@@ -64,5 +64,44 @@ jobs:
             echo "release exists"
             exit 0
           fi
+          # -dev. tags are the dev channel: the prerelease flag is what keeps
+          # them away from stable HACS users (HACS filters on it unless the
+          # repository's "Pre-release" switch entity is on) and out of
+          # GitHub's "latest" release.
+          PRERELEASE_FLAG=""
+          case "$GITHUB_REF_NAME" in
+            *-dev.*) PRERELEASE_FLAG="--prerelease" ;;
+          esac
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --title "$VER" -F /tmp/notes.md
+            --title "$VER" -F /tmp/notes.md $PRERELEASE_FLAG
+
+      - name: Retire superseded dev pre-releases
+        # A stable release supersedes every dev pre-release cut before it:
+        # the component version on master only moves forward, so when the
+        # bare v<version> lands, any existing -dev. tag is for a version at
+        # or below it. HACS's newest-first scan already stops offering those
+        # builds once the stable release exists - this step just keeps the
+        # releases page and the HACS version dropdown from accumulating
+        # stale dev builds. The base-version guard (not a blanket wipe)
+        # protects a dev build for a HIGHER version that races in between.
+        if: ${{ !contains(github.ref_name, '-dev.') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          # Capture instead of piping into the loop: the default GHA shell
+          # has no pipefail, so a failed gh api would otherwise read as
+          # "nothing to retire" and pass silently.
+          TAGS=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq '.[] | select(.prerelease) | .tag_name')
+          for TAG in $TAGS; do
+            case "$TAG" in *-dev.*) ;; *) continue ;; esac
+            BASE="${TAG#v}"
+            BASE="${BASE%%-dev.*}"
+            if [ "$(printf '%s\n%s\n' "$BASE" "$VER" | sort -V | tail -n1)" = "$VER" ]; then
+              echo "retiring superseded pre-release ${TAG}"
+              gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+            else
+              echo "keeping ${TAG} (newer than ${VER})"
+            fi
+          done
