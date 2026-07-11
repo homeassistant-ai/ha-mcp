@@ -6,6 +6,7 @@ This module provides entity search, system overview, deep search, and state retr
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal, cast
 
 from fastmcp import Context
@@ -13,6 +14,8 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import HomeAssistantCommandError
+from ..client.websocket_client import get_websocket_client
 from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
@@ -20,6 +23,12 @@ from ..utils.fuzzy_search import apply_hidden_penalty
 from ..visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
+)
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
 )
 from .helpers import (
     exception_to_structured_error,
@@ -567,6 +576,295 @@ def _apply_result_fields_to_response(
     _warn = _result_fields_warning(orig, data["results"], parsed_result_fields)
     if _warn:
         data.setdefault("warnings", []).append(_warn)
+
+
+def _new_search_response(
+    query: str | None, parsed_search_types: list[str] | None
+) -> dict[str, Any]:
+    """Build the base ha_search response envelope shared by both serving paths.
+
+    The component-served and legacy-served paths start from this identical
+    skeleton, so the two responses are shape-parity by construction: every
+    accumulating diagnostic / pagination key gets a typed default here, then is
+    filled by ``_apply_search_outcome`` regardless of which path produced the
+    data.
+    """
+    return {
+        "success": True,
+        "query": query,
+        "entities": [],
+        "entity_total_matches": 0,
+        "automations": [],
+        "scripts": [],
+        "scenes": [],
+        "helpers": [],
+        "search_types": parsed_search_types
+        or ["automation", "script", "scene", "helper"],
+        "config_total_matches": 0,
+        "partial": False,
+        "errors": [],
+        "warnings": [],
+    }
+
+
+@dataclass(frozen=True)
+class _ResolvedSearch:
+    """Parsed + validated ha_search inputs shared by the component and legacy paths.
+
+    ``ha_search`` parses parameters, validates them, and computes branch
+    eligibility exactly once, then hands this immutable bundle to whichever
+    path serves the request so both operate on identical resolved inputs. The
+    filter fields (``domain_filter`` / ``area_filter`` / ``state_filter``) hold
+    the **raw** tool arguments so the legacy path normalises them exactly as
+    before; the component helpers normalise their own copies.
+    """
+
+    query: str | None
+    query_text: str
+    domain_filter: str | None
+    area_filter: str | None
+    state_filter: str | None
+    parsed_search_types: list[str] | None
+    parsed_fields: list[str] | None
+    result_fields: Any
+    limit: int
+    offset: int
+    exact_match: bool
+    include_hidden: bool
+    include_config: bool
+    group_by_domain: bool
+    per_domain_limit: int | None
+    config_time_budget: float | None
+    registry_eligible: bool
+    body_eligible: bool
+    body_skipped_by_intent_gate: bool
+
+
+def _parse_component_result_fields(result_fields: Any) -> list[str] | None:
+    """Parse ``result_fields`` for the component path (mirrors the entity branch).
+
+    The legacy entity branch parses ``result_fields`` inside
+    ``_validate_entity_search_params``; the component path re-uses the identical
+    parse + validation so a bad ``result_fields`` raises the same structured
+    error on either path.
+    """
+    if result_fields is None:
+        return None
+    try:
+        parsed = parse_string_list_param(result_fields, "result_fields", allow_csv=True)
+    except ValueError as exc:
+        raise_tool_error(create_validation_error(str(exc), parameter="result_fields"))
+    if parsed is not None and len(parsed) == 0:
+        raise_tool_error(
+            create_validation_error(
+                "result_fields must contain at least one key",
+                parameter="result_fields",
+            )
+        )
+    return parsed
+
+
+def _as_record_list(value: Any) -> list[dict[str, Any]]:
+    """Coerce a component payload slice to a list of records (defensive)."""
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _normalized_domain_filter(raw: str | None) -> str | None:
+    """Strip + lowercase a domain filter to the entity branch's canonical form.
+
+    Matches ``_validate_entity_search_params`` so the component request and the
+    ``domain_filter`` echo agree with the legacy path.
+    """
+    return ((raw or "").strip().lower()) or None
+
+
+# The documented per-record entity surface (result_fields= "Available keys").
+# Both legacy entity paths emit exactly these; the component path is trimmed
+# to them in _shape_component_search_response.
+_ENTITY_RECORD_KEYS = (
+    "entity_id",
+    "friendly_name",
+    "domain",
+    "state",
+    "score",
+    "match_type",
+)
+
+
+def _normalize_component_config_record(
+    bucket: str, rec: dict[str, Any], include_config: bool
+) -> dict[str, Any]:
+    """Map one component config-bucket record onto the exact legacy key set.
+
+    The component speaks HA-native vocabulary (automations/scripts carry an
+    ``alias``, scenes a ``name``, storage ids ride an ``id`` key, and records
+    add ``source``/``kind``/``object_id`` metadata). The legacy deep-search
+    records that agents, tests, and downstream consumers key on use
+    ``friendly_name`` plus per-bucket id keys (``script_id``/``scene_id``) —
+    so normalize here, at the single seam, rather than teaching the component
+    the MCP envelope's vocabulary. Extra component fields are deliberately
+    dropped for byte-level shape parity with the legacy path; enrichment
+    (e.g. ``source: yaml``) can be added to BOTH paths together later.
+
+    ``config`` key semantics mirror the legacy pipeline's include_config pop:
+    present (possibly ``None`` for YAML/name-only matches) when
+    ``include_config`` is True, absent otherwise. Flow-helper records carry
+    their body under ``options`` component-side (data-minimized
+    ``ConfigEntry.options``); legacy calls the same payload ``config``.
+    """
+    entity_id = rec.get("entity_id")
+    name = rec.get("alias") or rec.get("name") or rec.get("friendly_name")
+    out: dict[str, Any] = {}
+    if bucket == "helpers":
+        if rec.get("kind") == "flow" or (entity_id is None and rec.get("entry_id")):
+            out["entry_id"] = rec.get("entry_id")
+        else:
+            out["entity_id"] = entity_id
+        out["helper_type"] = rec.get("helper_type")
+        out["name"] = name
+    else:
+        out["entity_id"] = entity_id
+        if bucket == "scripts":
+            out["script_id"] = rec.get("id")
+        elif bucket == "scenes":
+            out["scene_id"] = rec.get("id")
+        out["friendly_name"] = name if name is not None else entity_id
+    out["score"] = rec.get("score")
+    out["match_in_name"] = bool(rec.get("match_in_name"))
+    out["match_in_config"] = bool(rec.get("match_in_config"))
+    if include_config:
+        config = rec.get("config")
+        if config is None and "options" in rec:
+            config = rec.get("options")
+        out["config"] = config if config else None
+    return out
+
+
+def _build_component_search_request(req: _ResolvedSearch) -> dict[str, Any]:
+    """Translate resolved ha_search inputs into an ``ha_mcp_tools/search`` request.
+
+    ``search_types`` on the WS command selects surfaces including the entity
+    surface (``"entity"``), so branch eligibility computed server-side maps
+    directly onto which surfaces the component searches — all-or-nothing per
+    command. Optional string filters are omitted when empty to satisfy the
+    component's ``str``-typed voluptuous schema.
+    """
+    search_types: list[str] = []
+    if req.registry_eligible:
+        search_types.append("entity")
+    if req.body_eligible:
+        search_types.extend(
+            req.parsed_search_types or ["automation", "script", "scene", "helper"]
+        )
+    request: dict[str, Any] = {
+        "search_types": search_types,
+        "exact": req.exact_match,
+        "include_hidden": req.include_hidden,
+        "include_config": req.include_config,
+        "limit": req.limit,
+        "offset": req.offset,
+    }
+    if req.query_text:
+        request["query"] = req.query_text
+    domain_filter = _normalized_domain_filter(req.domain_filter)
+    if domain_filter:
+        request["domain_filter"] = domain_filter
+    area_filter = (req.area_filter or "").strip()
+    if area_filter:
+        request["area_filter"] = area_filter
+    state_filter = (req.state_filter or "").strip()
+    if state_filter:
+        request["state_filter"] = state_filter
+    return request
+
+
+def _shape_component_search_response(
+    req: _ResolvedSearch, component_result: dict[str, Any]
+) -> dict[str, Any]:
+    """Map an ``ha_mcp_tools/search`` result into the ha_search envelope.
+
+    The component returns per-surface records already scored and paginated
+    (``entities`` + config buckets with ``*_total_matches`` / ``*_has_more``).
+    Projection (``result_fields`` on entity records, ``fields`` on the
+    response), by-domain grouping, and the flat pagination / partial-mirror
+    finalisation all stay server-side and reuse the same helpers the legacy
+    path uses (``_apply_search_outcome`` and friends), so the shape is
+    identical to the legacy response by construction.
+    """
+    response = _new_search_response(req.query, req.parsed_search_types)
+    _emit_intent_skip_warning(response, req.body_skipped_by_intent_gate)
+
+    if req.registry_eligible:
+        parsed_result_fields = _parse_component_result_fields(req.result_fields)
+        # Normalize to the documented entity-record key set (the same six keys
+        # the legacy paths emit and result_fields= advertises). The component
+        # enriches records with area/floor/labels/aliases joins — dropped here
+        # for shape parity with the legacy path; adding enrichment to BOTH
+        # paths together is a separate change.
+        entities = [
+            {key: rec.get(key) for key in _ENTITY_RECORD_KEYS}
+            for rec in _as_record_list(component_result.get("entities"))
+        ]
+        entity_has_more = bool(component_result.get("entity_has_more", False))
+        entity_payload: dict[str, Any] = {
+            "results": entities,
+            "total_matches": int(
+                component_result.get("entity_total_matches", len(entities)) or 0
+            ),
+            "has_more": entity_has_more,
+            "next_offset": (req.offset + req.limit) if entity_has_more else None,
+            "offset": req.offset,
+            "limit": req.limit,
+            "count": len(entities),
+            "search_type": "exact_match" if req.exact_match else "fuzzy_search",
+        }
+        domain_filter = _normalized_domain_filter(req.domain_filter)
+        if domain_filter:
+            entity_payload["domain_filter"] = domain_filter
+        # Order mirrors _search_regular: group by domain first (it projects its
+        # own records), then project the flat results[].
+        _apply_by_domain_grouping(
+            entity_payload,
+            entities,
+            req.group_by_domain,
+            req.per_domain_limit,
+            parsed_result_fields,
+        )
+        _apply_result_fields_to_response(entity_payload, parsed_result_fields)
+        _apply_search_outcome(response, "entities", entity_payload)
+
+    if req.body_eligible:
+        config_has_more = bool(component_result.get("config_has_more", False))
+        config_payload: dict[str, Any] = {
+            "total_matches": int(component_result.get("config_total_matches", 0) or 0),
+            "has_more": config_has_more,
+            "next_offset": (req.offset + req.limit) if config_has_more else None,
+        }
+        for bucket in _CONFIG_BUCKETS:
+            if bucket in component_result:
+                config_payload[bucket] = [
+                    _normalize_component_config_record(bucket, rec, req.include_config)
+                    for rec in _as_record_list(component_result.get(bucket))
+                ]
+        _apply_search_outcome(response, "configs", config_payload)
+
+    # The component reports a single overall partial flag (design § 1). In-process
+    # joins are effectively never partial, but a body too large to serialize can
+    # set it — carry it through honestly rather than assuming completeness.
+    if component_result.get("partial"):
+        response["partial"] = True
+        reason = component_result.get("partial_reason")
+        if isinstance(reason, str) and reason:
+            _merge_partial_reason(response, reason)
+
+    response["count"] = len(response["entities"]) + sum(
+        len(response.get(bucket, [])) for bucket in _CONFIG_BUCKETS
+    )
+    _synthesize_combined_pagination(response)
+    _mirror_partial_to_warnings(response)
+    return _project_response_fields(response, req.parsed_fields)
 
 
 def _normalize_regular_search_result(
@@ -1188,47 +1486,133 @@ class SearchTools:
                 )
             )
 
+        req = _ResolvedSearch(
+            query=query,
+            query_text=query_text,
+            domain_filter=domain_filter,
+            area_filter=area_filter,
+            state_filter=state_filter,
+            parsed_search_types=parsed_search_types,
+            parsed_fields=parsed_fields,
+            result_fields=result_fields,
+            limit=limit,
+            offset=offset,
+            exact_match=exact_match,
+            include_hidden=include_hidden,
+            include_config=include_config,
+            group_by_domain=group_by_domain,
+            per_domain_limit=per_domain_limit,
+            config_time_budget=config_time_budget,
+            registry_eligible=registry_eligible,
+            body_eligible=body_eligible,
+            body_skipped_by_intent_gate=body_skipped_by_intent_gate,
+        )
+
+        # Prefer the custom component's in-process unified search when it
+        # advertises the capability: one WS round-trip replaces the multi-fetch
+        # legacy pipeline. Route all-or-nothing per command and fall back
+        # cleanly when the component is absent, downlevel, or errors — the
+        # taxonomy lives in ``_ha_search_via_component``.
+        caps = await get_component_caps(self._client)
+        if component_supports(caps, "search"):
+            component_response = await self._ha_search_via_component(req, ctx)
+            if component_response is not None:
+                return component_response
+
+        return await self._legacy_ha_search(req, ctx)
+
+    async def _ha_search_via_component(
+        self, req: _ResolvedSearch, ctx: Context | None
+    ) -> dict[str, Any] | None:
+        """Serve ha_search from the component; ``None`` ⇒ run the legacy path.
+
+        Error taxonomy (design § 4):
+
+        - ``unknown_command`` (component downgraded mid-session, so the cached
+          positive caps are stale): invalidate the caps and return ``None`` so
+          the caller falls back **silently** — an expected, non-actionable
+          transition.
+        - any other ``HomeAssistantCommandError`` (a component handler bug):
+          serve the correct result from the legacy path, append a ``warnings[]``
+          entry, and ``log.warning`` — correct results now, breakage visible.
+        - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
+          propagates; the legacy path depends on the same socket and would fail
+          identically, so surfacing it is correct.
+        """
+        try:
+            raw = await self._send_component_search(req)
+        except HomeAssistantCommandError as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+                return None
+            legacy = await self._legacy_ha_search(req, ctx)
+            legacy.setdefault("warnings", []).append(
+                f"component search path failed ({exc}); served via legacy path"
+            )
+            logger.warning("ha_mcp_tools/search failed; fell back to legacy: %r", exc)
+            return legacy
+        return _shape_component_search_response(req, raw.get("result") or {})
+
+    async def _send_component_search(self, req: _ResolvedSearch) -> dict[str, Any]:
+        """Send one ``ha_mcp_tools/search`` command over the per-client WebSocket."""
+        ws = await get_websocket_client(
+            url=self._client.base_url, token=self._client.token
+        )
+        return await ws.send_command(
+            "ha_mcp_tools/search", **_build_component_search_request(req)
+        )
+
+    async def _legacy_ha_search(
+        self, req: _ResolvedSearch, ctx: Context | None
+    ) -> dict[str, Any]:
+        """Run the multi-fetch REST/WS ha_search orchestration (fallback path).
+
+        Behaviourally unchanged from the pre-component implementation: the two
+        surfaces fan out over shared ``/api/states`` + entity-registry
+        snapshots, gather with per-surface partial handling, and assemble the
+        flat dual-surface envelope.
+        """
         # When both branches run they each independently fetch the full state
         # machine (/api/states) and the entity-registry list; fetch each once and
         # thread the snapshots down so the two branches share one of each instead
         # of fetching two.
         shared_states, shared_registry = await _prefetch_shared_search_snapshots(
             self._client,
-            registry_eligible=registry_eligible,
-            body_eligible=body_eligible,
+            registry_eligible=req.registry_eligible,
+            body_eligible=req.body_eligible,
         )
 
         registry_callable_kwargs: dict[str, Any] = {
-            "query": query_text or None,
-            "domain_filter": domain_filter,
-            "area_filter": area_filter,
-            "limit": limit,
-            "offset": offset,
-            "exact_match": exact_match,
-            "include_hidden": include_hidden,
-            "group_by_domain": group_by_domain,
-            "per_domain_limit": per_domain_limit,
-            "state_filter": state_filter,
-            "result_fields": result_fields,
+            "query": req.query_text or None,
+            "domain_filter": req.domain_filter,
+            "area_filter": req.area_filter,
+            "limit": req.limit,
+            "offset": req.offset,
+            "exact_match": req.exact_match,
+            "include_hidden": req.include_hidden,
+            "group_by_domain": req.group_by_domain,
+            "per_domain_limit": req.per_domain_limit,
+            "state_filter": req.state_filter,
+            "result_fields": req.result_fields,
             "prefetched_states": shared_states,
             "prefetched_registry": shared_registry,
         }
 
         tasks: list[Any] = []
         labels: list[str] = []
-        if registry_eligible:
+        if req.registry_eligible:
             tasks.append(self._ha_search_entities(**registry_callable_kwargs))
             labels.append("entities")
-        if body_eligible:
+        if req.body_eligible:
             tasks.append(
                 self._ha_deep_search(
-                    query=query_text,
-                    search_types=parsed_search_types,
-                    limit=limit,
-                    offset=offset,
-                    include_config=include_config,
-                    exact_match=exact_match,
-                    config_time_budget=config_time_budget,
+                    query=req.query_text,
+                    search_types=req.parsed_search_types,
+                    limit=req.limit,
+                    offset=req.offset,
+                    include_config=req.include_config,
+                    exact_match=req.exact_match,
+                    config_time_budget=req.config_time_budget,
                     ctx=ctx,
                     prefetched_states=shared_states,
                     prefetched_registry=shared_registry,
@@ -1241,31 +1625,11 @@ class SearchTools:
         # cancelled before the tasks complete.
         outcomes = await asyncio.gather(*tasks, return_exceptions=True)
 
-        response: dict[str, Any] = {
-            "success": True,
-            "query": query,
-            "entities": [],
-            "entity_total_matches": 0,
-            "automations": [],
-            "scripts": [],
-            "scenes": [],
-            "helpers": [],
-            "search_types": parsed_search_types
-            or ["automation", "script", "scene", "helper"],
-            "config_total_matches": 0,
-            # Pre-init the accumulating diagnostic keys so callers reading
-            # ``response["errors"]`` / ``response["partial"]`` / ``response
-            # ["warnings"]`` get a typed default instead of ``KeyError`` on
-            # the no-error path, and so ``_merge_payload_metadata`` extends
-            # rather than first-wins.
-            "partial": False,
-            "errors": [],
-            "warnings": [],
-        }
+        response = _new_search_response(req.query, req.parsed_search_types)
         # Surface the body-skip so a caller who actually wanted config
         # matches alongside the entity scope can see why their request
         # returned no automations / scripts / etc.
-        _emit_intent_skip_warning(response, body_skipped_by_intent_gate)
+        _emit_intent_skip_warning(response, req.body_skipped_by_intent_gate)
         partial = False
         errors: list[dict[str, str]] = []
         for label, outcome in zip(labels, outcomes, strict=True):
@@ -1295,7 +1659,7 @@ class SearchTools:
         _finalize_partial_state(response, partial_local=partial, errors_local=errors)
         _mirror_partial_to_warnings(response)
 
-        return _project_response_fields(response, parsed_fields)
+        return _project_response_fields(response, req.parsed_fields)
 
     async def _ha_search_entities(
         self,

@@ -86,7 +86,19 @@ class HomeAssistantCommandError(HomeAssistantError):
     ``_classify_exception``'s match dispatch; classification then falls
     through to ``_classify_by_message`` for pattern matching on the
     error message.
+
+    ``code`` carries HA's structured WebSocket error code (the ``code`` field
+    of the response ``error`` object — e.g. ``"unknown_command"``,
+    ``"invalid_format"``) when available, so routing decisions can key off the
+    stable code rather than pattern-matching the human-readable message. It
+    defaults to ``None`` for exceptions raised without a code (older raise
+    sites, string error payloads, or direct construction in tests), which
+    keeps the single-positional-argument constructor backward-compatible.
     """
+
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 class HomeAssistantCommandTimeout(HomeAssistantError):

@@ -40,6 +40,20 @@ logger = logging.getLogger(__name__)
 MAX_WS_MESSAGE_BYTES = 64 * 1024 * 1024
 
 
+def _extract_ws_error(error: Any) -> tuple[str, str | None]:
+    """Split an HA WebSocket ``error`` payload into ``(message, code)``.
+
+    HA replies to a failed command with ``{"error": {"code": ..., "message":
+    ...}}``. Dict payloads yield both fields; a bare string (or other shape)
+    yields ``str(error)`` as the message and ``None`` for the code. The code is
+    threaded onto ``HomeAssistantCommandError`` so callers route on the stable
+    ``code`` (e.g. ``unknown_command``) instead of the message text.
+    """
+    if isinstance(error, dict):
+        return error.get("message", str(error)), error.get("code")
+    return str(error), None
+
+
 class WebSocketConnectionState:
     """Encapsulates mutable state used by the WebSocket client."""
 
@@ -632,13 +646,10 @@ class HomeAssistantWebSocketClient:
             # Process standard Home Assistant WebSocket response
             if response.get("type") == "result":
                 if response.get("success") is False:
-                    error = response.get("error", {})
-                    error_msg = (
-                        error.get("message", str(error))
-                        if isinstance(error, dict)
-                        else str(error)
+                    error_msg, error_code = _extract_ws_error(response.get("error", {}))
+                    raise HomeAssistantCommandError(
+                        f"Command failed: {error_msg}", error_code
                     )
-                    raise HomeAssistantCommandError(f"Command failed: {error_msg}")
 
                 # Return success response according to HA WebSocket format
                 return {
@@ -715,13 +726,8 @@ class HomeAssistantWebSocketClient:
 
         if not result_response.get("success"):
             self.cancel_event_response(message_id)
-            error = result_response.get("error", {})
-            error_msg = (
-                error.get("message", str(error))
-                if isinstance(error, dict)
-                else str(error)
-            )
-            raise HomeAssistantCommandError(f"Command failed: {error_msg}")
+            error_msg, error_code = _extract_ws_error(result_response.get("error", {}))
+            raise HomeAssistantCommandError(f"Command failed: {error_msg}", error_code)
 
         try:
             event_response = await asyncio.wait_for(event_future, timeout=wait_timeout)
@@ -787,11 +793,10 @@ class HomeAssistantWebSocketClient:
         if response.get("type") == "result" and response.get("success"):
             return message_id
 
-        error = response.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg, error_code = _extract_ws_error(response.get("error", {}))
+        raise HomeAssistantCommandError(
+            f"subscribe_events failed: {error_msg}", error_code
         )
-        raise HomeAssistantCommandError(f"subscribe_events failed: {error_msg}")
 
     async def unsubscribe_events(self, subscription_id: int) -> None:
         """Release a subscription previously returned by ``subscribe_events``.
@@ -885,12 +890,9 @@ class HomeAssistantWebSocketClient:
             return message_id, queue
 
         self._state.unregister_subscription_queue(message_id)
-        error = response.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
+        error_msg, error_code = _extract_ws_error(response.get("error", {}))
         raise HomeAssistantCommandError(
-            f"subscribe_command({command_type!r}) failed: {error_msg}"
+            f"subscribe_command({command_type!r}) failed: {error_msg}", error_code
         )
 
     async def unsubscribe_command(
