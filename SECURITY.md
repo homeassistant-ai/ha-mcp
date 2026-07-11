@@ -201,6 +201,11 @@ the proxy returns 503 whenever the server is not running.
   (see [Threat Model](#threat-model) above).
 - OAuth token revocation not preventing further HA API access: revoke the LLAT
   in Home Assistant instead.
+- Saved custom tools (code mode, off by default) visible to other clients of the
+  same server process: they are shared, persistent scaffolding — not per-user
+  data — and `run_saved` executes with the caller's own HA token, granting no
+  access the caller lacks. Any client that can reach ha-mcp is a trusted
+  principal (see [Threat Model](#threat-model) above).
 - Vulnerabilities that are only exploitable due to a misconfigured deployment
   (e.g., standard-mode instance exposed to the internet without TLS, or a
   network-reachable HTTP entrypoint using the default `MCP_SECRET_PATH`).
