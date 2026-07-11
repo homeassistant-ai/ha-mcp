@@ -9,6 +9,7 @@ the command type, mirroring the live component's info/search surface.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -20,6 +21,7 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools import component_api
 from ha_mcp.tools.component_api import (
+    SUPPORTED_SCHEMA_VERSION,
     ComponentCaps,
     component_supports,
     get_component_caps,
@@ -168,6 +170,102 @@ async def test_invalidate_caps_forces_reprobe() -> None:
         await get_component_caps(client)
 
     assert ws.send_command.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_supported_schema_version_routes() -> None:
+    """A probe at the supported schema_version yields usable caps."""
+    info = {**_INFO_OK, "schema_version": SUPPORTED_SCHEMA_VERSION}
+    ws = _make_ws(info_result=info)
+    with _patch_ws(ws):
+        caps = await get_component_caps(_client())
+    assert isinstance(caps, ComponentCaps)
+    assert component_supports(caps, "search") is True
+
+
+@pytest.mark.asyncio
+async def test_unsupported_schema_version_caps_none_and_warns(caplog) -> None:
+    """A probe at an unsupported schema_version is a cached negative (logged once)."""
+    info = {**_INFO_OK, "schema_version": SUPPORTED_SCHEMA_VERSION + 1}
+    ws = _make_ws(info_result=info)
+    client = _client()
+    with _patch_ws(ws), caplog.at_level(logging.WARNING, logger=component_api.__name__):
+        first = await get_component_caps(client)
+        second = await get_component_caps(client)
+
+    assert first is None
+    assert second is None
+    # Negative is cached, so the probe (and the warning) happen exactly once.
+    assert ws.send_command.await_count == 1
+    schema_warnings = [r for r in caplog.records if "schema_version" in r.getMessage()]
+    assert len(schema_warnings) == 1
+    assert str(SUPPORTED_SCHEMA_VERSION + 1) in schema_warnings[0].getMessage()
+    assert str(SUPPORTED_SCHEMA_VERSION) in schema_warnings[0].getMessage()
+
+
+def _clock(start: float = 1000.0) -> list[float]:
+    """A one-element mutable clock; tests advance ``holder[0]`` in place."""
+    return [start]
+
+
+@pytest.mark.asyncio
+async def test_fresh_negative_does_not_reprobe(monkeypatch) -> None:
+    """A negative within the TTL window is honored without re-probing."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    ws = _make_ws(
+        info_exc=HomeAssistantCommandError("Command failed: x", "unknown_command")
+    )
+    client = _client()
+    with _patch_ws(ws):
+        assert await get_component_caps(client) is None
+        clock[0] += component_api._NEGATIVE_CACHE_TTL_S - 1  # still inside window
+        assert await get_component_caps(client) is None
+    assert ws.send_command.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_negative_reprobes_and_adopts(monkeypatch) -> None:
+    """Past the TTL the negative expires: the next call re-probes and can adopt."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+
+    ws = AsyncMock()
+    probe_count = _clock(0.0)
+
+    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+        assert command_type == "ha_mcp_tools/info"
+        probe_count[0] += 1
+        if probe_count[0] == 1:
+            raise HomeAssistantCommandError("Command failed: x", "unknown_command")
+        return {"success": True, "result": _INFO_OK}
+
+    ws.send_command = AsyncMock(side_effect=_send)
+    client = _client()
+    with _patch_ws(ws):
+        assert await get_component_caps(client) is None  # negative cached at t0
+        clock[0] += component_api._NEGATIVE_CACHE_TTL_S + 1  # expire it
+        caps = await get_component_caps(client)
+
+    assert isinstance(caps, ComponentCaps)  # mid-session install adopted
+    assert ws.send_command.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_positive_unaffected_by_ttl(monkeypatch) -> None:
+    """A positive entry never expires on the negative TTL timer."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    ws = _make_ws(info_result=_INFO_OK)
+    client = _client()
+    with _patch_ws(ws):
+        first = await get_component_caps(client)
+        clock[0] += component_api._NEGATIVE_CACHE_TTL_S * 10  # far past any TTL
+        second = await get_component_caps(client)
+
+    assert isinstance(first, ComponentCaps)
+    assert first is second
+    assert ws.send_command.await_count == 1
 
 
 def test_component_supports() -> None:

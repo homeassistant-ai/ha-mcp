@@ -31,7 +31,6 @@ ran on the component path. Mirrors ``test_ha_search_component_routing.py``.
 
 from __future__ import annotations
 
-import contextlib
 import json
 from collections import Counter
 from typing import Any
@@ -40,7 +39,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.client.rest_client import HomeAssistantAPIError, HomeAssistantCommandError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
 from ha_mcp.tools import (
     component_api,
     tools_config_automations,
@@ -49,6 +52,8 @@ from ha_mcp.tools import (
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+from ._component_routing_helpers import make_ws, patch_ws
 
 # --- Fixtures / bodies -------------------------------------------------------
 
@@ -144,41 +149,6 @@ class RoutingClient:
             + self.resolve_scene_id.await_count
             + sum(self.ws_types.values())
         )
-
-
-def _make_ws(
-    *,
-    info_result: dict[str, Any] | None = None,
-    info_exc: Exception | None = None,
-    config_get_result: dict[str, Any] | None = None,
-    config_get_exc: Exception | None = None,
-) -> AsyncMock:
-    ws = AsyncMock()
-
-    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
-        if command_type == "ha_mcp_tools/info":
-            if info_exc is not None:
-                raise info_exc
-            return {"success": True, "result": info_result}
-        if command_type == "ha_mcp_tools/config_get":
-            if config_get_exc is not None:
-                raise config_get_exc
-            return {"success": True, "result": config_get_result}
-        raise AssertionError(f"unexpected command {command_type!r}")
-
-    ws.send_command = AsyncMock(side_effect=_send)
-    return ws
-
-
-@contextlib.contextmanager
-def _patch_ws(ws: AsyncMock, tool_module: Any) -> Any:
-    """Patch ``get_websocket_client`` on both the gate and the tool module."""
-    factory = AsyncMock(return_value=ws)
-    with (
-        patch.object(component_api, "get_websocket_client", factory),
-        patch.object(tool_module, "get_websocket_client", factory),
-    ):
-        yield ws
 
 
 def _config_get_calls(ws: AsyncMock) -> list[Any]:
@@ -282,8 +252,12 @@ class TestAutomationConfigGetRouting:
     async def test_fast_path_skips_legacy_fetches(self) -> None:
         """Component serves the read: none of the legacy fetches are awaited."""
         client = _auto_legacy_client()
-        ws = _make_ws(info_result=_CAPS_CONFIG_GET, config_get_result=_auto_cg_found())
-        with _patch_ws(ws, tools_config_automations):
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_result=_auto_cg_found(),
+        )
+        with patch_ws(ws, tools_config_automations):
             resp = await AutomationConfigTools(client).ha_config_get_automation(
                 identifier="automation.morning"
             )
@@ -299,15 +273,19 @@ class TestAutomationConfigGetRouting:
     async def test_storage_happy_path_parity(self) -> None:
         """Component and legacy responses are byte-identical for a storage item."""
         comp_client = RoutingClient()  # legacy must not be reached on this path
-        ws = _make_ws(info_result=_CAPS_CONFIG_GET, config_get_result=_auto_cg_found())
-        with _patch_ws(ws, tools_config_automations):
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_result=_auto_cg_found(),
+        )
+        with patch_ws(ws, tools_config_automations):
             component = await AutomationConfigTools(
                 comp_client
             ).ha_config_get_automation(identifier="automation.morning")
 
         legacy_client = _auto_legacy_client()
-        ws_legacy = _make_ws(info_result=_CAPS_NO_CONFIG_GET)
-        with _patch_ws(ws_legacy, tools_config_automations):
+        ws_legacy = make_ws("ha_mcp_tools/config_get", info_result=_CAPS_NO_CONFIG_GET)
+        with patch_ws(ws_legacy, tools_config_automations):
             legacy = await AutomationConfigTools(
                 legacy_client
             ).ha_config_get_automation(identifier="automation.morning")
@@ -317,9 +295,13 @@ class TestAutomationConfigGetRouting:
     async def test_found_false_raises_resource_not_found(self) -> None:
         """found:false → the exact RESOURCE_NOT_FOUND, without the legacy REST fetch."""
         client = RoutingClient(registry_list=[])
-        ws = _make_ws(info_result=_CAPS_CONFIG_GET, config_get_result={"found": False})
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_result={"found": False},
+        )
         with (
-            _patch_ws(ws, tools_config_automations),
+            patch_ws(ws, tools_config_automations),
             pytest.raises(ToolError) as exc_info,
         ):
             await AutomationConfigTools(client).ha_config_get_automation(
@@ -334,13 +316,14 @@ class TestAutomationConfigGetRouting:
     async def test_unknown_command_falls_back_silently(self) -> None:
         """unknown_command on config_get → legacy path, no fallback warning."""
         client = _auto_legacy_client()
-        ws = _make_ws(
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
             info_result=_CAPS_CONFIG_GET,
-            config_get_exc=HomeAssistantCommandError(
+            cmd_exc=HomeAssistantCommandError(
                 "Command failed: nope", "unknown_command"
             ),
         )
-        with _patch_ws(ws, tools_config_automations):
+        with patch_ws(ws, tools_config_automations):
             resp = await AutomationConfigTools(client).ha_config_get_automation(
                 identifier="automation.morning"
             )
@@ -351,13 +334,12 @@ class TestAutomationConfigGetRouting:
     async def test_raised_command_falls_back_with_warning(self) -> None:
         """A non-unknown command error → legacy path AND a warnings[] entry."""
         client = _auto_legacy_client()
-        ws = _make_ws(
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
             info_result=_CAPS_CONFIG_GET,
-            config_get_exc=HomeAssistantCommandError(
-                "Command failed: boom", "internal_error"
-            ),
+            cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
         )
-        with _patch_ws(ws, tools_config_automations):
+        with patch_ws(ws, tools_config_automations):
             resp = await AutomationConfigTools(client).ha_config_get_automation(
                 identifier="automation.morning"
             )
@@ -368,8 +350,8 @@ class TestAutomationConfigGetRouting:
     async def test_no_capability_uses_legacy_untouched(self) -> None:
         """A component without config_get → legacy path, config_get never sent."""
         client = _auto_legacy_client()
-        ws = _make_ws(info_result=_CAPS_NO_CONFIG_GET)
-        with _patch_ws(ws, tools_config_automations):
+        ws = make_ws("ha_mcp_tools/config_get", info_result=_CAPS_NO_CONFIG_GET)
+        with patch_ws(ws, tools_config_automations):
             resp = await AutomationConfigTools(client).ha_config_get_automation(
                 identifier="automation.morning"
             )
@@ -380,13 +362,103 @@ class TestAutomationConfigGetRouting:
     async def test_caps_probed_once_across_calls(self) -> None:
         """The info probe is cached: two reads, one ha_mcp_tools/info call."""
         client = _auto_legacy_client()
-        ws = _make_ws(info_result=_CAPS_CONFIG_GET, config_get_result=_auto_cg_found())
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_result=_auto_cg_found(),
+        )
         tools = AutomationConfigTools(client)
-        with _patch_ws(ws, tools_config_automations):
+        with patch_ws(ws, tools_config_automations):
             await tools.ha_config_get_automation(identifier="automation.morning")
             await tools.ha_config_get_automation(identifier="automation.morning")
         assert len(_info_calls(ws)) == 1
         assert len(_config_get_calls(ws)) == 2
+
+    async def test_command_timeout_falls_back_with_warning(self) -> None:
+        """A component WS timeout → legacy path AND a warnings[] entry."""
+        client = _auto_legacy_client()
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_exc=HomeAssistantCommandTimeout("Command timeout"),
+        )
+        with patch_ws(ws, tools_config_automations):
+            resp = await AutomationConfigTools(client).ha_config_get_automation(
+                identifier="automation.morning"
+            )
+        assert resp["success"] is True
+        assert client.get_automation_config.await_count == 1
+        assert any("served via legacy path" in w for w in resp["warnings"])
+
+    async def test_malformed_success_falls_back_to_legacy(self) -> None:
+        """found:true with a non-dict config → silent legacy fallback (untrusted)."""
+        client = _auto_legacy_client()
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_result={"found": True, "config": "not-a-dict"},
+        )
+        with patch_ws(ws, tools_config_automations):
+            resp = await AutomationConfigTools(client).ha_config_get_automation(
+                identifier="automation.morning"
+            )
+        assert resp["success"] is True
+        # The malformed component body is not trusted; legacy served the read.
+        assert resp["config"]["alias"] == "Morning Routine"
+        assert client.get_automation_config.await_count == 1
+        # A malformed success is a silent fallback (no component-failure warning).
+        assert "warnings" not in resp
+
+    async def test_downgrade_reprobes_and_serves_legacy_without_component(self) -> None:
+        """routed OK → unknown_command → invalidate → re-probe serves legacy only.
+
+        A component dropped mid-session: the first call is component-served, the
+        second's config_get comes back unknown_command (caps invalidated + silent
+        legacy), and the third re-probes ``info`` — now advertising no
+        ``config_get`` — so it serves legacy without ever sending a third
+        config_get frame.
+        """
+        client = _auto_legacy_client()
+        info_probes = [0]
+        config_gets = [0]
+
+        async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+            if command_type == "ha_mcp_tools/info":
+                info_probes[0] += 1
+                caps = _CAPS_CONFIG_GET if info_probes[0] == 1 else _CAPS_NO_CONFIG_GET
+                return {"success": True, "result": caps}
+            if command_type == "ha_mcp_tools/config_get":
+                config_gets[0] += 1
+                if config_gets[0] == 1:
+                    return {"success": True, "result": _auto_cg_found()}
+                raise HomeAssistantCommandError(
+                    "Command failed: gone", "unknown_command"
+                )
+            raise AssertionError(f"unexpected command {command_type!r}")
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(side_effect=_send)
+        tools = AutomationConfigTools(client)
+        with patch_ws(ws, tools_config_automations):
+            first = await tools.ha_config_get_automation(
+                identifier="automation.morning"
+            )
+            second = await tools.ha_config_get_automation(
+                identifier="automation.morning"
+            )
+            third = await tools.ha_config_get_automation(
+                identifier="automation.morning"
+            )
+
+        # Call 1 was component-served (no legacy config fetch yet).
+        assert first["config"]["category"] == "cat_a"
+        assert second["success"] is True and third["success"] is True
+        # config_get was consulted exactly twice (call 1 OK, call 2 unknown); the
+        # re-probed call 3 saw no capability and never sent a third frame.
+        assert config_gets[0] == 2
+        assert info_probes[0] == 2
+        # Legacy served both the downgraded call and the re-probed call.
+        assert client.get_automation_config.await_count == 2
 
 
 # =============================================================================
@@ -397,10 +469,12 @@ class TestAutomationConfigGetRouting:
 class TestScriptConfigGetRouting:
     async def test_fast_path_skips_legacy_fetches(self) -> None:
         client = _script_legacy_client()
-        ws = _make_ws(
-            info_result=_CAPS_CONFIG_GET, config_get_result=_script_cg_found()
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_result=_script_cg_found(),
         )
-        with _patch_ws(ws, tools_config_scripts):
+        with patch_ws(ws, tools_config_scripts):
             resp = await ConfigScriptTools(client).ha_config_get_script(
                 script_id="morning"
             )
@@ -417,10 +491,12 @@ class TestScriptConfigGetRouting:
     async def test_entity_id_prefix_stripped_before_routing(self) -> None:
         """A ``script.`` prefix is stripped before the component call (parity)."""
         client = RoutingClient()
-        ws = _make_ws(
-            info_result=_CAPS_CONFIG_GET, config_get_result=_script_cg_found()
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_result=_script_cg_found(),
         )
-        with _patch_ws(ws, tools_config_scripts):
+        with patch_ws(ws, tools_config_scripts):
             await ConfigScriptTools(client).ha_config_get_script(
                 script_id="script.morning"
             )
@@ -428,17 +504,19 @@ class TestScriptConfigGetRouting:
 
     async def test_storage_happy_path_parity(self) -> None:
         comp_client = RoutingClient()
-        ws = _make_ws(
-            info_result=_CAPS_CONFIG_GET, config_get_result=_script_cg_found()
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_result=_script_cg_found(),
         )
-        with _patch_ws(ws, tools_config_scripts):
+        with patch_ws(ws, tools_config_scripts):
             component = await ConfigScriptTools(comp_client).ha_config_get_script(
                 script_id="morning"
             )
 
         legacy_client = _script_legacy_client()
-        ws_legacy = _make_ws(info_result=_CAPS_NO_CONFIG_GET)
-        with _patch_ws(ws_legacy, tools_config_scripts):
+        ws_legacy = make_ws("ha_mcp_tools/config_get", info_result=_CAPS_NO_CONFIG_GET)
+        with patch_ws(ws_legacy, tools_config_scripts):
             legacy = await ConfigScriptTools(legacy_client).ha_config_get_script(
                 script_id="morning"
             )
@@ -447,9 +525,13 @@ class TestScriptConfigGetRouting:
 
     async def test_found_false_raises_resource_not_found(self) -> None:
         client = RoutingClient(registry_list=[])
-        ws = _make_ws(info_result=_CAPS_CONFIG_GET, config_get_result={"found": False})
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_result={"found": False},
+        )
         with (
-            _patch_ws(ws, tools_config_scripts),
+            patch_ws(ws, tools_config_scripts),
             pytest.raises(ToolError) as exc_info,
         ):
             await ConfigScriptTools(client).ha_config_get_script(script_id="ghost")
@@ -460,13 +542,14 @@ class TestScriptConfigGetRouting:
 
     async def test_unknown_command_falls_back_silently(self) -> None:
         client = _script_legacy_client()
-        ws = _make_ws(
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
             info_result=_CAPS_CONFIG_GET,
-            config_get_exc=HomeAssistantCommandError(
+            cmd_exc=HomeAssistantCommandError(
                 "Command failed: nope", "unknown_command"
             ),
         )
-        with _patch_ws(ws, tools_config_scripts):
+        with patch_ws(ws, tools_config_scripts):
             resp = await ConfigScriptTools(client).ha_config_get_script(
                 script_id="morning"
             )
@@ -476,13 +559,12 @@ class TestScriptConfigGetRouting:
 
     async def test_raised_command_falls_back_with_warning(self) -> None:
         client = _script_legacy_client()
-        ws = _make_ws(
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
             info_result=_CAPS_CONFIG_GET,
-            config_get_exc=HomeAssistantCommandError(
-                "Command failed: boom", "internal_error"
-            ),
+            cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
         )
-        with _patch_ws(ws, tools_config_scripts):
+        with patch_ws(ws, tools_config_scripts):
             resp = await ConfigScriptTools(client).ha_config_get_script(
                 script_id="morning"
             )
@@ -492,14 +574,47 @@ class TestScriptConfigGetRouting:
 
     async def test_no_capability_uses_legacy_untouched(self) -> None:
         client = _script_legacy_client()
-        ws = _make_ws(info_result=_CAPS_NO_CONFIG_GET)
-        with _patch_ws(ws, tools_config_scripts):
+        ws = make_ws("ha_mcp_tools/config_get", info_result=_CAPS_NO_CONFIG_GET)
+        with patch_ws(ws, tools_config_scripts):
             resp = await ConfigScriptTools(client).ha_config_get_script(
                 script_id="morning"
             )
         assert resp["success"] is True
         assert client.get_script_config.await_count == 1
         assert _config_get_calls(ws) == []
+
+    async def test_command_timeout_falls_back_with_warning(self) -> None:
+        """A component WS timeout → legacy path AND a warnings[] entry."""
+        client = _script_legacy_client()
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_exc=HomeAssistantCommandTimeout("Command timeout"),
+        )
+        with patch_ws(ws, tools_config_scripts):
+            resp = await ConfigScriptTools(client).ha_config_get_script(
+                script_id="morning"
+            )
+        assert resp["success"] is True
+        assert client.get_script_config.await_count == 1
+        assert any("served via legacy path" in w for w in resp["warnings"])
+
+    async def test_malformed_success_falls_back_to_legacy(self) -> None:
+        """found:true with a non-dict config → silent legacy fallback (untrusted)."""
+        client = _script_legacy_client()
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_result={"found": True, "config": ["not", "a", "dict"]},
+        )
+        with patch_ws(ws, tools_config_scripts):
+            resp = await ConfigScriptTools(client).ha_config_get_script(
+                script_id="morning"
+            )
+        assert resp["success"] is True
+        assert resp["config"]["config"] == _SCRIPT_BODY  # legacy REST envelope
+        assert client.get_script_config.await_count == 1
+        assert "warnings" not in resp
 
 
 # =============================================================================
@@ -526,7 +641,11 @@ class TestSceneConfigGetAlwaysLegacy:
         client = _scene_legacy_client()
         # A component WS that WOULD serve config_get if asked — the point is that
         # the scene tool never asks it (no caps probe, no config_get frame).
-        ws = _make_ws(info_result=_CAPS_CONFIG_GET, config_get_result=_scene_cg_found())
+        ws = make_ws(
+            "ha_mcp_tools/config_get",
+            info_result=_CAPS_CONFIG_GET,
+            cmd_result=_scene_cg_found(),
+        )
         factory = AsyncMock(return_value=ws)
         with patch.object(component_api, "get_websocket_client", factory):
             resp = await ConfigSceneTools(client).ha_config_get_scene(
@@ -551,7 +670,7 @@ class TestSceneConfigGetAlwaysLegacy:
                 "Scene not found: ghost", status_code=404
             )
         )
-        ws = _make_ws(info_result=_CAPS_CONFIG_GET)
+        ws = make_ws("ha_mcp_tools/config_get", info_result=_CAPS_CONFIG_GET)
         factory = AsyncMock(return_value=ws)
         with (
             patch.object(component_api, "get_websocket_client", factory),

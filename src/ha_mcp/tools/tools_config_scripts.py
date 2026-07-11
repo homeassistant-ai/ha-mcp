@@ -16,9 +16,9 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
@@ -39,6 +39,7 @@ from .component_api import (
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
+    send_component_config_get,
 )
 from .helpers import (
     exception_to_structured_error,
@@ -62,21 +63,6 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-async def _send_component_config_get(
-    client: Any, domain: str, item_id: str
-) -> dict[str, Any]:
-    """Send one ``ha_mcp_tools/config_get`` command over the per-client WebSocket.
-
-    Returns the raw ``{success, result}`` envelope; the caller shapes
-    ``result`` onto the legacy response. Raises ``HomeAssistantCommandError``
-    on a ``success:False`` reply (routed by the caller's error taxonomy).
-    """
-    ws = await get_websocket_client(url=client.base_url, token=client.token)
-    return await ws.send_command(
-        "ha_mcp_tools/config_get", domain=domain, item_id=item_id
-    )
 
 
 # Scripts share the automation skill mapping — both use
@@ -256,16 +242,17 @@ class ConfigScriptTools:
 
         Error taxonomy mirrors ``tools_search._ha_search_via_component``:
         ``unknown_command`` → invalidate caps + silent legacy fallback; any
-        other ``HomeAssistantCommandError`` → legacy + ``warnings[]`` +
-        ``log.warning``; connection errors propagate.
+        other ``HomeAssistantCommandError`` (or a ``HomeAssistantCommandTimeout``
+        on the component WS read) → legacy + ``warnings[]`` + ``log.warning``;
+        connection errors propagate.
 
         A ``found:false`` result (id resolves to nothing, or to a YAML-defined
         item the component won't serve) raises the same ``RESOURCE_NOT_FOUND``
         the legacy REST 404 path raises, via ``_raise_script_not_found``.
         """
         try:
-            raw = await _send_component_config_get(self._client, "script", script_id)
-        except HomeAssistantCommandError as exc:
+            raw = await send_component_config_get(self._client, "script", script_id)
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
                 return None

@@ -16,9 +16,9 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ..client.websocket_client import get_websocket_client
 from ..errors import (
     ErrorCode,
     create_config_error,
@@ -44,6 +44,7 @@ from .component_api import (
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
+    send_component_config_get,
 )
 from .helpers import (
     exception_to_structured_error,
@@ -68,21 +69,6 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-async def _send_component_config_get(
-    client: Any, domain: str, item_id: str
-) -> dict[str, Any]:
-    """Send one ``ha_mcp_tools/config_get`` command over the per-client WebSocket.
-
-    Returns the raw ``{success, result}`` envelope; the caller shapes
-    ``result`` onto the legacy response. Raises ``HomeAssistantCommandError``
-    on a ``success:False`` reply (routed by the caller's error taxonomy).
-    """
-    ws = await get_websocket_client(url=client.base_url, token=client.token)
-    return await ws.send_command(
-        "ha_mcp_tools/config_get", domain=domain, item_id=item_id
-    )
 
 
 # Skill files attached to ha_config_set_automation responses when
@@ -476,7 +462,8 @@ class AutomationConfigTools:
 
         - ``unknown_command`` (component downgraded mid-session, stale caps):
           invalidate caps and return ``None`` for a silent legacy fallback.
-        - any other ``HomeAssistantCommandError`` (component handler bug):
+        - any other ``HomeAssistantCommandError`` (component handler bug) or a
+          ``HomeAssistantCommandTimeout`` (the component WS read timed out):
           serve the correct result from the legacy path, append a
           ``warnings[]`` entry, and ``log.warning``.
         - ``HomeAssistantConnectionError`` (WS down): not caught, so it
@@ -488,10 +475,10 @@ class AutomationConfigTools:
         ``_raise_automation_not_found``.
         """
         try:
-            raw = await _send_component_config_get(
+            raw = await send_component_config_get(
                 self._client, "automation", identifier
             )
-        except HomeAssistantCommandError as exc:
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
                 return None

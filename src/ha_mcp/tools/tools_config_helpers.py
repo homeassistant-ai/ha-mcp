@@ -16,7 +16,11 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import AliasChoices, Field
 
-from ..client.rest_client import HomeAssistantAPIError, HomeAssistantCommandError
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
@@ -3363,18 +3367,24 @@ def _shape_collection_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
     The legacy ``{helper_type}/list`` record is the storage body itself
     (``id`` = storage id, ``name`` = creation-time name, plus type-specific
     keys). The component supplies that same body as ``config`` and, from the
-    entity registry, the current ``entity_id`` and display ``name``. Keep the
-    legacy keys with their legacy meanings (``id`` stays the storage id) and
-    layer the current ``entity_id`` + ``name`` on top — the additive form of
-    the #1794 stale-id fix that the legacy-path PR converges to.
+    real storage collection + entity registry, the authoritative
+    ``storage_id`` plus the current ``entity_id`` and display ``name``. Keep the
+    legacy keys with their legacy meanings and layer the current ``entity_id`` +
+    ``name`` on top — the additive form of the #1794 stale-id fix that the
+    legacy-path PR converges to.
     """
     config = rec.get("config")
     out: dict[str, Any] = dict(config) if isinstance(config, dict) else {}
-    # The faithful component body already carries ``id``; fall back to the
-    # record-level ``object_id`` only when it doesn't, so the storage id the
-    # legacy record guarantees is never dropped.
-    if "id" not in out and rec.get("object_id") is not None:
-        out["id"] = rec["object_id"]
+    # Prefer the record-level ``storage_id`` (the component reads it from the
+    # real storage collection). Not every collection body carries its own
+    # ``id`` — person/zone are stored keyed by id rather than embedding it — so
+    # trusting the body's ``id`` drifts for those types. Fall back to
+    # ``object_id`` only when ``storage_id`` is absent (older component).
+    storage_id = rec.get("storage_id")
+    if storage_id is None:
+        storage_id = rec.get("object_id")
+    if storage_id is not None:
+        out["id"] = storage_id
     entity_id = rec.get("entity_id")
     if entity_id is not None:
         out["entity_id"] = entity_id
@@ -3637,7 +3647,8 @@ class HelperConfigTools:
           ``None`` so the caller falls through to the byte-identical legacy
           body, **silently**. For a flow type, raise the component-required
           error.
-        - any other ``HomeAssistantCommandError`` (a component handler bug):
+        - any other ``HomeAssistantCommandError`` (a component handler bug) or a
+          ``HomeAssistantCommandTimeout`` (the component WS list timed out):
           for a storage type, serve the correct result from the legacy WS list,
           append a ``warnings[]`` entry, and ``log.warning``. For a flow type,
           raise the component-required error — no legacy fallback exists.
@@ -3653,7 +3664,7 @@ class HelperConfigTools:
         """
         try:
             raw = await self._send_component_helpers_list(helper_type, is_flow=is_flow)
-        except HomeAssistantCommandError as exc:
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             unknown = is_unknown_command(exc)
             if unknown:
                 invalidate_caps(self._client)

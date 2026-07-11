@@ -14,7 +14,10 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..client.rest_client import HomeAssistantCommandError
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
 from ..client.websocket_client import get_websocket_client
 from ..config import get_global_settings
 from ..errors import create_validation_error
@@ -473,6 +476,27 @@ def _merge_partial_reason(response: dict[str, Any], value: str) -> None:
         response["partial_reason"] = value
 
 
+def _format_search_diagnostics(diagnostics: dict[str, Any]) -> str | None:
+    """Render the component's non-empty search diagnostics into one reason fragment.
+
+    The component reports intentional per-surface diagnostics (e.g.
+    ``config_components_inaccessible: [...]`` — config domains it could not read
+    from HA's in-process registries). Each non-empty entry becomes a
+    human-readable ``"<label>: <values>"`` clause; empty entries are dropped.
+    Returns ``None`` when nothing is reportable.
+    """
+    fragments: list[str] = []
+    for key, value in diagnostics.items():
+        if not value:
+            continue
+        label = key.replace("_", " ")
+        if isinstance(value, (list, tuple, set)):
+            fragments.append(f"{label}: {', '.join(str(v) for v in value)}")
+        else:
+            fragments.append(f"{label}: {value}")
+    return "; ".join(fragments) if fragments else None
+
+
 def _build_hidden_ids(registry_result: Any) -> set[str]:
     """Build a set of hidden entity IDs from a registry/list WS response."""
     hidden_ids: set[str] = set()
@@ -860,6 +884,18 @@ def _shape_component_search_response(
         if isinstance(reason, str) and reason:
             _merge_partial_reason(response, reason)
 
+    # The component also surfaces intentional per-surface diagnostics (e.g. a
+    # config domain it couldn't read) separately from the overall partial flag.
+    # A non-empty diagnostics map is a genuine incompleteness, so mark the
+    # response partial and fold a readable clause into partial_reason rather than
+    # dropping the component's signal.
+    diagnostics = component_result.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        diag_reason = _format_search_diagnostics(diagnostics)
+        if diag_reason:
+            response["partial"] = True
+            _merge_partial_reason(response, diag_reason)
+
     response["count"] = len(response["entities"]) + sum(
         len(response.get(bucket, [])) for bucket in _CONFIG_BUCKETS
     )
@@ -932,7 +968,21 @@ def _wrap_registry(slice_value: Any) -> dict[str, Any]:
     }
 
 
-def _build_overview_slices(component_result: dict[str, Any]) -> _OverviewSlices:
+# The always-present overview slices the component returns independent of any
+# request flag. Each must be a list; ``config`` (a dict) is checked separately.
+# A missing/malformed member means the component couldn't assemble a trustworthy
+# snapshot, so the caller falls back to the legacy fetch path rather than serve a
+# silently-degraded overview.
+_REQUIRED_OVERVIEW_LIST_SLICES = (
+    "states",
+    "services",
+    "area_registry",
+    "entity_registry",
+    "device_registry",
+)
+
+
+def _build_overview_slices(component_result: dict[str, Any]) -> _OverviewSlices | None:
     """Adapt the component's BARE overview slices into the assembly's shapes.
 
     The component returns bare in-process data (no ``{success, result}`` WS
@@ -940,25 +990,38 @@ def _build_overview_slices(component_result: dict[str, Any]) -> _OverviewSlices:
     + ``_fetch_*`` were written against the wrapped REST/WS payloads, so the three
     registries and the notifications/repairs reads are re-wrapped here at the
     seam. ``states`` / ``services`` / ``config`` already match their bare
-    ``get_states()`` / ``get_services()`` / ``get_config()`` shapes. Every field
-    is type-guarded so a malformed slice degrades to empty rather than raising
-    inside the assembly.
+    ``get_states()`` / ``get_services()`` / ``get_config()`` shapes.
+
+    Returns ``None`` (⇒ legacy fallback) when the snapshot can't be trusted: any
+    required slice missing/malformed (see ``_REQUIRED_OVERVIEW_LIST_SLICES`` plus
+    ``config``), or the component reported a non-empty ``slice_errors`` list (a
+    per-slice read failure it surfaced instead of silently emptying). The
+    flag-gated ``notifications`` / ``repairs`` slices stay lenient — absent or
+    malformed degrades to empty, matching a request that never asked for them.
     """
     result = component_result if isinstance(component_result, dict) else {}
-    states = result.get("states")
-    services = result.get("services")
+
+    slice_errors = result.get("slice_errors")
+    if isinstance(slice_errors, list) and slice_errors:
+        return None
+    for key in _REQUIRED_OVERVIEW_LIST_SLICES:
+        if not isinstance(result.get(key), list):
+            return None
     config = result.get("config")
+    if not isinstance(config, dict):
+        return None
+
     notifications = result.get("notifications")
     repairs = result.get("repairs")
     return _OverviewSlices(
         registry_slices={
-            "states": states if isinstance(states, list) else [],
-            "services": services if isinstance(services, list) else [],
-            "area_registry": _wrap_registry(result.get("area_registry")),
-            "entity_registry": _wrap_registry(result.get("entity_registry")),
-            "device_registry": _wrap_registry(result.get("device_registry")),
+            "states": result["states"],
+            "services": result["services"],
+            "area_registry": _wrap_registry(result["area_registry"]),
+            "entity_registry": _wrap_registry(result["entity_registry"]),
+            "device_registry": _wrap_registry(result["device_registry"]),
         },
-        config=config if isinstance(config, dict) else {},
+        config=config,
         notifications={
             "success": True,
             "result": notifications if isinstance(notifications, list) else [],
@@ -1658,7 +1721,8 @@ class SearchTools:
           positive caps are stale): invalidate the caps and return ``None`` so
           the caller falls back **silently** — an expected, non-actionable
           transition.
-        - any other ``HomeAssistantCommandError`` (a component handler bug):
+        - any other ``HomeAssistantCommandError`` (a component handler bug) or a
+          ``HomeAssistantCommandTimeout`` (the component WS search timed out):
           serve the correct result from the legacy path, append a ``warnings[]``
           entry, and ``log.warning`` — correct results now, breakage visible.
         - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
@@ -1667,7 +1731,7 @@ class SearchTools:
         """
         try:
             raw = await self._send_component_search(req)
-        except HomeAssistantCommandError as exc:
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
                 return None
@@ -2985,16 +3049,21 @@ class SearchTools:
           cached positive caps are stale): invalidate the caps and return
           ``None`` so the caller falls back **silently** — an expected,
           non-actionable transition.
-        - any other ``HomeAssistantCommandError`` (a component handler bug):
+        - any other ``HomeAssistantCommandError`` (a component handler bug) or a
+          ``HomeAssistantCommandTimeout`` (the component WS overview timed out):
           serve the correct result from the legacy path, append a ``warnings[]``
           entry, and ``log.warning`` — correct results now, breakage visible.
+        - a malformed slice payload (a required slice missing/malformed, or a
+          non-empty ``slice_errors`` — ``_build_overview_slices`` returns
+          ``None``): treated like the command-error branch (legacy + warning +
+          log), so a partial snapshot never serves a silently-degraded overview.
         - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
           propagates; the legacy path depends on the same socket and would fail
           identically, so surfacing it is correct.
         """
         try:
             raw = await self._send_component_overview(inputs)
-        except HomeAssistantCommandError as exc:
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
                 return None
@@ -3005,6 +3074,15 @@ class SearchTools:
             logger.warning("ha_mcp_tools/overview failed; fell back to legacy: %r", exc)
             return legacy
         slices = _build_overview_slices(raw.get("result") or {})
+        if slices is None:
+            legacy = await self._assemble_overview(inputs, None)
+            legacy.setdefault("warnings", []).append(
+                "component overview returned malformed slices; served via legacy path"
+            )
+            logger.warning(
+                "ha_mcp_tools/overview returned malformed slices; fell back to legacy"
+            )
+            return legacy
         return await self._assemble_overview(inputs, slices)
 
     async def _send_component_overview(self, inputs: _OverviewInputs) -> dict[str, Any]:

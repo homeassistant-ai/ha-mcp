@@ -13,20 +13,24 @@ can assert they never ran on the component path.
 
 from __future__ import annotations
 
-import contextlib
 from collections import Counter
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
-from ha_mcp.tools import component_api, tools_search
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
+from ha_mcp.tools import tools_search
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import register_search_tools
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
+
+from ._component_routing_helpers import make_ws, patch_ws
 
 _STATES = [
     {
@@ -93,41 +97,6 @@ class RoutingClient:
         return {"config": {}}
 
 
-def _make_ws(
-    *,
-    info_result: dict[str, Any] | None = None,
-    info_exc: Exception | None = None,
-    search_result: dict[str, Any] | None = None,
-    search_exc: Exception | None = None,
-) -> AsyncMock:
-    ws = AsyncMock()
-
-    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
-        if command_type == "ha_mcp_tools/info":
-            if info_exc is not None:
-                raise info_exc
-            return {"success": True, "result": info_result}
-        if command_type == "ha_mcp_tools/search":
-            if search_exc is not None:
-                raise search_exc
-            return {"success": True, "result": search_result}
-        raise AssertionError(f"unexpected command {command_type!r}")
-
-    ws.send_command = AsyncMock(side_effect=_send)
-    return ws
-
-
-@contextlib.contextmanager
-def _patch_ws(ws: AsyncMock) -> Any:
-    """Patch both module references to ``get_websocket_client`` to yield ``ws``."""
-    factory = AsyncMock(return_value=ws)
-    with (
-        patch.object(component_api, "get_websocket_client", factory),
-        patch.object(tools_search, "get_websocket_client", factory),
-    ):
-        yield ws
-
-
 def _build_ha_search(client: Any) -> Any:
     mcp = MagicMock()
     registered: dict[str, Any] = {}
@@ -174,11 +143,15 @@ def _entity_search_result() -> dict[str, Any]:
 async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -> None:
     """When the component serves search, none of the legacy fetches are awaited."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
-    ws = _make_ws(info_result=_CAPS_SEARCH, search_result=_entity_search_result())
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH,
+        cmd_result=_entity_search_result(),
+    )
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_search):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -198,14 +171,15 @@ async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -
 async def test_unknown_command_falls_back_silently(tmp_path, monkeypatch) -> None:
     """unknown_command on the search call → legacy path, no fallback warning."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
-    ws = _make_ws(
+    ws = make_ws(
+        "ha_mcp_tools/search",
         info_result=_CAPS_SEARCH,
-        search_exc=HomeAssistantCommandError("Command failed: nope", "unknown_command"),
+        cmd_exc=HomeAssistantCommandError("Command failed: nope", "unknown_command"),
     )
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_search):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -220,14 +194,15 @@ async def test_unknown_command_falls_back_silently(tmp_path, monkeypatch) -> Non
 async def test_raised_command_falls_back_with_warning(tmp_path, monkeypatch) -> None:
     """A non-unknown command error → legacy path AND a warnings[] entry."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
-    ws = _make_ws(
+    ws = make_ws(
+        "ha_mcp_tools/search",
         info_result=_CAPS_SEARCH,
-        search_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
+        cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
     )
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_search):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -239,11 +214,15 @@ async def test_raised_command_falls_back_with_warning(tmp_path, monkeypatch) -> 
 async def test_caps_probed_once_across_searches(tmp_path, monkeypatch) -> None:
     """The info probe is cached: two searches, one ha_mcp_tools/info call."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
-    ws = _make_ws(info_result=_CAPS_SEARCH, search_result=_entity_search_result())
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH,
+        cmd_result=_entity_search_result(),
+    )
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_search):
         await ha_search(query="kitchen")
         await ha_search(query="kitchen")
 
@@ -251,6 +230,49 @@ async def test_caps_probed_once_across_searches(tmp_path, monkeypatch) -> None:
         c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/info"
     ]
     assert len(info_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_command_timeout_falls_back_with_warning(tmp_path, monkeypatch) -> None:
+    """A component WS timeout → legacy path AND a warnings[] entry (not aborted)."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH,
+        cmd_exc=HomeAssistantCommandTimeout("Command timeout"),
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 1
+    assert any("served via legacy path" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_component_diagnostics_mark_partial(tmp_path, monkeypatch) -> None:
+    """Non-empty component ``diagnostics`` → partial True + reason names the surface."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    result = {
+        **_entity_search_result(),
+        "diagnostics": {"config_components_inaccessible": ["automation", "script"]},
+    }
+    ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result=result)
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert resp["partial"] is True
+    reason = resp["partial_reason"]
+    assert "config components inaccessible" in reason
+    assert "automation" in reason and "script" in reason
+    # The partial reason is mirrored onto the warnings channel agents read.
+    assert any("config components inaccessible" in w for w in resp["warnings"])
 
 
 @pytest.mark.asyncio
@@ -266,21 +288,26 @@ async def test_component_and_legacy_response_shape_parity(
     """
     _setup_visibility_disabled(tmp_path, monkeypatch)
 
-    ws_component = _make_ws(
-        info_result=_CAPS_SEARCH, search_result=_entity_search_result()
+    ws_component = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH,
+        cmd_result=_entity_search_result(),
     )
     client_component = RoutingClient()
-    with _patch_ws(ws_component):
+    with patch_ws(ws_component, tools_search):
         component = await _build_ha_search(client_component)(
             query="kitchen", domain_filter="light"
         )
 
     # info → unknown_command yields no caps, so this run takes the legacy path.
-    ws_legacy = _make_ws(
-        info_exc=HomeAssistantCommandError("Command failed: no info", "unknown_command")
+    ws_legacy = make_ws(
+        "ha_mcp_tools/search",
+        info_exc=HomeAssistantCommandError(
+            "Command failed: no info", "unknown_command"
+        ),
     )
     client_legacy = RoutingClient()
-    with _patch_ws(ws_legacy):
+    with patch_ws(ws_legacy, tools_search):
         legacy = await _build_ha_search(client_legacy)(
             query="kitchen", domain_filter="light"
         )
@@ -354,8 +381,8 @@ class TestListingModesBypassComponent:
         _setup_visibility_disabled(tmp_path, monkeypatch)
         client = ListingModeClient()
         ha_search = _build_ha_search(client)
-        ws = _make_ws(info_result=_CAPS_SEARCH, search_result={})
-        with _patch_ws(ws):
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
+        with patch_ws(ws, tools_search):
             data = await ha_search(domain_filter="light")
         assert data.get("search_type") == "domain_listing", data
         assert not ws.send_command.await_count, (
@@ -369,8 +396,8 @@ class TestListingModesBypassComponent:
         _setup_visibility_disabled(tmp_path, monkeypatch)
         client = ListingModeClient()
         ha_search = _build_ha_search(client)
-        ws = _make_ws(info_result=_CAPS_SEARCH, search_result={})
-        with _patch_ws(ws):
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
+        with patch_ws(ws, tools_search):
             data = await ha_search(query="   ", domain_filter="light")
         assert data.get("search_type") == "domain_listing", data
         assert not ws.send_command.await_count
@@ -382,8 +409,8 @@ class TestListingModesBypassComponent:
         _setup_visibility_disabled(tmp_path, monkeypatch)
         client = ListingModeClient()
         ha_search = _build_ha_search(client)
-        ws = _make_ws(info_result=_CAPS_SEARCH, search_result={})
-        with _patch_ws(ws):
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
+        with patch_ws(ws, tools_search):
             data = await ha_search(area_filter="Kitchen")
         assert data.get("search_type") == "area_only", data
         assert not ws.send_command.await_count, (
@@ -397,8 +424,8 @@ class TestListingModesBypassComponent:
         _setup_visibility_disabled(tmp_path, monkeypatch)
         client = ListingModeClient()
         ha_search = _build_ha_search(client)
-        ws = _make_ws(info_result=_CAPS_SEARCH, search_result={})
-        with _patch_ws(ws):
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
+        with patch_ws(ws, tools_search):
             data = await ha_search(query="kitchen", area_filter="Kitchen")
         assert data.get("search_type") == "area_filtered_query", data
         assert not ws.send_command.await_count, (
@@ -433,9 +460,13 @@ class TestVisibilityFilterBypassesComponent:
         monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
         client = RoutingClient()
         ha_search = _build_ha_search(client)
-        ws = _make_ws(info_result=_CAPS_SEARCH, search_result=_entity_search_result())
+        ws = make_ws(
+            "ha_mcp_tools/search",
+            info_result=_CAPS_SEARCH,
+            cmd_result=_entity_search_result(),
+        )
 
-        with _patch_ws(ws):
+        with patch_ws(ws, tools_search):
             data = await ha_search(query="kitchen")
 
         # The component search command must never run while the filter is active.
@@ -460,9 +491,13 @@ class TestVisibilityFilterBypassesComponent:
         monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
         client = RoutingClient()
         ha_search = _build_ha_search(client)
-        ws = _make_ws(info_result=_CAPS_SEARCH, search_result=_entity_search_result())
+        ws = make_ws(
+            "ha_mcp_tools/search",
+            info_result=_CAPS_SEARCH,
+            cmd_result=_entity_search_result(),
+        )
 
-        with _patch_ws(ws):
+        with patch_ws(ws, tools_search):
             await ha_search(query="kitchen")
 
         assert any(

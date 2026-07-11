@@ -20,17 +20,22 @@ from __future__ import annotations
 
 from collections import Counter
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
-from ha_mcp.tools import component_api, tools_search
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
+from ha_mcp.tools import tools_search
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import register_search_tools
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
+
+from ._component_routing_helpers import make_ws, patch_ws
 
 _STATES = [
     {
@@ -123,48 +128,6 @@ class OverviewRoutingClient:
         )
 
 
-def _make_ws(
-    *,
-    info_result: dict[str, Any] | None = None,
-    info_exc: Exception | None = None,
-    overview_result: dict[str, Any] | None = None,
-    overview_exc: Exception | None = None,
-) -> AsyncMock:
-    ws = AsyncMock()
-
-    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
-        if command_type == "ha_mcp_tools/info":
-            if info_exc is not None:
-                raise info_exc
-            return {"success": True, "result": info_result}
-        if command_type == "ha_mcp_tools/overview":
-            if overview_exc is not None:
-                raise overview_exc
-            return {"success": True, "result": overview_result}
-        raise AssertionError(f"unexpected command {command_type!r}")
-
-    ws.send_command = AsyncMock(side_effect=_send)
-    return ws
-
-
-class _PatchBothWs:
-    """Context manager patching the caps-probe and overview-send WS factories."""
-
-    def __init__(self, ws: AsyncMock) -> None:
-        self._factory = AsyncMock(return_value=ws)
-
-    def __enter__(self) -> AsyncMock:
-        self._p1 = patch.object(component_api, "get_websocket_client", self._factory)
-        self._p2 = patch.object(tools_search, "get_websocket_client", self._factory)
-        self._p1.start()
-        self._p2.start()
-        return self._factory
-
-    def __exit__(self, *exc: Any) -> None:
-        self._p1.stop()
-        self._p2.stop()
-
-
 def _build_overview_tool(client: Any) -> Any:
     mcp = MagicMock()
     registered: dict[str, Any] = {}
@@ -224,11 +187,15 @@ async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -
     """When the component serves overview, none of the ~8 legacy fetches run."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
     _quiet_tail(monkeypatch)
-    ws = _make_ws(info_result=_CAPS_OVERVIEW, overview_result=_overview_slices())
+    ws = make_ws(
+        "ha_mcp_tools/overview",
+        info_result=_CAPS_OVERVIEW,
+        cmd_result=_overview_slices(),
+    )
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with _PatchBothWs(ws):
+    with patch_ws(ws, tools_search):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -251,11 +218,15 @@ async def test_caps_probed_once_across_overviews(tmp_path, monkeypatch) -> None:
     """The info probe is cached: two overviews, one ha_mcp_tools/info call."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
     _quiet_tail(monkeypatch)
-    ws = _make_ws(info_result=_CAPS_OVERVIEW, overview_result=_overview_slices())
+    ws = make_ws(
+        "ha_mcp_tools/overview",
+        info_result=_CAPS_OVERVIEW,
+        cmd_result=_overview_slices(),
+    )
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with _PatchBothWs(ws):
+    with patch_ws(ws, tools_search):
         await overview(detail_level="standard")
         await overview(detail_level="standard")
 
@@ -270,16 +241,15 @@ async def test_unknown_command_falls_back_silently(tmp_path, monkeypatch) -> Non
     """unknown_command on the overview call → legacy path, no fallback warning."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
     _quiet_tail(monkeypatch)
-    ws = _make_ws(
+    ws = make_ws(
+        "ha_mcp_tools/overview",
         info_result=_CAPS_OVERVIEW,
-        overview_exc=HomeAssistantCommandError(
-            "Command failed: nope", "unknown_command"
-        ),
+        cmd_exc=HomeAssistantCommandError("Command failed: nope", "unknown_command"),
     )
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with _PatchBothWs(ws):
+    with patch_ws(ws, tools_search):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -297,16 +267,15 @@ async def test_raised_command_falls_back_with_warning(tmp_path, monkeypatch) -> 
     """A non-unknown command error → legacy path AND a warnings[] entry."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
     _quiet_tail(monkeypatch)
-    ws = _make_ws(
+    ws = make_ws(
+        "ha_mcp_tools/overview",
         info_result=_CAPS_OVERVIEW,
-        overview_exc=HomeAssistantCommandError(
-            "Command failed: boom", "internal_error"
-        ),
+        cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
     )
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with _PatchBothWs(ws):
+    with patch_ws(ws, tools_search):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -318,17 +287,93 @@ async def test_raised_command_falls_back_with_warning(tmp_path, monkeypatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_capsless_client_uses_legacy(tmp_path, monkeypatch) -> None:
-    """info → unknown_command yields no caps, so overview runs the legacy path."""
+async def test_command_timeout_falls_back_with_warning(tmp_path, monkeypatch) -> None:
+    """A component WS overview timeout → legacy path AND a warnings[] entry."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
     _quiet_tail(monkeypatch)
-    ws = _make_ws(
-        info_exc=HomeAssistantCommandError("Command failed: no info", "unknown_command")
+    ws = make_ws(
+        "ha_mcp_tools/overview",
+        info_result=_CAPS_OVERVIEW,
+        cmd_exc=HomeAssistantCommandTimeout("Command timeout"),
     )
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with _PatchBothWs(ws):
+    with patch_ws(ws, tools_search):
+        resp = await overview(detail_level="standard")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 1
+    assert any(
+        "component overview path failed" in w and "served via legacy path" in w
+        for w in resp["warnings"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_slice_falls_back_with_warning(tmp_path, monkeypatch) -> None:
+    """A required slice of the wrong type → legacy path AND a warnings[] entry.
+
+    ``_build_overview_slices`` returns None on a malformed required slice, so a
+    partial snapshot never serves a silently-degraded overview.
+    """
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    _quiet_tail(monkeypatch)
+    slices = _overview_slices()
+    slices["states"] = "not a list"  # malformed required slice
+    ws = make_ws("ha_mcp_tools/overview", info_result=_CAPS_OVERVIEW, cmd_result=slices)
+    client = OverviewRoutingClient()
+    overview = _build_overview_tool(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await overview(detail_level="standard")
+
+    assert resp["success"] is True
+    # Legacy inventory served the request instead of the malformed slices.
+    assert client.get_states_calls == 1
+    assert any(
+        "malformed slices" in w and "served via legacy path" in w
+        for w in resp["warnings"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_slice_errors_falls_back_with_warning(tmp_path, monkeypatch) -> None:
+    """A non-empty ``slice_errors`` list → legacy path AND a warnings[] entry."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    _quiet_tail(monkeypatch)
+    slices = _overview_slices()  # every required slice well-formed...
+    slices["slice_errors"] = ["entity_registry read failed"]  # ...but flagged bad
+    ws = make_ws("ha_mcp_tools/overview", info_result=_CAPS_OVERVIEW, cmd_result=slices)
+    client = OverviewRoutingClient()
+    overview = _build_overview_tool(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await overview(detail_level="standard")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 1
+    assert any(
+        "malformed slices" in w and "served via legacy path" in w
+        for w in resp["warnings"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_capsless_client_uses_legacy(tmp_path, monkeypatch) -> None:
+    """info → unknown_command yields no caps, so overview runs the legacy path."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    _quiet_tail(monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/overview",
+        info_exc=HomeAssistantCommandError(
+            "Command failed: no info", "unknown_command"
+        ),
+    )
+    client = OverviewRoutingClient()
+    overview = _build_overview_tool(client)
+
+    with patch_ws(ws, tools_search):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -360,11 +405,15 @@ async def test_visibility_active_bypasses_component(tmp_path, monkeypatch) -> No
     )
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
     _quiet_tail(monkeypatch)
-    ws = _make_ws(info_result=_CAPS_OVERVIEW, overview_result=_overview_slices())
+    ws = make_ws(
+        "ha_mcp_tools/overview",
+        info_result=_CAPS_OVERVIEW,
+        cmd_result=_overview_slices(),
+    )
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with _PatchBothWs(ws):
+    with patch_ws(ws, tools_search):
         resp = await overview(detail_level="standard")
 
     # The component overview command must never run while the filter is active.
@@ -388,11 +437,15 @@ async def test_enabled_but_no_active_dimension_still_uses_component(
     )
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
     _quiet_tail(monkeypatch)
-    ws = _make_ws(info_result=_CAPS_OVERVIEW, overview_result=_overview_slices())
+    ws = make_ws(
+        "ha_mcp_tools/overview",
+        info_result=_CAPS_OVERVIEW,
+        cmd_result=_overview_slices(),
+    )
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with _PatchBothWs(ws):
+    with patch_ws(ws, tools_search):
         await overview(detail_level="standard")
 
     assert any(
@@ -416,19 +469,24 @@ async def test_component_and_legacy_response_parity(tmp_path, monkeypatch) -> No
     _quiet_tail(monkeypatch)
 
     # Legacy run (info → unknown_command ⇒ no caps ⇒ legacy per-read fetch path).
-    ws_legacy = _make_ws(
-        info_exc=HomeAssistantCommandError("Command failed: no info", "unknown_command")
+    ws_legacy = make_ws(
+        "ha_mcp_tools/overview",
+        info_exc=HomeAssistantCommandError(
+            "Command failed: no info", "unknown_command"
+        ),
     )
     client_legacy = OverviewRoutingClient()
-    with _PatchBothWs(ws_legacy):
+    with patch_ws(ws_legacy, tools_search):
         legacy = await _build_overview_tool(client_legacy)(detail_level="standard")
 
     # Component run: the same eight reads, delivered as raw slices in one call.
-    ws_component = _make_ws(
-        info_result=_CAPS_OVERVIEW, overview_result=_overview_slices()
+    ws_component = make_ws(
+        "ha_mcp_tools/overview",
+        info_result=_CAPS_OVERVIEW,
+        cmd_result=_overview_slices(),
     )
     client_component = OverviewRoutingClient()
-    with _PatchBothWs(ws_component):
+    with patch_ws(ws_component, tools_search):
         component = await _build_overview_tool(client_component)(
             detail_level="standard"
         )

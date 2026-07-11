@@ -32,16 +32,23 @@ fetch so a test can assert it never ran on the component path.
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
 from ha_mcp.tools import component_api, tools_config_helpers
-from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
+from ha_mcp.tools.tools_config_helpers import (
+    _shape_collection_helper_record,
+    register_config_helper_tools,
+)
+
+from ._component_routing_helpers import make_ws, patch_ws
 
 # One collection helper renamed after creation: storage name "Old Name",
 # current registry display name "New Name", entity_id input_boolean.foo — the
@@ -108,41 +115,6 @@ class RoutingClient:
         return {"success": False, "error": "unexpected list type"}
 
 
-def _make_ws(
-    *,
-    info_result: dict[str, Any] | None = None,
-    info_exc: Exception | None = None,
-    helpers_result: dict[str, Any] | None = None,
-    helpers_exc: Exception | None = None,
-) -> AsyncMock:
-    ws = AsyncMock()
-
-    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
-        if command_type == "ha_mcp_tools/info":
-            if info_exc is not None:
-                raise info_exc
-            return {"success": True, "result": info_result}
-        if command_type == "ha_mcp_tools/helpers_list":
-            if helpers_exc is not None:
-                raise helpers_exc
-            return {"success": True, "result": helpers_result}
-        raise AssertionError(f"unexpected command {command_type!r}")
-
-    ws.send_command = AsyncMock(side_effect=_send)
-    return ws
-
-
-@contextlib.contextmanager
-def _patch_ws(ws: AsyncMock) -> Any:
-    """Patch both module references to ``get_websocket_client`` to yield ``ws``."""
-    factory = AsyncMock(return_value=ws)
-    with (
-        patch.object(component_api, "get_websocket_client", factory),
-        patch.object(tools_config_helpers, "get_websocket_client", factory),
-    ):
-        yield ws
-
-
 def _build_list_helpers(client: Any) -> Any:
     registered: dict[str, Any] = {}
 
@@ -187,11 +159,15 @@ def _info_calls(ws: AsyncMock) -> list[Any]:
 @pytest.mark.asyncio
 async def test_component_fast_path_skips_legacy_and_probes_caps_once() -> None:
     """Component serves the listing: no legacy fetch, and info probed once."""
-    ws = _make_ws(info_result=_CAPS_HELPERS, helpers_result=_component_helpers_result())
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_helpers_result(),
+    )
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_config_helpers):
         resp = await list_helpers(helper_type="input_boolean")
         resp2 = await list_helpers(helper_type="input_boolean")
 
@@ -213,11 +189,15 @@ async def test_component_fast_path_skips_legacy_and_probes_caps_once() -> None:
 @pytest.mark.asyncio
 async def test_rename_case_record_keeps_storage_id_and_adds_entity_id_name() -> None:
     """#1794 shape: storage id kept, current entity_id + name added additively."""
-    ws = _make_ws(info_result=_CAPS_HELPERS, helpers_result=_component_helpers_result())
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_helpers_result(),
+    )
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_config_helpers):
         resp = await list_helpers(helper_type="input_boolean")
 
     (record,) = resp["helpers"]
@@ -234,19 +214,24 @@ async def test_rename_case_record_keeps_storage_id_and_adds_entity_id_name() -> 
 @pytest.mark.asyncio
 async def test_component_and_legacy_envelope_parity() -> None:
     """Both serving paths return the same top-level envelope keys."""
-    ws_component = _make_ws(
-        info_result=_CAPS_HELPERS, helpers_result=_component_helpers_result()
+    ws_component = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_helpers_result(),
     )
-    with _patch_ws(ws_component):
+    with patch_ws(ws_component, tools_config_helpers):
         component = await _build_list_helpers(RoutingClient())(
             helper_type="input_boolean"
         )
 
     # info → unknown_command yields no caps, so this run takes the legacy path.
-    ws_legacy = _make_ws(
-        info_exc=HomeAssistantCommandError("Command failed: no info", "unknown_command")
+    ws_legacy = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_exc=HomeAssistantCommandError(
+            "Command failed: no info", "unknown_command"
+        ),
     )
-    with _patch_ws(ws_legacy):
+    with patch_ws(ws_legacy, tools_config_helpers):
         legacy = await _build_list_helpers(RoutingClient())(helper_type="input_boolean")
 
     assert set(component.keys()) == set(legacy.keys())
@@ -261,16 +246,15 @@ async def test_component_and_legacy_envelope_parity() -> None:
 @pytest.mark.asyncio
 async def test_unknown_command_falls_back_silently() -> None:
     """unknown_command on the helpers_list call → legacy path, no warning."""
-    ws = _make_ws(
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
-        helpers_exc=HomeAssistantCommandError(
-            "Command failed: gone", "unknown_command"
-        ),
+        cmd_exc=HomeAssistantCommandError("Command failed: gone", "unknown_command"),
     )
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_config_helpers):
         resp = await list_helpers(helper_type="input_boolean")
 
     assert resp["success"] is True
@@ -284,14 +268,15 @@ async def test_unknown_command_falls_back_silently() -> None:
 @pytest.mark.asyncio
 async def test_raised_command_falls_back_with_warning() -> None:
     """A non-unknown command error → legacy path AND a warnings[] entry."""
-    ws = _make_ws(
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
-        helpers_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
+        cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
     )
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_config_helpers):
         resp = await list_helpers(helper_type="input_boolean")
 
     assert resp["success"] is True
@@ -302,13 +287,16 @@ async def test_raised_command_falls_back_with_warning() -> None:
 @pytest.mark.asyncio
 async def test_capsless_component_pins_legacy_path() -> None:
     """Old component (info unknown_command) → legacy path, helpers_list never sent."""
-    ws = _make_ws(
-        info_exc=HomeAssistantCommandError("Command failed: no info", "unknown_command")
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_exc=HomeAssistantCommandError(
+            "Command failed: no info", "unknown_command"
+        ),
     )
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_config_helpers):
         resp = await list_helpers(helper_type="input_boolean")
 
     assert resp["success"] is True
@@ -337,10 +325,12 @@ async def test_flow_records_are_dropped_from_component_output() -> None:
         "count": 2,
         "covered_types": ["input_boolean"],
     }
-    ws = _make_ws(info_result=_CAPS_HELPERS, helpers_result=mixed)
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=mixed
+    )
     client = _build_list_helpers(RoutingClient())
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_config_helpers):
         resp = await client(helper_type="input_boolean")
 
     assert resp["count"] == 1
@@ -353,11 +343,15 @@ async def test_flow_records_are_dropped_from_component_output() -> None:
 @pytest.mark.asyncio
 async def test_flow_type_served_only_by_component() -> None:
     """A flow type is served through the component: entry_id + name + options."""
-    ws = _make_ws(info_result=_CAPS_HELPERS, helpers_result=_component_flow_result())
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_flow_result(),
+    )
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_config_helpers):
         resp = await list_helpers(helper_type="template")
 
     assert resp["success"] is True
@@ -381,13 +375,16 @@ async def test_flow_type_served_only_by_component() -> None:
 @pytest.mark.asyncio
 async def test_flow_type_capsless_raises_component_required() -> None:
     """Flow type without a component surface → hard error, no legacy, no empty."""
-    ws = _make_ws(
-        info_exc=HomeAssistantCommandError("Command failed: no info", "unknown_command")
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_exc=HomeAssistantCommandError(
+            "Command failed: no info", "unknown_command"
+        ),
     )
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
 
-    with _patch_ws(ws), pytest.raises(ToolError) as excinfo:
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="template")
 
     assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
@@ -400,14 +397,15 @@ async def test_flow_type_capsless_raises_component_required() -> None:
 @pytest.mark.asyncio
 async def test_flow_type_component_error_raises_no_legacy_fallback() -> None:
     """A component handler error on a flow type → same hard error, no legacy."""
-    ws = _make_ws(
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
-        helpers_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
+        cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
     )
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
 
-    with _patch_ws(ws), pytest.raises(ToolError) as excinfo:
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="template")
 
     assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
@@ -418,16 +416,15 @@ async def test_flow_type_component_error_raises_no_legacy_fallback() -> None:
 @pytest.mark.asyncio
 async def test_flow_type_unknown_command_raises_component_required() -> None:
     """A downgraded component (unknown_command) on a flow type → same hard error."""
-    ws = _make_ws(
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
-        helpers_exc=HomeAssistantCommandError(
-            "Command failed: gone", "unknown_command"
-        ),
+        cmd_exc=HomeAssistantCommandError("Command failed: gone", "unknown_command"),
     )
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
 
-    with _patch_ws(ws), pytest.raises(ToolError) as excinfo:
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="template")
 
     assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
@@ -440,11 +437,13 @@ async def test_uncovered_storage_type_falls_back_to_legacy() -> None:
     # The component ran but its from-states scan can't see tags, so tag is not
     # in covered_types even though the command succeeded with an empty list.
     result = {"helpers": [], "count": 0, "covered_types": ["zone", "person"]}
-    ws = _make_ws(info_result=_CAPS_HELPERS, helpers_result=result)
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
+    )
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_config_helpers):
         resp = await list_helpers(helper_type="tag")
 
     # The component was consulted exactly once, then legacy tag/list served.
@@ -464,11 +463,13 @@ async def test_missing_covered_types_falls_back_to_legacy() -> None:
         "helpers": _component_helpers_result()["helpers"],
         "count": 1,
     }  # no covered_types key
-    ws = _make_ws(info_result=_CAPS_HELPERS, helpers_result=result)
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
+    )
     client = RoutingClient()
     list_helpers = _build_list_helpers(client)
 
-    with _patch_ws(ws):
+    with patch_ws(ws, tools_config_helpers):
         resp = await list_helpers(helper_type="input_boolean")
 
     # Component consulted once, but its list isn't trusted → legacy serves.
@@ -476,3 +477,100 @@ async def test_missing_covered_types_falls_back_to_legacy() -> None:
     assert client.list_calls == 1
     assert resp["count"] == 1
     assert resp["helpers"][0]["id"] == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_storage_command_timeout_falls_back_with_warning() -> None:
+    """A storage-type component WS timeout → legacy path AND a warnings[] entry."""
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_exc=HomeAssistantCommandTimeout("Command timeout"),
+    )
+    client = RoutingClient()
+    list_helpers = _build_list_helpers(client)
+
+    with patch_ws(ws, tools_config_helpers):
+        resp = await list_helpers(helper_type="input_boolean")
+
+    assert resp["success"] is True
+    assert client.list_calls == 1
+    assert any("served via legacy path" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_flow_command_timeout_raises_component_required() -> None:
+    """A flow-type component WS timeout → hard component-required error, no legacy."""
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_exc=HomeAssistantCommandTimeout("Command timeout"),
+    )
+    client = RoutingClient()
+    list_helpers = _build_list_helpers(client)
+
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
+        await list_helpers(helper_type="template")
+
+    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert client.list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_flow_type_missing_covered_types_raises_component_required() -> None:
+    """Flow type + response with no covered_types → component-required, not empty.
+
+    A flow type is always covered when the component enumerated it; a response
+    that omits covered_types can't be trusted as "no such helpers", and there is
+    no legacy path for flow types, so the tool raises rather than returning an
+    empty list.
+    """
+    result = {"helpers": [], "count": 0}  # no covered_types key
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
+    )
+    client = RoutingClient()
+    list_helpers = _build_list_helpers(client)
+
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
+        await list_helpers(helper_type="template")
+
+    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert client.list_calls == 0
+
+
+def test_collection_record_prefers_storage_id_over_object_id() -> None:
+    """``_shape_collection_helper_record`` consumes the authoritative storage_id.
+
+    person/zone bodies don't carry their own ``id``; the component reads it from
+    the real storage collection as ``storage_id``, which must win over both the
+    (absent) body ``id`` and the record-level ``object_id``.
+    """
+    rec = {
+        "helper_type": "person",
+        "storage_id": "person.abc",
+        "object_id": "derived_from_entity",
+        "entity_id": "person.alice",
+        "name": "Alice",
+        "kind": "collection",
+        "config": {"name": "Alice", "user_id": "u1"},  # no ``id`` in the body
+    }
+    out = _shape_collection_helper_record(rec)
+    assert out["id"] == "person.abc"
+    assert out["entity_id"] == "person.alice"
+    assert out["name"] == "Alice"
+    assert out["user_id"] == "u1"
+
+
+def test_collection_record_falls_back_to_object_id_without_storage_id() -> None:
+    """Older component (no storage_id) still keys ``id`` off ``object_id``."""
+    rec = {
+        "helper_type": "input_boolean",
+        "object_id": "guest_mode",
+        "entity_id": "input_boolean.guest_mode",
+        "name": "Guest",
+        "kind": "collection",
+        "config": {"name": "Guest"},
+    }
+    out = _shape_collection_helper_record(rec)
+    assert out["id"] == "guest_mode"
