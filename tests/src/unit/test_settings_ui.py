@@ -2541,7 +2541,7 @@ class TestEnvPinnedTools:
         (tmp_path / "tool_config.json").write_text(
             json.dumps({"tools": {}, "llm_api": {"ha_get_state": False}})
         )
-        import ha_mcp.settings_ui as sui
+        from ha_mcp import settings_ui as sui
         from ha_mcp.config import _reset_global_settings
 
         _reset_global_settings()
