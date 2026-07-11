@@ -5,7 +5,8 @@ name: Release on tag
 # into the ha-mcp-integration mirror by sync-integration-mirror.yml. Do not
 # hand-edit it in the mirror -- edits are overwritten on the next sync.
 #
-# The monorepo sync pushes vX.Y.Z tags (deploy keys cannot call the GitHub
+# The monorepo sync pushes vX.Y.Z stable tags and vX.Y.Z-dev.N pre-release
+# tags (deploy keys cannot call the GitHub
 # API to create a release directly, only push git refs -- including
 # annotated tags and, per this same sync workflow, this file). Since the
 # deploy key can't set a release body via the API either, the tag itself
@@ -20,6 +21,16 @@ on:
 
 permissions:
   contents: write
+
+# Serialize runs: a dev pre-release tag and the stable tag that supersedes
+# it can arrive minutes apart, each starting its own run. Without
+# serialization the stable run's retire scan can list releases before the
+# dev run has published its pre-release, orphaning it until the next
+# stable release. cancel-in-progress stays false so a queued stable run
+# is never evicted.
+concurrency:
+  group: release-on-tag
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -94,14 +105,25 @@ jobs:
           # "nothing to retire" and pass silently.
           TAGS=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
             --jq '.[] | select(.prerelease) | .tag_name')
+          # Process every tag, THEN fail if any deletion errored: aborting
+          # mid-loop (plain set -e) leaves later tags unprocessed, while
+          # `|| echo warning` would mask a persistent failure forever - the
+          # same anti-pattern the create step's history warns about. A red
+          # run here is self-healing (the release is already published and
+          # the next stable release re-runs the full scan).
+          FAILED=0
           for TAG in $TAGS; do
             case "$TAG" in *-dev.*) ;; *) continue ;; esac
             BASE="${TAG#v}"
             BASE="${BASE%%-dev.*}"
             if [ "$(printf '%s\n%s\n' "$BASE" "$VER" | sort -V | tail -n1)" = "$VER" ]; then
               echo "retiring superseded pre-release ${TAG}"
-              gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+              gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || FAILED=1
             else
               echo "keeping ${TAG} (newer than ${VER})"
             fi
           done
+          if [ "$FAILED" -ne 0 ]; then
+            echo "::error::one or more pre-release retirements failed; the next stable release re-runs the scan"
+            exit 1
+          fi

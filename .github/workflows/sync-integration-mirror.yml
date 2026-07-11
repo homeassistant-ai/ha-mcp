@@ -46,6 +46,8 @@ on:
           stable re-tags the current component version as a full release
           (recovery path when a release run flaked); dev cuts a
           v<version>-dev.N pre-release from the current master snapshot.
+          Dispatch from master only - the tag version is read from the
+          checked-out ref's manifest.json.
         type: choice
         options: [stable, dev]
         default: stable
@@ -219,7 +221,12 @@ jobs:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
         run: |
           VER=$(python3 -c "import json; print(json.load(open('custom_components/ha_mcp_tools/manifest.json'))['version'])")
-          if git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}" | grep -q .; then
+          # Capture instead of `| grep -q .`: without pipefail a FAILED
+          # ls-remote looks identical to "tag absent" and the step would
+          # proceed on a network blip; a bare assignment under set -e
+          # aborts loud instead.
+          existing=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
+          if [ -n "$existing" ]; then
             echo "mirror tag v${VER} exists"
             exit 0
           fi
@@ -241,9 +248,11 @@ jobs:
         # tags the bare v<version>, HACS's newest-first release scan puts
         # everyone - including pre-release users - back on the stable build.
         #
-        # The dev tag MUST NOT be the bare v<version>: the stable tag step
-        # above is idempotent and would skip on the existing tag, leaving the
-        # version permanently marked pre-release. run_number keeps successive
+        # The dev tag MUST NOT be the bare v<version>: release-on-tag.yml
+        # keys --prerelease off the -dev. suffix, so a bare tag would publish
+        # the dev snapshot as a FULL release to every stable HACS user, and
+        # the idempotent stable tag step above would then skip on the
+        # existing tag, blocking the real stable release. run_number keeps successive
         # dev builds of one version ordered and unique; a re-run of the same
         # run number hits the existing-tag check and no-ops.
         if: >-
@@ -257,13 +266,21 @@ jobs:
           # the last stable release, so there is nothing dev-only to publish:
           # a v<VER>-dev.N tag would hide behind the stable release in HACS's
           # newest-first scan. Component changes are required to bump
-          # manifest.json in the same PR (AGENTS.md "Custom Component").
-          if git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}" | grep -q .; then
+          # manifest.json in the same PR (AGENTS.md "Custom Component") - if
+          # that rule is ever violated, this skip means pre-release users
+          # silently miss that build until the next bump.
+          # Captures instead of `| grep -q .`: without pipefail a FAILED
+          # ls-remote is indistinguishable from "tag absent", and here that
+          # would cut a dev tag for an already-stable version on a network
+          # blip; bare assignments under set -e abort loud instead.
+          stable_exists=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
+          if [ -n "$stable_exists" ]; then
             echo "v${VER} is already released as stable - skipping dev tag"
             exit 0
           fi
           TAG="v${VER}-dev.${{ github.run_number }}"
-          if git -C /tmp/mirror ls-remote --tags origin "refs/tags/${TAG}" | grep -q .; then
+          tag_exists=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/${TAG}")
+          if [ -n "$tag_exists" ]; then
             echo "mirror tag ${TAG} exists"
             exit 0
           fi
