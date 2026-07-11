@@ -1,0 +1,978 @@
+"""In-process WebSocket command surface for the ha_mcp_tools component.
+
+This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
+ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
+capability gate. v1.1.0 ships two commands:
+
+* ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
+  + ``component_version`` + advisory ``limits``. One cached probe tells the
+  server which commands are live (capability negotiation, NOT a version floor).
+* ``ha_mcp_tools/search`` — a unified in-process search over live registries and
+  states, joined and scored, mirroring today's ``ha_search`` response envelope.
+
+Design notes that are load-bearing:
+
+* **Capability negotiation, not version-lockstep.** ``CAPABILITIES`` grows one
+  entry per shipped command; the server asks "do you support ``search``?"
+  rather than "are you >= X". The manifest version is reported for display only.
+* **Data minimization.** Flow-helper indexing reads ``ConfigEntry.options`` /
+  ``title`` only — **never** ``ConfigEntry.data`` (integration credentials).
+* **YAML config bodies are never emitted.** automation/script/scene bodies are
+  indexed for *matching*, but a matched item's ``config`` body is returned only
+  when it is storage/editor-backed AND ``include_config`` is set. YAML-loaded
+  items return identity/metadata only (their ``raw_config`` may carry resolved
+  ``!secret`` plaintext). Body emission for YAML belongs to the future
+  ``config_get`` command.
+* **Event-loop hygiene.** Every join is a pure in-memory read over live
+  registries — run synchronously, no executor, no persistent index (always
+  fresh, zero cache-invalidation surface).
+
+Extension point — to add a command later (overview / config_get / helpers_list):
+write ``_do_<name>(hass, params)``, append its capability to :data:`CAPABILITIES`,
+and add one row to :func:`_command_specs`. ``info`` enumerates the rest.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from difflib import SequenceMatcher
+from typing import Any
+
+import voluptuous as vol
+from homeassistant.components import websocket_api
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import (
+    area_registry as ar,
+)
+from homeassistant.helpers import (
+    device_registry as dr,
+)
+from homeassistant.helpers import (
+    entity_registry as er,
+)
+from homeassistant.helpers import (
+    floor_registry as fr,
+)
+from homeassistant.helpers import (
+    label_registry as lr,
+)
+
+from .const import COMPONENT_VERSION
+
+_LOGGER = logging.getLogger(__name__)
+
+# --- Wire contract -----------------------------------------------------------
+WS_API_PREFIX = "ha_mcp_tools"
+WS_INFO = f"{WS_API_PREFIX}/info"
+WS_SEARCH = f"{WS_API_PREFIX}/search"
+
+# Wire-format generation of the request/response envelopes. Bumped only on an
+# *incompatible* shape change to an existing command; additive fields do not
+# bump it (the server checks ``schema_version >= N`` before using a new shape).
+SCHEMA_VERSION = 1
+
+# Which commands exist. Grows one entry per shipped command; the server gates
+# each consumer on ``capability in caps.capabilities``. Never remove an entry
+# without a major bump.
+CAPABILITIES: list[str] = ["search"]
+
+# Advisory caps advertised in ``info.limits`` so no single WS frame balloons.
+MAX_RESULTS = 500
+MAX_BODY_BYTES = 1_000_000
+LIMITS = {"max_results": MAX_RESULTS, "max_body_bytes": MAX_BODY_BYTES}
+
+DEFAULT_LIMIT = 10
+
+# Fuzzy floor + hidden penalty, mirrored from the server so the two scorers do
+# not drift (guarded by the golden parity test).
+FUZZY_THRESHOLD = 70
+HIDDEN_SCORE_PENALTY = 20
+
+# --- Search surfaces ---------------------------------------------------------
+SEARCH_TYPE_ENTITY = "entity"
+SEARCH_TYPE_AUTOMATION = "automation"
+SEARCH_TYPE_SCRIPT = "script"
+SEARCH_TYPE_SCENE = "scene"
+SEARCH_TYPE_HELPER = "helper"
+ALL_SEARCH_TYPES = [
+    SEARCH_TYPE_ENTITY,
+    SEARCH_TYPE_AUTOMATION,
+    SEARCH_TYPE_SCRIPT,
+    SEARCH_TYPE_SCENE,
+    SEARCH_TYPE_HELPER,
+]
+# raw_config surfaces reached via each domain's EntityComponent in hass.data.
+CONFIG_SEARCH_TYPES = (
+    SEARCH_TYPE_AUTOMATION,
+    SEARCH_TYPE_SCRIPT,
+    SEARCH_TYPE_SCENE,
+)
+
+# Collection ("storage collection") helpers — entities in the state machine.
+# Matched on entity_id / friendly_name only; their body is not read in v1.
+COLLECTION_HELPER_DOMAINS = frozenset(
+    {
+        "input_boolean",
+        "input_number",
+        "input_text",
+        "input_select",
+        "input_datetime",
+        "input_button",
+        "counter",
+        "timer",
+        "schedule",
+    }
+)
+# Flow (config-entry-backed) helpers. Indexed from ``entry.options`` / ``title``
+# directly — no OptionsFlow start/abort dance, and NEVER ``entry.data``.
+FLOW_HELPER_DOMAINS = frozenset(
+    {
+        "template",
+        "group",
+        "utility_meter",
+        "threshold",
+        "derivative",
+        "integration",
+        "min_max",
+        "statistics",
+        "trend",
+        "tod",
+        "random",
+        "switch_as_x",
+        "mold_indicator",
+        "history_stats",
+        "bayesian",
+        "filter",
+        "generic_thermostat",
+        "generic_hygrostat",
+        "combine",
+    }
+)
+
+_SPLIT_RE = re.compile(r"[._\-\s]+")
+
+
+# =============================================================================
+# Registration (thin @websocket_command wrappers over the pure `_do_*` funcs)
+# =============================================================================
+def async_register_commands(hass: HomeAssistant) -> None:
+    """Register the ``ha_mcp_tools/*`` WebSocket commands.
+
+    Idempotent: HA's ``async_register_command`` overwrites an existing handler,
+    so re-running on a config-entry reload is harmless. Called from the tools
+    config-entry setup alongside the service registrations.
+    """
+    for schema, do_fn in _command_specs():
+        websocket_api.async_register_command(hass, _build_handler(schema, do_fn))
+    _LOGGER.debug(
+        "Registered ha_mcp_tools WS commands: schema_version=%s capabilities=%s",
+        SCHEMA_VERSION,
+        CAPABILITIES,
+    )
+
+
+def _command_specs() -> list[tuple[dict[Any, Any], Any]]:
+    """The (schema, pure-handler) rows. Append one row to add a command."""
+    return [
+        (_info_schema(), lambda hass, msg: _do_info()),
+        (_search_schema(), _do_search),
+    ]
+
+
+def _build_handler(schema: dict[Any, Any], do_fn: Any) -> Any:
+    """Wrap a pure ``_do_*`` function as an admin-gated WS command handler."""
+
+    @websocket_api.websocket_command(schema)
+    @websocket_api.require_admin
+    @websocket_api.async_response
+    async def _handler(
+        hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+    ) -> None:
+        connection.send_result(msg["id"], do_fn(hass, msg))
+
+    return _handler
+
+
+def _info_schema() -> dict[Any, Any]:
+    return {vol.Required("type"): WS_INFO}
+
+
+def _search_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_SEARCH,
+        vol.Optional("query"): vol.Any(str, None),
+        vol.Optional("search_types"): [vol.In(ALL_SEARCH_TYPES)],
+        vol.Optional("domain_filter"): str,
+        vol.Optional("area_filter"): str,
+        vol.Optional("state_filter"): str,
+        vol.Optional("exact", default=True): bool,
+        vol.Optional("include_hidden", default=True): bool,
+        vol.Optional("include_config", default=False): bool,
+        vol.Optional("limit", default=DEFAULT_LIMIT): vol.All(
+            int, vol.Range(min=1, max=MAX_RESULTS)
+        ),
+        vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0)),
+    }
+
+
+# =============================================================================
+# ha_mcp_tools/info
+# =============================================================================
+def _do_info() -> dict[str, Any]:
+    """Return the handshake payload (pure; no hass access)."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "component_version": COMPONENT_VERSION,
+        "capabilities": list(CAPABILITIES),
+        "limits": dict(LIMITS),
+    }
+
+
+# =============================================================================
+# ha_mcp_tools/search
+# =============================================================================
+@dataclass
+class _RegistryView:
+    """Bundle of the five HA registries (any may be ``None`` if unavailable)."""
+
+    entity: Any = None
+    area: Any = None
+    floor: Any = None
+    label: Any = None
+    device: Any = None
+
+
+def _resolve_registries(hass: HomeAssistant) -> _RegistryView:
+    """Snapshot the five registries. Test seam — monkeypatched in unit tests."""
+    return _RegistryView(
+        entity=_safe(er.async_get, hass),
+        area=_safe(ar.async_get, hass),
+        floor=_safe(fr.async_get, hass),
+        label=_safe(lr.async_get, hass),
+        device=_safe(dr.async_get, hass),
+    )
+
+
+def _safe(fn: Any, hass: HomeAssistant) -> Any:
+    try:
+        return fn(hass)
+    except Exception:  # pragma: no cover - defensive; core drift
+        return None
+
+
+def _do_search(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Unified in-process search. Pure over ``hass`` — the WS wrapper is thin.
+
+    Joins live registries + states, scores per the server's tiers, paginates
+    per surface, and returns the ``ha_search``-shaped envelope.
+    """
+    query_lower = (params.get("query") or "").strip().lower()
+    match_all = not query_lower
+    exact = params.get("exact", True)
+    include_hidden = params.get("include_hidden", True)
+    include_config = params.get("include_config", False)
+    limit = params.get("limit", DEFAULT_LIMIT)
+    offset = params.get("offset", 0)
+    search_types = params.get("search_types") or ALL_SEARCH_TYPES
+    domain_filter = params.get("domain_filter")
+    area_filter = params.get("area_filter")
+    state_filter = params.get("state_filter")
+
+    view = _resolve_registries(hass)
+    diagnostics: dict[str, int] = {}
+    partial_reasons: list[str] = []
+
+    # --- Entities ------------------------------------------------------------
+    entities: list[dict[str, Any]] = []
+    entity_total = 0
+    entity_has_more = False
+    if SEARCH_TYPE_ENTITY in search_types:
+        scored_entities = _search_entities(
+            hass,
+            view,
+            query_lower,
+            match_all=match_all,
+            exact=exact,
+            include_hidden=include_hidden,
+            domain_filter=domain_filter,
+            area_filter=area_filter,
+            state_filter=state_filter,
+        )
+        scored_entities.sort(key=lambda r: (-r["score"], r["entity_id"]))
+        entity_total = len(scored_entities)
+        page = scored_entities[offset : offset + limit]
+        entity_has_more = offset + len(page) < entity_total
+        entities = [_project_entity(r) for r in page]
+
+    # --- Config surfaces (automations + scripts + scenes + helpers) ----------
+    # One combined pagination window, mirroring the server's config branch.
+    combined: list[tuple[str, dict[str, Any]]] = []
+    for domain in CONFIG_SEARCH_TYPES:
+        if domain in search_types:
+            combined.extend(
+                (domain, rec)
+                for rec in _search_config_surface(
+                    hass,
+                    view,
+                    domain,
+                    query_lower,
+                    match_all=match_all,
+                    exact=exact,
+                    include_config=include_config,
+                    partial_reasons=partial_reasons,
+                    diagnostics=diagnostics,
+                )
+            )
+    if SEARCH_TYPE_HELPER in search_types:
+        combined.extend(
+            ("helper", rec)
+            for rec in _search_helpers(
+                hass,
+                query_lower,
+                match_all=match_all,
+                exact=exact,
+                include_config=include_config,
+            )
+        )
+
+    combined.sort(key=lambda item: (-item[1]["score"], _sort_key(item[1])))
+    config_total = len(combined)
+    config_page = combined[offset : offset + limit]
+    config_has_more = offset + len(config_page) < config_total
+
+    buckets: dict[str, list[dict[str, Any]]] = {
+        "automations": [],
+        "scripts": [],
+        "scenes": [],
+        "helpers": [],
+    }
+    bucket_of = {
+        SEARCH_TYPE_AUTOMATION: "automations",
+        SEARCH_TYPE_SCRIPT: "scripts",
+        SEARCH_TYPE_SCENE: "scenes",
+        "helper": "helpers",
+    }
+    for surface, rec in config_page:
+        buckets[bucket_of[surface]].append(rec)
+
+    result: dict[str, Any] = {
+        "entities": entities,
+        "entity_total_matches": entity_total,
+        "entity_has_more": entity_has_more,
+        "automations": buckets["automations"],
+        "scripts": buckets["scripts"],
+        "scenes": buckets["scenes"],
+        "helpers": buckets["helpers"],
+        "config_total_matches": config_total,
+        "config_has_more": config_has_more,
+        "partial": bool(partial_reasons),
+        "partial_reason": " ; ".join(partial_reasons) if partial_reasons else None,
+    }
+    if diagnostics:
+        result["diagnostics"] = diagnostics
+    return result
+
+
+def _sort_key(rec: dict[str, Any]) -> str:
+    """Stable tiebreak for combined config sorting."""
+    return str(rec.get("entity_id") or rec.get("id") or rec.get("name") or "")
+
+
+# --- Entity join + scoring ---------------------------------------------------
+def _search_entities(
+    hass: HomeAssistant,
+    view: _RegistryView,
+    query_lower: str,
+    *,
+    match_all: bool,
+    exact: bool,
+    include_hidden: bool,
+    domain_filter: str | None,
+    area_filter: str | None,
+    state_filter: str | None,
+) -> list[dict[str, Any]]:
+    """Score every state against the query over the joined registry view."""
+    results: list[dict[str, Any]] = []
+    area_filter_lower = area_filter.lower() if area_filter else None
+    for state in _iter_states(hass):
+        rec = _entity_record(state, view)
+        if domain_filter and rec["domain"] != domain_filter:
+            continue
+        if rec["_hidden"] and not include_hidden:
+            continue
+        if state_filter is not None and rec["state"] != state_filter:
+            continue
+        if area_filter_lower is not None and not _entity_matches_area(
+            rec, area_filter_lower
+        ):
+            continue
+
+        if match_all:
+            score: int | None = _apply_hidden_penalty(100, rec["_hidden"])
+            match_type = "match_all"
+        else:
+            tier = _text_tier(query_lower, rec["_match_texts"], fuzzy=not exact)
+            if tier is None:
+                continue
+            score = _apply_hidden_penalty(tier, rec["_hidden"])
+            match_type = "exact_match" if exact else "fuzzy"
+        rec["score"] = score
+        rec["match_type"] = match_type
+        results.append(rec)
+    return results
+
+
+def _entity_record(state: Any, view: _RegistryView) -> dict[str, Any]:
+    """Join a state with the entity/device/area/floor/label registries."""
+    entity_id = getattr(state, "entity_id", "") or ""
+    domain = entity_id.split(".")[0] if "." in entity_id else ""
+    attrs = getattr(state, "attributes", None) or {}
+    friendly = attrs.get("friendly_name", entity_id)
+
+    reg = _reg_entity(view, entity_id)
+    aliases = (
+        sorted(str(a) for a in (getattr(reg, "aliases", None) or [])) if reg else []
+    )
+    area_id = getattr(reg, "area_id", None) if reg else None
+    device_id = getattr(reg, "device_id", None) if reg else None
+    labels = set(getattr(reg, "labels", None) or []) if reg else set()
+    hidden = bool(getattr(reg, "hidden_by", None)) if reg else False
+
+    dev = _device(view, device_id) if device_id else None
+    dev_texts: list[str] = []
+    if dev is not None:
+        if area_id is None:
+            area_id = getattr(dev, "area_id", None)
+        labels |= set(getattr(dev, "labels", None) or [])
+        for attr in ("name_by_user", "name", "manufacturer", "model"):
+            val = getattr(dev, attr, None)
+            if val:
+                dev_texts.append(str(val))
+
+    area_name = _area_name(view, area_id)
+    floor_name = _floor_name_for_area(view, area_id)
+    label_names = _label_names(view, labels)
+
+    # Scored texts extend the server's id + friendly-name pair with the specific
+    # joined identifiers (alias / area / floor / label / device). The bare domain
+    # is deliberately excluded: matching it would score every entity of a domain
+    # at the exact tier (a "light" query flooding all lights), which the server
+    # does not do — domain is a filter dimension, not a scored text.
+    match_texts = [entity_id, friendly, *aliases, *label_names, *dev_texts]
+    if area_name:
+        match_texts.append(area_name)
+    if floor_name:
+        match_texts.append(floor_name)
+
+    return {
+        "entity_id": entity_id,
+        "friendly_name": friendly,
+        "domain": domain,
+        "state": getattr(state, "state", "unknown"),
+        "area": area_name,
+        "floor": floor_name,
+        "labels": label_names,
+        "aliases": aliases,
+        "_hidden": hidden,
+        "_area_id": area_id,
+        "_match_texts": match_texts,
+    }
+
+
+def _entity_matches_area(rec: dict[str, Any], area_filter_lower: str) -> bool:
+    area_id = rec.get("_area_id")
+    if area_id and str(area_id).lower() == area_filter_lower:
+        return True
+    area_name = rec.get("area")
+    return bool(area_name and str(area_name).lower() == area_filter_lower)
+
+
+def _project_entity(rec: dict[str, Any]) -> dict[str, Any]:
+    """Strip internal ``_``-prefixed keys for the wire response."""
+    return {
+        "entity_id": rec["entity_id"],
+        "friendly_name": rec["friendly_name"],
+        "domain": rec["domain"],
+        "state": rec["state"],
+        "area": rec["area"],
+        "floor": rec["floor"],
+        "labels": rec["labels"],
+        "aliases": rec["aliases"],
+        "score": rec["score"],
+        "match_type": rec["match_type"],
+    }
+
+
+# --- Config surfaces (automation/script/scene) -------------------------------
+def _search_config_surface(
+    hass: HomeAssistant,
+    view: _RegistryView,
+    domain: str,
+    query_lower: str,
+    *,
+    match_all: bool,
+    exact: bool,
+    include_config: bool,
+    partial_reasons: list[str],
+    diagnostics: dict[str, int],
+) -> list[dict[str, Any]]:
+    """Score one config domain's loaded entities (raw_config indexed, not emitted for YAML)."""
+    component = hass.data.get(domain) if getattr(hass, "data", None) else None
+    entities = getattr(component, "entities", None)
+    if entities is None:
+        diagnostics["config_components_inaccessible"] = (
+            diagnostics.get("config_components_inaccessible", 0) + 1
+        )
+        return []
+
+    results: list[dict[str, Any]] = []
+    for entity in entities:
+        entity_id = getattr(entity, "entity_id", None)
+        if not entity_id:
+            continue
+        name, item_id, config_dict = _extract_config(domain, entity)
+        source = _classify_source(item_id)
+
+        if match_all:
+            score: int | None = 100
+            match_in_name = False
+            match_in_config = False
+        else:
+            scored = _config_score(
+                query_lower, entity_id, name, config_dict, exact=exact
+            )
+            if scored is None:
+                continue
+            score, match_in_name, match_in_config = scored
+
+        emit_body = include_config and source == "storage" and config_dict is not None
+        config_out: dict[str, Any] | None = None
+        if emit_body:
+            if _too_large(config_dict):
+                partial_reasons.append(f"{domain} {entity_id} body omitted (too large)")
+            else:
+                config_out = config_dict
+
+        rec: dict[str, Any] = {
+            "id": item_id,
+            "entity_id": entity_id,
+            "source": source,
+            "score": score,
+            "match_in_name": match_in_name,
+            "match_in_config": match_in_config,
+            "config": config_out,
+        }
+        # Scenes carry a "name"; automations/scripts carry an "alias".
+        if domain == SEARCH_TYPE_SCENE:
+            rec["name"] = name
+        else:
+            rec["alias"] = name
+        results.append(rec)
+    return results
+
+
+def _extract_config(
+    domain: str, entity: Any
+) -> tuple[str, str | None, dict[str, Any] | None]:
+    """Return (display_name, item_id, config_dict) for a config entity.
+
+    Uses defensive getattr because the exact accessor can drift across core
+    versions: automation/script expose ``raw_config``; scenes expose
+    ``scene_config`` (name/icon/id/states) rather than ``raw_config``.
+    """
+    entity_id = getattr(entity, "entity_id", "") or ""
+    name = getattr(entity, "name", None) or entity_id
+    unique_id = getattr(entity, "unique_id", None)
+
+    if domain == SEARCH_TYPE_SCENE:
+        scene_config = getattr(entity, "scene_config", None)
+        config_dict = _scene_config_to_dict(scene_config)
+        item_id = unique_id
+        if item_id is None and config_dict is not None:
+            item_id = config_dict.get("id")
+        if config_dict is not None:
+            cfg_name = config_dict.get("name")
+            if cfg_name:
+                name = str(cfg_name)
+        return str(name), (str(item_id) if item_id is not None else None), config_dict
+
+    raw = getattr(entity, "raw_config", None)
+    config_dict = dict(raw) if isinstance(raw, dict) else None
+    item_id = unique_id
+    if item_id is None and config_dict is not None:
+        item_id = config_dict.get("id")
+    return str(name), (str(item_id) if item_id is not None else None), config_dict
+
+
+def _scene_config_to_dict(scene_config: Any) -> dict[str, Any] | None:
+    """Coerce a ``HomeAssistantScene.scene_config`` object into a plain dict."""
+    if scene_config is None:
+        return None
+    if isinstance(scene_config, dict):
+        return dict(scene_config)
+    out: dict[str, Any] = {}
+    for attr in ("id", "name", "icon", "states", "entities"):
+        val = getattr(scene_config, attr, None)
+        if val is not None:
+            out[attr] = _plainify(val)
+    return out or None
+
+
+def _plainify(value: Any) -> Any:
+    """Best-effort conversion of registry/state objects to plain JSON-able data."""
+    if isinstance(value, dict):
+        return {str(k): _plainify(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_plainify(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _classify_source(item_id: str | None) -> str:
+    """Classify an automation/script/scene as storage- or YAML-backed.
+
+    HA addresses editor-managed items by their ``id`` (the entity's
+    ``unique_id``); the config editor's ``/config/<domain>/config/<id>`` REST
+    path — and its edit link — key off exactly that id, and 404 for items with
+    no id. So an id-bearing item is treated as ``storage`` (body emittable under
+    ``include_config``); an id-less item is ``yaml`` and its body is never
+    emitted from search (its ``raw_config`` may carry resolved ``!secret``
+    plaintext). This is the conservative rule: the safe error is toward
+    withholding a body, not leaking one.
+    """
+    return "storage" if item_id else "yaml"
+
+
+def _too_large(config_dict: dict[str, Any]) -> bool:
+    """Rough guard so a huge body never balloons a single WS frame."""
+    try:
+        return len(repr(config_dict)) > MAX_BODY_BYTES
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
+# --- Helpers surface ---------------------------------------------------------
+def _search_helpers(
+    hass: HomeAssistant,
+    query_lower: str,
+    *,
+    match_all: bool,
+    exact: bool,
+    include_config: bool,
+) -> list[dict[str, Any]]:
+    """Index collection helpers (states) + flow helpers (config-entry options)."""
+    results: list[dict[str, Any]] = []
+
+    # Collection helpers: entities in the state machine, matched on name only.
+    for state in _iter_states(hass):
+        entity_id = getattr(state, "entity_id", "") or ""
+        domain = entity_id.split(".")[0] if "." in entity_id else ""
+        if domain not in COLLECTION_HELPER_DOMAINS:
+            continue
+        attrs = getattr(state, "attributes", None) or {}
+        name = attrs.get("friendly_name", entity_id)
+        object_id = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
+        if match_all:
+            score: int | None = 100
+            match_in_name = False
+        else:
+            score = _name_tier(query_lower, [entity_id, name], exact=exact)
+            if score is None:
+                continue
+            match_in_name = True
+        results.append(
+            {
+                "entity_id": entity_id,
+                "helper_type": domain,
+                "object_id": object_id,
+                "name": name,
+                "kind": "collection",
+                "score": score,
+                "match_in_name": match_in_name,
+                "match_in_config": False,
+                "config": None,
+            }
+        )
+
+    # Flow helpers: config entries — options + title ONLY, never data.
+    for entry in _iter_config_entries(hass):
+        domain = getattr(entry, "domain", None)
+        if domain not in FLOW_HELPER_DOMAINS:
+            continue
+        title = getattr(entry, "title", None) or ""
+        options = getattr(entry, "options", None)
+        options = dict(options) if isinstance(options, dict) else {}
+        entry_id = getattr(entry, "entry_id", None)
+        if match_all:
+            score = 100
+            match_in_name = False
+            match_in_config = False
+        else:
+            scored = _config_score(query_lower, title, title, options, exact=exact)
+            if scored is None:
+                continue
+            score, match_in_name, match_in_config = scored
+        results.append(
+            {
+                "entity_id": None,
+                "helper_type": domain,
+                "entry_id": entry_id,
+                "name": title,
+                "kind": "flow",
+                "score": score,
+                "match_in_name": match_in_name,
+                "match_in_config": match_in_config,
+                # Data minimization: options only, never entry.data.
+                "options": options if include_config else None,
+            }
+        )
+    return results
+
+
+# =============================================================================
+# Scoring — mirrors the server's tiers (guarded by the golden parity test)
+# =============================================================================
+def _apply_hidden_penalty(score: int, hidden: bool) -> int:
+    """Reduce ``score`` by :data:`HIDDEN_SCORE_PENALTY` for hidden entities.
+
+    Mirrors ``utils.fuzzy_search.apply_hidden_penalty`` so the two rankings
+    stay consistent.
+    """
+    s = int(score)
+    return max(0, s - HIDDEN_SCORE_PENALTY) if hidden else s
+
+
+def _calc_ratio(a: str, b: str) -> int:
+    """SequenceMatcher ratio (0-100). Mirrors ``fuzzy_search.calculate_ratio``."""
+    return int(SequenceMatcher(None, a, b, autojunk=False).ratio() * 100)
+
+
+def _tokenize(text: str) -> list[str]:
+    """Split on ``.``/``_``/``-``/whitespace, lowercase, drop empties.
+
+    Mirrors ``utils.fuzzy_search.tokenize``.
+    """
+    return [t for t in _SPLIT_RE.split(text.lower()) if t]
+
+
+def _text_tier(query_lower: str, texts: Any, *, fuzzy: bool) -> int | None:
+    """Entity tier: 100 (exact), 80 (substring), fuzzy ratio (>=threshold), or None.
+
+    Mirrors the server's ``_match_exact_search_entity`` (100/80) over the entity
+    id + friendly name, extended to the joined alias/area/floor/label/domain/
+    device texts. In fuzzy mode a whole-string ``calculate_ratio`` fallback
+    surfaces typos above :data:`FUZZY_THRESHOLD`.
+    """
+    best_substring: int | None = None
+    best_ratio = 0
+    for text in texts:
+        if not text:
+            continue
+        text_lower = str(text).lower()
+        if query_lower == text_lower:
+            return 100
+        if query_lower in text_lower:
+            best_substring = 80
+        elif fuzzy:
+            ratio = _calc_ratio(query_lower, text_lower)
+            if ratio > best_ratio:
+                best_ratio = ratio
+    if best_substring is not None:
+        return best_substring
+    if fuzzy and best_ratio >= FUZZY_THRESHOLD:
+        return best_ratio
+    return None
+
+
+def _name_tier(query_lower: str, texts: Any, *, exact: bool) -> int | None:
+    """Config-name tier: substring => 100 (not 80), else fuzzy ratio or None.
+
+    Config name matches are binary 100/0 in the server's exact path
+    (``_score_deep_match``: ``name_exact = 100 if query in id/name else 0``),
+    unlike entity matches which have the 80 substring tier.
+    """
+    best_ratio = 0
+    for text in texts:
+        if not text:
+            continue
+        text_lower = str(text).lower()
+        if query_lower in text_lower:
+            return 100
+        if not exact:
+            ratio = _calc_ratio(query_lower, text_lower)
+            if ratio > best_ratio:
+                best_ratio = ratio
+    if not exact and best_ratio >= FUZZY_THRESHOLD:
+        return best_ratio
+    return None
+
+
+def _config_score(
+    query_lower: str,
+    entity_id: str,
+    name: str,
+    config_dict: dict[str, Any] | None,
+    *,
+    exact: bool,
+) -> tuple[int, bool, bool] | None:
+    """Score a config surface: (total, match_in_name, match_in_config) or None.
+
+    Exact mode is binary 100/0 with a threshold of 100 (server parity); fuzzy
+    mode floors at :data:`FUZZY_THRESHOLD`.
+    """
+    name_score = _name_tier(query_lower, [entity_id, name], exact=exact) or 0
+    config_score = _config_body_score(query_lower, config_dict, exact=exact)
+    threshold = 100 if exact else FUZZY_THRESHOLD
+    total = max(name_score, config_score)
+    if total < threshold:
+        return None
+    return total, name_score >= threshold, config_score >= threshold
+
+
+def _config_body_score(
+    query_lower: str, config_dict: dict[str, Any] | None, *, exact: bool
+) -> int:
+    """Match the query against a config body's keys/values.
+
+    Exact => 100/0 substring (``_search_in_dict_exact`` parity). Fuzzy adds a
+    token-vs-token ``calculate_ratio`` fallback (the server's tier-3 path).
+    """
+    if config_dict is None:
+        return 0
+    if _search_in_dict_exact(config_dict, query_lower) >= 100:
+        return 100
+    if exact:
+        return 0
+    leaves: list[str] = []
+    _collect_string_leaves(config_dict, leaves)
+    query_tokens = _tokenize(query_lower)
+    if not query_tokens:
+        return 0
+    doc_tokens = {tok for leaf in leaves for tok in _tokenize(leaf)}
+    best = 0
+    for qt in query_tokens:
+        for dt in doc_tokens:
+            best = max(best, _calc_ratio(qt, dt))
+    return best if best >= FUZZY_THRESHOLD else 0
+
+
+def _search_in_dict_exact(data: Any, query_lower: str) -> int:
+    """Exact substring search in nested structures (100 or 0).
+
+    Mirrors ``smart_search._scoring.ScoringMixin._search_in_dict_exact``.
+    """
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if query_lower in str(key).lower():
+                return 100
+            if _search_in_dict_exact(value, query_lower) >= 100:
+                return 100
+        return 0
+    if isinstance(data, (list, tuple)):
+        for item in data:
+            if _search_in_dict_exact(item, query_lower) >= 100:
+                return 100
+        return 0
+    if isinstance(data, str):
+        return 100 if query_lower in data.lower() else 0
+    if data is not None:
+        return 100 if query_lower in str(data).lower() else 0
+    return 0
+
+
+def _collect_string_leaves(data: Any, out: list[str]) -> None:
+    """Recursively collect string representations. Mirrors the server helper."""
+    if isinstance(data, dict):
+        for key, value in data.items():
+            out.append(str(key))
+            _collect_string_leaves(value, out)
+    elif isinstance(data, (list, tuple)):
+        for item in data:
+            _collect_string_leaves(item, out)
+    elif isinstance(data, str):
+        out.append(data)
+    elif data is not None:
+        out.append(str(data))
+
+
+# =============================================================================
+# Registry accessors (all getattr-guarded against core drift)
+# =============================================================================
+def _iter_states(hass: HomeAssistant) -> list[Any]:
+    states = getattr(hass, "states", None)
+    getter = getattr(states, "async_all", None) if states is not None else None
+    if getter is None:
+        return []
+    try:
+        return list(getter())
+    except Exception:  # pragma: no cover - defensive
+        return []
+
+
+def _iter_config_entries(hass: HomeAssistant) -> list[Any]:
+    config_entries = getattr(hass, "config_entries", None)
+    getter = (
+        getattr(config_entries, "async_entries", None)
+        if config_entries is not None
+        else None
+    )
+    if getter is None:
+        return []
+    try:
+        return list(getter())
+    except Exception:  # pragma: no cover - defensive
+        return []
+
+
+def _reg_entity(view: _RegistryView, entity_id: str) -> Any:
+    return _call_lookup(view.entity, "async_get", entity_id)
+
+
+def _device(view: _RegistryView, device_id: str | None) -> Any:
+    if not device_id:
+        return None
+    return _call_lookup(view.device, "async_get", device_id)
+
+
+def _area_name(view: _RegistryView, area_id: str | None) -> str | None:
+    if not area_id:
+        return None
+    area = _call_lookup(view.area, "async_get_area", area_id)
+    name = getattr(area, "name", None) if area is not None else None
+    return str(name) if name else None
+
+
+def _floor_name_for_area(view: _RegistryView, area_id: str | None) -> str | None:
+    if not area_id:
+        return None
+    area = _call_lookup(view.area, "async_get_area", area_id)
+    floor_id = getattr(area, "floor_id", None) if area is not None else None
+    if not floor_id:
+        return None
+    floor = _call_lookup(view.floor, "async_get_floor", floor_id)
+    name = getattr(floor, "name", None) if floor is not None else None
+    return str(name) if name else None
+
+
+def _label_names(view: _RegistryView, label_ids: Any) -> list[str]:
+    names: list[str] = []
+    for label_id in sorted(label_ids or []):
+        label = _call_lookup(view.label, "async_get_label", label_id)
+        name = getattr(label, "name", None) if label is not None else None
+        names.append(str(name) if name else str(label_id))
+    return names
+
+
+def _call_lookup(registry: Any, method: str, key: str) -> Any:
+    if registry is None:
+        return None
+    getter = getattr(registry, method, None)
+    if getter is None:
+        return None
+    try:
+        return getter(key)
+    except Exception:  # pragma: no cover - defensive
+        return None
