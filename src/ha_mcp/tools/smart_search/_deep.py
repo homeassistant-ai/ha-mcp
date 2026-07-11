@@ -18,8 +18,10 @@ from ._config import (
     BULK_REST_TIMEOUT,
     DEFAULT_CONCURRENCY_LIMIT,
     INDIVIDUAL_CONFIG_TIMEOUT,
+    INDIVIDUAL_FETCH_BATCH_SIZE,
     SCRIPT_CONFIG_TIME_BUDGET,
 )
+from ._fetch import is_timeout_error
 from ._scenes import SceneSearchMixin
 
 logger = logging.getLogger(__name__)
@@ -111,6 +113,7 @@ class DeepSearchMixin(SceneSearchMixin):
             scene_stats: dict[str, Any] = {
                 "failed": 0,
                 "skipped": 0,
+                "timeout": 0,
                 "integration_skipped": 0,
                 "registry_failed": False,
             }
@@ -120,13 +123,16 @@ class DeepSearchMixin(SceneSearchMixin):
             # surface as ``partial: True`` so callers can detect "incomplete
             # zero" / "incomplete partial" results vs a true complete answer.
             # ``_skipped`` = budget exhausted before fetch; ``_failed`` =
-            # fetch attempted but raised (caught at ``debug``-level).
+            # fetch attempted but raised (caught at ``debug``-level);
+            # ``_timeout`` = fetch exceeded the per-request timeout (#1784).
             automation_skipped = 0
             automation_failed = 0
             automation_yaml_skipped = 0
+            automation_timeout = 0
             script_skipped = 0
             script_failed = 0
             script_yaml_skipped = 0
+            script_timeout = 0
             helper_failed = 0
             dashboard_failed = 0
 
@@ -136,6 +142,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     automation_skipped,
                     automation_failed,
                     automation_yaml_skipped,
+                    automation_timeout,
                 ) = await self._deep_search_automations(
                     all_entities,
                     automation_unique_id_map,
@@ -157,6 +164,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     script_skipped,
                     script_failed,
                     script_yaml_skipped,
+                    script_timeout,
                 ) = await self._deep_search_scripts(
                     all_entities,
                     query_lower,
@@ -178,6 +186,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     scene_stats["skipped"],
                     scene_stats["integration_skipped"],
                     scene_stats["registry_failed"],
+                    scene_stats["timeout"],
                 ) = await self._deep_search_scenes(
                     all_entities,
                     query_lower,
@@ -233,9 +242,11 @@ class DeepSearchMixin(SceneSearchMixin):
                 automation_skipped=automation_skipped,
                 automation_failed=automation_failed,
                 automation_yaml_skipped=automation_yaml_skipped,
+                automation_timeout=automation_timeout,
                 script_skipped=script_skipped,
                 script_failed=script_failed,
                 script_yaml_skipped=script_yaml_skipped,
+                script_timeout=script_timeout,
                 helper_failed=helper_failed,
                 dashboard_failed=dashboard_failed,
             )
@@ -282,22 +293,26 @@ class DeepSearchMixin(SceneSearchMixin):
         exact_match: bool,
         *,
         config_time_budget: float | None = None,
-    ) -> tuple[list[dict[str, Any]], int, int, int]:
+    ) -> tuple[list[dict[str, Any]], int, int, int, int]:
         """Deep-search automations: 3-tier config fetch (REST bulk -> WS bulk -> individual).
 
-        Returns ``(matches, skipped_count, failed_count, yaml_skipped_count)``.
-        ``skipped_count`` is non-zero only when bulk fetch fell back to the
-        per-id Attempt-C path AND its wall-clock budget exhausted before all
-        configs were fetched; ``failed_count`` is non-zero when individual
-        config fetches raised a non-404 exception (caught at ``debug``-level);
-        ``yaml_skipped_count`` is non-zero when individual config fetches
-        returned 404, which is the documented HA behaviour for YAML-defined
-        automations (the ``/config/automation/config/<id>`` REST endpoint
-        only exposes UI-storage automations). All three surface as
-        ``partial: True`` in the response so callers can distinguish a
-        complete zero-result from an incomplete one — skipped/failed ids
-        carry their score-without-config through the merge and fall below
-        the match threshold silently otherwise.
+        Returns ``(matches, skipped_count, failed_count, yaml_skipped_count,
+        timeout_count)``. ``skipped_count`` is non-zero only when bulk fetch
+        fell back to the per-id Attempt-C path AND its wall-clock budget
+        exhausted before all configs were fetched; ``failed_count`` is
+        non-zero when individual config fetches raised a non-404, non-timeout
+        exception (caught at ``debug``-level); ``yaml_skipped_count`` is
+        non-zero when individual config fetches returned 404, which is the
+        documented HA behaviour for YAML-defined automations (the
+        ``/config/automation/config/<id>`` REST endpoint only exposes
+        UI-storage automations); ``timeout_count`` is non-zero when fetches
+        exceeded the per-request ``INDIVIDUAL_CONFIG_TIMEOUT`` — usually a
+        sign the HA server serves config reads serially and the concurrent
+        batch queued past the timeout, not that anything is broken (#1784).
+        All four surface as ``partial: True`` in the response so callers can
+        distinguish a complete zero-result from an incomplete one —
+        skipped/failed ids carry their score-without-config through the
+        merge and fall below the match threshold silently otherwise.
         """
         automation_entities = [
             e for e in all_entities if e.get("entity_id", "").startswith("automation.")
@@ -334,6 +349,9 @@ class DeepSearchMixin(SceneSearchMixin):
 
         # Attempt C: parallel individual REST calls with time budget (LAST RESORT)
         skipped_count = 0
+        failed_count = 0
+        yaml_skipped_count = 0
+        timeout_count = 0
         if not bulk_fetched:
             uids_to_fetch = [
                 uid for _, _, uid, _ in scored if uid and uid not in configs
@@ -364,7 +382,27 @@ class DeepSearchMixin(SceneSearchMixin):
                         f"Automation individual config fetch ({uid}) failed: {e}"
                     )
                     return (uid, None, "failed")
+                except TimeoutError:
+                    # asyncio.wait_for hit INDIVIDUAL_CONFIG_TIMEOUT. Classify
+                    # distinctly from "failed": on servers that serialize
+                    # config reads, a batch's tail requests queue past the
+                    # timeout while still perfectly healthy (#1784).
+                    logger.debug(
+                        f"Automation individual config fetch ({uid}) timed "
+                        f"out after {INDIVIDUAL_CONFIG_TIMEOUT}s."
+                    )
+                    return (uid, None, "timeout")
                 except Exception as e:
+                    if is_timeout_error(e):
+                        # The REST client's own httpx timeout (HA_TIMEOUT)
+                        # fired first and arrived wrapped in a
+                        # HomeAssistantConnectionError — still a timeout,
+                        # not a failure. See is_timeout_error.
+                        logger.debug(
+                            f"Automation individual config fetch ({uid}) "
+                            f"timed out (client-side HTTP timeout): {e}"
+                        )
+                        return (uid, None, "timeout")
                     logger.debug(
                         f"Automation individual config fetch ({uid}) failed: {e}"
                     )
@@ -375,6 +413,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 failed_count,
                 skipped_count,
                 yaml_skipped_count,
+                timeout_count,
             ) = await self._individual_fetch_budgeted(
                 uids_to_fetch,
                 _fetch_automation_config,
@@ -385,9 +424,6 @@ class DeepSearchMixin(SceneSearchMixin):
                 "automations",
             )
             configs.update(fetched_configs)
-        else:
-            failed_count = 0
-            yaml_skipped_count = 0
 
         # Phase 3: Score with whatever configs we have
         matches = [
@@ -403,7 +439,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 scored, configs, query_lower, exact_match
             )
         ]
-        return matches, skipped_count, failed_count, yaml_skipped_count
+        return matches, skipped_count, failed_count, yaml_skipped_count, timeout_count
 
     async def _deep_search_scripts(
         self,
@@ -412,13 +448,14 @@ class DeepSearchMixin(SceneSearchMixin):
         exact_match: bool,
         *,
         config_time_budget: float | None = None,
-    ) -> tuple[list[dict[str, Any]], int, int, int]:
+    ) -> tuple[list[dict[str, Any]], int, int, int, int]:
         """Deep-search scripts: same 3-tier strategy as automations.
 
-        Returns ``(matches, skipped_count, failed_count, yaml_skipped_count)``;
-        semantics identical to ``_deep_search_automations`` — the 404 path
-        catches YAML-defined scripts (which ``client.get_script_config``
-        re-raises as ``HomeAssistantAPIError(status_code=404)``).
+        Returns ``(matches, skipped_count, failed_count, yaml_skipped_count,
+        timeout_count)``; semantics identical to ``_deep_search_automations``
+        — the 404 path catches YAML-defined scripts (which
+        ``client.get_script_config`` re-raises as
+        ``HomeAssistantAPIError(status_code=404)``).
         """
         script_entities = [
             e for e in all_entities if e.get("entity_id", "").startswith("script.")
@@ -451,6 +488,9 @@ class DeepSearchMixin(SceneSearchMixin):
 
         # Attempt C: parallel individual fetch with budget (see #879)
         skipped_count = 0
+        failed_count = 0
+        yaml_skipped_count = 0
+        timeout_count = 0
         if not bulk_fetched:
             sids_to_fetch = [
                 sid for _, _, sid, _ in scored if sid and sid not in configs
@@ -478,7 +518,23 @@ class DeepSearchMixin(SceneSearchMixin):
                         return (sid, None, "yaml_skipped")
                     logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
                     return (sid, None, "failed")
+                except TimeoutError:
+                    # See _fetch_automation_config: per-request timeout under
+                    # batch concurrency, distinct from a real failure (#1784).
+                    logger.debug(
+                        f"Script individual config fetch ({sid}) timed out "
+                        f"after {INDIVIDUAL_CONFIG_TIMEOUT}s."
+                    )
+                    return (sid, None, "timeout")
                 except Exception as e:
+                    if is_timeout_error(e):
+                        # Client-side HTTP timeout arrived wrapped; still a
+                        # timeout. See _fetch_automation_config.
+                        logger.debug(
+                            f"Script individual config fetch ({sid}) timed "
+                            f"out (client-side HTTP timeout): {e}"
+                        )
+                        return (sid, None, "timeout")
                     logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
                     return (sid, None, "failed")
 
@@ -487,6 +543,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 failed_count,
                 skipped_count,
                 yaml_skipped_count,
+                timeout_count,
             ) = await self._individual_fetch_budgeted(
                 sids_to_fetch,
                 _fetch_script_config,
@@ -497,9 +554,6 @@ class DeepSearchMixin(SceneSearchMixin):
                 "scripts",
             )
             configs.update(fetched_configs)
-        else:
-            failed_count = 0
-            yaml_skipped_count = 0
 
         # Phase 3: Score scripts
         matches = [
@@ -516,7 +570,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 scored, configs, query_lower, exact_match
             )
         ]
-        return matches, skipped_count, failed_count, yaml_skipped_count
+        return matches, skipped_count, failed_count, yaml_skipped_count, timeout_count
 
     async def _search_helper_type(
         self,
@@ -796,6 +850,8 @@ class DeepSearchMixin(SceneSearchMixin):
         script_failed: int = 0,
         automation_yaml_skipped: int = 0,
         script_yaml_skipped: int = 0,
+        automation_timeout: int = 0,
+        script_timeout: int = 0,
         helper_failed: int = 0,
         dashboard_failed: int = 0,
     ) -> dict[str, Any]:
@@ -856,6 +912,8 @@ class DeepSearchMixin(SceneSearchMixin):
             script_failed=script_failed,
             automation_yaml_skipped=automation_yaml_skipped,
             script_yaml_skipped=script_yaml_skipped,
+            automation_timeout=automation_timeout,
+            script_timeout=script_timeout,
             helper_failed=helper_failed,
             dashboard_failed=dashboard_failed,
         )
@@ -871,18 +929,25 @@ class DeepSearchMixin(SceneSearchMixin):
         script_failed: int = 0,
         automation_yaml_skipped: int = 0,
         script_yaml_skipped: int = 0,
+        automation_timeout: int = 0,
+        script_timeout: int = 0,
         helper_failed: int = 0,
         dashboard_failed: int = 0,
     ) -> None:
         """Set ``partial: True`` when the deep-search per-type fetch path lost
         data — either the Attempt-C wall-clock budget exhausted
-        (``*_skipped``), individual fetches raised non-404 exceptions
-        (``*_failed``, caught at ``debug``-level so they would otherwise
-        be silent), or individual fetches returned 404 because the entity
-        is YAML-defined (``*_yaml_skipped``). ``helper_failed`` /
-        ``dashboard_failed`` cover the helper- and dashboard-list/config
-        backends, whose per-unit ``except`` blocks would otherwise swallow a
-        backend outage to an empty list with no signal.
+        (``*_skipped``), individual fetches raised non-404 non-timeout
+        exceptions (``*_failed``, caught at ``debug``-level so they would
+        otherwise be silent), individual fetches returned 404 because the
+        entity is YAML-defined (``*_yaml_skipped``), or individual fetches
+        exceeded the per-request timeout (``*_timeout`` — on servers that
+        serialize config reads a concurrent batch's tail queues past the
+        timeout while perfectly healthy, so the wording points at the
+        batch-size/timeout knobs rather than at the entities, #1784).
+        ``helper_failed`` / ``dashboard_failed`` cover the helper- and
+        dashboard-list/config backends, whose per-unit ``except`` blocks
+        would otherwise swallow a backend outage to an empty list with no
+        signal.
 
         Mirrors ``_apply_scene_partial_flag`` 's "looks complete when it
         isn't" coverage onto the automation/script/helper/dashboard paths —
@@ -902,52 +967,64 @@ class DeepSearchMixin(SceneSearchMixin):
         and the new reasons are concatenated with ``" ; "``.
         """
         reasons: list[str] = []
-        if automation_skipped:
-            reasons.append(
-                f"{automation_skipped} automation(s) not scanned (time budget "
-                "exhausted) — their match status is unknown; this result is "
-                "not exhaustive. Pass `config_time_budget=` on `ha_search` to "
-                "raise the per-call limit (or, for the default, set "
-                "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET or the matching field in "
-                "the web Settings UI's Advanced section)."
-            )
-        if automation_failed:
-            reasons.append(
-                f"{automation_failed} automation(s) not scanned (per-id fetch "
-                "raised a non-404 error) — their match status is unknown; "
-                "this result is not exhaustive."
-            )
-        if automation_yaml_skipped:
-            reasons.append(
-                f"{automation_yaml_skipped} automation(s) not scanned "
-                "(per-id config endpoint returned 404 — these are likely "
-                "YAML-defined automations that the /config/automation/config "
-                "REST endpoint does not expose) — their match status is "
-                "unknown; this result is not exhaustive."
-            )
-        if script_skipped:
-            reasons.append(
-                f"{script_skipped} script(s) not scanned (time budget "
-                "exhausted) — their match status is unknown; this result is "
-                "not exhaustive. Pass `config_time_budget=` on `ha_search` to "
-                "raise the per-call limit (or, for the default, set "
-                "HAMCP_SCRIPT_CONFIG_TIME_BUDGET or the matching field in "
-                "the web Settings UI's Advanced section)."
-            )
-        if script_failed:
-            reasons.append(
-                f"{script_failed} script(s) not scanned (per-id fetch raised "
-                "a non-404 error) — their match status is unknown; this "
-                "result is not exhaustive."
-            )
-        if script_yaml_skipped:
-            reasons.append(
-                f"{script_yaml_skipped} script(s) not scanned (per-id config "
-                "endpoint returned 404 — these are likely YAML-defined "
-                "scripts that the /config/script/config REST endpoint does "
-                "not expose) — their match status is unknown; this result "
-                "is not exhaustive."
-            )
+        # The automation and script fragments are symmetric (noun, per-id
+        # endpoint, budget env var); loop rather than duplicating the four
+        # per-class fragments per type.
+        for noun, endpoint, budget_env, skipped, failed, yaml_skipped, timeout in (
+            (
+                "automation",
+                "/config/automation/config",
+                "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET",
+                automation_skipped,
+                automation_failed,
+                automation_yaml_skipped,
+                automation_timeout,
+            ),
+            (
+                "script",
+                "/config/script/config",
+                "HAMCP_SCRIPT_CONFIG_TIME_BUDGET",
+                script_skipped,
+                script_failed,
+                script_yaml_skipped,
+                script_timeout,
+            ),
+        ):
+            if skipped:
+                reasons.append(
+                    f"{skipped} {noun}(s) not scanned (time budget "
+                    "exhausted) — their match status is unknown; this result "
+                    "is not exhaustive. Pass `config_time_budget=` on "
+                    "`ha_search` to raise the per-call limit (or, for the "
+                    f"default, set {budget_env} or the matching field in "
+                    "the web Settings UI's Advanced section)."
+                )
+            if failed:
+                reasons.append(
+                    f"{failed} {noun}(s) not scanned (per-id fetch raised "
+                    "a non-404 error) — their match status is unknown; this "
+                    "result is not exhaustive."
+                )
+            if yaml_skipped:
+                reasons.append(
+                    f"{yaml_skipped} {noun}(s) not scanned (per-id config "
+                    "endpoint returned 404 — these are likely YAML-defined "
+                    f"{noun}s that the {endpoint} REST endpoint does not "
+                    "expose) — their match status is unknown; this result "
+                    "is not exhaustive."
+                )
+            if timeout:
+                reasons.append(
+                    f"{timeout} {noun}(s) not scanned (per-id fetch timed "
+                    f"out after {INDIVIDUAL_CONFIG_TIMEOUT}s while "
+                    f"{INDIVIDUAL_FETCH_BATCH_SIZE} fetches ran concurrently "
+                    "— this usually means the HA server serves config reads "
+                    f"serially, not that the {noun}s are broken) — their "
+                    "match status is unknown; this result is not exhaustive. "
+                    "Lower HAMCP_INDIVIDUAL_FETCH_BATCH_SIZE and/or raise "
+                    "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT (or the matching fields "
+                    "in the web Settings UI's Advanced section)."
+                )
         if helper_failed:
             reasons.append(
                 f"{helper_failed} helper backend(s) not scanned (per-type list, "

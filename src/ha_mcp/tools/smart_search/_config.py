@@ -13,23 +13,29 @@ DEFAULT_CONCURRENCY_LIMIT = 20
 # Bulk fetch timeouts (in seconds)
 BULK_REST_TIMEOUT = 5.0  # Timeout for bulk REST endpoint calls
 BULK_WEBSOCKET_TIMEOUT = 3.0  # Timeout for bulk WebSocket calls
-INDIVIDUAL_CONFIG_TIMEOUT = 5.0  # Timeout for individual config fetches
 
 
-# Time budgets for fallback individual fetching (in seconds). Sourced from
-# the resolved Settings (issue #1538) so the env var, the web Settings UI
+# Attempt-C (per-id fallback) tuning knobs. Sourced from the resolved
+# Settings (issues #1538 / #1784) so the env var, the web Settings UI
 # override file, and the field defaults all flow through one precedence path
 # — and so add-on users (who cannot set raw env vars) can tune them from the
 # Advanced panel. Read once at import as module-level constants; a change
 # takes effect on the next MCP-host restart (advanced settings already
 # carry a restart-required notice in the UI).
 _settings = get_global_settings()
+
+# Time budgets for fallback individual fetching (in seconds).
 AUTOMATION_CONFIG_TIME_BUDGET = _settings.automation_config_time_budget
 SCRIPT_CONFIG_TIME_BUDGET = _settings.script_config_time_budget
 SCENE_CONFIG_TIME_BUDGET = _settings.scene_config_time_budget
 
-# Batch size for parallel individual config fetches (Attempt C fallback)
-INDIVIDUAL_FETCH_BATCH_SIZE = 10
+# Per-request timeout (seconds) and batch size for the parallel individual
+# config fetches. On HA servers that serve the per-id config endpoint
+# serially, a batch's tail requests queue behind its head and can exceed
+# the per-request timeout despite being perfectly healthy — tune batch
+# size toward 1 and/or raise the timeout on such instances (issue #1784).
+INDIVIDUAL_CONFIG_TIMEOUT = _settings.individual_config_timeout
+INDIVIDUAL_FETCH_BATCH_SIZE = _settings.individual_fetch_batch_size
 
 
 def _simplify_states_summary(
