@@ -57,6 +57,7 @@ from .const import (
     DOMAIN,
     ENTRY_TYPE_SERVER,
     ENTRY_TYPE_TOOLS,
+    LLM_API_DOCS_URL,
     OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
     OPT_CHANNEL,
@@ -297,6 +298,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             description_placeholders={
                 "versions": await self._versions_hint(),
                 "connect_url": self._connect_url_hint(),
+                "llm_api_docs_url": LLM_API_DOCS_URL,
             },
         )
 

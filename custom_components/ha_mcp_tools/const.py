@@ -383,6 +383,15 @@ HACS_COMPONENT_URL = (
     "?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration"
 )
 
+# Usage guide for the conversation-agent LLM API option (#1745). Injected into
+# the options form as a description placeholder — hassfest forbids literal
+# URLs inside strings.json.
+LLM_API_DOCS_URL = (
+    "https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/"
+    "in-process-server.md"
+    "#chat-with-the-toolset-from-home-assistant-conversation-agents--voice"
+)
+
 # Repair-issue ids surfaced when server bring-up fails.
 ISSUE_PACKAGE_FAILED = "server_package_install_failed"
 ISSUE_START_FAILED = "server_start_failed"

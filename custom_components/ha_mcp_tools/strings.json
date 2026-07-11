@@ -58,7 +58,7 @@
                     "secret_path_override": "Replaces the random path used for direct access on the server port. Same rule: the path is the credential. Leave empty to keep the current one.",
                     "regenerate_secrets": "One-time action: mints a fresh random webhook secret and direct-access path, invalidating the old connect URLs immediately. Also clears the two override fields above.",
                     "enable_webhook": "Turn off for local-only mode: the Home Assistant webhook is not registered at all, so nothing - including Nabu Casa - can reach the server through Home Assistant. The direct server port and the sidebar panel keep working.",
-                    "enable_llm_api": "Offer the full toolset to Home Assistant conversation agents (OpenAI, Google, Ollama, ...): while enabled, agents can select 'HA-MCP Server' under Control Home Assistant and drive the tools from Assist chat and voice. Enabling only makes it selectable - nothing is exposed until you pick it on an agent. Usage guide: https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/in-process-server.md#chat-with-the-toolset-from-home-assistant-conversation-agents--voice"
+                    "enable_llm_api": "Offer the full toolset to Home Assistant conversation agents (OpenAI, Google, Ollama, ...): while enabled, agents can select 'HA-MCP Server' under Control Home Assistant and drive the tools from Assist chat and voice. Enabling only makes it selectable - nothing is exposed until you pick it on an agent. Usage guide: {llm_api_docs_url}"
                 }
             }
         }
