@@ -168,16 +168,23 @@ def _record_ignored_section_keys(
 def _ignored_keys_warnings(
     ignored_config_keys: set[str], remaining_config: dict[str, Any]
 ) -> list[str]:
-    """Build warnings for caller config keys no flow step declared."""
+    """Build warnings for caller-supplied config keys no flow step consumed."""
+    warnings: list[str] = []
     ignored = ignored_config_keys | {
         key for key in remaining_config if key not in _MENU_SELECTION_KEYS
     }
-    if not ignored:
-        return []
-    return [
-        "Ignored config keys not declared by the Home Assistant flow "
-        f"schema: {', '.join(sorted(ignored))}"
-    ]
+    if ignored:
+        warnings.append(
+            "Ignored config keys not declared by the Home Assistant flow "
+            f"schema: {', '.join(sorted(ignored))}"
+        )
+    leftover_menu_keys = _MENU_SELECTION_KEYS & remaining_config.keys()
+    if leftover_menu_keys:
+        warnings.append(
+            "Ignored menu selection key(s) with no matching menu step: "
+            f"{', '.join(sorted(leftover_menu_keys))}"
+        )
+    return warnings
 
 
 def _consume_form_schema(

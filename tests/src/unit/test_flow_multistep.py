@@ -500,6 +500,66 @@ class TestSubentryFlowIgnoredKeys:
             "Ignored config keys not declared by the Home Assistant flow schema: junk"
         ]
 
+    async def test_subentry_reports_unknown_explicit_section_keys_with_path(
+        self,
+    ) -> None:
+        """The threaded ignored-keys set reaches the subentry success path."""
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        client = AsyncMock()
+        client.submit_config_subentry_flow_step = AsyncMock(side_effect=[final_entry])
+        initial_step = {
+            "type": "form",
+            "flow_id": "flow-6",
+            "step_id": "user",
+            "data_schema": [
+                {"name": "name"},
+                {
+                    "type": "expandable",
+                    "name": "advanced_options",
+                    "schema": [{"name": "availability"}],
+                },
+            ],
+        }
+
+        result = await _handle_config_subentry_flow_steps(
+            client,
+            "flow-6",
+            initial_step,
+            {"name": "x", "advanced_options": {"availabilty": "{{ true }}"}},
+            is_reconfigure=False,
+        )
+
+        assert result["warnings"] == [
+            "Ignored config keys not declared by the Home Assistant flow schema: "
+            "advanced_options.availabilty"
+        ]
+
+    async def test_menu_key_without_menu_step_is_reported(self) -> None:
+        """A menu selection key supplied to a menu-less flow is surfaced."""
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        client = AsyncMock()
+        client.submit_config_subentry_flow_step = AsyncMock(side_effect=[final_entry])
+        initial_step = {
+            "type": "form",
+            "flow_id": "flow-7",
+            "step_id": "user",
+            "data_schema": [{"name": "name"}],
+        }
+
+        result = await _handle_config_subentry_flow_steps(
+            client,
+            "flow-7",
+            initial_step,
+            {"name": "x", "next_step_id": "conversation"},
+            is_reconfigure=False,
+        )
+
+        submitted = client.submit_config_subentry_flow_step.await_args_list[0].args[1]
+        assert "next_step_id" not in submitted
+        assert result["warnings"] == [
+            "Ignored menu selection key(s) with no matching menu step: next_step_id"
+        ]
+
 
 class TestSubmitStep:
     """Unit tests for _submit_step error propagation."""
