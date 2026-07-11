@@ -396,6 +396,35 @@ class TestEntityJoins:
         assert len(last["entities"]) == 1
         assert last["entity_has_more"] is False
 
+    def test_underscore_space_query_equivalence(self, empty_view):
+        """Separator-normalized fuzzy matching: ``input_boolean`` and
+        ``input boolean`` queries must return the same result set (mirrors
+        e2e test_fuzzy_search_underscore_space_equivalence — the server's
+        BM25 tokenizes both sides, so the component's tier scorer compares
+        separator-normalized forms in fuzzy mode)."""
+        states = [
+            FakeState("input_boolean.guests", "off", "We Have Guests"),
+            FakeState("input_boolean.dark_mode", "on", "Dark Mode"),
+            FakeState("light.kitchen", "on", "Kitchen"),
+        ]
+        h = FakeHass(states=states)
+        underscore = wsapi._do_search(
+            h, {"query": "input_boolean", "exact": False, "limit": 20}
+        )
+        space = wsapi._do_search(
+            h, {"query": "input boolean", "exact": False, "limit": 20}
+        )
+        ids_u = {e["entity_id"] for e in underscore["entities"]}
+        ids_s = {e["entity_id"] for e in space["entities"]}
+        assert ids_u == ids_s and len(ids_u) == 2, f"underscore={ids_u} space={ids_s}"
+        assert underscore["entity_total_matches"] == space["entity_total_matches"] == 2
+        # Exact mode keeps raw substring semantics (server parity): the space
+        # form matches nothing exactly.
+        exact_space = wsapi._do_search(
+            h, {"query": "input boolean", "exact": True, "limit": 20}
+        )
+        assert exact_space["entity_total_matches"] == 0
+
     def test_match_all_on_empty_query(self, empty_view):
         states = [FakeState("light.a", "on", "A"), FakeState("light.b", "on", "B")]
         res = wsapi._do_search(FakeHass(states=states), {})

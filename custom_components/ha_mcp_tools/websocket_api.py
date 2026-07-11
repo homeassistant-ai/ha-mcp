@@ -937,14 +937,30 @@ def _tokenize(text: str) -> list[str]:
     return [t for t in _SPLIT_RE.split(text.lower()) if t]
 
 
+def _sep_normalized(text: str) -> str:
+    """Collapse ``.``/``_``/``-``/whitespace runs to single spaces.
+
+    The server's fuzzy engine (BM25) tokenizes query and documents with the
+    same splitter, making ``input_boolean`` and ``input boolean`` equivalent
+    queries (pinned by the e2e underscore/space-equivalence test). Comparing
+    separator-normalized strings replicates that equivalence for the
+    component's tier scorer.
+    """
+    return " ".join(_tokenize(text))
+
+
 def _text_tier(query_lower: str, texts: Any, *, fuzzy: bool) -> int | None:
     """Entity tier: 100 (exact), 80 (substring), fuzzy ratio (>=threshold), or None.
 
     Mirrors the server's ``_match_exact_search_entity`` (100/80) over the entity
     id + friendly name, extended to the joined alias/area/floor/label/domain/
-    device texts. In fuzzy mode a whole-string ``calculate_ratio`` fallback
-    surfaces typos above :data:`FUZZY_THRESHOLD`.
+    device texts. In fuzzy mode comparisons run on BOTH the raw strings and
+    their separator-normalized forms (unified tokenization — ``_``/space
+    equivalence), with a whole-string ``calculate_ratio`` fallback surfacing
+    typos above :data:`FUZZY_THRESHOLD`. Exact mode stays raw-only for
+    byte-parity with the server's exact path.
     """
+    query_norm = _sep_normalized(query_lower) if fuzzy else ""
     best_substring: int | None = None
     best_ratio = 0
     for text in texts:
@@ -953,12 +969,17 @@ def _text_tier(query_lower: str, texts: Any, *, fuzzy: bool) -> int | None:
         text_lower = str(text).lower()
         if query_lower == text_lower:
             return 100
+        if fuzzy and query_norm and query_norm == _sep_normalized(text_lower):
+            return 100
         if query_lower in text_lower:
             best_substring = 80
         elif fuzzy:
-            ratio = _calc_ratio(query_lower, text_lower)
-            if ratio > best_ratio:
-                best_ratio = ratio
+            if query_norm and query_norm in _sep_normalized(text_lower):
+                best_substring = 80
+            else:
+                ratio = _calc_ratio(query_lower, text_lower)
+                if ratio > best_ratio:
+                    best_ratio = ratio
     if best_substring is not None:
         return best_substring
     if fuzzy and best_ratio >= FUZZY_THRESHOLD:
@@ -973,6 +994,7 @@ def _name_tier(query_lower: str, texts: Any, *, exact: bool) -> int | None:
     (``_score_deep_match``: ``name_exact = 100 if query in id/name else 0``),
     unlike entity matches which have the 80 substring tier.
     """
+    query_norm = "" if exact else _sep_normalized(query_lower)
     best_ratio = 0
     for text in texts:
         if not text:
@@ -981,6 +1003,8 @@ def _name_tier(query_lower: str, texts: Any, *, exact: bool) -> int | None:
         if query_lower in text_lower:
             return 100
         if not exact:
+            if query_norm and query_norm in _sep_normalized(text_lower):
+                return 100
             ratio = _calc_ratio(query_lower, text_lower)
             if ratio > best_ratio:
                 best_ratio = ratio
