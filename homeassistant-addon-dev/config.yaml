@@ -54,6 +54,7 @@ options:
   enable_code_mode: false
   enable_lite_docstrings: false
   enable_mandatory_bps: true
+  enable_strict_mandatory_bps: true
   enable_auto_backup: true
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
@@ -76,6 +77,7 @@ schema:
   enable_code_mode: bool?
   enable_lite_docstrings: bool?
   enable_mandatory_bps: bool?
+  enable_strict_mandatory_bps: bool?
   enable_filesystem_tools: bool?
   enable_custom_component_integration: bool?
   enable_dashboard_screenshot: bool?

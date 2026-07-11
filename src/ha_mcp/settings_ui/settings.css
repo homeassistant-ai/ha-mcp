@@ -516,6 +516,12 @@
   .feature-row.yaml-packages-sub::before { content: ""; position: absolute; left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
   .feature-row.yaml-packages-sub.dimmed { opacity: 0.38; }
   .feature-row.yaml-packages-sub.dimmed input { cursor: not-allowed; }
+  /* Strict-mode row nests one level under the non-beta enable_mandatory_bps
+     row, so it uses the same 32px indent / 12px guide bar as .beta-sub. */
+  .feature-row.mandatory-bps-sub { padding-left: 32px; position: relative; }
+  .feature-row.mandatory-bps-sub::before { content: ""; position: absolute; left: 12px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .feature-row.mandatory-bps-sub.dimmed { opacity: 0.38; }
+  .feature-row.mandatory-bps-sub.dimmed input { cursor: not-allowed; }
 
   /* ── ADVANCED SETTINGS ───────────────────────────────────────────────── */
   .adv-section-title {

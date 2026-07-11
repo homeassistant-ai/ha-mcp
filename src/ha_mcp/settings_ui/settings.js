@@ -1555,6 +1555,10 @@ const FEATURE_META = {
     label: "Attach best-practice skills on writes",
     help: "Master switch for the write-tool skill content delivery feature (issue #1182). When enabled (default), the six config write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant best-practice reference files under skill_content on every successful write, plus auto-embed any reference sections cited by best-practice warnings. Each tool also exposes a per-call MandatoryBPS parameter the agent can set to false on subsequent calls once it has the content. When this master switch is off, NO skill_content goes out regardless of the per-call parameter or BP warnings. Leave on if your LLM benefits from inline guidance; turn off to minimise tokens when using an LLM that has the best-practice files indexed via skills or another retrieval path. Requires restart to take effect.",
   },
+  enable_strict_mandatory_bps: {
+    label: "Strict best-practices mode",
+    help: "Strict mode: prevents the client from using the tool until it can prove that it read the best practices. While on, the six best-practice write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked and return an error directing the client to read the best-practices skill via ha_get_skill_guide and pass back the acknowledgment key it obtains there. Nested under \"Attach best-practice skills on writes\" above and inert while that parent toggle is off. Requires restart to take effect.",
+  },
   // Master beta toggle — gates the 5 sub-flags below at runtime
   // (see config.py:_apply_feature_flag_overrides master gate). UI
   // dims sub-rows when this is off and re-renders live on flip.
@@ -1621,6 +1625,16 @@ const YAML_PACKAGES_SUB_FLAGS = [
   'enable_yaml_packages_automation',
   'enable_yaml_packages_script',
   'enable_yaml_packages_scene',
+];
+
+// Sub-flag of ``enable_mandatory_bps`` (strict best-practices mode).
+// Unlike YAML_PACKAGES_SUB_FLAGS this is NON-beta — it is NOT in
+// BETA_SUB_FLAGS and its only gate is the parent toggle. The main
+// render pass skips it via the includes() guard below, and
+// renderMandatoryBpsSubRows re-renders it nested beneath its parent so
+// it never appears as a standalone top-level row.
+const MANDATORY_BPS_SUB_FLAGS = [
+  'enable_strict_mandatory_bps',
 ];
 
 // Cached add-on flag. Each settings endpoint (/api/settings/features,
@@ -1736,6 +1750,9 @@ function renderFeatureFlags(flags) {
     // by renderYamlPackagesSubRows below right after their parent so
     // the nesting reads in source order.
     if (YAML_PACKAGES_SUB_FLAGS.includes(fieldName)) return;
+    // Same for the strict-mode sub-row — rendered by
+    // renderMandatoryBpsSubRows right after its enable_mandatory_bps parent.
+    if (MANDATORY_BPS_SUB_FLAGS.includes(fieldName)) return;
     const meta = FEATURE_META[fieldName];
     const isMaster = fieldName === 'enable_beta_features';
     const isBetaSub = BETA_SUB_FLAGS.has(fieldName);
@@ -1820,6 +1837,18 @@ function renderFeatureFlags(flags) {
             renderFeatureFlags(_lastFeatureFlags);
           }
         }
+        // Re-render on enable_mandatory_bps flip so the strict-mode
+        // sub-row dims/undims immediately. Same live-cache pattern as
+        // the master and yaml-config flips above.
+        if (fieldName === 'enable_mandatory_bps') {
+          if (_lastFeatureFlags[fieldName]) {
+            _lastFeatureFlags[fieldName] = {
+              ..._lastFeatureFlags[fieldName],
+              value: input.checked,
+            };
+            renderFeatureFlags(_lastFeatureFlags);
+          }
+        }
         saveFeatureFlag(fieldName, input.checked);
       });
       const slider = document.createElement('span');
@@ -1865,6 +1894,13 @@ function renderFeatureFlags(flags) {
     if (fieldName === 'enable_yaml_config_editing') {
       const parentOn = !!f.value;
       renderYamlPackagesSubRows(flags, targetBody, masterOn, parentOn);
+    }
+    // After the enable_mandatory_bps parent row, inject its strict-mode
+    // sub-row. This whole group is non-beta, so the only gate is the
+    // parent toggle (no master beta involved).
+    if (fieldName === 'enable_mandatory_bps') {
+      const parentOn = !!f.value;
+      renderMandatoryBpsSubRows(flags, targetBody, parentOn);
     }
     // After the enable_filesystem_tools row, inject the custom-directories
     // editor (issue #1567). Dimmed when either the master beta is off or
@@ -1918,6 +1954,69 @@ function renderYamlPackagesSubRows(flags, parentEl, masterOn, parentOn) {
       // row handlers) so a later parent flip — which re-renders from
       // _lastFeatureFlags — reflects this sub-row's current state rather
       // than a stale value.
+      if (_lastFeatureFlags[fieldName]) {
+        _lastFeatureFlags[fieldName] = {
+          ..._lastFeatureFlags[fieldName],
+          value: input.checked,
+        };
+      }
+      saveFeatureFlag(fieldName, input.checked);
+    });
+    const slider = document.createElement('span');
+    slider.className = 'slider';
+    label.appendChild(input);
+    label.appendChild(slider);
+    control.appendChild(label);
+
+    row.appendChild(info);
+    row.appendChild(control);
+    parentEl.appendChild(row);
+  });
+}
+
+function renderMandatoryBpsSubRows(flags, parentEl, parentOn) {
+  MANDATORY_BPS_SUB_FLAGS.forEach(fieldName => {
+    const f = flags[fieldName];
+    if (!f) return;
+    const meta = FEATURE_META[fieldName] || { label: fieldName, help: '' };
+    // Strict mode is a plain child of enable_mandatory_bps — no beta
+    // master in play, so the only gate is the parent toggle.
+    const lockedByGate = !parentOn;
+    const row = document.createElement('div');
+    row.className = 'feature-row mandatory-bps-sub' + (lockedByGate ? ' dimmed' : '');
+
+    const info = document.createElement('div');
+    info.className = 'feature-info';
+    const lockedNote = !f.editable
+      ? `<div class="feature-locked-note">` +
+        (f.origin === 'env'
+          ? envLockedNoteHtml(f.env_var, fieldName)
+          : escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')) +
+        `</div>`
+      : '';
+    const infoNote = f.editable && ORIGIN_INFO_NOTE[f.origin]
+      ? `<div class="feature-locked-note">` +
+        `${escapeHtml(ORIGIN_INFO_NOTE[f.origin])}</div>`
+      : '';
+    info.innerHTML =
+      `<div class="feature-name" id="label-feature-${fieldName}">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
+      lockedNote + infoNote;
+
+    const control = document.createElement('div');
+    control.className = 'feature-control';
+    const label = document.createElement('label');
+    label.className = 'switch';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.name = 'feature:' + fieldName;
+    input.checked = !!f.value;
+    input.disabled = !f.editable || lockedByGate;
+    input.setAttribute('aria-labelledby', 'label-feature-' + fieldName);
+    input.addEventListener('change', () => {
+      // Keep the cached flag value in sync (parity with the parent row
+      // handler) so a later parent flip — which re-renders from
+      // _lastFeatureFlags — reflects this sub-row's current state.
       if (_lastFeatureFlags[fieldName]) {
         _lastFeatureFlags[fieldName] = {
           ..._lastFeatureFlags[fieldName],

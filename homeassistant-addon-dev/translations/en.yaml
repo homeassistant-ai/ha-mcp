@@ -190,6 +190,17 @@ configuration:
       benefits from inline guidance; turn off to minimise tokens when
       using an LLM that has the best-practice files indexed via skills
       or another retrieval path. Requires restart to take effect.
+  enable_strict_mandatory_bps:
+    name: Strict best-practices mode
+    description: >-
+      Strict mode: prevents the client from using the tool until it can
+      prove that it read the best practices. While on, the six
+      best-practice write tools (automations, scripts, scenes, helpers,
+      dashboards, raw YAML) are blocked and return an error directing the
+      client to read the best-practices skill via ha_get_skill_guide and
+      pass back the acknowledgment key it obtains there. Child of the
+      "Attach best-practice skills on writes" option above and inert
+      while that parent is off. Requires restart to take effect.
   enable_filesystem_tools:
     name: Enable filesystem tools (beta)
     description: >-

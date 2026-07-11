@@ -1380,6 +1380,12 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
                 "enable_yaml_packages_automation": True,
                 "enable_yaml_packages_script": True,
                 "enable_yaml_packages_scene": True,
+                # Strict best-practices gate (#1779) defaults ON; leaving it
+                # unset here would block every keyless inaddon write. Pin it
+                # off like the conftest env blocks do for the other lanes
+                # (the strict-gate e2e skips the inaddon backend and builds
+                # its own in-process server instead).
+                "enable_strict_mandatory_bps": False,
                 "enable_code_mode": True,
                 "enable_lite_docstrings": False,
                 "enable_filesystem_tools": True,

@@ -100,6 +100,12 @@ class ErrorCode(StrEnum):
     # because the server-wide Read Only Mode toggle is on.
     READ_ONLY_MODE = "READ_ONLY_MODE"
 
+    # Strict mandatory best-practices gate (#1779). A gated write tool was
+    # blocked because strict mode is effective and the call did not carry
+    # the acknowledgment key published only in the best-practices skill
+    # content. Fail-closed: nothing was changed.
+    BPS_ACKNOWLEDGMENT_REQUIRED = "BPS_ACKNOWLEDGMENT_REQUIRED"
+
     # Mandatory auto-backup (#1579). A write that requires a pre-write
     # snapshot was blocked because the snapshot could not be captured
     # (fetch failed, the snapshot write failed — e.g. disk full — or the

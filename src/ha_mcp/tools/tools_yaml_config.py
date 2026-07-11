@@ -250,6 +250,18 @@ class YamlConfigTools:
             bool,
             Field(default=True),
         ] = True,
+        # BestPracticeKey (#1779): declared so FastMCP/pydantic accepts the
+        # kwarg and schema-validating clients will send it; StrictBpsMiddleware
+        # consumes it and the tool body never reads it. Described (unlike
+        # MandatoryBPS) because it never leaks the key and clients need to know
+        # where it comes from.
+        BestPracticeKey: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="Acknowledgment key published in the home-assistant-best-practices skill content; required when strict best-practices mode is enabled.",
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT). MUST call ha_get_skill_guide first.
 

@@ -65,6 +65,56 @@ def test_enable_mandatory_bps_env_var_coercion_rejected(env_value):
         )
 
 
+def test_enable_strict_mandatory_bps_default_on():
+    """ENABLE_STRICT_MANDATORY_BPS defaults to True — strict mode is active
+    whenever the parent enable_mandatory_bps is on (issue #1779)."""
+    from ha_mcp.config import Settings
+
+    assert Settings().enable_strict_mandatory_bps is True
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [
+        ("true", True),
+        ("True", True),
+        ("TRUE", True),
+        ("1", True),
+        ("yes", True),
+        ("on", True),
+        ("false", False),
+        ("False", False),
+        ("0", False),
+        ("no", False),
+        ("off", False),
+    ],
+)
+def test_enable_strict_mandatory_bps_env_var_coercion_accepted(env_value, expected):
+    """Pydantic accepts the documented boolean strings (case-insensitive)."""
+    from ha_mcp.config import Settings
+
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        ENABLE_STRICT_MANDATORY_BPS=env_value,
+    )
+    assert settings.enable_strict_mandatory_bps is expected
+
+
+@pytest.mark.parametrize("env_value", ["garbage", "disable", "off please", ""])
+def test_enable_strict_mandatory_bps_env_var_coercion_rejected(env_value):
+    """Pydantic rejects non-boolean strings with ValidationError, surfacing
+    a clear startup-time error instead of silently coercing."""
+    import pydantic
+
+    from ha_mcp.config import Settings
+
+    with pytest.raises(pydantic.ValidationError):
+        Settings(
+            _env_file=None,  # type: ignore[call-arg]
+            ENABLE_STRICT_MANDATORY_BPS=env_value,
+        )
+
+
 def test_read_only_mode_disabled_by_default():
     """read_only_mode defaults to False (opt-in safety toggle, #1569)."""
     from ha_mcp.config import Settings

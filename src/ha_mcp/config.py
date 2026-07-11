@@ -237,6 +237,18 @@ class Settings(BaseSettings):
     # regardless of the per-call param or BP warnings. Default on.
     enable_mandatory_bps: bool = Field(True, alias="ENABLE_MANDATORY_BPS")
 
+    # Strict best-practices gate (issue #1779) — child flag of
+    # ``enable_mandatory_bps``. When effective, the six write tools are
+    # HARD-BLOCKED unless the call carries the acknowledgment key that is
+    # published only inside the best-practices skill content served by
+    # ``ha_get_skill_guide`` (modeled on the Hubitat MCP acknowledgment
+    # gate). Default ON so strict mode is active whenever the parent is on;
+    # inert when the parent is off — that cascade is enforced at the
+    # consumption site (``strict_bps.strict_bps_effective``), not here,
+    # because this flag is deliberately NOT a beta sub-flag and there is no
+    # config-level parent gate for non-beta flags.
+    enable_strict_mandatory_bps: bool = Field(True, alias="ENABLE_STRICT_MANDATORY_BPS")
+
     # Filesystem tools — read/write/delete/list under the HA config dir.
     # Previously gated by a direct ``os.getenv`` call in
     # ``tools/tools_filesystem.py`` so callers (and the settings UI)
@@ -656,6 +668,12 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
     # gated by the beta master) nor in ADVANCED_SETTINGS_FIELDS (registries
     # are name-disjoint per _validate_registries()).
     FeatureFlagField("enable_mandatory_bps", "ENABLE_MANDATORY_BPS", bool),
+    # Child flag of enable_mandatory_bps (#1779). Non-beta like its
+    # parent, so it belongs here and NOT in BETA_FEATURE_FIELDS; kept out
+    # of ADVANCED_SETTINGS_FIELDS too (registries are name-disjoint).
+    FeatureFlagField(
+        "enable_strict_mandatory_bps", "ENABLE_STRICT_MANDATORY_BPS", bool
+    ),
     FeatureFlagField("enable_yaml_config_editing", "ENABLE_YAML_CONFIG_EDITING", bool),
     FeatureFlagField("enable_yaml_edit_confirm", "ENABLE_YAML_EDIT_CONFIRM", bool),
     # Per-key sub-gates beneath enable_yaml_config_editing. Nested in

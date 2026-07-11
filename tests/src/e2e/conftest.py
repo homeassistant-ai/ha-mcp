@@ -145,6 +145,11 @@ _EMBEDDED_FEATURE_FLAGS: dict[str, bool] = {
     "enable_yaml_packages_scene": True,
     "enable_filesystem_tools": True,
     "enable_custom_component_integration": True,
+    # Strict best-practices gate (#1779) defaults ON with its parent
+    # (enable_mandatory_bps); pin it OFF here the same way the testcontainer
+    # backend pins ENABLE_STRICT_MANDATORY_BPS=false, so the embedded server's
+    # keyless writes aren't hard-blocked.
+    "enable_strict_mandatory_bps": False,
 }
 # Boot budgets for the embedded path. The wheel + its dependency tree is
 # preinstalled in the container entrypoint BEFORE HA's /init (so bring-up is
@@ -1572,6 +1577,10 @@ def ha_container_with_fresh_config(request):
             os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
             os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
             os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
+            # Strict best-practices gate (#1779) defaults ON with its parent;
+            # pin it OFF so the suite's keyless writes aren't hard-blocked. The
+            # strict-gate e2e test builds its own server with the flag enabled.
+            os.environ["ENABLE_STRICT_MANDATORY_BPS"] = "false"
             _reset_ha_in_process_caches()
             # Mirrors the sun.sun + entity wait loop in the testcontainer
             # branch of ha_container_with_fresh_config: the first tests reach
@@ -2095,6 +2104,10 @@ def ha_container_with_fresh_config(request):
         os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
         os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
         os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
+        # Strict best-practices gate (#1779) defaults ON with its parent; pin it
+        # OFF so the suite's keyless writes aren't hard-blocked. The strict-gate
+        # e2e test builds its own server with the flag enabled.
+        os.environ["ENABLE_STRICT_MANDATORY_BPS"] = "false"
 
         # Reset cached settings + WebSocket pool so subsequent client
         # lookups pick up the new container's URL.

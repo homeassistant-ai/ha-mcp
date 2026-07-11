@@ -372,6 +372,9 @@ def main() -> int:
     enable_lite_docstrings = False  # default
     lite_docstrings_in_config = False  # presence flag
     enable_mandatory_bps = True  # default (issue #1182 — on by default, non-beta)
+    # Strict best-practices mode (issue #1779). Non-beta, default-ON child
+    # of enable_mandatory_bps; runtime-gated off whenever the parent is off.
+    enable_strict_mandatory_bps = True  # default
     # Master beta toggle: present only in the dev addon's schema.
     # Default to False (stable behaviour); when
     # the dev schema-default merges in, ``beta_master_in_config``
@@ -493,6 +496,16 @@ def main() -> int:
                     "using default True"
                 )
                 enable_mandatory_bps = True
+            raw_strict_mandatory_bps = config.get("enable_strict_mandatory_bps", True)
+            if isinstance(raw_strict_mandatory_bps, bool):
+                enable_strict_mandatory_bps = raw_strict_mandatory_bps
+            else:
+                log_error(
+                    "enable_strict_mandatory_bps must be bool, got "
+                    f"{type(raw_strict_mandatory_bps).__name__}="
+                    f"{raw_strict_mandatory_bps!r}; using default True"
+                )
+                enable_strict_mandatory_bps = True
             # Master beta toggle is present in the dev-addon schema.
             # Track presence separately so stable
             # add-on installs (where the key is absent from options.json)
@@ -573,6 +586,10 @@ def main() -> int:
     # unconditionally (like the stable core settings above) — never
     # presence-gated or beta-master-gated like the beta sub-flags below.
     os.environ["ENABLE_MANDATORY_BPS"] = str(enable_mandatory_bps).lower()
+    # ENABLE_STRICT_MANDATORY_BPS is non-beta and default-ON as well, so it
+    # is also written unconditionally. It is runtime-gated off by the server
+    # whenever ENABLE_MANDATORY_BPS is off (parent dependency, issue #1779).
+    os.environ["ENABLE_STRICT_MANDATORY_BPS"] = str(enable_strict_mandatory_bps).lower()
     # Beta sub-flags: only write env vars when the key is actually in
     # the addon's options.json. On stable addon,
     # none of these keys are in schema, so config.get(...) returned

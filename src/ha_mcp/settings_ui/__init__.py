@@ -1997,6 +1997,51 @@ def build_settings_handlers(
                 status_code=409,
             )
 
+        # Strict-mandatory-BPS dependency gate: strict mode
+        # (``enable_strict_mandatory_bps``) is a child of
+        # ``enable_mandatory_bps`` and is inert unless the parent is on.
+        # Mirrors the beta-master gate above: derive the post-merge parent
+        # from the payload (if present), otherwise fall back to the live
+        # ``Settings`` value, and reject a payload that tries to turn strict
+        # on while the resulting parent state would be off — the runtime gate
+        # would force strict False anyway, so the user should learn the save
+        # was a no-op now rather than at next startup. Turning the parent off
+        # alone is NOT rejected here (strict absent from the payload): its
+        # persisted value is preserved and the runtime gate handles it, same
+        # as the beta sub-flags.
+        effective_mandatory_bps = bool(
+            raw_flags.get(
+                "enable_mandatory_bps",
+                getattr(get_global_settings(), "enable_mandatory_bps", True),
+            )
+        )
+        strict_write = "enable_strict_mandatory_bps" in raw_flags and bool(
+            raw_flags["enable_strict_mandatory_bps"]
+        )
+        if strict_write and not effective_mandatory_bps:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    (
+                        "Cannot enable strict best-practices mode "
+                        "('enable_strict_mandatory_bps') while the parent "
+                        "'Attach best-practice skills on writes' "
+                        "(enable_mandatory_bps) toggle is off. Strict mode is "
+                        "a child of that toggle and has no effect without it. "
+                        "Include enable_mandatory_bps=true in the same save, or "
+                        "turn the parent on first."
+                    ),
+                    suggestions=[
+                        "Include enable_mandatory_bps=true in the same save "
+                        + "payload as enable_strict_mandatory_bps.",
+                        "Or turn on the parent 'Attach best-practice skills on "
+                        + "writes' toggle first, then enable strict mode.",
+                    ],
+                    context={"rejected": ["enable_strict_mandatory_bps"]},
+                ),
+                status_code=409,
+            )
+
         # Build the validated override dict. Reject unknown fields and
         # env-locked fields up front so the user gets a precise error
         # instead of a silent no-op. ``addon``-origin fields are now
