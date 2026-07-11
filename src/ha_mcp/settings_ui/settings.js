@@ -1553,7 +1553,7 @@ const FEATURE_META = {
   },
   enable_code_mode: {
     label: "Enable code-mode sandbox (beta)",
-    help: "Beta feature, disabled by default. Enables ha_manage_custom_tool, a sandboxed Python interpreter (pydantic-monty) that lets AI assistants write/run/save/delete custom tools when no built-in tool covers the request. Sandbox cannot touch the filesystem or arbitrary network, but CAN call any registered MCP tool, hit the HA REST API, or send HA WebSocket commands, effectively 'do whatever existing tools allow you to do, in any combination'. See docs/beta.md for known limitations. Requires restart to take effect.",
+    help: "Beta feature, disabled by default. Enables ha_manage_custom_tool, a sandboxed Python interpreter (pydantic-monty) that lets AI assistants write/run/save/delete custom tools when no built-in tool covers the request. Sandbox cannot touch the filesystem or arbitrary network, but CAN call any registered MCP tool, hit the HA REST API, or send HA WebSocket commands, effectively 'do whatever existing tools allow you to do, in any combination'. Saved tools persist and are visible to any client that can connect to ha-mcp. See docs/beta.md for known limitations. Requires restart to take effect.",
   },
   enable_lite_docstrings: {
     label: "Enable lite tool docstrings (beta)",

@@ -126,7 +126,8 @@ configuration:
       existing MCP tools (call_tool), or remove a saved tool
       (delete_saved_tool). Saved tools persist to
       /data/saved_tools.json by default so they survive add-on
-      restarts. See docs/beta.md for known limitations. Requires
+      restarts, and are visible to any client that can connect. See
+      docs/beta.md for known limitations. Requires
       restart to take effect. REQUIRES the master "Enable beta
       features" toggle above (and in the web UI) to be on — otherwise
       this sub-flag is ignored at runtime regardless of its value
