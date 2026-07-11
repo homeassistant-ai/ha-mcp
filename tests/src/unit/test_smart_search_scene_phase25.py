@@ -610,6 +610,53 @@ class TestApplyScenePartialFlag:
         assert "match status is unknown" in reason
         assert "not exhaustive" in reason
 
+    def test_timeout_sets_partial_pointing_at_concurrency_knobs(self) -> None:
+        """Per-request timeouts (issue #1784) must surface as their own
+        fragment pointing at the batch-size/timeout knobs — not be lumped
+        into the generic per-id-fetch-raised reason."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 0,
+                "skipped": 0,
+                "timeout": 6,
+                "integration_skipped": 0,
+                "registry_failed": False,
+            },
+        )
+        assert response["partial"] is True
+        reason = response["partial_reason"]
+        assert "6 scene(s) not scanned" in reason
+        assert "timed out" in reason
+        assert "HAMCP_INDIVIDUAL_FETCH_BATCH_SIZE" in reason
+        assert "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT" in reason
+        assert "match status is unknown" in reason
+        assert "not exhaustive" in reason
+
+    def test_stats_dict_without_timeout_key_is_tolerated(self) -> None:
+        """The timeout key is read with ``.get()`` so older stats-dict
+        builders (and these direct-call tests) without it keep working."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 1,
+                "skipped": 0,
+                "integration_skipped": 0,
+                "registry_failed": False,
+            },
+        )
+        assert response["partial"] is True
+        assert (
+            "1 scene(s) not scanned (per-id fetch raised)"
+            in (response["partial_reason"])
+        )
+
     def test_skipped_sets_partial_with_budget_reason(self) -> None:
         from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
 

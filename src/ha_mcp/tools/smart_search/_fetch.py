@@ -74,23 +74,34 @@ class ConfigFetchMixin(ScoringMixin):
         budget: float,
         label: str,
         plural: str,
-    ) -> tuple[dict[str, dict[str, Any]], int, int, int]:
+    ) -> tuple[dict[str, dict[str, Any]], int, int, int, int]:
         """Fetch configs individually in parallel batches under a wall-clock budget.
 
         ``fetch_one(id)`` returns ``(id, config | None, fail_kind | None)``
         where ``fail_kind`` is ``None`` on success, ``"yaml_skipped"`` when
         the per-id endpoint returned 404 (the config is structurally
         unfetchable — typically a YAML-defined automation/script that the
-        ``/config/<type>/config/<id>`` REST endpoint can't expose), or
-        ``"failed"`` for any other exception. New batches stop launching
-        once ``budget`` seconds elapse. Returns
-        ``(configs, failed_count, skipped_count, yaml_skipped_count)``.
+        ``/config/<type>/config/<id>`` REST endpoint can't expose),
+        ``"timeout"`` when the fetch exceeded the per-request
+        ``INDIVIDUAL_CONFIG_TIMEOUT``, or ``"failed"`` for any other
+        exception. New batches stop launching once ``budget`` seconds
+        elapse. Returns
+        ``(configs, failed_count, skipped_count, yaml_skipped_count,
+        timeout_count)``.
 
         Counting the YAML-defined class distinctly lets callers explain to
         end users that the gap is **structural** (the config exists, the
         endpoint just can't return it) rather than a transient error. This
         mirrors the scene path's ``integration_skipped`` treatment for
         non-HA-managed scenes.
+
+        Counting the timeout class distinctly matters for the same reason
+        (issue #1784): on HA servers that serve the per-id endpoint
+        serially, a batch's tail requests queue past the per-request
+        timeout even though every one of them would return 200 — folding
+        those into the generic "failed" bucket sends users hunting for
+        broken automations that don't exist, when the fix is tuning
+        ``INDIVIDUAL_FETCH_BATCH_SIZE`` / ``INDIVIDUAL_CONFIG_TIMEOUT``.
 
         Fetch order is NOT prioritized by name score: deep_search's purpose is
         to find matches INSIDE configs (conditions/actions), not just by name,
@@ -104,15 +115,21 @@ class ConfigFetchMixin(ScoringMixin):
         failed_count = 0
         skipped_count = 0
         yaml_skipped_count = 0
+        timeout_count = 0
         for i in range(0, len(ids), INDIVIDUAL_FETCH_BATCH_SIZE):
             if time.perf_counter() - budget_start > budget:
                 skipped_count = (
-                    total_to_fetch - fetched_count - failed_count - yaml_skipped_count
+                    total_to_fetch
+                    - fetched_count
+                    - failed_count
+                    - yaml_skipped_count
+                    - timeout_count
                 )
                 logger.warning(
                     f"{label} config fetch budget exhausted ({budget}s). "
                     f"Fetched {fetched_count}/{total_to_fetch} "
-                    f"({failed_count} failed, {yaml_skipped_count} yaml-skipped), "
+                    f"({failed_count} failed, {timeout_count} timed out, "
+                    f"{yaml_skipped_count} yaml-skipped), "
                     f"skipped {skipped_count} {plural}."
                 )
                 break
@@ -124,9 +141,11 @@ class ConfigFetchMixin(ScoringMixin):
                     fetched_count += 1
                 elif fail_kind == "yaml_skipped":
                     yaml_skipped_count += 1
+                elif fail_kind == "timeout":
+                    timeout_count += 1
                 else:
                     failed_count += 1
-        return configs, failed_count, skipped_count, yaml_skipped_count
+        return configs, failed_count, skipped_count, yaml_skipped_count, timeout_count
 
     def _score_config_entries(
         self,

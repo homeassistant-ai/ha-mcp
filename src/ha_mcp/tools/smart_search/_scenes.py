@@ -7,6 +7,7 @@ from typing import Any
 from ._config import (
     BULK_WEBSOCKET_TIMEOUT,
     INDIVIDUAL_CONFIG_TIMEOUT,
+    INDIVIDUAL_FETCH_BATCH_SIZE,
     SCENE_CONFIG_TIME_BUDGET,
 )
 from ._fetch import ConfigFetchMixin
@@ -199,13 +200,14 @@ class SceneSearchMixin(ConfigFetchMixin):
         exact_match: bool,
         *,
         config_time_budget: float | None = None,
-    ) -> tuple[list[dict[str, Any]], int, int, int, bool]:
+    ) -> tuple[list[dict[str, Any]], int, int, int, bool, int]:
         """Deep-search scenes: 3-tier strategy plus registry-walk augmentation.
 
         Scenes have no listing primitive, so entities are enumerated from
         get_states() and configs fetched per id. Returns the scene results plus
-        the four signals that drive the response ``partial`` flag:
-        ``(results, failed_count, skipped_count, integration_skipped, registry_failed)``.
+        the five signals that drive the response ``partial`` flag:
+        ``(results, failed_count, skipped_count, integration_skipped,
+        registry_failed, timeout_count)``.
         """
         scene_entities = [
             e for e in all_entities if e.get("entity_id", "").startswith("scene.")
@@ -248,6 +250,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         failed_count = 0
         skipped_count = 0
         integration_skipped = 0
+        timeout_count = 0
 
         # Attempt C: parallel per-id fetch with a wall-clock budget so a few
         # slow scenes don't tank the whole search.
@@ -265,6 +268,15 @@ class SceneSearchMixin(ConfigFetchMixin):
                         timeout=INDIVIDUAL_CONFIG_TIMEOUT,
                     )
                     return (sid, config_resp.get("config", {}), None)
+                except TimeoutError:
+                    # Per-request timeout under batch concurrency — distinct
+                    # from a real failure; see _fetch_automation_config
+                    # (#1784).
+                    logger.debug(
+                        f"Scene individual config fetch ({sid}) timed out "
+                        f"after {INDIVIDUAL_CONFIG_TIMEOUT}s."
+                    )
+                    return (sid, None, "timeout")
                 except Exception as e:
                     logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")
                     return (sid, None, "failed")
@@ -278,6 +290,7 @@ class SceneSearchMixin(ConfigFetchMixin):
                 # from `_individual_fetch_budgeted` is therefore expected
                 # to stay at zero on this path.
                 _scene_yaml_skipped,
+                timeout_count,
             ) = await self._individual_fetch_budgeted(
                 sids_to_fetch,
                 _fetch_scene_config,
@@ -312,6 +325,7 @@ class SceneSearchMixin(ConfigFetchMixin):
             skipped_count,
             integration_skipped,
             registry_failed,
+            timeout_count,
         )
 
     @staticmethod
@@ -333,7 +347,10 @@ class SceneSearchMixin(ConfigFetchMixin):
         """
         failed = scene_stats["failed"]
         skipped = scene_stats["skipped"]
-        if not (failed or skipped):
+        # .get(): tolerate older callers/tests that build the stats dict
+        # without the timeout key (added for #1784).
+        timeout = scene_stats.get("timeout", 0)
+        if not (failed or skipped or timeout):
             return
         response["partial"] = True
         reason_parts: list[str] = []
@@ -341,6 +358,18 @@ class SceneSearchMixin(ConfigFetchMixin):
             reason_parts.append(
                 f"{failed} scene(s) not scanned (per-id fetch raised) — "
                 "their match status is unknown; this result is not exhaustive."
+            )
+        if timeout:
+            reason_parts.append(
+                f"{timeout} scene(s) not scanned (per-id fetch timed out "
+                f"after {INDIVIDUAL_CONFIG_TIMEOUT}s while "
+                f"{INDIVIDUAL_FETCH_BATCH_SIZE} fetches ran concurrently — "
+                "this usually means the HA server serves config reads "
+                "serially, not that the scenes are broken) — their match "
+                "status is unknown; this result is not exhaustive. Lower "
+                "HAMCP_INDIVIDUAL_FETCH_BATCH_SIZE and/or raise "
+                "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT (or the matching fields in "
+                "the web Settings UI's Advanced section)."
             )
         if skipped:
             reason_parts.append(

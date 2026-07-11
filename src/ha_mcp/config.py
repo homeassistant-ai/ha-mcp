@@ -83,6 +83,22 @@ class Settings(BaseSettings):
         20.0, alias="HAMCP_SCENE_CONFIG_TIME_BUDGET"
     )
 
+    # Per-request timeout and concurrency of the smart-search per-id
+    # config-fetch fallback (Attempt C). On HA servers that serve
+    # /config/<domain>/config/<id> serially, a full batch of concurrent
+    # requests queues behind one another and the tail of each batch can
+    # exceed the per-request timeout even though every request would
+    # succeed — lowering the batch size (toward 1) and/or raising the
+    # timeout lets such instances scan exhaustively (issue #1784). Same
+    # consumption model as the budgets above: import-time constants in
+    # tools/smart_search/_config.py, restart required.
+    individual_config_timeout: float = Field(
+        5.0, alias="HAMCP_INDIVIDUAL_CONFIG_TIMEOUT"
+    )
+    individual_fetch_batch_size: int = Field(
+        10, alias="HAMCP_INDIVIDUAL_FETCH_BATCH_SIZE"
+    )
+
     # Backup tool configuration
     backup_hint: str = Field("normal", alias="BACKUP_HINT")
 
@@ -350,21 +366,26 @@ class Settings(BaseSettings):
         "automation_config_time_budget",
         "script_config_time_budget",
         "scene_config_time_budget",
+        "individual_config_timeout",
+        "individual_fetch_batch_size",
         mode="before",
     )
     @classmethod
     def _lenient_time_budget(cls, v: object, info: ValidationInfo) -> object:
-        """Coerce the three smart-search time budgets, falling back to the
-        field default (with a warning) instead of crashing startup.
+        """Coerce the smart-search Attempt-C knobs (the three time budgets,
+        the per-request timeout, and the fetch batch size), falling back to
+        the field default (with a warning) instead of crashing startup.
 
         Preserves the parse-tolerance of the removed ``_env_float`` helper
         (empty / unparseable -> default) and additionally enforces the same
         ``_ADVANCED_SETTINGS_BOUNDS`` range as the override-file / UI-POST
         path, so the env-var path can't smuggle in an out-of-range or
-        non-finite budget. A ``<= 0`` budget would silently disable the
-        per-id config-fetch scan, and ``inf`` / ``nan`` would uncap it; the
-        ``lo <= val <= hi`` test rejects all three (NaN comparisons are
-        False), keeping the env and override-file paths consistent."""
+        non-finite value. A ``<= 0`` budget or timeout would silently
+        disable the per-id config-fetch scan, and ``inf`` / ``nan`` would
+        uncap it; the ``lo <= val <= hi`` test rejects all three (NaN
+        comparisons are False), keeping the env and override-file paths
+        consistent. Int fields (batch size) additionally reject fractional
+        values rather than truncating them."""
         field_name = info.field_name
         if field_name is None:  # always set for field_validator; defensive
             return v
@@ -389,6 +410,17 @@ class Settings(BaseSettings):
                 default,
             )
             return default
+        if isinstance(default, int) and not isinstance(default, bool):
+            if val != int(val):
+                logger.warning(
+                    "Invalid value for %s=%r (must be a whole number); "
+                    "using default %s",
+                    field_name,
+                    v,
+                    default,
+                )
+                return default
+            return int(val)
         return val
 
     @property
@@ -759,6 +791,22 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
         "search",
         True,
     ),
+    # Attempt-C per-request timeout + batch size (#1784). Restart-required
+    # (same import-time consumption as the budgets above).
+    AdvancedField(
+        "individual_config_timeout",
+        "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT",
+        float,
+        "search",
+        True,
+    ),
+    AdvancedField(
+        "individual_fetch_batch_size",
+        "HAMCP_INDIVIDUAL_FETCH_BATCH_SIZE",
+        int,
+        "search",
+        True,
+    ),
     # Operations.
     AdvancedField("backup_hint", "BACKUP_HINT", str, "operations", True),
     AdvancedField("enable_websocket", "ENABLE_WEBSOCKET", bool, "operations", True),
@@ -846,6 +894,8 @@ _ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
     "automation_config_time_budget": (1.0, 600.0),
     "script_config_time_budget": (1.0, 600.0),
     "scene_config_time_budget": (1.0, 600.0),
+    "individual_config_timeout": (1.0, 600.0),
+    "individual_fetch_batch_size": (1, 100),
     "code_mode_max_duration": (1.0, 300.0),
     "code_mode_max_memory": (1_048_576, 268_435_456),
     "code_mode_max_recursion": (1, 10_000),

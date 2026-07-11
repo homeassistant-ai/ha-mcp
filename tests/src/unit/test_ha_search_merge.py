@@ -916,6 +916,57 @@ def test_budget_partial_flag_distinguishes_yaml_skipped_from_failed() -> None:
     assert reason.count(" ; ") == 1
 
 
+def test_budget_partial_flag_set_when_automation_individual_fetches_timed_out() -> None:
+    """Per-id fetches that hit INDIVIDUAL_CONFIG_TIMEOUT classify as a
+    distinct ``timeout`` class (issue #1784): on HA servers that serve
+    config reads serially, a concurrent batch's tail queues past the
+    per-request timeout while every request would still return 200.
+    Lumping those into "raised a non-404 error" sent users hunting for
+    broken automations that don't exist; the timeout fragment must
+    instead point at the batch-size/timeout knobs."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(response, automation_timeout=31)
+    assert response["partial"] is True
+    reason = response["partial_reason"]
+    assert "31 automation(s) not scanned" in reason
+    assert "timed out" in reason
+    assert "non-404" not in reason
+    assert "HAMCP_INDIVIDUAL_FETCH_BATCH_SIZE" in reason
+    assert "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT" in reason
+    assert "match status is unknown" in reason
+    assert "not exhaustive" in reason
+
+
+def test_budget_partial_flag_set_when_script_individual_fetches_timed_out() -> None:
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(response, script_timeout=4)
+    assert response["partial"] is True
+    reason = response["partial_reason"]
+    assert "4 script(s) not scanned" in reason
+    assert "timed out" in reason
+    assert "non-404" not in reason
+    assert "HAMCP_INDIVIDUAL_FETCH_BATCH_SIZE" in reason
+    assert "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT" in reason
+    assert "match status is unknown" in reason
+    assert "not exhaustive" in reason
+
+
+def test_budget_partial_flag_distinguishes_timeout_from_failed() -> None:
+    """Timeout and non-timeout failures on the same type must surface as
+    two separate fragments — the prescribed fixes differ (tune the
+    concurrency knobs vs investigate the error in debug logs)."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(
+        response, automation_failed=3, automation_timeout=5
+    )
+    assert response["partial"] is True
+    reason = response["partial_reason"]
+    assert "3 automation(s) not scanned (per-id fetch raised a non-404 error)" in reason
+    assert "5 automation(s) not scanned (per-id fetch timed out" in reason
+    # Two distinct per-type fragments -> exactly one ` ; ` separator.
+    assert reason.count(" ; ") == 1
+
+
 def test_budget_partial_flag_set_when_helper_type_lists_failed() -> None:
     """Helpers run on every default ha_search call; silent per-type-list
     failures previously left callers unable to distinguish a clean

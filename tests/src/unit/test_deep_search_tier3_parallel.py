@@ -454,6 +454,7 @@ class TestYamlSkippedClassification:
             skipped_count,
             failed_count,
             yaml_skipped_count,
+            _timeout_count,
         ) = await smart_tools._deep_search_automations(
             automations,
             {
@@ -516,6 +517,7 @@ class TestYamlSkippedClassification:
             _skipped_count,
             failed_count,
             yaml_skipped_count,
+            _timeout_count,
         ) = await smart_tools._deep_search_automations(
             automations,
             {
@@ -564,6 +566,7 @@ class TestYamlSkippedClassification:
             _skipped_count,
             failed_count,
             yaml_skipped_count,
+            _timeout_count,
         ) = await smart_tools._deep_search_automations(
             automations,
             {"automation.none_status": "uid_none"},
@@ -609,6 +612,7 @@ class TestYamlSkippedClassification:
             skipped_count,
             failed_count,
             yaml_skipped_count,
+            _timeout_count,
         ) = await smart_tools._deep_search_scripts(
             scripts,
             query_lower="anything",
@@ -674,6 +678,7 @@ class TestYamlSkippedClassification:
             skipped_count,
             failed_count,
             yaml_skipped_count,
+            _timeout_count,
         ) = await smart_tools._deep_search_automations(
             automations,
             {
@@ -833,4 +838,191 @@ class TestYamlSkippedThroughDeepSearch:
         assert re.search(r"\b2 script\(s\)", reason), (
             f"partial_reason must carry the real yaml_skipped count (2) as a "
             f"standalone token (not a substring of e.g. '12'); got {reason!r}"
+        )
+
+
+class TestTimeoutClassification:
+    """Component + seam coverage of the per-request-timeout → ``timeout``
+    classification (issue #1784).
+
+    A real ``asyncio.wait_for`` expiry inside Attempt C must increment the
+    new 5th tuple slot (``timeout_count``) — NOT ``failed_count``. Before
+    #1784 these landed in the generic non-404 ``failed`` bucket and
+    ``partial_reason`` said the fetch "raised a non-404 error", sending
+    users hunting for broken automations that don't exist when the real
+    cause was batch concurrency queueing past the per-request timeout on a
+    server that serializes config reads. The component tests drive the
+    REAL ``wait_for`` path (patched-down timeout + slow fetch), not a
+    hand-raised ``TimeoutError``, so a refactor that moves or unwraps
+    ``wait_for`` still trips them.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        # Bulk fetch fails (triggers Tier 3 per-id fallback).
+        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client.send_websocket_message = AsyncMock(
+            side_effect=Exception("WebSocket unavailable")
+        )
+        return client
+
+    @pytest.fixture
+    def smart_tools(self, mock_client):
+        return _make_tools(mock_client)
+
+    @pytest.mark.asyncio
+    async def test_automation_slow_fetch_classifies_as_timeout(
+        self, mock_client, smart_tools
+    ):
+        """A per-id fetch that outlives INDIVIDUAL_CONFIG_TIMEOUT must
+        count in the ``timeout`` slot, with ``failed`` staying 0."""
+        automations = [
+            {
+                "entity_id": "automation.slow_one",
+                "state": "on",
+                "attributes": {"friendly_name": "Slow One", "id": "uid_slow_one"},
+            },
+            {
+                "entity_id": "automation.slow_two",
+                "state": "on",
+                "attributes": {"friendly_name": "Slow Two", "id": "uid_slow_two"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _slow_per_id(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            # Healthy but slow — the serialized-server shape from #1784:
+            # the request WOULD return 200, it just outlives the timeout.
+            await asyncio.sleep(0.2)
+            return {"id": url.rsplit("/", 1)[-1], "alias": "slow"}
+
+        mock_client._request = AsyncMock(side_effect=_slow_per_id)
+
+        with patch("ha_mcp.tools.smart_search._deep.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+            (
+                matches,
+                skipped_count,
+                failed_count,
+                yaml_skipped_count,
+                timeout_count,
+            ) = await smart_tools._deep_search_automations(
+                automations,
+                {
+                    "automation.slow_one": "uid_slow_one",
+                    "automation.slow_two": "uid_slow_two",
+                },
+                query_lower="anything",
+                exact_match=False,
+            )
+        assert timeout_count == 2, (
+            f"both wait_for expiries must classify as timeout; got "
+            f"timeout={timeout_count}, failed={failed_count}"
+        )
+        assert failed_count == 0, (
+            f"timeouts must NOT count as generic failed; got failed={failed_count}"
+        )
+        assert yaml_skipped_count == 0
+        assert skipped_count == 0
+        assert matches == []
+
+    @pytest.mark.asyncio
+    async def test_script_slow_fetch_classifies_as_timeout(
+        self, mock_client, smart_tools
+    ):
+        """Mirror for the script fetch surface (``get_script_config``)."""
+        scripts = [
+            {
+                "entity_id": "script.slow_one",
+                "state": "off",
+                "attributes": {"friendly_name": "Slow One"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=scripts)
+
+        async def _slow_script(sid: str) -> dict:
+            await asyncio.sleep(0.2)
+            return {"config": {"alias": "slow"}}
+
+        mock_client.get_script_config = AsyncMock(side_effect=_slow_script)
+
+        with patch("ha_mcp.tools.smart_search._deep.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+            (
+                _matches,
+                _skipped_count,
+                failed_count,
+                yaml_skipped_count,
+                timeout_count,
+            ) = await smart_tools._deep_search_scripts(
+                scripts,
+                query_lower="anything",
+                exact_match=False,
+            )
+        assert timeout_count == 1, (
+            f"script wait_for expiry must classify as timeout; got "
+            f"timeout={timeout_count}, failed={failed_count}"
+        )
+        assert failed_count == 0
+        assert yaml_skipped_count == 0
+
+    @pytest.mark.asyncio
+    async def test_timeout_surfaces_partial_through_deep_search(
+        self, mock_client, smart_tools
+    ):
+        """A timeout driven through public ``deep_search`` must set
+        ``partial: True`` and word the reason as a timeout pointing at the
+        concurrency knobs — NOT as "raised a non-404 error". Pins the
+        5th-slot forward through ``_paginate_and_build_response`` →
+        ``_apply_per_type_partial_flag`` that the component tests can't
+        see (a regression leaving ``automation_timeout=0`` at its default
+        would pass them)."""
+        automations = [
+            {
+                "entity_id": "automation.slow_one",
+                "state": "on",
+                "attributes": {"friendly_name": "Slow One", "id": "uid_slow_one"},
+            },
+            {
+                "entity_id": "automation.slow_two",
+                "state": "on",
+                "attributes": {"friendly_name": "Slow Two", "id": "uid_slow_two"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _slow_per_id(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            await asyncio.sleep(0.2)
+            return {"id": url.rsplit("/", 1)[-1], "alias": "slow"}
+
+        mock_client._request = AsyncMock(side_effect=_slow_per_id)
+
+        with patch("ha_mcp.tools.smart_search._deep.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+            result = await smart_tools.deep_search(
+                query="anything",
+                search_types=["automation"],
+                limit=10,
+            )
+
+        assert result["partial"] is True, (
+            f"a per-request timeout must flag partial through deep_search; "
+            f"got {result.get('partial')!r}"
+        )
+        reason = result["partial_reason"]
+        assert "timed out" in reason, (
+            f"partial_reason must word the gap as a timeout; got {reason!r}"
+        )
+        assert "non-404" not in reason, (
+            f"timeouts must no longer be misreported as 'raised a non-404 "
+            f"error'; got {reason!r}"
+        )
+        assert "HAMCP_INDIVIDUAL_FETCH_BATCH_SIZE" in reason
+        assert "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT" in reason
+        # The real count (2) must flow through the seam, not a hardcode.
+        assert re.search(r"\b2 automation\(s\)", reason), (
+            f"partial_reason must carry the real timeout count (2); got {reason!r}"
         )
