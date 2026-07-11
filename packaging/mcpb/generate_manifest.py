@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Generate mcpb manifest.json with auto-discovered tools from the codebase."""
+
 from __future__ import annotations
 
 import ast
@@ -29,18 +30,30 @@ def extract_tools_from_file(file_path: Path) -> list[dict]:
             for decorator in node.decorator_list:
                 if isinstance(decorator, ast.Call):
                     for keyword in decorator.keywords:
-                        if keyword.arg == "annotations" and isinstance(keyword.value, ast.Dict):
-                            for k, v in zip(keyword.value.keys, keyword.value.values, strict=False):
+                        if keyword.arg == "annotations" and isinstance(
+                            keyword.value, ast.Dict
+                        ):
+                            for k, v in zip(
+                                keyword.value.keys, keyword.value.values, strict=False
+                            ):
                                 if isinstance(k, ast.Constant) and k.value == "title":
                                     if isinstance(v, ast.Constant):
                                         title = v.value
                                         break
                         # Also check for description in decorator if no docstring
-                        if not description and keyword.arg == "description" and isinstance(keyword.value, ast.Constant):
+                        if (
+                            not description
+                            and keyword.arg == "description"
+                            and isinstance(keyword.value, ast.Constant)
+                        ):
                             description = keyword.value.value
 
             # Use title as the display name, fallback to formatted function name
-            display_name = title if title else node.name.replace("ha_", "").replace("_", " ").title()
+            display_name = (
+                title
+                if title
+                else node.name.replace("ha_", "").replace("_", " ").title()
+            )
 
             # Use docstring first line as description, fallback to title or formatted name
             if not description:
@@ -48,10 +61,12 @@ def extract_tools_from_file(file_path: Path) -> list[dict]:
 
             # MCPB only supports name and description
             # Use title/display_name as the "name" shown in UI
-            tools.append({
-                "name": display_name,
-                "description": description[:100]  # Truncate long descriptions
-            })
+            tools.append(
+                {
+                    "name": display_name,
+                    "description": description[:100],  # Truncate long descriptions
+                }
+            )
 
     return tools
 
@@ -72,10 +87,7 @@ def discover_all_tools(tools_dir: Path) -> list[dict]:
 
 
 def generate_manifest(
-    template_path: Path,
-    output_path: Path,
-    version: str,
-    tools: list[dict]
+    template_path: Path, output_path: Path, version: str, tools: list[dict]
 ):
     """Generate manifest.json from template with discovered tools.
 
@@ -94,8 +106,7 @@ def generate_manifest(
     # Update description with actual tool count
     manifest = json.loads(manifest_str)
     manifest["long_description"] = manifest["long_description"].replace(
-        "80+ specialized tools",
-        f"{len(tools)} specialized tools"
+        "80+ specialized tools", f"{len(tools)} specialized tools"
     )
 
     output_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

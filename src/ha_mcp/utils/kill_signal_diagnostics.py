@@ -72,8 +72,19 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# SIGKILL/SIGSTOP omitted — uncatchable by design.
-_INSTRUMENTED_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+# SIGKILL/SIGSTOP omitted — uncatchable by design. SIGHUP resolved via
+# getattr: it doesn't exist on Windows, and a bare reference crashes the
+# module at import time (the diagnostic itself is Linux-only, but the
+# module must stay importable everywhere — test collection imports it).
+_INSTRUMENTED_SIGNALS = tuple(
+    sig
+    for sig in (
+        signal.SIGTERM,
+        signal.SIGINT,
+        getattr(signal, "SIGHUP", None),
+    )
+    if sig is not None
+)
 
 # si_code constants from Linux's <asm-generic/siginfo.h>. Pinned in
 # tests so a wrong value can't silently mislabel diagnostics.
