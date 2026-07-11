@@ -15,8 +15,6 @@ from pydantic import Field
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
@@ -33,13 +31,6 @@ from .best_practice_checker import (
 )
 from .best_practice_checker import (
     check_script_config as _check_best_practices,
-)
-from .component_api import (
-    component_supports,
-    get_component_caps,
-    invalidate_caps,
-    is_unknown_command,
-    send_component_config_get,
 )
 from .helpers import (
     exception_to_structured_error,
@@ -165,18 +156,18 @@ class ConfigScriptTools:
                 ],
             )
 
-            # Prefer the custom component's in-process config_get when it
-            # advertises the capability: one WS round-trip returns the config
-            # body + storage key + category, replacing the legacy 3-4 (id
-            # resolution WS + per-id config REST + fetch_entity_category WS).
-            # Falls back cleanly when the component is absent, downlevel, or
-            # errors — taxonomy lives in ``_get_script_via_component``.
-            caps = await get_component_caps(self._client)
-            if component_supports(caps, "config_get"):
-                routed = await self._get_script_via_component(script_id)
-                if routed is not None:
-                    return routed
-
+            # Script gets ALWAYS take the legacy path — the component's
+            # in-process ``config_get`` was withdrawn. It served
+            # ``entity.raw_config``, which is only the storage body as of the
+            # last COMPLETED async reload, with no version marker to tell a
+            # fresh body from a stale one. A get racing a reload returned the
+            # pre-edit body and broke the get -> python_transform -> set
+            # round-trip (caught live by the automation/script config e2e on the
+            # arm/HAOS runners). The legacy REST config endpoint reads the config
+            # FILE, which is fresh the instant a write lands, so it stays the
+            # sole path. Scenes were already legacy-only (no storage body in
+            # memory at all); scripts join them here for freshness. A
+            # file-reading ``config_get`` may return later (issue #1813).
             return await self._legacy_get_script(script_id)
         except ToolError:
             raise
@@ -195,11 +186,11 @@ class ConfigScriptTools:
     async def _legacy_get_script(self, script_id: str) -> dict[str, Any]:
         """Assemble the script-get response from the REST/WS pipeline.
 
-        The multi-fetch fallback: id-resolution WS + per-id config REST +
-        ``fetch_entity_category`` WS call. Behaviourally unchanged from the
-        pre-component implementation — the component path
-        (``_get_script_via_component``) reproduces this exact envelope
-        (including the REST-wrapper ``config``) from a single WS call.
+        The multi-fetch path: id-resolution WS + per-id config REST +
+        ``fetch_entity_category`` WS call. This is the ONLY script-get path —
+        see ``ha_config_get_script`` for why script gets never route through the
+        component's ``config_get`` (its ``raw_config`` freshness lags the config
+        file between a write and the next completed reload).
         """
         config_result = await self._fetch_script_config_envelope(script_id)
         # Extract actual script config body and compute hash before category injection
@@ -233,69 +224,6 @@ class ConfigScriptTools:
             "success": True,
             "action": "get",
             "script_id": canonical_id,
-            "config": config_result,
-            "config_hash": config_hash_value,
-        }
-
-    async def _get_script_via_component(self, script_id: str) -> dict[str, Any] | None:
-        """Serve ha_config_get_script from the component; ``None`` ⇒ legacy.
-
-        Error taxonomy mirrors ``tools_search._ha_search_via_component``:
-        ``unknown_command`` → invalidate caps + silent legacy fallback; any
-        other ``HomeAssistantCommandError`` (or a ``HomeAssistantCommandTimeout``
-        on the component WS read) → legacy + ``warnings[]`` + ``log.warning``;
-        connection errors propagate.
-
-        A ``found:false`` result (id resolves to nothing, or to a YAML-defined
-        item the component won't serve) raises the same ``RESOURCE_NOT_FOUND``
-        the legacy REST 404 path raises, via ``_raise_script_not_found``.
-        """
-        try:
-            raw = await send_component_config_get(self._client, "script", script_id)
-        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-            if is_unknown_command(exc):
-                invalidate_caps(self._client)
-                return None
-            legacy = await self._legacy_get_script(script_id)
-            legacy.setdefault("warnings", []).append(
-                f"component config_get path failed ({exc}); served via legacy path"
-            )
-            logger.warning(
-                "ha_mcp_tools/config_get failed; fell back to legacy: %r", exc
-            )
-            return legacy
-
-        result = raw.get("result") or {}
-        if not result.get("found"):
-            await self._raise_script_not_found(script_id)  # raises ToolError
-        config = result.get("config")
-        if not isinstance(config, dict):
-            # Malformed success payload — defer to legacy rather than trust it.
-            return None
-
-        config_hash_value = compute_config_hash(config)
-        entity_id = result.get("entity_id")
-        # The component's item_id/id is the storage key (unique_id), which
-        # survives an entity_id rename — prefer it over deriving from entity_id.
-        storage_key = result.get("item_id") or result.get("id")
-        if not storage_key:
-            storage_key = entity_id.removeprefix("script.") if entity_id else script_id
-
-        # Rebuild the REST-wrapper shape the legacy path returns under ``config``
-        # ({success, script_id, config[, category]}) for byte-parity.
-        config_result: dict[str, Any] = {
-            "success": True,
-            "script_id": storage_key,
-            "config": config,
-        }
-        category = result.get("category")
-        if category:
-            config_result["category"] = str(category)
-
-        return {
-            "success": True,
-            "action": "get",
-            "script_id": storage_key,
             "config": config_result,
             "config_hash": config_hash_value,
         }

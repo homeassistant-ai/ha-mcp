@@ -2,22 +2,13 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. v1.1.0 ships five commands (four capabilities):
+capability gate. v1.1.0 ships four commands (three capabilities):
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
   + ``component_version`` + advisory ``limits``. One cached probe tells the
   server which commands are live (capability negotiation, NOT a version floor).
 * ``ha_mcp_tools/search`` — a unified in-process search over live registries and
   states, joined and scored, mirroring today's ``ha_search`` response envelope.
-* ``ha_mcp_tools/config_get`` — one-call fetch of a storage/editor-backed
-  automation/script body + current entity_id + friendly_name + entity category,
-  collapsing the server's id-resolve + config-fetch + registry-category
-  round-trips. Automation/script ONLY — scenes are excluded because a
-  ``HomeAssistantScene`` holds no raw storage body in memory (its
-  ``scene_config.states`` is runtime State objects, not the storage ``entities``
-  dict), so ``ha_config_get_scene`` stays on its legacy REST path. Storage-only:
-  a YAML-loaded item returns a structured not-found (its body is never emitted —
-  that belongs to the future file-based tool).
 * ``ha_mcp_tools/overview`` — the raw in-process reads the server's
   ``get_system_overview`` + ``ha_get_overview`` wrapper consume (states,
   services, entity/device/area registries, ``hass.config``, persistent
@@ -32,6 +23,13 @@ capability gate. v1.1.0 ships five commands (four capabilities):
   enumerated, so the server falls back to its legacy ``<type>/list`` path for an
   uncovered type (e.g. ``tag``, which has no state entity) instead of trusting an
   empty result.
+
+``ha_mcp_tools/config_get`` was withdrawn before release: it served an entity's
+``raw_config``, whose freshness lags the config file between a write and the next
+completed reload (no version marker distinguishes a fresh body from a stale one),
+so a get racing a reload returned a pre-edit body. ``ha_config_get_{automation,
+script}`` stay on the legacy REST path (which reads the fresh config file);
+scenes were already legacy-only. A file-reading redesign may return (issue #1813).
 
 Design notes that are load-bearing:
 
@@ -104,7 +102,6 @@ _LOGGER = logging.getLogger(__name__)
 WS_API_PREFIX = "ha_mcp_tools"
 WS_INFO = f"{WS_API_PREFIX}/info"
 WS_SEARCH = f"{WS_API_PREFIX}/search"
-WS_CONFIG_GET = f"{WS_API_PREFIX}/config_get"
 WS_OVERVIEW = f"{WS_API_PREFIX}/overview"
 WS_HELPERS_LIST = f"{WS_API_PREFIX}/helpers_list"
 
@@ -117,7 +114,7 @@ SCHEMA_VERSION = 1
 # each consumer on ``capability in caps.capabilities``. Never remove an entry
 # without a major bump. (``info`` is always present in 1.1.0, so it carries no
 # capability key of its own.)
-CAPABILITIES: list[str] = ["search", "config_get", "overview", "helpers_list"]
+CAPABILITIES: list[str] = ["search", "overview", "helpers_list"]
 
 # Advisory caps advertised in ``info.limits`` so no single WS frame balloons.
 MAX_RESULTS = 500
@@ -149,17 +146,6 @@ CONFIG_SEARCH_TYPES = (
     SEARCH_TYPE_AUTOMATION,
     SEARCH_TYPE_SCRIPT,
     SEARCH_TYPE_SCENE,
-)
-
-# Domains ``ha_mcp_tools/config_get`` will serve a storage body for. Scenes are
-# deliberately EXCLUDED (unlike search, which indexes all three): a
-# ``HomeAssistantScene`` keeps ``scene_config.states`` as runtime State objects,
-# not the storage ``entities`` dict, so there is no raw storage body in memory to
-# return — a component-served scene body would break shape parity and
-# ``config_hash`` stability, so ``ha_config_get_scene`` stays on its legacy path.
-CONFIG_GET_DOMAINS = (
-    SEARCH_TYPE_AUTOMATION,
-    SEARCH_TYPE_SCRIPT,
 )
 
 # Collection ("storage collection") helpers — entities in the state machine.
@@ -264,7 +250,6 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
     return [
         (_info_schema(), lambda hass, msg: _do_info(), None),
         (_search_schema(), _do_search, _search_prep),
-        (_config_get_schema(), _do_config_get, None),
         (_overview_schema(), _do_overview, None),
         (_helpers_list_schema(), _do_helpers_list, None),
     ]
@@ -308,14 +293,6 @@ def _search_schema() -> dict[Any, Any]:
             int, vol.Range(min=1, max=MAX_RESULTS)
         ),
         vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0)),
-    }
-
-
-def _config_get_schema() -> dict[Any, Any]:
-    return {
-        vol.Required("type"): WS_CONFIG_GET,
-        vol.Required("domain"): vol.In(list(CONFIG_GET_DOMAINS)),
-        vol.Required("item_id"): str,
     }
 
 
@@ -1509,80 +1486,6 @@ def _reg_name(reg: Any) -> str | None:
     return str(name) if name else None
 
 
-# =============================================================================
-# ha_mcp_tools/config_get
-# =============================================================================
-def _do_config_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
-    """One-call fetch of a storage-backed automation/script config body.
-
-    Automation/script ONLY — the schema (:func:`_config_get_schema`) rejects any
-    other domain. Scenes are excluded on purpose: a ``HomeAssistantScene`` keeps
-    no raw storage body in memory (``scene_config.states`` is runtime State
-    objects, not the storage ``entities`` dict), so ``ha_config_get_scene`` stays
-    on its legacy REST path.
-
-    Storage-only (maintainer decision): a YAML-loaded item (id-less, same
-    ``_classify_source`` rule as search) returns a structured not-found and its
-    body is NEVER emitted — YAML-body retrieval belongs to a future file-based
-    tool. Collapses the server's id-resolve + config-fetch + registry-category
-    round-trips into one in-process call.
-    """
-    domain = params["domain"]
-    item_id = str(params["item_id"])
-
-    entity, name, storage_id, config_dict = _find_config_item(hass, domain, item_id)
-    if entity is None:
-        # Nothing resolves — a clean not-found (mirrors the REST 404).
-        return {"found": False, "domain": domain, "item_id": item_id, "source": None}
-
-    entity_id = getattr(entity, "entity_id", None)
-    if _classify_source(storage_id) != "storage":
-        # Resolved to a YAML item: structured not-found, body absent.
-        return {
-            "found": False,
-            "domain": domain,
-            "item_id": item_id,
-            "entity_id": entity_id,
-            "source": "yaml",
-        }
-
-    view = _resolve_registries(hass)
-    return {
-        "found": True,
-        "domain": domain,
-        "item_id": storage_id,
-        "entity_id": entity_id,
-        "friendly_name": _current_friendly_name(hass, entity_id, name),
-        "config": config_dict,
-        "source": "storage",
-        "category": _entity_category(view, entity_id, domain),
-    }
-
-
-def _find_config_item(
-    hass: HomeAssistant, domain: str, item_id: str
-) -> tuple[Any, str | None, str | None, dict[str, Any] | None]:
-    """Resolve (entity, name, storage_id, config_dict) for a config id, or Nones.
-
-    Matches ``item_id`` against the loaded entity's entity_id, its storage id
-    (unique_id / raw_config ``id``), or its object_id slug — the same identifiers
-    the server accepts for ``ha_config_get_*``.
-    """
-    component = hass.data.get(domain) if getattr(hass, "data", None) else None
-    entities = getattr(component, "entities", None)
-    if entities is None:
-        return None, None, None, None
-    for entity in entities:
-        entity_id = getattr(entity, "entity_id", None)
-        if not entity_id:
-            continue
-        name, storage_id, config_dict = _extract_config(domain, entity)
-        object_id = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
-        if item_id in (entity_id, storage_id, object_id):
-            return entity, name, storage_id, config_dict
-    return None, None, None, None
-
-
 def _current_friendly_name(
     hass: HomeAssistant, entity_id: str | None, fallback: str | None
 ) -> str | None:
@@ -1601,16 +1504,6 @@ def _current_friendly_name(
     if fallback:
         return str(fallback)
     return entity_id
-
-
-def _entity_category(view: _RegistryView, entity_id: str | None, scope: str) -> Any:
-    """In-process equivalent of ``fetch_entity_category``: registry ``categories[scope]``."""
-    reg = _reg_entity(view, entity_id) if entity_id else None
-    categories = getattr(reg, "categories", None) if reg is not None else None
-    if isinstance(categories, Mapping):
-        cat = categories.get(scope)
-        return str(cat) if cat is not None else None
-    return None
 
 
 # =============================================================================

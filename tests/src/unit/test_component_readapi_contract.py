@@ -1,13 +1,18 @@
 """Cross-seam contract tests for the component read API (non-search commands).
 
 Like ``test_component_search_contract.py``, these wire the REAL component
-functions (``_do_config_get`` / ``_do_overview`` / ``_do_helpers_list``, driven
-against fake hass objects) underneath the mocked WS transport and then invoke
-the REAL server tools — so a vocabulary or shape drift on either side of a
-seam fails here rather than shipping a component-served response the consumer
-mis-shapes. The component and consumer test suites each verify their own side
-against the design doc; this file is the bridge that verifies them against
-each other.
+functions (``_do_overview`` / ``_do_helpers_list``, driven against fake hass
+objects) underneath the mocked WS transport and then invoke the REAL server
+tools — so a vocabulary or shape drift on either side of a seam fails here
+rather than shipping a component-served response the consumer mis-shapes. The
+component and consumer test suites each verify their own side against the design
+doc; this file is the bridge that verifies them against each other.
+
+The config_get seam is the exception: the component's ``config_get`` was
+withdrawn before release (its ``raw_config`` freshness lags the config file
+between a write and the next completed reload), so those pins assert the get
+tools serve automation/script/scene reads from the legacy path and never touch
+the component WS.
 """
 
 from __future__ import annotations
@@ -20,9 +25,7 @@ import pytest
 
 from ha_mcp.tools import (
     component_api,
-    tools_config_automations,
     tools_config_helpers,
-    tools_config_scripts,
     tools_search,
 )
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
@@ -32,9 +35,7 @@ from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ._component_routing_helpers import patch_ws
 from .test_component_ws_search import (
     FakeArea,
-    FakeComponent,
     FakeConfig,
-    FakeConfigEntity,
     FakeConfigEntry,
     FakeDevice,
     FakeHass,
@@ -60,7 +61,6 @@ from .test_ha_overview_component_routing import (
 )
 
 _REAL_FNS = {
-    "ha_mcp_tools/config_get": wsapi._do_config_get,
     "ha_mcp_tools/overview": wsapi._do_overview,
     "ha_mcp_tools/helpers_list": wsapi._do_helpers_list,
 }
@@ -86,124 +86,68 @@ def _real_component_ws(hass: FakeHass) -> AsyncMock:
     return ws
 
 
-# --- config_get ---------------------------------------------------------------
+# --- config_get (withdrawn: automation/script/scene gets are legacy-only) ------
 class TestConfigGetSeam:
-    def _hass(self) -> FakeHass:
-        storage = FakeConfigEntity(
-            "automation.ui",
-            "UI Auto",
-            unique_id="uid-1",
-            raw_config={
+    """The component's ``config_get`` was withdrawn before release — it served an
+    entity's ``raw_config``, whose freshness lags the config file between a write
+    and the next completed reload, so a get racing a reload returned a stale
+    body. All three get tools serve their reads from the legacy REST/WS pipeline
+    (which reads the fresh config file). Even against a REAL component WS whose
+    ``info`` advertises ``config_get``, the get tools skip the caps probe and
+    never send a frame — the component WS is never touched. Scenes were already
+    legacy-only (a ``HomeAssistantScene`` has no raw storage body in memory);
+    automation/script now share the pattern.
+    """
+
+    @pytest.mark.asyncio
+    async def test_automation_get_stays_legacy_with_full_caps(self) -> None:
+        client = GetRoutingClient(
+            automation_config={
                 "id": "uid-1",
                 "alias": "UI Auto",
                 "action": [{"service": "light.turn_on"}],
             },
         )
-        yaml_auto = FakeConfigEntity(
-            "automation.pkg",
-            "Package Auto",
-            unique_id=None,
-            raw_config={"alias": "Package Auto", "action": []},
-        )
-        return FakeHass(
-            states=[FakeState("automation.ui", "on", "UI Auto")],
-            data={"automation": FakeComponent([storage, yaml_auto])},
-        )
-
-    @pytest.mark.asyncio
-    async def test_storage_automation_served_by_real_component(
-        self, monkeypatch
-    ) -> None:
-        hass = self._hass()
-        monkeypatch.setattr(
-            wsapi,
-            "_resolve_registries",
-            lambda h: make_view(
-                entity={
-                    "automation.ui": FakeRegEntry(
-                        "automation.ui", categories={"automation": "cat-1"}
-                    )
-                }
-            ),
-        )
-        client = GetRoutingClient()
-        ws = _real_component_ws(hass)
-        with patch_ws(ws, tools_config_automations):
+        # A real component WS advertising full caps (config_get included). The
+        # automation tool must never reach for it.
+        ws = _real_component_ws(FakeHass())
+        with patch.object(
+            component_api, "get_websocket_client", AsyncMock(return_value=ws)
+        ):
             resp = await AutomationConfigTools(client).ha_config_get_automation("uid-1")
         assert resp["success"] is True
         assert resp["config"]["alias"] == "UI Auto"
-        # The tool's canonicalization (singular -> plural root keys) runs
-        # identically on the component path — parity includes the normalize.
+        # The tool's canonicalization (singular -> plural root keys) runs on the
+        # legacy path.
         assert resp["config"]["actions"] == [{"service": "light.turn_on"}]
-        assert client.legacy_fetch_count() == 0, (
-            "storage get must be fully component-served"
-        )
+        # The component WS was never touched; the legacy config fetch served it.
+        assert ws.send_command.await_count == 0
+        assert client.get_automation_config.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_yaml_automation_not_found_without_legacy_call(
-        self, monkeypatch
-    ) -> None:
-        """A YAML item (found:false from the real component) must produce the
-        legacy not-found error WITHOUT any legacy REST fetch, and its body
-        must appear nowhere."""
-        hass = self._hass()
-        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
-        client = GetRoutingClient()
-        ws = _real_component_ws(hass)
-        with (
-            patch_ws(ws, tools_config_automations),
-            pytest.raises(Exception) as excinfo,
-        ):
-            await AutomationConfigTools(client).ha_config_get_automation(
-                "automation.pkg"
-            )
-        assert "not found" in str(excinfo.value).lower()
-        # The not-found raiser fetches available ids for the error context —
-        # legacy-parity behavior. What must NOT run is the per-id config fetch.
-        assert client.get_automation_config.await_count == 0
-
-    def _script_hass(self) -> FakeHass:
-        storage = FakeConfigEntity(
-            "script.morning",
-            "Morning Script",
-            unique_id="morning",
-            raw_config={
-                "alias": "Morning Script",
-                "sequence": [{"delay": {"seconds": 5}}],
+    async def test_script_get_stays_legacy_with_full_caps(self) -> None:
+        """Script analog: the legacy REST envelope is returned under ``config``
+        (storage key + category injected). Scripts run NO root-key
+        canonicalization (unlike automations' action->actions), so the storage
+        ``sequence`` body passes through byte-exact."""
+        client = GetRoutingClient(
+            script_envelope={
+                "success": True,
+                "script_id": "morning",
+                "config": {
+                    "alias": "Morning Script",
+                    "sequence": [{"delay": {"seconds": 5}}],
+                },
             },
+            categories={"script": "cat-s"},
         )
-        return FakeHass(
-            states=[FakeState("script.morning", "off", "Morning Script")],
-            data={"script": FakeComponent([storage])},
-        )
-
-    @pytest.mark.asyncio
-    async def test_storage_script_served_by_real_component(self, monkeypatch) -> None:
-        """Script analog of the automation seam: the real component's
-        ``config_get`` output is reshaped into the legacy REST-envelope contract
-        (storage key + category injected) with zero legacy fetches. Scripts run
-        NO root-key canonicalization (unlike automations' action->actions), so
-        the storage ``sequence`` body passes through byte-exact."""
-        hass = self._script_hass()
-        monkeypatch.setattr(
-            wsapi,
-            "_resolve_registries",
-            lambda h: make_view(
-                entity={
-                    "script.morning": FakeRegEntry(
-                        "script.morning", categories={"script": "cat-s"}
-                    )
-                }
-            ),
-        )
-        client = GetRoutingClient()
-        ws = _real_component_ws(hass)
-        with patch_ws(ws, tools_config_scripts):
+        ws = _real_component_ws(FakeHass())
+        with patch.object(
+            component_api, "get_websocket_client", AsyncMock(return_value=ws)
+        ):
             resp = await ConfigScriptTools(client).ha_config_get_script("morning")
         assert resp["success"] is True
         assert resp["script_id"] == "morning"
-        # The legacy path returns the REST envelope under ``config``; the real
-        # component reconstructs it (storage key + category injected).
         assert resp["config"]["script_id"] == "morning"
         assert resp["config"]["category"] == "cat-s"
         # raw_config served byte-exact — the sequence body is untouched.
@@ -211,17 +155,16 @@ class TestConfigGetSeam:
             "alias": "Morning Script",
             "sequence": [{"delay": {"seconds": 5}}],
         }
-        assert client.legacy_fetch_count() == 0, (
-            "storage get must be fully component-served"
-        )
+        assert ws.send_command.await_count == 0
+        assert client.get_script_config.await_count == 1
 
     @pytest.mark.asyncio
     async def test_scene_get_stays_legacy_with_full_caps(self, monkeypatch) -> None:
         """With the real component advertising ``config_get``, a scene get is
         still served entirely by the legacy path: ``ha_config_get_scene`` skips
-        the caps probe, so the component WS never receives a ``config_get`` for
-        ``domain=scene`` (a ``HomeAssistantScene`` has no raw storage body in
-        memory — its ``scene_config.states`` is runtime State objects)."""
+        the caps probe, so the component WS is never touched (a
+        ``HomeAssistantScene`` has no raw storage body in memory — its
+        ``scene_config.states`` is runtime State objects)."""
         monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
         client = GetRoutingClient(
             scene_envelope={
@@ -249,16 +192,7 @@ class TestConfigGetSeam:
             )
         assert resp["success"] is True
         assert resp["scene_id"] == "movie_night"
-        # No ``config_get`` frame was ever sent for a scene...
-        scene_config_get_calls = [
-            c
-            for c in ws.send_command.call_args_list
-            if c.args
-            and c.args[0] == "ha_mcp_tools/config_get"
-            and c.kwargs.get("domain") == "scene"
-        ]
-        assert scene_config_get_calls == []
-        # ...and, more strongly, the component WS was never touched at all.
+        # The component WS was never touched at all — no caps probe, no frame.
         assert ws.send_command.await_count == 0
         assert client.get_scene_config.await_count == 1
 

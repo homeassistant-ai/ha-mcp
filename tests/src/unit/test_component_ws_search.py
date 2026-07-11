@@ -387,10 +387,12 @@ class TestInfo:
         assert info["component_version"] == COMPONENT_VERSION
         assert info["capabilities"] == [
             "search",
-            "config_get",
             "overview",
             "helpers_list",
         ]
+        # config_get was withdrawn before release (raw_config freshness lags the
+        # config file between write and reload) — it must not be advertised.
+        assert "config_get" not in info["capabilities"]
         assert info["limits"] == {"max_results": 500, "max_body_bytes": 1_000_000}
 
     def test_manifest_version_parity(self):
@@ -1380,16 +1382,15 @@ def functional_ws(monkeypatch):
 _ALL_COMMANDS = [
     "ha_mcp_tools/info",
     "ha_mcp_tools/search",
-    "ha_mcp_tools/config_get",
     "ha_mcp_tools/overview",
     "ha_mcp_tools/helpers_list",
 ]
 
 # Minimal well-formed message body per command (Required fields) so the admin
-# gate / async_response wrappers reach the pure handler.
-_CMD_MSG_EXTRA = {
-    "ha_mcp_tools/config_get": {"domain": "automation", "item_id": "nope"},
-}
+# gate / async_response wrappers reach the pure handler. Empty now that
+# config_get (which required domain + item_id) is withdrawn — every remaining
+# command has no Required field beyond ``type``.
+_CMD_MSG_EXTRA: dict[str, dict[str, object]] = {}
 
 
 class TestRegistrationAndAdminGate:
@@ -1397,10 +1398,11 @@ class TestRegistrationAndAdminGate:
         assert set(functional_ws.registered) == {
             wsapi.WS_INFO,
             wsapi.WS_SEARCH,
-            wsapi.WS_CONFIG_GET,
             wsapi.WS_OVERVIEW,
             wsapi.WS_HELPERS_LIST,
         }
+        # config_get is withdrawn: no handler is registered for it.
+        assert "ha_mcp_tools/config_get" not in functional_ws.registered
 
     @pytest.mark.parametrize("command", _ALL_COMMANDS)
     def test_non_admin_rejected(self, functional_ws, command):
@@ -1457,34 +1459,11 @@ class TestSchemaValidation:
 
 
 class TestNewCommandSchemas:
-    """Voluptuous validation for config_get / overview / helpers_list."""
+    """Voluptuous validation for overview / helpers_list."""
 
     def _schema(self, monkeypatch, schema_fn):
         monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
         return _REAL_VOL.Schema(schema_fn())
-
-    def test_config_get_valid(self, monkeypatch):
-        schema = self._schema(monkeypatch, wsapi._config_get_schema)
-        out = schema(
-            {"type": wsapi.WS_CONFIG_GET, "domain": "script", "item_id": "abc"}
-        )
-        assert out["domain"] == "script"
-        assert out["item_id"] == "abc"
-
-    @pytest.mark.parametrize(
-        "bad",
-        [
-            {"type": "ha_mcp_tools/config_get", "domain": "light", "item_id": "x"},
-            # scene is excluded from config_get (legacy-only; no in-memory body).
-            {"type": "ha_mcp_tools/config_get", "domain": "scene", "item_id": "x"},
-            {"type": "ha_mcp_tools/config_get", "domain": "automation"},  # no item_id
-            {"type": "ha_mcp_tools/config_get", "item_id": "x"},  # no domain
-        ],
-    )
-    def test_config_get_malformed_rejected(self, monkeypatch, bad):
-        schema = self._schema(monkeypatch, wsapi._config_get_schema)
-        with pytest.raises(_REAL_VOL.Invalid):
-            schema(bad)
 
     def test_overview_defaults(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._overview_schema)
@@ -1516,109 +1495,27 @@ class TestNewCommandSchemas:
 
 
 # =============================================================================
-# config_get — storage-only body fetch; YAML -> structured not-found (no body)
+# config_get — withdrawn before release (raw_config freshness lag)
 # =============================================================================
-class TestConfigGet:
-    def _storage_hass(self):
-        storage_auto = FakeConfigEntity(
-            "automation.ui",
-            "UI Auto",
-            unique_id="uid-1",
-            raw_config={
-                "id": "uid-1",
-                "alias": "UI Auto",
-                "action": [{"service": "light.turn_on"}],
-            },
-        )
-        yaml_auto = FakeConfigEntity(
-            "automation.pkg",
-            "Package Auto",
-            unique_id=None,
-            raw_config={
-                "alias": "Package Auto",
-                "action": [{"service": "notify.x", "data": {"message": "YAMLSECRET"}}],
-            },
-        )
-        h = FakeHass(
-            states=[FakeState("automation.ui", "on", "UI Auto Live")],
-            data={"automation": FakeComponent([storage_auto, yaml_auto])},
-        )
-        return h
+class TestConfigGetWithdrawn:
+    """``config_get`` was withdrawn before release: it served an entity's
+    ``raw_config``, whose freshness lags the config file between a write and the
+    next completed reload, so a get racing a reload returned a stale body. The
+    command, its schema, its capability, and its domain gate are all gone — the
+    get tools serve automation/script reads from the legacy REST path (which
+    reads the fresh config file). These pin that nothing component-side still
+    exposes it (issue #1813 tracks a possible file-reading redesign)."""
 
-    def _view(self):
-        return make_view(
-            entity={
-                "automation.ui": FakeRegEntry(
-                    "automation.ui", categories={"automation": "cat-morning"}
-                )
-            }
-        )
+    def test_capability_not_advertised(self):
+        assert "config_get" not in wsapi.CAPABILITIES
 
-    def test_storage_item_full_payload(self, monkeypatch):
-        h = self._storage_hass()
-        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
-        res = wsapi._do_config_get(h, {"domain": "automation", "item_id": "uid-1"})
-        assert res["found"] is True
-        assert res["source"] == "storage"
-        assert res["domain"] == "automation"
-        assert res["item_id"] == "uid-1"
-        assert res["entity_id"] == "automation.ui"
-        # Current friendly_name comes from the live state, not the storage name.
-        assert res["friendly_name"] == "UI Auto Live"
-        assert res["config"]["id"] == "uid-1"
-        assert res["category"] == "cat-morning"
+    def test_no_command_constant_schema_or_domain_gate(self):
+        assert not hasattr(wsapi, "WS_CONFIG_GET")
+        assert not hasattr(wsapi, "_config_get_schema")
+        assert not hasattr(wsapi, "CONFIG_GET_DOMAINS")
 
-    @pytest.mark.parametrize("item_id", ["uid-1", "automation.ui", "ui"])
-    def test_resolves_by_id_entity_id_or_slug(self, monkeypatch, item_id):
-        h = self._storage_hass()
-        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
-        res = wsapi._do_config_get(h, {"domain": "automation", "item_id": item_id})
-        assert res["found"] is True
-        assert res["entity_id"] == "automation.ui"
-
-    def test_yaml_item_structured_not_found_no_body(self, empty_view):
-        h = self._storage_hass()
-        res = wsapi._do_config_get(
-            h, {"domain": "automation", "item_id": "automation.pkg"}
-        )
-        assert res["found"] is False
-        assert res["source"] == "yaml"
-        assert res["entity_id"] == "automation.pkg"
-        # The YAML body must never appear anywhere in the response.
-        assert "config" not in res
-        assert "YAMLSECRET" not in json.dumps(res)
-
-    def test_absent_item_not_found(self, empty_view):
-        h = self._storage_hass()
-        res = wsapi._do_config_get(h, {"domain": "automation", "item_id": "ghost"})
-        assert res["found"] is False
-        assert res["source"] is None
-        assert "config" not in res
-
-    def test_inaccessible_component_not_found(self, empty_view):
-        res = wsapi._do_config_get(
-            FakeHass(), {"domain": "script", "item_id": "whatever"}
-        )
-        assert res["found"] is False
-        assert res["source"] is None
-
-    def test_scene_domain_rejected_by_schema(self, monkeypatch):
-        """Scenes are NOT a valid config_get domain — the voluptuous schema
-        rejects ``domain='scene'``. ``ha_config_get_scene`` stays on its legacy
-        REST path because a ``HomeAssistantScene`` holds no raw storage body in
-        memory (``scene_config.states`` is runtime State objects). config_get is
-        automation/script only."""
-        assert "scene" not in wsapi.CONFIG_GET_DOMAINS
-        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-        schema = _REAL_VOL.Schema(wsapi._config_get_schema())
-        with pytest.raises(_REAL_VOL.Invalid):
-            schema(
-                {
-                    "type": wsapi.WS_CONFIG_GET,
-                    "domain": "scene",
-                    "item_id": "movie_night",
-                }
-            )
+    def test_no_handler_function(self):
+        assert not hasattr(wsapi, "_do_config_get")
 
 
 # =============================================================================

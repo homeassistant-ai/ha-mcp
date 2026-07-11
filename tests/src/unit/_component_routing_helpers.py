@@ -59,8 +59,8 @@ def patch_ws(ws: AsyncMock, tool_module: Any) -> Any:
     The caps probe always resolves through ``component_api.get_websocket_client``,
     so that is patched unconditionally. A tool module also imports its own
     ``get_websocket_client`` when it sends the read command itself (search /
-    overview / helpers_list); the config-get consumers instead route through
-    ``component_api.send_component_config_get``, so those modules no longer bind
+    overview / helpers_list); the config-get consumers are legacy-only (their
+    gets never route through the component at all), so those modules do not bind
     the symbol — patch the tool module only when it actually has it.
     """
     factory = AsyncMock(return_value=ws)

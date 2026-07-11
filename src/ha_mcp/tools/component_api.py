@@ -265,21 +265,3 @@ def invalidate_caps(client: Any) -> None:
     """
     _CAPS_CACHE.pop(client, None)
     _NEGATIVE_CACHE_TS.pop(client, None)
-
-
-async def send_component_config_get(
-    client: Any, domain: str, item_id: str
-) -> dict[str, Any]:
-    """Send one ``ha_mcp_tools/config_get`` command over the per-client WebSocket.
-
-    Returns the raw ``{success, result}`` envelope; the caller shapes
-    ``result`` onto the legacy response. Raises ``HomeAssistantCommandError``
-    on a ``success:False`` reply (routed by the caller's error taxonomy).
-
-    Shared by the automation and script config-get consumers; both route their
-    single-item read through this one WS round-trip.
-    """
-    ws = await get_websocket_client(url=client.base_url, token=client.token)
-    return await ws.send_command(
-        "ha_mcp_tools/config_get", domain=domain, item_id=item_id
-    )
