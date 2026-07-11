@@ -278,6 +278,14 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     default=bool(opts.get(OPT_ENABLE_WEBHOOK, True)),
                 ): bool,
                 vol.Required(
+                    OPT_ENABLE_STARTUP_NOTIFICATION,
+                    default=bool(opts.get(OPT_ENABLE_STARTUP_NOTIFICATION, True)),
+                ): bool,
+                vol.Required(
+                    OPT_ENABLE_SIDEBAR_PANEL,
+                    default=bool(opts.get(OPT_ENABLE_SIDEBAR_PANEL, True)),
+                ): bool,
+                vol.Required(
                     OPT_ENABLE_LLM_API,
                     default=bool(opts.get(OPT_ENABLE_LLM_API, DEFAULT_ENABLE_LLM_API)),
                 ): bool,
@@ -293,14 +301,6 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
-                vol.Required(
-                    OPT_ENABLE_STARTUP_NOTIFICATION,
-                    default=bool(opts.get(OPT_ENABLE_STARTUP_NOTIFICATION, True)),
-                ): bool,
-                vol.Required(
-                    OPT_ENABLE_SIDEBAR_PANEL,
-                    default=bool(opts.get(OPT_ENABLE_SIDEBAR_PANEL, True)),
-                ): bool,
                 vol.Optional(
                     OPT_EXTERNAL_URL,
                     default=opts.get(OPT_EXTERNAL_URL, ""),
