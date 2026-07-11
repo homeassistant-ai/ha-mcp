@@ -547,9 +547,8 @@ def _search_config_surface(
                 continue
             score, match_in_name, match_in_config = scored
 
-        emit_body = include_config and source == "storage" and config_dict is not None
         config_out: dict[str, Any] | None = None
-        if emit_body:
+        if include_config and source == "storage" and config_dict is not None:
             if _too_large(config_dict):
                 partial_reasons.append(f"{domain} {entity_id} body omitted (too large)")
             else:
