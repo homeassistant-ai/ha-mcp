@@ -1063,13 +1063,12 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Project the response to only the specified top-level "
-                    'keys (e.g. ["entities", "automations"]). Diagnostic / '
-                    "pagination keys are always retained regardless of "
-                    "projection, so narrowing the response shape cannot "
-                    "hide partial / error state. None = full response. "
-                    "Distinct from `result_fields` (which projects each "
-                    "entity record's fields). Available keys: success, "
+                    "Project the response to the named top-level keys "
+                    '(e.g. ["entities", "automations"]); None = full '
+                    "response. Diagnostic / pagination keys are always "
+                    "retained so projection cannot hide partial / error "
+                    "state. Distinct from `result_fields` (which projects "
+                    "each entity record's keys). Available keys: success, "
                     "query, entities, automations, scripts, scenes, "
                     "helpers, dashboards, search_types, search_type, "
                     "entity_total_matches, config_total_matches, count, "
@@ -1104,86 +1103,51 @@ class SearchTools:
     ) -> dict[str, Any]:
         """Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.
 
-        Searches two surfaces in parallel and returns tagged results:
-          - **entities**: matches from the entity registry (entity_id,
-            friendly name, area). Use `domain_filter` and/or `area_filter` to
-            list/narrow. Omit `query` to enumerate entities by domain/area.
+        Two surfaces run in parallel and return tagged results:
+          - **entities**: entity-registry matches (entity_id, friendly name,
+            area). Filter with `domain_filter`/`area_filter`; omit `query` to
+            enumerate a domain/area.
           - **automations / scripts / scenes / helpers / dashboards**: matches
-            *inside* configuration definitions — triggers, actions, sequences,
-            scene entity-sets, helper bodies, dashboard cards. Use `query`
-            with config-body terms; filter with `search_types`.
+            *inside* config definitions — triggers, actions, sequences, scene
+            entity-sets, helper bodies, dashboard cards. Driven by `query`;
+            narrow with `search_types`.
 
-        Eligibility:
-          - Registry (entity) search runs whenever `query`, `domain_filter`,
-            or `area_filter` is set, except when `search_types` is explicitly
-            set (which pins to config-only).
-          - Config-body search runs only when `query` is non-empty AND the
-            caller's inputs do not signal entity-only intent — i.e. when
-            none of `domain_filter`/`area_filter`/`state_filter` is set, OR
-            when `search_types` is explicitly set as an override. The
-            "filter set ⇒ skip body" rule keeps name-based single-entity
-            lookups (e.g. `ha_search("bedroom motion", domain_filter=
-            "binary_sensor")`) off the expensive config-body backend; pass
-            `search_types=[...]` to opt back in (a warning surfaces in the
-            response when the gate fires so the skip is visible).
-
-        Use this whenever you need to find something in HA — without needing
-        to decide between entity-name search vs config-body search up front.
+        Use this whenever you need to find something in HA without deciding
+        entity-name vs config-body search up front.
 
         When NOT to use:
-          - To fetch the state of a known entity_id: use `ha_get_state` (cheaper,
-            no search overhead).
-          - To inspect a specific automation/script/scene config by id: use the
-            matching `ha_config_get_*` tool.
+          - To read a known entity_id's state: use `ha_get_state` (cheaper).
+          - To inspect one automation/script/scene config by id: use the
+            matching `ha_config_get_*`.
           - To list installed add-ons: use `ha_get_addon`.
 
+        Config-body search is skipped when `domain_filter`/`area_filter`/
+        `state_filter` signal entity-only intent (keeping name lookups off the
+        expensive backend); a `warnings[]` entry names the skip. Pass
+        `search_types=[...]` to force config search.
+
         Caveats:
-          - Both surfaces fan out in parallel; response carries `partial: True`
-            plus an `errors[]` array tagged by surface ("entities" / "configs")
-            when one branch raises. Empty `entities`/`automations`/... combined
-            with `partial: True` means "search failed", not "no results".
-          - `partial: True` is ALSO set (with `partial_reason`) when the
-            config-body branch loses data on the per-type fetch paths —
-            either the per-id wall-clock budget exhausts and skips
-            unfetched configs, OR individual fetches raise exceptions
-            (caught at debug-level so they would otherwise be silent), OR
-            an `input_*` helper-type list fetch fails. Helpers run on every
-            default call, so silent per-type-list failures would otherwise
-            leave callers unable to tell a real zero-match from a partial
-            backend outage.
-          - When `partial: True` is set, the `partial_reason` text is
-            also mirrored into `warnings[]` with an `"incomplete results: "`
-            prefix. Agents that read `warnings` consistently (the
-            entity-intent skip warning lands fine) but ignore `partial`
-            still see the truncation diagnostic this way.
-          - When the body branch is skipped by the entity-intent gate above,
-            the response carries a `warnings[]` entry naming the skip
-            reason; pass `search_types=[...]` to override.
-          - The `fields=` parameter projects the response to only the
-            named top-level keys; diagnostic / pagination keys
-            (`success`, `warnings`, `errors`, `partial`, `partial_reason`,
-            `*_total_matches`, `has_more`, `next_offset`, and per-surface
-            counterparts) are always retained so projection cannot hide
-            incomplete-results state. Distinct from `result_fields=`
-            which projects each entity record's fields.
-          - `count` is items in this response (post-pagination), not total
-            matches across the corpus. Use `entity_total_matches` +
-            `config_total_matches` for the totals.
-          - `limit`/`offset` are applied per-surface independently. The flat
-            `has_more` / `next_offset` keys describe the next caller-page
-            (same offset/limit semantics as a single-surface tool — iterate
-            with `offset = next_offset`). Per-surface
-            `entity_has_more`/`entity_next_offset` and
-            `config_has_more`/`config_next_offset` let callers see which
-            surface still has results when only one of two does.
+          - `partial: True` means results are NOT exhaustive — a surface raised,
+            or the config-body branch lost data (per-id time budget exhausted,
+            an individual fetch failed, or a helper-type list fetch failed).
+            Empty buckets with `partial: True` mean "search failed", not "no
+            results". The cause is in `partial_reason`, also mirrored into
+            `warnings[]` with an "incomplete results: " prefix. Do not treat a
+            partial response as complete.
+          - `count` is items in this response (post-pagination), not corpus
+            totals — use `entity_total_matches` + `config_total_matches`.
+          - `limit`/`offset` apply per-surface. Flat `has_more`/`next_offset`
+            page the next call (iterate `offset = next_offset`); per-surface
+            `entity_*`/`config_*` variants show which surface still has results.
+
+        For parameters, schema, and worked examples, see ha_get_skill_guide.
 
         Examples:
             - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
-            - List all calendars: ha_search(domain_filter="calendar")
             - Find a light by name: ha_search("kitchen", domain_filter="light")
-            - Which automations use an entity (no filter, body included): ha_search("light.bed_light")
+            - Which automations use an entity: ha_search("light.bed_light")
             - Scenes touching a light: ha_search("light.kitchen", search_types=["scene"])
-            - Narrow the response to only the entity bucket: ha_search("kitchen", fields=["entities"])
+            - Narrow the response to the entity bucket: ha_search("kitchen", fields=["entities"])
         """
         try:
             parsed_search_types = parse_string_list_param(search_types, "search_types")
