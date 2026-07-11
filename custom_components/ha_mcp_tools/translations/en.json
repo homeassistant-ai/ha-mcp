@@ -29,7 +29,7 @@
         "step": {
             "init": {
                 "title": "HA-MCP Server",
-                "description": "Configure the HA-MCP server. Open the [HA-MCP settings panel](/ha-mcp) for tool management and server settings. Changes here are applied on save.\n\n{versions}\n\n{connect_url}",
+                "description": "Configure the HA-MCP server. {panel_hint}Changes here are applied on save.\n\n{versions}\n\n{connect_url}",
                 "data": {
                     "channel": "Release channel",
                     "auto_update": "Automatic server updates",
@@ -42,7 +42,9 @@
                     "webhook_id_override": "Custom webhook secret (optional)",
                     "secret_path_override": "Custom direct-access path (optional)",
                     "regenerate_secrets": "Regenerate connect secrets now",
-                    "enable_webhook": "Remote access via webhook"
+                    "enable_webhook": "Remote access via webhook",
+                    "enable_startup_notification": "Startup notification",
+                    "enable_sidebar_panel": "Sidebar settings panel"
                 },
                 "data_description": {
                     "channel": "Stable installs the latest stable release; Development installs the newest development build. When automatic updates are on, a reload or restart, plus a periodic check, install the newest build of the selected channel. A developer package override below takes precedence and disables automatic updates.",
@@ -56,7 +58,9 @@
                     "webhook_id_override": "Replaces the random webhook secret in the connect URL (/api/webhook/...). The URL is the credential - use a long, hard-to-guess value. Leave empty to keep the current one.",
                     "secret_path_override": "Replaces the random path used for direct access on the server port. Same rule: the path is the credential. Leave empty to keep the current one.",
                     "regenerate_secrets": "One-time action: mints a fresh random webhook secret and direct-access path, invalidating the old connect URLs immediately. Also clears the two override fields above.",
-                    "enable_webhook": "Turn off for local-only mode: the Home Assistant webhook is not registered at all, so nothing - including Nabu Casa - can reach the server through Home Assistant. The direct server port and the sidebar panel keep working."
+                    "enable_webhook": "Turn off for local-only mode: the Home Assistant webhook is not registered at all, so nothing - including Nabu Casa - can reach the server through Home Assistant. The direct server port and the sidebar panel keep working.",
+                    "enable_startup_notification": "Show a notification each time the server starts, pointing at the admin-only settings surfaces. Turn off to start silently - the connect URLs still appear in the Home Assistant log.",
+                    "enable_sidebar_panel": "Show the HA-MCP settings panel in the sidebar (administrators only). Turn off to remove the sidebar entry - server options stay available on this screen."
                 }
             }
         }

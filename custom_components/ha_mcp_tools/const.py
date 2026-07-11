@@ -288,6 +288,12 @@ OPT_REGENERATE_SECRETS = "regenerate_secrets"
 # server through Home Assistant; only the direct server port (+ the
 # admin-only sidebar panel, which proxies over loopback) remains.
 OPT_ENABLE_WEBHOOK = "enable_webhook"
+# When False, the persistent notification created on every server bring-up is
+# suppressed; the connect URLs still reach the admin-only Home Assistant log.
+OPT_ENABLE_STARTUP_NOTIFICATION = "enable_startup_notification"
+# When False, the admin-only "HA-MCP" sidebar settings panel is not registered;
+# the server's options stay reachable on the entry's Configure screen.
+OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
 
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"

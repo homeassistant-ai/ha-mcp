@@ -49,6 +49,8 @@ from .const import (
     ISSUE_UPDATE_HELD,
     OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
+    OPT_ENABLE_SIDEBAR_PANEL,
+    OPT_ENABLE_STARTUP_NOTIFICATION,
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_PIP_SPEC,
@@ -264,6 +266,20 @@ def _surface_connect_urls(
         url_lines,
         auth_note,
     )
+    if not bool(entry.options.get(OPT_ENABLE_STARTUP_NOTIFICATION, True)):
+        # Notification suppressed by option: clear any notification created
+        # before the toggle was turned off, then skip creating a fresh one. The
+        # connect URLs still reached the admin-only log above.
+        persistent_notification.async_dismiss(hass, _NOTIFICATION_ID)
+        return
+    # The sidebar-panel line is included only while the panel is registered:
+    # with the panel option off the /ha-mcp route does not exist and the link
+    # would 404.
+    panel_line = (
+        "Manage it from the [HA-MCP settings panel](/ha-mcp) in the sidebar.\n\n"
+        if bool(entry.options.get(OPT_ENABLE_SIDEBAR_PANEL, True))
+        else ""
+    )
     # SECURITY (review finding): persistent notifications are visible to EVERY
     # authenticated Home Assistant user - core's persistent_notification/get
     # and /subscribe carry no admin gate. In the default posture the connect
@@ -274,7 +290,7 @@ def _surface_connect_urls(
     # as the add-on printing its URL to the admin-only add-on log.
     message = (
         "The HA-MCP Server is now running inside Home Assistant.\n\n"
-        "Manage it from the [HA-MCP settings panel](/ha-mcp) in the sidebar.\n\n"
+        f"{panel_line}"
         "The connect URL is shown on the entry's Configure screen "
         "(Settings - Devices & Services - HA-MCP Custom Component - "
         "HA-MCP Server - Configure) and in the Home Assistant log - both "
