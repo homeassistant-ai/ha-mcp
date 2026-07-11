@@ -165,6 +165,28 @@ def _record_ignored_section_keys(
     )
 
 
+def _ignored_keys_warnings(
+    ignored_config_keys: set[str], remaining_config: dict[str, Any]
+) -> list[str]:
+    """Build warnings for caller-supplied config keys no flow step consumed."""
+    warnings: list[str] = []
+    ignored = ignored_config_keys | {
+        key for key in remaining_config if key not in _MENU_SELECTION_KEYS
+    }
+    if ignored:
+        warnings.append(
+            "Ignored config keys not declared by the Home Assistant flow "
+            f"schema: {', '.join(sorted(ignored))}"
+        )
+    leftover_menu_keys = _MENU_SELECTION_KEYS & remaining_config.keys()
+    if leftover_menu_keys:
+        warnings.append(
+            "Ignored menu selection key(s) with no matching menu step: "
+            f"{', '.join(sorted(leftover_menu_keys))}"
+        )
+    return warnings
+
+
 def _consume_form_schema(
     data_schema: list[Any],
     remaining_config: dict[str, Any],
@@ -643,15 +665,10 @@ async def _handle_flow_steps(
         result_type = current_step.get("type")
 
         if result_type == _FlowType.CREATE_ENTRY:
-            ignored_config_keys.update(
-                key for key in remaining_config if key not in _MENU_SELECTION_KEYS
-            )
             response: dict[str, Any] = {"success": True, "entry": current_step}
-            if ignored_config_keys:
-                response["warnings"] = [
-                    "Ignored config keys not declared by the Home Assistant flow "
-                    f"schema: {', '.join(sorted(ignored_config_keys))}"
-                ]
+            warnings = _ignored_keys_warnings(ignored_config_keys, remaining_config)
+            if warnings:
+                response["warnings"] = warnings
             return response
 
         if result_type == _FlowType.ABORT:
@@ -731,30 +748,43 @@ async def _handle_config_subentry_flow_steps(
     *,
     is_reconfigure: bool,
 ) -> dict[str, Any]:
-    """Walk a config subentry flow and accept HA's reconfigure-success abort."""
+    """Walk a config subentry flow and accept HA's reconfigure-success abort.
+
+    Successful results include ``warnings`` when caller-supplied config keys
+    were not declared by any flow step.
+    """
     remaining_config = dict(config)
     current_step = initial_step
     last_menu_choice: str | None = None
+    ignored_config_keys: set[str] = set()
     max_steps = 10
 
     for step_num in range(max_steps):
         result_type = current_step.get("type")
 
         if result_type == _FlowType.CREATE_ENTRY:
-            return {
+            response: dict[str, Any] = {
                 "success": True,
                 "operation": "created",
                 "flow_result": current_step,
             }
+            warnings = _ignored_keys_warnings(ignored_config_keys, remaining_config)
+            if warnings:
+                response["warnings"] = warnings
+            return response
 
         if result_type == _FlowType.ABORT:
             reason = current_step.get("reason")
             if is_reconfigure and reason in _RECONFIGURE_SUCCESS_REASONS:
-                return {
+                response = {
                     "success": True,
                     "operation": "reconfigured",
                     "flow_result": current_step,
                 }
+                warnings = _ignored_keys_warnings(ignored_config_keys, remaining_config)
+                if warnings:
+                    response["warnings"] = warnings
+                return response
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
@@ -784,7 +814,12 @@ async def _handle_config_subentry_flow_steps(
             continue
 
         if result_type == _FlowType.FORM:
-            form_data = _handle_form_step(flow_id, current_step, remaining_config)
+            form_data = _handle_form_step(
+                flow_id,
+                current_step,
+                remaining_config,
+                ignored_config_keys,
+            )
             logger.debug(
                 "Config subentry flow step %s: form submit (step_id=%s, keys=%s)",
                 step_num,
@@ -895,7 +930,7 @@ async def set_config_subentry(
             )
         raise
 
-    return {
+    response = {
         "success": True,
         "entry_id": entry_id,
         "subentry_type": subentry_type,
@@ -904,6 +939,9 @@ async def set_config_subentry(
         "flow_result": result["flow_result"],
         "message": f"Config subentry {result['operation']} successfully",
     }
+    if result.get("warnings"):
+        response["warnings"] = result["warnings"]
+    return response
 
 
 async def get_user_step_field_names(client: Any, helper_type: str) -> set[str] | None:

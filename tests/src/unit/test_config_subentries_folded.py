@@ -231,6 +231,13 @@ async def test_config_set_helper_creates_config_subentry(helper_tools, mock_clie
 
     assert result["success"] is True
     assert result["operation"] == "created"
+    # The walker's ignored-key warning must survive out to the tool boundary
+    # (asserted by membership so an unrelated skills-vendor warning, present
+    # when that submodule is not initialised, does not make this brittle).
+    assert (
+        "Ignored config keys not declared by the Home Assistant flow schema: ignored"
+        in result["warnings"]
+    )
     mock_client.submit_config_subentry_flow_step.assert_awaited_once_with(
         "flow-1", {"name": "Local Model", "model": "gemma3:27b"}
     )
@@ -266,6 +273,11 @@ async def test_config_set_helper_walks_multistep_subentry_flow(
 
     assert result["success"] is True
     assert result["operation"] == "created"
+    # Fully consumed config must not produce an ignored-keys warning (other
+    # warnings, e.g. the skills-vendor notice, are unrelated to this path).
+    assert not any(
+        "Ignored config keys" in warning for warning in result.get("warnings", [])
+    )
     assert mock_client.submit_config_subentry_flow_step.await_args_list == [
         call("flow-1", {"name": "Local Model"}),
         call("flow-1", {"model": "gemma3:27b"}),
