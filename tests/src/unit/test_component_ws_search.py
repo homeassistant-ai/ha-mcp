@@ -1,22 +1,27 @@
-"""Unit tests for the ha_mcp_tools in-process WebSocket search API.
+"""Unit tests for the ha_mcp_tools in-process WebSocket command surface.
 
 Mirrors the established component-test pattern (``test_caller_token_auth.py`` /
 ``test_custom_component_filesystem.py``): the ``homeassistant.*`` imports are
 stubbed with ``MagicMock`` and the pure ``_do_*`` functions are exercised with
 fake hass / registry objects injected through the ``_resolve_registries`` seam.
 
-Coverage:
-* ``_do_info`` handshake shape + manifest/const version parity (drift guard).
-* entity joins (name / alias / area / floor / label / domain / device).
-* config matching: a YAML-loaded automation is indexed but its body is NEVER
-  emitted; a storage-backed body is emitted only under ``include_config``.
-* flow-helper ``options`` indexed while ``entry.data`` never appears anywhere in
-  the serialized response (data-minimization contract).
-* pagination, include_hidden, match-all, search_types gating.
-* admin gate present on both registered commands.
-* scorer parity against the server's ``_match_exact_search_entity`` /
-  ``calculate_ratio`` (golden corpus) so the two scorers never drift.
-* malformed-params rejection via voluptuous.
+Covers all five v1.1.0 commands (info / search / config_get / overview /
+helpers_list). Highlights:
+* ``_do_info`` handshake shape + manifest/const version parity (drift guard);
+  ``info`` advertising all four capabilities.
+* search: entity joins (name / alias / area / floor / label / domain / device);
+  YAML config body indexed but NEVER emitted; storage body only under
+  ``include_config``; flow-helper ``options`` indexed while ``entry.data`` never
+  leaks; pagination / include_hidden / match-all / search_types gating; scorer
+  parity against the server's ``_match_exact_search_entity`` / ``calculate_ratio``.
+* config_get: storage-item full payload; YAML -> structured not-found with the
+  body ABSENT everywhere; id / entity_id / slug resolution.
+* overview: the raw slices (states / services / three registries / config /
+  notifications / repairs) shaped for the server's existing overview logic.
+* helpers_list: collection + flow helpers; ``entry.data`` negative scan; rename
+  (issue #1794) shows current values; helper_types filter.
+* admin gate + async_response on all five registered commands.
+* malformed-params rejection via voluptuous for every command schema.
 """
 
 from __future__ import annotations
@@ -89,11 +94,28 @@ class FakeConfigEntries:
         return list(self._entries)
 
 
+class FakeServices:
+    """Stand-in for ``hass.services`` (``async_services`` mapping)."""
+
+    def __init__(self, services):
+        # services: {domain: {service_name: <anything>}}
+        self._services = {d: dict(s) for d, s in dict(services).items()}
+
+    def async_services(self):
+        return dict(self._services)
+
+
 class FakeHass:
-    def __init__(self, states=(), data=None, config_entries=()):
+    def __init__(
+        self, states=(), data=None, config_entries=(), services=None, config=None
+    ):
         self.states = FakeStates(states)
         self.data = dict(data or {})
         self.config_entries = FakeConfigEntries(config_entries)
+        if services is not None:
+            self.services = services
+        if config is not None:
+            self.config = config
 
 
 class FakeRegEntry:
@@ -106,6 +128,13 @@ class FakeRegEntry:
         labels=(),
         hidden_by=None,
         name=None,
+        unique_id=None,
+        original_name=None,
+        categories=None,
+        config_entry_id=None,
+        entity_category=None,
+        platform=None,
+        disabled_by=None,
     ):
         self.entity_id = entity_id
         self.aliases = set(aliases)
@@ -114,11 +143,21 @@ class FakeRegEntry:
         self.labels = set(labels)
         self.hidden_by = hidden_by
         self.name = name
+        self.unique_id = unique_id
+        self.original_name = original_name
+        self.categories = dict(categories or {})
+        self.config_entry_id = config_entry_id
+        self.entity_category = entity_category
+        self.platform = platform
+        self.disabled_by = disabled_by
 
 
 class FakeEntityReg:
     def __init__(self, entries):
         self._entries = dict(entries)
+        # Real HA exposes ``registry.entities`` as a mapping; overview /
+        # helpers_list iterate it, while search uses ``async_get``.
+        self.entities = dict(entries)
 
     def async_get(self, entity_id):
         return self._entries.get(entity_id)
@@ -137,6 +176,9 @@ class FakeAreaReg:
 
     def async_get_area(self, area_id):
         return self._areas.get(area_id)
+
+    def async_list_areas(self):
+        return list(self._areas.values())
 
 
 class FakeFloor:
@@ -190,6 +232,8 @@ class FakeDevice:
 class FakeDeviceReg:
     def __init__(self, devices):
         self._devices = {d.id: d for d in devices}
+        # Real HA exposes ``registry.devices`` as a mapping (overview reads it).
+        self.devices = dict(self._devices)
 
     def async_get(self, device_id):
         return self._devices.get(device_id)
@@ -230,13 +274,68 @@ class FakeConfigEntry:
 
 
 class FakeConfig:
-    """Stand-in for ``hass.config`` whose ``path()`` roots at a temp dir."""
+    """Stand-in for ``hass.config``: ``path()`` roots at a temp dir; ``as_dict()``
+    returns the injected HA-config payload (overview's system-info slice)."""
 
-    def __init__(self, base_dir):
-        self._base = Path(base_dir)
+    def __init__(self, base_dir=None, data=None):
+        self._base = Path(base_dir) if base_dir is not None else None
+        self._data = dict(data or {})
 
     def path(self, *parts):
         return str(self._base.joinpath(*parts))
+
+    def as_dict(self):
+        return dict(self._data)
+
+
+class FakeIssue:
+    """Stand-in for an issue-registry ``IssueEntry`` (repairs slice)."""
+
+    def __init__(
+        self,
+        issue_id,
+        domain,
+        *,
+        severity="warning",
+        translation_key=None,
+        dismissed_version=None,
+        is_fixable=True,
+        breaks_in_ha_version=None,
+        created=None,
+        issue_domain=None,
+        translation_placeholders=None,
+        learn_more_url=None,
+        active=True,
+    ):
+        self.issue_id = issue_id
+        self.domain = domain
+        self.severity = severity
+        self.translation_key = translation_key
+        self.dismissed_version = dismissed_version
+        self.is_fixable = is_fixable
+        self.breaks_in_ha_version = breaks_in_ha_version
+        self.created = created
+        self.issue_domain = issue_domain
+        self.translation_placeholders = translation_placeholders
+        self.learn_more_url = learn_more_url
+        self.active = active
+
+
+class FakeIssueRegistry:
+    """Stand-in for the issue registry: ``.issues`` maps (domain, id) -> IssueEntry."""
+
+    def __init__(self, issues):
+        self.issues = {(i.domain, i.issue_id): i for i in issues}
+
+
+class FakeIssueRegModule:
+    """Stand-in for the ``issue_registry`` module (``async_get`` seam)."""
+
+    def __init__(self, registry):
+        self._registry = registry
+
+    def async_get(self, hass):
+        return self._registry
 
 
 def make_view(entity=None, areas=(), floors=(), labels=(), devices=()):
@@ -265,7 +364,12 @@ class TestInfo:
         info = wsapi._do_info()
         assert info["schema_version"] == 1
         assert info["component_version"] == COMPONENT_VERSION
-        assert info["capabilities"] == ["search"]
+        assert info["capabilities"] == [
+            "search",
+            "config_get",
+            "overview",
+            "helpers_list",
+        ]
         assert info["limits"] == {"max_results": 500, "max_body_bytes": 1_000_000}
 
     def test_manifest_version_parity(self):
@@ -1109,29 +1213,51 @@ def functional_ws(monkeypatch):
     return fake
 
 
-class TestRegistrationAndAdminGate:
-    def test_both_commands_registered(self, functional_ws):
-        assert set(functional_ws.registered) == {wsapi.WS_INFO, wsapi.WS_SEARCH}
+_ALL_COMMANDS = [
+    "ha_mcp_tools/info",
+    "ha_mcp_tools/search",
+    "ha_mcp_tools/config_get",
+    "ha_mcp_tools/overview",
+    "ha_mcp_tools/helpers_list",
+]
 
-    @pytest.mark.parametrize("command", ["ha_mcp_tools/info", "ha_mcp_tools/search"])
+# Minimal well-formed message body per command (Required fields) so the admin
+# gate / async_response wrappers reach the pure handler.
+_CMD_MSG_EXTRA = {
+    "ha_mcp_tools/config_get": {"domain": "automation", "item_id": "nope"},
+}
+
+
+class TestRegistrationAndAdminGate:
+    def test_all_commands_registered(self, functional_ws):
+        assert set(functional_ws.registered) == {
+            wsapi.WS_INFO,
+            wsapi.WS_SEARCH,
+            wsapi.WS_CONFIG_GET,
+            wsapi.WS_OVERVIEW,
+            wsapi.WS_HELPERS_LIST,
+        }
+
+    @pytest.mark.parametrize("command", _ALL_COMMANDS)
     def test_non_admin_rejected(self, functional_ws, command):
         handler = functional_ws.registered[command]
         conn = _FakeConnection(is_admin=False)
         with pytest.raises(_Unauthorized):
             handler(FakeHass(), conn, {"id": 1, "type": command})
 
-    @pytest.mark.parametrize("command", ["ha_mcp_tools/info", "ha_mcp_tools/search"])
+    @pytest.mark.parametrize("command", _ALL_COMMANDS)
     def test_no_user_rejected(self, functional_ws, command):
         handler = functional_ws.registered[command]
         conn = _FakeConnection(has_user=False)
         with pytest.raises(_Unauthorized):
             handler(FakeHass(), conn, {"id": 2, "type": command})
 
-    @pytest.mark.parametrize("command", ["ha_mcp_tools/info", "ha_mcp_tools/search"])
+    @pytest.mark.parametrize("command", _ALL_COMMANDS)
     def test_admin_call_sends_result(self, functional_ws, command):
         handler = functional_ws.registered[command]
         conn = _FakeConnection(is_admin=True)
-        handler(FakeHass(), conn, {"id": 9, "type": command})
+        msg = {"id": 9, "type": command, **_CMD_MSG_EXTRA.get(command, {})}
+        handler(FakeHass(), conn, msg)
         assert 9 in conn.results
         assert isinstance(conn.results[9], dict)
 
@@ -1164,3 +1290,496 @@ class TestSchemaValidation:
         schema = self._schema(monkeypatch)
         with pytest.raises(_REAL_VOL.Invalid):
             schema(bad)
+
+
+class TestNewCommandSchemas:
+    """Voluptuous validation for config_get / overview / helpers_list."""
+
+    def _schema(self, monkeypatch, schema_fn):
+        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
+        return _REAL_VOL.Schema(schema_fn())
+
+    def test_config_get_valid(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._config_get_schema)
+        out = schema(
+            {"type": wsapi.WS_CONFIG_GET, "domain": "script", "item_id": "abc"}
+        )
+        assert out["domain"] == "script"
+        assert out["item_id"] == "abc"
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/config_get", "domain": "light", "item_id": "x"},
+            {"type": "ha_mcp_tools/config_get", "domain": "automation"},  # no item_id
+            {"type": "ha_mcp_tools/config_get", "item_id": "x"},  # no domain
+        ],
+    )
+    def test_config_get_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._config_get_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
+
+    def test_overview_defaults(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._overview_schema)
+        out = schema({"type": wsapi.WS_OVERVIEW})
+        assert out["include_notifications"] is True
+        assert out["include_repairs"] is True
+
+    def test_overview_malformed_rejected(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._overview_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema({"type": wsapi.WS_OVERVIEW, "include_notifications": "yes"})
+
+    def test_helpers_list_defaults(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._helpers_list_schema)
+        out = schema({"type": wsapi.WS_HELPERS_LIST})
+        assert out["include_flow_helpers"] is True
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/helpers_list", "helper_types": "template"},
+            {"type": "ha_mcp_tools/helpers_list", "include_flow_helpers": "yes"},
+        ],
+    )
+    def test_helpers_list_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._helpers_list_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
+
+
+# =============================================================================
+# config_get — storage-only body fetch; YAML -> structured not-found (no body)
+# =============================================================================
+class TestConfigGet:
+    def _storage_hass(self):
+        storage_auto = FakeConfigEntity(
+            "automation.ui",
+            "UI Auto",
+            unique_id="uid-1",
+            raw_config={
+                "id": "uid-1",
+                "alias": "UI Auto",
+                "action": [{"service": "light.turn_on"}],
+            },
+        )
+        yaml_auto = FakeConfigEntity(
+            "automation.pkg",
+            "Package Auto",
+            unique_id=None,
+            raw_config={
+                "alias": "Package Auto",
+                "action": [{"service": "notify.x", "data": {"message": "YAMLSECRET"}}],
+            },
+        )
+        h = FakeHass(
+            states=[FakeState("automation.ui", "on", "UI Auto Live")],
+            data={"automation": FakeComponent([storage_auto, yaml_auto])},
+        )
+        return h
+
+    def _view(self):
+        return make_view(
+            entity={
+                "automation.ui": FakeRegEntry(
+                    "automation.ui", categories={"automation": "cat-morning"}
+                )
+            }
+        )
+
+    def test_storage_item_full_payload(self, monkeypatch):
+        h = self._storage_hass()
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
+        res = wsapi._do_config_get(h, {"domain": "automation", "item_id": "uid-1"})
+        assert res["found"] is True
+        assert res["source"] == "storage"
+        assert res["domain"] == "automation"
+        assert res["item_id"] == "uid-1"
+        assert res["entity_id"] == "automation.ui"
+        # Current friendly_name comes from the live state, not the storage name.
+        assert res["friendly_name"] == "UI Auto Live"
+        assert res["config"]["id"] == "uid-1"
+        assert res["category"] == "cat-morning"
+
+    @pytest.mark.parametrize("item_id", ["uid-1", "automation.ui", "ui"])
+    def test_resolves_by_id_entity_id_or_slug(self, monkeypatch, item_id):
+        h = self._storage_hass()
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
+        res = wsapi._do_config_get(h, {"domain": "automation", "item_id": item_id})
+        assert res["found"] is True
+        assert res["entity_id"] == "automation.ui"
+
+    def test_yaml_item_structured_not_found_no_body(self, empty_view):
+        h = self._storage_hass()
+        res = wsapi._do_config_get(
+            h, {"domain": "automation", "item_id": "automation.pkg"}
+        )
+        assert res["found"] is False
+        assert res["source"] == "yaml"
+        assert res["entity_id"] == "automation.pkg"
+        # The YAML body must never appear anywhere in the response.
+        assert "config" not in res
+        assert "YAMLSECRET" not in json.dumps(res)
+
+    def test_absent_item_not_found(self, empty_view):
+        h = self._storage_hass()
+        res = wsapi._do_config_get(h, {"domain": "automation", "item_id": "ghost"})
+        assert res["found"] is False
+        assert res["source"] is None
+        assert "config" not in res
+
+    def test_inaccessible_component_not_found(self, empty_view):
+        res = wsapi._do_config_get(
+            FakeHass(), {"domain": "script", "item_id": "whatever"}
+        )
+        assert res["found"] is False
+        assert res["source"] is None
+
+    def test_scene_storage_body(self, monkeypatch):
+        scene = FakeSceneEntity(
+            "scene.movie",
+            "Movie Night",
+            unique_id="scn-1",
+            scene_config={"id": "scn-1", "name": "Movie Night", "icon": "mdi:movie"},
+        )
+        h = FakeHass(data={"scene": FakeComponent([scene])})
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda hass: wsapi._RegistryView()
+        )
+        res = wsapi._do_config_get(h, {"domain": "scene", "item_id": "scn-1"})
+        assert res["found"] is True
+        assert res["source"] == "storage"
+        assert res["config"]["name"] == "Movie Night"
+        # No registry -> category degrades to None, not an error.
+        assert res["category"] is None
+
+
+# =============================================================================
+# helpers_list — collection (live attrs) + flow (options, never entry.data)
+# =============================================================================
+class TestHelpersList:
+    def test_collection_helper_listed_with_body(self, empty_view):
+        states = [
+            FakeState(
+                "input_select.house_mode",
+                "day",
+                friendly_name="House Mode",
+                options=["day", "night"],
+            )
+        ]
+        res = wsapi._do_helpers_list(FakeHass(states=states), {})
+        coll = [h for h in res["helpers"] if h["kind"] == "collection"]
+        assert res["count"] == len(res["helpers"]) == 1
+        rec = coll[0]
+        assert rec["helper_type"] == "input_select"
+        assert rec["entity_id"] == "input_select.house_mode"
+        assert rec["object_id"] == "house_mode"
+        assert rec["name"] == "House Mode"
+        assert rec["config"]["options"] == ["day", "night"]
+
+    def test_rename_shows_current_values_issue_1794(self, monkeypatch):
+        # The storage collection name is stale ("Old Name"); the current name
+        # (state friendly_name + registry override) must win — issue #1794.
+        states = [
+            FakeState("input_boolean.guest_mode", "off", friendly_name="Current Guest")
+        ]
+        view = make_view(
+            entity={
+                "input_boolean.guest_mode": FakeRegEntry(
+                    "input_boolean.guest_mode",
+                    name="Current Guest",
+                    original_name="Old Name",
+                    unique_id="guest_mode",
+                )
+            }
+        )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+        res = wsapi._do_helpers_list(FakeHass(states=states), {})
+        rec = next(h for h in res["helpers"] if h["kind"] == "collection")
+        assert rec["name"] == "Current Guest"
+        assert rec["storage_id"] == "guest_mode"
+        assert "Old Name" not in json.dumps(res)
+
+    def test_flow_helper_options_and_entity_data_never_leaks(self, monkeypatch):
+        entry = FakeConfigEntry(
+            "template",
+            title="Sun Sensor",
+            options={"state": "{{ is_state('sun.sun', 'above_horizon') }}"},
+            data={"api_key": "DATA_SECRET_XYZ"},
+            entry_id="e1",
+        )
+        # A registry entity bound to the config entry supplies the CURRENT
+        # entity_id + display name (a rename updates the registry, not the entry
+        # title).
+        view = make_view(
+            entity={
+                "binary_sensor.sun_up": FakeRegEntry(
+                    "binary_sensor.sun_up",
+                    name="Sun Is Up",
+                    config_entry_id="e1",
+                )
+            }
+        )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+        res = wsapi._do_helpers_list(FakeHass(config_entries=[entry]), {})
+        flow = [h for h in res["helpers"] if h["kind"] == "flow"]
+        assert flow
+        rec = flow[0]
+        assert rec["helper_type"] == "template"
+        assert rec["entry_id"] == "e1"
+        assert rec["storage_id"] == "e1"
+        assert rec["entity_id"] == "binary_sensor.sun_up"
+        assert rec["name"] == "Sun Is Up"
+        assert rec["options"] == {"state": "{{ is_state('sun.sun', 'above_horizon') }}"}
+        serialized = json.dumps(res)
+        assert "DATA_SECRET_XYZ" not in serialized
+        assert "api_key" not in serialized
+
+    def test_flow_helper_without_registered_entity(self, empty_view):
+        entry = FakeConfigEntry(
+            "group", title="Living Room Group", options={"entities": []}, entry_id="e9"
+        )
+        res = wsapi._do_helpers_list(FakeHass(config_entries=[entry]), {})
+        rec = next(h for h in res["helpers"] if h["kind"] == "flow")
+        assert rec["entity_id"] is None
+        assert rec["name"] == "Living Room Group"
+
+    def test_helper_types_filter(self, empty_view):
+        states = [FakeState("input_boolean.guest", "off", "Guest")]
+        entry = FakeConfigEntry(
+            "template", title="Tmpl", options={"state": "x"}, entry_id="e1"
+        )
+        h = FakeHass(states=states, config_entries=[entry])
+        only_tmpl = wsapi._do_helpers_list(h, {"helper_types": ["template"]})
+        assert {r["helper_type"] for r in only_tmpl["helpers"]} == {"template"}
+        only_bool = wsapi._do_helpers_list(h, {"helper_types": ["input_boolean"]})
+        assert {r["helper_type"] for r in only_bool["helpers"]} == {"input_boolean"}
+
+    def test_include_flow_helpers_false(self, empty_view):
+        entry = FakeConfigEntry(
+            "template", title="Tmpl", options={"state": "x"}, entry_id="e1"
+        )
+        res = wsapi._do_helpers_list(
+            FakeHass(config_entries=[entry]), {"include_flow_helpers": False}
+        )
+        assert [r for r in res["helpers"] if r["kind"] == "flow"] == []
+
+    def test_zone_and_person_are_listed_but_search_unaffected(self, empty_view):
+        # helpers_list covers zone/person (consumer parity); search must not.
+        states = [
+            FakeState("zone.home", "zoning", friendly_name="Home"),
+            FakeState("person.alice", "home", friendly_name="Alice"),
+        ]
+        listed = wsapi._do_helpers_list(FakeHass(states=states), {})
+        kinds = {r["helper_type"] for r in listed["helpers"]}
+        assert kinds == {"zone", "person"}
+        assert {"zone", "person"} <= set(listed["covered_types"])
+        # search's helper surface excludes zone/person (unchanged behaviour).
+        searched = wsapi._do_search(
+            FakeHass(states=states), {"query": "home", "search_types": ["helper"]}
+        )
+        assert searched["helpers"] == []
+
+    def test_covered_types_advertises_the_full_enumerable_universe(self, empty_view):
+        # covered_types is the anti-silent-wrong signal the server gates fallback
+        # on: it must name every state-machine collection type + every flow type,
+        # so the server trusts a genuinely-empty result for those.
+        res = wsapi._do_helpers_list(FakeHass(), {})
+        covered = set(res["covered_types"])
+        # All 11 state-machine collection types the consumer accepts.
+        assert {
+            "input_boolean",
+            "input_number",
+            "input_text",
+            "input_select",
+            "input_datetime",
+            "input_button",
+            "counter",
+            "timer",
+            "schedule",
+            "zone",
+            "person",
+        } <= covered
+        # Flow types are covered too (they're enumerated by default).
+        assert {"template", "group", "utility_meter"} <= covered
+
+    def test_tag_is_not_covered_so_empty_is_not_authoritative(self, empty_view):
+        # tag has no state entity, so the component cannot enumerate it. A
+        # tag-only request returns empty AND omits tag from covered_types, telling
+        # the server to fall back to its legacy tag/list rather than trust it.
+        res = wsapi._do_helpers_list(FakeHass(), {"helper_types": ["tag"]})
+        assert res["helpers"] == []
+        assert "tag" not in res["covered_types"]
+
+    def test_covered_types_excludes_flow_when_disabled(self, empty_view):
+        res = wsapi._do_helpers_list(FakeHass(), {"include_flow_helpers": False})
+        covered = set(res["covered_types"])
+        assert "input_boolean" in covered
+        # No flow types are covered when flow enumeration is turned off.
+        assert covered.isdisjoint(wsapi.FLOW_HELPER_DOMAINS)
+
+
+# =============================================================================
+# overview — RAW slices (server runs its existing overview logic over them)
+# =============================================================================
+class _FakeEnum:
+    """StrEnum-ish stand-in: ``.value`` is the wire string."""
+
+    def __init__(self, value):
+        self.value = value
+
+
+class TestOverview:
+    def _hass(self):
+        return FakeHass(
+            states=[
+                FakeState(
+                    "light.lamp", "on", friendly_name="Lamp", device_class="light"
+                )
+            ],
+            services=FakeServices({"light": {"turn_on": {}, "turn_off": {}}}),
+            config=FakeConfig(
+                data={
+                    "version": "2026.7.0",
+                    "location_name": "Home",
+                    "time_zone": "UTC",
+                    "language": "en",
+                    "state": "RUNNING",
+                    "country": "US",
+                    "unit_system": {"temperature": "°C"},
+                    "components": ["light", "sensor"],
+                    "allowlist_external_dirs": {"/config/www"},
+                    "internal_url": "http://homeassistant.local:8123",
+                }
+            ),
+            data={
+                "persistent_notification": {
+                    "n1": {
+                        "notification_id": "n1",
+                        "title": "Heads up",
+                        "message": "Something",
+                        "created_at": "2026-07-11T00:00:00+00:00",
+                    }
+                }
+            },
+        )
+
+    def _view(self):
+        return make_view(
+            entity={
+                "light.lamp": FakeRegEntry(
+                    "light.lamp",
+                    area_id="a1",
+                    device_id="d1",
+                    labels={"lb1"},
+                    entity_category=_FakeEnum("config"),
+                    hidden_by=_FakeEnum("user"),
+                )
+            },
+            areas=[FakeArea("a1", "Office", floor_id="f1")],
+            devices=[FakeDevice("d1", name="Lamp Device", area_id="a1")],
+        )
+
+    def test_raw_slices_present_and_shaped(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
+        res = wsapi._do_overview(self._hass(), {})
+
+        # states: bare list, get_states()-shaped
+        assert isinstance(res["states"], list)
+        st = res["states"][0]
+        assert st["entity_id"] == "light.lamp"
+        assert st["state"] == "on"
+        assert st["attributes"]["friendly_name"] == "Lamp"
+
+        # services: [{domain, services:{name:{}}}]
+        assert res["services"] == [
+            {"domain": "light", "services": {"turn_on": {}, "turn_off": {}}}
+        ]
+
+        # registries: bare lists (NOT the {success, result} WS wrapper)
+        assert isinstance(res["entity_registry"], list)
+        ent = res["entity_registry"][0]
+        assert ent["entity_id"] == "light.lamp"
+        assert ent["area_id"] == "a1"
+        assert ent["device_id"] == "d1"
+        assert ent["labels"] == ["lb1"]
+        # enum-ish registry fields are unwrapped to their wire strings
+        assert ent["entity_category"] == "config"
+        assert ent["hidden_by"] == "user"
+
+        assert res["device_registry"] == [
+            {
+                "id": "d1",
+                "area_id": "a1",
+                "labels": [],
+                "name": "Lamp Device",
+                "name_by_user": None,
+                "manufacturer": None,
+                "model": None,
+            }
+        ]
+        assert res["area_registry"] == [
+            {"area_id": "a1", "name": "Office", "floor_id": "f1"}
+        ]
+
+        # config: HA-config fields, no base_url (server supplies that)
+        assert res["config"]["version"] == "2026.7.0"
+        assert res["config"]["location_name"] == "Home"
+        assert "base_url" not in res["config"]
+        # a set-valued config field is JSON-plainified to a list
+        assert res["config"]["allowlist_external_dirs"] == ["/config/www"]
+
+        # notifications
+        assert res["notifications"] == [
+            {
+                "notification_id": "n1",
+                "title": "Heads up",
+                "message": "Something",
+                "created_at": "2026-07-11T00:00:00+00:00",
+            }
+        ]
+
+    def test_repairs_ignored_derived_from_dismissed_version(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
+        registry = FakeIssueRegistry(
+            [
+                FakeIssue("active_issue", "mqtt", severity=_FakeEnum("warning")),
+                FakeIssue("old_issue", "zwave", dismissed_version="2026.1.0"),
+            ]
+        )
+        monkeypatch.setattr(wsapi, "ir", FakeIssueRegModule(registry))
+        res = wsapi._do_overview(self._hass(), {})
+        by_id = {r["issue_id"]: r for r in res["repairs"]}
+        assert by_id["active_issue"]["ignored"] is False
+        assert by_id["active_issue"]["severity"] == "warning"
+        assert by_id["old_issue"]["ignored"] is True
+        assert by_id["old_issue"]["dismissed_version"] == "2026.1.0"
+
+    def test_include_flags_skip_sections(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
+        monkeypatch.setattr(
+            wsapi, "ir", FakeIssueRegModule(FakeIssueRegistry([FakeIssue("x", "y")]))
+        )
+        res = wsapi._do_overview(
+            self._hass(),
+            {"include_notifications": False, "include_repairs": False},
+        )
+        assert res["notifications"] == []
+        assert res["repairs"] == []
+        # core slices still present
+        assert res["states"] and res["entity_registry"]
+
+    def test_degrades_without_registries_or_config(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda hass: wsapi._RegistryView()
+        )
+        monkeypatch.setattr(wsapi, "ir", FakeIssueRegModule(FakeIssueRegistry([])))
+        res = wsapi._do_overview(FakeHass(), {})
+        assert res["entity_registry"] == []
+        assert res["device_registry"] == []
+        assert res["area_registry"] == []
+        assert res["services"] == []
+        assert res["config"] == {}
+        assert res["notifications"] == []
+        assert res["repairs"] == []

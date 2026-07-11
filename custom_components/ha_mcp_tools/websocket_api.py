@@ -2,13 +2,32 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. v1.1.0 ships two commands:
+capability gate. v1.1.0 ships five commands (four capabilities):
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
   + ``component_version`` + advisory ``limits``. One cached probe tells the
   server which commands are live (capability negotiation, NOT a version floor).
 * ``ha_mcp_tools/search`` — a unified in-process search over live registries and
   states, joined and scored, mirroring today's ``ha_search`` response envelope.
+* ``ha_mcp_tools/config_get`` — one-call fetch of a storage/editor-backed
+  automation/script/scene body + current entity_id + friendly_name + entity
+  category, collapsing the server's id-resolve + config-fetch + registry-category
+  round-trips. Storage-only: a YAML-loaded item returns a structured not-found
+  (its body is never emitted — that belongs to the future file-based tool).
+* ``ha_mcp_tools/overview`` — the raw in-process reads the server's
+  ``get_system_overview`` + ``ha_get_overview`` wrapper consume (states,
+  services, entity/device/area registries, ``hass.config``, persistent
+  notifications, repairs issues) in one call, so the server builds its existing
+  overview envelope with no extra HA round-trips.
+* ``ha_mcp_tools/helpers_list`` — collection helpers (live state-attribute
+  bodies) AND flow helpers (``ConfigEntry.options``/``title``/``entry_id`` —
+  never ``entry.data``), each with the CURRENT entity_id + display name from the
+  registry (renamed helpers show current values — issue #1794), closing the
+  documented "flow helpers cannot be listed" gap with no OptionsFlow dance. The
+  response's ``covered_types`` names which helper_type values were authoritatively
+  enumerated, so the server falls back to its legacy ``<type>/list`` path for an
+  uncovered type (e.g. ``tag``, which has no state entity) instead of trusting an
+  empty result.
 
 Design notes that are load-bearing:
 
@@ -33,9 +52,9 @@ Design notes that are load-bearing:
   registries — run synchronously, no executor, no persistent index (always
   fresh, zero cache-invalidation surface).
 
-Extension point — to add a command later (overview / config_get / helpers_list):
-write ``_do_<name>(hass, params)``, append its capability to :data:`CAPABILITIES`,
-and add one row to :func:`_command_specs`. ``info`` enumerates the rest.
+Extension point — to add another command later: write ``_do_<name>(hass,
+params)``, append its capability to :data:`CAPABILITIES`, and add one row to
+:func:`_command_specs`. ``info`` enumerates the rest.
 """
 
 from __future__ import annotations
@@ -64,6 +83,9 @@ from homeassistant.helpers import (
     floor_registry as fr,
 )
 from homeassistant.helpers import (
+    issue_registry as ir,
+)
+from homeassistant.helpers import (
     label_registry as lr,
 )
 
@@ -75,6 +97,9 @@ _LOGGER = logging.getLogger(__name__)
 WS_API_PREFIX = "ha_mcp_tools"
 WS_INFO = f"{WS_API_PREFIX}/info"
 WS_SEARCH = f"{WS_API_PREFIX}/search"
+WS_CONFIG_GET = f"{WS_API_PREFIX}/config_get"
+WS_OVERVIEW = f"{WS_API_PREFIX}/overview"
+WS_HELPERS_LIST = f"{WS_API_PREFIX}/helpers_list"
 
 # Wire-format generation of the request/response envelopes. Bumped only on an
 # *incompatible* shape change to an existing command; additive fields do not
@@ -83,8 +108,9 @@ SCHEMA_VERSION = 1
 
 # Which commands exist. Grows one entry per shipped command; the server gates
 # each consumer on ``capability in caps.capabilities``. Never remove an entry
-# without a major bump.
-CAPABILITIES: list[str] = ["search"]
+# without a major bump. (``info`` is always present in 1.1.0, so it carries no
+# capability key of its own.)
+CAPABILITIES: list[str] = ["search", "config_get", "overview", "helpers_list"]
 
 # Advisory caps advertised in ``info.limits`` so no single WS frame balloons.
 MAX_RESULTS = 500
@@ -160,6 +186,23 @@ FLOW_HELPER_DOMAINS = frozenset(
     }
 )
 
+# Collection helper domains enumerated by ``ha_mcp_tools/helpers_list``: the
+# collection helpers ``search`` indexes PLUS zone/person, which are state-machine
+# entities the server's ``ha_config_list_helpers`` also accepts. Kept SEPARATE
+# from :data:`COLLECTION_HELPER_DOMAINS` so search behaviour is unchanged — zones
+# and persons are not indexed as "helpers" by ``ha_mcp_tools/search``.
+#
+# ``tag`` is deliberately EXCLUDED: tags are a storage collection with no state
+# entity (the server reaches them via ``tag/list``, and its create/list paths
+# special-case ``tag`` precisely because it has no entity_id), so a from-states
+# scan can never enumerate them. Advertising it as covered would make an empty
+# result indistinguishable from "no tags exist" (a silent-wrong listing); it is
+# left OUT of ``covered_types`` so the server falls back to its legacy
+# ``tag/list`` path for that type. See :func:`_do_helpers_list`.
+HELPERS_LIST_COLLECTION_DOMAINS = COLLECTION_HELPER_DOMAINS | frozenset(
+    {"zone", "person"}
+)
+
 _SPLIT_RE = re.compile(r"[._\-\s]+")
 
 
@@ -187,6 +230,9 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any]]:
     return [
         (_info_schema(), lambda hass, msg: _do_info()),
         (_search_schema(), _do_search),
+        (_config_get_schema(), _do_config_get),
+        (_overview_schema(), _do_overview),
+        (_helpers_list_schema(), _do_helpers_list),
     ]
 
 
@@ -223,6 +269,30 @@ def _search_schema() -> dict[Any, Any]:
             int, vol.Range(min=1, max=MAX_RESULTS)
         ),
         vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0)),
+    }
+
+
+def _config_get_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_CONFIG_GET,
+        vol.Required("domain"): vol.In(list(CONFIG_SEARCH_TYPES)),
+        vol.Required("item_id"): str,
+    }
+
+
+def _overview_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_OVERVIEW,
+        vol.Optional("include_notifications", default=True): bool,
+        vol.Optional("include_repairs", default=True): bool,
+    }
+
+
+def _helpers_list_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_HELPERS_LIST,
+        vol.Optional("helper_types"): [str],
+        vol.Optional("include_flow_helpers", default=True): bool,
     }
 
 
@@ -1231,3 +1301,544 @@ def _call_lookup(registry: Any, method: str, key: str) -> Any:
         return getter(key)
     except Exception:  # pragma: no cover - defensive
         return None
+
+
+def _call_no_arg(obj: Any, method: str) -> Any:
+    """Call a no-argument accessor (e.g. ``async_services``), guarded."""
+    if obj is None:
+        return None
+    fn = getattr(obj, method, None)
+    if not callable(fn):
+        return None
+    try:
+        return fn()
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _iso(value: Any) -> Any:
+    """Serialize a datetime-ish value to an ISO string; pass through otherwise.
+
+    HA registry/state timestamps are ``datetime`` objects. The WS layer can
+    encode them, but the REST shapes the overview consumer mirrors carry ISO
+    strings, so normalize here for a stable wire contract.
+    """
+    if value is None:
+        return None
+    iso = getattr(value, "isoformat", None)
+    if callable(iso):
+        try:
+            return iso()
+        except Exception:  # pragma: no cover - defensive
+            return None
+    return value if isinstance(value, (str, int, float, bool)) else str(value)
+
+
+def _enum_value(value: Any) -> Any:
+    """Unwrap a StrEnum-ish registry field (``entity_category``/``hidden_by``/…).
+
+    HA stores these as enums whose ``.value`` is the wire string; a plain string
+    (or None) passes through unchanged.
+    """
+    if value is None or isinstance(value, str):
+        return value
+    return getattr(value, "value", str(value))
+
+
+def _reg_name(reg: Any) -> str | None:
+    """Current display name from a registry entry: user override, else original."""
+    if reg is None:
+        return None
+    name = getattr(reg, "name", None) or getattr(reg, "original_name", None)
+    return str(name) if name else None
+
+
+# =============================================================================
+# ha_mcp_tools/config_get
+# =============================================================================
+def _do_config_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """One-call fetch of a storage-backed automation/script/scene config body.
+
+    Storage-only (maintainer decision): a YAML-loaded item (id-less, same
+    ``_classify_source`` rule as search) returns a structured not-found and its
+    body is NEVER emitted — YAML-body retrieval belongs to a future file-based
+    tool. Collapses the server's id-resolve + config-fetch + registry-category
+    round-trips into one in-process call.
+    """
+    domain = params["domain"]
+    item_id = str(params["item_id"])
+
+    entity, name, storage_id, config_dict = _find_config_item(hass, domain, item_id)
+    if entity is None:
+        # Nothing resolves — a clean not-found (mirrors the REST 404).
+        return {"found": False, "domain": domain, "item_id": item_id, "source": None}
+
+    entity_id = getattr(entity, "entity_id", None)
+    if _classify_source(storage_id) != "storage":
+        # Resolved to a YAML item: structured not-found, body absent.
+        return {
+            "found": False,
+            "domain": domain,
+            "item_id": item_id,
+            "entity_id": entity_id,
+            "source": "yaml",
+        }
+
+    view = _resolve_registries(hass)
+    return {
+        "found": True,
+        "domain": domain,
+        "item_id": storage_id,
+        "entity_id": entity_id,
+        "friendly_name": _current_friendly_name(hass, entity_id, name),
+        "config": config_dict,
+        "source": "storage",
+        "category": _entity_category(view, entity_id, domain),
+    }
+
+
+def _find_config_item(
+    hass: HomeAssistant, domain: str, item_id: str
+) -> tuple[Any, str | None, str | None, dict[str, Any] | None]:
+    """Resolve (entity, name, storage_id, config_dict) for a config id, or Nones.
+
+    Matches ``item_id`` against the loaded entity's entity_id, its storage id
+    (unique_id / raw_config ``id``), or its object_id slug — the same identifiers
+    the server accepts for ``ha_config_get_*``.
+    """
+    component = hass.data.get(domain) if getattr(hass, "data", None) else None
+    entities = getattr(component, "entities", None)
+    if entities is None:
+        return None, None, None, None
+    for entity in entities:
+        entity_id = getattr(entity, "entity_id", None)
+        if not entity_id:
+            continue
+        name, storage_id, config_dict = _extract_config(domain, entity)
+        object_id = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
+        if item_id in (entity_id, storage_id, object_id):
+            return entity, name, storage_id, config_dict
+    return None, None, None, None
+
+
+def _current_friendly_name(
+    hass: HomeAssistant, entity_id: str | None, fallback: str | None
+) -> str | None:
+    """Current friendly_name from the state machine, falling back to the config name."""
+    if entity_id:
+        for state in _iter_states(hass):
+            if getattr(state, "entity_id", None) != entity_id:
+                continue
+            attrs = getattr(state, "attributes", None) or {}
+            friendly = (
+                attrs.get("friendly_name") if isinstance(attrs, Mapping) else None
+            )
+            if friendly:
+                return str(friendly)
+            break
+    if fallback:
+        return str(fallback)
+    return entity_id
+
+
+def _entity_category(view: _RegistryView, entity_id: str | None, scope: str) -> Any:
+    """In-process equivalent of ``fetch_entity_category``: registry ``categories[scope]``."""
+    reg = _reg_entity(view, entity_id) if entity_id else None
+    categories = getattr(reg, "categories", None) if reg is not None else None
+    if isinstance(categories, Mapping):
+        cat = categories.get(scope)
+        return str(cat) if cat is not None else None
+    return None
+
+
+# =============================================================================
+# ha_mcp_tools/helpers_list
+# =============================================================================
+def _do_helpers_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """List collection helpers (live state bodies) + flow helpers (config-entry options).
+
+    Flow-helper ``options`` come straight from ``ConfigEntry.options`` — no
+    OptionsFlow start/abort dance, and NEVER ``entry.data`` (integration
+    credentials). Every record carries the CURRENT entity_id + display name from
+    the entity registry so a renamed helper shows current values (issue #1794),
+    not the stale storage-collection name. No secret scrub: collection bodies are
+    live state attributes and flow options are storage-backed — neither is
+    YAML-derived, so no resolved ``!secret`` plaintext can appear.
+
+    ``covered_types`` names exactly the helper_type values this command can
+    enumerate (the state-machine collection domains + the flow domains, minus the
+    flow set when ``include_flow_helpers`` is false). It is the anti-silent-wrong
+    signal: for a requested helper_type NOT in ``covered_types`` (e.g. ``tag``,
+    which has no state entity), an empty ``helpers`` list means "cannot
+    enumerate", NOT "none exist" — the server must fall back to its legacy
+    ``<type>/list`` path rather than trust the emptiness.
+    """
+    requested = params.get("helper_types")
+    type_filter = frozenset(requested) if requested else None
+    include_flow = params.get("include_flow_helpers", True)
+
+    view = _resolve_registries(hass)
+    helpers = _collection_helpers_list(hass, view, type_filter)
+    covered = set(HELPERS_LIST_COLLECTION_DOMAINS)
+    if include_flow:
+        helpers.extend(_flow_helpers_list(hass, view, type_filter))
+        covered |= FLOW_HELPER_DOMAINS
+    return {
+        "helpers": helpers,
+        "count": len(helpers),
+        "covered_types": sorted(covered),
+    }
+
+
+def _collection_helpers_list(
+    hass: HomeAssistant, view: _RegistryView, type_filter: frozenset[str] | None
+) -> list[dict[str, Any]]:
+    """Collection helpers from the state machine (input_*, counter, timer, zone, …)."""
+    out: list[dict[str, Any]] = []
+    for state in _iter_states(hass):
+        entity_id = getattr(state, "entity_id", "") or ""
+        domain = entity_id.split(".")[0] if "." in entity_id else ""
+        if domain not in HELPERS_LIST_COLLECTION_DOMAINS:
+            continue
+        if type_filter is not None and domain not in type_filter:
+            continue
+        attrs = getattr(state, "attributes", None) or {}
+        body = dict(attrs) if isinstance(attrs, Mapping) else {}
+        object_id = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
+        reg = _reg_entity(view, entity_id)
+        # Current display name: state friendly_name reflects a registry rename;
+        # fall back to the registry name, then the object_id.
+        current = attrs.get("friendly_name") if isinstance(attrs, Mapping) else None
+        name = current or _reg_name(reg) or object_id
+        storage_id = getattr(reg, "unique_id", None) or object_id
+        out.append(
+            {
+                "helper_type": domain,
+                "kind": "collection",
+                "entity_id": entity_id,
+                "object_id": object_id,
+                "name": str(name),
+                "storage_id": storage_id,
+                "config": _plainify(body),
+            }
+        )
+    return out
+
+
+def _flow_helpers_list(
+    hass: HomeAssistant, view: _RegistryView, type_filter: frozenset[str] | None
+) -> list[dict[str, Any]]:
+    """Flow (config-entry-backed) helpers — options + title + entry_id, never data."""
+    out: list[dict[str, Any]] = []
+    entity_by_entry = _entities_by_config_entry(view)
+    for entry in _iter_config_entries(hass):
+        domain = getattr(entry, "domain", None)
+        if domain not in FLOW_HELPER_DOMAINS:
+            continue
+        if type_filter is not None and domain not in type_filter:
+            continue
+        entry_id = getattr(entry, "entry_id", None)
+        title = getattr(entry, "title", None) or ""
+        raw_options = getattr(entry, "options", None)
+        options = (
+            _plainify(dict(raw_options)) if isinstance(raw_options, Mapping) else {}
+        )
+        reg = entity_by_entry.get(entry_id)
+        entity_id = getattr(reg, "entity_id", None) if reg is not None else None
+        name = _reg_name(reg) or _current_friendly_name(hass, entity_id, title)
+        out.append(
+            {
+                "helper_type": domain,
+                "kind": "flow",
+                "entry_id": entry_id,
+                "entity_id": entity_id,
+                "name": str(name) if name else title,
+                "storage_id": entry_id,
+                # Data minimization: options only, never entry.data.
+                "options": options,
+            }
+        )
+    return out
+
+
+def _entities_by_config_entry(view: _RegistryView) -> dict[Any, Any]:
+    """Index the first registry entity bound to each config entry (flow helpers)."""
+    index: dict[Any, Any] = {}
+    for entry in _all_entity_entries(view):
+        config_entry_id = getattr(entry, "config_entry_id", None)
+        if config_entry_id and config_entry_id not in index:
+            index[config_entry_id] = entry
+    return index
+
+
+def _all_entity_entries(view: _RegistryView) -> list[Any]:
+    """All entity-registry entries (``registry.entities`` is a mapping in HA)."""
+    reg = view.entity
+    entities = getattr(reg, "entities", None) if reg is not None else None
+    if entities is None:
+        return []
+    try:
+        return list(entities.values())
+    except Exception:  # pragma: no cover - defensive
+        return []
+
+
+# =============================================================================
+# ha_mcp_tools/overview
+# =============================================================================
+def _do_overview(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return the raw in-process reads the server's overview path consumes.
+
+    NOT the assembled overview envelope — the RAW slices the server's
+    ``get_system_overview`` + ``ha_get_overview`` wrapper fetch today (states,
+    services, entity/device/area registries, ``hass.config``, persistent
+    notifications, repairs issues). The server runs its existing overview logic
+    over these, so detail_level / domains / pagination stay server-side and no
+    logic is duplicated (or drifts) in the component. Registries are BARE lists
+    (not the ``{success, result}`` WS wrapper); the server adapts. Collapses the
+    ~8 round-trips to one in-process call.
+    """
+    include_notifications = params.get("include_notifications", True)
+    include_repairs = params.get("include_repairs", True)
+
+    view = _resolve_registries(hass)
+    result: dict[str, Any] = {
+        "states": _overview_states(hass),
+        "services": _overview_services(hass),
+        "entity_registry": _overview_entity_registry(view),
+        "device_registry": _overview_device_registry(view),
+        "area_registry": _overview_area_registry(view),
+        "config": _overview_config(hass),
+        "notifications": _overview_notifications(hass) if include_notifications else [],
+        "repairs": _overview_repairs(hass) if include_repairs else [],
+    }
+    return result
+
+
+def _overview_states(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """States in the ``client.get_states()`` shape the overview consumer reads."""
+    out: list[dict[str, Any]] = []
+    for state in _iter_states(hass):
+        entity_id = getattr(state, "entity_id", None)
+        if not entity_id:
+            continue
+        attrs = getattr(state, "attributes", None) or {}
+        out.append(
+            {
+                "entity_id": entity_id,
+                "state": getattr(state, "state", "unknown"),
+                "attributes": _plainify(dict(attrs))
+                if isinstance(attrs, Mapping)
+                else {},
+                "last_changed": _iso(getattr(state, "last_changed", None)),
+                "last_updated": _iso(getattr(state, "last_updated", None)),
+            }
+        )
+    return out
+
+
+def _overview_services(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Service catalog in the ``client.get_services()`` list shape.
+
+    The consumer's ``_build_service_stats`` reads only the per-domain service
+    *names*, so each service maps to an empty dict — keeps the frame small while
+    preserving the ``{domain, services: {name: {...}}}`` structure.
+    """
+    services = _call_no_arg(getattr(hass, "services", None), "async_services")
+    if not isinstance(services, Mapping):
+        return []
+    out: list[dict[str, Any]] = []
+    for domain, svcs in services.items():
+        names = list(svcs.keys()) if isinstance(svcs, Mapping) else []
+        out.append({"domain": domain, "services": {name: {} for name in names}})
+    return out
+
+
+def _overview_entity_registry(view: _RegistryView) -> list[dict[str, Any]]:
+    """Entity registry as a bare list, with the fields the overview + visibility
+    consumers read (area/device/labels/entity_category/hidden_by/options/…)."""
+    out: list[dict[str, Any]] = []
+    for entry in _all_entity_entries(view):
+        entity_id = getattr(entry, "entity_id", None)
+        if not entity_id:
+            continue
+        out.append(
+            {
+                "entity_id": entity_id,
+                "area_id": getattr(entry, "area_id", None),
+                "device_id": getattr(entry, "device_id", None),
+                "labels": sorted(
+                    str(x) for x in (getattr(entry, "labels", None) or [])
+                ),
+                "entity_category": _enum_value(getattr(entry, "entity_category", None)),
+                "hidden_by": _enum_value(getattr(entry, "hidden_by", None)),
+                "categories": _plainify(getattr(entry, "categories", None) or {}),
+                "options": _plainify(getattr(entry, "options", None) or {}),
+                "name": getattr(entry, "name", None),
+                "original_name": getattr(entry, "original_name", None),
+                "platform": getattr(entry, "platform", None),
+                "unique_id": getattr(entry, "unique_id", None),
+                "disabled_by": _enum_value(getattr(entry, "disabled_by", None)),
+            }
+        )
+    return out
+
+
+def _overview_device_registry(view: _RegistryView) -> list[dict[str, Any]]:
+    """Device registry as a bare list (id + area + labels + name/manufacturer/model)."""
+    out: list[dict[str, Any]] = []
+    reg = view.device
+    devices = getattr(reg, "devices", None) if reg is not None else None
+    values = _mapping_values(devices)
+    for dev in values:
+        dev_id = getattr(dev, "id", None)
+        if not dev_id:
+            continue
+        out.append(
+            {
+                "id": dev_id,
+                "area_id": getattr(dev, "area_id", None),
+                "labels": sorted(str(x) for x in (getattr(dev, "labels", None) or [])),
+                "name": getattr(dev, "name", None),
+                "name_by_user": getattr(dev, "name_by_user", None),
+                "manufacturer": getattr(dev, "manufacturer", None),
+                "model": getattr(dev, "model", None),
+            }
+        )
+    return out
+
+
+def _overview_area_registry(view: _RegistryView) -> list[dict[str, Any]]:
+    """Area registry as a bare list (area_id + name + floor_id)."""
+    out: list[dict[str, Any]] = []
+    for area in _all_area_entries(view):
+        area_id = getattr(area, "id", None) or getattr(area, "area_id", None)
+        if not area_id:
+            continue
+        out.append(
+            {
+                "area_id": area_id,
+                "name": getattr(area, "name", None),
+                "floor_id": getattr(area, "floor_id", None),
+            }
+        )
+    return out
+
+
+def _all_area_entries(view: _RegistryView) -> list[Any]:
+    """All area-registry entries via ``async_list_areas()`` or the ``areas`` mapping."""
+    reg = view.area
+    if reg is None:
+        return []
+    listed = _call_no_arg(reg, "async_list_areas")
+    if listed is not None:
+        try:
+            return list(listed)
+        except Exception:  # pragma: no cover - defensive
+            return []
+    return _mapping_values(getattr(reg, "areas", None))
+
+
+def _mapping_values(mapping: Any) -> list[Any]:
+    """``list(mapping.values())`` guarded against a non-mapping / drift."""
+    if mapping is None:
+        return []
+    try:
+        return list(mapping.values())
+    except Exception:  # pragma: no cover - defensive
+        return []
+
+
+def _overview_config(hass: HomeAssistant) -> dict[str, Any]:
+    """The ``hass.config`` fields the wrapper's ``_fetch_system_info`` reads.
+
+    ``base_url`` is intentionally omitted — the server supplies it from its own
+    client; only HA-core config values are the component's to provide.
+    """
+    config = getattr(hass, "config", None)
+    raw = _call_no_arg(config, "as_dict")
+    if not isinstance(raw, Mapping):
+        return {}
+    keys = (
+        "version",
+        "location_name",
+        "time_zone",
+        "language",
+        "state",
+        "country",
+        "currency",
+        "unit_system",
+        "latitude",
+        "longitude",
+        "elevation",
+        "components",
+        "safe_mode",
+        "internal_url",
+        "external_url",
+        "allowlist_external_dirs",
+    )
+    return {k: _plainify(raw[k]) for k in keys if k in raw}
+
+
+def _overview_notifications(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Active persistent notifications (``persistent_notification/get`` shape)."""
+    store = getattr(hass, "data", None)
+    data = store.get("persistent_notification") if isinstance(store, Mapping) else None
+    return [
+        {
+            "notification_id": _field(note, "notification_id"),
+            "title": _field(note, "title"),
+            "message": _field(note, "message"),
+            "created_at": _iso(_field(note, "created_at")),
+        }
+        for note in _notification_values(data)
+    ]
+
+
+def _field(obj: Any, key: str) -> Any:
+    """Read ``key`` from a mapping (``.get``) or an object (``getattr``)."""
+    if isinstance(obj, Mapping):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _notification_values(data: Any) -> list[Any]:
+    """Notification records: ``{id: note}`` mapping values, or a bare list."""
+    if isinstance(data, Mapping):
+        return list(data.values())
+    if isinstance(data, list):
+        return list(data)
+    return []
+
+
+def _overview_repairs(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Raw issue-registry entries (the server filters/projects them itself).
+
+    ``ignored`` is derived from ``dismissed_version`` so the server's
+    ``filter_active_repairs`` (which keys off ``ignored``) works unchanged.
+    """
+    registry = _safe(ir.async_get, hass)
+    issues = getattr(registry, "issues", None) if registry is not None else None
+    out: list[dict[str, Any]] = []
+    for issue in _mapping_values(issues):
+        dismissed = getattr(issue, "dismissed_version", None)
+        out.append(
+            {
+                "issue_id": getattr(issue, "issue_id", None),
+                "domain": getattr(issue, "domain", None),
+                "severity": _enum_value(getattr(issue, "severity", None)),
+                "translation_key": getattr(issue, "translation_key", None),
+                "translation_placeholders": _plainify(
+                    getattr(issue, "translation_placeholders", None) or {}
+                ),
+                "ignored": dismissed is not None,
+                "dismissed_version": dismissed,
+                "is_fixable": getattr(issue, "is_fixable", None),
+                "breaks_in_ha_version": getattr(issue, "breaks_in_ha_version", None),
+                "created": _iso(getattr(issue, "created", None)),
+                "issue_domain": getattr(issue, "issue_domain", None),
+                "learn_more_url": getattr(issue, "learn_more_url", None),
+                "active": getattr(issue, "active", None),
+            }
+        )
+    return out
