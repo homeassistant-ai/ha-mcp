@@ -1502,11 +1502,21 @@ def build_settings_handlers(
         }
 
         config = load_tool_config()
+
         # The enable/disable/pin half still needs a restart to apply
         # (visibility is wired at server build); the LLM-API exposure half
         # applies live (stamped per tools/list). Only demand a restart when
-        # the half that needs one actually changed.
-        states_changed = config.get("tools", {}) != states
+        # the half that needs one actually changed. Compare with the SAME
+        # default-pinned padding _get_tools applies to its response — the JS
+        # posts that padded map back verbatim, so an unpadded compare would
+        # flag every first save as a states change (live-found on #1745).
+        def _padded(tool_states: dict[str, str]) -> dict[str, str]:
+            padded = dict(tool_states)
+            for name in DEFAULT_PINNED_TOOLS:
+                padded.setdefault(name, "pinned")
+            return padded
+
+        states_changed = _padded(config.get("tools", {})) != _padded(states)
         config["tools"] = states
         config[LLM_API_CONFIG_KEY] = llm_api_overrides
         if not save_tool_config(config):

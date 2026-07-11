@@ -2450,6 +2450,79 @@ class TestEnvPinnedTools:
         _reset_global_settings()
 
     @pytest.mark.asyncio
+    async def test_save_tools_llm_api_only_change_needs_no_restart(
+        self, monkeypatch, tmp_path
+    ):
+        """An LLM-API-exposure-only save applies live: restart_required is
+        False even when the JS echoes back the GET response's default-pinned-
+        PADDED states map (live-found on #1745 — an unpadded compare flagged
+        every first save as a states change), and the override persists."""
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.delenv("DISABLED_TOOLS", raising=False)
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        (tmp_path / "tool_config.json").write_text(
+            json.dumps({"tools": {"ha_other": "disabled"}})
+        )
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+
+        get_resp = await handlers["get_tools"](MagicMock())
+        echoed_states = json.loads(get_resp.body)["states"]
+
+        request = MagicMock()
+        request.json = AsyncMock(
+            return_value={
+                "states": echoed_states,
+                "llm_api": {"ha_manage_pipeline": False, "ha_bad": "nope"},
+            }
+        )
+        resp = await handlers["save_tools"](request)
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        assert body["restart_required"] is False
+        # Only bool overrides persist.
+        assert body["llm_api_applied"] == {"ha_manage_pipeline": False}
+        saved = json.loads((tmp_path / "tool_config.json").read_text())
+        assert saved["llm_api"] == {"ha_manage_pipeline": False}
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_tools_states_change_still_needs_restart(
+        self, monkeypatch, tmp_path
+    ):
+        """A genuine enable/disable/pin change keeps restart_required True."""
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.delenv("DISABLED_TOOLS", raising=False)
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        request = MagicMock()
+        request.json = AsyncMock(
+            return_value={"states": {"ha_other": "disabled"}, "llm_api": {}}
+        )
+        resp = await handlers["save_tools"](request)
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        assert body["restart_required"] is True
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
     async def test_get_tools_includes_env_pinned_map(self, monkeypatch):
         """GET /api/settings/tools advertises env_pinned status so UI can
         render locked rows in Chunk 5b."""
