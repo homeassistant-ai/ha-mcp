@@ -131,10 +131,17 @@ class TestConfigEntryFlow:
                     "config": {
                         "state": "{{ 1 }}",
                         "availability": availability,
+                        "availabilty": "{{ false }}",
                     },
                 },
             )
-            assert_mcp_success(update_result, "Update template sensor availability")
+            update_data = assert_mcp_success(
+                update_result, "Update template sensor availability"
+            )
+            assert update_data.get("warnings") == [
+                "Ignored config keys not declared by the Home Assistant flow "
+                "schema: availabilty"
+            ]
 
             integration_result = await mcp_client.call_tool(
                 "ha_get_integration",

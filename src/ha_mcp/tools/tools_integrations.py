@@ -113,8 +113,8 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     ``default``). A field can carry both ``suggested_value`` and
     ``default`` at once — e.g. a group helper's ``hide_members`` stored as
     ``True`` over a schema default of ``False`` — and the stored value
-    must win (issue #1575). Fields with a missing or ``None`` value are
-    skipped.
+    must win (issue #1575). Nested section fields are flattened into the
+    returned top-level map. Fields with a missing or ``None`` value are skipped.
     """
     out: dict[str, Any] = {}
     # Defensive: HA should always return a list of dict fields, but guard

@@ -1294,6 +1294,30 @@ class TestOptionsFromFormFlow:
             "availability": "{{ has_value('sensor.x') }}",
         }
 
+    def test_reads_values_from_depth_two_sections(self) -> None:
+        flow = {
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "advanced_options",
+                    "schema": [
+                        {
+                            "type": "expandable",
+                            "name": "timing",
+                            "schema": [
+                                {
+                                    "name": "delay",
+                                    "description": {"suggested_value": 30},
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ]
+        }
+
+        assert options_from_form_flow(flow) == {"delay": 30}
+
     def test_suggested_value_wins_over_default(self) -> None:
         # Issue #1575: a field can carry the static schema default AND the
         # entry's current value at the same time. HA injects the persisted

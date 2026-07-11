@@ -148,6 +148,132 @@ class TestHandleFormStepFiltering:
         }
         assert remaining == {}
 
+    def test_omits_section_when_only_top_level_field_is_updated(self) -> None:
+        remaining = {"state": "{{ 2 }}"}
+        step = {
+            "type": "form",
+            "step_id": "sensor",
+            "data_schema": [
+                {"name": "state", "required": True},
+                {
+                    "type": "expandable",
+                    "name": "advanced_options",
+                    "schema": [{"name": "availability", "required": False}],
+                },
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {"state": "{{ 2 }}"}
+        assert remaining == {}
+
+    def test_flat_section_field_overrides_explicit_section_value(self) -> None:
+        remaining = {
+            "availability": "{{ true }}",
+            "advanced_options": {"availability": "{{ false }}"},
+        }
+        step = {
+            "type": "form",
+            "step_id": "sensor",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "advanced_options",
+                    "schema": [{"name": "availability", "required": False}],
+                },
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {
+            "advanced_options": {"availability": "{{ true }}"},
+        }
+        assert remaining == {}
+
+    def test_wraps_depth_two_flat_field_for_submission(self) -> None:
+        remaining = {"delay": 30}
+        step = {
+            "type": "form",
+            "step_id": "nested",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "advanced_options",
+                    "schema": [
+                        {
+                            "type": "expandable",
+                            "name": "timing",
+                            "schema": [{"name": "delay"}],
+                        }
+                    ],
+                },
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {
+            "advanced_options": {
+                "timing": {"delay": 30},
+            },
+        }
+        assert remaining == {}
+
+    def test_legacy_fallback_submits_all_non_menu_keys(self) -> None:
+        remaining = {
+            "name": "Legacy",
+            "unknown": "still submitted",
+            "next_step_id": "sensor",
+        }
+        step = {"type": "form", "step_id": "user", "data_schema": None}
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {
+            "name": "Legacy",
+            "unknown": "still submitted",
+        }
+        assert remaining == {"next_step_id": "sensor"}
+
+    def test_passes_through_non_dict_explicit_section_value(self) -> None:
+        remaining = {"advanced_options": "invalid"}
+        step = {
+            "type": "form",
+            "step_id": "sensor",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "advanced_options",
+                    "schema": [{"name": "availability"}],
+                }
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {"advanced_options": "invalid"}
+        assert remaining == {}
+
+    def test_flattens_children_when_section_name_is_missing(self) -> None:
+        remaining = {"availability": "{{ true }}"}
+        step = {
+            "type": "form",
+            "step_id": "sensor",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "schema": [{"name": "availability"}],
+                }
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {"availability": "{{ true }}"}
+        assert remaining == {}
+
     def test_strips_menu_selection_keys(self) -> None:
         remaining = {"group_type": "light", "name": "x"}
         step = {
@@ -239,8 +365,8 @@ class TestMultiStepFlow:
         assert second_call_args[0] == "flow-1"
         assert second_call_args[1] == {"state_characteristic": "mean"}
 
-    async def test_extra_unknown_keys_are_dropped(self) -> None:
-        """Keys never declared by any step are silently dropped (HA will ignore)."""
+    async def test_extra_unknown_keys_are_reported_as_warnings(self) -> None:
+        """Keys never declared by any step are omitted and reported."""
         final_entry = {
             "type": "create_entry",
             "result": {"entry_id": "e1", "title": "t", "domain": "min_max"},
@@ -264,7 +390,7 @@ class TestMultiStepFlow:
             "junk": "ignored",
         }
 
-        await _handle_flow_steps(
+        result = await _handle_flow_steps(
             client=None,
             flow_id="flow-2",
             initial_step=initial_step,
@@ -279,6 +405,45 @@ class TestMultiStepFlow:
             "entity_ids": ["sensor.a"],
             "type": "mean",
         }
+        assert result["warnings"] == [
+            "Ignored config keys not declared by the Home Assistant flow schema: junk"
+        ]
+
+    async def test_unknown_explicit_section_keys_are_reported_with_path(self) -> None:
+        final_entry = {
+            "type": "create_entry",
+            "result": {"entry_id": "e1", "title": "t", "domain": "template"},
+        }
+        submit_fn = AsyncMock(side_effect=[final_entry])
+        initial_step = {
+            "type": "form",
+            "flow_id": "flow-3",
+            "step_id": "sensor",
+            "data_schema": [
+                {"name": "state"},
+                {
+                    "type": "expandable",
+                    "name": "advanced_options",
+                    "schema": [{"name": "availability"}],
+                },
+            ],
+        }
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-3",
+            initial_step=initial_step,
+            config={
+                "state": "{{ 1 }}",
+                "advanced_options": {"availabilty": "{{ true }}"},
+            },
+            submit_fn=submit_fn,
+        )
+
+        assert result["warnings"] == [
+            "Ignored config keys not declared by the Home Assistant flow schema: "
+            "advanced_options.availabilty"
+        ]
 
 
 class TestSubmitStep:
