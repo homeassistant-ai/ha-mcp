@@ -15,8 +15,10 @@ from pydantic import Field
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
+from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
@@ -31,6 +33,12 @@ from .best_practice_checker import (
 )
 from .best_practice_checker import (
     check_script_config as _check_best_practices,
+)
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
 )
 from .helpers import (
     exception_to_structured_error,
@@ -54,6 +62,21 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _send_component_config_get(
+    client: Any, domain: str, item_id: str
+) -> dict[str, Any]:
+    """Send one ``ha_mcp_tools/config_get`` command over the per-client WebSocket.
+
+    Returns the raw ``{success, result}`` envelope; the caller shapes
+    ``result`` onto the legacy response. Raises ``HomeAssistantCommandError``
+    on a ``success:False`` reply (routed by the caller's error taxonomy).
+    """
+    ws = await get_websocket_client(url=client.base_url, token=client.token)
+    return await ws.send_command(
+        "ha_mcp_tools/config_get", domain=domain, item_id=item_id
+    )
 
 
 # Scripts share the automation skill mapping — both use
@@ -155,41 +178,20 @@ class ConfigScriptTools:
                     "Use ha_search(domain_filter='script') to list scripts",
                 ],
             )
-            config_result = await self._fetch_script_config_envelope(script_id)
-            # Extract actual script config body and compute hash before category injection
-            actual_config = config_result.get("config", config_result)
-            config_hash_value = compute_config_hash(actual_config)
 
-            # Fetch category from entity registry (best-effort)
-            # (injected after hash so transient registry failures don't affect the hash)
-            entity_id = f"script.{script_id}"
-            cat_id = await fetch_entity_category(self._client, entity_id, "script")
-            if cat_id:
-                config_result["category"] = cat_id
+            # Prefer the custom component's in-process config_get when it
+            # advertises the capability: one WS round-trip returns the config
+            # body + storage key + category, replacing the legacy 3-4 (id
+            # resolution WS + per-id config REST + fetch_entity_category WS).
+            # Falls back cleanly when the component is absent, downlevel, or
+            # errors — taxonomy lives in ``_get_script_via_component``.
+            caps = await get_component_caps(self._client)
+            if component_supports(caps, "config_get"):
+                routed = await self._get_script_via_component(script_id)
+                if routed is not None:
+                    return routed
 
-            # Issue #1334: return the canonical storage key from the
-            # rest_client envelope so callers can thread the result into
-            # subsequent ha_config_*_script calls without re-resolving.
-            # Falls back to the input when the rest_client response omits
-            # the key — a contract violation that we surface via warning
-            # rather than mask silently.
-            canonical_id = config_result.get("script_id")
-            if canonical_id is None:
-                logger.warning(
-                    "get_script_config envelope missing 'script_id' for "
-                    "input %r; falling back to caller input. This indicates "
-                    "a rest_client contract violation.",
-                    script_id,
-                )
-                canonical_id = script_id
-
-            return {
-                "success": True,
-                "action": "get",
-                "script_id": canonical_id,
-                "config": config_result,
-                "config_hash": config_hash_value,
-            }
+            return await self._legacy_get_script(script_id)
         except ToolError:
             raise
         except Exception as e:
@@ -203,6 +205,113 @@ class ConfigScriptTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+
+    async def _legacy_get_script(self, script_id: str) -> dict[str, Any]:
+        """Assemble the script-get response from the REST/WS pipeline.
+
+        The multi-fetch fallback: id-resolution WS + per-id config REST +
+        ``fetch_entity_category`` WS call. Behaviourally unchanged from the
+        pre-component implementation — the component path
+        (``_get_script_via_component``) reproduces this exact envelope
+        (including the REST-wrapper ``config``) from a single WS call.
+        """
+        config_result = await self._fetch_script_config_envelope(script_id)
+        # Extract actual script config body and compute hash before category injection
+        actual_config = config_result.get("config", config_result)
+        config_hash_value = compute_config_hash(actual_config)
+
+        # Fetch category from entity registry (best-effort)
+        # (injected after hash so transient registry failures don't affect the hash)
+        entity_id = f"script.{script_id}"
+        cat_id = await fetch_entity_category(self._client, entity_id, "script")
+        if cat_id:
+            config_result["category"] = cat_id
+
+        # Issue #1334: return the canonical storage key from the
+        # rest_client envelope so callers can thread the result into
+        # subsequent ha_config_*_script calls without re-resolving.
+        # Falls back to the input when the rest_client response omits
+        # the key — a contract violation that we surface via warning
+        # rather than mask silently.
+        canonical_id = config_result.get("script_id")
+        if canonical_id is None:
+            logger.warning(
+                "get_script_config envelope missing 'script_id' for "
+                "input %r; falling back to caller input. This indicates "
+                "a rest_client contract violation.",
+                script_id,
+            )
+            canonical_id = script_id
+
+        return {
+            "success": True,
+            "action": "get",
+            "script_id": canonical_id,
+            "config": config_result,
+            "config_hash": config_hash_value,
+        }
+
+    async def _get_script_via_component(self, script_id: str) -> dict[str, Any] | None:
+        """Serve ha_config_get_script from the component; ``None`` ⇒ legacy.
+
+        Error taxonomy mirrors ``tools_search._ha_search_via_component``:
+        ``unknown_command`` → invalidate caps + silent legacy fallback; any
+        other ``HomeAssistantCommandError`` → legacy + ``warnings[]`` +
+        ``log.warning``; connection errors propagate.
+
+        A ``found:false`` result (id resolves to nothing, or to a YAML-defined
+        item the component won't serve) raises the same ``RESOURCE_NOT_FOUND``
+        the legacy REST 404 path raises, via ``_raise_script_not_found``.
+        """
+        try:
+            raw = await _send_component_config_get(self._client, "script", script_id)
+        except HomeAssistantCommandError as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+                return None
+            legacy = await self._legacy_get_script(script_id)
+            legacy.setdefault("warnings", []).append(
+                f"component config_get path failed ({exc}); served via legacy path"
+            )
+            logger.warning(
+                "ha_mcp_tools/config_get failed; fell back to legacy: %r", exc
+            )
+            return legacy
+
+        result = raw.get("result") or {}
+        if not result.get("found"):
+            await self._raise_script_not_found(script_id)  # raises ToolError
+        config = result.get("config")
+        if not isinstance(config, dict):
+            # Malformed success payload — defer to legacy rather than trust it.
+            return None
+
+        config_hash_value = compute_config_hash(config)
+        entity_id = result.get("entity_id")
+        # The component's item_id/id is the storage key (unique_id), which
+        # survives an entity_id rename — prefer it over deriving from entity_id.
+        storage_key = result.get("item_id") or result.get("id")
+        if not storage_key:
+            storage_key = entity_id.removeprefix("script.") if entity_id else script_id
+
+        # Rebuild the REST-wrapper shape the legacy path returns under ``config``
+        # ({success, script_id, config[, category]}) for byte-parity.
+        config_result: dict[str, Any] = {
+            "success": True,
+            "script_id": storage_key,
+            "config": config,
+        }
+        category = result.get("category")
+        if category:
+            config_result["category"] = str(category)
+
+        return {
+            "success": True,
+            "action": "get",
+            "script_id": storage_key,
+            "config": config_result,
+            "config_hash": config_hash_value,
+        }
 
     async def _list_script_entity_ids(self) -> list[str]:
         """Best-effort list of bare script IDs (up to 10) from the entity registry.

@@ -15,8 +15,10 @@ from pydantic import Field
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
+from ..client.websocket_client import get_websocket_client
 from ..errors import (
     ErrorCode,
     create_config_error,
@@ -36,6 +38,12 @@ from .best_practice_checker import (
 )
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
+)
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
 )
 from .helpers import (
     exception_to_structured_error,
@@ -60,6 +68,21 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _send_component_config_get(
+    client: Any, domain: str, item_id: str
+) -> dict[str, Any]:
+    """Send one ``ha_mcp_tools/config_get`` command over the per-client WebSocket.
+
+    Returns the raw ``{success, result}`` envelope; the caller shapes
+    ``result`` onto the legacy response. Raises ``HomeAssistantCommandError``
+    on a ``success:False`` reply (routed by the caller's error taxonomy).
+    """
+    ws = await get_websocket_client(url=client.base_url, token=client.token)
+    return await ws.send_command(
+        "ha_mcp_tools/config_get", domain=domain, item_id=item_id
+    )
 
 
 # Skill files attached to ha_config_set_automation responses when
@@ -387,27 +410,20 @@ class AutomationConfigTools:
                     "Use ha_search(domain_filter='automation') to list automations",
                 ],
             )
-            normalized_config, config_hash = await self._get_automation_config_internal(
-                identifier
-            )
 
-            # Resolve entity_id and fetch category from entity registry
-            # (injected after hash so transient registry failures don't affect the hash)
-            entity_id = await self._resolve_automation_entity_id(identifier)
-            if entity_id:
-                cat_id = await fetch_entity_category(
-                    self._client, entity_id, "automation"
-                )
-                if cat_id:
-                    normalized_config["category"] = cat_id
+            # Prefer the custom component's in-process config_get when it
+            # advertises the capability: one WS round-trip returns the config
+            # body + current entity_id + category, replacing the legacy 3-4
+            # (id resolution + per-id config REST + fetch_entity_category WS).
+            # Falls back cleanly when the component is absent, downlevel, or
+            # errors — taxonomy lives in ``_get_automation_via_component``.
+            caps = await get_component_caps(self._client)
+            if component_supports(caps, "config_get"):
+                routed = await self._get_automation_via_component(identifier)
+                if routed is not None:
+                    return routed
 
-            return {
-                "success": True,
-                "action": "get",
-                "automation_id": entity_id or identifier,
-                "config": normalized_config,
-                "config_hash": config_hash,
-            }
+            return await self._legacy_get_automation(identifier)
         except ToolError:
             raise
         except Exception as e:
@@ -421,6 +437,95 @@ class AutomationConfigTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+
+    async def _legacy_get_automation(self, identifier: str) -> dict[str, Any]:
+        """Assemble the automation-get response from the REST/WS pipeline.
+
+        The multi-fetch fallback: per-id config REST + state-lookup entity_id
+        resolution + ``fetch_entity_category`` WS call. Behaviourally
+        unchanged from the pre-component implementation — the component path
+        (``_get_automation_via_component``) reproduces this exact envelope
+        from a single WS call.
+        """
+        normalized_config, config_hash = await self._get_automation_config_internal(
+            identifier
+        )
+
+        # Resolve entity_id and fetch category from entity registry
+        # (injected after hash so transient registry failures don't affect the hash)
+        entity_id = await self._resolve_automation_entity_id(identifier)
+        if entity_id:
+            cat_id = await fetch_entity_category(self._client, entity_id, "automation")
+            if cat_id:
+                normalized_config["category"] = cat_id
+
+        return {
+            "success": True,
+            "action": "get",
+            "automation_id": entity_id or identifier,
+            "config": normalized_config,
+            "config_hash": config_hash,
+        }
+
+    async def _get_automation_via_component(
+        self, identifier: str
+    ) -> dict[str, Any] | None:
+        """Serve ha_config_get_automation from the component; ``None`` ⇒ legacy.
+
+        Error taxonomy mirrors ``tools_search._ha_search_via_component``:
+
+        - ``unknown_command`` (component downgraded mid-session, stale caps):
+          invalidate caps and return ``None`` for a silent legacy fallback.
+        - any other ``HomeAssistantCommandError`` (component handler bug):
+          serve the correct result from the legacy path, append a
+          ``warnings[]`` entry, and ``log.warning``.
+        - ``HomeAssistantConnectionError`` (WS down): not caught, so it
+          propagates; the legacy path shares the socket and would fail alike.
+
+        A ``found:false`` result (the id resolves to nothing, or resolves to a
+        YAML-defined item the component won't serve) raises the same
+        ``RESOURCE_NOT_FOUND`` the legacy REST 404 path raises, via
+        ``_raise_automation_not_found``.
+        """
+        try:
+            raw = await _send_component_config_get(
+                self._client, "automation", identifier
+            )
+        except HomeAssistantCommandError as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+                return None
+            legacy = await self._legacy_get_automation(identifier)
+            legacy.setdefault("warnings", []).append(
+                f"component config_get path failed ({exc}); served via legacy path"
+            )
+            logger.warning(
+                "ha_mcp_tools/config_get failed; fell back to legacy: %r", exc
+            )
+            return legacy
+
+        result = raw.get("result") or {}
+        if not result.get("found"):
+            await self._raise_automation_not_found(identifier)  # raises ToolError
+        config = result.get("config")
+        if not isinstance(config, dict):
+            # Malformed success payload — defer to legacy rather than trust it.
+            return None
+
+        normalized_config = _normalize_config_for_roundtrip(config)
+        config_hash = compute_config_hash(normalized_config)
+        entity_id = result.get("entity_id")
+        category = result.get("category")
+        if category:
+            normalized_config["category"] = str(category)
+
+        return {
+            "success": True,
+            "action": "get",
+            "automation_id": entity_id or identifier,
+            "config": normalized_config,
+            "config_hash": config_hash,
+        }
 
     @tool(
         name="ha_config_set_automation",
