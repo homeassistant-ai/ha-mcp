@@ -583,6 +583,7 @@ dev = [
     { name = "ruff" },
     { name = "testcontainers" },
     { name = "voluptuous" },
+    { name = "voluptuous-openapi" },
 ]
 
 [package.metadata]
@@ -620,6 +621,7 @@ dev = [
     { name = "ruff", specifier = ">=0.12.12" },
     { name = "testcontainers", specifier = ">=4.13.0" },
     { name = "voluptuous", specifier = ">=0.15.2" },
+    { name = "voluptuous-openapi", specifier = ">=0.4.1" },
 ]
 
 [[package]]
@@ -1821,6 +1823,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/92/f4/0738e6849858deae22218be3bbb8207ba83a96e9d0ec7e8e8cd67b30e5ca/voluptuous-0.16.0.tar.gz", hash = "sha256:006535e22fed944aec17bef6e8725472476194743c87bd233e912eb463f8ff05", size = 54238, upload-time = "2025-12-18T23:18:46.08Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d1/00/0e0da784245c93cf346150ab67634177bf277f93b7a162bb56c928c39c04/voluptuous-0.16.0-py3-none-any.whl", hash = "sha256:ee342095263e1b5afbd4d418cb5adc92810eebfd07696bb033a261210df33db4", size = 31931, upload-time = "2025-12-18T23:18:44.694Z" },
+]
+
+[[package]]
+name = "voluptuous-openapi"
+version = "0.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "voluptuous" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/60/a5/517c143607fd82cfc8842fcdccf5cf2c07cdd96528c936bde196e05dece3/voluptuous_openapi-0.4.1.tar.gz", hash = "sha256:745d0d60940a851d9a90c87eebf659c57072c9ef305c0f6f04f4fd7c063dc0ac", size = 21432, upload-time = "2026-06-26T13:31:35.924Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bc/bb/64db054ad3852e3b63841a570942d3ce29e6b44979d5ac4be806973a2338/voluptuous_openapi-0.4.1-py3-none-any.whl", hash = "sha256:b30abc527c622cd62dba1269a05099e6b6170678c2838908d347fa85ab0cdb44", size = 12824, upload-time = "2026-06-26T13:31:35.126Z" },
 ]
 
 [[package]]

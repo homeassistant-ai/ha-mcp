@@ -26,6 +26,13 @@ let toolStates = {};
 // Populated from data.env_pinned in loadTools(); read by render() to
 // lock rows and show the env-var name banner.
 let toolEnvPinned = {};
+// Conversation-agent LLM API exposure (#1745). toolLlm mirrors the
+// server-computed EFFECTIVE value per tool (user override, else the
+// deny-by-default for beta/dev/restart tools); toolLlmOverrides holds
+// only the user-set overrides and is what saveConfig persists — tools
+// never flipped keep tracking their defaults across releases.
+let toolLlm = {};
+let toolLlmOverrides = {};
 let saveTimer = null;
 let openGroups = new Set();
 
@@ -160,6 +167,8 @@ async function loadTools() {
   toolData = data.tools || [];
   toolStates = data.states || {};
   toolEnvPinned = data.env_pinned || {};
+  toolLlm = data.llm_api || {};
+  toolLlmOverrides = data.llm_api_overrides || {};
   READ_ONLY_EXEMPT = new Set(data.read_only_exempt || []);
   // Load policy state before the first render so the "security gated"
   // toggle reflects current policy.rules. loadPolicyState() never throws
@@ -741,6 +750,14 @@ function render() {
               `<span class="slider"></span></label>` +
             `<span>security gated</span>` +
           `</div>` +
+          `<div class="toggle-group ${isEnabled ? '' : 'disabled-toggle'}" ` +
+               `title="Offer this tool to Home Assistant conversation agents through the LLM API. Applies on the agent's next message - no restart. A tool disabled above is unavailable to agents regardless.">` +
+            `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:llm" data-tool="${escapeHtml(t.name)}" data-field="llm" ` +
+              `aria-label="${escapeHtml(title)} exposed to the conversation-agent LLM API" ` +
+              `${(toolLlm[t.name] !== false) ? 'checked' : ''} ${isEnabled ? '' : 'disabled'}>` +
+              `<span class="slider"></span></label>` +
+            `<span>LLM API</span>` +
+          `</div>` +
         `</div>`;
 
       const inputs = div.querySelectorAll('input[type="checkbox"]');
@@ -763,6 +780,16 @@ function render() {
               e.target.checked = wasGated;
               alert('Failed to update tool security policy: ' + err.message);
             }
+            render();
+            return;
+          }
+          if (field === 'llm') {
+            // LLM-API exposure lives in its own overrides map (persisted
+            // alongside states by saveConfig); the effective map mirrors it
+            // immediately so the re-render shows the new value.
+            toolLlm[t.name] = e.target.checked;
+            toolLlmOverrides[t.name] = e.target.checked;
+            scheduleSave();
             render();
             return;
           }
@@ -816,7 +843,7 @@ async function saveConfig() {
     resp = await fetch('./api/settings/tools', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({states: toolStates}),
+      body: JSON.stringify({states: toolStates, llm_api: toolLlmOverrides}),
     });
   } catch (e) {
     // Auto-save is fire-and-forget (scheduleSave -> setTimeout); without
@@ -826,8 +853,20 @@ async function saveConfig() {
     return;
   }
   if (resp.ok) {
-    updateStatus('Saved. Restart required.', true);
-    markRestartRequired();
+    // LLM-API-exposure-only saves apply live (stamped per tools/list);
+    // enable/disable/pin changes still need a restart. The server tells
+    // us which happened.
+    let restartRequired = true;
+    try {
+      const saved = await resp.json();
+      restartRequired = saved.restart_required !== false;
+    } catch (e) { /* keep the conservative default */ }
+    if (restartRequired) {
+      updateStatus('Saved. Restart required.', true);
+      markRestartRequired();
+    } else {
+      updateStatus('Saved. LLM API exposure applies on the next agent message.', true);
+    }
   } else {
     // Surface the server's structured error when present (mirrors
     // saveAdvancedSettings / saveFeatureFlag) instead of a generic

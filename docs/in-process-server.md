@@ -91,6 +91,62 @@ the webhook and panel paths. All connect URLs — the webhook forms and, wheneve
 direct access is on, the direct URL — are listed on the entry's Configure
 screen and in the Home Assistant log.
 
+## Chat with the toolset from Home Assistant (conversation agents / voice)
+
+While the server is running, its toolset is also registered as a Home
+Assistant **LLM API** named after the entry. Any conversation agent — OpenAI,
+Google Generative AI, Anthropic, Ollama, or any other integration that
+supports LLM APIs — can select it, with the LLM of your choice, cloud or
+local:
+
+1. Add a conversation-agent integration (for a fully local setup: **Ollama**).
+2. In that agent's settings, under **Control Home Assistant**, select
+   **HA-MCP Server (tool search)** (alongside or instead of the built-in
+   Assist API).
+3. Talk to the agent from the **Assist chat** dialog, the companion apps, or a
+   **voice satellite** whose pipeline uses that agent — "create an automation
+   that turns off the lights when everyone leaves" now runs through the
+   ha-mcp tools.
+
+### Exposure modes
+
+The **Conversation-agent tool exposure** option picks the shape agents get:
+
+- **Tool search** (default): a compact API — the pinned tools directly, plus
+  `ha_search_tools` (find tools for a task) and `ha_call_tool` (run one).
+  Keeps the agent's context small; works with modest local models.
+- **Full catalog**: every exposed tool listed directly with its schema.
+  Better tool selection for large-context models, at ~10× the prompt cost.
+- **Both**: registers the two APIs side by side — each agent picks its own
+  in the selector. One server serves both; nothing runs twice.
+
+### Per-tool exposure
+
+Which tools agents may see is managed per tool from the **HA-MCP settings
+panel** (the new **LLM API** toggle next to enabled/pinned/security-gated).
+It is deny-by-default for **beta** tools, **developer-mode** tools, and the
+**restart / reload / backup** family — a hidden tool is simply invisible to
+agents (absent from the catalog and from search results) while staying fully
+available to your regular MCP clients. Changes apply on the agent's next
+message, no restart. A tool disabled globally is off for everything,
+everywhere; the security gate and Read Only Mode apply to agent calls exactly
+as to any MCP client.
+
+Notes:
+
+- No MCP client, external URL, or token is involved: the agent reaches the
+  server over loopback inside Home Assistant.
+- Home Assistant conversation agents cap tool iterations per turn (around
+  ten), so a very complex build may need a follow-up prompt to continue.
+
+**Security:** the toolset runs with the server's admin access. Selecting it
+on an agent hands that power to everyone who can talk to that agent,
+including anyone within earshot of a voice satellite using it. Keep it off
+pipelines where that is not intended.
+
+To remove the API from every agent's selector entirely, turn off
+**Conversation-agent LLM API** in the entry's [options](#options).
+
 ## Settings panel ("HA-MCP" in the sidebar)
 
 While a server entry is running, the integration adds an **HA-MCP** panel
@@ -126,6 +182,8 @@ Configure there just reports that.)
 | **ha-mcp package (advanced)** | empty (tracks the selected release channel) | The pip requirement installed at runtime. Leave it empty unless you are testing a pre-release — it accepts any pip requirement string, including a version pin or a GitHub tarball URL. An explicit value overrides the release channel and **disables automatic updates** (a pin stays put until you clear it); changing it forces a reinstall on the next reload. |
 | **Home Assistant URL for the server (advanced)** | `http://127.0.0.1:8123` | How the in-process server reaches Home Assistant. The loopback default works for almost everyone; only change it for unusual SSL-only setups. |
 | **Remote access via webhook** | on | Turn off for local-only mode: the webhook is never registered, so Home Assistant (including Nabu Casa) cannot reach the server at all. Direct port access and the sidebar panel keep working. |
+| **Conversation-agent LLM API** | on | Offers the toolset to Home Assistant conversation agents — see [Chat with the toolset](#chat-with-the-toolset-from-home-assistant-conversation-agents--voice). Enabling only makes it selectable per agent; turn off to remove it from every agent's selector. |
+| **Conversation-agent tool exposure** | `tool_search` | Shape of the toolset agents get: compact tool-search API (default), the full catalog, or both side by side (choose per agent). See [Exposure modes](#exposure-modes). |
 | **External URL (optional)** | empty | Shown as the primary connect URL - for your own domain / reverse proxy (e.g. `https://ha.example.com`). Empty = Nabu Casa / local automatically. |
 | **Custom webhook secret (optional)** | empty | Replaces the random webhook secret in `/api/webhook/<secret>`. The URL is the credential - use a long, hard-to-guess value. |
 | **Custom direct-access path (optional)** | empty | Replaces the random `/private_...` path on the server port. Same rule: the path is the credential. |

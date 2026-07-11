@@ -316,6 +316,10 @@ class TestServerOptionsFlow:
             const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
             const.OPT_PIP_SPEC: "ha-mcp==0.0.1",
             const.OPT_SERVER_URL: "https://ha.example:8123",
+            # Saved False (non-default) proves the LLM-API toggle prefills.
+            const.OPT_ENABLE_LLM_API: False,
+            # Saved full (non-default) proves the exposure selector prefills.
+            const.OPT_LLM_API_EXPOSURE: const.EXPOSURE_FULL,
             const.OPT_EXTERNAL_URL: "https://ha.example.com",
             const.OPT_WEBHOOK_ID_OVERRIDE: "my_custom_hook",
             const.OPT_SECRET_PATH_OVERRIDE: "/custom_path",

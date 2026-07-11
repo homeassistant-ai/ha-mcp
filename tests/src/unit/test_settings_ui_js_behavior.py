@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import ClassVar
 
 import pytest
 
@@ -4105,6 +4106,144 @@ class TestBackupActionErrorToast:
         assert verb in toast and name in toast and "failed" in toast, (
             f"error toast missing action/name context; got {toast!r}"
         )
+
+
+class TestLlmApiToggle:
+    """The per-tool "LLM API" toggle (#1745): renders the server-computed
+    effective value, a flip lands in the POSTed llm_api overrides, and the
+    save messaging branches on restart_required (exposure-only saves apply
+    live — no restart banner)."""
+
+    _TOOL: ClassVar[dict] = {
+        "name": "ha_get_state",
+        "title": "Get State",
+        "category": "read",
+        "description": "x",
+        "tags": ["Entity"],
+    }
+
+    def _tools_json(self, llm_effective: bool) -> dict:
+        return {
+            "tools": [self._TOOL],
+            "states": {},
+            "env_pinned": {},
+            "read_only_exempt": [],
+            "llm_api": {"ha_get_state": llm_effective},
+            "llm_api_overrides": {},
+        }
+
+    def test_toggle_renders_effective_value(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": self._tools_json(False),
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            settle_ms=300,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const llm = document.querySelector('input[data-field="llm"]');
+              document.body.setAttribute('data-llm-checked',
+                llm ? String(llm.checked) : 'MISSING');
+            """,
+        )
+        _assert_clean_init(result)
+        # Server-computed effective False renders unchecked.
+        assert _probe(result, "llm-checked") == "false"
+
+    def test_flip_posts_override_and_live_apply_message(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "responses": [
+                    {"status": 200, "json": self._tools_json(True)},
+                    {
+                        "status": 200,
+                        "json": {
+                            "success": True,
+                            "applied": {},
+                            "llm_api_applied": {"ha_get_state": False},
+                            "mode": "file",
+                            "restart_required": False,
+                        },
+                    },
+                ]
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            settle_ms=300,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              document.querySelector('input[data-field="llm"]').click();
+              await window.saveConfig();
+              const t = document.querySelector('#ha-toast-region .ha-toast');
+              document.body.setAttribute('data-toast',
+                t ? (t.querySelector('.ha-toast-msg')?.textContent || '') : 'NONE');
+            """,
+        )
+        _assert_clean_init(result)
+        posts = [
+            f
+            for f in result.fetches
+            if f["method"] == "POST" and "/api/settings/tools" in f["url"]
+        ]
+        assert posts, "the toggle flip never saved"
+        body = json.loads(posts[-1]["body"])
+        # The flip (effective True -> off) lands in the overrides map.
+        assert body["llm_api"] == {"ha_get_state": False}
+        # Exposure-only saves apply live: no restart messaging.
+        toast = _probe(result, "toast") or ""
+        assert "next agent message" in toast, toast
+        assert "Restart required" not in toast
+
+    def test_states_change_still_shows_restart_message(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "responses": [
+                    {"status": 200, "json": self._tools_json(True)},
+                    {
+                        "status": 200,
+                        "json": {
+                            "success": True,
+                            "applied": {"ha_get_state": "disabled"},
+                            "llm_api_applied": {},
+                            "mode": "file",
+                            "restart_required": True,
+                        },
+                    },
+                ]
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            settle_ms=300,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              document.querySelector('input[data-field="enabled"]').click();
+              await window.saveConfig();
+              const t = document.querySelector('#ha-toast-region .ha-toast');
+              document.body.setAttribute('data-toast',
+                t ? (t.querySelector('.ha-toast-msg')?.textContent || '') : 'NONE');
+            """,
+        )
+        _assert_clean_init(result)
+        toast = _probe(result, "toast") or ""
+        assert "Restart required" in toast, toast
 
 
 class TestSaveConfigStructuredError:

@@ -39,6 +39,7 @@ from .const import (
     DATA_WEBHOOK_ID,
     DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
+    DEFAULT_ENABLE_LLM_API,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
     DOMAIN,
@@ -49,6 +50,7 @@ from .const import (
     ISSUE_UPDATE_HELD,
     OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
+    OPT_ENABLE_LLM_API,
     OPT_ENABLE_SIDEBAR_PANEL,
     OPT_ENABLE_STARTUP_NOTIFICATION,
     OPT_ENABLE_WEBHOOK,
@@ -60,6 +62,7 @@ from .const import (
     channel_for_dist,
 )
 from .embedded_server import EmbeddedServerError, EmbeddedServerManager
+from .llm_api import async_register_llm_api, async_unregister_llm_api
 from .mcp_webhook import async_register_webhook, async_unregister_webhook
 
 if TYPE_CHECKING:
@@ -125,6 +128,18 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
                 "(direct port + sidebar panel)"
             )
         _surface_connect_urls(hass, entry, auth_mode, webhook_enabled=webhook_enabled)
+        # Conversation-agent LLM API (#1745), gated on its option (default on).
+        # Advisory: registration failures are contained inside (logged, feature
+        # absent) — the running server must never be taken down by them.
+        if bool(entry.options.get(OPT_ENABLE_LLM_API, DEFAULT_ENABLE_LLM_API)):
+            await async_register_llm_api(
+                hass, entry, port=manager.port, secret_path=secret_path
+            )
+        else:
+            _LOGGER.info(
+                "Conversation-agent LLM API disabled by option - the toolset "
+                "will not be offered to Home Assistant conversation agents"
+            )
         await _async_finish_update_cycle(hass)
     except asyncio.CancelledError:
         # Unloaded mid-bring-up: undo whatever partial state exists, then let the
@@ -153,12 +168,14 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
 
 
 async def async_teardown_server(hass: HomeAssistant) -> None:
-    """Unregister the webhook and stop the server thread (reload-safe, idempotent).
+    """Unregister the LLM API + webhook and stop the server thread (reload-safe,
+    idempotent).
 
     Does NOT revoke the provisioned token — a reload must keep it. The ha_auth
     discovery views stay bound (aiohttp can't unregister them until HA restarts);
     they 404 while the entry is not live.
     """
+    async_unregister_llm_api(hass)
     await async_unregister_webhook(hass)
     manager = hass.data.get(DOMAIN, {}).pop(DATA_MANAGER, None)
     if isinstance(manager, EmbeddedServerManager):

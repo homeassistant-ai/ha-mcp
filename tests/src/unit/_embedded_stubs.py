@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import enum
 import sys
+from dataclasses import dataclass, field
 from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -139,6 +140,84 @@ class CoreState(enum.StrEnum):
 
 
 EVENT_HOMEASSISTANT_STARTED = "homeassistant_started"
+
+
+# ---------------------------------------------------------------------------
+# LLM-API fakes (``homeassistant.helpers.llm``, issue #1745)
+# ---------------------------------------------------------------------------
+# Real-ish classes, not MagicMocks: ``llm_api.py`` SUBCLASSES ``llm.API`` (a
+# kw_only dataclass in real HA) and ``llm.Tool``, so the bases must be real
+# classes with the real field shapes. The registration registry lives in
+# ``hass.data`` so it is isolated per test (each test builds a fresh hass),
+# mirroring the frontend-panel fakes below.
+
+
+class LlmTool:
+    """Stand-in for ``homeassistant.helpers.llm.Tool``."""
+
+    name: str
+    description: str | None = None
+    parameters: Any = None
+
+
+@dataclass(slots=True)
+class LlmLLMContext:
+    """Stand-in for ``homeassistant.helpers.llm.LLMContext``."""
+
+    platform: str = "test"
+    context: Any = None
+    language: str | None = "en"
+    assistant: str = "conversation"
+    device_id: str | None = None
+
+
+@dataclass(slots=True)
+class LlmToolInput:
+    """Stand-in for ``homeassistant.helpers.llm.ToolInput``."""
+
+    tool_name: str
+    tool_args: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class LlmAPIInstance:
+    """Stand-in for ``homeassistant.helpers.llm.APIInstance``."""
+
+    api: Any
+    api_prompt: str
+    llm_context: Any
+    tools: list[Any]
+    custom_serializer: Any = None
+
+
+@dataclass(kw_only=True)
+class LlmAPI:
+    """Stand-in for ``homeassistant.helpers.llm.API`` (kw_only dataclass)."""
+
+    hass: Any
+    id: str
+    name: str
+
+
+_FAKE_LLM_APIS_KEY = "_fake_llm_apis"
+
+
+def fake_llm_apis(hass: Any) -> dict[str, Any]:
+    """Return the per-hass fake LLM-API registry (tests assert on it)."""
+    return hass.data.setdefault(_FAKE_LLM_APIS_KEY, {})
+
+
+def _llm_async_register_api(hass: Any, api: Any) -> Any:
+    """Stand-in for ``llm.async_register_api``: registry + unsub, dup raises."""
+    apis = fake_llm_apis(hass)
+    if api.id in apis:
+        raise HomeAssistantError(f"API {api.id} is already registered")
+    apis[api.id] = api
+
+    def unregister() -> None:
+        apis.pop(api.id, None)
+
+    return unregister
 
 
 # ---------------------------------------------------------------------------
@@ -335,10 +414,35 @@ def _make_fake_aiohttp() -> ModuleType:
 _INSTALLED = False
 
 
+def _pin_llm_on_helpers() -> None:
+    """(Re-)attach the llm stub submodule onto the current ``homeassistant.helpers``.
+
+    ``from homeassistant.helpers import llm`` binds the PARENT's ``llm``
+    attribute (hasattr on a MagicMock parent is always True, so the
+    ``sys.modules`` entry alone is shadowed by an auto-generated mock child —
+    and llm_api.py cannot subclass a MagicMock's ``API``/``Tool``). Some peer
+    unit-test modules replace ``sys.modules["homeassistant.helpers"]``
+    wholesale (test_yaml_*.py, test_custom_component_filesystem.py), dropping
+    the attribute; collection order inside one pytest-xdist worker can
+    interleave them between two embedded test modules, so every ``install()``
+    call re-pins onto whatever parent is current.
+    """
+    helpers = sys.modules.get("homeassistant.helpers")
+    llm_mod = sys.modules.get("homeassistant.helpers.llm")
+    if helpers is not None and llm_mod is not None:
+        helpers.llm = llm_mod
+
+
 def install() -> None:
-    """Install the stub modules into ``sys.modules`` once."""
+    """Install the stub modules into ``sys.modules`` once.
+
+    Re-pins the ``homeassistant.helpers.llm`` parent attribute on every call
+    (see :func:`_pin_llm_on_helpers`) — that binding is the one piece a peer
+    test module's own stubs can knock out after the first install.
+    """
     global _INSTALLED
     if _INSTALLED:
+        _pin_llm_on_helpers()
         return
 
     def setmod(name: str, **attrs: Any) -> ModuleType:
@@ -458,11 +562,41 @@ def install() -> None:
         async_delete_issue=MagicMock(name="async_delete_issue"),
         IssueSeverity=IssueSeverity,
     )
+    # LLM API surface (#1745). The submodule must ALSO be set as an attribute
+    # on the ``homeassistant.helpers`` parent: that parent is a MagicMock, so
+    # ``from homeassistant.helpers import llm`` binds ``parent.llm`` (hasattr
+    # on a MagicMock is always True) — without the explicit attribute the
+    # auto-generated mock child would shadow this module, and llm_api.py
+    # cannot subclass a MagicMock's ``API``/``Tool`` attributes.
+    setmod(
+        "homeassistant.helpers.llm",
+        Tool=LlmTool,
+        LLMContext=LlmLLMContext,
+        ToolInput=LlmToolInput,
+        APIInstance=LlmAPIInstance,
+        API=LlmAPI,
+        async_register_api=_llm_async_register_api,
+    )
+    _pin_llm_on_helpers()
+    # voluptuous_openapi (an HA-core runtime dependency, not installed in this
+    # test environment). Pass-through conversion: the unit tests assert wiring,
+    # not the real JSON-schema -> voluptuous translation.
+    setmod(
+        "voluptuous_openapi",
+        convert_to_voluptuous=lambda schema: {"_converted": schema},
+    )
     # aiohttp_client + event helpers for the periodic auto-update check
     # (embedded_setup fetches PyPI; embedded_entry registers the interval).
     setmod(
         "homeassistant.helpers.aiohttp_client",
         async_get_clientsession=MagicMock(name="async_get_clientsession"),
+    )
+    # Shared httpx client helper (#1745 llm_api): the SDK receives it as
+    # http_client so session opens never build a client (and its blocking
+    # SSL setup) inside the event loop.
+    setmod(
+        "homeassistant.helpers.httpx_client",
+        get_async_client=MagicMock(name="get_async_client"),
     )
     setmod(
         "homeassistant.helpers.event",
