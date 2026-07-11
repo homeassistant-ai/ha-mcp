@@ -229,6 +229,16 @@ class FakeConfigEntry:
         self.entry_id = entry_id
 
 
+class FakeConfig:
+    """Stand-in for ``hass.config`` whose ``path()`` roots at a temp dir."""
+
+    def __init__(self, base_dir):
+        self._base = Path(base_dir)
+
+    def path(self, *parts):
+        return str(self._base.joinpath(*parts))
+
+
 def make_view(entity=None, areas=(), floors=(), labels=(), devices=()):
     return wsapi._RegistryView(
         entity=FakeEntityReg(entity or {}),
@@ -568,6 +578,243 @@ class TestHelpers:
         assert coll[0]["object_id"] == "guest_mode"
         assert coll[0]["config"] is None
 
+    def test_collection_helper_body_indexed_by_option_value(self, empty_view):
+        """Mirror e2e ``test_deep_search_helper``: an input_select's option value
+        lives in the state attributes, not the name, and must be searchable +
+        report ``match_in_config`` (parity with the legacy ``<type>/list`` body
+        search) and, under include_config, emit that body."""
+        states = [
+            FakeState(
+                "input_select.house_mode",
+                "day",
+                friendly_name="House Mode",
+                options=["day", "deep_search_option_a", "night"],
+            )
+        ]
+        res = wsapi._do_search(
+            FakeHass(states=states),
+            {
+                "query": "deep_search_option_a",
+                "search_types": ["helper"],
+                "include_config": True,
+            },
+        )
+        coll = [x for x in res["helpers"] if x["kind"] == "collection"]
+        assert coll, "option-value query must find the input_select helper"
+        rec = coll[0]
+        assert rec["helper_type"] == "input_select"
+        assert rec["match_in_config"] is True
+        assert rec["match_in_name"] is False
+        assert "deep_search_option_a" in json.dumps(rec["config"])
+
+    def test_collection_helper_body_withheld_without_include_config(self, empty_view):
+        states = [
+            FakeState(
+                "input_select.house_mode",
+                "day",
+                friendly_name="House Mode",
+                options=["deep_search_option_a"],
+            )
+        ]
+        res = wsapi._do_search(
+            FakeHass(states=states),
+            {"query": "deep_search_option_a", "search_types": ["helper"]},
+        )
+        coll = [x for x in res["helpers"] if x["kind"] == "collection"]
+        assert coll and coll[0]["config"] is None
+
+    def test_flow_helper_mappingproxy_options_indexed(self, empty_view):
+        """Regression: ``ConfigEntry.options`` is a ``MappingProxyType`` in live
+        HA, not a ``dict``. The old ``isinstance(..., dict)`` guard dropped it to
+        ``{}`` so a template helper's body was never searchable — e2e
+        ``test_deep_search_finds_ui_template_helper`` /
+        ``test_deep_search_flow_helper_fuzzy_probes_config`` timed out. A body
+        token must match through a MappingProxy in both exact and fuzzy mode."""
+        from types import MappingProxyType
+
+        marker = "deepsearchtemplatebody4471"
+        entry = FakeConfigEntry(
+            "template",
+            title="Deep Search Template Helper",
+            options={
+                "name": "Deep Search Template Helper",
+                "state": "{{ states('sensor." + marker + "') }}",
+            },
+            data={},
+            entry_id="e1",
+        )
+        # Reproduce the live-HA type exactly: options is a read-only proxy.
+        entry.options = MappingProxyType(dict(entry.options))
+        h = FakeHass(config_entries=[entry])
+
+        for exact in (True, False):
+            res = wsapi._do_search(
+                h,
+                {
+                    "query": marker,
+                    "search_types": ["helper"],
+                    "exact": exact,
+                    "include_config": True,
+                },
+            )
+            flow = [x for x in res["helpers"] if x["kind"] == "flow"]
+            assert flow, f"body token must match through MappingProxy (exact={exact})"
+            assert flow[0]["entry_id"] == "e1"
+            assert flow[0]["helper_type"] == "template"
+            assert flow[0]["match_in_config"] is True
+            assert marker in json.dumps(flow[0]["options"])
+
+
+def test_flow_helper_domains_cover_server_flow_helper_types():
+    """The component must index every domain the server routes as a flow helper,
+    or a UI-created helper of a covered type would be invisible to the component
+    path (e2e ``test_deep_search_finds_non_template_flow_helpers``)."""
+    from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
+
+    missing = set(FLOW_HELPER_TYPES) - wsapi.FLOW_HELPER_DOMAINS
+    assert not missing, f"component FLOW_HELPER_DOMAINS misses server types: {missing}"
+
+
+# =============================================================================
+# secret scrub — resolved !secret plaintext is BLOCKED from the match corpus
+# =============================================================================
+class TestSecretScrub:
+    """A resolved ``!secret`` value in a config body must never produce a match,
+    so ``ha_search`` cannot be used as a probe oracle (query a suspected secret,
+    confirm it via ``match_in_config``). The value is blocked, not just unemitted.
+    """
+
+    _SECRET = "s3cr3tprobevaluexyz"
+
+    def _yaml_automation_hass(self, secret_value):
+        # A YAML-defined automation (unique_id=None → body never emitted) whose
+        # body carries a resolved secret next to a normal, non-secret token.
+        auto = FakeConfigEntity(
+            "automation.leaky",
+            "Leaky Auto",
+            unique_id=None,
+            raw_config={
+                "alias": "Leaky Auto",
+                "action": [
+                    {
+                        "service": "notify.x",
+                        "data": {
+                            "api_password": secret_value,
+                            "message": "normalbodytoken",
+                        },
+                    }
+                ],
+            },
+        )
+        return FakeHass(data={"automation": FakeComponent([auto])})
+
+    def _write_secrets(self, tmp_path, **values):
+        body = "".join(f"{k}: {v}\n" for k, v in values.items())
+        (tmp_path / "secrets.yaml").write_text(body, encoding="utf-8")
+
+    def test_secret_value_scrubbed_but_normal_token_matches(self, empty_view, tmp_path):
+        self._write_secrets(tmp_path, api_password=self._SECRET)
+        h = self._yaml_automation_hass(self._SECRET)
+        h.config = FakeConfig(tmp_path)
+
+        by_secret = wsapi._do_search(
+            h, {"query": self._SECRET, "search_types": ["automation"]}
+        )
+        assert not by_secret["automations"], (
+            "a query equal to a resolved secret must not match (probe oracle)"
+        )
+
+        by_token = wsapi._do_search(
+            h, {"query": "normalbodytoken", "search_types": ["automation"]}
+        )
+        assert any(a["match_in_config"] for a in by_token["automations"]), (
+            "a non-secret body token must still match after scrubbing"
+        )
+
+    def test_secret_scrubbed_in_fuzzy_mode(self, empty_view, tmp_path):
+        self._write_secrets(tmp_path, api_password=self._SECRET)
+        h = self._yaml_automation_hass(self._SECRET)
+        h.config = FakeConfig(tmp_path)
+        res = wsapi._do_search(
+            h,
+            {"query": self._SECRET, "search_types": ["automation"], "exact": False},
+        )
+        assert not res["automations"], "fuzzy mode must also scrub the secret leaf"
+
+    def test_flow_helper_option_secret_scrubbed(self, empty_view, tmp_path):
+        self._write_secrets(tmp_path, tmpl_secret=self._SECRET)
+        entry = FakeConfigEntry(
+            "template",
+            title="Sun Sensor",
+            options={"state": self._SECRET, "name": "Sun Sensor"},
+            entry_id="e1",
+        )
+        h = FakeHass(config_entries=[entry])
+        h.config = FakeConfig(tmp_path)
+        res = wsapi._do_search(h, {"query": self._SECRET, "search_types": ["helper"]})
+        assert not [x for x in res["helpers"] if x["kind"] == "flow"], (
+            "a flow-helper option equal to a secret must not match"
+        )
+
+    def test_missing_secrets_file_degrades_without_scrubbing(
+        self, empty_view, tmp_path
+    ):
+        # No secrets.yaml under tmp_path → no scrub → the value matches (proves
+        # the degrade-off path runs without error).
+        h = self._yaml_automation_hass(self._SECRET)
+        h.config = FakeConfig(tmp_path)
+        res = wsapi._do_search(
+            h, {"query": self._SECRET, "search_types": ["automation"]}
+        )
+        assert res["automations"], (
+            "absent secrets.yaml must degrade to no scrubbing without error"
+        )
+
+    def test_malformed_secrets_file_degrades_without_scrubbing(
+        self, empty_view, tmp_path
+    ):
+        (tmp_path / "secrets.yaml").write_text("{not: valid: yaml: [", encoding="utf-8")
+        h = self._yaml_automation_hass(self._SECRET)
+        h.config = FakeConfig(tmp_path)
+        res = wsapi._do_search(
+            h, {"query": self._SECRET, "search_types": ["automation"]}
+        )
+        assert res["automations"], (
+            "malformed secrets.yaml must degrade to no scrubbing without error"
+        )
+
+    def test_non_string_secret_values_ignored(self, empty_view, tmp_path):
+        # A numeric secret is not a plaintext-leak leaf; only string values are
+        # collected, so loading must not choke on it.
+        (tmp_path / "secrets.yaml").write_text(
+            f"port: 8123\napi_password: {self._SECRET}\n", encoding="utf-8"
+        )
+        h = self._yaml_automation_hass(self._SECRET)
+        h.config = FakeConfig(tmp_path)
+        res = wsapi._do_search(
+            h, {"query": self._SECRET, "search_types": ["automation"]}
+        )
+        assert not res["automations"], (
+            "string secret still scrubbed alongside a non-string one"
+        )
+
+    def test_entity_only_search_skips_secrets_read(
+        self, empty_view, tmp_path, monkeypatch
+    ):
+        # Entity-only searches never touch a config body, so the secrets.yaml read
+        # is skipped entirely (perf gate).
+        calls = {"n": 0}
+
+        def _spy(hass):
+            calls["n"] += 1
+            return frozenset()
+
+        monkeypatch.setattr(wsapi, "_load_secret_values", _spy)
+        h = FakeHass(states=[FakeState("light.k", "on", "Kitchen")])
+        h.config = FakeConfig(tmp_path)
+        wsapi._do_search(h, {"query": "kitchen", "search_types": ["entity"]})
+        assert calls["n"] == 0, "entity-only search must not read secrets.yaml"
+
 
 # =============================================================================
 # scorer parity (golden corpus)
@@ -663,6 +910,98 @@ class TestScorerParity:
         assert scored is not None
         total, in_name, in_config = scored
         assert total == 100 and in_name is True
+
+
+# =============================================================================
+# match_type taxonomy parity (Group 3 — #1166 / #1170 finding 8)
+# =============================================================================
+class TestMatchTypeTaxonomy:
+    """The component's fuzzy match_type must mirror the server's taxonomy —
+    ``alias_match`` for an alias-driven hit, the ``_get_match_type`` tiers
+    otherwise — while exact mode keeps the server's flat ``exact_match``.
+    """
+
+    def _match_type(self, monkeypatch, entity_id, friendly, aliases, query, *, exact):
+        view = make_view(entity={entity_id: FakeRegEntry(entity_id, aliases=aliases)})
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+        recs = wsapi._search_entities(
+            FakeHass(states=[FakeState(entity_id, "on", friendly)]),
+            view,
+            query.lower(),
+            match_all=False,
+            exact=exact,
+            include_hidden=True,
+            domain_filter=None,
+            area_filter=None,
+            state_filter=None,
+        )
+        assert recs, f"expected a hit for {query!r}"
+        return recs[0]["match_type"]
+
+    def test_alias_match_labeled(self, monkeypatch):
+        # Mirror e2e test_search_finds_entity_by_alias_issue_1170: a fuzzy query
+        # equal to an alias the id/name don't carry is labeled alias_match.
+        mt = self._match_type(
+            monkeypatch,
+            "input_boolean.alias_src",
+            "Alias Source",
+            {"e2e1170aliasabcd"},
+            "e2e1170aliasabcd",
+            exact=False,
+        )
+        assert mt == "alias_match"
+
+    def test_exact_mode_is_flat_exact_match(self, monkeypatch):
+        mt = self._match_type(
+            monkeypatch, "light.kitchen", "Kitchen Light", (), "kitchen", exact=True
+        )
+        assert mt == "exact_match"
+
+    @pytest.mark.parametrize(
+        "query,expected",
+        [
+            ("light.kitchen", "exact_id"),
+            ("kitchen light", "exact_name"),
+            ("light", "exact_domain"),
+            ("kitch", "partial_id"),
+            ("chen ligh", "partial_name"),
+        ],
+    )
+    def test_fuzzy_tier_mapping(self, monkeypatch, query, expected):
+        mt = self._match_type(
+            monkeypatch, "light.kitchen", "Kitchen Light", (), query, exact=False
+        )
+        assert mt == expected
+
+    def test_alias_match_parity_with_server_engine(self, monkeypatch):
+        """Cross-check the alias case against the server's own
+        ``FuzzyEntitySearcher``: both label it ``alias_match`` for the same
+        entity, so the taxonomies cannot silently drift."""
+        from ha_mcp.utils.fuzzy_search import FuzzyEntitySearcher
+
+        entity_id, friendly, alias = (
+            "input_boolean.alias_src",
+            "Alias Source",
+            "e2e1170aliasabcd",
+        )
+        server_matches, _ = FuzzyEntitySearcher().search_entities(
+            [
+                {
+                    "entity_id": entity_id,
+                    "attributes": {"friendly_name": friendly},
+                    "state": "on",
+                    "_aliases": [alias],
+                }
+            ],
+            alias,
+        )
+        server_mt = next(
+            m["match_type"] for m in server_matches if m["entity_id"] == entity_id
+        )
+        component_mt = self._match_type(
+            monkeypatch, entity_id, friendly, {alias}, alias, exact=False
+        )
+        assert component_mt == server_mt == "alias_match"
 
 
 # =============================================================================

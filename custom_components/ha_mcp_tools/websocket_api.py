@@ -23,6 +23,12 @@ Design notes that are load-bearing:
   items return identity/metadata only (their ``raw_config`` may carry resolved
   ``!secret`` plaintext). Body emission for YAML belongs to the future
   ``config_get`` command.
+* **Resolved secrets are scrubbed from the match corpus.** Because YAML bodies
+  (and flow-helper options) can hold ``!secret`` values resolved to plaintext,
+  a body leaf that exactly equals a ``secrets.yaml`` value is dropped before
+  scoring (:func:`_load_secret_values`) — otherwise a query equal to a suspected
+  secret would confirm it via ``match_in_config`` (a probe oracle). Blocked, not
+  merely unemitted.
 * **Event-loop hygiene.** Every join is a pure in-memory read over live
   registries — run synchronously, no executor, no persistent index (always
   fresh, zero cache-invalidation surface).
@@ -36,11 +42,13 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
 
 import voluptuous as vol
+import yaml  # type: ignore[import-untyped]
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import (
@@ -111,7 +119,8 @@ CONFIG_SEARCH_TYPES = (
 )
 
 # Collection ("storage collection") helpers — entities in the state machine.
-# Matched on entity_id / friendly_name only; their body is not read in v1.
+# Matched on entity_id / friendly_name AND the live state-attribute body (an
+# input_select's ``options``, an input_number's ``min``/``max``/``step``, …).
 COLLECTION_HELPER_DOMAINS = frozenset(
     {
         "input_boolean",
@@ -284,6 +293,20 @@ def _do_search(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
     diagnostics: dict[str, int] = {}
     partial_reasons: list[str] = []
 
+    # Resolved-!secret scrub set: config bodies (YAML-loaded automations/scripts/
+    # scenes reach this path, unlike the server's 404-ing per-id path) can carry
+    # a secret already resolved to plaintext, and matching inside it would make
+    # ha_search a probe oracle (query a suspected secret, confirm via
+    # match_in_config). Load the secrets.yaml values once per call, only when a
+    # config/helper surface is actually searched, so entity-only searches skip
+    # the file read entirely.
+    scrub_surfaces = (*CONFIG_SEARCH_TYPES, SEARCH_TYPE_HELPER)
+    secret_values = (
+        _load_secret_values(hass)
+        if any(st in search_types for st in scrub_surfaces)
+        else frozenset()
+    )
+
     # --- Entities ------------------------------------------------------------
     entities: list[dict[str, Any]] = []
     entity_total = 0
@@ -323,6 +346,7 @@ def _do_search(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
                     include_config=include_config,
                     partial_reasons=partial_reasons,
                     diagnostics=diagnostics,
+                    secret_values=secret_values,
                 )
             )
     if SEARCH_TYPE_HELPER in search_types:
@@ -334,6 +358,7 @@ def _do_search(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
                 match_all=match_all,
                 exact=exact,
                 include_config=include_config,
+                secret_values=secret_values,
             )
         )
 
@@ -380,6 +405,44 @@ def _sort_key(rec: dict[str, Any]) -> str:
     return str(rec.get("entity_id") or rec.get("id") or rec.get("name") or "")
 
 
+def _load_secret_values(hass: HomeAssistant) -> frozenset[str]:
+    """Load the string values from the instance's ``secrets.yaml``.
+
+    These scrub resolved ``!secret`` plaintext out of the config-body match
+    corpus: a YAML-loaded automation/script/scene body (or a flow-helper's
+    options) can carry a secret already resolved to its plaintext value, and
+    matching inside it would turn ``ha_search`` into a probe oracle — a query
+    equal to a suspected secret confirmed via ``match_in_config``. Any body leaf
+    that exactly equals one of these values is dropped before scoring.
+
+    Defensive by design: a missing or malformed ``secrets.yaml`` yields an empty
+    set (scrub degrades OFF, never raising). Only string values are collected —
+    a secret can be any YAML scalar, but a non-string can't be a plaintext-leak
+    leaf and is skipped. Computed once per ``_do_search`` call (see the caller),
+    never cached across calls, so an edited ``secrets.yaml`` applies on the next
+    search. ``secrets.yaml`` is a flat ``key: value`` mapping with no custom
+    tags, so the plain ``yaml.safe_load`` (not HA's ``!secret``/``!include``
+    loader) reads it correctly.
+    """
+    config = getattr(hass, "config", None)
+    path_fn = getattr(config, "path", None)
+    if not callable(path_fn):
+        return frozenset()
+    try:
+        path = path_fn("secrets.yaml")
+        if not path:
+            return frozenset()
+        with open(path, encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+    except (OSError, yaml.YAMLError):
+        return frozenset()
+    except Exception:  # pragma: no cover - defensive against loader edge cases
+        return frozenset()
+    if not isinstance(raw, dict):
+        return frozenset()
+    return frozenset(v for v in raw.values() if isinstance(v, str) and v)
+
+
 # --- Entity join + scoring ---------------------------------------------------
 def _search_entities(
     hass: HomeAssistant,
@@ -417,11 +480,92 @@ def _search_entities(
             if tier is None:
                 continue
             score = _apply_hidden_penalty(tier, rec["_hidden"])
-            match_type = "exact_match" if exact else "fuzzy"
+            match_type = _entity_match_type(
+                query_lower,
+                rec["entity_id"],
+                rec["friendly_name"],
+                rec["domain"],
+                rec["aliases"],
+                exact=exact,
+            )
         rec["score"] = score
         rec["match_type"] = match_type
         results.append(rec)
     return results
+
+
+def _entity_match_type(
+    query_lower: str,
+    entity_id: str,
+    friendly: str,
+    domain: str,
+    aliases: list[str],
+    *,
+    exact: bool,
+) -> str:
+    """Classify an entity hit into the server's match_type taxonomy.
+
+    The server labels matches two ways and the component must be
+    indistinguishable from it:
+
+    - **exact mode** — the server's ``_match_exact_search_entity`` stamps a flat
+      ``"exact_match"`` on every hit, so mirror that constant.
+    - **fuzzy mode** — the server's ``FuzzySearchEngine`` emits a richer set that
+      agents key on. ``"alias_match"`` wins when the hit is driven by an alias
+      token the id/name don't already carry (the engine's ``alias_hit`` tracking
+      — closes #1166); otherwise the ``_get_match_type`` tiers: ``exact_id`` /
+      ``exact_name`` / ``exact_domain`` / ``partial_id`` / ``partial_name``,
+      falling to ``fuzzy_match``.
+    """
+    if exact:
+        return "exact_match"
+    if _is_alias_driven(query_lower, entity_id, friendly, aliases):
+        return "alias_match"
+    return _get_match_type_tier(query_lower, entity_id, friendly, domain)
+
+
+def _is_alias_driven(
+    query_lower: str, entity_id: str, friendly: str, aliases: list[str]
+) -> bool:
+    """Whether a query token lands only on an alias, mirroring the engine's alias_hit.
+
+    Collects the alias tokens (and each alias's separator-stripped concat form)
+    that are NOT already present in the id/name token set; a query token in that
+    set means the friendly_name / id alone would not have surfaced this entity.
+    """
+    id_tail = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
+    id_name_tokens = set(_tokenize(entity_id)) | set(_tokenize(str(friendly)))
+    id_name_tokens.add(_SPLIT_RE.sub("", id_tail.lower()))
+    id_name_tokens.add(_SPLIT_RE.sub("", str(friendly).lower()))
+    alias_only: set[str] = set()
+    for alias in aliases:
+        a_lower = str(alias).lower()
+        for tok in _tokenize(a_lower):
+            if tok not in id_name_tokens:
+                alias_only.add(tok)
+        a_concat = _SPLIT_RE.sub("", a_lower)
+        if a_concat and a_concat not in id_name_tokens:
+            alias_only.add(a_concat)
+    return bool(set(_tokenize(query_lower)) & alias_only)
+
+
+def _get_match_type_tier(
+    query_lower: str, entity_id: str, friendly: str, domain: str
+) -> str:
+    """The server's ``_get_match_type`` id/name/domain tiers (non-alias hits)."""
+    eid = entity_id.lower()
+    fname = str(friendly).lower()
+    if query_lower == eid:
+        return "exact_id"
+    if query_lower == fname:
+        return "exact_name"
+    if query_lower == domain.lower():
+        return "exact_domain"
+    if query_lower in eid:
+        return "partial_id"
+    if query_lower in fname:
+        return "partial_name"
+    return "fuzzy_match"
 
 
 def _entity_record(state: Any, view: _RegistryView) -> dict[str, Any]:
@@ -517,6 +661,7 @@ def _search_config_surface(
     include_config: bool,
     partial_reasons: list[str],
     diagnostics: dict[str, int],
+    secret_values: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Score one config domain's loaded entities (raw_config indexed, not emitted for YAML)."""
     component = hass.data.get(domain) if getattr(hass, "data", None) else None
@@ -541,7 +686,12 @@ def _search_config_surface(
             match_in_config = False
         else:
             scored = _config_score(
-                query_lower, entity_id, name, config_dict, exact=exact
+                query_lower,
+                entity_id,
+                name,
+                config_dict,
+                exact=exact,
+                secret_values=secret_values,
             )
             if scored is None:
                 continue
@@ -661,11 +811,19 @@ def _search_helpers(
     match_all: bool,
     exact: bool,
     include_config: bool,
+    secret_values: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Index collection helpers (states) + flow helpers (config-entry options)."""
     results: list[dict[str, Any]] = []
 
-    # Collection helpers: entities in the state machine, matched on name only.
+    # Collection helpers: entities in the state machine. Their searchable body is
+    # the live state attributes — an input_select's ``options``, an
+    # input_number's ``min``/``max``/``step``, etc. — so a query on an option
+    # value matches in-config the way the server's ``<type>/list`` body search
+    # does. (Residual delta vs the server: the ``<type>/list`` record's
+    # config-only leaves — e.g. ``initial`` — are not state attributes, so a
+    # match existing ONLY there is unreachable here; and the attribute set
+    # carries the CURRENT friendly_name, not the creation-time storage name.)
     for state in _iter_states(hass):
         entity_id = getattr(state, "entity_id", "") or ""
         domain = entity_id.split(".")[0] if "." in entity_id else ""
@@ -674,14 +832,23 @@ def _search_helpers(
         attrs = getattr(state, "attributes", None) or {}
         name = attrs.get("friendly_name", entity_id)
         object_id = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
+        body = dict(attrs) if isinstance(attrs, Mapping) else {}
         if match_all:
             score: int | None = 100
             match_in_name = False
+            match_in_config = False
         else:
-            score = _name_tier(query_lower, [entity_id, name], exact=exact)
-            if score is None:
+            scored = _config_score(
+                query_lower,
+                entity_id,
+                name,
+                body,
+                exact=exact,
+                secret_values=secret_values,
+            )
+            if scored is None:
                 continue
-            match_in_name = True
+            score, match_in_name, match_in_config = scored
         results.append(
             {
                 "entity_id": entity_id,
@@ -691,8 +858,8 @@ def _search_helpers(
                 "kind": "collection",
                 "score": score,
                 "match_in_name": match_in_name,
-                "match_in_config": False,
-                "config": None,
+                "match_in_config": match_in_config,
+                "config": body if include_config else None,
             }
         )
 
@@ -702,15 +869,28 @@ def _search_helpers(
         if domain not in FLOW_HELPER_DOMAINS:
             continue
         title = getattr(entry, "title", None) or ""
-        options = getattr(entry, "options", None)
-        options = dict(options) if isinstance(options, dict) else {}
+        # ``ConfigEntry.options`` is a ``MappingProxyType`` in live HA, not a
+        # ``dict``; the old ``isinstance(..., dict)`` guard silently dropped it to
+        # ``{}``, so a flow helper's body (a template's ``state``, a group's
+        # members, …) was never indexed and ``match_in_config`` could never fire.
+        # Accept any ``Mapping`` so the persisted options are searchable and
+        # emittable under ``include_config``.
+        raw_options = getattr(entry, "options", None)
+        options = dict(raw_options) if isinstance(raw_options, Mapping) else {}
         entry_id = getattr(entry, "entry_id", None)
         if match_all:
             score = 100
             match_in_name = False
             match_in_config = False
         else:
-            scored = _config_score(query_lower, title, title, options, exact=exact)
+            scored = _config_score(
+                query_lower,
+                title,
+                title,
+                options,
+                exact=exact,
+                secret_values=secret_values,
+            )
             if scored is None:
                 continue
             score, match_in_name, match_in_config = scored
@@ -816,14 +996,18 @@ def _config_score(
     config_dict: dict[str, Any] | None,
     *,
     exact: bool,
+    secret_values: frozenset[str] = frozenset(),
 ) -> tuple[int, bool, bool] | None:
     """Score a config surface: (total, match_in_name, match_in_config) or None.
 
     Exact mode is binary 100/0 with a threshold of 100 (server parity); fuzzy
-    mode floors at :data:`FUZZY_THRESHOLD`.
+    mode floors at :data:`FUZZY_THRESHOLD`. ``secret_values`` scrubs the body
+    match corpus (see :func:`_search_in_dict_exact`).
     """
     name_score = _name_tier(query_lower, [entity_id, name], exact=exact) or 0
-    config_score = _config_body_score(query_lower, config_dict, exact=exact)
+    config_score = _config_body_score(
+        query_lower, config_dict, exact=exact, secret_values=secret_values
+    )
     threshold = 100 if exact else FUZZY_THRESHOLD
     total = max(name_score, config_score)
     if total < threshold:
@@ -832,21 +1016,26 @@ def _config_score(
 
 
 def _config_body_score(
-    query_lower: str, config_dict: dict[str, Any] | None, *, exact: bool
+    query_lower: str,
+    config_dict: dict[str, Any] | None,
+    *,
+    exact: bool,
+    secret_values: frozenset[str] = frozenset(),
 ) -> int:
     """Match the query against a config body's keys/values.
 
     Exact => 100/0 substring (``_search_in_dict_exact`` parity). Fuzzy adds a
     token-vs-token ``calculate_ratio`` fallback (the server's tier-3 path).
+    ``secret_values`` scrubs resolved-``!secret`` leaves from the corpus.
     """
     if config_dict is None:
         return 0
-    if _search_in_dict_exact(config_dict, query_lower) >= 100:
+    if _search_in_dict_exact(config_dict, query_lower, secret_values) >= 100:
         return 100
     if exact:
         return 0
     leaves: list[str] = []
-    _collect_string_leaves(config_dict, leaves)
+    _collect_string_leaves(config_dict, leaves, secret_values)
     query_tokens = _tokenize(query_lower)
     if not query_tokens:
         return 0
@@ -858,41 +1047,68 @@ def _config_body_score(
     return best if best >= FUZZY_THRESHOLD else 0
 
 
-def _search_in_dict_exact(data: Any, query_lower: str) -> int:
+def _search_in_dict_exact(
+    data: Any, query_lower: str, secret_values: frozenset[str] = frozenset()
+) -> int:
     """Exact substring search in nested structures (100 or 0).
 
-    Mirrors ``smart_search._scoring.ScoringMixin._search_in_dict_exact``.
+    Mirrors ``smart_search._scoring.ScoringMixin._search_in_dict_exact``, plus a
+    secret scrub: a string leaf that exactly equals a known secret value never
+    contributes a match (see :func:`_load_secret_values`), so a query equal to a
+    resolved ``!secret`` cannot be confirmed via ``match_in_config``. Keys and
+    non-string scalars are never secrets, so they are matched as before.
     """
     if isinstance(data, dict):
         for key, value in data.items():
             if query_lower in str(key).lower():
                 return 100
-            if _search_in_dict_exact(value, query_lower) >= 100:
+            if _search_in_dict_exact(value, query_lower, secret_values) >= 100:
                 return 100
         return 0
     if isinstance(data, (list, tuple)):
         for item in data:
-            if _search_in_dict_exact(item, query_lower) >= 100:
+            if _search_in_dict_exact(item, query_lower, secret_values) >= 100:
                 return 100
         return 0
+    return _leaf_exact_score(data, query_lower, secret_values)
+
+
+def _leaf_exact_score(
+    data: Any, query_lower: str, secret_values: frozenset[str]
+) -> int:
+    """Exact substring score for a scalar leaf (100 or 0).
+
+    A string leaf that exactly equals a known secret value scores 0 — the scrub
+    that keeps a resolved ``!secret`` out of the match corpus.
+    """
     if isinstance(data, str):
+        if data in secret_values:
+            return 0
         return 100 if query_lower in data.lower() else 0
     if data is not None:
         return 100 if query_lower in str(data).lower() else 0
     return 0
 
 
-def _collect_string_leaves(data: Any, out: list[str]) -> None:
-    """Recursively collect string representations. Mirrors the server helper."""
+def _collect_string_leaves(
+    data: Any, out: list[str], secret_values: frozenset[str] = frozenset()
+) -> None:
+    """Recursively collect string representations. Mirrors the server helper.
+
+    A string leaf that exactly equals a known secret value is dropped so it
+    never reaches the fuzzy token corpus (the scrub in :func:`_search_in_dict_exact`
+    covers the exact path).
+    """
     if isinstance(data, dict):
         for key, value in data.items():
             out.append(str(key))
-            _collect_string_leaves(value, out)
+            _collect_string_leaves(value, out, secret_values)
     elif isinstance(data, (list, tuple)):
         for item in data:
-            _collect_string_leaves(item, out)
+            _collect_string_leaves(item, out, secret_values)
     elif isinstance(data, str):
-        out.append(data)
+        if data not in secret_values:
+            out.append(data)
     elif data is not None:
         out.append(str(data))
 

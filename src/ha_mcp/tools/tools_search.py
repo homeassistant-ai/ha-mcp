@@ -23,6 +23,7 @@ from ..utils.fuzzy_search import apply_hidden_penalty
 from ..visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
+    visibility_filter_active,
 )
 from .component_api import (
     component_supports,
@@ -1522,9 +1523,22 @@ class SearchTools:
         # differ per mode, and after the request-dedup work they are cheap
         # registry-only calls, so the component round-trip buys nothing worth
         # the shape risk.
+        #
+        # The component also applies no entity-visibility filtering, so an
+        # install with an ACTIVE visibility filter (enabled + a hide dimension)
+        # must keep the legacy path, which excludes hidden entities before the
+        # counts/pagination. ``visibility_filter_active`` reloads the same
+        # opt-in config file the legacy filter uses (fail-closed to legacy on a
+        # malformed config). Checked only when the component would otherwise
+        # serve, so the common (no-component / filter-off) install pays nothing;
+        # visibility-enabled installs are the opt-in minority and stay on legacy
+        # until a later capability passes the hide rules to the component.
         if req.query_text and not (req.area_filter or "").strip():
             caps = await get_component_caps(self._client)
-            if component_supports(caps, "search"):
+            if (
+                component_supports(caps, "search")
+                and not await visibility_filter_active()
+            ):
                 component_response = await self._ha_search_via_component(req, ctx)
                 if component_response is not None:
                     return component_response

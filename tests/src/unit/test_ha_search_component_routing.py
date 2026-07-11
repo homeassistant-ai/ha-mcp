@@ -404,3 +404,68 @@ class TestListingModesBypassComponent:
         assert not ws.send_command.await_count, (
             "component must not be consulted for area-scoped queries"
         )
+
+
+class TestVisibilityFilterBypassesComponent:
+    """An ACTIVE entity-visibility filter must force the legacy path.
+
+    The component applies no visibility filtering, so a query search on a
+    visibility-enabled install has to stay on the legacy pipeline that excludes
+    hidden entities before the counts/pagination — otherwise a denied entity
+    reappears in ha_search. Regression for the first live component e2e run
+    (test_entity_visibility.py::test_visibility_denylist_hides_entity_from_
+    search_but_get_state_returns_it and ::test_visibility_label_dimension_hides_
+    entity_from_search).
+    """
+
+    @pytest.mark.asyncio
+    async def test_active_deny_filter_bypasses_component(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        save_visibility_config(
+            tmp_path,
+            VisibilityConfig(
+                enabled=True,
+                exclude_categories=[],
+                deny_entity_ids=["light.kitchen"],
+            ),
+        )
+        monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+        client = RoutingClient()
+        ha_search = _build_ha_search(client)
+        ws = _make_ws(info_result=_CAPS_SEARCH, search_result=_entity_search_result())
+
+        with _patch_ws(ws):
+            data = await ha_search(query="kitchen")
+
+        # The component search command must never run while the filter is active.
+        assert not any(
+            c.args[0] == "ha_mcp_tools/search" for c in ws.send_command.call_args_list
+        ), "component search must not run while the visibility filter is active"
+        # Legacy inventory served the request and the denied entity is gone.
+        assert client.get_states_calls == 1
+        entity_ids = {e["entity_id"] for e in data["entities"]}
+        assert "light.kitchen" not in entity_ids
+        assert "sensor.kitchen_temp" in entity_ids
+
+    @pytest.mark.asyncio
+    async def test_enabled_but_no_active_dimension_still_uses_component(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # enabled=True with every dimension cleared hides nothing → the fast
+        # component path is still eligible (no needless legacy fallback).
+        save_visibility_config(
+            tmp_path, VisibilityConfig(enabled=True, exclude_categories=[])
+        )
+        monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+        client = RoutingClient()
+        ha_search = _build_ha_search(client)
+        ws = _make_ws(info_result=_CAPS_SEARCH, search_result=_entity_search_result())
+
+        with _patch_ws(ws):
+            await ha_search(query="kitchen")
+
+        assert any(
+            c.args[0] == "ha_mcp_tools/search" for c in ws.send_command.call_args_list
+        ), "no active hide dimension → component should still serve"
+        assert client.get_states_calls == 0
