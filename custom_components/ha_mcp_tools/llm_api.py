@@ -58,6 +58,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import llm
+from homeassistant.helpers.httpx_client import get_async_client
 from voluptuous_openapi import convert_to_voluptuous
 
 from .const import (
@@ -225,27 +226,45 @@ async def async_probe_mcp_sdk(hass: HomeAssistant) -> bool:
 @asynccontextmanager
 async def _mcp_session(
     url: str,
+    http_client: Any = None,
 ) -> AsyncIterator[tuple[ClientSession, mcp_types.InitializeResult]]:
     """Open an initialized MCP session against the loopback server.
 
     Imports resolve from ``sys.modules`` — :func:`async_probe_mcp_sdk` did the
     real (blocking) import on the executor before the API was registered.
+
+    ``http_client`` is Home Assistant's shared httpx client
+    (``helpers.httpx_client.get_async_client``). Passing it is what keeps
+    this loop-safe: without it the SDK constructs its own httpx client per
+    session, whose SSL setup loads the CA bundle SYNCHRONOUSLY inside HA's
+    event loop (live-found — HA's blocking-call monitor flagged this exact
+    line). HA's shared client is built against the process-cached SSL
+    context, and the SDK does not close caller-owned clients (HA core's mcp
+    integration relies on the same contract).
     """
     from mcp.client.session import ClientSession
 
     try:
         from mcp.client.streamable_http import streamable_http_client
+
+        transport = (
+            streamable_http_client(url=url, http_client=http_client)
+            if http_client is not None
+            else streamable_http_client(url=url)
+        )
     except ImportError:
         # Pre-rename SDK (an older ha-mcp resolved by a pip-spec override
-        # pins an older fastmcp/mcp): same call shape, deprecated name. The
-        # ignore covers the signature drift between the two declarations —
-        # only the url kwarg is used here, which both accept.
-        from mcp.client.streamable_http import (  # type: ignore[assignment]
-            streamablehttp_client as streamable_http_client,
+        # pins an older fastmcp/mcp): same call shape, deprecated name, but
+        # no http_client kwarg — it builds its own client, so on those old
+        # SDKs the blocking-SSL-setup warning is the accepted cost.
+        from mcp.client.streamable_http import (
+            streamablehttp_client,
         )
 
+        transport = streamablehttp_client(url=url)
+
     async with (
-        streamable_http_client(url=url) as (read_stream, write_stream, _),
+        transport as (read_stream, write_stream, _),
         ClientSession(read_stream, write_stream) as session,
     ):
         init_result = await session.initialize()
@@ -320,18 +339,18 @@ class HaMcpTool(llm.Tool):
     ) -> JsonObjectType:
         """Call the tool on the in-process server and return its result."""
         return await _forward_tool_call(
-            self._server_url, tool_input.tool_name, tool_input.tool_args
+            hass, self._server_url, tool_input.tool_name, tool_input.tool_args
         )
 
 
 async def _forward_tool_call(
-    server_url: str, name: str, arguments: dict[str, Any]
+    hass: HomeAssistant, server_url: str, name: str, arguments: dict[str, Any]
 ) -> JsonObjectType:
     """Forward one tool call over loopback and dump the result for the agent."""
     try:
         async with (
             asyncio.timeout(_CALL_TOOL_TIMEOUT_SECONDS),
-            _mcp_session(server_url) as (session, _init),
+            _mcp_session(server_url, get_async_client(hass)) as (session, _init),
         ):
             result = await session.call_tool(name, arguments)
     except _transport_errors() as err:
@@ -450,7 +469,7 @@ class HaMcpCallTool(llm.Tool):
                 "error": f"Unknown tool '{name}'.",
                 "suggestion": (f"Use {_SEARCH_TOOL_NAME} to discover available tools."),
             }
-        return await _forward_tool_call(self._server_url, name, arguments)
+        return await _forward_tool_call(hass, self._server_url, name, arguments)
 
 
 @dataclass(kw_only=True)
@@ -472,7 +491,10 @@ class HaMcpLlmApi(llm.API):
         try:
             async with (
                 asyncio.timeout(_LIST_TOOLS_TIMEOUT_SECONDS),
-                _mcp_session(self.server_url) as (session, init_result),
+                _mcp_session(self.server_url, get_async_client(self.hass)) as (
+                    session,
+                    init_result,
+                ),
             ):
                 list_result = await session.list_tools()
         except _transport_errors() as err:

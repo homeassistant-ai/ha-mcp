@@ -591,6 +591,13 @@ def install() -> None:
         "homeassistant.helpers.aiohttp_client",
         async_get_clientsession=MagicMock(name="async_get_clientsession"),
     )
+    # Shared httpx client helper (#1745 llm_api): the SDK receives it as
+    # http_client so session opens never build a client (and its blocking
+    # SSL setup) inside the event loop.
+    setmod(
+        "homeassistant.helpers.httpx_client",
+        get_async_client=MagicMock(name="get_async_client"),
+    )
     setmod(
         "homeassistant.helpers.event",
         async_track_time_interval=MagicMock(

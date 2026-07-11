@@ -94,8 +94,9 @@ def _fake_session(
     init_result = SimpleNamespace(instructions=instructions)
 
     @asynccontextmanager
-    async def fake_mcp_session(url):
+    async def fake_mcp_session(url, http_client=None):
         session.url = url
+        session.http_client = http_client
         if raise_on_open is not None:
             raise raise_on_open
         if delay:
@@ -641,6 +642,54 @@ class TestToolCall:
                 llm_api.llm.ToolInput("ha_search", {}),
                 llm_api.llm.LLMContext(),
             )
+
+
+class TestSharedHttpClientPassthrough:
+    async def test_canonical_sdk_receives_hass_shared_client(self, monkeypatch):
+        # The blocking-SSL-setup fix (live-found by HA's event-loop monitor):
+        # sessions must hand HA's shared httpx client to the SDK so it never
+        # constructs its own inside the loop. Faked at the sys.modules level
+        # so _mcp_session's REAL wiring runs.
+        import sys
+        from types import ModuleType
+
+        opened: dict[str, Any] = {}
+
+        @asynccontextmanager
+        async def _canonical_client(url, http_client=None):
+            opened["url"] = url
+            opened["http_client"] = http_client
+            yield "read-stream", "write-stream", lambda: None
+
+        fake_transport = ModuleType("mcp.client.streamable_http")
+        fake_transport.streamable_http_client = _canonical_client  # type: ignore[attr-defined]
+
+        class _FakeClientSession:
+            def __init__(self, read_stream, write_stream):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+            async def initialize(self):
+                return SimpleNamespace(instructions="hi")
+
+        fake_session_mod = ModuleType("mcp.client.session")
+        fake_session_mod.ClientSession = _FakeClientSession  # type: ignore[attr-defined]
+
+        monkeypatch.setitem(sys.modules, "mcp.client.streamable_http", fake_transport)
+        monkeypatch.setitem(sys.modules, "mcp.client.session", fake_session_mod)
+
+        shared_client = object()
+        async with llm_api._mcp_session(
+            "http://127.0.0.1:9584/private_x", shared_client
+        ):
+            pass
+
+        assert opened["http_client"] is shared_client
 
 
 class TestPreRenameSdkFallback:
