@@ -868,6 +868,108 @@ def _shape_component_search_response(
     return _project_response_fields(response, req.parsed_fields)
 
 
+@dataclass(frozen=True)
+class _OverviewInputs:
+    """Resolved ``ha_get_overview`` inputs threaded to the routing/assembly.
+
+    All display params (``detail_level`` … ``offset``) stay server-side — the
+    component returns raw slices independent of them; the two include-flags gate
+    which slices it bothers to snapshot.
+    """
+
+    detail_level: str
+    max_entities_per_domain: int | None
+    include_state: bool | None
+    include_entity_id: bool | None
+    domains_filter: list[str] | None
+    limit: int | None
+    offset: int
+    include_notifications: bool
+    include_dismissed_repairs: bool
+
+
+@dataclass(frozen=True)
+class _OverviewSlices:
+    """The component's raw overview slices, adapted to the assembly's shapes.
+
+    ``registry_slices`` bundles the five ``get_system_overview`` inputs — bare
+    ``states`` / ``services`` lists plus the three registries re-wrapped in the
+    ``{success, result}`` envelope ``_extract_registry_list`` / ``load_hidden_set``
+    unwrap. ``config`` is the bare ``get_config()`` dict. ``notifications`` and
+    ``repairs`` are re-wrapped in the WS ``{success, result}`` envelope the
+    ``_fetch_*`` helpers unwrap (``repairs`` nested under ``result.issues``).
+    """
+
+    registry_slices: dict[str, Any]
+    config: dict[str, Any]
+    notifications: dict[str, Any]
+    repairs: dict[str, Any]
+
+
+def _build_component_overview_request(inputs: _OverviewInputs) -> dict[str, Any]:
+    """Translate resolved ha_get_overview inputs into an ``ha_mcp_tools/overview`` request.
+
+    The component returns raw slices independent of the display params
+    (``detail_level`` / ``domains`` / ``limit`` / ``offset`` /
+    ``max_entities_per_domain`` / ``include_state`` / ``include_entity_id`` stay
+    server-side — the server assembles), so only the two fetch-gating flags cross
+    the wire: ``include_notifications`` mirrors the wrapper's flag;
+    ``include_repairs`` is always ``True`` because the wrapper always assembles
+    repairs (``include_dismissed_repairs`` only filters dismissed ones
+    server-side, it never skips the fetch).
+    """
+    return {
+        "include_notifications": inputs.include_notifications,
+        "include_repairs": True,
+    }
+
+
+def _wrap_registry(slice_value: Any) -> dict[str, Any]:
+    """Wrap a bare registry list in the ``{success, result}`` envelope the assembly expects."""
+    return {
+        "success": True,
+        "result": slice_value if isinstance(slice_value, list) else [],
+    }
+
+
+def _build_overview_slices(component_result: dict[str, Any]) -> _OverviewSlices:
+    """Adapt the component's BARE overview slices into the assembly's shapes.
+
+    The component returns bare in-process data (no ``{success, result}`` WS
+    wrapper — design § ha_mcp_tools/overview); the server's ``get_system_overview``
+    + ``_fetch_*`` were written against the wrapped REST/WS payloads, so the three
+    registries and the notifications/repairs reads are re-wrapped here at the
+    seam. ``states`` / ``services`` / ``config`` already match their bare
+    ``get_states()`` / ``get_services()`` / ``get_config()`` shapes. Every field
+    is type-guarded so a malformed slice degrades to empty rather than raising
+    inside the assembly.
+    """
+    result = component_result if isinstance(component_result, dict) else {}
+    states = result.get("states")
+    services = result.get("services")
+    config = result.get("config")
+    notifications = result.get("notifications")
+    repairs = result.get("repairs")
+    return _OverviewSlices(
+        registry_slices={
+            "states": states if isinstance(states, list) else [],
+            "services": services if isinstance(services, list) else [],
+            "area_registry": _wrap_registry(result.get("area_registry")),
+            "entity_registry": _wrap_registry(result.get("entity_registry")),
+            "device_registry": _wrap_registry(result.get("device_registry")),
+        },
+        config=config if isinstance(config, dict) else {},
+        notifications={
+            "success": True,
+            "result": notifications if isinstance(notifications, list) else [],
+        },
+        repairs={
+            "success": True,
+            "result": {"issues": repairs if isinstance(repairs, list) else []},
+        },
+    )
+
+
 def _normalize_regular_search_result(
     result: dict[str, Any],
     search_type: str,
@@ -2611,23 +2713,19 @@ class SearchTools:
 
         parsed_domains = parse_string_list_param(domains, "domains", allow_csv=True)
 
-        result = await self._smart_tools.get_system_overview(
-            detail_level,
-            max_entities_per_domain,
-            include_state_bool,
-            include_entity_id_bool,
-            domains_filter=parsed_domains,
-            limit=limit,
-            offset=offset,
+        result = await self._collect_overview(
+            _OverviewInputs(
+                detail_level=detail_level,
+                max_entities_per_domain=max_entities_per_domain,
+                include_state=include_state_bool,
+                include_entity_id=include_entity_id_bool,
+                domains_filter=parsed_domains,
+                limit=limit,
+                offset=offset,
+                include_notifications=include_notifications_bool,
+                include_dismissed_repairs=include_dismissed_repairs_bool,
+            )
         )
-        result = cast(dict[str, Any], result)
-
-        await self._fetch_system_info(result, detail_level)
-
-        if include_notifications_bool:
-            await self._fetch_notifications(result)
-
-        await self._fetch_repairs(result, include_dismissed_repairs_bool)
 
         settings = get_global_settings()
         if settings.enable_tool_search:
@@ -2703,11 +2801,23 @@ class SearchTools:
         return projected
 
     async def _fetch_system_info(
-        self, result: dict[str, Any], detail_level: str
+        self,
+        result: dict[str, Any],
+        detail_level: str,
+        *,
+        prefetched_config: dict[str, Any] | None = None,
     ) -> None:
-        """Fetch HA config and populate result['system_info']; tolerates failure."""
+        """Populate result['system_info'] from HA config; tolerates failure.
+
+        ``prefetched_config`` (the component's ``config`` slice, already the bare
+        ``get_config()`` dict) is used verbatim when given, skipping the fetch.
+        """
         try:
-            config = await self._client.get_config()
+            config = (
+                prefetched_config
+                if prefetched_config is not None
+                else await self._client.get_config()
+            )
             system_info: dict[str, Any] = {
                 "base_url": self._client.base_url,
                 "version": config.get("version"),
@@ -2746,13 +2856,27 @@ class SearchTools:
             if "system_summary" in result:
                 result["system_summary"].setdefault("version", "unknown")
 
-    async def _fetch_notifications(self, result: dict[str, Any]) -> None:
-        """Fetch active persistent notifications and attach them to result."""
+    async def _fetch_notifications(
+        self,
+        result: dict[str, Any],
+        *,
+        prefetched_notifications: dict[str, Any] | None = None,
+    ) -> None:
+        """Attach active persistent notifications to result.
+
+        ``prefetched_notifications`` (the component's ``notifications`` slice
+        re-wrapped in the ``{success, result}`` envelope) is unwrapped by the same
+        code as the live fetch when given, skipping the WS call.
+        """
         result["notification_count"] = 0
         result["notifications"] = []
         try:
-            ws_result = await self._client.send_websocket_message(
-                {"type": "persistent_notification/get"}
+            ws_result = (
+                prefetched_notifications
+                if prefetched_notifications is not None
+                else await self._client.send_websocket_message(
+                    {"type": "persistent_notification/get"}
+                )
             )
             if ws_result.get("success"):
                 notifications = ws_result.get("result", [])
@@ -2772,14 +2896,28 @@ class SearchTools:
             )
 
     async def _fetch_repairs(
-        self, result: dict[str, Any], include_dismissed_repairs_bool: bool
+        self,
+        result: dict[str, Any],
+        include_dismissed_repairs_bool: bool,
+        *,
+        prefetched_repairs: dict[str, Any] | None = None,
     ) -> None:
-        """Fetch active repairs issues and attach them to result."""
+        """Attach active repairs issues to result.
+
+        ``prefetched_repairs`` (the component's ``repairs`` slice re-wrapped in the
+        ``{success, result: {issues: [...]}}`` envelope) is unwrapped, filtered
+        (``filter_active_repairs``), and projected by the same code as the live
+        fetch when given, skipping the WS call.
+        """
         result["repair_count"] = 0
         result["repairs"] = []
         try:
-            repairs_result = await self._client.send_websocket_message(
-                {"type": "repairs/list_issues"}
+            repairs_result = (
+                prefetched_repairs
+                if prefetched_repairs is not None
+                else await self._client.send_websocket_message(
+                    {"type": "repairs/list_issues"}
+                )
             )
             if repairs_result.get("success"):
                 all_issues = repairs_result.get("result", {}).get("issues", [])
@@ -2805,6 +2943,125 @@ class SearchTools:
         except Exception as e:
             logger.warning("Failed to fetch repairs for overview: %s", e, exc_info=True)
             result["repairs_error"] = f"Could not fetch repairs: {e}"
+
+    async def _collect_overview(self, inputs: _OverviewInputs) -> dict[str, Any]:
+        """Assemble the HA-sourced overview, preferring the in-process component.
+
+        The component's ``ha_mcp_tools/overview`` returns the eight raw reads the
+        legacy path makes today (states + services + the three registries +
+        config + notifications + repairs) in one WebSocket round-trip; the server
+        feeds those slices into its **unchanged** assembly
+        (``get_system_overview`` + ``system_info`` / ``notifications`` /
+        ``repairs``), so the two paths are byte-identical by construction. Routed
+        all-or-nothing per the ``ha_search`` precedent: gated on the ``overview``
+        capability AND an inactive entity-visibility filter. The filter is applied
+        server-side over the slices either way, so the bypass is a simplification,
+        not a correctness requirement — an active filter that respects Assist
+        exposure would need extra WS reads inside ``load_hidden_set`` that the
+        single round-trip does not carry, so it keeps the legacy path (mirroring
+        search; applying the filter over the slices can come later). The
+        server-side-only fields (``tool_discovery``, ``settings_url``,
+        ``read_only_mode``, ``ha_mcp_update``) and the ``fields=`` projection are
+        applied by ``ha_get_overview`` after this, identically on both paths.
+        """
+        caps = await get_component_caps(self._client)
+        if (
+            component_supports(caps, "overview")
+            and not await visibility_filter_active()
+        ):
+            component_result = await self._overview_via_component(inputs)
+            if component_result is not None:
+                return component_result
+        return await self._assemble_overview(inputs, None)
+
+    async def _overview_via_component(
+        self, inputs: _OverviewInputs
+    ) -> dict[str, Any] | None:
+        """Serve the overview from the component's slices; ``None`` ⇒ run legacy.
+
+        Error taxonomy (design § 4), mirroring ``_ha_search_via_component``:
+
+        - ``unknown_command`` (the component was downgraded mid-session, so the
+          cached positive caps are stale): invalidate the caps and return
+          ``None`` so the caller falls back **silently** — an expected,
+          non-actionable transition.
+        - any other ``HomeAssistantCommandError`` (a component handler bug):
+          serve the correct result from the legacy path, append a ``warnings[]``
+          entry, and ``log.warning`` — correct results now, breakage visible.
+        - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
+          propagates; the legacy path depends on the same socket and would fail
+          identically, so surfacing it is correct.
+        """
+        try:
+            raw = await self._send_component_overview(inputs)
+        except HomeAssistantCommandError as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+                return None
+            legacy = await self._assemble_overview(inputs, None)
+            legacy.setdefault("warnings", []).append(
+                f"component overview path failed ({exc}); served via legacy path"
+            )
+            logger.warning("ha_mcp_tools/overview failed; fell back to legacy: %r", exc)
+            return legacy
+        slices = _build_overview_slices(raw.get("result") or {})
+        return await self._assemble_overview(inputs, slices)
+
+    async def _send_component_overview(self, inputs: _OverviewInputs) -> dict[str, Any]:
+        """Send one ``ha_mcp_tools/overview`` command over the per-client WebSocket."""
+        ws = await get_websocket_client(
+            url=self._client.base_url, token=self._client.token
+        )
+        return await ws.send_command(
+            "ha_mcp_tools/overview",
+            **_build_component_overview_request(inputs),
+        )
+
+    async def _assemble_overview(
+        self, inputs: _OverviewInputs, prefetched: _OverviewSlices | None
+    ) -> dict[str, Any]:
+        """Assemble the overview from slices — prefetched or legacy-fetched.
+
+        Identical assembly either way: ``get_system_overview``'s join plus the
+        wrapper's ``system_info`` / ``notifications`` / ``repairs``, with the
+        entity-visibility filter applied server-side over the (prefetched or
+        fetched) registry + states. ``prefetched`` carries the component's raw
+        slices adapted to the shapes the assembly consumes; ``None`` runs the
+        original per-read REST/WS fetches. Byte-parity between the two is by
+        construction — same code, only the data source differs.
+        """
+        result = await self._smart_tools.get_system_overview(
+            inputs.detail_level,
+            inputs.max_entities_per_domain,
+            inputs.include_state,
+            inputs.include_entity_id,
+            domains_filter=inputs.domains_filter,
+            limit=inputs.limit,
+            offset=inputs.offset,
+            prefetched_slices=prefetched.registry_slices if prefetched else None,
+        )
+        result = cast(dict[str, Any], result)
+
+        await self._fetch_system_info(
+            result,
+            inputs.detail_level,
+            prefetched_config=prefetched.config if prefetched else None,
+        )
+
+        if inputs.include_notifications:
+            await self._fetch_notifications(
+                result,
+                prefetched_notifications=(
+                    prefetched.notifications if prefetched else None
+                ),
+            )
+
+        await self._fetch_repairs(
+            result,
+            inputs.include_dismissed_repairs,
+            prefetched_repairs=prefetched.repairs if prefetched else None,
+        )
+        return result
 
     async def _ha_deep_search(
         self,

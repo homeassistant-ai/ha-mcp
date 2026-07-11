@@ -25,6 +25,7 @@ class SystemOverviewMixin(_SearchBase):
         domains_filter: list[str] | None = None,
         limit: int | None = None,
         offset: int = 0,
+        prefetched_slices: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Get AI-friendly system overview with intelligent categorization.
@@ -42,27 +43,50 @@ class SystemOverviewMixin(_SearchBase):
                 Defaults to None (no limit) for minimal, 200 for standard/full.
                 Domain counts and states_summary are always complete regardless.
             offset: Number of entities to skip for pagination (default: 0)
+            prefetched_slices: The five overview reads (``states``, ``services``,
+                ``area_registry``, ``entity_registry``, ``device_registry``)
+                already fetched by a caller — the ``ha_mcp_tools/overview``
+                component collapses them into one round-trip. When given, the
+                parallel gather is skipped and these are used verbatim (bare
+                ``states``/``services`` lists; the three registries in the
+                ``{success, result}`` envelope ``_extract_registry_list`` /
+                ``load_hidden_set`` unwrap). ``None`` (default) fetches them
+                itself, mirroring the ``prefetched_states``/``prefetched_registry``
+                threading used by the search paths.
 
         Returns:
             System overview optimized for AI understanding at requested detail level
         """
         try:
-            # Fetch all data in parallel. return_exceptions=True so a degraded
-            # registry/service fetch doesn't abort the whole overview.
-            results = await asyncio.gather(
-                self.client.get_states(),
-                self.client.get_services(),
-                self.client.send_websocket_message(
-                    {"type": "config/area_registry/list"}
-                ),
-                self.client.send_websocket_message(
-                    {"type": "config/entity_registry/list"}
-                ),
-                self.client.send_websocket_message(
-                    {"type": "config/device_registry/list"}
-                ),
-                return_exceptions=True,
-            )
+            if prefetched_slices is not None:
+                # Component raw-slice path: the reads were already returned in
+                # one WS round-trip, so use them instead of fetching. Downstream
+                # unwrapping is unchanged — states/services are bare lists and the
+                # registries carry the {success, result} envelope.
+                results: list[Any] = [
+                    prefetched_slices["states"],
+                    prefetched_slices["services"],
+                    prefetched_slices["area_registry"],
+                    prefetched_slices["entity_registry"],
+                    prefetched_slices["device_registry"],
+                ]
+            else:
+                # Fetch all data in parallel. return_exceptions=True so a degraded
+                # registry/service fetch doesn't abort the whole overview.
+                results = await asyncio.gather(
+                    self.client.get_states(),
+                    self.client.get_services(),
+                    self.client.send_websocket_message(
+                        {"type": "config/area_registry/list"}
+                    ),
+                    self.client.send_websocket_message(
+                        {"type": "config/entity_registry/list"}
+                    ),
+                    self.client.send_websocket_message(
+                        {"type": "config/device_registry/list"}
+                    ),
+                    return_exceptions=True,
+                )
 
             # Entities are mandatory — surface connection/auth errors immediately.
             # Use BaseException so a cancelled states fetch propagates instead of
