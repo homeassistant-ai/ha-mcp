@@ -19,7 +19,10 @@ class SceneSearchMixin(ConfigFetchMixin):
     """Scene config search (scenes lack a list primitive; per-id fetch + registry walk)."""
 
     async def _walk_scene_registry(
-        self, configs: dict[str, dict[str, Any]]
+        self,
+        configs: dict[str, dict[str, Any]],
+        *,
+        prefetched_registry: Any = None,
     ) -> tuple[set[str], dict[str, str], bool]:
         """Walk the entity registry once for scene metadata (Phase 2.5).
 
@@ -60,12 +63,19 @@ class SceneSearchMixin(ConfigFetchMixin):
         # scene the registry knows about regardless of bulk-fetch coverage.
         slug_to_storage_id: dict[str, str] = {}
         try:
-            reg_resp = await asyncio.wait_for(
-                self.client.send_websocket_message(
-                    {"type": "config/entity_registry/list"}
-                ),
-                timeout=BULK_WEBSOCKET_TIMEOUT,
-            )
+            # The ha_search orchestrator may hand us the registry list it already
+            # fetched for the entity branch (one list instead of two). A
+            # pre-fetched non-success payload flows through the same else-branch
+            # below → registry_failed=True, matching a self-fetched soft failure.
+            if prefetched_registry is not None:
+                reg_resp = prefetched_registry
+            else:
+                reg_resp = await asyncio.wait_for(
+                    self.client.send_websocket_message(
+                        {"type": "config/entity_registry/list"}
+                    ),
+                    timeout=BULK_WEBSOCKET_TIMEOUT,
+                )
             if isinstance(reg_resp, dict) and reg_resp.get("success"):
                 for entry in reg_resp.get("result") or []:
                     self._index_scene_registry_entry(
@@ -200,6 +210,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         exact_match: bool,
         *,
         config_time_budget: float | None = None,
+        prefetched_registry: Any = None,
     ) -> tuple[list[dict[str, Any]], int, int, int, bool, int]:
         """Deep-search scenes: 3-tier strategy plus registry-walk augmentation.
 
@@ -246,7 +257,9 @@ class SceneSearchMixin(ConfigFetchMixin):
             homeassistant_scene_uids,
             slug_to_storage_id,
             registry_failed,
-        ) = await self._walk_scene_registry(configs)
+        ) = await self._walk_scene_registry(
+            configs, prefetched_registry=prefetched_registry
+        )
 
         failed_count = 0
         skipped_count = 0

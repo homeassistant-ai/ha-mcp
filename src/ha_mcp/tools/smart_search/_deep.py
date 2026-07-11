@@ -41,6 +41,9 @@ class DeepSearchMixin(SceneSearchMixin):
         exact_match: bool = True,
         config_time_budget: float | None = None,
         ctx: Context | None = None,
+        *,
+        prefetched_states: list[dict[str, Any]] | None = None,
+        prefetched_registry: Any = None,
     ) -> dict[str, Any]:
         """
         Deep search across automation, script, scene, helper, and dashboard
@@ -58,6 +61,12 @@ class DeepSearchMixin(SceneSearchMixin):
             include_config: Include full config in results (default: False)
             concurrency_limit: Max concurrent API calls for config fetching
             exact_match: Use exact substring matching (default: True). Set False for fuzzy.
+            prefetched_states: Pre-fetched ``get_states()`` list shared by the
+                ha_search orchestrator when both search branches run; ``None``
+                means fetch here.
+            prefetched_registry: Pre-fetched ``config/entity_registry/list``
+                response threaded to the scene registry walk; ``None`` means the
+                walk fetches it itself.
 
         Returns:
             Dictionary with search results grouped by type
@@ -87,8 +96,14 @@ class DeepSearchMixin(SceneSearchMixin):
                 message="fetching entity states",
             )
 
-            # Fetch all entities once at the beginning to avoid repeated calls
-            all_entities = await self.client.get_states()
+            # Fetch all entities once at the beginning to avoid repeated calls.
+            # The ha_search orchestrator may hand us a snapshot it already fetched
+            # for the entity branch so the two branches share one /api/states.
+            all_entities = (
+                prefetched_states
+                if prefetched_states is not None
+                else await self.client.get_states()
+            )
             phase_done = 1
             await safe_progress(
                 ctx,
@@ -192,6 +207,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     query_lower,
                     exact_match,
                     config_time_budget=config_time_budget,
+                    prefetched_registry=prefetched_registry,
                 )
                 phase_done += 1
                 await safe_progress(

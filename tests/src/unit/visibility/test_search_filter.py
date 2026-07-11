@@ -81,8 +81,10 @@ def test_corrupt_config_fails_open_returns_both(tmp_path, monkeypatch):
 
 
 class _DomainClient:
-    """Client for the domain-listing path: states + registry + get_config
-    (the domain path wraps its result via add_timezone_metadata)."""
+    """Client for the domain-listing path: states + entity registry.
+
+    The domain path returns its search dict directly (no add_timezone_metadata
+    wrapper) since entity records carry no timestamp fields."""
 
     def __init__(self, states, registry):
         self._states = states
@@ -94,9 +96,6 @@ class _DomainClient:
     async def send_websocket_message(self, msg):
         assert msg == {"type": "config/entity_registry/list"}
         return self._registry
-
-    async def get_config(self):
-        return {"time_zone": "UTC"}
 
 
 def test_domain_only_search_excludes_denied_and_counts_stay_coherent(
@@ -134,10 +133,9 @@ def test_domain_only_search_excludes_denied_and_counts_stay_coherent(
             parsed_result_fields=None,
         )
     )
-    data = res["data"]
-    ids = [r["entity_id"] for r in data["results"]]
+    ids = [r["entity_id"] for r in res["results"]]
     assert ids == ["sensor.keep"]  # diagnostic sensor.drop excluded
-    assert data["total_matches"] == 1  # count reflects post-filter set, not raw 2
+    assert res["total_matches"] == 1  # count reflects post-filter set, not raw 2
 
 
 class _GetStateClient:

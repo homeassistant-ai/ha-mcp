@@ -467,6 +467,39 @@ async def _fetch_assist_exposure(
         return None, False
 
 
+def config_needs_device_registry(config: VisibilityConfig) -> bool:
+    """Whether an enabled visibility config has a dimension that reads the device registry.
+
+    The device registry (``config/device_registry/list``) only supplies the
+    device-inherited area/labels consumed by the area/label exclude *and* allow
+    dimensions (see ``_effective_area`` / ``_effective_labels``). A disabled
+    config, or an enabled one with none of those four dimensions set (the
+    default), never touches it, so fetching it there is pure waste.
+    """
+    return config.enabled and bool(
+        config.exclude_areas
+        or config.exclude_labels
+        or config.allow_areas
+        or config.allow_labels
+    )
+
+
+async def device_registry_needed_for_visibility() -> bool:
+    """Load the visibility config off-loop and report whether the device-registry
+    fetch is needed by any active area/label dimension.
+
+    Fail-open to ``False``: a default install (no config file) or an unloadable
+    config resolves to disabled, which needs no device registry. The
+    operator-facing load-failure warning is owned by the ``load_hidden_set`` call
+    that runs right after — this gate only decides whether to spend the fetch.
+    """
+    try:
+        config = await asyncio.to_thread(load_visibility_config, get_data_dir())
+    except Exception:
+        return False
+    return config_needs_device_registry(config)
+
+
 async def load_hidden_set(
     registry_result: object,
     states_result: object | None = None,

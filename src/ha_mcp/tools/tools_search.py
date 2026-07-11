@@ -17,7 +17,10 @@ from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from ..utils.fuzzy_search import apply_hidden_penalty
-from ..visibility.resolver import load_hidden_set
+from ..visibility.resolver import (
+    device_registry_needed_for_visibility,
+    load_hidden_set,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -345,6 +348,38 @@ def _compute_eligibility(
     return registry_eligible, body_eligible, body_skipped_by_intent_gate
 
 
+async def _prefetch_shared_search_snapshots(
+    client: Any,
+    *,
+    registry_eligible: bool,
+    body_eligible: bool,
+) -> tuple[list[dict[str, Any]] | None, Any]:
+    """Pre-fetch ``/api/states`` + the entity-registry list once for ha_search.
+
+    Only pre-fetches when both branches are eligible — a lone branch keeps
+    fetching for itself. Returns ``(shared_states, shared_registry)``; either is
+    ``None`` when not pre-fetched, or when its fetch failed (each branch then
+    fetches and fails on its own, reproducing the per-surface partial-result
+    handling exactly). A cancellation (structured-concurrency teardown)
+    propagates rather than degrading to per-branch fetching.
+    """
+    if not (registry_eligible and body_eligible):
+        return None, None
+    prefetch = await asyncio.gather(
+        client.get_states(),
+        client.send_websocket_message({"type": "config/entity_registry/list"}),
+        return_exceptions=True,
+    )
+    for snap in prefetch:
+        if isinstance(snap, BaseException) and not isinstance(snap, Exception):
+            raise snap
+    shared_states = prefetch[0] if not isinstance(prefetch[0], BaseException) else None
+    shared_registry = (
+        prefetch[1] if not isinstance(prefetch[1], BaseException) else None
+    )
+    return shared_states, shared_registry
+
+
 def _merge_payload_metadata(
     response: dict[str, Any],
     payload: dict[str, Any],
@@ -457,10 +492,12 @@ def _apply_search_outcome(
 ) -> None:
     """Apply one gather outcome (entities or configs) to the response dict in-place.
 
-    ``_ha_search_entities`` wraps its payload via ``add_timezone_metadata``
-    into ``{"data": {...}, "metadata": {...}}``; ``_ha_deep_search`` returns
-    the search dict directly.  Unwrap once so downstream reads see the same
-    shape regardless of which helper produced it.
+    Both ``_ha_search_entities`` and ``_ha_deep_search`` return their search dict
+    directly. The entity builders no longer wrap it via ``add_timezone_metadata``:
+    entity-search records carry none of the timestamp fields that enrichment
+    converts, so it was a discarded ``/api/config`` fetch. The ``{"data": ...}``
+    unwrap is kept as a defensive no-op so a future wrapped payload still reads
+    correctly.
     """
     payload = (
         outcome["data"] if isinstance(outcome, dict) and "data" in outcome else outcome
@@ -753,6 +790,9 @@ async def _exact_match_search(
     offset: int = 0,
     include_hidden: bool = True,
     state_filter: str | None = None,
+    *,
+    prefetched_states: list[dict[str, Any]] | None = None,
+    prefetched_registry: Any = None,
 ) -> dict[str, Any]:
     """
     Search entities by substring on entity_id + friendly_name.
@@ -763,22 +803,49 @@ async def _exact_match_search(
     ``hidden_by`` entities: by default they remain in results but
     receive a score penalty so visible matches sort first; pass
     ``include_hidden=False`` to filter them out entirely.
+
+    ``prefetched_states`` / ``prefetched_registry`` are the snapshots the
+    ha_search orchestrator shares with the config branch when both run (``None``
+    = fetch here). The device registry is fetched only when the loaded visibility
+    config has an area/label dimension that consumes it.
     """
-    # Fetch states + entity registry in parallel. Registry-list failure
-    # is tolerated (we just lose the hidden filter); states-fetch failure
-    # is fatal — auth/connection errors must propagate so the agent sees
-    # "your token is invalid" instead of "zero entities matched".
-    entities_task = client.get_states()
-    registry_task = client.send_websocket_message(
-        {"type": "config/entity_registry/list"}
+    # Fetch states + entity registry in parallel (unless the orchestrator already
+    # shared them). Registry-list failure is tolerated (we just lose the hidden
+    # filter); states-fetch failure is fatal — auth/connection errors must
+    # propagate so the agent sees "your token is invalid" instead of "zero
+    # entities matched". The device registry is gated: it only feeds the
+    # visibility area/label dimensions, so a default/area-free config skips it.
+    need_device = await device_registry_needed_for_visibility()
+    fetch_coros: list[Any] = []
+    fetch_slots: list[str] = []
+    if prefetched_states is None:
+        fetch_coros.append(client.get_states())
+        fetch_slots.append("states")
+    if prefetched_registry is None:
+        fetch_coros.append(
+            client.send_websocket_message({"type": "config/entity_registry/list"})
+        )
+        fetch_slots.append("registry")
+    if need_device:
+        fetch_coros.append(
+            client.send_websocket_message({"type": "config/device_registry/list"})
+        )
+        fetch_slots.append("device")
+    fetched = (
+        await asyncio.gather(*fetch_coros, return_exceptions=True)
+        if fetch_coros
+        else []
     )
-    device_task = client.send_websocket_message({"type": "config/device_registry/list"})
-    gather_results = await asyncio.gather(
-        entities_task, registry_task, device_task, return_exceptions=True
+    slots = dict(zip(fetch_slots, fetched, strict=True))
+    state_result: Any = (
+        prefetched_states if prefetched_states is not None else slots.get("states")
     )
-    state_result: Any = gather_results[0]
-    registry_result: Any = gather_results[1]
-    device_result: Any = gather_results[2]
+    registry_result: Any = (
+        prefetched_registry
+        if prefetched_registry is not None
+        else slots.get("registry")
+    )
+    device_result: Any = slots.get("device")
     _raise_gather_exceptions(state_result, registry_result, device_result)
     all_entities = state_result
     hidden_ids = _build_hidden_ids(registry_result)
@@ -1157,6 +1224,16 @@ class SearchTools:
                 )
             )
 
+        # When both branches run they each independently fetch the full state
+        # machine (/api/states) and the entity-registry list; fetch each once and
+        # thread the snapshots down so the two branches share one of each instead
+        # of fetching two.
+        shared_states, shared_registry = await _prefetch_shared_search_snapshots(
+            self._client,
+            registry_eligible=registry_eligible,
+            body_eligible=body_eligible,
+        )
+
         registry_callable_kwargs: dict[str, Any] = {
             "query": query_text or None,
             "domain_filter": domain_filter,
@@ -1169,6 +1246,8 @@ class SearchTools:
             "per_domain_limit": per_domain_limit,
             "state_filter": state_filter,
             "result_fields": result_fields,
+            "prefetched_states": shared_states,
+            "prefetched_registry": shared_registry,
         }
 
         tasks: list[Any] = []
@@ -1187,6 +1266,8 @@ class SearchTools:
                     exact_match=exact_match,
                     config_time_budget=config_time_budget,
                     ctx=ctx,
+                    prefetched_states=shared_states,
+                    prefetched_registry=shared_registry,
                 )
             )
             labels.append("configs")
@@ -1368,6 +1449,9 @@ class SearchTools:
                 ),
             ),
         ] = None,
+        *,
+        prefetched_states: list[dict[str, Any]] | None = None,
+        prefetched_registry: Any = None,
     ) -> dict[str, Any]:
         """Search for entities (lights, sensors, switches, etc.) by name, domain, or area.
 
@@ -1378,6 +1462,10 @@ class SearchTools:
         To enumerate all entities of a domain, omit `query` and pass `domain_filter`. For
         example, `ha_search_entities(domain_filter="calendar")` lists all calendars. At
         least one of `query`, `domain_filter`, or `area_filter` must be set.
+
+        ``prefetched_states`` / ``prefetched_registry`` are the orchestrator's
+        shared snapshots; they only reach the regular (non-area, non-domain-only)
+        path, which is the only one that can run alongside the config branch.
         """
         query, domain_filter, area_filter, parsed_result_fields = (
             _validate_entity_search_params(
@@ -1427,11 +1515,10 @@ class SearchTools:
                 # carry area_result's warnings; forward them here in one place so a
                 # visibility/registry degradation on the area path is not silently
                 # dropped (mirrors the non-area path's merge_visibility_warnings).
-                # The builders wrap their payload via add_timezone_metadata into
-                # {"data": {...}, "metadata": {...}}, and the ha_search orchestrator
-                # unwraps ["data"] before merging metadata — so the warnings must
-                # live inside ["data"], not at the wrapper's top level, or the
-                # unwrap drops them.
+                # The builders now return the search dict directly (no
+                # add_timezone_metadata wrapper), so warnings merge into that dict;
+                # the ``["data"]`` unwrap is a defensive holdover for a hypothetical
+                # future wrapped payload.
                 warn_target = (
                     area_search["data"]
                     if isinstance(area_search, dict) and "data" in area_search
@@ -1464,6 +1551,8 @@ class SearchTools:
                 group_by_domain_bool,
                 per_domain_limit_int,
                 parsed_result_fields,
+                prefetched_states=prefetched_states,
+                prefetched_registry=prefetched_registry,
             )
 
         except ToolError:
@@ -1636,7 +1725,10 @@ class SearchTools:
         )
         _apply_result_fields_to_response(search_data, parsed_result_fields)
 
-        return await add_timezone_metadata(self._client, search_data)
+        # No add_timezone_metadata: entity records carry no timestamp fields, so
+        # the enrichment converted nothing and its /api/config fetch was pure
+        # waste (the orchestrator discards its metadata wrapper anyway).
+        return search_data
 
     async def _search_area_only_populated(
         self,
@@ -1711,7 +1803,8 @@ class SearchTools:
         )
         _apply_result_fields_to_response(area_search_data, parsed_result_fields)
 
-        return await add_timezone_metadata(self._client, area_search_data)
+        # No add_timezone_metadata — see _search_area_with_query.
+        return area_search_data
 
     async def _search_area_only(
         self,
@@ -1756,7 +1849,8 @@ class SearchTools:
             empty_area_data["state_filter"] = state_filter
         if group_by_domain_bool:
             empty_area_data["by_domain"] = {}
-        return await add_timezone_metadata(self._client, empty_area_data)
+        # No add_timezone_metadata — see _search_area_with_query.
+        return empty_area_data
 
     async def _search_domain_only(
         self,
@@ -1773,20 +1867,26 @@ class SearchTools:
         """List all entities of a single domain (empty query + domain_filter)."""
         # Fetch states + registry list in parallel. Registry-list failure is
         # tolerated (we just lose the hidden filter); states-fetch failure is
-        # fatal — auth/connection errors must propagate.
-        states_task = self._client.get_states()
-        registry_task = self._client.send_websocket_message(
-            {"type": "config/entity_registry/list"}
-        )
-        device_task = self._client.send_websocket_message(
-            {"type": "config/device_registry/list"}
-        )
-        gather_results = await asyncio.gather(
-            states_task, registry_task, device_task, return_exceptions=True
-        )
+        # fatal — auth/connection errors must propagate. The device registry is
+        # gated: it only feeds the visibility area/label dimensions, so a
+        # default/area-free config skips the fetch entirely.
+        need_device = await device_registry_needed_for_visibility()
+        fetch_coros: list[Any] = [
+            self._client.get_states(),
+            self._client.send_websocket_message(
+                {"type": "config/entity_registry/list"}
+            ),
+        ]
+        if need_device:
+            fetch_coros.append(
+                self._client.send_websocket_message(
+                    {"type": "config/device_registry/list"}
+                )
+            )
+        gather_results = await asyncio.gather(*fetch_coros, return_exceptions=True)
         states_result: Any = gather_results[0]
         registry_result: Any = gather_results[1]
-        device_result: Any = gather_results[2]
+        device_result: Any = gather_results[2] if need_device else None
         if isinstance(states_result, BaseException):
             raise states_result
         # CancelledError must propagate; gather captures it like any other
@@ -1862,10 +1962,8 @@ class SearchTools:
                 domain_filter, results, per_domain_limit_int, parsed_result_fields
             )
 
-        return await add_timezone_metadata(
-            self._client,
-            merge_visibility_warnings(domain_list_data, visibility_warnings),
-        )
+        # No add_timezone_metadata — see _search_area_with_query.
+        return merge_visibility_warnings(domain_list_data, visibility_warnings)
 
     async def _search_regular(
         self,
@@ -1879,8 +1977,16 @@ class SearchTools:
         group_by_domain_bool: bool,
         per_domain_limit_int: int | None,
         parsed_result_fields: list[str] | None,
+        *,
+        prefetched_states: list[dict[str, Any]] | None = None,
+        prefetched_registry: Any = None,
     ) -> dict[str, Any]:
-        """Perform exact-match or fuzzy entity search (no area/domain-listing shortcuts)."""
+        """Perform exact-match or fuzzy entity search (no area/domain-listing shortcuts).
+
+        ``prefetched_states`` / ``prefetched_registry`` are the snapshots the
+        ha_search orchestrator shares with the config branch when both run; they
+        are threaded into whichever backend this call uses (``None`` = fetch).
+        """
         result: dict[str, Any]
         warning: str | None = None
         search_type = "exact_match" if exact_match_bool else "fuzzy_search"
@@ -1897,6 +2003,8 @@ class SearchTools:
                 offset,
                 include_hidden=include_hidden_bool,
                 state_filter=state_filter,
+                prefetched_states=prefetched_states,
+                prefetched_registry=prefetched_registry,
             )
         else:
             # Fuzzy mode: BM25 → substring fallback on exception only.
@@ -1907,6 +2015,8 @@ class SearchTools:
                     offset=offset,
                     domain_filter=domain_filter,
                     include_hidden=include_hidden_bool,
+                    prefetched_states=prefetched_states,
+                    prefetched_registry=prefetched_registry,
                 )
                 search_type = "fuzzy_search"
             except asyncio.CancelledError:
@@ -1928,6 +2038,8 @@ class SearchTools:
                     offset,
                     include_hidden=include_hidden_bool,
                     state_filter=state_filter,
+                    prefetched_states=prefetched_states,
+                    prefetched_registry=prefetched_registry,
                 )
                 warning = "Fuzzy search unavailable, using substring match"
                 search_type = "exact_match"
@@ -1967,7 +2079,8 @@ class SearchTools:
 
         _apply_result_fields_to_response(result, parsed_result_fields)
 
-        return await add_timezone_metadata(self._client, result)
+        # No add_timezone_metadata — see _search_area_with_query.
+        return result
 
     @tool(
         name="ha_get_overview",
@@ -2409,6 +2522,9 @@ class SearchTools:
             ),
         ] = None,
         ctx: Context | None = None,
+        *,
+        prefetched_states: list[dict[str, Any]] | None = None,
+        prefetched_registry: Any = None,
     ) -> dict[str, Any]:
         """Search inside automation, script, scene, helper, and dashboard *configurations* — not for finding entity IDs.
 
@@ -2462,6 +2578,8 @@ class SearchTools:
                 exact_match=exact_match_bool,
                 config_time_budget=config_time_budget,
                 ctx=ctx,
+                prefetched_states=prefetched_states,
+                prefetched_registry=prefetched_registry,
             )
             return cast(dict[str, Any], result)
         except ToolError:

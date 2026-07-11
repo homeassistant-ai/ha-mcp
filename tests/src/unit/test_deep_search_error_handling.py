@@ -52,6 +52,12 @@ class TestDeepSearchErrorHandling:
         client = MagicMock()
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         client.get_states = AsyncMock(return_value=[])
+        # ha_search now shares one entity-registry list between both branches by
+        # pre-fetching it in the orchestrator, so the client must support the WS
+        # call directly (previously the entity branch's copy was swallowed).
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
         return client
 
     @pytest.fixture
