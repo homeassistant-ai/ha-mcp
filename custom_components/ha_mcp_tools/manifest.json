@@ -19,5 +19,5 @@
     "requirements": [
         "ruamel.yaml>=0.18.0"
     ],
-    "version": "1.0.4"
+    "version": "1.0.5"
 }

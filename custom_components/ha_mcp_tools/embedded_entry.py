@@ -30,6 +30,7 @@ from .const import (
     DATA_UPDATE_COORDINATOR,
     DATA_WEBHOOK_ID,
     DOMAIN,
+    OPT_ENABLE_SIDEBAR_PANEL,
     OPT_REGENERATE_SECRETS,
     OPT_SECRET_PATH_OVERRIDE,
     OPT_WEBHOOK_ID_OVERRIDE,
@@ -67,8 +68,11 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
 
     # Admin-only "Open Web UI" sidebar panel + proxy. Registered while the entry
     # exists (its proxy returns 503 until the server is actually running), so the
-    # user sees the panel immediately and it reflects the running state.
-    await async_register_ui_panel(hass)
+    # user sees the panel immediately and it reflects the running state. Gated on
+    # the sidebar-panel option; a change to it reloads the entry, and unload's
+    # unconditional async_unregister_ui_panel then removes the panel this skips.
+    if bool(entry.options.get(OPT_ENABLE_SIDEBAR_PANEL, True)):
+        await async_register_ui_panel(hass)
 
     domain_data = hass.data.setdefault(DOMAIN, {})
     # Snapshot the options so the update listener reloads only on a genuine
