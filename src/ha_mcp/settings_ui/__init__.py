@@ -37,6 +37,7 @@ from ..config import (
     get_global_settings,
 )
 from ..errors import ErrorCode, create_error_response
+from ..llm_exposure import LLM_API_CONFIG_KEY
 from ..transforms import DEFAULT_PINNED_TOOLS, categorize_capability
 from ..utils.data_paths import get_data_dir
 
@@ -1370,7 +1371,24 @@ def build_settings_handlers(
         # (their write actions are blocked at call time instead). The JS
         # uses this to keep their toggles live while force-disabling the
         # other write-capable tools' rows when the mode is on.
+        # Conversation-agent LLM API exposure (#1745): effective value per
+        # tool (override else default) so the UI toggle renders the truth,
+        # plus the raw overrides so it can tell "user-set" from "default".
+        from ..llm_exposure import effective_llm_api_exposed, load_llm_api_overrides
         from ..read_only import READ_ONLY_EXEMPT_TOOLS
+
+        llm_overrides = load_llm_api_overrides()
+        # Feature-gated stub rows (tool not registered, flag off) carry no
+        # tags — treat them as beta so their default renders hidden, matching
+        # what the stamp will say once the flag turns the real tool on.
+        llm_effective = {
+            t["name"]: effective_llm_api_exposed(
+                t["name"],
+                t.get("tags") or (["beta"] if t.get("disabled_by") else []),
+                llm_overrides,
+            )
+            for t in tools
+        }
 
         return JSONResponse(
             {
@@ -1378,6 +1396,8 @@ def build_settings_handlers(
                 "states": states,
                 "env_pinned": pinned,
                 "read_only_exempt": sorted(READ_ONLY_EXEMPT_TOOLS),
+                "llm_api": llm_effective,
+                "llm_api_overrides": llm_overrides,
             }
         )
 
@@ -1462,8 +1482,33 @@ def build_settings_handlers(
             name: state for name, state in states.items() if name not in env_pinned
         }
 
+        # Conversation-agent LLM API exposure overrides (#1745): a sparse
+        # {tool_name: bool} map, orthogonal to the states enum. Only bools
+        # persist — tools the user never flipped keep tracking their
+        # (deny-by-default for beta/dev/restart) defaults across releases.
+        raw_llm_api = body.get("llm_api", {})
+        if not isinstance(raw_llm_api, dict):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "'llm_api' must be an object mapping tool names to booleans",
+                ),
+                status_code=400,
+            )
+        llm_api_overrides = {
+            name: value
+            for name, value in raw_llm_api.items()
+            if isinstance(name, str) and isinstance(value, bool)
+        }
+
         config = load_tool_config()
+        # The enable/disable/pin half still needs a restart to apply
+        # (visibility is wired at server build); the LLM-API exposure half
+        # applies live (stamped per tools/list). Only demand a restart when
+        # the half that needs one actually changed.
+        states_changed = config.get("tools", {}) != states
         config["tools"] = states
+        config[LLM_API_CONFIG_KEY] = llm_api_overrides
         if not save_tool_config(config):
             return JSONResponse(
                 create_error_response(
@@ -1480,9 +1525,13 @@ def build_settings_handlers(
         disabled_count = sum(1 for s in states.values() if s == "disabled")
         pinned_count = sum(1 for s in states.values() if s == "pinned")
         logger.info(
-            "Saved tool config (restart required to apply): %d disabled, %d pinned",
+            "Saved tool config (%s): %d disabled, %d pinned, %d LLM-API overrides",
+            "restart required to apply"
+            if states_changed
+            else "LLM-API exposure applies live",
             disabled_count,
             pinned_count,
+            len(llm_api_overrides),
         )
 
         # Same response shape as ``_save_feature_flags`` and
@@ -1496,8 +1545,9 @@ def build_settings_handlers(
             {
                 "success": True,
                 "applied": states,
+                "llm_api_applied": llm_api_overrides,
                 "mode": "file",
-                "restart_required": True,
+                "restart_required": states_changed,
             }
         )
 

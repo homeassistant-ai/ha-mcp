@@ -49,6 +49,7 @@ from .const import (
     DEFAULT_BIND_HOST,
     DEFAULT_CHANNEL,
     DEFAULT_ENABLE_LLM_API,
+    DEFAULT_LLM_API_EXPOSURE,
     DEFAULT_LOOPBACK_URL,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
@@ -57,6 +58,9 @@ from .const import (
     DOMAIN,
     ENTRY_TYPE_SERVER,
     ENTRY_TYPE_TOOLS,
+    EXPOSURE_BOTH,
+    EXPOSURE_FULL,
+    EXPOSURE_TOOL_SEARCH,
     LLM_API_DOCS_URL,
     OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
@@ -64,6 +68,7 @@ from .const import (
     OPT_ENABLE_LLM_API,
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
+    OPT_LLM_API_EXPOSURE,
     OPT_PIP_SPEC,
     OPT_REGENERATE_SECRETS,
     OPT_SECRET_PATH_OVERRIDE,
@@ -274,6 +279,18 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     OPT_ENABLE_LLM_API,
                     default=bool(opts.get(OPT_ENABLE_LLM_API, DEFAULT_ENABLE_LLM_API)),
                 ): bool,
+                vol.Required(
+                    OPT_LLM_API_EXPOSURE,
+                    default=str(
+                        opts.get(OPT_LLM_API_EXPOSURE, DEFAULT_LLM_API_EXPOSURE)
+                    ),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[EXPOSURE_TOOL_SEARCH, EXPOSURE_FULL, EXPOSURE_BOTH],
+                        translation_key="llm_api_exposure",
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
                 vol.Optional(
                     OPT_EXTERNAL_URL,
                     default=opts.get(OPT_EXTERNAL_URL, ""),

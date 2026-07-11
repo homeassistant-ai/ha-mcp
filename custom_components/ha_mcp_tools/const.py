@@ -295,6 +295,16 @@ OPT_ENABLE_WEBHOOK = "enable_webhook"
 # user picks it on an agent.
 OPT_ENABLE_LLM_API = "enable_llm_api"
 DEFAULT_ENABLE_LLM_API = True
+# Which exposure shape(s) the LLM API offers to conversation agents:
+# ``tool_search`` (default) registers a compact API — pinned tools plus
+# search/execute meta-tools — the shape context-limited models need; ``full``
+# registers the whole exposed catalog as one API; ``both`` registers the two
+# side by side so the choice is made per agent in HA's own selector.
+OPT_LLM_API_EXPOSURE = "llm_api_exposure"
+EXPOSURE_TOOL_SEARCH = "tool_search"
+EXPOSURE_FULL = "full"
+EXPOSURE_BOTH = "both"
+DEFAULT_LLM_API_EXPOSURE = EXPOSURE_TOOL_SEARCH
 
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"

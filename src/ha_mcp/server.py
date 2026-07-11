@@ -243,6 +243,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         self.mcp.add_middleware(ToolSearchHintMiddleware())
 
+        # Stamp every tools/list entry with its conversation-agent LLM API
+        # exposure + pinned state (#1745). Additive metadata only — regular
+        # clients are unaffected; the ha_mcp_tools custom component filters
+        # what it offers to Home Assistant conversation agents on it.
+        from .llm_exposure import LlmExposureMiddleware
+
+        self.mcp.add_middleware(LlmExposureMiddleware())
+
         # Read Only Mode write blocker (discussion #1569) — always
         # installed, consults the live flag per call. Before
         # PolicyMiddleware so a write blocked by Read Only Mode never

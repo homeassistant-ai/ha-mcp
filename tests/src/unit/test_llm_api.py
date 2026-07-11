@@ -1,9 +1,10 @@
 """Unit tests for the conversation-agent LLM API (issue #1745).
 
-``llm_api`` exposes the in-process server's toolset as a Home Assistant LLM
-API so conversation agents (and through them the Assist chat UI and voice)
-can drive ha-mcp. These tests cover the registration lifecycle the bring-up /
-teardown paths rely on, the per-turn tool-list fetch and schema conversion,
+``llm_api`` exposes the in-process server's toolset as Home Assistant LLM
+API(s) so conversation agents (and through them the Assist chat UI and voice)
+can drive ha-mcp. These tests cover the registration lifecycle (exposure
+modes, failure containment), the per-turn tool-list fetch with the server's
+exposure stamp, the tool-search meta-tools (search + call-time enforcement),
 and the loopback transport error mapping — all hermetically: Home Assistant
 is stubbed via ``_embedded_stubs`` and the MCP client session is faked at the
 ``_mcp_session`` seam (the SDK itself is exercised by the embedded e2e test).
@@ -28,7 +29,14 @@ import custom_components.ha_mcp_tools.llm_api as llm_api  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_LLM_API_UNSUB,
     DOMAIN,
+    EXPOSURE_BOTH,
+    EXPOSURE_FULL,
+    EXPOSURE_TOOL_SEARCH,
+    OPT_LLM_API_EXPOSURE,
 )
+
+_FULL_ID = f"{DOMAIN}-entry-1745"
+_SEARCH_ID = f"{DOMAIN}-entry-1745-toolsearch"
 
 
 def _make_hass() -> MagicMock:
@@ -42,11 +50,31 @@ def _make_hass() -> MagicMock:
     return hass
 
 
-def _make_entry() -> MagicMock:
+def _make_entry(options: dict[str, Any] | None = None) -> MagicMock:
     entry = MagicMock(name="entry")
     entry.entry_id = "entry-1745"
     entry.title = "HA-MCP Server"
+    entry.options = options or {}
     return entry
+
+
+def _tool_entry(
+    name: str = "ha_search",
+    *,
+    exposed: bool = True,
+    pinned: bool = False,
+    stamped: bool = True,
+    description: str | None = None,
+) -> SimpleNamespace:
+    meta = (
+        {"ha_mcp": {"llm_api_exposed": exposed, "pinned": pinned}} if stamped else None
+    )
+    return SimpleNamespace(
+        name=name,
+        description=description if description is not None else f"{name} description",
+        inputSchema={"type": "object", "properties": {"query": {"type": "string"}}},
+        meta=meta,
+    )
 
 
 def _fake_session(
@@ -78,37 +106,83 @@ def _fake_session(
     return session
 
 
-def _tool_entry(name: str = "ha_search") -> SimpleNamespace:
-    return SimpleNamespace(
-        name=name,
-        description=f"{name} description",
-        inputSchema={"type": "object", "properties": {"query": {"type": "string"}}},
+def _make_api(hass, mode: str = EXPOSURE_FULL) -> Any:
+    return llm_api.HaMcpLlmApi(
+        hass=hass,
+        id=_FULL_ID,
+        name="HA-MCP Server",
+        server_url="http://127.0.0.1:9584/private_x",
+        mode=mode,
     )
 
 
 class TestRegistrationLifecycle:
-    async def test_register_stores_unsub_and_registers_api(self, monkeypatch):
+    async def test_default_exposure_registers_tool_search_api(self, monkeypatch):
         monkeypatch.setattr(llm_api, "_import_mcp_sdk", lambda: None)
         hass = _make_hass()
-        entry = _make_entry()
+
+        await llm_api.async_register_llm_api(
+            hass, _make_entry(), port=9584, secret_path="/private_x"
+        )
+
+        apis = fake_llm_apis(hass)
+        assert set(apis) == {_SEARCH_ID}
+        api = apis[_SEARCH_ID]
+        assert api.name == "HA-MCP Server (tool search)"
+        assert api.mode == EXPOSURE_TOOL_SEARCH
+        assert api.server_url == "http://127.0.0.1:9584/private_x"
+        unsubs = hass.data[DOMAIN][DATA_LLM_API_UNSUB]
+        assert len(unsubs) == 1 and all(callable(u) for u in unsubs)
+
+    async def test_full_exposure_registers_full_api(self, monkeypatch):
+        monkeypatch.setattr(llm_api, "_import_mcp_sdk", lambda: None)
+        hass = _make_hass()
+        entry = _make_entry({OPT_LLM_API_EXPOSURE: EXPOSURE_FULL})
 
         await llm_api.async_register_llm_api(
             hass, entry, port=9584, secret_path="/private_x"
         )
 
         apis = fake_llm_apis(hass)
-        assert set(apis) == {f"{DOMAIN}-entry-1745"}
-        api = apis[f"{DOMAIN}-entry-1745"]
-        assert api.name == "HA-MCP Server"
-        assert api.server_url == "http://127.0.0.1:9584/private_x"
-        assert callable(hass.data[DOMAIN][DATA_LLM_API_UNSUB])
+        assert set(apis) == {_FULL_ID}
+        assert apis[_FULL_ID].mode == EXPOSURE_FULL
+        assert apis[_FULL_ID].name == "HA-MCP Server"
 
-    async def test_unregister_removes_api_and_is_idempotent(self, monkeypatch):
+    async def test_both_exposure_registers_two_apis_one_server(self, monkeypatch):
         monkeypatch.setattr(llm_api, "_import_mcp_sdk", lambda: None)
         hass = _make_hass()
+        entry = _make_entry({OPT_LLM_API_EXPOSURE: EXPOSURE_BOTH})
 
         await llm_api.async_register_llm_api(
-            hass, _make_entry(), port=9584, secret_path="/private_x"
+            hass, entry, port=9584, secret_path="/private_x"
+        )
+
+        apis = fake_llm_apis(hass)
+        assert set(apis) == {_FULL_ID, _SEARCH_ID}
+        # One server: both registrations point at the same loopback URL.
+        assert {a.server_url for a in apis.values()} == {
+            "http://127.0.0.1:9584/private_x"
+        }
+        assert len(hass.data[DOMAIN][DATA_LLM_API_UNSUB]) == 2
+
+    async def test_unknown_stored_mode_degrades_to_default(self, monkeypatch):
+        monkeypatch.setattr(llm_api, "_import_mcp_sdk", lambda: None)
+        hass = _make_hass()
+        entry = _make_entry({OPT_LLM_API_EXPOSURE: "bogus"})
+
+        await llm_api.async_register_llm_api(
+            hass, entry, port=9584, secret_path="/private_x"
+        )
+
+        assert set(fake_llm_apis(hass)) == {_SEARCH_ID}
+
+    async def test_unregister_removes_apis_and_is_idempotent(self, monkeypatch):
+        monkeypatch.setattr(llm_api, "_import_mcp_sdk", lambda: None)
+        hass = _make_hass()
+        entry = _make_entry({OPT_LLM_API_EXPOSURE: EXPOSURE_BOTH})
+
+        await llm_api.async_register_llm_api(
+            hass, entry, port=9584, secret_path="/private_x"
         )
         llm_api.async_unregister_llm_api(hass)
 
@@ -117,26 +191,23 @@ class TestRegistrationLifecycle:
         # Second teardown (reload paths run it again) must be a no-op.
         llm_api.async_unregister_llm_api(hass)
 
-    async def test_reregistration_replaces_stale_api(self, monkeypatch):
+    async def test_reregistration_replaces_stale_apis(self, monkeypatch):
         # A bring-up after a teardown that never ran (e.g. a crashed reload)
-        # must replace the stale registration instead of failing on the
-        # duplicate id.
+        # must replace the stale registrations instead of failing on the
+        # duplicate ids.
         monkeypatch.setattr(llm_api, "_import_mcp_sdk", lambda: None)
         hass = _make_hass()
-        entry = _make_entry()
 
         await llm_api.async_register_llm_api(
-            hass, entry, port=9584, secret_path="/private_x"
+            hass, _make_entry(), port=9584, secret_path="/private_x"
         )
         await llm_api.async_register_llm_api(
-            hass, entry, port=9999, secret_path="/private_y"
+            hass, _make_entry(), port=9999, secret_path="/private_y"
         )
 
         apis = fake_llm_apis(hass)
         assert len(apis) == 1
-        assert apis[f"{DOMAIN}-entry-1745"].server_url == (
-            "http://127.0.0.1:9999/private_y"
-        )
+        assert apis[_SEARCH_ID].server_url == "http://127.0.0.1:9999/private_y"
 
     @pytest.mark.parametrize(
         "exc_factory",
@@ -191,17 +262,8 @@ class TestRegistrationLifecycle:
         assert "no importable 'mcp' client SDK" in caplog.text
 
 
-def _make_api(hass) -> Any:
-    return llm_api.HaMcpLlmApi(
-        hass=hass,
-        id=f"{DOMAIN}-entry-1745",
-        name="HA-MCP Server",
-        server_url="http://127.0.0.1:9584/private_x",
-    )
-
-
-class TestApiInstance:
-    async def test_lists_tools_with_converted_schemas_and_server_prompt(
+class TestFullModeInstance:
+    async def test_lists_exposed_tools_with_converted_schemas_and_prompt(
         self, monkeypatch
     ):
         hass = _make_hass()
@@ -222,8 +284,50 @@ class TestApiInstance:
         assert instance.tools[0].parameters == {
             "_converted": _tool_entry("ha_search").inputSchema
         }
-        # The server's own initialize instructions become the API prompt.
+        # The server's own initialize instructions become the API prompt,
+        # WITHOUT the tool-search discovery section in full mode.
         assert instance.api_prompt == "Use the skills-first workflow."
+
+    async def test_hidden_tools_are_filtered_out(self, monkeypatch):
+        # The server stamp is the exposure decision: a tool stamped
+        # llm_api_exposed=False must be invisible to the agent even though it
+        # is present on the raw MCP surface.
+        hass = _make_hass()
+        _fake_session(
+            monkeypatch,
+            tools=[
+                _tool_entry("ha_get_state"),
+                _tool_entry("ha_restart", exposed=False),
+            ],
+        )
+
+        instance = await _make_api(hass).async_get_api_instance(
+            llm_api.llm.LLMContext()
+        )
+
+        assert [t.name for t in instance.tools] == ["ha_get_state"]
+
+    async def test_unstamped_server_falls_back_to_deny_list(self, monkeypatch, caplog):
+        # Older server packages don't stamp exposure: the component applies
+        # its conservative built-in deny-list instead, loudly.
+        hass = _make_hass()
+        _fake_session(
+            monkeypatch,
+            tools=[
+                _tool_entry("ha_get_state", stamped=False),
+                _tool_entry("ha_restart", stamped=False),
+                _tool_entry("ha_write_file", stamped=False),
+                _tool_entry("ha_dev_manage_server", stamped=False),
+            ],
+        )
+
+        with caplog.at_level(logging.WARNING):
+            instance = await _make_api(hass).async_get_api_instance(
+                llm_api.llm.LLMContext()
+            )
+
+        assert [t.name for t in instance.tools] == ["ha_get_state"]
+        assert "does not stamp LLM-API exposure metadata" in caplog.text
 
     async def test_prompt_falls_back_when_server_has_no_instructions(self, monkeypatch):
         hass = _make_hass()
@@ -286,6 +390,124 @@ class TestApiInstance:
 
         with pytest.raises(ExceptionGroup):
             await _make_api(hass).async_get_api_instance(llm_api.llm.LLMContext())
+
+
+class TestToolSearchModeInstance:
+    def _tools(self) -> list[SimpleNamespace]:
+        return [
+            _tool_entry("ha_search", pinned=True),
+            _tool_entry("ha_get_state", description="Get entity state"),
+            _tool_entry("ha_config_set_automation", description="Create automation"),
+            _tool_entry("ha_restart", exposed=False),
+        ]
+
+    async def _instance(self, monkeypatch, tools=None):
+        hass = _make_hass()
+        _fake_session(monkeypatch, tools=tools or self._tools())
+        return await _make_api(hass, mode=EXPOSURE_TOOL_SEARCH).async_get_api_instance(
+            llm_api.llm.LLMContext()
+        )
+
+    async def test_compact_catalog_shape(self, monkeypatch):
+        instance = await self._instance(monkeypatch)
+
+        names = [t.name for t in instance.tools]
+        # Pinned exposed tool mirrored directly; hidden + unpinned ones are
+        # only reachable through the meta-tools.
+        assert names == ["ha_search", "ha_search_tools", "ha_call_tool"]
+        assert "Tool Discovery" in instance.api_prompt
+
+    async def test_search_finds_exposed_tools_only(self, monkeypatch):
+        instance = await self._instance(monkeypatch)
+        search = next(t for t in instance.tools if t.name == "ha_search_tools")
+
+        result = await search.async_call(
+            _make_hass(),
+            llm_api.llm.ToolInput("ha_search_tools", {"query": "create automation"}),
+            llm_api.llm.LLMContext(),
+        )
+
+        names = [r["name"] for r in result["results"]]
+        assert "ha_config_set_automation" in names
+        # Hidden tools never appear in search results.
+        assert "ha_restart" not in names
+        # Results carry the schema the agent needs for ha_call_tool.
+        assert all("input_schema" in r for r in result["results"])
+
+    async def test_search_with_no_match_guides_retry(self, monkeypatch):
+        instance = await self._instance(monkeypatch)
+        search = next(t for t in instance.tools if t.name == "ha_search_tools")
+
+        result = await search.async_call(
+            _make_hass(),
+            llm_api.llm.ToolInput("ha_search_tools", {"query": "zzzznothing"}),
+            llm_api.llm.LLMContext(),
+        )
+
+        assert result["results"] == []
+        assert "message" in result
+
+    async def test_call_tool_forwards_exposed_tool(self, monkeypatch):
+        instance = await self._instance(monkeypatch)
+        call = next(t for t in instance.tools if t.name == "ha_call_tool")
+        forward = AsyncMock(return_value={"content": [{"type": "text", "text": "ok"}]})
+        monkeypatch.setattr(llm_api, "_forward_tool_call", forward)
+
+        result = await call.async_call(
+            _make_hass(),
+            llm_api.llm.ToolInput(
+                "ha_call_tool",
+                {"name": "ha_get_state", "arguments": {"entity_id": "sun.sun"}},
+            ),
+            llm_api.llm.LLMContext(),
+        )
+
+        forward.assert_awaited_once_with(
+            "http://127.0.0.1:9584/private_x",
+            "ha_get_state",
+            {"entity_id": "sun.sun"},
+        )
+        assert result == {"content": [{"type": "text", "text": "ok"}]}
+
+    @pytest.mark.parametrize(
+        "target", ["ha_restart", "ha_totally_made_up"], ids=["hidden", "nonexistent"]
+    )
+    async def test_call_tool_unknown_for_hidden_and_nonexistent(
+        self, monkeypatch, target
+    ):
+        # Call-time enforcement: a hidden tool gets EXACTLY the same
+        # unknown-tool answer a nonexistent tool gets — hiding without
+        # enforcement would let a model that guesses names skirt the
+        # exposure settings, and a distinct error would leak existence.
+        instance = await self._instance(monkeypatch)
+        call = next(t for t in instance.tools if t.name == "ha_call_tool")
+        forward = AsyncMock()
+        monkeypatch.setattr(llm_api, "_forward_tool_call", forward)
+
+        result = await call.async_call(
+            _make_hass(),
+            llm_api.llm.ToolInput("ha_call_tool", {"name": target, "arguments": {}}),
+            llm_api.llm.LLMContext(),
+        )
+
+        forward.assert_not_awaited()
+        assert result["error"] == f"Unknown tool '{target}'."
+
+    async def test_server_side_search_tool_name_is_excluded(self, monkeypatch):
+        # A server running its own ENABLE_TOOL_SEARCH registers a real
+        # ha_search_tools — never mirror/search it alongside the synthesized
+        # one: one name, one behavior.
+        tools = [*self._tools(), _tool_entry("ha_search_tools", pinned=True)]
+        instance = await self._instance(monkeypatch, tools=tools)
+
+        search = next(t for t in instance.tools if t.name == "ha_search_tools")
+        assert isinstance(search, llm_api.HaMcpSearchTool)
+        result = await search.async_call(
+            _make_hass(),
+            llm_api.llm.ToolInput("ha_search_tools", {"query": "search tools"}),
+            llm_api.llm.LLMContext(),
+        )
+        assert "ha_search_tools" not in [r["name"] for r in result["results"]]
 
 
 class TestToolCall:

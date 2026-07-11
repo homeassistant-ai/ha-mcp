@@ -448,3 +448,30 @@ class TestEmbeddedServerEndToEnd:
                 dumped = call.model_dump(exclude_unset=True, exclude_none=True)
                 assert dumped.get("content"), dumped
                 assert not dumped.get("isError"), dumped
+
+                # LLM-API exposure stamp (#1745): the REAL server must stamp
+                # every tool with _meta.ha_mcp so the component's filtering
+                # has its data. Deny-by-default set spot-checked both ways —
+                # ha_restart is on the raw MCP surface (this listing) but
+                # marked hidden from conversation agents, which is the whole
+                # no-cross-talk design.
+                stamps = {}
+                unstamped = []
+                for tool in listed.tools:
+                    meta = (tool.meta or {}).get("ha_mcp") or {}
+                    if not isinstance(meta.get("llm_api_exposed"), bool):
+                        unstamped.append(tool.name)
+                    else:
+                        stamps[tool.name] = meta
+                assert not unstamped, (
+                    f"tools missing the LLM-API exposure stamp: {unstamped}"
+                )
+                assert stamps["ha_restart"]["llm_api_exposed"] is False
+                assert stamps["ha_reload_core"]["llm_api_exposed"] is False
+                assert stamps["ha_manage_backup"]["llm_api_exposed"] is False
+                assert stamps["ha_get_state"]["llm_api_exposed"] is True
+                assert stamps["ha_search"]["llm_api_exposed"] is True
+                # Pinned state rides the same stamp (mirrored directly in the
+                # component's tool-search mode).
+                assert stamps["ha_search"]["pinned"] is True
+                assert stamps["ha_get_state"]["pinned"] is False
