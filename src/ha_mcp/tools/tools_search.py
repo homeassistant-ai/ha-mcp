@@ -1513,11 +1513,21 @@ class SearchTools:
         # legacy pipeline. Route all-or-nothing per command and fall back
         # cleanly when the component is absent, downlevel, or errors — the
         # taxonomy lives in ``_ha_search_via_component``.
-        caps = await get_component_caps(self._client)
-        if component_supports(caps, "search"):
-            component_response = await self._ha_search_via_component(req, ctx)
-            if component_response is not None:
-                return component_response
+        #
+        # Only QUERY-DRIVEN searches route through the component. The listing
+        # modes — empty/whitespace query with domain_filter (legacy
+        # ``search_type: domain_listing``) and any area_filter search (legacy
+        # ``area_only`` / ``area_filtered_query``, with their own area-shaped
+        # response keys) — keep the legacy path: their response contracts
+        # differ per mode, and after the request-dedup work they are cheap
+        # registry-only calls, so the component round-trip buys nothing worth
+        # the shape risk.
+        if req.query_text and not (req.area_filter or "").strip():
+            caps = await get_component_caps(self._client)
+            if component_supports(caps, "search"):
+                component_response = await self._ha_search_via_component(req, ctx)
+                if component_response is not None:
+                    return component_response
 
         return await self._legacy_ha_search(req, ctx)
 

@@ -295,3 +295,112 @@ async def test_component_and_legacy_response_shape_parity(
     skip = "config-body search skipped"
     assert any(skip in w for w in component["warnings"])
     assert any(skip in w for w in legacy["warnings"])
+
+
+class ListingModeClient(RoutingClient):
+    """RoutingClient + area/floor registries so the area listing path works."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.registry_with_area = {
+            "success": True,
+            "result": [
+                {
+                    "entity_id": "light.kitchen",
+                    "entity_category": None,
+                    "area_id": "kitchen",
+                },
+                {
+                    "entity_id": "sensor.kitchen_temp",
+                    "entity_category": None,
+                    "area_id": "kitchen",
+                },
+            ],
+        }
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        msg_type = msg.get("type", "")
+        if msg_type == "config/area_registry/list":
+            self.ws_types[msg_type] += 1
+            return {
+                "success": True,
+                "result": [{"area_id": "kitchen", "name": "Kitchen"}],
+            }
+        if msg_type == "config/floor_registry/list":
+            self.ws_types[msg_type] += 1
+            return {"success": True, "result": []}
+        if msg_type == "config/entity_registry/list":
+            self.ws_types[msg_type] += 1
+            return self.registry_with_area
+        return await super().send_websocket_message(msg)
+
+
+class TestListingModesBypassComponent:
+    """The three legacy listing modes must NEVER route through the component.
+
+    Regression for the first live e2e run of the component path
+    (test_search_entities.py::test_search_entities_{empty,whitespace}_query_
+    with_domain_filter and ::test_search_entities_area_filter_only): the
+    component path stamped ``search_type: exact_match`` onto responses the
+    legacy path labels ``domain_listing`` / ``area_only`` — and those modes
+    carry mode-specific response shapes the component does not replicate.
+    Only query-driven, non-area searches may route through the component.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_query_domain_listing_bypasses_component(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        client = ListingModeClient()
+        ha_search = _build_ha_search(client)
+        ws = _make_ws(info_result=_CAPS_SEARCH, search_result={})
+        with _patch_ws(ws):
+            data = await ha_search(domain_filter="light")
+        assert data.get("search_type") == "domain_listing", data
+        assert not ws.send_command.await_count, (
+            "component must not be consulted for domain listings"
+        )
+
+    @pytest.mark.asyncio
+    async def test_whitespace_query_domain_listing_bypasses_component(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        client = ListingModeClient()
+        ha_search = _build_ha_search(client)
+        ws = _make_ws(info_result=_CAPS_SEARCH, search_result={})
+        with _patch_ws(ws):
+            data = await ha_search(query="   ", domain_filter="light")
+        assert data.get("search_type") == "domain_listing", data
+        assert not ws.send_command.await_count
+
+    @pytest.mark.asyncio
+    async def test_area_filter_only_bypasses_component(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        client = ListingModeClient()
+        ha_search = _build_ha_search(client)
+        ws = _make_ws(info_result=_CAPS_SEARCH, search_result={})
+        with _patch_ws(ws):
+            data = await ha_search(area_filter="Kitchen")
+        assert data.get("search_type") == "area_only", data
+        assert not ws.send_command.await_count, (
+            "component must not be consulted for area listings"
+        )
+
+    @pytest.mark.asyncio
+    async def test_query_with_area_filter_bypasses_component(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        client = ListingModeClient()
+        ha_search = _build_ha_search(client)
+        ws = _make_ws(info_result=_CAPS_SEARCH, search_result={})
+        with _patch_ws(ws):
+            data = await ha_search(query="kitchen", area_filter="Kitchen")
+        assert data.get("search_type") == "area_filtered_query", data
+        assert not ws.send_command.await_count, (
+            "component must not be consulted for area-scoped queries"
+        )
