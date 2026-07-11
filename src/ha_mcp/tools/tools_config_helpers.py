@@ -1398,6 +1398,74 @@ async def _find_collision_in_simple_helpers(
     return None
 
 
+_REGISTRY_JOIN_STALE_WARNING = (
+    "Could not read the entity registry, so a renamed helper's 'name' may be the "
+    "creation-time name and no current 'entity_id' is shown; use ha_get_entity for "
+    "the authoritative current values."
+)
+
+
+async def _enrich_helpers_with_current_registry(
+    client: Any, helper_type: str, items: list[Any]
+) -> list[str]:
+    """Join the entity registry onto storage-collection helper records.
+
+    The ``{helper_type}/list`` response carries the immutable storage ``id``
+    (the unique_id) and the creation-time ``name``; after a UI rename the
+    current ``entity_id`` and display name live only in the entity registry, so
+    the raw list goes stale (issue #1794). For each record matched by
+    ``unique_id`` **and** ``platform == helper_type`` this adds the current
+    ``entity_id``, moves the storage name to ``original_name``, and sets
+    ``name`` to the current display name (registry ``name``, falling back to
+    ``original_name``). ``items`` is mutated in place.
+
+    Storage types without a matching entity (e.g. ``tag``) and platform
+    mismatches are left untouched. Returns a warnings list — non-empty only
+    when the registry read failed, so the caller can flag the un-enriched
+    result instead of silently returning stale values.
+    """
+    if not items:
+        # Nothing to enrich — skip the full-registry fetch entirely.
+        return []
+    try:
+        reg_result = await client.send_websocket_message(
+            {"type": "config/entity_registry/list"}
+        )
+    except (HomeAssistantAPIError, ConnectionError, TimeoutError) as e:
+        logger.debug(f"list_helpers registry enrichment: registry read failed: {e}")
+        return [_REGISTRY_JOIN_STALE_WARNING]
+    # A missing / non-list ``result`` (or a non-dict / unsuccessful response) is
+    # a malformed read, not an empty registry — flag it rather than silently
+    # returning un-enriched records. A present-but-empty ``[]`` is a legitimate
+    # no-match and passes through below without a warning.
+    if not (
+        isinstance(reg_result, dict)
+        and reg_result.get("success")
+        and isinstance(reg_result.get("result"), list)
+    ):
+        return [_REGISTRY_JOIN_STALE_WARNING]
+    registry = reg_result["result"]
+    reg_by_uid = {
+        entry["unique_id"]: entry
+        for entry in registry
+        if isinstance(entry, dict)
+        and entry.get("platform") == helper_type
+        and entry.get("unique_id")
+    }
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        entry = reg_by_uid.get(item.get("id"))
+        if entry is None:
+            continue
+        item["entity_id"] = entry.get("entity_id")
+        item["original_name"] = item.get("name")
+        item["name"] = (
+            entry.get("name") or entry.get("original_name") or item.get("name")
+        )
+    return []
+
+
 async def _check_name_collision(
     client: Any,
     helper_type: str,
@@ -3537,10 +3605,15 @@ class HelperConfigTools:
         List all Home Assistant helpers of a specific type with their configurations.
 
         Returns complete configuration for all helpers of the specified type including:
-        - ID (storage id), name, icon
-        - entity_id and current display name (where available)
+        - id (immutable storage key), entity_id (current — address the helper by
+          this, where available), name (current display name), original_name
+          (creation-time name), icon
         - Type-specific settings (min/max for input_number, options for input_select, etc.)
         - Area and label assignments
+
+        For a helper renamed in the UI, id/original_name keep the storage values while
+        entity_id/name reflect the current entity registry (entity_id is the identifier
+        ha_config_set_helper resolves against, so prefer it over id for a renamed helper).
 
         SUPPORTED HELPER TYPES:
         - input_button: Virtual buttons for triggering automations
@@ -3601,14 +3674,25 @@ class HelperConfigTools:
                 {"type": f"{helper_type}/list"}
             )
             if result.get("success"):
-                items = result.get("result", [])
-                return {
+                # Flatten first: person/list returns {"storage": [...],
+                # "config": [...]} rather than a flat list, so a raw
+                # result["result"] would be a dict here — breaking both the
+                # count and the registry enrichment below (which iterates
+                # records). _flatten_helper_list_result normalises both shapes.
+                items = _flatten_helper_list_result(result)
+                warnings = await _enrich_helpers_with_current_registry(
+                    self._client, helper_type, items
+                )
+                response: dict[str, Any] = {
                     "success": True,
                     "helper_type": helper_type,
                     "count": len(items),
                     "helpers": items,
                     "message": f"Found {len(items)} {helper_type} helper(s)",
                 }
+                if warnings:
+                    response["warnings"] = warnings
+                return response
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,

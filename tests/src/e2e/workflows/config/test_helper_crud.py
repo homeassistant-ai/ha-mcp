@@ -97,12 +97,17 @@ class TestInputBooleanCRUD:
         )
         list_data = assert_mcp_success(list_result, "List after create")
 
-        found = False
+        found_helper = None
         for helper in list_data.get("helpers", []):
             if helper.get("name") == helper_name:
-                found = True
+                found_helper = helper
                 break
-        assert found, f"Created helper not found in list: {helper_name}"
+        assert found_helper, f"Created helper not found in list: {helper_name}"
+        # #1794: the list joins the entity registry, so each record carries the
+        # current entity_id (not just the storage id / creation name).
+        assert found_helper.get("entity_id") == entity_id, (
+            f"list_helpers should surface the current entity_id, got: {found_helper}"
+        )
         logger.info("Input boolean verified in list")
 
         # UPDATE
