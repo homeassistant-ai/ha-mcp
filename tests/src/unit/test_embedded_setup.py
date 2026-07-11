@@ -520,6 +520,83 @@ class TestSurfaceConnectUrls:
             esetup._surface_connect_urls(hass, entry, "none")
         assert "http://192.168.1.5:8123/api/webhook/mcp_id" in caplog.text
 
+    def test_default_options_create_notification_with_panel_line(
+        self, monkeypatch, caplog
+    ):
+        # Baseline for the two UX toggles: with neither option stored, the
+        # start-up notification is created (async_create) and its message links
+        # the sidebar settings panel; nothing is dismissed.
+        import logging
+
+        dismiss = MagicMock()
+        monkeypatch.setattr(esetup.persistent_notification, "async_dismiss", dismiss)
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"})
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(hass, entry, "none")
+        self.notif.assert_called_once()
+        assert "[HA-MCP settings panel](/ha-mcp)" in self._message()
+        dismiss.assert_not_called()
+
+    def test_startup_notification_off_dismisses_and_skips_create(
+        self, monkeypatch, caplog
+    ):
+        # enable_startup_notification=False: no persistent notification is
+        # created; instead any stale one is dismissed by its id. The connect
+        # URLs still reach the admin-only INFO log unchanged.
+        import logging
+
+        dismiss = MagicMock()
+        monkeypatch.setattr(esetup.persistent_notification, "async_dismiss", dismiss)
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
+            options={esetup.OPT_ENABLE_STARTUP_NOTIFICATION: False},
+        )
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(hass, entry, "none")
+        # No notification created.
+        self.notif.assert_not_called()
+        # The stale one is dismissed by the connect notification's id.
+        dismiss.assert_called_once()
+        dismissed_id = dismiss.call_args.kwargs.get("notification_id") or (
+            dismiss.call_args.args[1] if len(dismiss.call_args.args) > 1 else None
+        )
+        assert dismissed_id == esetup._NOTIFICATION_ID == "ha_mcp_tools_server_connect"
+        assert dismiss.call_args.args[0] is hass
+        # The INFO connect-URL log still happens.
+        assert "HA-MCP in-process server is running" in caplog.text
+        assert "http://192.168.1.5:8123/api/webhook/mcp_id" in caplog.text
+
+    def test_sidebar_panel_off_omits_panel_line_from_notification(
+        self, monkeypatch, caplog
+    ):
+        # enable_sidebar_panel=False (start-up notification still on): the
+        # notification is created, but its message drops the sidebar panel line
+        # (there is no panel to link to). The rest of the notification stays.
+        import logging
+
+        dismiss = MagicMock()
+        monkeypatch.setattr(esetup.persistent_notification, "async_dismiss", dismiss)
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
+            options={esetup.OPT_ENABLE_SIDEBAR_PANEL: False},
+        )
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(hass, entry, "none")
+        self.notif.assert_called_once()
+        dismiss.assert_not_called()
+        message = self._message()
+        assert "[HA-MCP settings panel](/ha-mcp)" not in message
+        assert "(/ha-mcp)" not in message
+        # Still a real notification: the admin-only Configure pointer remains.
+        assert "Configure" in message
+        assert self.notif.call_args.kwargs.get("title") == "HA-MCP Server"
+
 
 class TestBuildConnectUrls:
     """Direct coverage of ``build_connect_urls`` — the shared URL resolver that

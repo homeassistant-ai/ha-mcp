@@ -27,6 +27,7 @@ from ._embedded_stubs import install
 install()
 
 import custom_components.ha_mcp_tools.embedded_entry as eentry  # noqa: E402
+from custom_components.ha_mcp_tools import const  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_SECRET_PATH,
     DATA_UPDATE_COORDINATOR,
@@ -252,6 +253,31 @@ class TestSetup:
         hass.config_entries.async_forward_entry_setups.assert_awaited_once_with(
             entry, [eentry.Platform.UPDATE]
         )
+
+    async def test_default_registers_ui_panel(self, fake_collaborators):
+        # enable_sidebar_panel absent (default on): the admin-only "Open Web UI"
+        # sidebar panel is registered during entry setup.
+        hass = _make_hass()
+        entry = _make_entry()
+
+        await eentry.async_setup_server_entry(hass, entry)
+        await _drain_background_tasks(hass, entry)
+
+        fake_collaborators.panel.async_register_ui_panel.assert_awaited_once()
+
+    async def test_sidebar_panel_off_skips_ui_panel_registration(
+        self, fake_collaborators
+    ):
+        # enable_sidebar_panel=False: entry setup must not register the sidebar
+        # panel (the user opted out of the sidebar entry point).
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {const.OPT_ENABLE_SIDEBAR_PANEL: False}
+
+        await eentry.async_setup_server_entry(hass, entry)
+        await _drain_background_tasks(hass, entry)
+
+        fake_collaborators.panel.async_register_ui_panel.assert_not_awaited()
 
 
 class TestUnload:

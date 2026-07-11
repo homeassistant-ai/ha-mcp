@@ -305,6 +305,12 @@ EXPOSURE_TOOL_SEARCH = "tool_search"
 EXPOSURE_FULL = "full"
 EXPOSURE_BOTH = "both"
 DEFAULT_LLM_API_EXPOSURE = EXPOSURE_TOOL_SEARCH
+# When False, the persistent notification created on every server bring-up is
+# suppressed; the connect URLs still reach the admin-only Home Assistant log.
+OPT_ENABLE_STARTUP_NOTIFICATION = "enable_startup_notification"
+# When False, the admin-only "HA-MCP" sidebar settings panel is not registered;
+# the server's options stay reachable on the entry's Configure screen.
+OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
 
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"

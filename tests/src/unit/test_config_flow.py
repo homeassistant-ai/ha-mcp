@@ -330,11 +330,16 @@ class TestServerOptionsFlow:
         form = asyncio.run(flow.async_step_init(None))
         defaults = {m.schema: m.default() for m in form["data_schema"].schema}
         # regenerate_secrets is a one-shot action, never pre-filled True;
-        # enable_webhook defaults on when unsaved.
+        # enable_webhook / enable_startup_notification / enable_sidebar_panel
+        # default on when unsaved.
         regenerate_default = defaults.pop(const.OPT_REGENERATE_SECRETS)
         assert regenerate_default is False
         webhook_default = defaults.pop(const.OPT_ENABLE_WEBHOOK)
         assert webhook_default is True
+        notification_default = defaults.pop(const.OPT_ENABLE_STARTUP_NOTIFICATION)
+        assert notification_default is True
+        panel_default = defaults.pop(const.OPT_ENABLE_SIDEBAR_PANEL)
+        assert panel_default is True
         assert defaults == saved
 
     def test_init_submit_round_trips_input_into_entry(self):
@@ -392,6 +397,75 @@ class TestServerOptionsFlow:
         # Regression guard for the single-instance pivot: the enable/disable
         # toggle was dropped (entry-exists = server runs).
         assert not hasattr(const, "OPT_EMBEDDED_ENABLED")
+
+    def test_new_toggles_default_on_for_fresh_entry(self):
+        # Both UX toggles (start-up notification, sidebar panel) are present in
+        # the rendered schema and default on when the entry has never stored
+        # them.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        markers = {m.schema: m for m in form["data_schema"].schema}
+        assert const.OPT_ENABLE_STARTUP_NOTIFICATION in markers
+        assert markers[const.OPT_ENABLE_STARTUP_NOTIFICATION].default() is True
+        assert const.OPT_ENABLE_SIDEBAR_PANEL in markers
+        assert markers[const.OPT_ENABLE_SIDEBAR_PANEL].default() is True
+
+    def test_new_toggles_placed_right_after_enable_webhook(self):
+        # Contract: both toggles sit immediately after the enable_webhook field.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        keys = [m.schema for m in form["data_schema"].schema]
+        webhook_idx = keys.index(const.OPT_ENABLE_WEBHOOK)
+        assert set(keys[webhook_idx + 1 : webhook_idx + 3]) == {
+            const.OPT_ENABLE_STARTUP_NOTIFICATION,
+            const.OPT_ENABLE_SIDEBAR_PANEL,
+        }
+
+    def test_new_toggles_prefill_stored_false(self):
+        # Re-opening the form after saving False shows the stored False, not the
+        # default True (a regression here silently re-enables an opted-out UI).
+        flow = _make_options_flow(
+            data={const.DATA_WEBHOOK_ID: "mcp_abc"},
+            options={
+                const.OPT_ENABLE_STARTUP_NOTIFICATION: False,
+                const.OPT_ENABLE_SIDEBAR_PANEL: False,
+            },
+        )
+        form = asyncio.run(flow.async_step_init(None))
+        markers = {m.schema: m for m in form["data_schema"].schema}
+        assert markers[const.OPT_ENABLE_STARTUP_NOTIFICATION].default() is False
+        assert markers[const.OPT_ENABLE_SIDEBAR_PANEL].default() is False
+
+    def test_submitting_false_stores_false_for_new_toggles(self):
+        # Submitting the form with both toggles unchecked persists False.
+        flow = _make_options_flow()
+        user_input = {
+            const.OPT_CHANNEL: const.CHANNEL_STABLE,
+            const.OPT_ENABLE_STARTUP_NOTIFICATION: False,
+            const.OPT_ENABLE_SIDEBAR_PANEL: False,
+        }
+        result = asyncio.run(flow.async_step_init(user_input))
+        assert result["type"] == "entry"
+        assert result["data"][const.OPT_ENABLE_STARTUP_NOTIFICATION] is False
+        assert result["data"][const.OPT_ENABLE_SIDEBAR_PANEL] is False
+
+    def test_panel_hint_contains_panel_url_when_sidebar_enabled(self):
+        # panel_hint is a non-empty sentence naming the panel URL when the
+        # sidebar option is enabled (absent counts as enabled).
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        hint = form["description_placeholders"]["panel_hint"]
+        assert hint
+        assert "(/ha-mcp)" in hint
+
+    def test_panel_hint_empty_when_sidebar_disabled(self):
+        # With the sidebar option stored False, the panel hint collapses to "".
+        flow = _make_options_flow(
+            data={const.DATA_WEBHOOK_ID: "mcp_abc"},
+            options={const.OPT_ENABLE_SIDEBAR_PANEL: False},
+        )
+        form = asyncio.run(flow.async_step_init(None))
+        assert form["description_placeholders"]["panel_hint"] == ""
 
     def test_connect_url_hint_uses_configured_port(self):
         flow = _make_options_flow(

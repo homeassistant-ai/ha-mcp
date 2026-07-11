@@ -29,7 +29,7 @@
         "step": {
             "init": {
                 "title": "HA-MCP Server",
-                "description": "Configure the HA-MCP server. Open the [HA-MCP settings panel](/ha-mcp) for tool management and server settings. Changes here are applied on save.\n\n{versions}\n\n{connect_url}",
+                "description": "Configure the HA-MCP server. {panel_hint}Changes here are applied on save.\n\n{versions}\n\n{connect_url}",
                 "data": {
                     "channel": "Release channel",
                     "auto_update": "Automatic server updates",
@@ -44,7 +44,9 @@
                     "regenerate_secrets": "Regenerate connect secrets now",
                     "enable_webhook": "Remote access via webhook",
                     "enable_llm_api": "Conversation-agent LLM API",
-                    "llm_api_exposure": "Conversation-agent tool exposure"
+                    "llm_api_exposure": "Conversation-agent tool exposure",
+                    "enable_startup_notification": "Startup notification",
+                    "enable_sidebar_panel": "Sidebar settings panel"
                 },
                 "data_description": {
                     "channel": "Stable installs the latest stable release; Development installs the newest development build. When automatic updates are on, a reload or restart, plus a periodic check, install the newest build of the selected channel. A developer package override below takes precedence and disables automatic updates.",
@@ -60,7 +62,9 @@
                     "regenerate_secrets": "One-time action: mints a fresh random webhook secret and direct-access path, invalidating the old connect URLs immediately. Also clears the two override fields above.",
                     "enable_webhook": "Turn off for local-only mode: the Home Assistant webhook is not registered at all, so nothing - including Nabu Casa - can reach the server through Home Assistant. The direct server port and the sidebar panel keep working.",
                     "enable_llm_api": "Offer the full toolset to Home Assistant conversation agents (OpenAI, Google, Ollama, ...): while enabled, agents can select 'HA-MCP Server' under Control Home Assistant and drive the tools from Assist chat and voice. Enabling only makes it selectable - nothing is exposed until you pick it on an agent. Usage guide: {llm_api_docs_url}",
-                    "llm_api_exposure": "Shape of the toolset offered to conversation agents. Tool search (default) keeps the agent's context small: a compact API with pinned tools plus search/execute meta-tools. Full catalog lists every exposed tool directly - better for large-context models. Both registers the two side by side so each agent picks its own under Control Home Assistant. Per-tool exposure is managed in the HA-MCP settings panel; details: {llm_api_docs_url}"
+                    "llm_api_exposure": "Shape of the toolset offered to conversation agents. Tool search (default) keeps the agent's context small: a compact API with pinned tools plus search/execute meta-tools. Full catalog lists every exposed tool directly - better for large-context models. Both registers the two side by side so each agent picks its own under Control Home Assistant. Per-tool exposure is managed in the HA-MCP settings panel; details: {llm_api_docs_url}",
+                    "enable_startup_notification": "Show a notification each time the server starts, pointing at the admin-only settings surfaces. Turn off to start silently - the connect URLs still appear in the Home Assistant log.",
+                    "enable_sidebar_panel": "Show the HA-MCP settings panel in the sidebar (administrators only). Turn off to remove the sidebar entry - server options stay available on this screen."
                 }
             }
         }

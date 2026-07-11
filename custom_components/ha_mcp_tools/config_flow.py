@@ -66,6 +66,8 @@ from .const import (
     OPT_BIND_HOST,
     OPT_CHANNEL,
     OPT_ENABLE_LLM_API,
+    OPT_ENABLE_SIDEBAR_PANEL,
+    OPT_ENABLE_STARTUP_NOTIFICATION,
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_LLM_API_EXPOSURE,
@@ -291,6 +293,14 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                vol.Required(
+                    OPT_ENABLE_STARTUP_NOTIFICATION,
+                    default=bool(opts.get(OPT_ENABLE_STARTUP_NOTIFICATION, True)),
+                ): bool,
+                vol.Required(
+                    OPT_ENABLE_SIDEBAR_PANEL,
+                    default=bool(opts.get(OPT_ENABLE_SIDEBAR_PANEL, True)),
+                ): bool,
                 vol.Optional(
                     OPT_EXTERNAL_URL,
                     default=opts.get(OPT_EXTERNAL_URL, ""),
@@ -309,6 +319,17 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 ): bool,
             }
         )
+        # The sidebar-panel sentence in the description is only truthful while
+        # the panel is registered; drop it (from the CURRENT stored options, not
+        # the unsaved form state) when the panel is off so the link cannot point
+        # at a route that 404s. The trailing space keeps the surrounding prose
+        # spaced correctly whether the sentence is present or empty.
+        panel_hint = (
+            "Open the [HA-MCP settings panel](/ha-mcp) for tool management and "
+            "server settings. "
+            if bool(opts.get(OPT_ENABLE_SIDEBAR_PANEL, True))
+            else ""
+        )
         return self.async_show_form(
             step_id="init",
             data_schema=schema,
@@ -316,6 +337,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 "versions": await self._versions_hint(),
                 "connect_url": self._connect_url_hint(),
                 "llm_api_docs_url": LLM_API_DOCS_URL,
+                "panel_hint": panel_hint,
             },
         )
 
