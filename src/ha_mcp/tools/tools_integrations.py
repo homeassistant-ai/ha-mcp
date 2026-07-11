@@ -20,7 +20,7 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
-from .config_entry_flow import FLOW_HELPER_TYPES
+from .config_entry_flow import FLOW_HELPER_TYPES, iter_schema_fields
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -123,9 +123,7 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     data_schema = flow.get("data_schema")
     if not isinstance(data_schema, list):
         return out
-    for field in data_schema:
-        if not isinstance(field, dict):
-            continue
+    for field in iter_schema_fields(data_schema):
         name = field.get("name")
         if name is None:
             continue

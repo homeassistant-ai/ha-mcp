@@ -109,6 +109,52 @@ class TestConfigEntryFlow:
             {"target": entry_id, "confirm": True},
         )
 
+    async def test_update_template_sensor_availability(self, mcp_client):
+        """Persist and read a template field nested under advanced options."""
+        config = {
+            "next_step_id": "sensor",
+            "name": "test_template_availability_e2e",
+            "state": "{{ 1 }}",
+        }
+        entry_id = await _create_config_entry_helper(
+            mcp_client, "template", config, "template sensor with availability"
+        )
+        availability = "{{ has_value('sensor.demo_temperature') }}"
+
+        try:
+            update_result = await mcp_client.call_tool(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "template",
+                    "helper_id": entry_id,
+                    "action": "update",
+                    "config": {
+                        "state": "{{ 1 }}",
+                        "availability": availability,
+                    },
+                },
+            )
+            assert_mcp_success(update_result, "Update template sensor availability")
+
+            integration_result = await mcp_client.call_tool(
+                "ha_get_integration",
+                {"entry_id": entry_id, "include_options": True},
+            )
+            integration_data = assert_mcp_success(
+                integration_result, "Read template sensor availability"
+            )
+            options = (integration_data.get("entry") or {}).get("options") or {}
+            assert options.get("availability") == availability, (
+                "Nested availability option was not persisted or read back; "
+                f"got {options!r}"
+            )
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": entry_id, "confirm": True},
+            )
+
     async def test_create_template_binary_sensor(self, mcp_client):
         """Create a template binary sensor helper end-to-end."""
         config = {

@@ -35,6 +35,24 @@ class TestExtractSchemaFieldNames:
         ]
         assert _extract_schema_field_names(schema) == {"name", "entity_id"}
 
+    def test_extracts_names_from_expandable_sections(self) -> None:
+        schema = [
+            {"name": "state", "required": True, "selector": {"template": {}}},
+            {
+                "type": "expandable",
+                "name": "advanced_options",
+                "schema": [
+                    {
+                        "name": "availability",
+                        "required": False,
+                        "selector": {"template": {}},
+                    }
+                ],
+            },
+        ]
+
+        assert _extract_schema_field_names(schema) == {"state", "availability"}
+
     def test_handles_missing_or_malformed_schema(self) -> None:
         # Non-list inputs signal "schema not available" → None (legacy fallback).
         assert _extract_schema_field_names(None) is None
@@ -71,6 +89,64 @@ class TestHandleFormStepFiltering:
             "state_characteristic": "mean",
             "extra_key": "should_remain",
         }
+
+    def test_wraps_flat_expandable_fields_for_submission(self) -> None:
+        remaining = {
+            "state": "{{ 1 }}",
+            "availability": "{{ has_value('sensor.x') }}",
+        }
+        step = {
+            "type": "form",
+            "step_id": "sensor",
+            "data_schema": [
+                {"name": "state", "required": True},
+                {
+                    "type": "expandable",
+                    "name": "advanced_options",
+                    "schema": [{"name": "availability", "required": False}],
+                },
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {
+            "state": "{{ 1 }}",
+            "advanced_options": {
+                "availability": "{{ has_value('sensor.x') }}",
+            },
+        }
+        assert remaining == {}
+
+    def test_accepts_explicit_expandable_section_dict(self) -> None:
+        remaining = {
+            "state": "{{ 1 }}",
+            "advanced_options": {
+                "availability": "{{ has_value('sensor.x') }}",
+            },
+        }
+        step = {
+            "type": "form",
+            "step_id": "sensor",
+            "data_schema": [
+                {"name": "state", "required": True},
+                {
+                    "type": "expandable",
+                    "name": "advanced_options",
+                    "schema": [{"name": "availability", "required": False}],
+                },
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {
+            "state": "{{ 1 }}",
+            "advanced_options": {
+                "availability": "{{ has_value('sensor.x') }}",
+            },
+        }
+        assert remaining == {}
 
     def test_strips_menu_selection_keys(self) -> None:
         remaining = {"group_type": "light", "name": "x"}
