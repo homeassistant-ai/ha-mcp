@@ -10,7 +10,7 @@ from ._config import (
     INDIVIDUAL_FETCH_BATCH_SIZE,
     SCENE_CONFIG_TIME_BUDGET,
 )
-from ._fetch import ConfigFetchMixin
+from ._fetch import ConfigFetchMixin, is_timeout_error
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +205,8 @@ class SceneSearchMixin(ConfigFetchMixin):
 
         Scenes have no listing primitive, so entities are enumerated from
         get_states() and configs fetched per id. Returns the scene results plus
-        the five signals that drive the response ``partial`` flag:
+        the five diagnostic signals feeding the response ``partial`` /
+        ``partial_reason``:
         ``(results, failed_count, skipped_count, integration_skipped,
         registry_failed, timeout_count)``.
         """
@@ -278,6 +279,14 @@ class SceneSearchMixin(ConfigFetchMixin):
                     )
                     return (sid, None, "timeout")
                 except Exception as e:
+                    if is_timeout_error(e):
+                        # Client-side HTTP timeout arrived wrapped; still a
+                        # timeout. See is_timeout_error in _fetch.
+                        logger.debug(
+                            f"Scene individual config fetch ({sid}) timed "
+                            f"out (client-side HTTP timeout): {e}"
+                        )
+                        return (sid, None, "timeout")
                     logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")
                     return (sid, None, "failed")
 

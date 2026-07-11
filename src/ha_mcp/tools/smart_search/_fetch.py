@@ -6,10 +6,32 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import httpx
+
 from ._config import BULK_WEBSOCKET_TIMEOUT, INDIVIDUAL_FETCH_BATCH_SIZE
 from ._scoring import ScoringMixin
 
 logger = logging.getLogger(__name__)
+
+
+def is_timeout_error(exc: BaseException) -> bool:
+    """True when ``exc`` is, or was directly caused by, a request timeout.
+
+    The per-id fetchers wrap their client call in ``asyncio.wait_for``, whose
+    expiry raises the builtin ``TimeoutError`` — but the REST client applies
+    its own httpx timeout (``HA_TIMEOUT``, default 30s) and ``_raw_request``
+    re-raises ``httpx.TimeoutException`` as ``HomeAssistantConnectionError``
+    (a sibling of ``HomeAssistantAPIError``). When the httpx timeout is the
+    shorter of the two — e.g. a user raised HAMCP_INDIVIDUAL_CONFIG_TIMEOUT
+    past HA_TIMEOUT following the partial-result advice — the timeout
+    arrives wrapped, and classifying by ``except TimeoutError`` alone would
+    drop it into the generic "failed" bucket: the exact misclassification
+    issue #1784 exists to eliminate. Checking ``__cause__`` (set by the
+    client's ``raise ... from e``) catches the wrapped form.
+    """
+    if isinstance(exc, TimeoutError | httpx.TimeoutException):
+        return True
+    return isinstance(exc.__cause__, TimeoutError | httpx.TimeoutException)
 
 
 class ConfigFetchMixin(ScoringMixin):

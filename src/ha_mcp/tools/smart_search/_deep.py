@@ -21,6 +21,7 @@ from ._config import (
     INDIVIDUAL_FETCH_BATCH_SIZE,
     SCRIPT_CONFIG_TIME_BUDGET,
 )
+from ._fetch import is_timeout_error
 from ._scenes import SceneSearchMixin
 
 logger = logging.getLogger(__name__)
@@ -348,6 +349,9 @@ class DeepSearchMixin(SceneSearchMixin):
 
         # Attempt C: parallel individual REST calls with time budget (LAST RESORT)
         skipped_count = 0
+        failed_count = 0
+        yaml_skipped_count = 0
+        timeout_count = 0
         if not bulk_fetched:
             uids_to_fetch = [
                 uid for _, _, uid, _ in scored if uid and uid not in configs
@@ -389,6 +393,16 @@ class DeepSearchMixin(SceneSearchMixin):
                     )
                     return (uid, None, "timeout")
                 except Exception as e:
+                    if is_timeout_error(e):
+                        # The REST client's own httpx timeout (HA_TIMEOUT)
+                        # fired first and arrived wrapped in a
+                        # HomeAssistantConnectionError — still a timeout,
+                        # not a failure. See is_timeout_error.
+                        logger.debug(
+                            f"Automation individual config fetch ({uid}) "
+                            f"timed out (client-side HTTP timeout): {e}"
+                        )
+                        return (uid, None, "timeout")
                     logger.debug(
                         f"Automation individual config fetch ({uid}) failed: {e}"
                     )
@@ -410,10 +424,6 @@ class DeepSearchMixin(SceneSearchMixin):
                 "automations",
             )
             configs.update(fetched_configs)
-        else:
-            failed_count = 0
-            yaml_skipped_count = 0
-            timeout_count = 0
 
         # Phase 3: Score with whatever configs we have
         matches = [
@@ -478,6 +488,9 @@ class DeepSearchMixin(SceneSearchMixin):
 
         # Attempt C: parallel individual fetch with budget (see #879)
         skipped_count = 0
+        failed_count = 0
+        yaml_skipped_count = 0
+        timeout_count = 0
         if not bulk_fetched:
             sids_to_fetch = [
                 sid for _, _, sid, _ in scored if sid and sid not in configs
@@ -514,6 +527,14 @@ class DeepSearchMixin(SceneSearchMixin):
                     )
                     return (sid, None, "timeout")
                 except Exception as e:
+                    if is_timeout_error(e):
+                        # Client-side HTTP timeout arrived wrapped; still a
+                        # timeout. See _fetch_automation_config.
+                        logger.debug(
+                            f"Script individual config fetch ({sid}) timed "
+                            f"out (client-side HTTP timeout): {e}"
+                        )
+                        return (sid, None, "timeout")
                     logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
                     return (sid, None, "failed")
 
@@ -533,10 +554,6 @@ class DeepSearchMixin(SceneSearchMixin):
                 "scripts",
             )
             configs.update(fetched_configs)
-        else:
-            failed_count = 0
-            yaml_skipped_count = 0
-            timeout_count = 0
 
         # Phase 3: Score scripts
         matches = [

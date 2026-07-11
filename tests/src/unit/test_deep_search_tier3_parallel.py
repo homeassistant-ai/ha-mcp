@@ -10,10 +10,15 @@ import asyncio
 import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.smart_search._fetch import is_timeout_error
 
 
 def _make_tools(client):
@@ -381,7 +386,7 @@ class TestYamlSkippedClassification:
     """Component-level coverage of the 404 → ``yaml_skipped`` classification.
 
     These tests drive ``_deep_search_automations`` / ``_deep_search_scripts``
-    directly and assert on their returned 4-tuple, pinning the
+    directly and assert on their returned 5-tuple, pinning the
     FETCH→CLASSIFY→COUNT path *inside* each per-type helper (wrong exception
     type, wrong status-code attribute, wrong return slot) so a regression
     surfaces here rather than silently misclassifying YAML-defined entities
@@ -708,10 +713,11 @@ class TestYamlSkippedThroughDeepSearch:
     ``deep_search`` entrypoint.
 
     ``TestYamlSkippedClassification`` pins each per-type helper's returned
-    4-tuple; these tests pin the wiring *between* that return and the
-    response — ``deep_search`` unpacks the 4th slot (``_deep.py`` :130-133
-    / :151-154) and forwards it (:225-231) to ``_paginate_and_build_response``
-    → ``_apply_per_type_partial_flag``. A regression that unpacked the slot
+    5-tuple; these tests pin the wiring *between* that return and the
+    response — ``deep_search`` unpacks the 4th slot (the ``if "automation"``
+    / ``if "script"`` blocks in ``deep_search``) and forwards it via the
+    ``_paginate_and_build_response`` call to
+    ``_apply_per_type_partial_flag``. A regression that unpacked the slot
     but left ``automation_yaml_skipped=`` at its ``0`` default would ship a
     ``partial: False`` response with no warning — the exact find-references
     honesty bug this commit exists to fix — while every component-level test
@@ -1025,4 +1031,331 @@ class TestTimeoutClassification:
         # The real count (2) must flow through the seam, not a hardcode.
         assert re.search(r"\b2 automation\(s\)", reason), (
             f"partial_reason must carry the real timeout count (2); got {reason!r}"
+        )
+
+
+class TestSceneTimeoutClassification:
+    """Scene mirror of ``TestTimeoutClassification`` (issue #1784).
+
+    Scenes are separate code with separate tuple positions: the scene
+    fetcher lives in ``_scenes.py``, its timeout count rides the 6th slot
+    of ``_deep_search_scenes``'s return, and ``deep_search`` maps it into
+    ``scene_stats["timeout"]`` for ``_apply_scene_partial_flag``. Without
+    these tests a regression that returned ``"failed"`` from the scene
+    ``except`` clause or mis-mapped the 6th slot would pass the automation/
+    script suites untouched. The fixture's failing WebSocket makes the
+    registry walk fail (``registry_failed=True``), which routes Attempt C
+    to attempt-all — the maximal per-id-fetch surface.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        # Bulk fetch + registry walk fail (triggers Tier 3, attempt-all).
+        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client.send_websocket_message = AsyncMock(
+            side_effect=Exception("WebSocket unavailable")
+        )
+        return client
+
+    @pytest.fixture
+    def smart_tools(self, mock_client):
+        return _make_tools(mock_client)
+
+    @staticmethod
+    def _scene_entities() -> list[dict]:
+        return [
+            {
+                "entity_id": "scene.slow_one",
+                "state": "scening",
+                "attributes": {"friendly_name": "Slow One"},
+            },
+            {
+                "entity_id": "scene.slow_two",
+                "state": "scening",
+                "attributes": {"friendly_name": "Slow Two"},
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_scene_slow_fetch_classifies_as_timeout(
+        self, mock_client, smart_tools
+    ):
+        """A real ``wait_for`` expiry in the scene fetcher must land in the
+        6th tuple slot (``timeout_count``), with ``failed`` staying 0."""
+        scenes = self._scene_entities()
+        mock_client.get_states = AsyncMock(return_value=scenes)
+
+        async def _slow_scene(sid: str) -> dict:
+            await asyncio.sleep(0.2)
+            return {"config": {"name": "slow"}}
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_slow_scene)
+
+        with patch("ha_mcp.tools.smart_search._scenes.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+            (
+                results,
+                failed_count,
+                skipped_count,
+                _integration_skipped,
+                registry_failed,
+                timeout_count,
+            ) = await smart_tools._deep_search_scenes(
+                scenes,
+                query_lower="anything",
+                exact_match=False,
+            )
+        assert timeout_count == 2, (
+            f"both scene wait_for expiries must classify as timeout; got "
+            f"timeout={timeout_count}, failed={failed_count}"
+        )
+        assert failed_count == 0, (
+            f"scene timeouts must NOT count as generic failed; got "
+            f"failed={failed_count}"
+        )
+        assert skipped_count == 0
+        assert registry_failed is True  # fixture kills the registry walk
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_scene_timeout_surfaces_partial_through_deep_search(
+        self, mock_client, smart_tools
+    ):
+        """Scene timeouts driven through public ``deep_search`` must reach
+        ``scene_stats["timeout"]`` and ``_apply_scene_partial_flag`` — pins
+        the 6th-slot mapping in the aggregator that the component test
+        cannot see."""
+        scenes = self._scene_entities()
+        mock_client.get_states = AsyncMock(return_value=scenes)
+
+        async def _slow_scene(sid: str) -> dict:
+            await asyncio.sleep(0.2)
+            return {"config": {"name": "slow"}}
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_slow_scene)
+
+        with patch("ha_mcp.tools.smart_search._scenes.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+            result = await smart_tools.deep_search(
+                query="anything",
+                search_types=["scene"],
+                limit=10,
+            )
+
+        assert result["partial"] is True
+        reason = result["partial_reason"]
+        assert "timed out" in reason, (
+            f"scene partial_reason must word the gap as a timeout; got {reason!r}"
+        )
+        assert "HAMCP_INDIVIDUAL_FETCH_BATCH_SIZE" in reason
+        assert "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT" in reason
+        assert re.search(r"\b2 scene\(s\)", reason), (
+            f"partial_reason must carry the real scene timeout count (2); "
+            f"got {reason!r}"
+        )
+
+
+class TestWrappedClientTimeoutClassification:
+    """Client-side (httpx-layer) timeouts must also classify as ``timeout``.
+
+    The REST client applies its own httpx timeout (``HA_TIMEOUT``, default
+    30s) and ``_raw_request`` re-raises ``httpx.TimeoutException`` as
+    ``HomeAssistantConnectionError`` — a *sibling* of
+    ``HomeAssistantAPIError``, so it reaches the generic ``except
+    Exception`` clause. When a user raises HAMCP_INDIVIDUAL_CONFIG_TIMEOUT
+    past HA_TIMEOUT (following the partial-result advice), the httpx
+    timeout fires first and arrives wrapped; ``is_timeout_error``'s
+    ``__cause__`` check must route it to the ``timeout`` bucket, not
+    ``failed`` (#1784).
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client.send_websocket_message = AsyncMock(
+            side_effect=Exception("WebSocket unavailable")
+        )
+        return client
+
+    @pytest.fixture
+    def smart_tools(self, mock_client):
+        return _make_tools(mock_client)
+
+    def test_is_timeout_error_contract(self):
+        """Direct pin of the helper: builtin/httpx timeouts and one-level
+        ``__cause__`` wraps are timeouts; plain connection errors are not."""
+        assert is_timeout_error(TimeoutError())
+        assert is_timeout_error(httpx.ReadTimeout("slow"))
+        wrapped = HomeAssistantConnectionError("Request timeout: slow")
+        wrapped.__cause__ = httpx.ReadTimeout("slow")
+        assert is_timeout_error(wrapped)
+        assert not is_timeout_error(HomeAssistantConnectionError("refused"))
+        assert not is_timeout_error(ValueError("nope"))
+
+    @pytest.mark.asyncio
+    async def test_wrapped_httpx_timeout_classifies_as_timeout(
+        self, mock_client, smart_tools
+    ):
+        """A HomeAssistantConnectionError caused by httpx.ReadTimeout (the
+        exact shape ``_raw_request`` produces via ``raise ... from e``)
+        must count as ``timeout``, not ``failed``."""
+        automations = [
+            {
+                "entity_id": "automation.capped",
+                "state": "on",
+                "attributes": {"friendly_name": "Capped", "id": "uid_capped"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _wrapped_timeout(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            try:
+                raise httpx.ReadTimeout("timed out")
+            except httpx.ReadTimeout as cause:
+                raise HomeAssistantConnectionError(
+                    "Request timeout: timed out"
+                ) from cause
+
+        mock_client._request = AsyncMock(side_effect=_wrapped_timeout)
+
+        (
+            _matches,
+            _skipped_count,
+            failed_count,
+            yaml_skipped_count,
+            timeout_count,
+        ) = await smart_tools._deep_search_automations(
+            automations,
+            {"automation.capped": "uid_capped"},
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert timeout_count == 1, (
+            f"wrapped httpx timeout must classify as timeout; got "
+            f"timeout={timeout_count}, failed={failed_count}"
+        )
+        assert failed_count == 0
+        assert yaml_skipped_count == 0
+
+    @pytest.mark.asyncio
+    async def test_plain_connection_error_still_classifies_as_failed(
+        self, mock_client, smart_tools
+    ):
+        """A non-timeout HomeAssistantConnectionError (e.g. refused) must
+        stay in the ``failed`` bucket — the timeout carve-out must not
+        swallow real connectivity failures."""
+        automations = [
+            {
+                "entity_id": "automation.down",
+                "state": "on",
+                "attributes": {"friendly_name": "Down", "id": "uid_down"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _refused(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            raise HomeAssistantConnectionError(
+                "Failed to connect to Home Assistant: refused"
+            )
+
+        mock_client._request = AsyncMock(side_effect=_refused)
+
+        (
+            _matches,
+            _skipped_count,
+            failed_count,
+            yaml_skipped_count,
+            timeout_count,
+        ) = await smart_tools._deep_search_automations(
+            automations,
+            {"automation.down": "uid_down"},
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert failed_count == 1
+        assert timeout_count == 0
+        assert yaml_skipped_count == 0
+
+
+class TestBudgetedFetchCountArithmetic:
+    """Direct ``_individual_fetch_budgeted`` coverage of the counting seams
+    introduced by the ``timeout`` class (#1784)."""
+
+    @pytest.fixture
+    def smart_tools(self):
+        return _make_tools(MagicMock())
+
+    @pytest.mark.asyncio
+    async def test_mixed_classes_route_to_their_own_buckets(self, smart_tools):
+        """One batch containing success + yaml_skipped + failed + timeout
+        must land each id in exactly one bucket."""
+        kinds = {
+            "ok": ({"id": "ok"}, None),
+            "yaml": (None, "yaml_skipped"),
+            "boom": (None, "failed"),
+            "slow": (None, "timeout"),
+        }
+
+        async def fetch_one(key: str):
+            config, kind = kinds[key]
+            return (key, config, kind)
+
+        (
+            configs,
+            failed_count,
+            skipped_count,
+            yaml_skipped_count,
+            timeout_count,
+        ) = await smart_tools._individual_fetch_budgeted(
+            list(kinds), fetch_one, budget=30.0, label="Test", plural="items"
+        )
+        assert list(configs) == ["ok"]
+        assert failed_count == 1
+        assert yaml_skipped_count == 1
+        assert timeout_count == 1
+        assert skipped_count == 0
+
+    @pytest.mark.asyncio
+    async def test_budget_exhaustion_skipped_excludes_timed_out_ids(self, smart_tools):
+        """When the budget exhausts mid-run AND completed batches contained
+        timeouts, ``skipped_count`` must subtract the timeout bucket —
+        dropping the ``- timeout_count`` term would double-count timed-out
+        ids (once as timeout, once as skipped) and report two overlapping
+        partial fragments."""
+
+        async def fetch_one(key: str):
+            await asyncio.sleep(0.05)  # push elapsed past the budget
+            if key == "t1":
+                return (key, None, "timeout")
+            return (key, {"id": key}, None)
+
+        with patch("ha_mcp.tools.smart_search._fetch.INDIVIDUAL_FETCH_BATCH_SIZE", 2):
+            (
+                configs,
+                failed_count,
+                skipped_count,
+                yaml_skipped_count,
+                timeout_count,
+            ) = await smart_tools._individual_fetch_budgeted(
+                ["t1", "ok1", "never1", "never2"],
+                fetch_one,
+                budget=0.01,
+                label="Test",
+                plural="items",
+            )
+        # Batch 1 (t1, ok1) runs; elapsed ~0.05s > 0.01s budget, so batch 2
+        # never launches. skipped = 4 total - 1 fetched - 1 timeout = 2.
+        assert timeout_count == 1
+        assert len(configs) == 1
+        assert failed_count == 0
+        assert yaml_skipped_count == 0
+        assert skipped_count == 2, (
+            f"skipped must exclude fetched AND timed-out ids; got "
+            f"skipped={skipped_count}"
         )

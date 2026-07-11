@@ -107,7 +107,8 @@ def test_invalid_or_out_of_range_env_value_falls_back_to_default(
     """Lenient contract (same as the #1538 budgets): an empty, unparseable,
     or out-of-range (incl. non-finite) env value falls back to the default
     rather than crashing startup. A ``<= 0`` timeout would fail every per-id
-    fetch; a ``<= 0`` batch size would deadlock the batching loop."""
+    fetch; a ``<= 0`` batch size would crash the batching loop (``range``
+    step of 0) or silently fetch nothing (negative step)."""
     _clear_knob_envs(monkeypatch)
     monkeypatch.setenv(env, bad_value)
     assert getattr(Settings(), field) == default
