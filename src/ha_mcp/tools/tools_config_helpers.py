@@ -1968,6 +1968,7 @@ async def _handle_flow_helper(
     entry_id = flow_result.get("entry_id")
     title = flow_result.get("title")
     warnings = list(pre_warnings)
+    warnings.extend(flow_result.get("warnings", []))
     entities, wait_warnings = await _wait_for_flow_entities(
         client, entry_id, action, wait
     )

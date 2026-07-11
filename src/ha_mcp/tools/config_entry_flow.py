@@ -12,6 +12,7 @@ for the 15 helper types listed in FLOW_HELPER_TYPES.
 
 import asyncio
 import logging
+from collections.abc import Iterator
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -128,10 +129,125 @@ def _handle_menu_step(
     return str(menu_choice)
 
 
+def iter_schema_fields(data_schema: Any) -> Iterator[dict[str, Any]]:
+    """Yield leaf field definitions from a flow schema, descending into sections."""
+    if not isinstance(data_schema, list):
+        return
+    for field in data_schema:
+        if not isinstance(field, dict):
+            continue
+        nested_schema = field.get("schema")
+        if isinstance(nested_schema, list):
+            yield from iter_schema_fields(nested_schema)
+            continue
+        yield field
+
+
+def _section_path(path_prefix: str, name: Any) -> str:
+    """Return the dotted config path for a named or anonymous section."""
+    if not isinstance(name, str):
+        return path_prefix
+    return f"{path_prefix}.{name}" if path_prefix else name
+
+
+def _record_ignored_section_keys(
+    ignored_config_keys: set[str] | None,
+    remaining_config: dict[str, Any],
+    section_path: str,
+) -> None:
+    """Record undeclared keys remaining inside an explicit section dict."""
+    if ignored_config_keys is None:
+        return
+    ignored_config_keys.update(
+        f"{section_path}.{key}" if section_path else key
+        for key in remaining_config
+        if key not in _MENU_SELECTION_KEYS
+    )
+
+
+def _consume_form_schema(
+    data_schema: list[Any],
+    remaining_config: dict[str, Any],
+    ignored_config_keys: set[str] | None = None,
+    path_prefix: str = "",
+) -> dict[str, Any]:
+    """Consume matching config values and shape nested flow sections.
+
+    Mutates ``remaining_config`` by removing every consumed key. Flat child
+    values override the same value inside an explicitly supplied section dict.
+    Unknown keys inside explicit section dicts are added to
+    ``ignored_config_keys`` with their dotted section path.
+    """
+    form_data: dict[str, Any] = {}
+    missing = object()
+
+    for field in data_schema:
+        if not isinstance(field, dict):
+            continue
+
+        name = field.get("name")
+        nested_schema = field.get("schema")
+        if isinstance(nested_schema, list):
+            section_path = _section_path(path_prefix, name)
+            explicit_section = (
+                remaining_config.pop(name, missing)
+                if isinstance(name, str)
+                else missing
+            )
+            if explicit_section is not missing and not isinstance(
+                explicit_section, dict
+            ):
+                if isinstance(name, str):
+                    form_data[name] = explicit_section
+                continue
+
+            nested_data: dict[str, Any] = {}
+            if isinstance(explicit_section, dict):
+                explicit_remaining = dict(explicit_section)
+                nested_data.update(
+                    _consume_form_schema(
+                        nested_schema,
+                        explicit_remaining,
+                        ignored_config_keys,
+                        section_path,
+                    )
+                )
+                _record_ignored_section_keys(
+                    ignored_config_keys,
+                    explicit_remaining,
+                    section_path,
+                )
+            nested_data.update(
+                _consume_form_schema(
+                    nested_schema,
+                    remaining_config,
+                    ignored_config_keys,
+                    section_path,
+                )
+            )
+
+            if nested_data:
+                if isinstance(name, str):
+                    form_data[name] = nested_data
+                else:
+                    form_data.update(nested_data)
+            continue
+
+        if (
+            isinstance(name, str)
+            and name not in _MENU_SELECTION_KEYS
+            and name in remaining_config
+        ):
+            form_data[name] = remaining_config.pop(name)
+
+    return form_data
+
+
 def _extract_schema_field_names(data_schema: Any) -> set[str] | None:
     """Extract the set of field names declared by a step's data_schema.
 
     HA returns data_schema as a list of {name, selector, required, ...} dicts.
+    Nested leaf names are included; section-container names are omitted.
     Returns ``None`` when the schema is absent or not a list (signalling
     the caller to fall back to legacy submit-all behaviour). Returns a
     (possibly empty) set when the schema is present and parseable.
@@ -139,11 +255,10 @@ def _extract_schema_field_names(data_schema: Any) -> set[str] | None:
     if not isinstance(data_schema, list):
         return None
     names: set[str] = set()
-    for field in data_schema:
-        if isinstance(field, dict):
-            name = field.get("name")
-            if isinstance(name, str):
-                names.add(name)
+    for field in iter_schema_fields(data_schema):
+        name = field.get("name")
+        if isinstance(name, str):
+            names.add(name)
     return names
 
 
@@ -151,13 +266,15 @@ def _handle_form_step(
     flow_id: str,
     current_step: dict[str, Any],
     remaining_config: dict[str, Any],
+    ignored_config_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate a form step and return form data to submit.
 
     When the step's ``data_schema`` is provided, pops ONLY the keys declared
     in that schema from ``remaining_config`` (mutating it) so any unconsumed
     keys remain available for subsequent steps. Menu selection keys are never
-    submitted.
+    submitted. Fields declared inside a section are grouped under the section
+    key; callers may provide them flat or inside an explicit section dict.
 
     When ``data_schema`` is absent (HA didn't tell us field names), falls
     back to legacy behaviour: submit all non-menu keys and clear them. This
@@ -180,10 +297,10 @@ def _handle_form_step(
             )
         )
 
-    schema_fields = _extract_schema_field_names(current_step.get("data_schema"))
+    data_schema = current_step.get("data_schema")
 
     form_data: dict[str, Any] = {}
-    if schema_fields is None:
+    if not isinstance(data_schema, list):
         # Legacy fallback: no schema info — dump every non-menu key and
         # consume them all so a follow-up step (rare without schema) won't
         # re-submit the same data.
@@ -192,11 +309,9 @@ def _handle_form_step(
                 continue
             form_data[key] = remaining_config.pop(key)
     else:
-        for key in list(remaining_config.keys()):
-            if key in _MENU_SELECTION_KEYS:
-                continue
-            if key in schema_fields:
-                form_data[key] = remaining_config.pop(key)
+        form_data = _consume_form_schema(
+            data_schema, remaining_config, ignored_config_keys
+        )
 
     return form_data
 
@@ -512,7 +627,8 @@ async def _handle_flow_steps(
             for unstructured HA 4xx responses so the caller can react.
 
     Returns:
-        ``{"success": True, "entry": result}`` on success.
+        ``{"success": True, "entry": result}`` on success, plus ``warnings``
+        when caller-supplied config keys were not declared by any flow step.
         Raises ToolError on any failure.
     """
     if submit_fn is None:
@@ -520,13 +636,23 @@ async def _handle_flow_steps(
     remaining_config = dict(config)
     current_step = initial_step
     last_menu_choice: str | None = None
+    ignored_config_keys: set[str] = set()
     max_steps = 10
 
     for step_num in range(max_steps):
         result_type = current_step.get("type")
 
         if result_type == _FlowType.CREATE_ENTRY:
-            return {"success": True, "entry": current_step}
+            ignored_config_keys.update(
+                key for key in remaining_config if key not in _MENU_SELECTION_KEYS
+            )
+            response: dict[str, Any] = {"success": True, "entry": current_step}
+            if ignored_config_keys:
+                response["warnings"] = [
+                    "Ignored config keys not declared by the Home Assistant flow "
+                    f"schema: {', '.join(sorted(ignored_config_keys))}"
+                ]
+            return response
 
         if result_type == _FlowType.ABORT:
             raise_tool_error(
@@ -559,7 +685,12 @@ async def _handle_flow_steps(
             # step's data_schema, leaving any other keys in remaining_config
             # for subsequent steps (HA can present multi-step forms, e.g.
             # statistics: user step then pick-characteristic step).
-            form_data = _handle_form_step(flow_id, current_step, remaining_config)
+            form_data = _handle_form_step(
+                flow_id,
+                current_step,
+                remaining_config,
+                ignored_config_keys,
+            )
             logger.debug(
                 f"Flow step {step_num}: form submit "
                 f"(step_id={current_step.get('step_id')}, keys={list(form_data.keys())})"
@@ -875,7 +1006,7 @@ async def update_flow_helper(
         raise
 
     entry = result["entry"].get("result", {})
-    return {
+    response = {
         "success": True,
         "entry_id": entry_id,
         "title": entry.get("title"),
@@ -883,6 +1014,9 @@ async def update_flow_helper(
         "message": f"{helper_type} helper updated successfully",
         "updated": True,
     }
+    if result.get("warnings"):
+        response["warnings"] = result["warnings"]
+    return response
 
 
 async def create_flow_helper(
@@ -928,10 +1062,13 @@ async def create_flow_helper(
         raise
 
     entry = result["entry"].get("result", {})
-    return {
+    response = {
         "success": True,
         "entry_id": entry.get("entry_id"),
         "title": entry.get("title"),
         "domain": helper_type,
         "message": f"{helper_type} helper created successfully",
     }
+    if result.get("warnings"):
+        response["warnings"] = result["warnings"]
+    return response
