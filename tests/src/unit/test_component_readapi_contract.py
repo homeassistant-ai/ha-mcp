@@ -13,12 +13,18 @@ each other.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ha_mcp.tools import tools_config_automations
+from ha_mcp.tools import (
+    component_api,
+    tools_config_automations,
+    tools_config_scripts,
+)
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
+from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
+from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
 from .test_component_ws_search import (
     FakeArea,
@@ -157,6 +163,106 @@ class TestConfigGetSeam:
         # The not-found raiser fetches available ids for the error context —
         # legacy-parity behavior. What must NOT run is the per-id config fetch.
         assert client.get_automation_config.await_count == 0
+
+    def _script_hass(self) -> FakeHass:
+        storage = FakeConfigEntity(
+            "script.morning",
+            "Morning Script",
+            unique_id="morning",
+            raw_config={
+                "alias": "Morning Script",
+                "sequence": [{"delay": {"seconds": 5}}],
+            },
+        )
+        return FakeHass(
+            states=[FakeState("script.morning", "off", "Morning Script")],
+            data={"script": FakeComponent([storage])},
+        )
+
+    @pytest.mark.asyncio
+    async def test_storage_script_served_by_real_component(self, monkeypatch) -> None:
+        """Script analog of the automation seam: the real component's
+        ``config_get`` output is reshaped into the legacy REST-envelope contract
+        (storage key + category injected) with zero legacy fetches. Scripts run
+        NO root-key canonicalization (unlike automations' action->actions), so
+        the storage ``sequence`` body passes through byte-exact."""
+        hass = self._script_hass()
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(
+                entity={
+                    "script.morning": FakeRegEntry(
+                        "script.morning", categories={"script": "cat-s"}
+                    )
+                }
+            ),
+        )
+        client = GetRoutingClient()
+        ws = _real_component_ws(hass)
+        with _patch_get_ws(ws, tools_config_scripts):
+            resp = await ConfigScriptTools(client).ha_config_get_script("morning")
+        assert resp["success"] is True
+        assert resp["script_id"] == "morning"
+        # The legacy path returns the REST envelope under ``config``; the real
+        # component reconstructs it (storage key + category injected).
+        assert resp["config"]["script_id"] == "morning"
+        assert resp["config"]["category"] == "cat-s"
+        # raw_config served byte-exact — the sequence body is untouched.
+        assert resp["config"]["config"] == {
+            "alias": "Morning Script",
+            "sequence": [{"delay": {"seconds": 5}}],
+        }
+        assert client.legacy_fetch_count() == 0, (
+            "storage get must be fully component-served"
+        )
+
+    @pytest.mark.asyncio
+    async def test_scene_get_stays_legacy_with_full_caps(self, monkeypatch) -> None:
+        """With the real component advertising ``config_get``, a scene get is
+        still served entirely by the legacy path: ``ha_config_get_scene`` skips
+        the caps probe, so the component WS never receives a ``config_get`` for
+        ``domain=scene`` (a ``HomeAssistantScene`` has no raw storage body in
+        memory — its ``scene_config.states`` is runtime State objects)."""
+        monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
+        client = GetRoutingClient(
+            scene_envelope={
+                "success": True,
+                "scene_id": "movie_night",
+                "config": {
+                    "id": "movie_night",
+                    "name": "Movie Night",
+                    "entities": {"light.living_room": {"state": "on"}},
+                },
+            },
+            categories={"scene": "cat-x"},
+            registry_list=[
+                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
+            ],
+        )
+        # A real component WS advertising full caps (config_get included). The
+        # scene tool must never reach for it.
+        ws = _real_component_ws(FakeHass())
+        with patch.object(
+            component_api, "get_websocket_client", AsyncMock(return_value=ws)
+        ):
+            resp = await ConfigSceneTools(client).ha_config_get_scene(
+                scene_id="movie_night"
+            )
+        assert resp["success"] is True
+        assert resp["scene_id"] == "movie_night"
+        # No ``config_get`` frame was ever sent for a scene...
+        scene_config_get_calls = [
+            c
+            for c in ws.send_command.call_args_list
+            if c.args
+            and c.args[0] == "ha_mcp_tools/config_get"
+            and c.kwargs.get("domain") == "scene"
+        ]
+        assert scene_config_get_calls == []
+        # ...and, more strongly, the component WS was never touched at all.
+        assert ws.send_command.await_count == 0
+        assert client.get_scene_config.await_count == 1
 
 
 # --- overview -------------------------------------------------------------------

@@ -18,10 +18,8 @@ from pydantic import Field
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
-    HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
-from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
@@ -31,12 +29,6 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import with_auto_backup
-from .component_api import (
-    component_supports,
-    get_component_caps,
-    invalidate_caps,
-    is_unknown_command,
-)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -67,21 +59,6 @@ from .util_helpers import (
 _SCENE_SKILL_FILES: tuple[str, ...] = ("SKILL.md",)
 
 logger = logging.getLogger(__name__)
-
-
-async def _send_component_config_get(
-    client: Any, domain: str, item_id: str
-) -> dict[str, Any]:
-    """Send one ``ha_mcp_tools/config_get`` command over the per-client WebSocket.
-
-    Returns the raw ``{success, result}`` envelope; the caller shapes
-    ``result`` onto the legacy response. Raises ``HomeAssistantCommandError``
-    on a ``success:False`` reply (routed by the caller's error taxonomy).
-    """
-    ws = await get_websocket_client(url=client.base_url, token=client.token)
-    return await ws.send_command(
-        "ha_mcp_tools/config_get", domain=domain, item_id=item_id
-    )
 
 
 class ConfigSceneTools:
@@ -271,19 +248,16 @@ class ConfigSceneTools:
                 ],
                 context={"scene_id": scene_id},
             )
-            # Prefer the custom component's in-process config_get when it
-            # advertises the capability: one WS round-trip returns the config
-            # body + storage key + current entity_id + category, replacing the
-            # legacy 3-4 (id resolution WS + per-id config REST +
-            # ``_resolve_scene_entity_id`` WS + ``fetch_entity_category`` WS).
-            # Falls back cleanly when the component is absent, downlevel, or
-            # errors — taxonomy lives in ``_get_scene_via_component``.
-            caps = await get_component_caps(self._client)
-            if component_supports(caps, "config_get"):
-                routed = await self._get_scene_via_component(scene_id)
-                if routed is not None:
-                    return routed
-
+            # Scenes ALWAYS take the legacy path — deliberately no component
+            # routing here, unlike the automation/script gets. Scenes do not
+            # retain their raw storage body in memory: HomeAssistantScene's
+            # ``scene_config.states`` holds runtime State OBJECTS built at
+            # setup, not the storage ``entities`` dict, so a component-served
+            # body can neither match the REST body byte-for-byte nor produce
+            # a stable ``config_hash`` — and the get -> surgical-edit -> set
+            # round-trip depends on both (caught live by the scene lifecycle
+            # e2e suite). automation/script expose ``raw_config`` (the exact
+            # storage dict), which is why their gets DO route.
             return await self._legacy_get_scene(scene_id)
         except ToolError:
             raise
@@ -313,11 +287,12 @@ class ConfigSceneTools:
     async def _legacy_get_scene(self, scene_id: str) -> dict[str, Any]:
         """Assemble the scene-get response from the REST/WS pipeline.
 
-        The multi-fetch fallback: id-resolution WS + per-id config REST +
-        ``_resolve_scene_entity_id`` WS + ``fetch_entity_category`` WS.
-        Behaviourally unchanged from the pre-component implementation — the
-        component path (``_get_scene_via_component``) reproduces this exact
-        envelope from a single WS call.
+        The multi-fetch path: id-resolution WS + per-id config REST +
+        ``_resolve_scene_entity_id`` WS + ``fetch_entity_category`` WS. This is
+        the ONLY scene-get path — see ``ha_config_get_scene`` for why scenes
+        never route through the component's ``config_get`` (their in-memory
+        ``scene_config.states`` is runtime State objects, not the storage
+        ``entities`` dict).
         """
         # Issue #1168 R3 blockers 3 + 6: unwrap the rest-client envelope
         # so the response carries the scene body directly (no nested
@@ -344,68 +319,6 @@ class ConfigSceneTools:
         }
         if cat_id:
             response["category"] = cat_id
-        return response
-
-    async def _get_scene_via_component(self, scene_id: str) -> dict[str, Any] | None:
-        """Serve ha_config_get_scene from the component; ``None`` ⇒ legacy.
-
-        Error taxonomy mirrors ``tools_search._ha_search_via_component``:
-        ``unknown_command`` → invalidate caps + silent legacy fallback; any
-        other ``HomeAssistantCommandError`` → legacy + ``warnings[]`` +
-        ``log.warning``; connection errors propagate.
-        """
-        try:
-            raw = await _send_component_config_get(self._client, "scene", scene_id)
-        except HomeAssistantCommandError as exc:
-            if is_unknown_command(exc):
-                invalidate_caps(self._client)
-                return None
-            legacy = await self._legacy_get_scene(scene_id)
-            legacy.setdefault("warnings", []).append(
-                f"component config_get path failed ({exc}); served via legacy path"
-            )
-            logger.warning(
-                "ha_mcp_tools/config_get failed; fell back to legacy: %r", exc
-            )
-            return legacy
-
-        result = raw.get("result") or {}
-        if not result.get("found"):
-            # Scenes have no dedicated not-found raiser: the legacy path 404s
-            # at the REST editor and the tool's ``except Exception`` classifies
-            # it (entity_id in context → ENTITY_NOT_FOUND). Re-raise the same
-            # 404 so identical classification runs. ``resolve_scene_id`` returns
-            # the bare id for a missing scene, so the storage-key suffix appears
-            # iff the caller passed a ``scene.`` prefix — matching rest_client.
-            bare = scene_id.removeprefix("scene.")
-            msg = f"Scene not found: {scene_id}"
-            if bare != scene_id:
-                msg += f" (resolved storage key: {bare})"
-            raise HomeAssistantAPIError(msg, status_code=404)
-
-        config = result.get("config")
-        if not isinstance(config, dict):
-            # Malformed success payload — defer to legacy rather than trust it.
-            return None
-
-        config_hash_value = compute_config_hash(config)
-        # The component's item_id/id is the scene storage key (unique_id, or the
-        # body's ``id``). HA derives a scene entity_id from its name, so the
-        # storage key is NOT recoverable from entity_id — prefer the explicit key.
-        storage_key = result.get("item_id") or result.get("id")
-        if not storage_key:
-            storage_key = config.get("id") or scene_id.removeprefix("scene.")
-
-        response: dict[str, Any] = {
-            "success": True,
-            "action": "get",
-            "scene_id": storage_key,
-            "config": config,
-            "config_hash": config_hash_value,
-        }
-        category = result.get("category")
-        if category:
-            response["category"] = str(category)
         return response
 
     async def _get_scene_config_internal(

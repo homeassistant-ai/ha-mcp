@@ -1311,6 +1311,8 @@ class TestNewCommandSchemas:
         "bad",
         [
             {"type": "ha_mcp_tools/config_get", "domain": "light", "item_id": "x"},
+            # scene is excluded from config_get (legacy-only; no in-memory body).
+            {"type": "ha_mcp_tools/config_get", "domain": "scene", "item_id": "x"},
             {"type": "ha_mcp_tools/config_get", "domain": "automation"},  # no item_id
             {"type": "ha_mcp_tools/config_get", "item_id": "x"},  # no domain
         ],
@@ -1436,23 +1438,23 @@ class TestConfigGet:
         assert res["found"] is False
         assert res["source"] is None
 
-    def test_scene_storage_body(self, monkeypatch):
-        scene = FakeSceneEntity(
-            "scene.movie",
-            "Movie Night",
-            unique_id="scn-1",
-            scene_config={"id": "scn-1", "name": "Movie Night", "icon": "mdi:movie"},
-        )
-        h = FakeHass(data={"scene": FakeComponent([scene])})
-        monkeypatch.setattr(
-            wsapi, "_resolve_registries", lambda hass: wsapi._RegistryView()
-        )
-        res = wsapi._do_config_get(h, {"domain": "scene", "item_id": "scn-1"})
-        assert res["found"] is True
-        assert res["source"] == "storage"
-        assert res["config"]["name"] == "Movie Night"
-        # No registry -> category degrades to None, not an error.
-        assert res["category"] is None
+    def test_scene_domain_rejected_by_schema(self, monkeypatch):
+        """Scenes are NOT a valid config_get domain — the voluptuous schema
+        rejects ``domain='scene'``. ``ha_config_get_scene`` stays on its legacy
+        REST path because a ``HomeAssistantScene`` holds no raw storage body in
+        memory (``scene_config.states`` is runtime State objects). config_get is
+        automation/script only."""
+        assert "scene" not in wsapi.CONFIG_GET_DOMAINS
+        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
+        schema = _REAL_VOL.Schema(wsapi._config_get_schema())
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(
+                {
+                    "type": wsapi.WS_CONFIG_GET,
+                    "domain": "scene",
+                    "item_id": "movie_night",
+                }
+            )
 
 
 # =============================================================================

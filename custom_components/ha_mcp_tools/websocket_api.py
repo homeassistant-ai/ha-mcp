@@ -10,10 +10,14 @@ capability gate. v1.1.0 ships five commands (four capabilities):
 * ``ha_mcp_tools/search`` — a unified in-process search over live registries and
   states, joined and scored, mirroring today's ``ha_search`` response envelope.
 * ``ha_mcp_tools/config_get`` — one-call fetch of a storage/editor-backed
-  automation/script/scene body + current entity_id + friendly_name + entity
-  category, collapsing the server's id-resolve + config-fetch + registry-category
-  round-trips. Storage-only: a YAML-loaded item returns a structured not-found
-  (its body is never emitted — that belongs to the future file-based tool).
+  automation/script body + current entity_id + friendly_name + entity category,
+  collapsing the server's id-resolve + config-fetch + registry-category
+  round-trips. Automation/script ONLY — scenes are excluded because a
+  ``HomeAssistantScene`` holds no raw storage body in memory (its
+  ``scene_config.states`` is runtime State objects, not the storage ``entities``
+  dict), so ``ha_config_get_scene`` stays on its legacy REST path. Storage-only:
+  a YAML-loaded item returns a structured not-found (its body is never emitted —
+  that belongs to the future file-based tool).
 * ``ha_mcp_tools/overview`` — the raw in-process reads the server's
   ``get_system_overview`` + ``ha_get_overview`` wrapper consume (states,
   services, entity/device/area registries, ``hass.config``, persistent
@@ -142,6 +146,17 @@ CONFIG_SEARCH_TYPES = (
     SEARCH_TYPE_AUTOMATION,
     SEARCH_TYPE_SCRIPT,
     SEARCH_TYPE_SCENE,
+)
+
+# Domains ``ha_mcp_tools/config_get`` will serve a storage body for. Scenes are
+# deliberately EXCLUDED (unlike search, which indexes all three): a
+# ``HomeAssistantScene`` keeps ``scene_config.states`` as runtime State objects,
+# not the storage ``entities`` dict, so there is no raw storage body in memory to
+# return — a component-served scene body would break shape parity and
+# ``config_hash`` stability, so ``ha_config_get_scene`` stays on its legacy path.
+CONFIG_GET_DOMAINS = (
+    SEARCH_TYPE_AUTOMATION,
+    SEARCH_TYPE_SCRIPT,
 )
 
 # Collection ("storage collection") helpers — entities in the state machine.
@@ -275,7 +290,7 @@ def _search_schema() -> dict[Any, Any]:
 def _config_get_schema() -> dict[Any, Any]:
     return {
         vol.Required("type"): WS_CONFIG_GET,
-        vol.Required("domain"): vol.In(list(CONFIG_SEARCH_TYPES)),
+        vol.Required("domain"): vol.In(list(CONFIG_GET_DOMAINS)),
         vol.Required("item_id"): str,
     }
 
@@ -1357,7 +1372,13 @@ def _reg_name(reg: Any) -> str | None:
 # ha_mcp_tools/config_get
 # =============================================================================
 def _do_config_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
-    """One-call fetch of a storage-backed automation/script/scene config body.
+    """One-call fetch of a storage-backed automation/script config body.
+
+    Automation/script ONLY — the schema (:func:`_config_get_schema`) rejects any
+    other domain. Scenes are excluded on purpose: a ``HomeAssistantScene`` keeps
+    no raw storage body in memory (``scene_config.states`` is runtime State
+    objects, not the storage ``entities`` dict), so ``ha_config_get_scene`` stays
+    on its legacy REST path.
 
     Storage-only (maintainer decision): a YAML-loaded item (id-less, same
     ``_classify_source`` rule as search) returns a structured not-found and its

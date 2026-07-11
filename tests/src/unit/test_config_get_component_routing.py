@@ -1,20 +1,28 @@
 """Routing tests for ha_config_get_{automation,script,scene} over the component gate.
 
 When the ``ha_mcp_tools`` component advertises the ``config_get`` capability,
-each get tool serves the whole read from one ``ha_mcp_tools/config_get``
-WebSocket call and skips the legacy REST/WS pipeline (id resolution + per-id
-config REST + ``fetch_entity_category`` WS). These tests pin:
+the automation and script get tools serve the whole read from one
+``ha_mcp_tools/config_get`` WebSocket call and skip the legacy REST/WS pipeline
+(id resolution + per-id config REST + ``fetch_entity_category`` WS). Scenes are
+the deliberate exception: ``ha_config_get_scene`` NEVER routes through the
+component (a ``HomeAssistantScene`` holds no raw storage body in memory — its
+``scene_config.states`` is runtime State objects, not the storage ``entities``
+dict), so it stays on the legacy path regardless of caps. These tests pin:
 
-- the fast path (legacy fetches never awaited; the ``info`` probe cached),
-- storage happy-path byte-parity between the component and legacy responses
-  for all three domains,
+- the automation/script fast path (legacy fetches never awaited; the ``info``
+  probe cached),
+- storage happy-path byte-parity between the component and legacy responses for
+  automations and scripts,
 - ``found:false`` mapping onto the exact legacy not-found error (automation /
-  script → ``RESOURCE_NOT_FOUND``; scene → ``ENTITY_NOT_FOUND``, the classified
-  404), served without touching the legacy REST fetch,
+  script → ``RESOURCE_NOT_FOUND``), served without touching the legacy REST
+  fetch,
 - the error taxonomy (silent fallback on ``unknown_command``; legacy +
   ``warnings[]`` on any other command error),
-- and that a client whose component has no ``config_get`` capability keeps the
-  legacy path exactly as before.
+- that a client whose component has no ``config_get`` capability keeps the
+  legacy path exactly as before,
+- and that scenes stay legacy-served even when the component advertises
+  ``config_get`` (no ``config_get`` frame is ever sent for a scene), with the
+  scene 404 still classified as ``ENTITY_NOT_FOUND`` on that legacy path.
 
 The WS client is an ``AsyncMock`` dispatching on the command type; the HA
 client is a spy that tallies every legacy fetch so a test can assert it never
@@ -36,7 +44,6 @@ from ha_mcp.client.rest_client import HomeAssistantAPIError, HomeAssistantComman
 from ha_mcp.tools import (
     component_api,
     tools_config_automations,
-    tools_config_scenes,
     tools_config_scripts,
 )
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
@@ -500,11 +507,28 @@ class TestScriptConfigGetRouting:
 # =============================================================================
 
 
-class TestSceneConfigGetRouting:
-    async def test_fast_path_skips_legacy_fetches(self) -> None:
+class TestSceneConfigGetAlwaysLegacy:
+    """Scenes are deliberately legacy-only: even with the component advertising
+    ``config_get``, ``ha_config_get_scene`` never routes through it. A
+    ``HomeAssistantScene`` holds ``scene_config.states`` as runtime State
+    objects, not the storage ``entities`` dict, so a component-served body would
+    break shape parity and ``config_hash`` stability (caught live by the scene
+    lifecycle e2e). The tool skips the caps probe entirely and serves the read
+    from the legacy REST/WS pipeline — so the component WS is never touched.
+    """
+
+    async def test_scene_get_served_by_legacy_despite_config_get_caps(
+        self, monkeypatch
+    ) -> None:
+        """config_get advertised, yet the scene read is fully legacy-served and
+        no ``config_get`` frame ever reaches the component."""
+        monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
         client = _scene_legacy_client()
+        # A component WS that WOULD serve config_get if asked — the point is that
+        # the scene tool never asks it (no caps probe, no config_get frame).
         ws = _make_ws(info_result=_CAPS_CONFIG_GET, config_get_result=_scene_cg_found())
-        with _patch_ws(ws, tools_config_scenes):
+        factory = AsyncMock(return_value=ws)
+        with patch.object(component_api, "get_websocket_client", factory):
             resp = await ConfigSceneTools(client).ha_config_get_scene(
                 scene_id="movie_night"
             )
@@ -512,103 +536,31 @@ class TestSceneConfigGetRouting:
         assert resp["scene_id"] == "movie_night"
         assert resp["config"] == _SCENE_BODY
         assert resp["category"] == "cat_x"
-        assert client.legacy_fetch_count() == 0
-        call = _config_get_calls(ws)[0]
-        assert call.kwargs == {"domain": "scene", "item_id": "movie_night"}
+        # Legacy pipeline ran; the component WS was never touched.
+        assert client.get_scene_config.await_count == 1
+        assert ws.send_command.await_count == 0
 
-    async def test_storage_happy_path_parity(self, monkeypatch) -> None:
-        monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
-        comp_client = RoutingClient()
-        ws = _make_ws(info_result=_CAPS_CONFIG_GET, config_get_result=_scene_cg_found())
-        with _patch_ws(ws, tools_config_scenes):
-            component = await ConfigSceneTools(comp_client).ha_config_get_scene(
-                scene_id="movie_night"
-            )
-
-        legacy_client = _scene_legacy_client()
-        ws_legacy = _make_ws(info_result=_CAPS_NO_CONFIG_GET)
-        with _patch_ws(ws_legacy, tools_config_scenes):
-            legacy = await ConfigSceneTools(legacy_client).ha_config_get_scene(
-                scene_id="movie_night"
-            )
-
-        assert component == legacy
-
-    async def test_found_false_raises_entity_not_found_parity(
+    async def test_scene_not_found_classifies_entity_not_found_on_legacy(
         self, monkeypatch
     ) -> None:
-        """Scene found:false → the SAME classified error the legacy 404 produces."""
+        """A scene 404 stays classified as ENTITY_NOT_FOUND on the legacy path,
+        with ``config_get`` advertised but never sent."""
         monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
-
-        comp_client = RoutingClient()
-        ws = _make_ws(info_result=_CAPS_CONFIG_GET, config_get_result={"found": False})
-        with (
-            _patch_ws(ws, tools_config_scenes),
-            pytest.raises(ToolError) as comp_exc,
-        ):
-            await ConfigSceneTools(comp_client).ha_config_get_scene(scene_id="ghost")
-        # Component's not-found is authoritative — no legacy REST call.
-        assert comp_client.get_scene_config.await_count == 0
-
-        legacy_client = RoutingClient(
+        client = RoutingClient(
             scene_envelope_exc=HomeAssistantAPIError(
                 "Scene not found: ghost", status_code=404
             )
         )
-        ws_legacy = _make_ws(info_result=_CAPS_NO_CONFIG_GET)
+        ws = _make_ws(info_result=_CAPS_CONFIG_GET)
+        factory = AsyncMock(return_value=ws)
         with (
-            _patch_ws(ws_legacy, tools_config_scenes),
-            pytest.raises(ToolError) as legacy_exc,
+            patch.object(component_api, "get_websocket_client", factory),
+            pytest.raises(ToolError) as exc_info,
         ):
-            await ConfigSceneTools(legacy_client).ha_config_get_scene(scene_id="ghost")
-
-        comp_err = _error_payload(comp_exc.value)
-        legacy_err = _error_payload(legacy_exc.value)
-        assert comp_err["code"] == legacy_err["code"] == "ENTITY_NOT_FOUND"
-        assert comp_err["message"] == legacy_err["message"]
-
-    async def test_unknown_command_falls_back_silently(self, monkeypatch) -> None:
-        monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
-        client = _scene_legacy_client()
-        ws = _make_ws(
-            info_result=_CAPS_CONFIG_GET,
-            config_get_exc=HomeAssistantCommandError(
-                "Command failed: nope", "unknown_command"
-            ),
-        )
-        with _patch_ws(ws, tools_config_scenes):
-            resp = await ConfigSceneTools(client).ha_config_get_scene(
-                scene_id="movie_night"
-            )
-        assert resp["success"] is True
-        assert client.get_scene_config.await_count == 1
-        assert "warnings" not in resp
-
-    async def test_raised_command_falls_back_with_warning(self, monkeypatch) -> None:
-        monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
-        client = _scene_legacy_client()
-        ws = _make_ws(
-            info_result=_CAPS_CONFIG_GET,
-            config_get_exc=HomeAssistantCommandError(
-                "Command failed: boom", "internal_error"
-            ),
-        )
-        with _patch_ws(ws, tools_config_scenes):
-            resp = await ConfigSceneTools(client).ha_config_get_scene(
-                scene_id="movie_night"
-            )
-        assert resp["success"] is True
-        assert client.get_scene_config.await_count == 1
-        assert any("served via legacy path" in w for w in resp["warnings"])
-
-    async def test_no_capability_uses_legacy_untouched(self, monkeypatch) -> None:
-        monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
-        client = _scene_legacy_client()
-        ws = _make_ws(info_result=_CAPS_NO_CONFIG_GET)
-        with _patch_ws(ws, tools_config_scenes):
-            resp = await ConfigSceneTools(client).ha_config_get_scene(
-                scene_id="movie_night"
-            )
-        assert resp["success"] is True
-        assert client.get_scene_config.await_count == 1
-        assert _config_get_calls(ws) == []
+            await ConfigSceneTools(client).ha_config_get_scene(scene_id="ghost")
+        err = _error_payload(exc_info.value)
+        # The legacy REST 404 is classified via the tool's ``except Exception``
+        # (entity_id in context) into the ENTITY_NOT_FOUND taxonomy.
+        assert err["code"] == "ENTITY_NOT_FOUND"
+        assert err["message"] == "Entity 'scene.ghost' not found"
+        assert ws.send_command.await_count == 0
