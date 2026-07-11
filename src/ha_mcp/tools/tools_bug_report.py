@@ -45,6 +45,24 @@ AGENT_BEHAVIOR_URL = (
     "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml"
 )
 
+# Guidance surfaced when the reported problem is a tool that never shows up in
+# the client's tool list. In issue #1804 this produced a false bug report: the
+# tool was enabled and loaded server-side (startup logs even said so), but the
+# MCP client had never refreshed its cached tool list, so the agent concluded
+# it was a server bug. A stale client-side tool list is the single most likely
+# cause of a missing tool and must be ruled out before filing.
+MISSING_TOOL_HINT = (
+    "MISSING/UNAVAILABLE TOOL? If the problem is that a tool you expected is not "
+    "in your tool list (can't find it, can't call it), this is very likely NOT a "
+    "bug. MCP clients cache the tool list when they connect and do NOT pick up "
+    "newly enabled tools until the connection is refreshed. Server-side logs "
+    "saying a tool is 'enabled' do NOT mean the client has loaded it. Ask the "
+    "user to refresh their MCP connection first: in Claude Desktop / claude.ai "
+    "use the connector's refresh option, or simply disconnect and reconnect it; "
+    "in Claude Code run /mcp and reconnect the server. Only file a bug if the "
+    "tool is still missing after a refresh."
+)
+
 # Max characters to include from addon container logs.
 # 3000 chars ≈ 750 LLM tokens — keeps the tool response well below context budgets
 # while still capturing enough recent output to diagnose most issues.
@@ -188,12 +206,23 @@ def _detect_platform() -> dict[str, str]:
 # purpose: only flags that materially change which tools the agent sees, since
 # the same bug report behaves very differently depending on these. New
 # tool-shaping toggles should be added here so triage doesn't have to ask.
+#
+# ``enable_beta_features`` leads the list because it is the master gate: when
+# off it force-disables every beta sub-flag (filesystem tools, code mode, YAML
+# editing, ...) regardless of the sub-flag's own value, so a "missing tool"
+# report is meaningless without it. ``enable_filesystem_tools`` and
+# ``enable_custom_component_integration`` are the exact beta-gated tool families
+# from issue #1804 — surfacing them lets triage see at a glance whether the tool
+# the user couldn't find was even enabled server-side.
 _CONFIG_TOGGLE_FIELDS: tuple[str, ...] = (
+    "enable_beta_features",
     "enable_websocket",
     "enable_dashboard_partial_tools",
     "enable_tool_search",
     "tool_search_max_results",
     "enable_yaml_config_editing",
+    "enable_filesystem_tools",
+    "enable_custom_component_integration",
     "enable_code_mode",
     "enabled_tool_modules",
 )
@@ -668,6 +697,9 @@ class BugReportTools:
           empty string otherwise)
         - `core_error_log` — Home Assistant error log (home-assistant.log) over
           REST; carries auth / integration errors that don't show in addon_logs
+        - `missing_tool_hint` — check this FIRST when the report is about a
+          missing/unavailable tool; a stale client tool list (not a bug) is the
+          usual cause, and refreshing the MCP connection is the fix
         - `suggested_title`, `duplicate_check_urls`, `anonymization_guide`
         """
         # Detect installation method, platform, and runtime config.
@@ -821,8 +853,16 @@ class BugReportTools:
             "runtime_bug_submit_url": runtime_bug_submit_url,
             "agent_behavior_submit_url": agent_behavior_submit_url,
             "duplicate_check_urls": duplicate_check_urls,
+            "missing_tool_hint": MISSING_TOOL_HINT,
             "instructions": (
                 "WORKFLOW FOR PRESENTING BUG REPORTS:\n\n"
+                "0. **PRE-CHECK — is the problem a missing/unavailable tool?** If "
+                "the user's issue is that a tool they expected is missing or "
+                "cannot be called, DO NOT file a bug yet. See the "
+                "`missing_tool_hint` field: the likely cause is a stale MCP "
+                "client tool list (not a server bug), fixed by refreshing or "
+                "reconnecting the MCP connection. Only continue with this report "
+                "if the tool is still missing after the user refreshes.\n\n"
                 "1. **Check for duplicates FIRST** (before presenting the template):\n"
                 "   - Use the duplicate_check_urls to search for similar issues\n"
                 '   - If gh CLI is available: use `gh issue list --search "keyword"`\n'
