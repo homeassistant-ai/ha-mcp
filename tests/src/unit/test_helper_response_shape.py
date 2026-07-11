@@ -153,6 +153,18 @@ class TestUniformResponseShape:
         """
         mock_client.start_config_flow = AsyncMock(
             return_value={
+                "type": "form",
+                "flow_id": "flow-1",
+                "step_id": "user",
+                "data_schema": [
+                    {"name": "name"},
+                    {"name": "entity_ids"},
+                    {"name": "type"},
+                ],
+            }
+        )
+        mock_client.submit_config_flow_step = AsyncMock(
+            return_value={
                 "type": "create_entry",
                 "flow_id": "flow-1",
                 "result": {

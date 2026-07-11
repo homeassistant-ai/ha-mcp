@@ -644,9 +644,7 @@ async def _handle_flow_steps(
 
         if result_type == _FlowType.CREATE_ENTRY:
             ignored_config_keys.update(
-                key
-                for key in remaining_config
-                if key not in _MENU_SELECTION_KEYS
+                key for key in remaining_config if key not in _MENU_SELECTION_KEYS
             )
             response: dict[str, Any] = {"success": True, "entry": current_step}
             if ignored_config_keys:
