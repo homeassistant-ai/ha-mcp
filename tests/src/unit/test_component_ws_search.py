@@ -26,8 +26,10 @@ helpers_list). Highlights:
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import json
+import logging
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -116,6 +118,11 @@ class FakeHass:
             self.services = services
         if config is not None:
             self.config = config
+
+    async def async_add_executor_job(self, func, *args):
+        # The real hass runs ``func`` in a thread pool; the tests run it inline
+        # (the point under test is that the WS prep offloads it, not the pool).
+        return func(*args)
 
 
 class FakeRegEntry:
@@ -257,6 +264,20 @@ class FakeSceneEntity:
         self.name = name
         self.unique_id = unique_id
         self.scene_config = scene_config
+
+
+class FakeCollectionEntity:
+    """Stand-in for a CollectionEntity (input_boolean/schedule/counter/…).
+
+    Real collection helpers keep their full storage config on the entity as
+    ``_config`` (a schedule's weekday blocks, an input_datetime's has_date, …),
+    reachable via the domain's EntityComponent in ``hass.data['entity_components']``.
+    """
+
+    def __init__(self, entity_id, config, unique_id=None):
+        self.entity_id = entity_id
+        self._config = dict(config)
+        self.unique_id = unique_id if unique_id is not None else config.get("id")
 
 
 class FakeComponent:
@@ -591,12 +612,17 @@ class TestConfigSurfaces:
         for rec in res["automations"]:
             assert rec["config"] is None
 
-    def test_scene_matches_via_scene_config(self, empty_view):
+    def test_scene_matches_by_name_config_never_emitted(self, empty_view):
         scene = FakeSceneEntity(
             "scene.movie",
             "Movie Night",
             unique_id="scn-1",
-            scene_config={"id": "scn-1", "name": "Movie Night", "icon": "mdi:movie"},
+            scene_config={
+                "id": "scn-1",
+                "name": "Movie Night",
+                "icon": "mdi:movie",
+                "states": {"light.tv": object(), "media_player.lr": object()},
+            },
         )
         h = FakeHass(data={"scene": FakeComponent([scene])})
         res = wsapi._do_search(h, {"query": "movie", "include_config": True})
@@ -604,7 +630,54 @@ class TestConfigSurfaces:
         rec = res["scenes"][0]
         assert rec["name"] == "Movie Night"
         assert rec["source"] == "storage"
-        assert rec["config"]["id"] == "scn-1"
+        assert rec["match_in_name"] is True
+        # Scenes never emit a component-served body, even under include_config.
+        assert rec["config"] is None
+
+    def test_scene_matches_by_entity_reference(self, empty_view):
+        # The entity-id KEYS of scene_config.states are the match corpus, so a
+        # query for an entity a scene touches finds it ("which scenes touch X").
+        scene = FakeSceneEntity(
+            "scene.evening",
+            "Evening",
+            unique_id="scn-2",
+            scene_config={
+                "id": "scn-2",
+                "name": "Evening",
+                "states": {"light.porch": object()},
+            },
+        )
+        h = FakeHass(data={"scene": FakeComponent([scene])})
+        res = wsapi._do_search(h, {"query": "light.porch", "include_config": True})
+        assert res["scenes"], "a scene must match on an entity-id key of its states"
+        assert res["scenes"][0]["match_in_config"] is True
+        assert res["scenes"][0]["config"] is None
+
+    def test_scene_state_values_not_in_corpus_or_response(self, empty_view):
+        # Runtime State-object VALUES must never reach scoring or the response —
+        # only the entity-id keys and id/name/icon do (no stringified garbage).
+        class _RuntimeState:
+            def __repr__(self):
+                return "<state light.tv=scenegarbagevalue>"
+
+        scene = FakeSceneEntity(
+            "scene.movie",
+            "Movie Night",
+            unique_id="scn-1",
+            scene_config={
+                "id": "scn-1",
+                "name": "Movie Night",
+                "states": {"light.tv": _RuntimeState()},
+            },
+        )
+        h = FakeHass(data={"scene": FakeComponent([scene])})
+        by_value = wsapi._do_search(
+            h, {"query": "scenegarbagevalue", "include_config": True}
+        )
+        assert not by_value["scenes"], "State values must not be in the match corpus"
+        by_name = wsapi._do_search(h, {"query": "movie", "include_config": True})
+        assert by_name["scenes"]
+        assert "scenegarbagevalue" not in json.dumps(by_name)
 
     def test_config_combined_pagination(self, empty_view):
         autos = [
@@ -740,6 +813,36 @@ class TestHelpers:
         assert rec["match_in_name"] is False
         assert "deep_search_option_a" in json.dumps(rec["config"])
 
+    def test_collection_helper_search_matches_storage_body(self, empty_view):
+        # Search must match a schedule on a value that lives ONLY in the storage
+        # ``_config`` body (a weekday block time), not in the state attributes.
+        state = FakeState("schedule.work", "on", friendly_name="Work")
+        sched = FakeCollectionEntity(
+            "schedule.work",
+            {
+                "id": "work",
+                "name": "Work",
+                "monday": [{"from": "07:07:07", "to": "09:00:00"}],
+            },
+            unique_id="work",
+        )
+        h = FakeHass(
+            states=[state],
+            data={"entity_components": {"schedule": FakeComponent([sched])}},
+        )
+        res = wsapi._do_search(
+            h,
+            {
+                "query": "07:07:07",
+                "search_types": ["helper"],
+                "include_config": True,
+            },
+        )
+        coll = [x for x in res["helpers"] if x["kind"] == "collection"]
+        assert coll, "a storage-body-only value must match the collection helper"
+        assert coll[0]["match_in_config"] is True
+        assert "07:07:07" in json.dumps(coll[0]["config"])
+
     def test_collection_helper_body_withheld_without_include_config(self, empty_view):
         states = [
             FakeState(
@@ -815,6 +918,10 @@ class TestSecretScrub:
     """A resolved ``!secret`` value in a config body must never produce a match,
     so ``ha_search`` cannot be used as a probe oracle (query a suspected secret,
     confirm it via ``match_in_config``). The value is blocked, not just unemitted.
+
+    The scrub set is loaded off the event loop by ``_search_prep`` and passed into
+    the pure ``_do_search`` (see :class:`TestSearchPrep` / :class:`TestSecretLoader`
+    for the loader); these tests inject it directly via ``secret_values``.
     """
 
     _SECRET = "s3cr3tprobevaluexyz"
@@ -841,41 +948,38 @@ class TestSecretScrub:
         )
         return FakeHass(data={"automation": FakeComponent([auto])})
 
-    def _write_secrets(self, tmp_path, **values):
-        body = "".join(f"{k}: {v}\n" for k, v in values.items())
-        (tmp_path / "secrets.yaml").write_text(body, encoding="utf-8")
-
-    def test_secret_value_scrubbed_but_normal_token_matches(self, empty_view, tmp_path):
-        self._write_secrets(tmp_path, api_password=self._SECRET)
+    def test_secret_value_scrubbed_but_normal_token_matches(self, empty_view):
         h = self._yaml_automation_hass(self._SECRET)
-        h.config = FakeConfig(tmp_path)
+        scrub = frozenset({self._SECRET})
 
         by_secret = wsapi._do_search(
-            h, {"query": self._SECRET, "search_types": ["automation"]}
+            h,
+            {"query": self._SECRET, "search_types": ["automation"]},
+            secret_values=scrub,
         )
         assert not by_secret["automations"], (
             "a query equal to a resolved secret must not match (probe oracle)"
         )
 
         by_token = wsapi._do_search(
-            h, {"query": "normalbodytoken", "search_types": ["automation"]}
+            h,
+            {"query": "normalbodytoken", "search_types": ["automation"]},
+            secret_values=scrub,
         )
         assert any(a["match_in_config"] for a in by_token["automations"]), (
             "a non-secret body token must still match after scrubbing"
         )
 
-    def test_secret_scrubbed_in_fuzzy_mode(self, empty_view, tmp_path):
-        self._write_secrets(tmp_path, api_password=self._SECRET)
+    def test_secret_scrubbed_in_fuzzy_mode(self, empty_view):
         h = self._yaml_automation_hass(self._SECRET)
-        h.config = FakeConfig(tmp_path)
         res = wsapi._do_search(
             h,
             {"query": self._SECRET, "search_types": ["automation"], "exact": False},
+            secret_values=frozenset({self._SECRET}),
         )
         assert not res["automations"], "fuzzy mode must also scrub the secret leaf"
 
-    def test_flow_helper_option_secret_scrubbed(self, empty_view, tmp_path):
-        self._write_secrets(tmp_path, tmpl_secret=self._SECRET)
+    def test_flow_helper_option_secret_scrubbed(self, empty_view):
         entry = FakeConfigEntry(
             "template",
             title="Sun Sensor",
@@ -883,70 +987,134 @@ class TestSecretScrub:
             entry_id="e1",
         )
         h = FakeHass(config_entries=[entry])
-        h.config = FakeConfig(tmp_path)
-        res = wsapi._do_search(h, {"query": self._SECRET, "search_types": ["helper"]})
+        res = wsapi._do_search(
+            h,
+            {"query": self._SECRET, "search_types": ["helper"]},
+            secret_values=frozenset({self._SECRET}),
+        )
         assert not [x for x in res["helpers"] if x["kind"] == "flow"], (
             "a flow-helper option equal to a secret must not match"
         )
 
-    def test_missing_secrets_file_degrades_without_scrubbing(
-        self, empty_view, tmp_path
-    ):
-        # No secrets.yaml under tmp_path → no scrub → the value matches (proves
-        # the degrade-off path runs without error).
+    def test_empty_scrub_set_lets_the_value_match(self, empty_view):
+        # No scrub set (the default — entity-only search, or an absent secrets.yaml
+        # that degraded to empty) means the value is not blocked. Proves the scrub
+        # is what blocks, and its absence is safe.
         h = self._yaml_automation_hass(self._SECRET)
-        h.config = FakeConfig(tmp_path)
         res = wsapi._do_search(
             h, {"query": self._SECRET, "search_types": ["automation"]}
         )
-        assert res["automations"], (
-            "absent secrets.yaml must degrade to no scrubbing without error"
+        assert res["automations"], "an empty scrub set must not block the match"
+
+
+# =============================================================================
+# secret loader — off-loop read of secrets.yaml; absent silent, broken warns
+# =============================================================================
+class TestSecretLoader:
+    """``_load_secret_values`` reads ``secrets.yaml`` (run in the executor by
+    ``_search_prep``) and degrades safely: an ABSENT file is silent (the common
+    case), a present-but-unreadable/malformed file logs ONE warning; both yield
+    an empty set. Only string values are collected."""
+
+    _SECRET = "s3cr3tprobevaluexyz"
+    _LOGGER_NAME = "custom_components.ha_mcp_tools.websocket_api"
+
+    def _hass(self, tmp_path):
+        h = FakeHass()
+        h.config = FakeConfig(tmp_path)
+        return h
+
+    def test_valid_secrets_collected(self, tmp_path):
+        (tmp_path / "secrets.yaml").write_text(
+            f"api_password: {self._SECRET}\nother: value2\n", encoding="utf-8"
+        )
+        assert wsapi._load_secret_values(self._hass(tmp_path)) == frozenset(
+            {self._SECRET, "value2"}
         )
 
-    def test_malformed_secrets_file_degrades_without_scrubbing(
-        self, empty_view, tmp_path
-    ):
+    def test_missing_file_is_silent(self, tmp_path, caplog):
+        # No secrets.yaml written → FileNotFoundError → empty set, no warning.
+        with caplog.at_level(logging.WARNING, logger=self._LOGGER_NAME):
+            result = wsapi._load_secret_values(self._hass(tmp_path))
+        assert result == frozenset()
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == [], (
+            "an absent secrets.yaml must not warn"
+        )
+
+    def test_malformed_file_warns_once(self, tmp_path, caplog):
         (tmp_path / "secrets.yaml").write_text("{not: valid: yaml: [", encoding="utf-8")
-        h = self._yaml_automation_hass(self._SECRET)
-        h.config = FakeConfig(tmp_path)
-        res = wsapi._do_search(
-            h, {"query": self._SECRET, "search_types": ["automation"]}
-        )
-        assert res["automations"], (
-            "malformed secrets.yaml must degrade to no scrubbing without error"
-        )
+        with caplog.at_level(logging.WARNING, logger=self._LOGGER_NAME):
+            result = wsapi._load_secret_values(self._hass(tmp_path))
+        assert result == frozenset()
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1, "a malformed secrets.yaml must warn exactly once"
 
-    def test_non_string_secret_values_ignored(self, empty_view, tmp_path):
-        # A numeric secret is not a plaintext-leak leaf; only string values are
-        # collected, so loading must not choke on it.
+    def test_non_string_values_ignored(self, tmp_path):
+        # A numeric scalar is not a plaintext-leak leaf; only strings are collected
+        # and the load must not choke on the non-string.
         (tmp_path / "secrets.yaml").write_text(
             f"port: 8123\napi_password: {self._SECRET}\n", encoding="utf-8"
         )
-        h = self._yaml_automation_hass(self._SECRET)
-        h.config = FakeConfig(tmp_path)
-        res = wsapi._do_search(
-            h, {"query": self._SECRET, "search_types": ["automation"]}
-        )
-        assert not res["automations"], (
-            "string secret still scrubbed alongside a non-string one"
+        assert wsapi._load_secret_values(self._hass(tmp_path)) == frozenset(
+            {self._SECRET}
         )
 
-    def test_entity_only_search_skips_secrets_read(
-        self, empty_view, tmp_path, monkeypatch
-    ):
-        # Entity-only searches never touch a config body, so the secrets.yaml read
-        # is skipped entirely (perf gate).
+    def test_no_usable_config_path_degrades(self):
+        # A hass without a callable config.path degrades to an empty set, no raise.
+        assert wsapi._load_secret_values(FakeHass()) == frozenset()
+
+
+# =============================================================================
+# search prep — off-loop secret load, skipped for entity-only searches
+# =============================================================================
+class TestSearchPrep:
+    """The ``search`` command's async pre-step loads the scrub set via the
+    executor ONLY when a config/helper surface is requested; an entity-only
+    search skips the file read entirely (perf gate)."""
+
+    def _run(self, hass, msg):
+        return asyncio.run(wsapi._search_prep(hass, msg))
+
+    def test_entity_only_skips_executor(self, monkeypatch, tmp_path):
         calls = {"n": 0}
 
-        def _spy(hass):
+        async def _spy(func, *args):
             calls["n"] += 1
-            return frozenset()
+            return func(*args)
 
-        monkeypatch.setattr(wsapi, "_load_secret_values", _spy)
         h = FakeHass(states=[FakeState("light.k", "on", "Kitchen")])
         h.config = FakeConfig(tmp_path)
-        wsapi._do_search(h, {"query": "kitchen", "search_types": ["entity"]})
+        monkeypatch.setattr(h, "async_add_executor_job", _spy)
+        extra = self._run(h, {"search_types": ["entity"]})
+        assert extra == {"secret_values": frozenset()}
         assert calls["n"] == 0, "entity-only search must not read secrets.yaml"
+
+    def test_config_surface_loads_via_executor(self, monkeypatch, tmp_path):
+        (tmp_path / "secrets.yaml").write_text(
+            "api_password: sekret\n", encoding="utf-8"
+        )
+        calls = {"n": 0}
+
+        async def _spy(func, *args):
+            calls["n"] += 1
+            return func(*args)
+
+        h = FakeHass()
+        h.config = FakeConfig(tmp_path)
+        monkeypatch.setattr(h, "async_add_executor_job", _spy)
+        extra = self._run(h, {"search_types": ["automation"]})
+        assert calls["n"] == 1, "a config surface must offload the secrets read"
+        assert extra["secret_values"] == frozenset({"sekret"})
+
+    def test_default_search_types_load_via_executor(self, tmp_path):
+        # No search_types → defaults to ALL (includes config surfaces) → loads.
+        (tmp_path / "secrets.yaml").write_text(
+            "api_password: sekret\n", encoding="utf-8"
+        )
+        h = FakeHass()
+        h.config = FakeConfig(tmp_path)
+        extra = self._run(h, {})
+        assert extra["secret_values"] == frozenset({"sekret"})
 
 
 # =============================================================================
@@ -1187,13 +1355,9 @@ class _FakeWSApi:
     def async_response(self, func):
         @functools.wraps(func)
         def wrapper(hass, connection, msg):
-            coro = func(hass, connection, msg)
-            try:
-                coro.send(None)
-            except StopIteration:
-                return
-            coro.close()
-            raise AssertionError("handler awaited unexpectedly")
+            # The handler is a coroutine (it awaits the search prep's executor
+            # offload); drive it to completion the way the WS layer would.
+            asyncio.run(func(hass, connection, msg))
 
         return wrapper
 
@@ -1503,6 +1667,82 @@ class TestHelpersList:
         assert rec["storage_id"] == "guest_mode"
         assert "Old Name" not in json.dumps(res)
 
+    def test_body_from_storage_config_surfaces_schedule_blocks(self, empty_view):
+        # Regression for the live e2e schedule-update failure: a schedule's weekday
+        # blocks live in the storage ``_config`` (reached via the EntityComponent),
+        # NOT the live state attributes, so listing must surface them + the real id.
+        state = FakeState(
+            "schedule.work",
+            "on",
+            friendly_name="Work",
+            next_event="2026-07-13T09:00:00+00:00",
+        )
+        sched = FakeCollectionEntity(
+            "schedule.work",
+            {
+                "id": "work",
+                "name": "Work",
+                "monday": [
+                    {"from": "07:00:00", "to": "09:00:00"},
+                    {"from": "17:00:00", "to": "19:00:00"},
+                ],
+            },
+            unique_id="work",
+        )
+        h = FakeHass(
+            states=[state],
+            data={"entity_components": {"schedule": FakeComponent([sched])}},
+        )
+        res = wsapi._do_helpers_list(h, {})
+        rec = next(r for r in res["helpers"] if r["helper_type"] == "schedule")
+        assert rec["storage_id"] == "work"
+        # The weekday blocks are absent from the state attributes but present here.
+        assert "monday" not in state.attributes
+        assert len(rec["config"]["monday"]) == 2
+
+    def test_body_falls_back_to_attrs_without_storage_entity(self, empty_view):
+        # A collection helper with no reachable entity (_config absent, e.g. a
+        # YAML-defined input_boolean or input_number's _attr_* layout) falls back
+        # to the state-attributes body.
+        states = [FakeState("input_boolean.legacy", "off", friendly_name="Legacy Flag")]
+        res = wsapi._do_helpers_list(
+            FakeHass(states=states), {}
+        )  # no entity_components
+        rec = next(r for r in res["helpers"] if r["helper_type"] == "input_boolean")
+        assert rec["config"]["friendly_name"] == "Legacy Flag"
+        assert rec["storage_id"] == "legacy"
+
+    def test_rename_current_name_wins_over_storage_body_name(self, monkeypatch):
+        # With a storage body present, the record ``name`` is still the CURRENT
+        # display name, not the (possibly stale) name inside the storage config.
+        state = FakeState(
+            "input_boolean.guest_mode", "off", friendly_name="Current Guest"
+        )
+        ent = FakeCollectionEntity(
+            "input_boolean.guest_mode",
+            {"id": "guest_mode", "name": "Old Name"},
+            unique_id="guest_mode",
+        )
+        view = make_view(
+            entity={
+                "input_boolean.guest_mode": FakeRegEntry(
+                    "input_boolean.guest_mode", name="Current Guest"
+                )
+            }
+        )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+        h = FakeHass(
+            states=[state],
+            data={"entity_components": {"input_boolean": FakeComponent([ent])}},
+        )
+        rec = next(
+            r
+            for r in wsapi._do_helpers_list(h, {})["helpers"]
+            if r["kind"] == "collection"
+        )
+        assert rec["name"] == "Current Guest"
+        assert rec["storage_id"] == "guest_mode"
+
     def test_flow_helper_options_and_entity_data_never_leaks(self, monkeypatch):
         entry = FakeConfigEntry(
             "template",
@@ -1785,3 +2025,31 @@ class TestOverview:
         assert res["config"] == {}
         assert res["notifications"] == []
         assert res["repairs"] == []
+        # Missing/None registries are "nothing here", not a failure: no slice_errors.
+        assert res["slice_errors"] == []
+
+    def test_slice_errors_empty_when_clean(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
+        monkeypatch.setattr(wsapi, "ir", FakeIssueRegModule(FakeIssueRegistry([])))
+        res = wsapi._do_overview(self._hass(), {})
+        assert res["slice_errors"] == []
+
+    def test_slice_errors_records_degraded_slice(self, monkeypatch):
+        # A registry accessor that RAISES (vs a missing/None registry) is named in
+        # slice_errors so the server can tell "empty" from "failed"; the slice
+        # still degrades to a usable empty default and other slices are unaffected.
+        class _RaisingEntityReg:
+            @property
+            def entities(self):
+                raise RuntimeError("registry read blew up")
+
+            def async_get(self, entity_id):
+                return None
+
+        view = wsapi._RegistryView(entity=_RaisingEntityReg())
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+        monkeypatch.setattr(wsapi, "ir", FakeIssueRegModule(FakeIssueRegistry([])))
+        res = wsapi._do_overview(self._hass(), {})
+        assert "entity_registry" in res["slice_errors"]
+        assert res["entity_registry"] == []
+        assert res["states"], "an unrelated slice must still be populated"

@@ -22,6 +22,9 @@ Legacy per-bucket record keys (the contract being pinned; see
 
 ``config`` is present only under ``include_config=True`` (mirroring the
 legacy pipeline's pop), and YAML-backed records must never carry a body.
+Scene records never carry a body either: a scene's config is always ``None``
+from the component (its ``states`` are runtime objects), and it matches on the
+entity-id KEYS of ``states`` (here ``light.contractmarker_lamp``).
 """
 
 from __future__ import annotations
@@ -153,7 +156,13 @@ def _search_marker_hass() -> FakeHass:
                 _SceneEntity(
                     "scene.contractmarker_scene",
                     "Contractmarker Scene",
-                    {"id": "scn1", "name": "Contractmarker Scene", "states": {}},
+                    # ``states`` keys are entity ids (the scene match corpus); the
+                    # runtime State VALUES are never scored or emitted.
+                    {
+                        "id": "scn1",
+                        "name": "Contractmarker Scene",
+                        "states": {"light.contractmarker_lamp": {"state": "on"}},
+                    },
                     unique_id="scn1",
                 )
             ]
@@ -252,6 +261,9 @@ def test_all_surfaces_match_and_shape_to_legacy_keys(monkeypatch) -> None:
     for rec in _records(shaped, "scenes"):
         assert set(rec) == SCENE_KEYS | {"config"}, f"scene record keys drifted: {rec}"
         assert rec["scene_id"] == "scn1"
+        # Scenes never emit a component-served body: the config key follows the
+        # include_config pop rule, but its value from the component is always None.
+        assert rec["config"] is None
 
     helper_recs = _records(shaped, "helpers")
     by_kind = {("flow" if "entry_id" in r else "collection"): r for r in helper_recs}

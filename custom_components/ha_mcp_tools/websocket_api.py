@@ -36,25 +36,28 @@ capability gate. v1.1.0 ships five commands (four capabilities):
 Design notes that are load-bearing:
 
 * **Capability negotiation, not version-lockstep.** ``CAPABILITIES`` grows one
-  entry per shipped command; the server asks "do you support ``search``?"
-  rather than "are you >= X". The manifest version is reported for display only.
+  entry per shipped command (except the always-present ``info`` handshake); the
+  server asks "do you support ``search``?" rather than "are you >= X". The
+  manifest version is reported for display only.
 * **Data minimization.** Flow-helper indexing reads ``ConfigEntry.options`` /
   ``title`` only — **never** ``ConfigEntry.data`` (integration credentials).
 * **YAML config bodies are never emitted.** automation/script/scene bodies are
   indexed for *matching*, but a matched item's ``config`` body is returned only
   when it is storage/editor-backed AND ``include_config`` is set. YAML-loaded
   items return identity/metadata only (their ``raw_config`` may carry resolved
-  ``!secret`` plaintext). Body emission for YAML belongs to the future
-  ``config_get`` command.
+  ``!secret`` plaintext). Body emission for YAML belongs to a future file-based
+  tool.
 * **Resolved secrets are scrubbed from the match corpus.** Because YAML bodies
   (and flow-helper options) can hold ``!secret`` values resolved to plaintext,
   a body leaf that exactly equals a ``secrets.yaml`` value is dropped before
   scoring (:func:`_load_secret_values`) — otherwise a query equal to a suspected
   secret would confirm it via ``match_in_config`` (a probe oracle). Blocked, not
   merely unemitted.
-* **Event-loop hygiene.** Every join is a pure in-memory read over live
-  registries — run synchronously, no executor, no persistent index (always
-  fresh, zero cache-invalidation surface).
+* **Event-loop hygiene.** Every registry/state join is a pure in-memory read
+  over live data — run synchronously, no persistent index (always fresh, zero
+  cache-invalidation surface). The one blocking read — ``secrets.yaml`` for the
+  match-corpus scrub — runs in the executor via the command wrapper's async
+  pre-step (:func:`_search_prep`), never on the event loop.
 
 Extension point — to add another command later: write ``_do_<name>(hass,
 params)``, append its capability to :data:`CAPABILITIES`, and add one row to
@@ -218,6 +221,15 @@ HELPERS_LIST_COLLECTION_DOMAINS = COLLECTION_HELPER_DOMAINS | frozenset(
     {"zone", "person"}
 )
 
+# Every ``EntityComponent`` self-registers here (core's
+# ``entity_component.DATA_INSTANCES``). Collection-helper domains (input_*,
+# counter, timer, schedule) do NOT set ``hass.data[DOMAIN]`` and their
+# ``StorageCollection`` is a setup-local (``helpers/collection.py`` writes
+# nothing to ``hass.data``), so this registry is how their component — and thus
+# each entity's storage ``_config`` body — is reached. See
+# :func:`_collection_storage_index`.
+ENTITY_COMPONENTS_KEY = "entity_components"
+
 _SPLIT_RE = re.compile(r"[._\-\s]+")
 
 
@@ -231,8 +243,8 @@ def async_register_commands(hass: HomeAssistant) -> None:
     so re-running on a config-entry reload is harmless. Called from the tools
     config-entry setup alongside the service registrations.
     """
-    for schema, do_fn in _command_specs():
-        websocket_api.async_register_command(hass, _build_handler(schema, do_fn))
+    for schema, do_fn, prep in _command_specs():
+        websocket_api.async_register_command(hass, _build_handler(schema, do_fn, prep))
     _LOGGER.debug(
         "Registered ha_mcp_tools WS commands: schema_version=%s capabilities=%s",
         SCHEMA_VERSION,
@@ -240,19 +252,30 @@ def async_register_commands(hass: HomeAssistant) -> None:
     )
 
 
-def _command_specs() -> list[tuple[dict[Any, Any], Any]]:
-    """The (schema, pure-handler) rows. Append one row to add a command."""
+def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
+    """The (schema, pure-handler, async-prep) rows. Append one row per command.
+
+    ``prep`` (or ``None``) is an ``async`` pre-step run before the pure handler;
+    it returns keyword args merged into the ``do_fn`` call. It is the seam for a
+    command that must touch the filesystem/network off the event loop —
+    :func:`_search_prep` loads ``secrets.yaml`` in the executor — keeping every
+    ``_do_*`` function a pure, synchronous in-memory read.
+    """
     return [
-        (_info_schema(), lambda hass, msg: _do_info()),
-        (_search_schema(), _do_search),
-        (_config_get_schema(), _do_config_get),
-        (_overview_schema(), _do_overview),
-        (_helpers_list_schema(), _do_helpers_list),
+        (_info_schema(), lambda hass, msg: _do_info(), None),
+        (_search_schema(), _do_search, _search_prep),
+        (_config_get_schema(), _do_config_get, None),
+        (_overview_schema(), _do_overview, None),
+        (_helpers_list_schema(), _do_helpers_list, None),
     ]
 
 
-def _build_handler(schema: dict[Any, Any], do_fn: Any) -> Any:
-    """Wrap a pure ``_do_*`` function as an admin-gated WS command handler."""
+def _build_handler(schema: dict[Any, Any], do_fn: Any, prep: Any = None) -> Any:
+    """Wrap a pure ``_do_*`` function as an admin-gated WS command handler.
+
+    An optional ``prep`` async pre-step runs first (off-loop I/O such as the
+    ``secrets.yaml`` read); the keyword args it returns are passed to ``do_fn``.
+    """
 
     @websocket_api.websocket_command(schema)
     @websocket_api.require_admin
@@ -260,7 +283,8 @@ def _build_handler(schema: dict[Any, Any], do_fn: Any) -> Any:
     async def _handler(
         hass: HomeAssistant, connection: Any, msg: dict[str, Any]
     ) -> None:
-        connection.send_result(msg["id"], do_fn(hass, msg))
+        extra = await prep(hass, msg) if prep is not None else {}
+        connection.send_result(msg["id"], do_fn(hass, msg, **extra))
 
     return _handler
 
@@ -356,11 +380,21 @@ def _safe(fn: Any, hass: HomeAssistant) -> Any:
         return None
 
 
-def _do_search(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+def _do_search(
+    hass: HomeAssistant,
+    params: dict[str, Any],
+    *,
+    secret_values: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
     """Unified in-process search. Pure over ``hass`` — the WS wrapper is thin.
 
     Joins live registries + states, scores per the server's tiers, paginates
     per surface, and returns the ``ha_search``-shaped envelope.
+
+    ``secret_values`` is the resolved-``!secret`` scrub set, loaded off the event
+    loop by :func:`_search_prep` and passed in (default empty — the loader is
+    skipped for an entity-only search, and direct callers/tests supply it
+    explicitly). It keeps this function a pure, synchronous in-memory read.
     """
     query_lower = (params.get("query") or "").strip().lower()
     match_all = not query_lower
@@ -378,19 +412,11 @@ def _do_search(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
     diagnostics: dict[str, int] = {}
     partial_reasons: list[str] = []
 
-    # Resolved-!secret scrub set: config bodies (YAML-loaded automations/scripts/
-    # scenes reach this path, unlike the server's 404-ing per-id path) can carry
-    # a secret already resolved to plaintext, and matching inside it would make
-    # ha_search a probe oracle (query a suspected secret, confirm via
-    # match_in_config). Load the secrets.yaml values once per call, only when a
-    # config/helper surface is actually searched, so entity-only searches skip
-    # the file read entirely.
-    scrub_surfaces = (*CONFIG_SEARCH_TYPES, SEARCH_TYPE_HELPER)
-    secret_values = (
-        _load_secret_values(hass)
-        if any(st in search_types for st in scrub_surfaces)
-        else frozenset()
-    )
+    # ``secret_values`` (loaded off-loop by _search_prep) scrubs resolved-!secret
+    # plaintext from the config-body match corpus: a YAML-loaded automation/script/
+    # scene body (or a flow-helper's options) can carry a secret resolved to
+    # plaintext, and matching inside it would make ha_search a probe oracle (query
+    # a suspected secret, confirm via match_in_config). See _load_secret_values.
 
     # --- Entities ------------------------------------------------------------
     entities: list[dict[str, Any]] = []
@@ -490,6 +516,23 @@ def _sort_key(rec: dict[str, Any]) -> str:
     return str(rec.get("entity_id") or rec.get("id") or rec.get("name") or "")
 
 
+async def _search_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """Async pre-step for ``search``: load the secret-scrub set off the loop.
+
+    The scrub only applies to config/helper surfaces, so an entity-only search
+    skips the ``secrets.yaml`` read entirely (perf gate). When a scrubbed surface
+    is requested, the blocking ``open()`` + ``yaml.safe_load`` runs in the
+    executor via :meth:`hass.async_add_executor_job` so the WS handler never
+    blocks the event loop. The loaded set is handed to :func:`_do_search`.
+    """
+    search_types = msg.get("search_types") or ALL_SEARCH_TYPES
+    scrub_surfaces = (*CONFIG_SEARCH_TYPES, SEARCH_TYPE_HELPER)
+    if not any(st in search_types for st in scrub_surfaces):
+        return {"secret_values": frozenset()}
+    values = await hass.async_add_executor_job(_load_secret_values, hass)
+    return {"secret_values": values}
+
+
 def _load_secret_values(hass: HomeAssistant) -> frozenset[str]:
     """Load the string values from the instance's ``secrets.yaml``.
 
@@ -500,10 +543,12 @@ def _load_secret_values(hass: HomeAssistant) -> frozenset[str]:
     equal to a suspected secret confirmed via ``match_in_config``. Any body leaf
     that exactly equals one of these values is dropped before scoring.
 
-    Defensive by design: a missing or malformed ``secrets.yaml`` yields an empty
-    set (scrub degrades OFF, never raising). Only string values are collected —
-    a secret can be any YAML scalar, but a non-string can't be a plaintext-leak
-    leaf and is skipped. Computed once per ``_do_search`` call (see the caller),
+    Defensive by design: an absent ``secrets.yaml`` (``FileNotFoundError`` — the
+    common case) yields an empty set silently; a present-but-unreadable or
+    malformed file logs one warning and also degrades to an empty set (the scrub
+    turns OFF but never raises). Only string values are collected — a secret can
+    be any YAML scalar, but a non-string can't be a plaintext-leak leaf and is
+    skipped. Loaded off the event loop by :func:`_search_prep` once per search,
     never cached across calls, so an edited ``secrets.yaml`` applies on the next
     search. ``secrets.yaml`` is a flat ``key: value`` mapping with no custom
     tags, so the plain ``yaml.safe_load`` (not HA's ``!secret``/``!include``
@@ -519,9 +564,18 @@ def _load_secret_values(hass: HomeAssistant) -> frozenset[str]:
             return frozenset()
         with open(path, encoding="utf-8") as handle:
             raw = yaml.safe_load(handle)
-    except (OSError, yaml.YAMLError):
+    except FileNotFoundError:
+        # Expected: many instances have no secrets.yaml — nothing to scrub.
         return frozenset()
-    except Exception:  # pragma: no cover - defensive against loader edge cases
+    except Exception:
+        # Present-but-unreadable / malformed / permission error: unexpected, so
+        # warn once (this runs once per search) to surface a broken scrub, then
+        # degrade OFF (empty set) rather than raising into the WS handler.
+        _LOGGER.warning(
+            "Could not read secrets.yaml for the search secret-scrub; "
+            "continuing without it",
+            exc_info=True,
+        )
         return frozenset()
     if not isinstance(raw, dict):
         return frozenset()
@@ -782,8 +836,16 @@ def _search_config_surface(
                 continue
             score, match_in_name, match_in_config = scored
 
+        # Scenes never emit a component-served body: a HomeAssistantScene holds no
+        # raw storage dict (its states are runtime State objects), so config stays
+        # None and config_dict is used only as the faithful match corpus.
         config_out: dict[str, Any] | None = None
-        if include_config and source == "storage" and config_dict is not None:
+        if (
+            domain != SEARCH_TYPE_SCENE
+            and include_config
+            and source == "storage"
+            and config_dict is not None
+        ):
             if _too_large(config_dict):
                 partial_reasons.append(f"{domain} {entity_id} body omitted (too large)")
             else:
@@ -814,7 +876,9 @@ def _extract_config(
 
     Uses defensive getattr because the exact accessor can drift across core
     versions: automation/script expose ``raw_config``; scenes expose
-    ``scene_config`` (name/icon/id/states) rather than ``raw_config``.
+    ``scene_config`` (name/icon/id/states) rather than ``raw_config``. For a
+    scene the returned ``config_dict`` is the faithful MATCH corpus only (see
+    :func:`_scene_match_corpus`), never an emittable body.
     """
     entity_id = getattr(entity, "entity_id", "") or ""
     name = getattr(entity, "name", None) or entity_id
@@ -822,7 +886,7 @@ def _extract_config(
 
     if domain == SEARCH_TYPE_SCENE:
         scene_config = getattr(entity, "scene_config", None)
-        config_dict = _scene_config_to_dict(scene_config)
+        config_dict = _scene_match_corpus(scene_config)
         item_id = unique_id
         if item_id is None and config_dict is not None:
             item_id = config_dict.get("id")
@@ -840,17 +904,41 @@ def _extract_config(
     return str(name), (str(item_id) if item_id is not None else None), config_dict
 
 
-def _scene_config_to_dict(scene_config: Any) -> dict[str, Any] | None:
-    """Coerce a ``HomeAssistantScene.scene_config`` object into a plain dict."""
+def _scene_match_corpus(scene_config: Any) -> dict[str, Any] | None:
+    """Faithful, minimal MATCH corpus for a scene — never an emittable body.
+
+    A ``HomeAssistantScene`` holds no raw storage dict: ``scene_config.states`` is
+    a ``{entity_id: State}`` map of RUNTIME ``State`` objects. Scoring/emitting
+    those (each stringifying to ``<state light.x=on; ...>``) was garbage and
+    diverged the component's scoring from any real body. Index only the faithful,
+    non-runtime facts instead: ``id`` / ``name`` / ``icon`` plus the entity-id
+    KEYS of ``states`` (so "which scenes touch ``light.x``" still matches) — no
+    State values, no timestamps or contexts. Used for MATCHING only; the scene
+    record never emits a ``config`` body (see :func:`_search_config_surface`).
+    """
     if scene_config is None:
         return None
-    if isinstance(scene_config, dict):
-        return dict(scene_config)
+    if isinstance(scene_config, Mapping):
+        src: Mapping[str, Any] = scene_config
+    else:
+        collected: dict[str, Any] = {}
+        for attr in ("id", "name", "icon", "states", "entities"):
+            val = getattr(scene_config, attr, None)
+            if val is not None:
+                collected[attr] = val
+        src = collected
     out: dict[str, Any] = {}
-    for attr in ("id", "name", "icon", "states", "entities"):
-        val = getattr(scene_config, attr, None)
+    for key in ("id", "name", "icon"):
+        val = src.get(key)
         if val is not None:
-            out[attr] = _plainify(val)
+            out[key] = str(val)
+    entity_ids: set[str] = set()
+    for key in ("states", "entities"):
+        mapping = src.get(key)
+        if isinstance(mapping, Mapping):
+            entity_ids.update(str(k) for k in mapping)
+    if entity_ids:
+        out["entities"] = sorted(entity_ids)
     return out or None
 
 
@@ -889,6 +977,56 @@ def _too_large(config_dict: dict[str, Any]) -> bool:
 
 
 # --- Helpers surface ---------------------------------------------------------
+def _collection_storage_index(
+    hass: HomeAssistant, domains: frozenset[str]
+) -> dict[str, tuple[dict[str, Any], str | None]]:
+    """Map collection-helper ``entity_id`` -> ``(storage body, storage id)``.
+
+    Collection helpers keep their full storage config on the ``CollectionEntity``
+    as ``_config`` — a schedule's weekday blocks, an input_datetime's
+    ``has_date``/``has_time``, an input_boolean's ``initial`` — fields the live
+    state attributes do NOT carry. The ``StorageCollection`` that loaded them is a
+    setup-local (``helpers/collection.py`` writes nothing to ``hass.data``), so
+    the reachable in-process source is the domain's ``EntityComponent``
+    (``hass.data['entity_components'][domain]``, or ``hass.data[domain]`` for the
+    automation/script/scene pattern) and each entity's ``_config``.
+
+    Domains that decompose config into ``_attr_*`` instead of keeping ``_config``
+    (input_number / input_text / input_select) have no entry here; the caller
+    falls back to the state-attributes body for them (and for any YAML-defined
+    helper whose entity is absent). All access is getattr-guarded against drift.
+    """
+    index: dict[str, tuple[dict[str, Any], str | None]] = {}
+    data = getattr(hass, "data", None)
+    if not isinstance(data, Mapping):
+        return index
+    instances = data.get(ENTITY_COMPONENTS_KEY)
+    for domain in domains:
+        component = (
+            instances.get(domain) if isinstance(instances, Mapping) else None
+        ) or data.get(domain)
+        entities = getattr(component, "entities", None)
+        if entities is None:
+            continue
+        try:
+            entity_list = list(entities)
+        except Exception:  # pragma: no cover - defensive
+            continue
+        for entity in entity_list:
+            entity_id = getattr(entity, "entity_id", None)
+            if not entity_id:
+                continue
+            raw = getattr(entity, "_config", None)
+            if not isinstance(raw, dict):
+                continue
+            storage_id = getattr(entity, "unique_id", None) or raw.get("id")
+            index[entity_id] = (
+                dict(raw),
+                str(storage_id) if storage_id is not None else None,
+            )
+    return index
+
+
 def _search_helpers(
     hass: HomeAssistant,
     query_lower: str,
@@ -901,14 +1039,13 @@ def _search_helpers(
     """Index collection helpers (states) + flow helpers (config-entry options)."""
     results: list[dict[str, Any]] = []
 
-    # Collection helpers: entities in the state machine. Their searchable body is
-    # the live state attributes — an input_select's ``options``, an
-    # input_number's ``min``/``max``/``step``, etc. — so a query on an option
-    # value matches in-config the way the server's ``<type>/list`` body search
-    # does. (Residual delta vs the server: the ``<type>/list`` record's
-    # config-only leaves — e.g. ``initial`` — are not state attributes, so a
-    # match existing ONLY there is unreachable here; and the attribute set
-    # carries the CURRENT friendly_name, not the creation-time storage name.)
+    # Collection helpers: entities in the state machine, matched on entity_id /
+    # friendly_name AND the searchable config body. That body is the entity's real
+    # storage ``_config`` (a schedule's weekday blocks, an input_select's
+    # ``options`` + ``initial``, …) when reachable, falling back to the live state
+    # attributes otherwise (see _collection_storage_index). The name still comes
+    # from the CURRENT friendly_name, not the creation-time storage name.
+    storage = _collection_storage_index(hass, COLLECTION_HELPER_DOMAINS)
     for state in _iter_states(hass):
         entity_id = getattr(state, "entity_id", "") or ""
         domain = entity_id.split(".")[0] if "." in entity_id else ""
@@ -917,7 +1054,11 @@ def _search_helpers(
         attrs = getattr(state, "attributes", None) or {}
         name = attrs.get("friendly_name", entity_id)
         object_id = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
-        body = dict(attrs) if isinstance(attrs, Mapping) else {}
+        stored = storage.get(entity_id)
+        if stored is not None:
+            body = _plainify(stored[0])
+        else:
+            body = dict(attrs) if isinstance(attrs, Mapping) else {}
         if match_all:
             score: int | None = 100
             match_in_name = False
@@ -1482,9 +1623,10 @@ def _do_helpers_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, A
     OptionsFlow start/abort dance, and NEVER ``entry.data`` (integration
     credentials). Every record carries the CURRENT entity_id + display name from
     the entity registry so a renamed helper shows current values (issue #1794),
-    not the stale storage-collection name. No secret scrub: collection bodies are
-    live state attributes and flow options are storage-backed — neither is
-    YAML-derived, so no resolved ``!secret`` plaintext can appear.
+    not the stale storage-collection name. No secret scrub: collection bodies come
+    from the storage collection (or live state attributes) and flow options are
+    storage-backed — neither is YAML-derived, so no resolved ``!secret`` plaintext
+    can appear.
 
     ``covered_types`` names exactly the helper_type values this command can
     enumerate (the state-machine collection domains + the flow domains, minus the
@@ -1514,8 +1656,16 @@ def _do_helpers_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, A
 def _collection_helpers_list(
     hass: HomeAssistant, view: _RegistryView, type_filter: frozenset[str] | None
 ) -> list[dict[str, Any]]:
-    """Collection helpers from the state machine (input_*, counter, timer, zone, …)."""
+    """Collection helpers from the state machine (input_*, counter, timer, zone, …).
+
+    The record's ``config`` is the entity's real storage ``_config`` body when
+    reachable — so a schedule surfaces its weekday blocks, which the live state
+    attributes omit — falling back to the state attributes otherwise (see
+    :func:`_collection_storage_index`). ``name`` stays the CURRENT display name
+    (a rename updates the registry, not the storage body — issue #1794).
+    """
     out: list[dict[str, Any]] = []
+    storage = _collection_storage_index(hass, HELPERS_LIST_COLLECTION_DOMAINS)
     for state in _iter_states(hass):
         entity_id = getattr(state, "entity_id", "") or ""
         domain = entity_id.split(".")[0] if "." in entity_id else ""
@@ -1524,14 +1674,20 @@ def _collection_helpers_list(
         if type_filter is not None and domain not in type_filter:
             continue
         attrs = getattr(state, "attributes", None) or {}
-        body = dict(attrs) if isinstance(attrs, Mapping) else {}
         object_id = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
         reg = _reg_entity(view, entity_id)
         # Current display name: state friendly_name reflects a registry rename;
         # fall back to the registry name, then the object_id.
         current = attrs.get("friendly_name") if isinstance(attrs, Mapping) else None
         name = current or _reg_name(reg) or object_id
-        storage_id = getattr(reg, "unique_id", None) or object_id
+        # Prefer the real storage body + id; the state attributes omit fields like
+        # a schedule's weekday blocks.
+        stored = storage.get(entity_id)
+        if stored is not None:
+            body, storage_id = stored
+        else:
+            body = dict(attrs) if isinstance(attrs, Mapping) else {}
+            storage_id = getattr(reg, "unique_id", None) or object_id
         out.append(
             {
                 "helper_type": domain,
@@ -1618,21 +1774,51 @@ def _do_overview(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
     logic is duplicated (or drifts) in the component. Registries are BARE lists
     (not the ``{success, result}`` WS wrapper); the server adapts. Collapses the
     ~8 round-trips to one in-process call.
+
+    ``slice_errors`` names any slice whose accessor RAISED (empty list when
+    clean). A missing/None registry degrades to an empty slice WITHOUT an entry —
+    that is "nothing here", not "failed". A genuine raise is caught per slice,
+    logged, and named here so the server can tell "empty" from "failed" and fall
+    back to its legacy REST read for just that slice instead of trusting the
+    empty value.
     """
     include_notifications = params.get("include_notifications", True)
     include_repairs = params.get("include_repairs", True)
 
     view = _resolve_registries(hass)
+    slice_errors: list[str] = []
+
+    def _slice(name: str, fn: Any, default: Any) -> Any:
+        try:
+            return fn()
+        except Exception:
+            _LOGGER.warning("overview slice %r degraded", name, exc_info=True)
+            slice_errors.append(name)
+            return default
+
     result: dict[str, Any] = {
-        "states": _overview_states(hass),
-        "services": _overview_services(hass),
-        "entity_registry": _overview_entity_registry(view),
-        "device_registry": _overview_device_registry(view),
-        "area_registry": _overview_area_registry(view),
-        "config": _overview_config(hass),
-        "notifications": _overview_notifications(hass) if include_notifications else [],
-        "repairs": _overview_repairs(hass) if include_repairs else [],
+        "states": _slice("states", lambda: _overview_states(hass), []),
+        "services": _slice("services", lambda: _overview_services(hass), []),
+        "entity_registry": _slice(
+            "entity_registry", lambda: _overview_entity_registry(view), []
+        ),
+        "device_registry": _slice(
+            "device_registry", lambda: _overview_device_registry(view), []
+        ),
+        "area_registry": _slice(
+            "area_registry", lambda: _overview_area_registry(view), []
+        ),
+        "config": _slice("config", lambda: _overview_config(hass), {}),
+        "notifications": _slice(
+            "notifications", lambda: _overview_notifications(hass), []
+        )
+        if include_notifications
+        else [],
+        "repairs": _slice("repairs", lambda: _overview_repairs(hass), [])
+        if include_repairs
+        else [],
     }
+    result["slice_errors"] = slice_errors
     return result
 
 
