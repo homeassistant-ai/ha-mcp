@@ -641,6 +641,32 @@ class TestBugReportTool:
         assert "PROMINENTLY display the submission URL" in instructions
 
     @pytest.mark.asyncio
+    async def test_bug_report_missing_tool_hint(
+        self, ha_report_issue_func, mock_client
+    ):
+        """Missing/unavailable-tool reports get a refresh-your-tool-list hint.
+
+        Regression guard for issue #1804: the report tool gave no signal that a
+        missing tool is usually a stale client tool list, so the agent filed a
+        false bug. The hint must be surfaced as a dedicated field AND flagged as
+        a pre-check in the agent instructions.
+        """
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        result = await ha_report_issue_func()
+
+        hint = result["missing_tool_hint"]
+        assert "refresh" in hint.lower()
+        assert "reconnect" in hint.lower()
+        # Names the client-side cache as the cause, not a server bug.
+        assert "tool list" in hint.lower()
+
+        instructions = result["instructions"]
+        assert "PRE-CHECK" in instructions
+        assert "missing_tool_hint" in instructions
+
+    @pytest.mark.asyncio
     async def test_bug_report_addon_logs_included_for_addon(
         self, registered_tools, mock_client
     ):
@@ -1095,11 +1121,14 @@ class TestGetConfigToggles:
         # real env-driven singleton. Only fields present on the namespace are
         # collected; missing fields fall through (None).
         fake = SimpleNamespace(
+            enable_beta_features=True,
             enable_websocket=True,
             enable_dashboard_partial_tools=True,
             enable_tool_search=False,
             tool_search_max_results=5,
             enable_yaml_config_editing=False,
+            enable_filesystem_tools=True,
+            enable_custom_component_integration=False,
             enable_code_mode=False,
             enabled_tool_modules="all",
             disabled_tools="ha_foo,ha_bar",
@@ -1109,6 +1138,11 @@ class TestGetConfigToggles:
         assert toggles["enable_tool_search"] is False
         assert toggles["tool_search_max_results"] == 5
         assert toggles["enabled_tool_modules"] == "all"
+        # Beta master + the tool-shaping sub-flags relevant to "missing tool"
+        # reports (issue #1804) are surfaced so triage doesn't have to ask.
+        assert toggles["enable_beta_features"] is True
+        assert toggles["enable_filesystem_tools"] is True
+        assert toggles["enable_custom_component_integration"] is False
         # Lists are summarized, not dumped — count of comma-separated entries.
         assert toggles["disabled_tools_count"] == 2
         assert toggles["pinned_tools_count"] == 0
