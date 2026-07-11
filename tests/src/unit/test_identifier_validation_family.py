@@ -643,31 +643,22 @@ class TestScriptsIdentifierValidation:
         tools._client.upsert_script_config.assert_not_called()
 
 
-# --- tools_config_dashboards.py (#1313) ---------------------------------
+# --- tools_config_dashboards.py (#1313 / #925) ---------------------------
 #
 # ``ha_config_get_dashboard`` / ``ha_config_set_dashboard`` /
-# ``ha_config_delete_dashboard`` are module-level (closure-pattern), not
-# class-based — so the tests use the register-and-capture pattern.
+# ``ha_config_delete_dashboard`` are ``DashboardConfigTools`` methods —
+# instantiate directly and return the bound methods by name.
 
 
 def _register_dashboard_tools_and_capture(mock_client):
-    from ha_mcp.tools.tools_config_dashboards import (
-        register_config_dashboard_tools,
-    )
+    from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 
-    mock_mcp = MagicMock()
-    captured: dict[str, Any] = {}
-
-    def fake_tool(**kwargs):
-        def decorator(fn):
-            captured[fn.__name__] = fn
-            return fn
-
-        return decorator
-
-    mock_mcp.tool = fake_tool
-    register_config_dashboard_tools(mock_mcp, mock_client)
-    return captured
+    tools = DashboardConfigTools(mock_client)
+    return {
+        "ha_config_get_dashboard": tools.ha_config_get_dashboard,
+        "ha_config_set_dashboard": tools.ha_config_set_dashboard,
+        "ha_config_delete_dashboard": tools.ha_config_delete_dashboard,
+    }
 
 
 class TestDashboardsIdentifierValidation:

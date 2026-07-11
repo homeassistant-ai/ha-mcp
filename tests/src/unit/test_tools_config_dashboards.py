@@ -17,10 +17,10 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_config_dashboards import (
     _LAZY_RESOLVE_TRIGGER,
+    DashboardConfigTools,
     _lazy_resolve_and_retry,
     _resolve_dashboard,
     _should_lazy_resolve,
-    register_config_dashboard_tools,
 )
 
 # -----------------------------------------------------------------------------
@@ -278,30 +278,14 @@ class TestDeleteDashboardNotFoundShape:
     """
 
     @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
-
-    @pytest.fixture
     def mock_client(self):
         client = MagicMock()
         client.send_websocket_message = AsyncMock()
         return client
 
     @pytest.fixture
-    def delete_tool(self, mock_mcp, mock_client):
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_config_delete_dashboard"]
+    def delete_tool(self, mock_client):
+        return DashboardConfigTools(mock_client).ha_config_delete_dashboard
 
     @pytest.mark.asyncio
     async def test_unresolvable_url_path_raises_resource_not_found(

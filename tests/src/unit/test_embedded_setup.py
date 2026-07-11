@@ -45,6 +45,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     ISSUE_COMPONENT_OUTDATED,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
+    ISSUE_UPDATE_HELD,
     OPT_AUTO_UPDATE,
     OPT_PIP_SPEC,
     OPT_WEBHOOK_AUTH,
@@ -137,21 +138,32 @@ class TestBringUp:
         assert kwargs["secret_path"] == "/private_x"
 
     async def test_success_clears_stale_repair_issues(self, fake_manager):
-        # Review gap: a successful bring-up must clear BOTH repair-issue ids
+        # Review gap: a successful bring-up must clear EVERY repair-issue id
         # left by a previous failed attempt, or a fixed install keeps showing
-        # a stale repair forever.
+        # a stale repair forever. The update-held issue clears here too: a
+        # reload that reached bring-up either bypassed the hold deliberately
+        # (Install button) or made it moot, and the post-setup coordinator
+        # refresh re-files it if it still applies.
         hass = _make_hass()
         entry = _make_entry()
 
         await esetup.async_bring_up_server(hass, entry)
 
         cleared = {c.args[2] for c in esetup.ir.async_delete_issue.call_args_list}
-        assert cleared == {esetup.ISSUE_PACKAGE_FAILED, esetup.ISSUE_START_FAILED}
+        assert cleared == {
+            esetup.ISSUE_PACKAGE_FAILED,
+            esetup.ISSUE_START_FAILED,
+            esetup.ISSUE_UPDATE_HELD,
+        }
 
-    async def test_local_only_skips_webhook_registration(self, fake_manager, caplog):
+    async def test_local_only_skips_endpoint_but_keeps_forwarding(
+        self, fake_manager, caplog
+    ):
         # Owner request: enable_webhook=False must never register the webhook
-        # (Nabu Casa path dead) while the server still starts; the log carries
-        # the local-only note.
+        # endpoint (Nabu Casa path dead) while the server still starts; the log
+        # carries the local-only note. The forwarding config must still be set
+        # up (register_endpoint=False) or the sidebar settings panel 503s
+        # forever (#1803).
         import logging
 
         hass = _make_hass()
@@ -161,7 +173,9 @@ class TestBringUp:
             await esetup.async_bring_up_server(hass, entry)
 
         fake_manager.async_start.assert_awaited_once()
-        esetup.async_register_webhook.assert_not_awaited()
+        esetup.async_register_webhook.assert_awaited_once()
+        kwargs = esetup.async_register_webhook.await_args.kwargs
+        assert kwargs["register_endpoint"] is False
         esetup._surface_connect_urls.assert_called_once()
         assert "local-only" in caplog.text
 
@@ -176,6 +190,7 @@ class TestBringUp:
         assert kwargs["auth_mode"] == WEBHOOK_AUTH_HA
         assert kwargs["port"] == 9584
         assert kwargs["secret_path"] == "/private_secret"
+        assert kwargs["register_endpoint"] is True
 
     async def test_package_failure_files_package_issue_and_skips_webhook(
         self, fake_manager
@@ -565,6 +580,18 @@ class TestMaybeAutoUpdate:
         installed="7.9.0", latest="7.10.0", dist=DIST_NAME_STABLE
     )
 
+    @pytest.fixture(autouse=True)
+    def _no_component_gate(self, monkeypatch):
+        """Neutralize the component-compatibility gate (fetch "fails" → the
+        gate fails open) so these tests keep exercising only the original
+        auto-update decision. The gate itself is covered by
+        :class:`TestAutoUpdateComponentGate`."""
+        monkeypatch.setattr(
+            esetup,
+            "_async_fetch_shipped_component_version",
+            AsyncMock(return_value=None),
+        )
+
     async def test_newer_version_reloads_and_sets_pending_marker(self, monkeypatch):
         # The notification no longer fires here - it's deferred to
         # _async_finish_update_cycle, which only runs after the reloaded
@@ -697,6 +724,275 @@ class TestMaybeAutoUpdate:
         await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
 
         hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
+
+
+# ---------------------------------------------------------------------------
+# Component-compatibility gate on the automatic server update (#1783/#1785)
+# ---------------------------------------------------------------------------
+
+
+class TestAutoUpdateComponentGate:
+    """The pre-install gate: a server release that also shipped a newer custom
+    component must not auto-install under the older running component (that is
+    the #1783/#1785 breakage). Held is loud (repair issue + warning log) and
+    escapable (HACS component update unblocks it automatically; the update
+    entity's Install button bypasses this path entirely). Every failure inside
+    the gate fails OPEN — the pre-gate behavior — so a GitHub hiccup can never
+    wedge auto-updates.
+    """
+
+    _NEWER = ServerVersionInfo(
+        installed="7.12.0", latest="7.12.1", dist=DIST_NAME_STABLE
+    )
+
+    def _stub_gate(self, monkeypatch, *, shipped, running="1.0.2"):
+        monkeypatch.setattr(
+            esetup,
+            "_async_fetch_shipped_component_version",
+            AsyncMock(return_value=shipped),
+        )
+        monkeypatch.setattr(
+            esetup,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version=running)),
+        )
+
+    async def test_newer_shipped_component_holds_update(self, monkeypatch, caplog):
+        import logging
+
+        hass = _make_async_hass()
+        entry = _make_entry()
+        self._stub_gate(monkeypatch, shipped="1.0.9", running="1.0.2")
+
+        with caplog.at_level(logging.WARNING):
+            await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+        assert DATA_PENDING_UPDATE_NOTIFY not in hass.data.get(DOMAIN, {})
+        esetup.ir.async_create_issue.assert_called_once()
+        args = esetup.ir.async_create_issue.call_args.args
+        kwargs = esetup.ir.async_create_issue.call_args.kwargs
+        assert ISSUE_UPDATE_HELD in args
+        assert kwargs["translation_placeholders"] == {
+            "latest": "7.12.1",
+            "shipped": "1.0.9",
+            "running": "1.0.2",
+        }
+        assert kwargs["severity"] == esetup.ir.IssueSeverity.WARNING
+        assert "HACS" in caplog.text
+
+    async def test_same_shipped_component_proceeds_and_clears_issue(self, monkeypatch):
+        hass = _make_async_hass()
+        entry = _make_entry()
+        self._stub_gate(monkeypatch, shipped="1.0.2", running="1.0.2")
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
+        assert (hass, DOMAIN, ISSUE_UPDATE_HELD) in [
+            c.args for c in esetup.ir.async_delete_issue.call_args_list
+        ]
+
+    async def test_manifest_fetch_failure_fails_open(self, monkeypatch):
+        # GitHub unreachable / tag layout changed → behave exactly as before
+        # the gate existed: install the update. Held-forever is the failure
+        # mode this trades away deliberately.
+        hass = _make_async_hass()
+        entry = _make_entry()
+        self._stub_gate(monkeypatch, shipped=None)
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
+        esetup.ir.async_create_issue.assert_not_called()
+
+    async def test_component_version_read_failure_fails_open(self, monkeypatch):
+        hass = _make_async_hass()
+        entry = _make_entry()
+        monkeypatch.setattr(
+            esetup,
+            "_async_fetch_shipped_component_version",
+            AsyncMock(return_value="1.0.9"),
+        )
+        monkeypatch.setattr(
+            esetup,
+            "async_get_integration",
+            AsyncMock(side_effect=RuntimeError("loader boom")),
+        )
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
+        esetup.ir.async_create_issue.assert_not_called()
+
+    async def test_incomparable_component_versions_fail_open(self, monkeypatch):
+        from awesomeversion import AwesomeVersion as RealAwesomeVersion
+
+        hass = _make_async_hass()
+        entry = _make_entry()
+        self._stub_gate(monkeypatch, shipped="weird", running="strange")
+
+        def picky(value):
+            if value in ("weird", "strange"):
+                raise esetup.AwesomeVersionException("bad version")
+            return RealAwesomeVersion(value)
+
+        monkeypatch.setattr(esetup, "AwesomeVersion", picky)
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
+        esetup.ir.async_create_issue.assert_not_called()
+
+    async def test_up_to_date_clears_held_issue(self, monkeypatch):
+        # The hold self-resolves: once the component update lands (installed
+        # catches up via the then-unblocked reload) the stale issue must not
+        # linger.
+        hass = _make_async_hass()
+        entry = _make_entry()
+        self._stub_gate(monkeypatch, shipped="1.0.2", running="1.0.2")
+        info = ServerVersionInfo(
+            installed="7.12.1", latest="7.12.1", dist=DIST_NAME_STABLE
+        )
+
+        await esetup.async_maybe_auto_update(hass, entry, info)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+        assert (hass, DOMAIN, ISSUE_UPDATE_HELD) in [
+            c.args for c in esetup.ir.async_delete_issue.call_args_list
+        ]
+
+    async def test_gate_not_consulted_for_pip_spec_override(self, monkeypatch):
+        # PR-tarball / pinned-version testing must stay unaffected: the
+        # override path returns before the gate ever runs.
+        hass = _make_async_hass()
+        entry = _make_entry(options={OPT_PIP_SPEC: "ha-mcp==7.8.0"})
+        fetch = AsyncMock(return_value="1.0.9")
+        monkeypatch.setattr(esetup, "_async_fetch_shipped_component_version", fetch)
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        fetch.assert_not_awaited()
+        hass.config_entries.async_reload.assert_not_awaited()
+
+
+class TestFetchShippedComponentVersion:
+    """The raw-manifest fetch behind the gate: resolves the component version
+    that shipped at the candidate server release's git tag."""
+
+    class _FakeResp:
+        """Mimics aiohttp's content-type guard for a raw.githubusercontent.com
+        response: the body is served as text/plain, so ``json()`` raises
+        ContentTypeError unless the caller passes ``content_type=None`` —
+        pinning the exact call production must make (review finding: without
+        this, dropping ``content_type=None`` in production would silently turn
+        every fetch into a fail-open and disarm the gate with all tests green).
+        """
+
+        def __init__(self, payload, *, raise_err=None):
+            self._payload = payload
+            self._raise_err = raise_err
+
+        def raise_for_status(self):
+            if self._raise_err is not None:
+                raise self._raise_err
+
+        async def json(self, content_type="application/json"):
+            if content_type is not None:
+                from aiohttp import ContentTypeError
+
+                raise ContentTypeError(
+                    None,
+                    (),
+                    message="Attempt to decode JSON with unexpected mimetype: "
+                    "text/plain; charset=utf-8",
+                )
+            if isinstance(self._payload, Exception):
+                raise self._payload
+            return self._payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _FakeSession:
+        def __init__(self, resp):
+            self._resp = resp
+            self.requested_urls = []
+
+        def get(self, url):
+            self.requested_urls.append(url)
+            return self._resp
+
+    def _install_session(self, monkeypatch, resp):
+        session = self._FakeSession(resp)
+        monkeypatch.setattr(
+            esetup, "async_get_clientsession", MagicMock(return_value=session)
+        )
+        return session
+
+    async def test_returns_version_from_release_tag_manifest(self, monkeypatch):
+        hass = _make_hass()
+        session = self._install_session(
+            monkeypatch, self._FakeResp({"version": "1.0.2"})
+        )
+
+        result = await esetup._async_fetch_shipped_component_version(hass, "7.12.1")
+
+        assert result == "1.0.2"
+        assert len(session.requested_urls) == 1
+        assert "/v7.12.1/" in session.requested_urls[0]
+        assert session.requested_urls[0].endswith("manifest.json")
+
+    async def test_http_error_returns_none(self, monkeypatch):
+        from aiohttp import ClientError
+
+        hass = _make_hass()
+        self._install_session(
+            monkeypatch, self._FakeResp({}, raise_err=ClientError("404"))
+        )
+
+        result = await esetup._async_fetch_shipped_component_version(hass, "7.12.1")
+
+        assert result is None
+
+    async def test_missing_version_key_returns_none(self, monkeypatch):
+        hass = _make_hass()
+        self._install_session(monkeypatch, self._FakeResp({"domain": "ha_mcp_tools"}))
+
+        result = await esetup._async_fetch_shipped_component_version(hass, "7.12.1")
+
+        assert result is None
+
+    async def test_invalid_json_returns_none(self, monkeypatch):
+        hass = _make_hass()
+        self._install_session(monkeypatch, self._FakeResp(ValueError("not json")))
+
+        result = await esetup._async_fetch_shipped_component_version(hass, "7.12.1")
+
+        assert result is None
+
+    async def test_timeout_returns_none(self, monkeypatch):
+        # GitHub latency is the most common failure in the field; the
+        # TimeoutError limb of the except tuple must fail open like the rest.
+        hass = _make_hass()
+        self._install_session(monkeypatch, self._FakeResp({}, raise_err=TimeoutError()))
+
+        result = await esetup._async_fetch_shipped_component_version(hass, "7.12.1")
+
+        assert result is None
+
+    async def test_non_mapping_payload_returns_none(self, monkeypatch):
+        # A JSON body that parses but is not an object ("null", a list) makes
+        # payload["version"] raise TypeError — the tuple's TypeError limb.
+        hass = _make_hass()
+        self._install_session(monkeypatch, self._FakeResp(None))
+
+        result = await esetup._async_fetch_shipped_component_version(hass, "7.12.1")
+
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

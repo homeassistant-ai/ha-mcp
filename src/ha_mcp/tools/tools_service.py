@@ -5,7 +5,7 @@ This module provides service execution and WebSocket-enabled operation monitorin
 """
 
 import logging
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NoReturn, cast
 
 import httpx
 from fastmcp import Context
@@ -163,6 +163,32 @@ class ServiceTools:
         return service_data
 
     @staticmethod
+    def _parse_result_projection_params(
+        result_fields: str | list[str] | None,
+        result_attribute_keys: str | list[str] | None,
+    ) -> tuple[list[str] | None, list[str] | None]:
+        """Parse and validate result_fields / result_attribute_keys into lists.
+
+        Raises a structured VALIDATION_INVALID_PARAMETER ToolError on malformed
+        input for either parameter.
+        """
+        try:
+            parsed_result_fields = parse_string_list_param(
+                result_fields, "result_fields", allow_csv=True
+            )
+        except ValueError as e:
+            raise_tool_error(create_validation_error(str(e), parameter="result_fields"))
+        try:
+            parsed_result_attribute_keys = parse_string_list_param(
+                result_attribute_keys, "result_attribute_keys", allow_csv=True
+            )
+        except ValueError as e:
+            raise_tool_error(
+                create_validation_error(str(e), parameter="result_attribute_keys")
+            )
+        return parsed_result_fields, parsed_result_attribute_keys
+
+    @staticmethod
     def _build_timeout_response(
         domain: str,
         service: str,
@@ -287,6 +313,65 @@ class ServiceTools:
                 warnings.append(warn)
         return projected, warnings
 
+    def _handle_connection_error(
+        self,
+        error: HomeAssistantConnectionError,
+        *,
+        domain: str,
+        service: str,
+        entity_id: str | None,
+        data: str | dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Handle a HomeAssistantConnectionError raised while calling a service.
+
+        Timeouts are treated as partial success (the service was dispatched but
+        Home Assistant did not respond in time) and return a partial-success
+        response. Non-timeout connection errors raise a structured ToolError.
+        """
+        # Check if this is a timeout - for service calls, timeouts typically
+        # mean the service was dispatched but HA didn't respond in time.
+        # The operation is likely still running (e.g., update.install, long automations).
+        if isinstance(error.__cause__, httpx.TimeoutException):
+            return self._build_timeout_response(domain, service, entity_id, data)
+        # Non-timeout connection errors are real failures
+        exception_to_structured_error(
+            error,
+            context={
+                "domain": domain,
+                "service": service,
+                "entity_id": entity_id,
+            },
+            suggestions=_build_service_suggestions(domain, service, entity_id),
+        )
+        return None  # unreachable: exception_to_structured_error always raises
+
+    @staticmethod
+    def _raise_unexpected_call_service_error(
+        error: Exception,
+        *,
+        domain: str,
+        service: str,
+        entity_id: str | None,
+    ) -> NoReturn:
+        """Raise a structured ToolError for an unexpected ha_call_service failure."""
+        suggestions = _build_service_suggestions(domain, service, entity_id)
+        if entity_id:
+            suggestions.extend(
+                [
+                    f"For automation: ha_call_service('automation', 'trigger', entity_id='{entity_id}')",
+                    f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')",
+                ]
+            )
+        exception_to_structured_error(
+            error,
+            context={
+                "domain": domain,
+                "service": service,
+                "entity_id": entity_id,
+            },
+            suggestions=suggestions,
+        )
+
     @tool(
         name="ha_call_service",
         tags={"Service & Device Control"},
@@ -404,22 +489,11 @@ class ServiceTools:
             return_response_bool = return_response
             wait_bool = wait
             verbose_bool = verbose
-            try:
-                parsed_result_fields = parse_string_list_param(
-                    result_fields, "result_fields", allow_csv=True
+            parsed_result_fields, parsed_result_attribute_keys = (
+                self._parse_result_projection_params(
+                    result_fields, result_attribute_keys
                 )
-            except ValueError as e:
-                raise_tool_error(
-                    create_validation_error(str(e), parameter="result_fields")
-                )
-            try:
-                parsed_result_attribute_keys = parse_string_list_param(
-                    result_attribute_keys, "result_attribute_keys", allow_csv=True
-                )
-            except ValueError as e:
-                raise_tool_error(
-                    create_validation_error(str(e), parameter="result_attribute_keys")
-                )
+            )
 
             # Determine if we should wait for state change:
             # Only for state-changing services on a single entity, not for
@@ -475,44 +549,22 @@ class ServiceTools:
 
             return response
         except HomeAssistantConnectionError as error:
-            # Check if this is a timeout - for service calls, timeouts typically
-            # mean the service was dispatched but HA didn't respond in time.
-            # The operation is likely still running (e.g., update.install, long automations).
-            if isinstance(error.__cause__, httpx.TimeoutException):
-                return self._build_timeout_response(domain, service, entity_id, data)
-            # Non-timeout connection errors are real failures
-            exception_to_structured_error(
+            return self._handle_connection_error(
                 error,
-                context={
-                    "domain": domain,
-                    "service": service,
-                    "entity_id": entity_id,
-                },
-                suggestions=_build_service_suggestions(domain, service, entity_id),
+                domain=domain,
+                service=service,
+                entity_id=entity_id,
+                data=data,
             )
         except ToolError:
             raise
         except Exception as error:
-            # Use structured error response
-            suggestions = _build_service_suggestions(domain, service, entity_id)
-            if entity_id:
-                suggestions.extend(
-                    [
-                        f"For automation: ha_call_service('automation', 'trigger', entity_id='{entity_id}')",
-                        f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')",
-                    ]
-                )
-            exception_to_structured_error(
-                error,
-                context={
-                    "domain": domain,
-                    "service": service,
-                    "entity_id": entity_id,
-                },
-                suggestions=suggestions,
+            self._raise_unexpected_call_service_error(
+                error, domain=domain, service=service, entity_id=entity_id
             )
-            return None  # unreachable: exception_to_structured_error always raises
-        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
+            return (
+                None  # unreachable: _raise_unexpected_call_service_error always raises
+            )
 
     @tool(
         name="ha_get_operation_status",

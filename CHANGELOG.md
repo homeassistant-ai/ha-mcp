@@ -3,6 +3,98 @@
 <!-- version list -->
 
 
+## v7.12.3 (2026-07-10)
+
+### Fixed
+
+- Sidebar settings panel 503s forever when webhook access is disabled
+  ([#1806](https://github.com/homeassistant-ai/ha-mcp/pull/1806))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish version 7.12.2 [skip ci]
+  ([`51f4ae5`](https://github.com/homeassistant-ai/ha-mcp/commit/51f4ae5ffc6d35c9bcfa92b20965b533c064c78e))
+
+### Continuous Integration
+
+- Gate the mirror version tag on the release job, not the whole run
+  ([#1805](https://github.com/homeassistant-ai/ha-mcp/pull/1805))
+</details>
+
+
+## v7.12.2 (2026-07-10)
+
+### Fixed
+
+- Stop the HA-MCP sidebar panel trapping iOS navigation and tripping http.ban
+  ([#1801](https://github.com/homeassistant-ai/ha-mcp/pull/1801))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish version 7.12.1 [skip ci]
+  ([`2b77d23`](https://github.com/homeassistant-ai/ha-mcp/commit/2b77d23791dd47594ae81e61e29969691dfbf3a8))
+
+### Continuous Integration
+
+- Use the release app token for hotfix-release's master push
+  ([#1800](https://github.com/homeassistant-ai/ha-mcp/pull/1800))
+</details>
+
+
+## v7.12.1 (2026-07-10)
+
+### Fixed
+
+- Stop the auto-updated in-process server crashing under an older custom component
+  ([#1792](https://github.com/homeassistant-ai/ha-mcp/pull/1792))
+
+### Refactoring
+
+- **c901**: Fix 8 files below C901 threshold, remove from grandfather list
+  ([#1793](https://github.com/homeassistant-ai/ha-mcp/pull/1793))
+- **c901**: Tools_config_dashboards.py below C901 threshold, enable C90 lint
+  ([#1790](https://github.com/homeassistant-ai/ha-mcp/pull/1790))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Fixed
+
+- Isolate 3 beta-gate tests from real ~/.ha-mcp config
+  ([#1791](https://github.com/homeassistant-ai/ha-mcp/pull/1791))
+- Split mypy-webhook-proxy lefthook job to avoid module collision
+  ([#1789](https://github.com/homeassistant-ai/ha-mcp/pull/1789))
+
+### Chores
+
+- **addon**: Publish dev addon version 7.12.0.dev1840 [skip ci]
+  ([`d315210`](https://github.com/homeassistant-ai/ha-mcp/commit/d31521044f06212204665155d9b2b0b999199d9b))
+- **addon**: Publish dev addon version 7.12.0.dev1837 [skip ci]
+  ([`2fd1621`](https://github.com/homeassistant-ai/ha-mcp/commit/2fd1621c01664ef2baf4ce30a4e31a734a567760))
+- **addon**: Publish dev addon version 7.12.0.dev1835 [skip ci]
+  ([`55ce284`](https://github.com/homeassistant-ai/ha-mcp/commit/55ce284bad809594b4a6472083f512a02b8edc37))
+- **addon**: Publish version 7.12.0 [skip ci]
+  ([`adcbd61`](https://github.com/homeassistant-ai/ha-mcp/commit/adcbd61c88633f1d3b12c2f713b6971cd82313d3))
+
+### Testing
+
+- Add an update-path e2e lane covering released-component x new-server installs
+  ([#1796](https://github.com/homeassistant-ai/ha-mcp/pull/1796))
+</details>
+
+
 ## v7.12.0 (2026-07-09)
 
 ### Added

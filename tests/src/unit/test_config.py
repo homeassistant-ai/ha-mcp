@@ -311,7 +311,9 @@ def test_master_on_allows_beta_subflag_file_overrides(
     assert s.enable_filesystem_tools is False
 
 
-def test_master_env_var_off_overrides_subflag_env_var(monkeypatch) -> None:
+def test_master_env_var_off_overrides_subflag_env_var(
+    isolated_data_dir, monkeypatch
+) -> None:
     """ENABLE_YAML_CONFIG_EDITING=true alone is not enough — without
     ENABLE_BETA_FEATURES=true the master gate forces yaml false."""
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)

@@ -122,6 +122,9 @@ jobs:
   semantic-release:
     needs: [check-changes, validate-docker]
     if: needs.check-changes.outputs.has_changes == 'true'
+    # This display name is load-bearing: sync-integration-mirror.yml's gate
+    # matches the triggering run's jobs by this exact name to decide whether a
+    # release happened. Rename it together with that gate's matcher.
     name: Semantic Release
     runs-on: ubuntu-latest
     outputs:
