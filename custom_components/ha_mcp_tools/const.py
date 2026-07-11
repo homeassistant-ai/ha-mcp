@@ -288,6 +288,13 @@ OPT_REGENERATE_SECRETS = "regenerate_secrets"
 # server through Home Assistant; only the direct server port (+ the
 # admin-only sidebar panel, which proxies over loopback) remains.
 OPT_ENABLE_WEBHOOK = "enable_webhook"
+# Conversation-agent LLM API (#1745): when False, the toolset is not
+# registered as a Home Assistant LLM API, so it never appears in any
+# conversation agent's "Control Home Assistant" selector. On by default —
+# registering the API only makes it selectable; nothing is exposed until a
+# user picks it on an agent.
+OPT_ENABLE_LLM_API = "enable_llm_api"
+DEFAULT_ENABLE_LLM_API = True
 
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"

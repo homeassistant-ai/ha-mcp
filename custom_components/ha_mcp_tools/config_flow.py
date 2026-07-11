@@ -48,6 +48,7 @@ from .const import (
     DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
     DEFAULT_CHANNEL,
+    DEFAULT_ENABLE_LLM_API,
     DEFAULT_LOOPBACK_URL,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
@@ -59,6 +60,7 @@ from .const import (
     OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
     OPT_CHANNEL,
+    OPT_ENABLE_LLM_API,
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_PIP_SPEC,
@@ -266,6 +268,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 vol.Required(
                     OPT_ENABLE_WEBHOOK,
                     default=bool(opts.get(OPT_ENABLE_WEBHOOK, True)),
+                ): bool,
+                vol.Required(
+                    OPT_ENABLE_LLM_API,
+                    default=bool(opts.get(OPT_ENABLE_LLM_API, DEFAULT_ENABLE_LLM_API)),
                 ): bool,
                 vol.Optional(
                     OPT_EXTERNAL_URL,

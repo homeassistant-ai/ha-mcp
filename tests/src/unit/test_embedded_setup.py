@@ -192,6 +192,23 @@ class TestBringUp:
         assert kwargs["secret_path"] == "/private_secret"
         assert kwargs["register_endpoint"] is True
 
+    async def test_llm_api_option_off_skips_registration(self, fake_manager, caplog):
+        # The Conversation-agent LLM API toggle (#1745, default on): turning
+        # it off must skip the registration while the server itself, the
+        # webhook, and the rest of the bring-up run unchanged.
+        import logging
+
+        hass = _make_hass()
+        entry = _make_entry(options={esetup.OPT_ENABLE_LLM_API: False})
+
+        with caplog.at_level(logging.INFO):
+            await esetup.async_bring_up_server(hass, entry)
+
+        fake_manager.async_start.assert_awaited_once()
+        esetup.async_register_webhook.assert_awaited_once()
+        esetup.async_register_llm_api.assert_not_awaited()
+        assert "LLM API disabled by option" in caplog.text
+
     async def test_package_failure_files_package_issue_and_skips_webhook(
         self, fake_manager
     ):
