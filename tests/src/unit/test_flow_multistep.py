@@ -19,6 +19,7 @@ import pytest
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.config_entry_flow import (
     _extract_schema_field_names,
+    _handle_config_subentry_flow_steps,
     _handle_flow_steps,
     _handle_form_step,
     _submit_step,
@@ -443,6 +444,60 @@ class TestMultiStepFlow:
         assert result["warnings"] == [
             "Ignored config keys not declared by the Home Assistant flow schema: "
             "advanced_options.availabilty"
+        ]
+
+
+class TestSubentryFlowIgnoredKeys:
+    """The subentry walker reports ignored keys like the main flow walker."""
+
+    async def test_subentry_create_reports_ignored_keys(self) -> None:
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        client = AsyncMock()
+        client.submit_config_subentry_flow_step = AsyncMock(side_effect=[final_entry])
+        initial_step = {
+            "type": "form",
+            "flow_id": "flow-4",
+            "step_id": "user",
+            "data_schema": [{"name": "name"}],
+        }
+
+        result = await _handle_config_subentry_flow_steps(
+            client,
+            "flow-4",
+            initial_step,
+            {"name": "x", "junk": "ignored"},
+            is_reconfigure=False,
+        )
+
+        submitted = client.submit_config_subentry_flow_step.await_args_list[0].args[1]
+        assert "junk" not in submitted
+        assert result["operation"] == "created"
+        assert result["warnings"] == [
+            "Ignored config keys not declared by the Home Assistant flow schema: junk"
+        ]
+
+    async def test_subentry_reconfigure_abort_reports_ignored_keys(self) -> None:
+        abort_step = {"type": "abort", "reason": "reconfigure_successful"}
+        client = AsyncMock()
+        client.submit_config_subentry_flow_step = AsyncMock(side_effect=[abort_step])
+        initial_step = {
+            "type": "form",
+            "flow_id": "flow-5",
+            "step_id": "reconfigure",
+            "data_schema": [{"name": "name"}],
+        }
+
+        result = await _handle_config_subentry_flow_steps(
+            client,
+            "flow-5",
+            initial_step,
+            {"name": "x", "junk": "ignored"},
+            is_reconfigure=True,
+        )
+
+        assert result["operation"] == "reconfigured"
+        assert result["warnings"] == [
+            "Ignored config keys not declared by the Home Assistant flow schema: junk"
         ]
 
 
