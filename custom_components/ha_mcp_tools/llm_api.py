@@ -339,7 +339,7 @@ class HaMcpTool(llm.Tool):
     ) -> JsonObjectType:
         """Call the tool on the in-process server and return its result."""
         return await _forward_tool_call(
-            hass, self._server_url, tool_input.tool_name, tool_input.tool_args
+            hass, self._server_url, self.name, tool_input.tool_args
         )
 
 
@@ -477,7 +477,12 @@ class HaMcpLlmApi(llm.API):
     """The in-process ha-mcp server's toolset as a Home Assistant LLM API."""
 
     server_url: str
-    mode: str = EXPOSURE_FULL
+    # Valid instance modes are only tool_search and full — EXPOSURE_BOTH is
+    # an option value that _apis_for_mode expands into two instances and must
+    # never reach here. The default is the compact/safe shape, matching the
+    # option default (review finding: defaulting to full made an omitted
+    # mode maximally exposed).
+    mode: str = EXPOSURE_TOOL_SEARCH
 
     async def async_get_api_instance(
         self, llm_context: llm.LLMContext
@@ -520,11 +525,13 @@ class HaMcpLlmApi(llm.API):
             )
 
         prompt = init_result.instructions or _FALLBACK_API_PROMPT
-        if self.mode == EXPOSURE_TOOL_SEARCH:
+        # full is the explicit opt-in; anything else — including an unknown
+        # value — falls through to the compact/safe tool-search shape.
+        if self.mode == EXPOSURE_FULL:
+            tools = self._build_full_tools(exposed)
+        else:
             tools = self._build_tool_search_tools(exposed, pinned)
             prompt += _TOOL_SEARCH_PROMPT
-        else:
-            tools = self._build_full_tools(exposed)
 
         return llm.APIInstance(self, prompt, llm_context, tools)
 

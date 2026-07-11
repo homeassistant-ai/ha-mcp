@@ -16,9 +16,9 @@ The single source of truth travels **in-band**: :class:`LlmExposureMiddleware`
 stamps every ``tools/list`` entry with
 ``_meta.ha_mcp = {"llm_api_exposed": bool, "pinned": bool}`` so the component
 (one more loopback MCP client) filters on data that can never drift from the
-server's settings, with zero extra round-trips. Stamping reads the persisted
-settings live on every list, so settings-UI changes apply on the agent's next
-conversation turn without a restart.
+server's settings, with zero extra round-trips. Stamping re-reads the
+persisted settings behind a short coalescing cache (2s TTL), so settings-UI
+changes apply on the agent's next conversation turn without a restart.
 
 Defaults are deny-by-default for the risky sets (owner decision, #1745):
 beta-tagged tools, developer-mode tools, and the restart/reload/backup
@@ -110,7 +110,12 @@ def load_llm_api_overrides() -> dict[str, bool]:
     # the defaults, so a top-level import would be circular.
     from .settings_ui import load_tool_config
 
-    raw = load_tool_config().get(LLM_API_CONFIG_KEY, {})
+    config = load_tool_config()
+    # load_tool_config returns whatever the JSON file parses to — guard the
+    # valid-JSON-but-not-an-object case (e.g. `[]`) instead of raising.
+    if not isinstance(config, dict):
+        return {}
+    raw = config.get(LLM_API_CONFIG_KEY, {})
     if not isinstance(raw, dict):
         return {}
     return {
@@ -163,13 +168,27 @@ class LlmExposureMiddleware(Middleware):
             overrides = load_llm_api_overrides()
             pinned = _pinned_tool_names()
         except Exception:
-            # Stamping must never break tools/list for regular clients. A
-            # failed settings read falls back to pure defaults, visibly.
-            logger.warning(
-                "Could not read LLM-API exposure settings; stamping defaults",
-                exc_info=True,
-            )
-            overrides, pinned = {}, set()
+            # Stamping must never break tools/list for regular clients — but
+            # the fallback direction matters for an exposure CONTROL: pure
+            # defaults would re-EXPOSE tools the user explicitly hid (their
+            # override lives in the unreadable settings), so serve the
+            # last-known-good values when we have them (review finding).
+            # Only a failure with no prior successful read stamps pure
+            # defaults. Visibly, either way.
+            if self._cache is not None:
+                _stamp, overrides, pinned = self._cache
+                logger.warning(
+                    "Could not read LLM-API exposure settings; keeping the "
+                    "last known values",
+                    exc_info=True,
+                )
+            else:
+                overrides, pinned = {}, set()
+                logger.warning(
+                    "Could not read LLM-API exposure settings and no prior "
+                    "read succeeded; stamping defaults",
+                    exc_info=True,
+                )
         self._cache = (now, overrides, pinned)
         return overrides, pinned
 

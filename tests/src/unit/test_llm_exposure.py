@@ -185,3 +185,45 @@ class TestMiddleware:
         await mw.on_list_tools(ctx, AsyncMock(return_value=[_tool("ha_a")]))
         await mw.on_list_tools(ctx, AsyncMock(return_value=[_tool("ha_b")]))
         assert calls["n"] == 1
+
+    async def test_ttl_expiry_rereads_settings(self, monkeypatch):
+        mw = LlmExposureMiddleware()
+        calls = {"n": 0}
+
+        def _counting_overrides():
+            calls["n"] += 1
+            return {}
+
+        monkeypatch.setattr(llm_exposure, "load_llm_api_overrides", _counting_overrides)
+        monkeypatch.setattr(llm_exposure, "_pinned_tool_names", set)
+        monkeypatch.setattr(llm_exposure, "_OVERRIDES_TTL_SECONDS", 0.0)
+        ctx = _context()
+        await mw.on_list_tools(ctx, AsyncMock(return_value=[_tool("ha_a")]))
+        await mw.on_list_tools(ctx, AsyncMock(return_value=[_tool("ha_b")]))
+        assert calls["n"] == 2
+
+    async def test_settings_read_failure_serves_last_known_good(self, monkeypatch):
+        # Fail-direction guard (review finding): a failed settings read must
+        # NOT re-expose tools the user explicitly hid — the middleware keeps
+        # serving the last successful read instead of pure defaults.
+        mw = LlmExposureMiddleware()
+        monkeypatch.setattr(
+            llm_exposure, "load_llm_api_overrides", lambda: {"ha_get_state": False}
+        )
+        monkeypatch.setattr(llm_exposure, "_pinned_tool_names", set)
+        ctx = _context()
+        first = await mw.on_list_tools(
+            ctx, AsyncMock(return_value=[_tool("ha_get_state")])
+        )
+        assert first[0].meta[META_NAMESPACE][META_EXPOSED_KEY] is False
+
+        def _boom():
+            raise OSError("disk gone")
+
+        monkeypatch.setattr(llm_exposure, "load_llm_api_overrides", _boom)
+        monkeypatch.setattr(llm_exposure, "_OVERRIDES_TTL_SECONDS", 0.0)
+        second = await mw.on_list_tools(
+            ctx, AsyncMock(return_value=[_tool("ha_get_state")])
+        )
+        # The user-hidden tool STAYS hidden on the stale data.
+        assert second[0].meta[META_NAMESPACE][META_EXPOSED_KEY] is False

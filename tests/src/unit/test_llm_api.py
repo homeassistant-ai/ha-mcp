@@ -646,6 +646,50 @@ class TestToolCall:
             )
 
 
+class TestMetaKeyContract:
+    def test_component_meta_keys_match_server(self):
+        # The stamp keys are duplicated because the component must never
+        # import ha_mcp at runtime — but the TEST tier can import both, so
+        # the keep-in-sync comment is enforced mechanically here.
+        from ha_mcp.llm_exposure import (
+            META_EXPOSED_KEY,
+            META_NAMESPACE,
+            META_PINNED_KEY,
+        )
+
+        assert llm_api._META_NAMESPACE == META_NAMESPACE
+        assert llm_api._META_EXPOSED_KEY == META_EXPOSED_KEY
+        assert llm_api._META_PINNED_KEY == META_PINNED_KEY
+
+
+class TestModeDefault:
+    async def test_omitted_mode_builds_tool_search_instance(self, monkeypatch):
+        # The dataclass default is the compact/safe shape (review finding:
+        # a full-catalog default made an omitted mode maximally exposed).
+        hass = _make_hass()
+        _fake_session(monkeypatch, tools=[_tool_entry("ha_get_state")])
+        api = llm_api.HaMcpLlmApi(
+            hass=hass,
+            id=_SEARCH_ID,
+            name="HA-MCP Server (tool search)",
+            server_url="http://127.0.0.1:9584/private_x",
+        )
+
+        instance = await api.async_get_api_instance(llm_api.llm.LLMContext())
+
+        assert [t.name for t in instance.tools] == ["ha_search_tools", "ha_call_tool"]
+        assert "Tool Discovery" in instance.api_prompt
+
+    async def test_unknown_mode_degrades_to_tool_search(self, monkeypatch):
+        hass = _make_hass()
+        _fake_session(monkeypatch, tools=[_tool_entry("ha_get_state")])
+        api = _make_api(hass, mode="bogus")
+
+        instance = await api.async_get_api_instance(llm_api.llm.LLMContext())
+
+        assert [t.name for t in instance.tools] == ["ha_search_tools", "ha_call_tool"]
+
+
 class TestSharedHttpClientPassthrough:
     async def test_canonical_sdk_receives_hass_shared_client(self, monkeypatch):
         # The blocking-SSL-setup fix (live-found by HA's event-loop monitor):

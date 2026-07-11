@@ -1378,13 +1378,18 @@ def build_settings_handlers(
         from ..read_only import READ_ONLY_EXEMPT_TOOLS
 
         llm_overrides = load_llm_api_overrides()
-        # Feature-gated stub rows (tool not registered, flag off) carry no
-        # tags — treat them as beta so their default renders hidden, matching
-        # what the stamp will say once the flag turns the real tool on.
+        # Feature-gated stub rows carry their primary tag but NOT the "beta"
+        # tag the registered tool declares (_render_stub renders from
+        # FEATURE_GATED_TOOLS metadata, whose tags are never empty) — append
+        # it whenever disabled_by is set so the toggle renders
+        # hidden-by-default, matching what the stamp will say once the flag
+        # turns the real tool on. Every feature-gated tool is beta by
+        # definition. (Review finding: a previous `or`-fallback here was dead
+        # code, so beta stubs rendered as exposed.)
         llm_effective = {
             t["name"]: effective_llm_api_exposed(
                 t["name"],
-                t.get("tags") or (["beta"] if t.get("disabled_by") else []),
+                [*(t.get("tags") or []), *(["beta"] if t.get("disabled_by") else [])],
                 llm_overrides,
             )
             for t in tools
