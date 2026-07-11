@@ -966,25 +966,41 @@ def _text_tier(query_lower: str, texts: Any, *, fuzzy: bool) -> int | None:
     for text in texts:
         if not text:
             continue
-        text_lower = str(text).lower()
-        if query_lower == text_lower:
+        tier, ratio = _tier_one_text(query_lower, query_norm, str(text).lower(), fuzzy)
+        if tier == 100:
             return 100
-        if fuzzy and query_norm and query_norm == _sep_normalized(text_lower):
-            return 100
-        if query_lower in text_lower:
+        if tier == 80:
             best_substring = 80
-        elif fuzzy:
-            if query_norm and query_norm in _sep_normalized(text_lower):
-                best_substring = 80
-            else:
-                ratio = _calc_ratio(query_lower, text_lower)
-                if ratio > best_ratio:
-                    best_ratio = ratio
+        elif ratio > best_ratio:
+            best_ratio = ratio
     if best_substring is not None:
         return best_substring
     if fuzzy and best_ratio >= FUZZY_THRESHOLD:
         return best_ratio
     return None
+
+
+def _tier_one_text(
+    query_lower: str, query_norm: str, text_lower: str, fuzzy: bool
+) -> tuple[int | None, int]:
+    """Score one candidate text: ``(tier, ratio)``.
+
+    Tier 100 = exact (raw, or separator-normalized in fuzzy mode); tier 80 =
+    substring (same two forms); otherwise ``ratio`` carries the fuzzy
+    whole-string fallback (0 when not in fuzzy mode).
+    """
+    if query_lower == text_lower:
+        return 100, 0
+    text_norm = _sep_normalized(text_lower) if fuzzy and query_norm else ""
+    if text_norm and query_norm == text_norm:
+        return 100, 0
+    if query_lower in text_lower:
+        return 80, 0
+    if text_norm and query_norm in text_norm:
+        return 80, 0
+    if fuzzy:
+        return None, _calc_ratio(query_lower, text_lower)
+    return None, 0
 
 
 def _name_tier(query_lower: str, texts: Any, *, exact: bool) -> int | None:
