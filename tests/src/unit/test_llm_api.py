@@ -453,9 +453,10 @@ class TestToolSearchModeInstance:
         call = next(t for t in instance.tools if t.name == "ha_call_tool")
         forward = AsyncMock(return_value={"content": [{"type": "text", "text": "ok"}]})
         monkeypatch.setattr(llm_api, "_forward_tool_call", forward)
+        hass = _make_hass()
 
         result = await call.async_call(
-            _make_hass(),
+            hass,
             llm_api.llm.ToolInput(
                 "ha_call_tool",
                 {"name": "ha_get_state", "arguments": {"entity_id": "sun.sun"}},
@@ -464,6 +465,7 @@ class TestToolSearchModeInstance:
         )
 
         forward.assert_awaited_once_with(
+            hass,
             "http://127.0.0.1:9584/private_x",
             "ha_get_state",
             {"entity_id": "sun.sun"},
