@@ -1,8 +1,12 @@
 name: Sync Integration Mirror
 
 # Keeps homeassistant-ai/ha-mcp-integration (the HACS distribution mirror)
-# in lockstep: master pushes sync the dev channel (mirror main), and a stable
-# release cuts a matching mirror release (stable channel). The mirror's README
+# in lockstep: master pushes sync the dev channel (mirror main, plus a
+# v<version>-dev.N pre-release tag whenever the snapshot changed the
+# component), and a stable release cuts a matching mirror release (stable
+# channel). HACS keys on the GitHub prerelease flag, so stable users never
+# see dev builds; users who enable the repository's HACS "Pre-release"
+# switch entity receive them. The mirror's README
 # is composed from a permanent prefix blurb plus the main repo README (with
 # relative links/images absolutized) so the HACS page mirrors the main docs.
 # The mirror carries no hand-made changes.
@@ -36,6 +40,17 @@ on:
     workflows: ["SemVer Release", "Hotfix Release"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      channel:
+        description: >-
+          stable re-tags the current component version as a full release
+          (recovery path when a release run flaked); dev cuts a
+          v<version>-dev.N pre-release from the current master snapshot.
+          Dispatch from master only - the tag version is read from the
+          checked-out ref's manifest.json.
+        type: choice
+        options: [stable, dev]
+        default: stable
 
 # Serialize mirror syncs. A real hotfix that touches the component triggers
 # BOTH legs — the master push (paths) and the workflow_run — nearly at once,
@@ -156,6 +171,7 @@ jobs:
             /tmp/mirror/.github/workflows/release-on-tag.yml
 
       - name: Commit and push
+        id: push
         env:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
         run: |
@@ -163,6 +179,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
+          # The dev pre-release step keys on component changes specifically:
+          # README/LICENSE/workflow-only syncs must not cut a new pre-release.
+          if git diff --cached --quiet -- custom_components; then
+            echo "component_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "component_changed=true" >> "$GITHUB_OUTPUT"
+          fi
           if git diff --cached --quiet; then
             echo "mirror already current"
           else
@@ -189,14 +212,21 @@ jobs:
         # release happened (checking workflow_run.conclusion again would
         # re-introduce the suppressed-tag bug the gate fixes — an unrelated
         # failed leg fails the RUN even when Semantic Release succeeded). The
-        # only event that reaches this job and must not tag is the push-leg
-        # code snapshot.
-        if: github.event_name != 'push'
+        # events that reach this job and must not tag stable are the push-leg
+        # code snapshot and a dev-channel dispatch.
+        if: >-
+          github.event_name == 'workflow_run' ||
+          (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
         env:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
         run: |
           VER=$(python3 -c "import json; print(json.load(open('custom_components/ha_mcp_tools/manifest.json'))['version'])")
-          if git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}" | grep -q .; then
+          # Capture instead of `| grep -q .`: without pipefail a FAILED
+          # ls-remote looks identical to "tag absent" and the step would
+          # proceed on a network blip; a bare assignment under set -e
+          # aborts loud instead.
+          existing=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
+          if [ -n "$existing" ]; then
             echo "mirror tag v${VER} exists"
             exit 0
           fi
@@ -208,3 +238,64 @@ jobs:
           cd /tmp/mirror
           git tag -a "v${VER}" -F /tmp/mirror_notes.md --cleanup=verbatim
           git push origin "v${VER}"
+
+      - name: Tag mirror dev pre-release
+        # Publishes the master component snapshot as a HACS pre-release
+        # whenever the component moved past the last stable tag. The mirror's
+        # release-on-tag.yml marks -dev. tags with --prerelease, so stable
+        # HACS users never see them; dev users opt in via the repository's
+        # HACS "Pre-release" switch entity. When the biweekly release later
+        # tags the bare v<version>, HACS's newest-first release scan puts
+        # everyone - including pre-release users - back on the stable build.
+        #
+        # The dev tag MUST NOT be the bare v<version>: release-on-tag.yml
+        # keys --prerelease off the -dev. suffix, so a bare tag would publish
+        # the dev snapshot as a FULL release to every stable HACS user, and
+        # the idempotent stable tag step above would then skip on the
+        # existing tag, blocking the real stable release. run_number keeps successive
+        # dev builds of one version ordered and unique; a re-run of the same
+        # run number hits the existing-tag check and no-ops.
+        if: >-
+          (github.event_name == 'push' && steps.push.outputs.component_changed == 'true') ||
+          (github.event_name == 'workflow_dispatch' && inputs.channel == 'dev')
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
+        run: |
+          VER=$(python3 -c "import json; print(json.load(open('custom_components/ha_mcp_tools/manifest.json'))['version'])")
+          # A bare v<VER> tag means master hasn't bumped the component since
+          # the last stable release, so there is nothing dev-only to publish:
+          # a v<VER>-dev.N tag would hide behind the stable release in HACS's
+          # newest-first scan. Component changes are required to bump
+          # manifest.json in the same PR (AGENTS.md "Custom Component") - if
+          # that rule is ever violated, this skip means pre-release users
+          # silently miss that build until the next bump.
+          # Captures instead of `| grep -q .`: without pipefail a FAILED
+          # ls-remote is indistinguishable from "tag absent", and here that
+          # would cut a dev tag for an already-stable version on a network
+          # blip; bare assignments under set -e abort loud instead.
+          stable_exists=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
+          if [ -n "$stable_exists" ]; then
+            echo "v${VER} is already released as stable - skipping dev tag"
+            exit 0
+          fi
+          TAG="v${VER}-dev.${{ github.run_number }}"
+          tag_exists=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/${TAG}")
+          if [ -n "$tag_exists" ]; then
+            echo "mirror tag ${TAG} exists"
+            exit 0
+          fi
+          {
+            echo "## HA-MCP Custom Component ${VER} (development pre-release)"
+            echo
+            echo "Snapshot of the custom component from" \
+              "${GITHUB_REPOSITORY}@${GITHUB_SHA}, ahead of the latest stable" \
+              "release. New features in this build may require a newer server" \
+              "and only become fully usable with the next stable release."
+            echo
+            echo "You receive these builds because the HACS **Pre-release**" \
+              "switch is enabled for this repository; turn it off to stay on" \
+              "stable releases."
+          } > /tmp/dev_notes.md
+          cd /tmp/mirror
+          git tag -a "${TAG}" -F /tmp/dev_notes.md --cleanup=verbatim
+          git push origin "${TAG}"
