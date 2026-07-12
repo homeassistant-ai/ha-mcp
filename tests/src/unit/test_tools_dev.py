@@ -239,6 +239,34 @@ _SERVER_FLOW = {
     ],
 }
 
+# Server flow with URL / secret overrides set. The optional text fields carry
+# their persisted value in ``description.suggested_value`` (not as a schema
+# ``default``), exactly as the component renders them so they stay clearable.
+_SERVER_FLOW_WITH_OVERRIDES = {
+    "type": "form",
+    "flow_id": "flow-1",
+    "data_schema": [
+        {"name": "channel", "default": "dev"},
+        {"name": "pip_spec", "description": {"suggested_value": "ha-mcp==9.9.9"}},
+        {
+            "name": "server_url",
+            "description": {"suggested_value": "http://ha.local:8123"},
+        },
+        {
+            "name": "external_url",
+            "description": {"suggested_value": "https://ext.example.com"},
+        },
+        {
+            "name": "webhook_id_override",
+            "description": {"suggested_value": "hook123"},
+        },
+        {
+            "name": "secret_path_override",
+            "description": {"suggested_value": "/secret"},
+        },
+    ],
+}
+
 
 class TestManageServer:
     async def test_info_standalone_without_component(self):
@@ -299,6 +327,31 @@ class TestManageServer:
         )
         assert result["data"]["applied"] == {"channel": "dev"}
         assert result["data"]["previous"]["channel"] == "stable"
+
+    async def test_update_source_preserves_url_and_secret_overrides(self):
+        # update_source drives the component's options flow, whose optional text
+        # fields pre-fill via suggested_value so the UI can clear them. A sparse
+        # submit would blank the user's server-URL / connect-secret overrides
+        # (an omitted optional reads as "cleared"), so update_source must resend
+        # them — harvested from description.suggested_value, not a schema default.
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}],
+            flows=[dict(_SERVER_FLOW_WITH_OVERRIDES)],
+        )
+        await DevTools(client).ha_dev_manage_server(
+            action="update_source", channel="stable"
+        )
+        client.submit_options_flow_step.assert_awaited_once_with(
+            "flow-1",
+            {
+                "pip_spec": "ha-mcp==9.9.9",
+                "server_url": "http://ha.local:8123",
+                "external_url": "https://ext.example.com",
+                "webhook_id_override": "hook123",
+                "secret_path_override": "/secret",
+                "channel": "stable",
+            },
+        )
 
     async def test_update_source_surfaces_flow_rejection(self):
         client = _mock_client(

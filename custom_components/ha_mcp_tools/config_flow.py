@@ -262,16 +262,27 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 ),
                 vol.Optional(
                     OPT_PIP_SPEC,
-                    # Pre-fill only a genuinely saved override. The normalized
-                    # "no override" state renders an EMPTY field — pre-filling
-                    # DEFAULT_PIP_SPEC as a hint made a field whose help text
-                    # says "leave blank" always look populated, and showed the
-                    # STABLE dist name even on the dev channel.
-                    default=opts.get(OPT_PIP_SPEC, ""),
+                    # Pre-fill via suggested_value, NOT a schema default: a
+                    # default equal to the saved value makes the field
+                    # impossible to clear. HA's frontend drops an emptied
+                    # optional field from the submitted payload, so voluptuous
+                    # re-applies the default (the old override) and clearing
+                    # never sticks. suggested_value pre-fills the same value but
+                    # is not re-injected on an empty submit. (Applies to every
+                    # optional text field below.) Only a genuinely saved
+                    # override is suggested; the normalized "no override" state
+                    # renders an EMPTY field — the help text says "leave blank",
+                    # and pre-filling DEFAULT_PIP_SPEC would show the STABLE dist
+                    # name even on the dev channel.
+                    description={"suggested_value": opts.get(OPT_PIP_SPEC, "")},
                 ): str,
                 vol.Optional(
                     OPT_SERVER_URL,
-                    default=opts.get(OPT_SERVER_URL, DEFAULT_LOOPBACK_URL),
+                    description={
+                        "suggested_value": opts.get(
+                            OPT_SERVER_URL, DEFAULT_LOOPBACK_URL
+                        )
+                    },
                 ): str,
                 vol.Required(
                     OPT_ENABLE_WEBHOOK,
@@ -301,17 +312,23 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                # suggested_value (not default) so these clear properly on an
+                # empty submit — see the OPT_PIP_SPEC note above.
                 vol.Optional(
                     OPT_EXTERNAL_URL,
-                    default=opts.get(OPT_EXTERNAL_URL, ""),
+                    description={"suggested_value": opts.get(OPT_EXTERNAL_URL, "")},
                 ): str,
                 vol.Optional(
                     OPT_WEBHOOK_ID_OVERRIDE,
-                    default=opts.get(OPT_WEBHOOK_ID_OVERRIDE, ""),
+                    description={
+                        "suggested_value": opts.get(OPT_WEBHOOK_ID_OVERRIDE, "")
+                    },
                 ): str,
                 vol.Optional(
                     OPT_SECRET_PATH_OVERRIDE,
-                    default=opts.get(OPT_SECRET_PATH_OVERRIDE, ""),
+                    description={
+                        "suggested_value": opts.get(OPT_SECRET_PATH_OVERRIDE, "")
+                    },
                 ): str,
                 vol.Optional(
                     OPT_REGENERATE_SECRETS,

@@ -44,7 +44,24 @@ COMPONENT_DOMAIN = "ha_mcp_tools"
 # (custom_components/ha_mcp_tools/const.py OPT_CHANNEL / OPT_PIP_SPEC).
 _OPT_CHANNEL = "channel"
 _OPT_PIP_SPEC = "pip_spec"
+_OPT_SERVER_URL = "server_url"
+_OPT_EXTERNAL_URL = "external_url"
+_OPT_WEBHOOK_ID_OVERRIDE = "webhook_id_override"
+_OPT_SECRET_PATH_OVERRIDE = "secret_path_override"
 _VALID_CHANNELS = ("stable", "dev")
+
+# Optional text fields the component's options flow pre-fills via
+# suggested_value (so the UI can clear them). Because an OMITTED optional field
+# reads as "cleared" rather than "unchanged", a partial update_source submit
+# must resend these at their current values or it would blank the user's
+# server-URL / connect-secret overrides.
+_PRESERVED_OPTION_KEYS = (
+    _OPT_PIP_SPEC,
+    _OPT_SERVER_URL,
+    _OPT_EXTERNAL_URL,
+    _OPT_WEBHOOK_ID_OVERRIDE,
+    _OPT_SECRET_PATH_OVERRIDE,
+)
 
 # Delay before a self-affecting action (embedded entry reload / options
 # submit) fires, so this tool's JSON response flushes to the MCP client
@@ -85,6 +102,22 @@ def _spawn_background(coro: Any) -> None:
     task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
+def _field_prefill(item: dict[str, Any]) -> Any:
+    """Return a serialized options-flow field's current value.
+
+    Reads ``description.suggested_value`` first: HA renders a persisted option
+    there (via ``add_suggested_values_to_schema``), and the component's
+    clearable text fields carry their value there rather than as a schema
+    ``default`` (a ``default`` equal to the value would make the field
+    impossible to clear). Falls back to ``default`` then ``value`` for the
+    dropdown/toggle fields. Mirrors ``tools_integrations.options_from_form_flow``.
+    """
+    description = item.get("description")
+    if isinstance(description, dict) and description.get("suggested_value") is not None:
+        return description["suggested_value"]
+    return item.get("default", item.get("value"))
+
+
 async def find_server_config_entry(
     client: Any,
 ) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
@@ -95,8 +128,8 @@ async def find_server_config_entry(
     (services) entry's flow aborts immediately. Returns
     ``(entry_id, open_flow, current_options)`` with the options flow left
     OPEN (callers must submit or abort it), or ``None`` when no server
-    entry exists. ``current_options`` maps schema field names to their
-    defaults — i.e. the entry's current option values.
+    entry exists. ``current_options`` maps schema field names to their current
+    values (persisted ``suggested_value`` first, else the schema ``default``).
 
     Module-level (not a DevTools method) so the settings UI's embedded
     restart handler can share it.
@@ -131,7 +164,7 @@ async def find_server_config_entry(
             continue
         schema = flow.get("data_schema") or []
         fields: dict[str, Any] = {
-            str(item["name"]): item.get("default")
+            str(item["name"]): _field_prefill(item)
             for item in schema
             if isinstance(item, dict) and item.get("name")
         }
@@ -819,7 +852,14 @@ class DevTools:
                 )
             )
         entry_id, flow, current = found
-        user_input: dict[str, Any] = {}
+        # The component's options flow pre-fills its optional text fields via
+        # suggested_value so the UI can clear them, which makes an OMITTED field
+        # read as "cleared", not "unchanged". Resend the user's current
+        # overrides (server URL, connect secrets, any pip-spec pin) so a
+        # channel/pip-spec change here does not blank them.
+        user_input: dict[str, Any] = {
+            key: current[key] for key in _PRESERVED_OPTION_KEYS if current.get(key)
+        }
         if channel is not None:
             user_input[_OPT_CHANNEL] = channel
         if pip_spec is not None:
