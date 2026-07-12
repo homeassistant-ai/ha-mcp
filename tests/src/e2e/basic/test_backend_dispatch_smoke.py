@@ -62,33 +62,31 @@ from ..utilities.assertions import safe_call_tool
 # the case where ~50+ tests vanish from collection.
 _COLLECTION_FLOOR = 850
 
-# Per-lane ceilings for the count of skip-marked tests. Set 5-9 above
-# current per-lane skip counts (as of 2026-05-22: container=46,
+# Per-lane ceilings for the count of skip-marked tests. They started 5-9 above
+# the observed per-lane skip counts (as of 2026-05-22: container=46,
 # haos=14, haos_inaddon=39 — the latter bumped by #1403's 17 new
 # auto-backup tests that skip on haos_inaddon via @external_only).
-# A buffer of 5-9 absorbs PRs that legitimately add a few new
-# marker-gated tests, but catches a mass-skip incident like PR #1375
-# (14 tests started skipping silently because a marker was applied
-# too broadly).
+# and are bumped when new marker-gated tests intentionally consume that
+# historical buffer. This still catches a mass-skip incident like PR #1375
+# (14 tests started skipping silently because a marker was applied too broadly).
 _SKIP_CEILING_PER_LANE = {
-    # The 5 dashboard-screenshot E2E tests
+    # The 6 dashboard-screenshot E2E tests
     # (tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py) are marked
     # haos_only + inaddon_only: they RUN only on the haos_inaddon lane (the
     # only place the MCP server shares the Supervisor network and can reach the
     # screenshot engine), and SKIP on both the container lane (haos_only) and
-    # the external-haos lane (inaddon_only). So both those ceilings gain 5;
+    # the external-haos lane (inaddon_only). So both those ceilings gain 6;
     # haos_inaddon is unchanged because the tests run there.
-    # The 5 dashboard-screenshot SIDECAR E2E tests
+    # The 10 dashboard-screenshot SIDECAR E2E tests
     # (tests/src/e2e/tools/test_dashboard_screenshot_sidecar.py) are marked
     # container_only: they RUN only on the container lane (in-process server +
     # fake engine) and SKIP on both HAOS lanes. So haos and haos_inaddon each
-    # gain 5; container is unchanged because the tests run there.
-    # Baselines are the observed skip counts as of 2026-05-22 (container=46,
-    # haos=14, haos_inaddon=39 from the prose above), plus this PR's new
-    # marker-gated skips, plus a 5-9 growth buffer.
-    "container": 71,  # was 68; +3 in-process MCP server HAOS tests (haos_only/test_embedded_server_haos.py, skip on the container lane)
-    "haos": 39,  # was 37; +2 LLM-API e2e tests (#1745, workflows/embedded, @container_only — run on the container lane only)
-    "haos_inaddon": 67,  # was 65; +2 LLM-API e2e tests (#1745, workflows/embedded, @container_only)
+    # gain 10; container is unchanged because the tests run there.
+    # Entries below are CI-observed item counts, bumped only for intentional
+    # marker-gated additions rather than runtime skips.
+    "container": 72,  # was 71; +1 Puppet-management test (haos_only + inaddon_only)
+    "haos": 45,  # was 39; +1 Puppet-management test and +5 screenshot sidecar tests
+    "haos_inaddon": 72,  # was 67; +5 screenshot sidecar tests (container_only)
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -97,12 +95,12 @@ _SKIP_CEILING_PER_LANE = {
     #     by test-process env/monkeypatch — same reason as inaddon), plus the
     #     workflows/embedded smoke test (not_on_embedded).
     # Static def-level derivation (Docker-less, so parametrize item-inflation isn't
-    # visible locally): haos_only 51 + inaddon_only-outside-haos 11 + external_only
+    # visible locally): haos_only 52 + inaddon_only-outside-haos 11 + external_only
     # 35 (auto_backup 18, supervisor_mock 15, self_update_notice 1, file_operations
-    # 1) + not_on_embedded 2 = 99. Initially set to 115 as a buffer for
+    # 1) + not_on_embedded 2 = 100. Initially set to 115 as a buffer for
     # parametrize item-inflation; round 6 (run 28709196071) observed the exact
     # item count and the entry below is pinned to it.
-    "embedded": 127,  # was 125; +2 LLM-API e2e tests (#1745, workflows/embedded, @container_only + not_on_embedded)
+    "embedded": 128,  # was 127; +1 Puppet-management test (haos_only + inaddon_only)
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:
@@ -113,14 +111,14 @@ _SKIP_CEILING_PER_LANE = {
     #   - the 3 haos_only embedded smoke tests skip (not_on_haos_embedded) because
     #     the session backend already enables the entry + drives the server.
     # Static def-level derivation (Docker/HAOS-less locally, so parametrize
-    # item-inflation isn't visible): container_only 11 + inaddon_only 19 +
-    # external_only 39 + smoke 3 = 72 (no overlaps: no external_only test is also
+    # item-inflation isn't visible): container_only 16 + inaddon_only 20 +
+    # external_only 39 + smoke 3 = 78 (no overlaps: no external_only test is also
     # container_only/inaddon_only, and the 2 not_on_embedded tests are already
     # container_only). Applying the ~1.16x parametrize inflation the other HAOS
     # lanes show (haos def 30 → ~35 observed; haos_inaddon def 50 → ~58) gives
     # ~84; initially set to 90 with a small buffer, and round 8 observed
     # exactly 90 — the entry below is pinned to the observed count.
-    "haos_embedded": 96,  # was 94; +2 LLM-API e2e tests (#1745, workflows/embedded, @container_only)
+    "haos_embedded": 102,  # was 96; +1 Puppet-management test and +5 screenshot sidecar tests
 }
 
 
@@ -310,9 +308,8 @@ def test_session_skipped_count_below_ceiling(
     run because an ``external_only`` skip was scoped wrong). A
     skip-count ceiling per lane catches that whole class of bug.
 
-    Ceilings sit 5-9 above current per-lane skip counts; updates are
-    only required when a PR legitimately introduces enough new
-    marker-gated tests to cross the threshold (uncommon).
+    Ceilings are updated only when a PR legitimately introduces new
+    marker-gated tests; runtime skips are deliberately excluded.
     """
     backend = ha_container_with_fresh_config["backend"]
     ceiling = _SKIP_CEILING_PER_LANE.get(backend)

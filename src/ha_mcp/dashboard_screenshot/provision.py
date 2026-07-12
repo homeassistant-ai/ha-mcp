@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any, NoReturn
 
 import httpx
@@ -36,6 +37,9 @@ from ..tools.helpers import raise_tool_error
 logger = logging.getLogger(__name__)
 
 ENGINE_PORT = 10000
+_PUPPET_ENGINE_READY_TIMEOUT_SECONDS = 30.0
+_PUPPET_ENGINE_REQUEST_TIMEOUT_SECONDS = 2.0
+_PUPPET_ENGINE_READY_POLL_INTERVAL_SECONDS = 0.5
 # The Supervisor slug is ``<repo-hash>_puppet`` for balloob's Puppet add-on.
 # ``str.endswith`` accepts a tuple, kept as one for easy future extension.
 ENGINE_SLUG_SUFFIXES = ("_puppet",)
@@ -260,10 +264,50 @@ def _raise_puppet_restart_failure(
     raise AssertionError("unreachable: raise_tool_error always raises")
 
 
+async def _wait_for_puppet_engine_ready(hostname: str) -> None:
+    """Wait until restarted Puppet serves its side-effect-free root page."""
+    deadline = time.monotonic() + _PUPPET_ENGINE_READY_TIMEOUT_SECONDS
+    last_detail: str | None = None
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(_PUPPET_ENGINE_REQUEST_TIMEOUT_SECONDS)
+    ) as http_client:
+        while True:
+            try:
+                response = await http_client.get(f"http://{hostname}:{ENGINE_PORT}/")
+                if response.status_code < 500:
+                    return
+                last_detail = f"HTTP {response.status_code}"
+            except httpx.HTTPError as exc:
+                last_detail = str(exc)
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(
+                min(_PUPPET_ENGINE_READY_POLL_INTERVAL_SECONDS, remaining)
+            )
+
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.CONNECTION_FAILED,
+            "Puppet restarted, but its screenshot engine did not become ready in time.",
+            details=last_detail,
+            context={"engine_ready": False, "supervisor_state": "started"},
+            suggestions=["Check the Puppet add-on logs and retry the screenshot"],
+        )
+    )
+    raise AssertionError("unreachable: raise_tool_error always raises")
+
+
 async def _maybe_restart_puppet_addon(
-    client: Any, *, slug: str, settings_changed: bool, restart: bool
+    client: Any,
+    *,
+    slug: str,
+    hostname: str | None,
+    settings_changed: bool,
+    restart: bool,
 ) -> bool | None:
-    """Restart only Puppet and verify Supervisor reports it started again."""
+    """Restart only Puppet and verify its lifecycle state and HTTP readiness."""
     if not restart:
         return None
     from ..tools.tools_addons import _supervisor_api_call
@@ -282,6 +326,8 @@ async def _maybe_restart_puppet_addon(
                 isinstance(restarted_data, dict)
                 and restarted_data.get("state") == "started"
             ):
+                assert hostname is not None
+                await _wait_for_puppet_engine_ready(hostname)
                 return True
             await asyncio.sleep(0.5)
     except Exception as exc:
@@ -387,6 +433,21 @@ async def configure_puppet_addon(
 
     current_options = dict(options)
     current_keep_open = current_options.get("keep_browser_open")
+    hostname_value = info.get("hostname") or info.get("ip_address")
+    hostname = str(hostname_value) if hostname_value else None
+    if restart and hostname is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Puppet is started, but Supervisor returned no engine hostname; "
+                "refusing a settings write that requires restart verification.",
+                context={
+                    "slug": slug,
+                    "engine_ready": False,
+                    "supervisor_state": "started",
+                },
+            )
+        )
     changed = keep_browser_open is not None and keep_browser_open != current_keep_open
     if changed:
         missing_options = sorted(_PUPPET_OPTION_NAMES - current_options.keys())
@@ -428,7 +489,11 @@ async def configure_puppet_addon(
             data={"options": merged_options},
         )
     restart_verified = await _maybe_restart_puppet_addon(
-        client, slug=slug, settings_changed=changed, restart=restart
+        client,
+        slug=slug,
+        hostname=hostname,
+        settings_changed=changed,
+        restart=restart,
     )
 
     return {

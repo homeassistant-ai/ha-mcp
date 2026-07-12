@@ -969,6 +969,7 @@ class TestConfigurePuppetAddon:
                     "result": {
                         "name": "Puppet",
                         "state": "stopped" if info_calls == 2 else "started",
+                        "hostname": "puppet-engine",
                         "schema": _PUPPET_SCHEMA,
                         "options": _puppet_options(keep_browser_open=False),
                     },
@@ -978,6 +979,8 @@ class TestConfigurePuppetAddon:
 
         monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
         monkeypatch.setattr(provision.asyncio, "sleep", AsyncMock())
+        ready = AsyncMock()
+        monkeypatch.setattr(provision, "_wait_for_puppet_engine_ready", ready)
 
         result = await provision.configure_puppet_addon(
             object(), keep_browser_open=None, restart=True
@@ -987,6 +990,129 @@ class TestConfigurePuppetAddon:
         assert result["status"] == "restarted"
         assert ("/addons/abc_puppet/restart", "POST", 120) in calls
         assert info_calls == 3
+        ready.assert_awaited_once_with("puppet-engine")
+
+    async def test_restart_waits_until_engine_root_is_ready(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            **_kwargs: Any,
+        ) -> dict[str, Any]:
+            if endpoint == "/addons":
+                return {"success": True, "result": {"addons": [{"slug": "abc_puppet"}]}}
+            if endpoint == "/addons/abc_puppet/info":
+                return {
+                    "success": True,
+                    "result": {
+                        "name": "Puppet",
+                        "state": "started",
+                        "hostname": "puppet-engine",
+                        "schema": _PUPPET_SCHEMA,
+                        "options": _puppet_options(keep_browser_open=False),
+                    },
+                }
+            assert endpoint == "/addons/abc_puppet/restart"
+            return {"success": True, "result": {}}
+
+        outcomes: list[Exception | int] = [
+            provision.httpx.ConnectError("not listening"),
+            503,
+            200,
+        ]
+
+        class ProbeClient:
+            async def __aenter__(self) -> ProbeClient:
+                return self
+
+            async def __aexit__(self, *_args: Any) -> None:
+                return None
+
+            async def get(self, _url: str) -> Any:
+                outcome = outcomes.pop(0)
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return SimpleNamespace(status_code=outcome)
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+        monkeypatch.setattr(
+            provision.httpx, "AsyncClient", lambda **_kwargs: ProbeClient()
+        )
+        sleep = AsyncMock()
+        monkeypatch.setattr(provision.asyncio, "sleep", sleep)
+
+        result = await provision.configure_puppet_addon(
+            object(), keep_browser_open=None, restart=True
+        )
+
+        assert result["restart_verified"] is True
+        assert outcomes == []
+        assert sleep.await_count == 2
+        sleep.assert_awaited_with(provision._PUPPET_ENGINE_READY_POLL_INTERVAL_SECONDS)
+
+    async def test_restart_readiness_timeout_preserves_applied_context(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            **_kwargs: Any,
+        ) -> dict[str, Any]:
+            if endpoint == "/addons":
+                return {"success": True, "result": {"addons": [{"slug": "abc_puppet"}]}}
+            if endpoint == "/addons/abc_puppet/info":
+                return {
+                    "success": True,
+                    "result": {
+                        "name": "Puppet",
+                        "state": "started",
+                        "hostname": "puppet-engine",
+                        "schema": _PUPPET_SCHEMA,
+                        "options": _puppet_options(keep_browser_open=False),
+                    },
+                }
+            if endpoint == "/addons/abc_puppet/options":
+                return {"success": True, "result": {}}
+            assert endpoint == "/addons/abc_puppet/restart"
+            return {"success": True, "result": {}}
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+
+        class UnreadyClient:
+            async def __aenter__(self) -> UnreadyClient:
+                return self
+
+            async def __aexit__(self, *_args: Any) -> None:
+                return None
+
+            async def get(self, _url: str) -> Any:
+                raise provision.httpx.ConnectError("not listening")
+
+        monkeypatch.setattr(provision, "_PUPPET_ENGINE_READY_TIMEOUT_SECONDS", 0)
+        monkeypatch.setattr(
+            provision.httpx, "AsyncClient", lambda **_kwargs: UnreadyClient()
+        )
+        monkeypatch.setattr(provision.asyncio, "sleep", AsyncMock())
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision.configure_puppet_addon(
+                object(), keep_browser_open=True, restart=True
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "CONNECTION_FAILED"
+        assert error["error"]["context"]["engine_ready"] is False
+        assert error["settings_changed"] is True
+        assert error["restart_requested"] is True
 
     async def test_schema_mismatch_fails_before_any_write(
         self, monkeypatch: Any
@@ -1096,6 +1222,7 @@ class TestConfigurePuppetAddon:
                     "result": {
                         "name": "Puppet",
                         "state": "started" if info_calls == 1 else "stopped",
+                        "hostname": "puppet-engine",
                         "schema": _PUPPET_SCHEMA,
                         "options": _puppet_options(keep_browser_open=False),
                     },
@@ -1159,6 +1286,7 @@ class TestConfigurePuppetAddon:
                     "result": {
                         "name": "Puppet",
                         "state": "started",
+                        "hostname": "puppet-engine",
                         "schema": _PUPPET_SCHEMA,
                         "options": _puppet_options(keep_browser_open=False),
                     },
@@ -1178,6 +1306,46 @@ class TestConfigurePuppetAddon:
         assert error["settings_changed"] is False
         assert error["restart_requested"] is True
         assert info_calls == 2
+
+    async def test_restart_without_hostname_fails_before_options_write(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        calls: list[tuple[str, str]] = []
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            **_kwargs: Any,
+        ) -> dict[str, Any]:
+            calls.append((endpoint, method))
+            if endpoint == "/addons":
+                return {"success": True, "result": {"addons": [{"slug": "abc_puppet"}]}}
+            assert endpoint == "/addons/abc_puppet/info"
+            return {
+                "success": True,
+                "result": {
+                    "name": "Puppet",
+                    "state": "started",
+                    "schema": _PUPPET_SCHEMA,
+                    "options": _puppet_options(keep_browser_open=False),
+                },
+            }
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision.configure_puppet_addon(
+                object(), keep_browser_open=True, restart=True
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert error["error"]["context"]["engine_ready"] is False
+        assert calls == [("/addons", "GET"), ("/addons/abc_puppet/info", "GET")]
 
 
 # ---------------------------------------------------------------------------

@@ -367,7 +367,6 @@ async def test_screenshot_tool_scopes_setting_and_restart_to_puppet(
         detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
         assert detail.get("options", {}).get("keep_browser_open") is changed_keep_open
         assert detail.get("state") == "started"
-        await _wait_engine_serving(mcp_client, context="Puppet settings restart")
     finally:
         restore = parse_mcp_result(
             await mcp_client.call_tool(
@@ -379,7 +378,8 @@ async def test_screenshot_tool_scopes_setting_and_restart_to_puppet(
             )
         )
         assert restore.get("success"), restore
-        await _wait_engine_serving(mcp_client, context="Puppet settings restore")
+        restored_png = await _screenshot(mcp_client, DEFAULT_DASHBOARD_PATH)
+        _png_dimensions(restored_png)
         restored_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
         assert (restored_detail.get("options") or {}).get(
             "keep_browser_open"
