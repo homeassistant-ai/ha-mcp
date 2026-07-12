@@ -90,7 +90,7 @@ These run the server outside Home Assistant — useful for **Container** / **Cor
 <details>
 <summary><b>🌐 Remote access (Nabu Casa / Webhook Proxy add-on / OpenAI Tunnel)</b></summary>
 
-> **Using the HA-MCP custom component?** You do not need this — the component has its own built-in webhook for remote access (see the **Get Started** quick start at the top). This proxy is for the **add-on** (it can also front another external server via its `mcp_server_url` option).
+> **Using the HA-MCP custom component?** You do not need the **Webhook Proxy** — the component has its own built-in webhook for remote access (see the **Get Started** quick start at the top). The proxy is for the **add-on** (it can also front another external server via its `mcp_server_url` option). The **OpenAI Tunnel** below is different: it applies to **any** install method when Home Assistant isn't publicly reachable at all (no Nabu Casa or reverse proxy).
 
 Already have **Nabu Casa** or another reverse proxy pointing at your Home Assistant? The Webhook Proxy add-on routes MCP traffic through your existing setup — no separate tunnel or port forwarding needed.
 
@@ -104,7 +104,7 @@ Already have **Nabu Casa** or another reverse proxy pointing at your Home Assist
 
 For other remote access methods (Cloudflare Tunnel, custom reverse proxy), see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
 
-**ChatGPT / Codex behind a firewall (OpenAI Tunnel).** ChatGPT connectors normally require a publicly reachable URL. If you can't (or don't want to) expose one, the community [OpenAI Tunnel for HA-MCP](https://github.com/norpol/hass-codex-tunnel-mcp) integration by [@norpol](https://github.com/norpol) runs OpenAI's [`tunnel-client`](https://github.com/openai/tunnel-client) inside Home Assistant and connects your local MCP server URL to an OpenAI-hosted tunnel over an outbound-only connection — no port forwarding, reverse proxy, or public URL. Point it at your ha-mcp URL, then attach the ChatGPT connector to the same tunnel ID. See the [FAQ entry](docs/FAQ.md#openai-tunnel) and [#1811](https://github.com/homeassistant-ai/ha-mcp/issues/1811).
+**ChatGPT / Codex behind a firewall (OpenAI Tunnel).** ChatGPT connectors normally require a publicly reachable URL. If you can't (or don't want to) expose one, the community [OpenAI Tunnel for HA-MCP](https://github.com/norpol/hass-codex-tunnel-mcp) integration by [@norpol](https://github.com/norpol) runs OpenAI's [`tunnel-client`](https://github.com/openai/tunnel-client) inside Home Assistant and connects your local MCP server URL to an OpenAI-hosted tunnel over an outbound-only connection — no port forwarding, reverse proxy, or public URL. Point it at your ha-mcp URL, then attach the ChatGPT connector to the same tunnel ID. See the [FAQ entry](https://homeassistant-ai.github.io/ha-mcp/faq/#openai-tunnel) and [#1811](https://github.com/homeassistant-ai/ha-mcp/issues/1811).
 
 [Webhook proxy documentation →](https://github.com/homeassistant-ai/ha-mcp/blob/master/homeassistant-addon-webhook-proxy/DOCS.md)
 

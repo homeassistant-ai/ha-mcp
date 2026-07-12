@@ -2349,7 +2349,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
               </ul>
             </li>
           </ol>
-          <p class="text-slate-400 text-sm mt-3"><strong class="text-slate-300">Behind a firewall?</strong> ChatGPT connects from OpenAI's servers, so the URL must be publicly reachable. If you can't (or don't want to) expose one, the community <a href="https://github.com/norpol/hass-codex-tunnel-mcp" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">OpenAI Tunnel for HA-MCP</a> integration connects your local ha-mcp URL to an OpenAI-hosted tunnel over an outbound-only connection, and the connector attaches to the tunnel ID instead of a URL. See the <a href="${base}/faq#openai-tunnel" class="text-blue-400 hover:underline">FAQ</a>.</p>
+          <p class="text-slate-400 text-sm mt-3"><strong class="text-slate-300">Behind a firewall?</strong> ChatGPT connects from OpenAI's servers, so the URL above must be publicly reachable. If you can't (or don't want to) expose one, the community <a href="https://github.com/norpol/hass-codex-tunnel-mcp" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">OpenAI Tunnel for HA-MCP</a> integration connects your local ha-mcp URL to an OpenAI-hosted tunnel over an outbound-only connection. In that case the connector is set up with your tunnel ID instead of the URL in the steps above — follow the integration's README for the ChatGPT-side steps. See the <a href="${base}/faq#openai-tunnel" class="text-blue-400 hover:underline">FAQ</a>.</p>
         </div>`;
       } else if (state.client.id === 'claude-ai') {
         uiSteps = `<div class="instruction-block">
