@@ -2249,12 +2249,22 @@ WS_CONNECTION_SIGNATURES = (
     "timed out",
     "timeout",
     "connection closed",
+    # reset_connection: "WebSocket connection to Home Assistant closed while
+    # waiting for a response" — "connection closed" is not adjacent there.
+    "closed while waiting",
+    # listener close reason: "connection dropped without a close frame".
+    "connection dropped",
     "disconnected",
     "not connected",
+    "not authenticated",
 )
 
 
-def is_connection_error_message(error_msg: str) -> bool:
-    """True when a pooled-WS failure string is connection/transport-shaped."""
-    lowered = error_msg.lower()
+def is_connection_error_message(error_msg: Any) -> bool:
+    """True when a pooled-WS failure payload is connection/transport-shaped.
+
+    Accepts any payload shape: HA error frames can carry a dict (or None)
+    in the error slot, so the value is stringified before matching.
+    """
+    lowered = str(error_msg).lower()
     return any(sig in lowered for sig in WS_CONNECTION_SIGNATURES)

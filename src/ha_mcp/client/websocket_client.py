@@ -1083,6 +1083,23 @@ class WebSocketManager:
         """Create a cache key from credentials."""
         return hashlib.sha256(f"{url.rstrip('/')}:{token}".encode()).hexdigest()
 
+    @staticmethod
+    def _effective_verify_ssl(verify_ssl: bool | None) -> bool:
+        """Resolve the effective TLS-verification mode for the pool key."""
+        if verify_ssl is not None:
+            return verify_ssl
+        try:
+            return bool(get_global_settings().verify_ssl)
+        except Exception as e:
+            # Mirror HomeAssistantWebSocketClient.__init__: a bad env var
+            # elsewhere should not crash pooling or silently flip TLS off.
+            logger.warning(
+                "Could not load settings while resolving the pool verify_ssl "
+                "key (%s); falling back to verify_ssl=True.",
+                e,
+            )
+            return True
+
     async def get_client(
         self,
         url: str | None = None,
@@ -1143,11 +1160,7 @@ class WebSocketManager:
             # the pooled connection with callers that omit the argument
             # (listener, HACS, installer) — only a genuine override such as
             # verify_ssl=False gets its own isolated connection.
-            effective_verify_ssl = (
-                verify_ssl
-                if verify_ssl is not None
-                else get_global_settings().verify_ssl
-            )
+            effective_verify_ssl = self._effective_verify_ssl(verify_ssl)
             key = (
                 f"{self._client_key(ws_url, ws_token)}"
                 f"|verify_ssl={effective_verify_ssl}"
