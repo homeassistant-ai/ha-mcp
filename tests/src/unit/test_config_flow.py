@@ -307,7 +307,10 @@ class TestServerOptionsFlow:
     def test_form_prefills_every_field_from_saved_options(self):
         # Review gap: the form must show the user's SAVED values, not the
         # defaults, for every field (a regression here silently reverts a
-        # user's config on the next save).
+        # user's config on the next save). Dropdowns/toggles pre-fill via the
+        # schema default; the optional text fields pre-fill via suggested_value
+        # (a default there would make them impossible to clear — see
+        # test_clearing_an_override_field_sticks).
         saved = {
             const.OPT_CHANNEL: const.CHANNEL_DEV,
             const.OPT_AUTO_UPDATE: False,
@@ -328,10 +331,27 @@ class TestServerOptionsFlow:
             data={const.DATA_WEBHOOK_ID: "mcp_abc"}, options=saved
         )
         form = asyncio.run(flow.async_step_init(None))
-        defaults = {m.schema: m.default() for m in form["data_schema"].schema}
+        markers = {m.schema: m for m in form["data_schema"].schema}
+
+        # Optional text fields pre-fill via suggested_value so they stay
+        # clearable; every other field pre-fills via the schema default.
+        text_fields = (
+            const.OPT_PIP_SPEC,
+            const.OPT_SERVER_URL,
+            const.OPT_EXTERNAL_URL,
+            const.OPT_WEBHOOK_ID_OVERRIDE,
+            const.OPT_SECRET_PATH_OVERRIDE,
+        )
+        for key in text_fields:
+            assert markers[key].description["suggested_value"] == saved[key]
+
+        defaults = {
+            key: m.default() for key, m in markers.items() if key not in text_fields
+        }
         # regenerate_secrets is a one-shot action, never pre-filled True;
         # enable_webhook / enable_startup_notification / enable_sidebar_panel
-        # default on when unsaved.
+        # default on when unsaved. Pop off the schema (not inside assert, which
+        # `python -O` would strip) before comparing the remainder.
         regenerate_default = defaults.pop(const.OPT_REGENERATE_SECRETS)
         assert regenerate_default is False
         webhook_default = defaults.pop(const.OPT_ENABLE_WEBHOOK)
@@ -340,7 +360,7 @@ class TestServerOptionsFlow:
         assert notification_default is True
         panel_default = defaults.pop(const.OPT_ENABLE_SIDEBAR_PANEL)
         assert panel_default is True
-        assert defaults == saved
+        assert defaults == {k: v for k, v in saved.items() if k not in text_fields}
 
     def test_init_submit_round_trips_input_into_entry(self):
         flow = _make_options_flow()
@@ -380,6 +400,31 @@ class TestServerOptionsFlow:
         )
         assert result["data"][const.OPT_PIP_SPEC] == ""
 
+    def test_server_url_whitespace_is_dropped_to_default(self):
+        # A whitespace-only Home Assistant URL must not be stored verbatim: it is
+        # truthy, so it would bypass the consumer's empty -> loopback fallback and
+        # break the connection. _normalize drops it so the default applies.
+        flow = _make_options_flow()
+        result = asyncio.run(
+            flow.async_step_init(
+                {const.OPT_CHANNEL: const.CHANNEL_STABLE, const.OPT_SERVER_URL: "   "}
+            )
+        )
+        assert const.OPT_SERVER_URL not in result["data"]
+
+    def test_server_url_trailing_slash_stripped(self):
+        # A real URL is kept, with any trailing slash trimmed.
+        flow = _make_options_flow()
+        result = asyncio.run(
+            flow.async_step_init(
+                {
+                    const.OPT_CHANNEL: const.CHANNEL_STABLE,
+                    const.OPT_SERVER_URL: "http://ha.local:8123/",
+                }
+            )
+        )
+        assert result["data"][const.OPT_SERVER_URL] == "http://ha.local:8123"
+
     def test_pip_spec_field_empty_when_no_override(self):
         # The "leave blank to follow the channel" field must actually BE
         # blank when no override is stored — pre-filling the default dist
@@ -391,7 +436,40 @@ class TestServerOptionsFlow:
         marker = next(
             m for m in form["data_schema"].schema if m.schema == const.OPT_PIP_SPEC
         )
-        assert marker.default() == ""
+        assert marker.description["suggested_value"] == ""
+
+    def test_clearing_an_override_field_sticks(self):
+        # Regression: emptying an optional text field must persist as cleared.
+        # HA's frontend DROPS an emptied optional field from the submitted
+        # payload; the flow manager then validates that payload against the
+        # shown schema (filling voluptuous defaults) before the step handler
+        # runs — the layer a direct-handler unit test skips. A schema
+        # ``default=<saved value>`` silently re-injects the old value there, so
+        # clearing never took: the pip-spec override kept re-installing the old
+        # build and the field re-appeared populated on reopen. Pre-filling with
+        # ``suggested_value`` (not ``default``) has no such re-injection, so the
+        # cleared state sticks.
+        clearable = {
+            const.OPT_PIP_SPEC: "ha-mcp @ https://example/x.tgz",
+            const.OPT_SERVER_URL: "https://ha.example:8123",
+            const.OPT_EXTERNAL_URL: "https://ha.example.com",
+            const.OPT_WEBHOOK_ID_OVERRIDE: "my_custom_hook",
+            const.OPT_SECRET_PATH_OVERRIDE: "/custom_path",
+        }
+        for field in clearable:
+            flow = _make_options_flow(
+                data={const.DATA_WEBHOOK_ID: "mcp_abc"}, options=dict(clearable)
+            )
+            form = asyncio.run(flow.async_step_init(None))
+            # The user cleared exactly one field; the frontend omits it and
+            # submits the rest. Validate through the shown schema exactly as the
+            # flow manager does, then hand the result to the step.
+            submitted = {k: v for k, v in clearable.items() if k != field}
+            validated = form["data_schema"](submitted)
+            result = asyncio.run(flow.async_step_init(validated))
+            assert result["data"].get(field, "") == "", (
+                f"clearing {field!r} did not persist: {result['data'].get(field)!r}"
+            )
 
     def test_no_enable_toggle_option_exists(self):
         # Regression guard for the single-instance pivot: the enable/disable
