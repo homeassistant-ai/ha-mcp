@@ -261,6 +261,16 @@ Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes M
 
 See [#784](https://github.com/homeassistant-ai/ha-mcp/issues/784) for an example where this resolved a TLS connection issue.
 
+### ChatGPT behind a firewall? Try the community OpenAI Tunnel integration {#openai-tunnel}
+
+ChatGPT connectors require a URL reachable from the public internet. If your Home Assistant sits behind a firewall or CGNAT and you don't want to expose it, the community-maintained [OpenAI Tunnel for HA-MCP](https://github.com/norpol/hass-codex-tunnel-mcp) integration by [@norpol](https://github.com/norpol) is an outbound-only alternative:
+
+- It downloads, verifies, and supervises OpenAI's [`tunnel-client`](https://github.com/openai/tunnel-client) as a Home Assistant subprocess (installed as a HACS custom repository; Linux `amd64`/`aarch64` on HA OS / Supervised).
+- The client connects your MCP server URL to an OpenAI-hosted tunnel, so ChatGPT, Codex, and other OpenAI products can reach it — no port forwarding, reverse proxy, or public URL needed.
+- Create a tunnel and a runtime API key on [platform.openai.com](https://platform.openai.com/settings/organization/tunnels), point the integration at your local ha-mcp URL, and add the ChatGPT connector using the same tunnel ID.
+
+See the [integration's README](https://github.com/norpol/hass-codex-tunnel-mcp#readme) for full setup and [#1811](https://github.com/homeassistant-ai/ha-mcp/issues/1811) for background. This is a third-party project — report tunnel issues on its tracker, not here.
+
 ### Server works but responses are slow
 
 1. **First request is slow** - `uvx` downloads packages on first run

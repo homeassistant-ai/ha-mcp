@@ -2280,6 +2280,7 @@ mcpServers:
             <div><code class="bg-slate-800 px-1 rounded">codex mcp remove home-assistant</code> <span class="text-slate-400">— remove this server</span></div>
             <div class="mt-2 text-slate-400">Codex stores config in TOML at <code class="bg-slate-800 px-1 rounded">~/.codex/config.toml</code> — shared between the CLI and the Codex Desktop app.</div>
             <div class="mt-2 text-slate-400"><strong class="text-slate-300">Codex Desktop UI:</strong> Go to <strong>Settings</strong> → <strong>MCP</strong> → <strong>Add Server</strong>, then choose type <strong>STDIO</strong> for local setup (or <strong>HTTP</strong> for remote). Fill in Name (<code class="bg-slate-800 px-1 rounded">home-assistant</code>), Command (<code class="bg-slate-800 px-1 rounded">uvx</code>), Args (<code class="bg-slate-800 px-1 rounded">ha-mcp@latest</code>), and Env vars (<code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> / <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>) — or paste the URL for HTTP. The desktop UI writes the same TOML as the CLI.</div>
+            <div class="mt-2 text-slate-400"><strong class="text-slate-300">Codex cloud tasks with a firewalled server:</strong> local Codex reaches ha-mcp over your LAN, but OpenAI's cloud surfaces (Codex web/cloud tasks, ChatGPT connectors) need the server reachable from OpenAI. Instead of exposing a public URL, the community <a href="https://github.com/norpol/hass-codex-tunnel-mcp" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">OpenAI Tunnel for HA-MCP</a> integration connects your local ha-mcp URL to an OpenAI-hosted tunnel (outbound-only). See the <a href="${base}/faq#openai-tunnel" class="text-blue-400 hover:underline">FAQ</a>.</div>
             ${!isStdio ? `<div class="mt-2 text-slate-400">OAuth 2.0 authentication is available for remote (HTTP) servers.</div>` : ''}
           </div>
         </div>`);
@@ -2348,6 +2349,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
               </ul>
             </li>
           </ol>
+          <p class="text-slate-400 text-sm mt-3"><strong class="text-slate-300">Behind a firewall?</strong> ChatGPT connects from OpenAI's servers, so the URL must be publicly reachable. If you can't (or don't want to) expose one, the community <a href="https://github.com/norpol/hass-codex-tunnel-mcp" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">OpenAI Tunnel for HA-MCP</a> integration connects your local ha-mcp URL to an OpenAI-hosted tunnel over an outbound-only connection, and the connector attaches to the tunnel ID instead of a URL. See the <a href="${base}/faq#openai-tunnel" class="text-blue-400 hover:underline">FAQ</a>.</p>
         </div>`;
       } else if (state.client.id === 'claude-ai') {
         uiSteps = `<div class="instruction-block">
