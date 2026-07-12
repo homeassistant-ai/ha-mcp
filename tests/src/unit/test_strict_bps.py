@@ -255,6 +255,52 @@ class TestStrictBpsMiddleware:
             await mw.on_call_tool(ctx, call_next)
         call_next.assert_not_awaited()
 
+    async def test_unregistered_gated_tool_passes_through(self, strict_on):
+        """A gate-map tool absent from the live catalog is NOT gated — the
+        caller gets FastMCP's unknown-tool error instead of being sent to
+        fetch a key for a tool that doesn't exist (e.g. ha_config_set_yaml
+        with yaml editing off)."""
+        catalog = [
+            SimpleNamespace(name=n)
+            for n in STRICT_BPS_GATED_TOOLS
+            if n != "ha_config_set_yaml"
+        ]
+        mw = StrictBpsMiddleware(list_tools=AsyncMock(return_value=catalog))
+        call_next = AsyncMock(return_value="ok")
+        ctx = make_context("ha_config_set_yaml", {"yaml_path": "automations.yaml"})
+        result = await mw.on_call_tool(ctx, call_next)
+        assert result == "ok"
+        call_next.assert_awaited_once()
+
+    async def test_registered_gated_tool_still_blocked_with_catalog(self, strict_on):
+        """The catalog check must not weaken the gate for registered tools."""
+        catalog = [SimpleNamespace(name=n) for n in STRICT_BPS_GATED_TOOLS]
+        mw = StrictBpsMiddleware(list_tools=AsyncMock(return_value=catalog))
+        call_next = AsyncMock(return_value="ok")
+        ctx = make_context("ha_config_set_yaml", {"yaml_path": "automations.yaml"})
+        with pytest.raises(ToolError):
+            await mw.on_call_tool(ctx, call_next)
+        call_next.assert_not_awaited()
+
+    async def test_catalog_lookup_failure_gates_conservatively(self, strict_on):
+        """A raising catalog lookup must gate (block), never pass a keyless
+        call through — pass-through on error would be a gate bypass."""
+        mw = StrictBpsMiddleware(list_tools=AsyncMock(side_effect=RuntimeError("x")))
+        call_next = AsyncMock(return_value="ok")
+        ctx = make_context("ha_config_set_automation", {"config": {}})
+        with pytest.raises(ToolError):
+            await mw.on_call_tool(ctx, call_next)
+        call_next.assert_not_awaited()
+
+    async def test_empty_catalog_gates_conservatively(self, strict_on):
+        """An empty catalog is abnormal — gate rather than pass through."""
+        mw = StrictBpsMiddleware(list_tools=AsyncMock(return_value=[]))
+        call_next = AsyncMock(return_value="ok")
+        ctx = make_context("ha_config_set_automation", {"config": {}})
+        with pytest.raises(ToolError):
+            await mw.on_call_tool(ctx, call_next)
+        call_next.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # Wiring: gated tools declare BestPracticeKey + map their first canonical file
@@ -365,6 +411,9 @@ class TestServerWiring:
             assert stub.mcp.add_middleware.call_count == 1
             args, _kwargs = stub.mcp.add_middleware.call_args
             assert isinstance(args[0], StrictBpsMiddleware)
+            # The catalog lookup must be injected so unregistered gate-map
+            # tools pass through to the unknown-tool error.
+            assert args[0]._list_tools is not None
 
     def test_inert_warning_when_child_on_parent_off(self, caplog):
         from ha_mcp.server import HomeAssistantSmartMCPServer

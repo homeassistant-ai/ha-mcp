@@ -26,6 +26,7 @@ schema-validating clients will send it; the tool bodies never read it —
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, Any, NoReturn
 
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
@@ -203,6 +204,43 @@ class StrictBpsMiddleware(Middleware):
     seen on the re-entry.
     """
 
+    def __init__(
+        self, *, list_tools: Callable[[], Awaitable[Sequence[Any]]] | None = None
+    ) -> None:
+        self._list_tools = list_tools
+        self._registered_cache: set[str] | None = None
+
+    async def _is_registered(self, name: str) -> bool:
+        """True when ``name`` is in the live tool catalog.
+
+        A gate-map tool may not actually be registered — ``ha_config_set_yaml``
+        only registers when yaml editing is enabled. Gating an unregistered
+        tool would misdirect the caller into fetching the key only to then
+        learn the tool doesn't exist; passing through lets FastMCP's
+        unknown-tool error surface first (#1820 review). The cache rebuilds
+        on a miss so a late-registered tool still gates. Failure direction
+        is the OPPOSITE of pass-through: with no injected catalog, an empty
+        catalog, or a raising lookup, treat the name as registered and gate —
+        wrongly gating a nonexistent tool costs one confusing error, while
+        wrongly passing a registered tool through would bypass the gate.
+        """
+        if self._list_tools is None:
+            return True
+        if self._registered_cache is None or name not in self._registered_cache:
+            try:
+                tools = await self._list_tools()
+            except Exception:
+                logger.exception(
+                    "strict-BPS: tool catalog lookup failed while checking "
+                    "%s — gating conservatively",
+                    name,
+                )
+                return True
+            self._registered_cache = {t.name for t in tools}
+        if not self._registered_cache:
+            return True
+        return name in self._registered_cache
+
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
@@ -223,7 +261,11 @@ class StrictBpsMiddleware(Middleware):
                 message=context.message.model_copy(update={"arguments": stripped})
             )
 
-        if strict_bps_effective() and supplied != STRICT_BPS_ACK_KEY:
+        if (
+            strict_bps_effective()
+            and supplied != STRICT_BPS_ACK_KEY
+            and await self._is_registered(name)
+        ):
             logger.info("strict-BPS mode blocked keyless write to %s", name)
             _raise_bps_ack_required_error(name)
 

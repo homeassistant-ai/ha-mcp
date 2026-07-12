@@ -1058,7 +1058,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "ENABLE_MANDATORY_BPS to activate the acknowledgment gate."
             )
 
-        self.mcp.add_middleware(StrictBpsMiddleware())
+        # Unfiltered catalog lookup so the gate can pass through calls to
+        # gate-map tools that never registered (e.g. ha_config_set_yaml with
+        # yaml editing off) — those get FastMCP's unknown-tool error instead
+        # of a key-fetch misdirection (#1820 review).
+        async def _list_all_tools() -> Any:
+            return await self.mcp.local_provider._list_tools()
+
+        self.mcp.add_middleware(StrictBpsMiddleware(list_tools=_list_all_tools))
 
     # Shared action-phrased keyword block for retrieval. Some MCP clients
     # (Claude Code, others) rank candidate tools by token-overlap between
@@ -1314,14 +1321,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 ),
             ] = None,
         ) -> dict[str, Any]:
-            # ``skills_dir`` is captured from the enclosing scope at
-            # registration time. The current ``_get_skills_dir()`` is
-            # effectively static per process (it inspects an on-disk
-            # path that doesn't change), so the closure is fine. If a
-            # future change makes the skills location dynamic (env-var
-            # override, etc.), the closure won't pick that up — re-read
-            # via ``self._get_skills_dir()`` here instead.
-            return self._handle_skill_guide_call(skills_dir, skill, file)
+            # Re-read the skills dir live on every call (#1820 review):
+            # the strict-BPS gate also reads it live, so a registration-time
+            # capture deadlocks the one recovery path — vendor absent at
+            # boot (gate fails open), operator runs `git submodule update
+            # --init` in place, the gate flips ON, but a captured None here
+            # would keep the acknowledgment key unobtainable until restart.
+            return self._handle_skill_guide_call(self._get_skills_dir(), skill, file)
 
         self.mcp.tool(
             name=SKILL_TOOL_NAME,
