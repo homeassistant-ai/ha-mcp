@@ -20,6 +20,28 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+remove_legacy_cron_entries() {
+    local owner="$1"
+    local current filtered
+
+    current=$(crontab -u "$owner" -l 2>/dev/null || true)
+    [[ -z "$current" ]] && return
+
+    # Remove both generations of the old cron deployment: the original direct
+    # hamcp-test-env invocation and the later destructive re-clone job. The
+    # latter predates systemd and deletes the live checkout before setup runs.
+    filtered=$(printf '%s\n' "$current" | grep -Ev \
+        'hamcp-test-env|ha-mcp-cron\.log|rm -rf (ha-mcp|[^ ]*/ha-mcp)/?([[:space:]]|$)' || true)
+    if [[ "$filtered" != "$current" ]]; then
+        info "Removing legacy ha-mcp cron entries for $owner..."
+        if [[ -n "$filtered" ]]; then
+            printf '%s\n' "$filtered" | crontab -u "$owner" -
+        else
+            crontab -u "$owner" -r 2>/dev/null || true
+        fi
+    fi
+}
+
 #=============================================================================
 [[ $EUID -ne 0 ]] && error "Run as root: sudo $0 [domain]"
 [[ "$SETUP_USER" == "root" ]] && error "Do not run as root directly. Use: sudo $0 [domain]\nIf calling from a root cron job, set: SUDO_USER=youruser $0 [domain]"
@@ -74,22 +96,28 @@ fi
 
 #=============================================================================
 # 5. HA-MCP REPO
-if [[ ! -d "$SETUP_HOME/ha-mcp" ]]; then
+if [[ ( -e "$SETUP_HOME/ha-mcp" || -L "$SETUP_HOME/ha-mcp" ) && ! -d "$SETUP_HOME/ha-mcp/.git" ]]; then
+    BROKEN_REPO="$SETUP_HOME/ha-mcp.incomplete.$(date +%Y%m%d%H%M%S)"
+    warn "$SETUP_HOME/ha-mcp is not a git checkout; moving it to $BROKEN_REPO"
+    mv "$SETUP_HOME/ha-mcp" "$BROKEN_REPO"
+fi
+
+if [[ ! -d "$SETUP_HOME/ha-mcp/.git" ]]; then
     info "Cloning ha-mcp..."
     sudo -u "$SETUP_USER" git clone https://github.com/homeassistant-ai/ha-mcp "$SETUP_HOME/ha-mcp"
 else
     info "ha-mcp repo exists, pulling latest..."
-    sudo -u "$SETUP_USER" git -C "$SETUP_HOME/ha-mcp" pull --ff-only || true
+    sudo -u "$SETUP_USER" git -C "$SETUP_HOME/ha-mcp" pull --ff-only
 fi
 
 #=============================================================================
 # 6. SYSTEMD SERVICE (replaces cron - ensures only one instance runs, auto-restarts)
 info "Setting up systemd service..."
 
-# Remove old cron entries if they exist (migration from cron-based setup)
-if sudo -u "$SETUP_USER" crontab -l 2>/dev/null | grep -q "hamcp-test-env"; then
-    sudo -u "$SETUP_USER" crontab -l 2>/dev/null | { grep -v "hamcp-test-env" || true; } | sudo -u "$SETUP_USER" crontab -
-fi
+# Remove old cron entries for both the configured user and root. Some early
+# installs placed a destructive nightly re-clone in root's crontab.
+remove_legacy_cron_entries "$SETUP_USER"
+[[ "$SETUP_USER" != "root" ]] && remove_legacy_cron_entries root
 
 cat > /etc/systemd/system/hamcp-demo.service << SVCEOF
 [Unit]
