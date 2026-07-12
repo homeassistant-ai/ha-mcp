@@ -1137,6 +1137,7 @@ async def _capture_dashboard_screenshot_result(
                 context={"capture_count": len(captures), "render_path": render_path},
             )
         )
+    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 async def _maybe_attach_screenshot(

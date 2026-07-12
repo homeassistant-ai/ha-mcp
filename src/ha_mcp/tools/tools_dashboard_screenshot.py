@@ -152,6 +152,7 @@ def _package_screenshot_result(
                 },
             )
         )
+    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 class DashboardScreenshotTools:

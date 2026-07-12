@@ -16,6 +16,9 @@ from ..tools.helpers import raise_tool_error
 from .capture import _normalize_dashboard_path
 
 _UNKNOWN_CONFIG_PREFIX = "Unknown config specified:"
+_NO_CONFIG_MESSAGES = frozenset(
+    {"No config found.", "Command failed: No config found."}
+)
 _JS_DECIMAL_NUMBER = re.compile(
     r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?\Z"
 )
@@ -285,8 +288,12 @@ async def fetch_dashboard_render_config(
         else:
             error_code = ""
             message = str(error)
-        missing_dashboard = error_code == "config_not_found" or message.startswith(
-            (_UNKNOWN_CONFIG_PREFIX, f"Command failed: {_UNKNOWN_CONFIG_PREFIX}")
+        missing_dashboard = (
+            error_code == "config_not_found"
+            or message.startswith(
+                (_UNKNOWN_CONFIG_PREFIX, f"Command failed: {_UNKNOWN_CONFIG_PREFIX}")
+            )
+            or message in _NO_CONFIG_MESSAGES
         )
         if missing_dashboard:
             raise_tool_error(
