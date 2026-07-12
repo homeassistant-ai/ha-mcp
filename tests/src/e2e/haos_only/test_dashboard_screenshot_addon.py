@@ -288,38 +288,58 @@ async def screenshot_engine_started(
     original_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
     original_options = dict(original_detail.get("options") or {})
     original_state = str(original_detail.get("state") or "stopped")
-    await _set_options(
-        mcp_client,
-        SCREENSHOT_ADDON_SLUG,
-        {**original_options, "access_token": token},
-    )
-    action = "restart" if original_state == "started" else "start"
-    result = await _addon_action(mcp_client, SCREENSHOT_ADDON_SLUG, action)
-    assert result.get("success"), (
-        f"Fixture failed to start screenshot engine addon: {result}"
-    )
-    await _wait_for_state(mcp_client, SCREENSHOT_ADDON_SLUG, "started")
-    await _wait_engine_serving(mcp_client)
     try:
+        await _set_options(
+            mcp_client,
+            SCREENSHOT_ADDON_SLUG,
+            {**original_options, "access_token": token},
+        )
+        action = "restart" if original_state == "started" else "start"
+        result = await _addon_action(mcp_client, SCREENSHOT_ADDON_SLUG, action)
+        assert result.get("success"), (
+            f"Fixture failed to start screenshot engine addon: {result}"
+        )
+        await _wait_for_state(mcp_client, SCREENSHOT_ADDON_SLUG, "started")
+        await _wait_engine_serving(mcp_client)
         yield
     finally:
-        await _set_options(mcp_client, SCREENSHOT_ADDON_SLUG, original_options)
+        cleanup_errors: list[str] = []
+        try:
+            await _set_options(mcp_client, SCREENSHOT_ADDON_SLUG, original_options)
+        except Exception as exc:
+            cleanup_errors.append(f"options restore failed: {exc!r}")
+
         restore_action = "restart" if original_state == "started" else "stop"
-        restore_result = await _addon_action(
-            mcp_client, SCREENSHOT_ADDON_SLUG, restore_action
-        )
-        assert restore_result.get("success"), (
-            "Fixture failed to restore screenshot engine state"
-        )
+        try:
+            restore_result = await _addon_action(
+                mcp_client, SCREENSHOT_ADDON_SLUG, restore_action
+            )
+            if not restore_result.get("success"):
+                cleanup_errors.append(
+                    f"state restore action failed: {restore_result!r}"
+                )
+        except Exception as exc:
+            cleanup_errors.append(f"state restore action failed: {exc!r}")
+
         expected_state: str | frozenset[str] = (
             "started" if original_state == "started" else STOPPED_STATES
         )
-        await _wait_for_state(
-            mcp_client, SCREENSHOT_ADDON_SLUG, expected_state, timeout=30.0
-        )
-        restored_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
-        assert dict(restored_detail.get("options") or {}) == original_options, (
-            "Fixture failed to restore screenshot engine options"
+        try:
+            await _wait_for_state(
+                mcp_client, SCREENSHOT_ADDON_SLUG, expected_state, timeout=30.0
+            )
+        except Exception as exc:
+            cleanup_errors.append(f"state verification failed: {exc!r}")
+
+        try:
+            restored_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
+            if dict(restored_detail.get("options") or {}) != original_options:
+                cleanup_errors.append("options verification failed")
+        except Exception as exc:
+            cleanup_errors.append(f"options verification failed: {exc!r}")
+
+        assert not cleanup_errors, (
+            "Fixture failed to restore screenshot engine: " + "; ".join(cleanup_errors)
         )
 
 

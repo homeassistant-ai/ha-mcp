@@ -132,6 +132,26 @@ def _select_started_verified_puppet(
     return started[0]
 
 
+def _supervisor_response_data(payload: Any, endpoint: str) -> dict[str, Any]:
+    """Return a Supervisor response's object-shaped data payload."""
+    if not isinstance(payload, dict):
+        raise ValueError(f"Supervisor {endpoint} returned a non-object payload")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise ValueError(f"Supervisor {endpoint} returned invalid data")
+    return data
+
+
+def _supervisor_addon_listing(payload: Any) -> list[dict[str, Any]]:
+    """Return the validated add-on objects from a Supervisor list response."""
+    addons = _supervisor_response_data(payload, "/addons").get("addons")
+    if not isinstance(addons, list) or not all(
+        isinstance(addon, dict) for addon in addons
+    ):
+        raise ValueError("Supervisor /addons returned an invalid addons list")
+    return addons
+
+
 async def resolve_engine_url() -> str:
     """Return the base URL of the screenshot engine, or raise ToolError.
 
@@ -174,7 +194,7 @@ async def _discover_engine_url_via_supervisor() -> str:
         async with make_supervisor_httpx_client(timeout=15.0, verify=True) as sup:
             listing = await sup.get("/addons")
             listing.raise_for_status()
-            addons = listing.json().get("data", {}).get("addons", [])
+            addons = _supervisor_addon_listing(listing.json())
 
             matches = [
                 a
@@ -201,9 +221,8 @@ async def _discover_engine_url_via_supervisor() -> str:
                 slug = str(match["slug"])
                 info = await sup.get(f"/addons/{slug}/info")
                 info.raise_for_status()
-                data = info.json().get("data", {})
-                if isinstance(data, dict):
-                    addon_infos.append((slug, data))
+                data = _supervisor_response_data(info.json(), f"/addons/{slug}/info")
+                addon_infos.append((slug, data))
             slug, data = _select_started_verified_puppet(addon_infos)
             hostname = data.get("hostname") or data.get("ip_address")
             if not hostname:
@@ -274,7 +293,7 @@ async def _wait_for_puppet_engine_ready(hostname: str) -> None:
         while True:
             try:
                 response = await http_client.get(f"http://{hostname}:{ENGINE_PORT}/")
-                if response.status_code < 500:
+                if 200 <= response.status_code < 300:
                     return
                 last_detail = f"HTTP {response.status_code}"
             except httpx.HTTPError as exc:

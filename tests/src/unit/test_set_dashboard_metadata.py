@@ -177,6 +177,37 @@ class TestSetDashboardMetadataUpdate:
             "url_path": "my-dashboard",
         }
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "write_args",
+        [
+            {"config": {"views": []}},
+            {
+                "python_transform": "config['views'] = []",
+                "config_hash": "old-hash",
+            },
+        ],
+    )
+    async def test_invalid_screenshot_options_are_rejected_before_write(
+        self,
+        set_tool,
+        mock_client,
+        write_args,
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(
+                url_path="my-dashboard",
+                return_screenshot=True,
+                height="auto",
+                orientation="portrait",
+                **write_args,
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error["parameter"] == "orientation"
+        mock_client.send_websocket_message.assert_not_called()
+
 
 class TestSetDashboardListCallDedup:
     """When the pre-resolver fires (internal-id branch), the existence-check

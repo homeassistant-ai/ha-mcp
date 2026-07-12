@@ -19,7 +19,7 @@ import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, ClassVar, Literal
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -458,6 +458,38 @@ class TestStandaloneScreenshotTool:
         assert error["error"]["code"] == "INTERNAL_ERROR"
         assert error["puppet_configuration_applied"] == applied
 
+    async def test_raw_capture_failure_without_management_is_structured(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
+            return DashboardRenderTarget(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                render_path="wall-panel/home",
+                view_index=0,
+                stable=True,
+            )
+
+        async def capture(*_a: Any, **_kw: Any) -> list[Any]:
+            raise RuntimeError("unexpected capture failure")
+
+        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
+        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
+
+        with pytest.raises(ToolError) as exc_info:
+            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "INTERNAL_ERROR"
+        assert error["error"]["details"] == "unexpected capture failure"
+        assert error["dashboard_path"] == "wall-panel/home"
+
     async def test_metadata_failure_reports_applied_puppet_configuration(
         self, monkeypatch: Any
     ) -> None:
@@ -538,13 +570,13 @@ class TestResolveEngineUrl:
 
 
 class _FakeSupResponse:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: Any) -> None:
         self._payload = payload
 
     def raise_for_status(self) -> None:
         return None
 
-    def json(self) -> dict[str, Any]:
+    def json(self) -> Any:
         return self._payload
 
 
@@ -683,6 +715,49 @@ class TestDiscoverEngineViaSupervisor:
         with pytest.raises(ToolError) as exc:
             await provision._discover_engine_url_via_supervisor()
         assert "supervisor" in str(exc.value).lower()
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            None,
+            {"data": None},
+            {"data": {"addons": None}},
+            {"data": {"addons": [None]}},
+        ],
+    )
+    async def test_malformed_addon_listing_raises_structured_error(
+        self, monkeypatch: Any, payload: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(monkeypatch, {"/addons": payload})
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision._discover_engine_url_via_supervisor()
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "CONNECTION_FAILED"
+        assert "Supervisor" in error["error"]["message"]
+
+    async def test_malformed_addon_info_raises_structured_error(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
+                "/addons/def_puppet/info": {"data": None},
+            },
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision._discover_engine_url_via_supervisor()
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "CONNECTION_FAILED"
+        assert "Supervisor" in error["error"]["message"]
 
 
 class TestConfigurePuppetAddon:
@@ -1022,6 +1097,7 @@ class TestConfigurePuppetAddon:
 
         outcomes: list[Exception | int] = [
             provision.httpx.ConnectError("not listening"),
+            404,
             503,
             200,
         ]
@@ -1052,7 +1128,7 @@ class TestConfigurePuppetAddon:
 
         assert result["restart_verified"] is True
         assert outcomes == []
-        assert sleep.await_count == 2
+        assert sleep.await_count == 3
         sleep.assert_awaited_with(provision._PUPPET_ENGINE_READY_POLL_INTERVAL_SECONDS)
 
     async def test_restart_readiness_timeout_preserves_applied_context(
@@ -1113,6 +1189,36 @@ class TestConfigurePuppetAddon:
         assert error["engine_ready"] is False
         assert error["settings_changed"] is True
         assert error["restart_requested"] is True
+
+    async def test_restart_readiness_rejects_permanent_client_error(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        class ClientErrorResponse:
+            async def __aenter__(self) -> ClientErrorResponse:
+                return self
+
+            async def __aexit__(self, *_args: Any) -> None:
+                return None
+
+            async def get(self, _url: str) -> Any:
+                return SimpleNamespace(status_code=404)
+
+        monkeypatch.setattr(provision, "_PUPPET_ENGINE_READY_TIMEOUT_SECONDS", 0)
+        monkeypatch.setattr(
+            provision.httpx,
+            "AsyncClient",
+            lambda **_kwargs: ClientErrorResponse(),
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision._wait_for_puppet_engine_ready("puppet-engine")
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "CONNECTION_FAILED"
+        assert error["error"]["details"] == "HTTP 404"
+        assert error["engine_ready"] is False
 
     async def test_schema_mismatch_fails_before_any_write(
         self, monkeypatch: Any
@@ -2101,6 +2207,45 @@ def test_multiple_capture_content_and_metadata_stay_ordered() -> None:
     }
 
 
+def test_native_image_conversion_failure_reports_second_image_context(
+    monkeypatch: Any,
+) -> None:
+    from ha_mcp.dashboard_screenshot import content as screenshot_content
+
+    original_image = screenshot_content.Image
+    image_count = 0
+
+    class _FailingImage:
+        def to_image_content(self, *, mime_type: str) -> None:
+            raise RuntimeError(f"could not encode {mime_type}")
+
+    def image_factory(*args: Any, **kwargs: Any) -> Any:
+        nonlocal image_count
+        image_index = image_count
+        image_count += 1
+        if image_index == 1:
+            return _FailingImage()
+        return original_image(*args, **kwargs)
+
+    monkeypatch.setattr(screenshot_content, "Image", image_factory)
+    captures = [
+        _fake_dashboard_capture(width=390, height=844, preset="mobile"),
+        _fake_dashboard_capture(width=1280, height=800, preset="desktop"),
+    ]
+
+    with pytest.raises(ToolError) as exc_info:
+        screenshot_content.dashboard_image_content(captures)
+
+    error = json.loads(str(exc_info.value))
+    assert error["error"]["code"] == "IMAGE_SERIALIZATION_FAILED"
+    assert error["content_index"] == 1
+    assert error["completed_count"] == 1
+    assert error["capture_count"] == 2
+    assert error["format"] == "png"
+    assert error["mime_type"] == "image/png"
+    assert error["size_bytes"] == len(_PNG)
+
+
 @pytest.mark.parametrize(
     ("image_format", "mime_type", "data"),
     [
@@ -2436,7 +2581,7 @@ class TestMaybeAttachScreenshot:
             config={"views": [{"title": "Home", "path": "home"}]},
         )
 
-        assert any("currently first" in warning for warning in result["warnings"])
+        assert any("first view visible" in warning for warning in result["warnings"])
 
     async def test_get_path_raises_on_capture_failure(self, monkeypatch: Any) -> None:
         """raise_on_failure (the get path) propagates the engine error instead
@@ -2702,6 +2847,132 @@ class TestNoteScreenshotIgnored:
             mode="search",
         )
         assert any("ignored in search mode" in w for w in result["warnings"])
+
+
+class TestPublicScreenshotOptionForwarding:
+    """Public dashboard get/set methods forward every shared render option."""
+
+    _OPTIONS: ClassVar[dict[str, Any]] = {
+        "view_path": "home",
+        "width": 901,
+        "height": "auto",
+        "viewport_presets": ["tablet"],
+        "orientation": "landscape",
+        "zoom": 1.25,
+        "wait_ms": 17,
+        "full_page": True,
+        "theme": "Test Theme",
+        "dark_mode": True,
+        "language": "de",
+        "image_format": "webp",
+        "render_timeout_seconds": 77,
+    }
+
+    @staticmethod
+    def _assert_capture_call(capture_call: dict[str, Any]) -> None:
+        assert capture_call["path"] == "wall-panel/home"
+        assert {
+            key: value
+            for key, value in capture_call.items()
+            if key not in {"path", "partial_failures"}
+        } == {
+            key: value
+            for key, value in TestPublicScreenshotOptionForwarding._OPTIONS.items()
+            if key != "view_path"
+        }
+        assert capture_call["partial_failures"] == []
+
+    async def test_get_include_screenshot_forwards_all_options(
+        self, monkeypatch: Any
+    ) -> None:
+        from fastmcp.tools.tool import ToolResult
+
+        from ha_mcp.dashboard_screenshot import capture
+        from ha_mcp.tools import tools_config_dashboards as dashboard_tools
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+        )
+        capture_call: dict[str, Any] = {}
+
+        async def record(path: str, **kwargs: Any) -> list[Any]:
+            capture_call.update(path=path, **kwargs)
+            return [_fake_dashboard_capture()]
+
+        monkeypatch.setattr(capture, "capture_dashboard_images", record)
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "result": {
+                    "views": [{"title": "Home", "path": "home"}],
+                }
+            }
+        )
+
+        result = await dashboard_tools.DashboardConfigTools(
+            client
+        ).ha_config_get_dashboard(
+            url_path="wall-panel",
+            include_screenshot=True,
+            **self._OPTIONS,
+        )
+
+        assert isinstance(result, ToolResult)
+        self._assert_capture_call(capture_call)
+
+    async def test_set_return_screenshot_forwards_all_options(
+        self, monkeypatch: Any
+    ) -> None:
+        from fastmcp.tools.tool import ToolResult
+
+        from ha_mcp.dashboard_screenshot import capture
+        from ha_mcp.tools import auto_backup
+        from ha_mcp.tools import tools_config_dashboards as dashboard_tools
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+        )
+        monkeypatch.setattr(
+            auto_backup,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_auto_backup=False),
+        )
+        capture_call: dict[str, Any] = {}
+
+        async def record(path: str, **kwargs: Any) -> list[Any]:
+            capture_call.update(path=path, **kwargs)
+            return [_fake_dashboard_capture()]
+
+        monkeypatch.setattr(capture, "capture_dashboard_images", record)
+        dashboard_config = {
+            "views": [{"title": "Home", "path": "home"}],
+        }
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=[
+                {"result": [{"url_path": "wall-panel", "id": "wall_panel"}]},
+                {"result": dashboard_config},
+                {"success": True},
+                {"result": dashboard_config},
+            ]
+        )
+
+        result = await dashboard_tools.DashboardConfigTools(
+            client
+        ).ha_config_set_dashboard(
+            url_path="wall-panel",
+            config=dashboard_config,
+            return_screenshot=True,
+            MandatoryBPS=False,
+            **self._OPTIONS,
+        )
+
+        assert isinstance(result, ToolResult)
+        self._assert_capture_call(capture_call)
 
 
 def test_public_screenshot_option_names_stay_in_parity() -> None:

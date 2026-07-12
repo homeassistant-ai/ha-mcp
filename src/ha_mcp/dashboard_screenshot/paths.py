@@ -24,6 +24,10 @@ _JS_DECIMAL_NUMBER = re.compile(
 )
 _JS_RADIX_NUMBER = re.compile(r"0(?P<base>[xXbBoO])(?P<digits>[0-9a-fA-F]+)\Z")
 _RESERVED_VIEW_PATHS = frozenset({"hass-unused-entities"})
+# Puppet percent-encodes each render-path segment, while HA's frontend applies
+# decodeURI before matching views.  decodeURI intentionally leaves these URI
+# delimiters encoded, so an exact configured-path match would silently miss.
+_DECODE_URI_RESERVED_VIEW_CHARS = frozenset("$&+,:;=")
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +88,7 @@ def _view_path_requires_numeric_fallback(
         _numeric_view_index(path) is not None
         or path != path.strip()
         or "/" in path
+        or any(char in path for char in _DECODE_URI_RESERVED_VIEW_CHARS)
         or path in _RESERVED_VIEW_PATHS
         or _raw_frontend_view_match(path, views) != index
     )
@@ -345,16 +350,16 @@ def resolve_dashboard_view(
     base_path = dashboard_frontend_path(dashboard_url_path)
     if view_path is None:
         views = config.get("views")
-        has_static_first_view = isinstance(views, list) and bool(views)
+        has_static_views = isinstance(views, list) and bool(views)
         if "strategy" in config:
             warning = (
                 "No view_path was supplied; this strategy dashboard generates "
                 "its views at runtime, so only the base route is available."
             )
-        elif has_static_first_view:
+        elif has_static_views:
             warning = (
                 "No view_path was supplied; the dashboard base route renders "
-                "whichever view is currently first."
+                "the first view visible to Puppet's Home Assistant user."
             )
         else:
             warning = (
@@ -365,7 +370,7 @@ def resolve_dashboard_view(
             dashboard_url_path=base_path,
             view_path=None,
             render_path=base_path,
-            view_index=0 if has_static_first_view else None,
+            view_index=None,
             stable=False,
             warnings=(warning,),
         )
@@ -625,7 +630,7 @@ async def resolve_dashboard_render_target(
             stable=False,
             warnings=(
                 "No named view path was supplied; the built-in dashboard base route "
-                "renders whichever view is currently first.",
+                "renders the first view visible to Puppet's Home Assistant user.",
             ),
         )
     config = await fetch_dashboard_render_config(client, dashboard_url_path)

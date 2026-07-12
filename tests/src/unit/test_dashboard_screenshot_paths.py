@@ -360,7 +360,17 @@ def test_named_view_resolution_reports_missing_and_ambiguous_paths(
 @pytest.mark.parametrize(
     ("config", "expected_index", "warning_text"),
     [
-        ({"views": [{"path": "home"}]}, 0, "currently first"),
+        ({"views": [{"path": "home"}]}, None, "first view visible"),
+        (
+            {
+                "views": [
+                    {"path": "hidden", "visible": False},
+                    {"path": "shown"},
+                ]
+            },
+            None,
+            "first view visible",
+        ),
         ({"strategy": {"type": "original-states"}}, None, "runtime"),
         ({"views": []}, None, "no static views"),
     ],
@@ -754,6 +764,33 @@ def test_unusable_configured_paths_use_verified_numeric_fallback(
     assert warnings
 
 
+@pytest.mark.parametrize("reserved_character", list("$&+,:;="))
+def test_decode_uri_reserved_view_paths_use_numeric_fallback(
+    reserved_character: str,
+) -> None:
+    configured_path = f"heat{reserved_character}zone"
+    config = {
+        "views": [
+            {"title": "Home", "path": "home"},
+            {"title": "Heat", "path": configured_path},
+        ]
+    }
+
+    paths, warnings = dashboard_render_paths("wall-panel", config)
+    target = resolve_dashboard_view("wall-panel", config, configured_path)
+
+    assert paths[1]["view_path"] == configured_path
+    assert paths[1]["view_index"] == 1
+    assert paths[1]["render_path"] == "wall-panel/1"
+    assert paths[1]["stable"] is False
+    assert paths[1]["invalid_path"] is True
+    assert target.render_path == "wall-panel/1"
+    assert target.view_index == 1
+    assert target.stable is False
+    assert "numeric fallback" in target.warnings[0]
+    assert warnings
+
+
 def test_exact_whitespace_view_path_resolves_to_numeric_fallback() -> None:
     target = resolve_dashboard_view(
         "wall-panel", {"views": [{"path": " home "}]}, " home "
@@ -797,9 +834,9 @@ async def test_raw_dashboard_base_is_reported_as_unstable() -> None:
 
     assert target.dashboard_url_path == "wall-panel"
     assert target.view_path is None
-    assert target.view_index == 0
+    assert target.view_index is None
     assert target.stable is False
-    assert any("currently first" in warning for warning in target.warnings)
+    assert any("first view visible" in warning for warning in target.warnings)
 
 
 async def test_raw_route_cannot_target_non_dashboard_frontend_panel() -> None:

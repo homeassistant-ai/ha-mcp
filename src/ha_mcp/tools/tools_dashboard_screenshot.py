@@ -412,7 +412,14 @@ class DashboardScreenshotTools:
         except Exception as exc:
             if puppet_configuration is not None:
                 _raise_with_puppet_configuration(exc, puppet_configuration)
-            raise
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Dashboard screenshot failed unexpectedly.",
+                    details=str(exc),
+                    context={"dashboard_path": target.render_path},
+                )
+            )
         return _package_screenshot_result(
             captures=captures,
             target=target,
