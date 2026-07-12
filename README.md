@@ -235,7 +235,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **HACS** | `ha_get_hacs_info`, `ha_manage_hacs` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_remove_helpers_integrations` |
 | **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logs` |
-| **Integrations** | `ha_get_integration`, `ha_get_system_health`, `ha_set_integration_enabled` |
+| **Integrations** | `ha_get_integration`, `ha_get_system_health`, `ha_set_integration` |
 | **Labels & Categories** | `ha_config_get_category`, `ha_config_get_label`, `ha_config_remove_category`, `ha_config_remove_label`, `ha_config_set_category`, `ha_config_set_label` |
 | **Matter** | `ha_manage_radio` |
 | **Scenes** | `ha_config_get_scene`, `ha_config_remove_scene`, `ha_config_set_scene` |
