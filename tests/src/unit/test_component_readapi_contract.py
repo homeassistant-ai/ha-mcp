@@ -1,0 +1,369 @@
+"""Cross-seam contract tests for the component read API (non-search commands).
+
+Like ``test_component_search_contract.py``, these wire the REAL component
+functions (``_do_overview`` / ``_do_helpers_list``, driven against fake hass
+objects) underneath the mocked WS transport and then invoke the REAL server
+tools — so a vocabulary or shape drift on either side of a seam fails here
+rather than shipping a component-served response the consumer mis-shapes. The
+component and consumer test suites each verify their own side against the design
+doc; this file is the bridge that verifies them against each other.
+
+The config_get seam is the exception: the component's ``config_get`` was
+withdrawn before release (its ``raw_config`` freshness lags the config file
+between a write and the next completed reload), so those pins assert the get
+tools serve automation/script/scene reads from the legacy path and never touch
+the component WS.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from ha_mcp.tools import (
+    component_api,
+    tools_config_helpers,
+    tools_search,
+)
+from ha_mcp.tools.tools_config_automations import AutomationConfigTools
+from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
+from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+from ._component_routing_helpers import patch_ws
+from .test_component_ws_search import (
+    FakeArea,
+    FakeConfig,
+    FakeConfigEntry,
+    FakeDevice,
+    FakeHass,
+    FakeRegEntry,
+    FakeServices,
+    FakeState,
+    make_view,
+    wsapi,
+)
+from .test_config_get_component_routing import (
+    RoutingClient as GetRoutingClient,
+)
+from .test_ha_config_list_helpers_component_routing import (
+    RoutingClient as HelpersRoutingClient,
+)
+from .test_ha_config_list_helpers_component_routing import (
+    _build_list_helpers,
+)
+from .test_ha_overview_component_routing import (
+    OverviewRoutingClient,
+    _build_overview_tool,
+    _setup_visibility_disabled,
+)
+
+_REAL_FNS = {
+    "ha_mcp_tools/overview": wsapi._do_overview,
+    "ha_mcp_tools/helpers_list": wsapi._do_helpers_list,
+}
+
+
+def _real_component_ws(hass: FakeHass) -> AsyncMock:
+    """A WS mock whose commands are served by the REAL component functions.
+
+    ``info`` returns the real ``_do_info()`` (so the caps probe sees the real
+    capability list), and each read command runs the real ``_do_*`` against
+    ``hass`` — the seam under test is everything between that return value and
+    the tool response.
+    """
+    ws = AsyncMock()
+
+    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+        if command_type == "ha_mcp_tools/info":
+            return {"success": True, "result": wsapi._do_info()}
+        fn = _REAL_FNS[command_type]
+        return {"success": True, "result": fn(hass, dict(kwargs))}
+
+    ws.send_command = AsyncMock(side_effect=_send)
+    return ws
+
+
+# --- config_get (withdrawn: automation/script/scene gets are legacy-only) ------
+class TestConfigGetSeam:
+    """The component's ``config_get`` was withdrawn before release — it served an
+    entity's ``raw_config``, whose freshness lags the config file between a write
+    and the next completed reload, so a get racing a reload returned a stale
+    body. All three get tools serve their reads from the legacy REST/WS pipeline
+    (which reads the fresh config file). Even against a REAL component WS whose
+    ``info`` advertises ``config_get``, the get tools skip the caps probe and
+    never send a frame — the component WS is never touched. Scenes were already
+    legacy-only (a ``HomeAssistantScene`` has no raw storage body in memory);
+    automation/script now share the pattern.
+    """
+
+    @pytest.mark.asyncio
+    async def test_automation_get_stays_legacy_with_full_caps(self) -> None:
+        client = GetRoutingClient(
+            automation_config={
+                "id": "uid-1",
+                "alias": "UI Auto",
+                "action": [{"service": "light.turn_on"}],
+            },
+        )
+        # A real component WS advertising full caps (config_get included). The
+        # automation tool must never reach for it.
+        ws = _real_component_ws(FakeHass())
+        with patch.object(
+            component_api, "get_websocket_client", AsyncMock(return_value=ws)
+        ):
+            resp = await AutomationConfigTools(client).ha_config_get_automation("uid-1")
+        assert resp["success"] is True
+        assert resp["config"]["alias"] == "UI Auto"
+        # The tool's canonicalization (singular -> plural root keys) runs on the
+        # legacy path.
+        assert resp["config"]["actions"] == [{"service": "light.turn_on"}]
+        # The component WS was never touched; the legacy config fetch served it.
+        assert ws.send_command.await_count == 0
+        assert client.get_automation_config.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_script_get_stays_legacy_with_full_caps(self) -> None:
+        """Script analog: the legacy REST envelope is returned under ``config``
+        (storage key + category injected). Scripts run NO root-key
+        canonicalization (unlike automations' action->actions), so the storage
+        ``sequence`` body passes through byte-exact."""
+        client = GetRoutingClient(
+            script_envelope={
+                "success": True,
+                "script_id": "morning",
+                "config": {
+                    "alias": "Morning Script",
+                    "sequence": [{"delay": {"seconds": 5}}],
+                },
+            },
+            categories={"script": "cat-s"},
+        )
+        ws = _real_component_ws(FakeHass())
+        with patch.object(
+            component_api, "get_websocket_client", AsyncMock(return_value=ws)
+        ):
+            resp = await ConfigScriptTools(client).ha_config_get_script("morning")
+        assert resp["success"] is True
+        assert resp["script_id"] == "morning"
+        assert resp["config"]["script_id"] == "morning"
+        assert resp["config"]["category"] == "cat-s"
+        # raw_config served byte-exact — the sequence body is untouched.
+        assert resp["config"]["config"] == {
+            "alias": "Morning Script",
+            "sequence": [{"delay": {"seconds": 5}}],
+        }
+        assert ws.send_command.await_count == 0
+        assert client.get_script_config.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_scene_get_stays_legacy_with_full_caps(self, monkeypatch) -> None:
+        """With the real component advertising ``config_get``, a scene get is
+        still served entirely by the legacy path: ``ha_config_get_scene`` skips
+        the caps probe, so the component WS is never touched (a
+        ``HomeAssistantScene`` has no raw storage body in memory — its
+        ``scene_config.states`` is runtime State objects)."""
+        monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
+        client = GetRoutingClient(
+            scene_envelope={
+                "success": True,
+                "scene_id": "movie_night",
+                "config": {
+                    "id": "movie_night",
+                    "name": "Movie Night",
+                    "entities": {"light.living_room": {"state": "on"}},
+                },
+            },
+            categories={"scene": "cat-x"},
+            registry_list=[
+                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
+            ],
+        )
+        # A real component WS advertising full caps (config_get included). The
+        # scene tool must never reach for it.
+        ws = _real_component_ws(FakeHass())
+        with patch.object(
+            component_api, "get_websocket_client", AsyncMock(return_value=ws)
+        ):
+            resp = await ConfigSceneTools(client).ha_config_get_scene(
+                scene_id="movie_night"
+            )
+        assert resp["success"] is True
+        assert resp["scene_id"] == "movie_night"
+        # The component WS was never touched at all — no caps probe, no frame.
+        assert ws.send_command.await_count == 0
+        assert client.get_scene_config.await_count == 1
+
+
+# --- overview -------------------------------------------------------------------
+class TestOverviewSeam:
+    def _hass(self) -> FakeHass:
+        return FakeHass(
+            states=[
+                FakeState("light.lamp", "on", friendly_name="Lamp"),
+                FakeState("sensor.temp", "21", friendly_name="Temp"),
+            ],
+            services=FakeServices({"light": {"turn_on": {}, "turn_off": {}}}),
+            config=FakeConfig(
+                data={
+                    "version": "2026.7.0",
+                    "location_name": "Home",
+                    "time_zone": "UTC",
+                    "language": "en",
+                    "state": "RUNNING",
+                    "country": "US",
+                    "unit_system": {"temperature": "°C"},
+                    "components": ["light", "sensor"],
+                    "internal_url": "http://homeassistant.local:8123",
+                }
+            ),
+            data={"persistent_notification": {}},
+        )
+
+    @pytest.mark.asyncio
+    async def test_overview_assembled_from_real_slices(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        hass = self._hass()
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(
+                entity={
+                    "light.lamp": FakeRegEntry(
+                        "light.lamp",
+                        area_id="a1",
+                        device_id="d1",
+                        entity_category=None,
+                        hidden_by=None,
+                    )
+                },
+                areas=[FakeArea("a1", "Office", floor_id=None)],
+                devices=[FakeDevice("d1", name="Lamp Device", area_id="a1")],
+            ),
+        )
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        client = OverviewRoutingClient()
+        ws = _real_component_ws(hass)
+        tool = _build_overview_tool(client)
+        with patch_ws(ws, tools_search):
+            resp = await tool()
+        assert resp["success"] is True
+        # The server's existing assembly ran over the REAL raw slices: the two
+        # states must be counted and the domain summary populated.
+        assert resp["system_summary"]["total_entities"] == 2
+        assert client.total_legacy_fetches() == 0, (
+            "overview must be fully component-served"
+        )
+
+
+# --- helpers_list ----------------------------------------------------------------
+class TestHelpersListSeam:
+    @pytest.mark.asyncio
+    async def test_collection_helper_records_shaped_from_real_output(
+        self, monkeypatch
+    ) -> None:
+        hass = FakeHass(
+            states=[
+                FakeState(
+                    "input_boolean.guest_mode", "off", friendly_name="Current Guest"
+                )
+            ]
+        )
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(
+                entity={
+                    "input_boolean.guest_mode": FakeRegEntry(
+                        "input_boolean.guest_mode",
+                        name="Current Guest",
+                        original_name="Old Name",
+                        unique_id="guest_mode",
+                    )
+                }
+            ),
+        )
+        client = HelpersRoutingClient()
+        ws = _real_component_ws(hass)
+        tool = _build_list_helpers(client)
+        with patch_ws(ws, tools_config_helpers):
+            resp = await tool(helper_type="input_boolean")
+        assert resp["success"] is True
+        assert resp["count"] == 1
+        rec = resp["helpers"][0]
+        # #1794 additive fix through the REAL component output: storage id
+        # preserved, current entity_id + name layered on.
+        assert rec["id"] == "guest_mode"
+        assert rec["entity_id"] == "input_boolean.guest_mode"
+        assert rec["name"] == "Current Guest"
+        assert client.list_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_flow_helper_records_shaped_from_real_output(
+        self, monkeypatch
+    ) -> None:
+        """A flow helper (template) round-trips the REAL ``_do_helpers_list`` flow
+        output through the REAL ``ha_config_list_helpers``: entry_id + current
+        registry name + options, with ``entry.data`` never surfacing and no
+        legacy fetch (flow types are component-only)."""
+        entry = FakeConfigEntry(
+            "template",
+            title="Creation Title",
+            options={"state": "{{ is_state('sun.sun', 'above_horizon') }}"},
+            data={"api_key": "DATA_SECRET_XYZ"},
+            entry_id="cfg1",
+        )
+        hass = FakeHass(config_entries=[entry])
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(
+                entity={
+                    "binary_sensor.sun_up": FakeRegEntry(
+                        "binary_sensor.sun_up",
+                        name="Sun Is Up",  # current display name (post-rename)
+                        config_entry_id="cfg1",
+                    )
+                }
+            ),
+        )
+        client = HelpersRoutingClient()
+        ws = _real_component_ws(hass)
+        tool = _build_list_helpers(client)
+        with patch_ws(ws, tools_config_helpers):
+            resp = await tool(helper_type="template")
+
+        assert resp["success"] is True
+        assert resp["count"] == 1
+        (rec,) = resp["helpers"]
+        assert rec["helper_type"] == "template"
+        assert rec["entry_id"] == "cfg1"
+        assert rec["entity_id"] == "binary_sensor.sun_up"
+        assert rec["name"] == "Sun Is Up"
+        assert rec["options"] == {"state": "{{ is_state('sun.sun', 'above_horizon') }}"}
+        # Flow helpers carry no storage id; entry.data must never leak.
+        assert "id" not in rec
+        assert "DATA_SECRET_XYZ" not in json.dumps(resp)
+        # A flow type is component-only: the legacy list is never consulted.
+        assert client.list_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_tag_falls_back_to_legacy_via_real_covered_types(
+        self, monkeypatch
+    ) -> None:
+        """The REAL component response's covered_types excludes tag — the tool
+        must serve tag from the legacy list, not report an empty component
+        result as 'no tags exist'."""
+        hass = FakeHass(states=[])
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
+        client = HelpersRoutingClient()  # its tag/list serves a fixed record
+        ws = _real_component_ws(hass)
+        tool = _build_list_helpers(client)
+        with patch_ws(ws, tools_config_helpers):
+            resp = await tool(helper_type="tag")
+        assert resp["success"] is True
+        assert [h["id"] for h in resp["helpers"]] == ["tag-42"]
+        assert client.list_calls >= 1, "tag must be served by legacy"

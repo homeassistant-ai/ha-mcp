@@ -6,6 +6,7 @@ This module provides entity search, system overview, deep search, and state retr
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal, cast
 
 from fastmcp import Context
@@ -13,11 +14,26 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
+from ..client.websocket_client import get_websocket_client
 from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from ..utils.fuzzy_search import apply_hidden_penalty
-from ..visibility.resolver import load_hidden_set
+from ..visibility.resolver import (
+    device_registry_needed_for_visibility,
+    load_hidden_set,
+    visibility_filter_active,
+)
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -345,6 +361,38 @@ def _compute_eligibility(
     return registry_eligible, body_eligible, body_skipped_by_intent_gate
 
 
+async def _prefetch_shared_search_snapshots(
+    client: Any,
+    *,
+    registry_eligible: bool,
+    body_eligible: bool,
+) -> tuple[list[dict[str, Any]] | None, Any]:
+    """Pre-fetch ``/api/states`` + the entity-registry list once for ha_search.
+
+    Only pre-fetches when both branches are eligible — a lone branch keeps
+    fetching for itself. Returns ``(shared_states, shared_registry)``; either is
+    ``None`` when not pre-fetched, or when its fetch failed (each branch then
+    fetches and fails on its own, reproducing the per-surface partial-result
+    handling exactly). A cancellation (structured-concurrency teardown)
+    propagates rather than degrading to per-branch fetching.
+    """
+    if not (registry_eligible and body_eligible):
+        return None, None
+    prefetch = await asyncio.gather(
+        client.get_states(),
+        client.send_websocket_message({"type": "config/entity_registry/list"}),
+        return_exceptions=True,
+    )
+    for snap in prefetch:
+        if isinstance(snap, BaseException) and not isinstance(snap, Exception):
+            raise snap
+    shared_states = prefetch[0] if not isinstance(prefetch[0], BaseException) else None
+    shared_registry = (
+        prefetch[1] if not isinstance(prefetch[1], BaseException) else None
+    )
+    return shared_states, shared_registry
+
+
 def _merge_payload_metadata(
     response: dict[str, Any],
     payload: dict[str, Any],
@@ -428,6 +476,27 @@ def _merge_partial_reason(response: dict[str, Any], value: str) -> None:
         response["partial_reason"] = value
 
 
+def _format_search_diagnostics(diagnostics: dict[str, Any]) -> str | None:
+    """Render the component's non-empty search diagnostics into one reason fragment.
+
+    The component reports intentional per-surface diagnostics (e.g.
+    ``config_components_inaccessible: [...]`` — config domains it could not read
+    from HA's in-process registries). Each non-empty entry becomes a
+    human-readable ``"<label>: <values>"`` clause; empty entries are dropped.
+    Returns ``None`` when nothing is reportable.
+    """
+    fragments: list[str] = []
+    for key, value in diagnostics.items():
+        if not value:
+            continue
+        label = key.replace("_", " ")
+        if isinstance(value, (list, tuple, set)):
+            fragments.append(f"{label}: {', '.join(str(v) for v in value)}")
+        else:
+            fragments.append(f"{label}: {value}")
+    return "; ".join(fragments) if fragments else None
+
+
 def _build_hidden_ids(registry_result: Any) -> set[str]:
     """Build a set of hidden entity IDs from a registry/list WS response."""
     hidden_ids: set[str] = set()
@@ -457,10 +526,12 @@ def _apply_search_outcome(
 ) -> None:
     """Apply one gather outcome (entities or configs) to the response dict in-place.
 
-    ``_ha_search_entities`` wraps its payload via ``add_timezone_metadata``
-    into ``{"data": {...}, "metadata": {...}}``; ``_ha_deep_search`` returns
-    the search dict directly.  Unwrap once so downstream reads see the same
-    shape regardless of which helper produced it.
+    Both ``_ha_search_entities`` and ``_ha_deep_search`` return their search dict
+    directly. The entity builders no longer wrap it via ``add_timezone_metadata``:
+    entity-search records carry none of the timestamp fields that enrichment
+    converts, so it was a discarded ``/api/config`` fetch. The ``{"data": ...}``
+    unwrap is kept as a defensive no-op so a future wrapped payload still reads
+    correctly.
     """
     payload = (
         outcome["data"] if isinstance(outcome, dict) and "data" in outcome else outcome
@@ -530,6 +601,436 @@ def _apply_result_fields_to_response(
     _warn = _result_fields_warning(orig, data["results"], parsed_result_fields)
     if _warn:
         data.setdefault("warnings", []).append(_warn)
+
+
+def _new_search_response(
+    query: str | None, parsed_search_types: list[str] | None
+) -> dict[str, Any]:
+    """Build the base ha_search response envelope shared by both serving paths.
+
+    The component-served and legacy-served paths start from this identical
+    skeleton, so the two responses are shape-parity by construction: every
+    accumulating diagnostic / pagination key gets a typed default here, then is
+    filled by ``_apply_search_outcome`` regardless of which path produced the
+    data.
+    """
+    return {
+        "success": True,
+        "query": query,
+        "entities": [],
+        "entity_total_matches": 0,
+        "automations": [],
+        "scripts": [],
+        "scenes": [],
+        "helpers": [],
+        "search_types": parsed_search_types
+        or ["automation", "script", "scene", "helper"],
+        "config_total_matches": 0,
+        "partial": False,
+        "errors": [],
+        "warnings": [],
+    }
+
+
+@dataclass(frozen=True)
+class _ResolvedSearch:
+    """Parsed + validated ha_search inputs shared by the component and legacy paths.
+
+    ``ha_search`` parses parameters, validates them, and computes branch
+    eligibility exactly once, then hands this immutable bundle to whichever
+    path serves the request so both operate on identical resolved inputs. The
+    filter fields (``domain_filter`` / ``area_filter`` / ``state_filter``) hold
+    the **raw** tool arguments so the legacy path normalises them exactly as
+    before; the component helpers normalise their own copies.
+    """
+
+    query: str | None
+    query_text: str
+    domain_filter: str | None
+    area_filter: str | None
+    state_filter: str | None
+    parsed_search_types: list[str] | None
+    parsed_fields: list[str] | None
+    result_fields: Any
+    limit: int
+    offset: int
+    exact_match: bool
+    include_hidden: bool
+    include_config: bool
+    group_by_domain: bool
+    per_domain_limit: int | None
+    config_time_budget: float | None
+    registry_eligible: bool
+    body_eligible: bool
+    body_skipped_by_intent_gate: bool
+
+
+def _parse_component_result_fields(result_fields: Any) -> list[str] | None:
+    """Parse ``result_fields`` for the component path (mirrors the entity branch).
+
+    The legacy entity branch parses ``result_fields`` inside
+    ``_validate_entity_search_params``; the component path re-uses the identical
+    parse + validation so a bad ``result_fields`` raises the same structured
+    error on either path.
+    """
+    if result_fields is None:
+        return None
+    try:
+        parsed = parse_string_list_param(result_fields, "result_fields", allow_csv=True)
+    except ValueError as exc:
+        raise_tool_error(create_validation_error(str(exc), parameter="result_fields"))
+    if parsed is not None and len(parsed) == 0:
+        raise_tool_error(
+            create_validation_error(
+                "result_fields must contain at least one key",
+                parameter="result_fields",
+            )
+        )
+    return parsed
+
+
+def _as_record_list(value: Any) -> list[dict[str, Any]]:
+    """Coerce a component payload slice to a list of records (defensive)."""
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _normalized_domain_filter(raw: str | None) -> str | None:
+    """Strip + lowercase a domain filter to the entity branch's canonical form.
+
+    Matches ``_validate_entity_search_params`` so the component request and the
+    ``domain_filter`` echo agree with the legacy path.
+    """
+    return ((raw or "").strip().lower()) or None
+
+
+# The documented per-record entity surface (result_fields= "Available keys").
+# Both legacy entity paths emit exactly these; the component path is trimmed
+# to them in _shape_component_search_response.
+_ENTITY_RECORD_KEYS = (
+    "entity_id",
+    "friendly_name",
+    "domain",
+    "state",
+    "score",
+    "match_type",
+)
+
+
+def _normalize_component_config_record(
+    bucket: str, rec: dict[str, Any], include_config: bool
+) -> dict[str, Any]:
+    """Map one component config-bucket record onto the exact legacy key set.
+
+    The component speaks HA-native vocabulary (automations/scripts carry an
+    ``alias``, scenes a ``name``, storage ids ride an ``id`` key, and records
+    add ``source``/``kind``/``object_id`` metadata). The legacy deep-search
+    records that agents, tests, and downstream consumers key on use
+    ``friendly_name`` plus per-bucket id keys (``script_id``/``scene_id``) —
+    so normalize here, at the single seam, rather than teaching the component
+    the MCP envelope's vocabulary. Extra component fields are deliberately
+    dropped for byte-level shape parity with the legacy path; enrichment
+    (e.g. ``source: yaml``) can be added to BOTH paths together later.
+
+    ``config`` key semantics mirror the legacy pipeline's include_config pop:
+    present (possibly ``None`` for YAML/name-only matches) when
+    ``include_config`` is True, absent otherwise. Flow-helper records carry
+    their body under ``options`` component-side (data-minimized
+    ``ConfigEntry.options``); legacy calls the same payload ``config``.
+    """
+    entity_id = rec.get("entity_id")
+    name = rec.get("alias") or rec.get("name") or rec.get("friendly_name")
+    out: dict[str, Any] = {}
+    if bucket == "helpers":
+        if rec.get("kind") == "flow" or (entity_id is None and rec.get("entry_id")):
+            out["entry_id"] = rec.get("entry_id")
+        else:
+            out["entity_id"] = entity_id
+        out["helper_type"] = rec.get("helper_type")
+        out["name"] = name
+    else:
+        out["entity_id"] = entity_id
+        if bucket == "scripts":
+            out["script_id"] = rec.get("id")
+        elif bucket == "scenes":
+            out["scene_id"] = rec.get("id")
+        out["friendly_name"] = name if name is not None else entity_id
+    out["score"] = rec.get("score")
+    out["match_in_name"] = bool(rec.get("match_in_name"))
+    out["match_in_config"] = bool(rec.get("match_in_config"))
+    if include_config:
+        config = rec.get("config")
+        if config is None and "options" in rec:
+            config = rec.get("options")
+        out["config"] = config if config else None
+    return out
+
+
+def _build_component_search_request(req: _ResolvedSearch) -> dict[str, Any]:
+    """Translate resolved ha_search inputs into an ``ha_mcp_tools/search`` request.
+
+    ``search_types`` on the WS command selects surfaces including the entity
+    surface (``"entity"``), so branch eligibility computed server-side maps
+    directly onto which surfaces the component searches — all-or-nothing per
+    command. Optional string filters are omitted when empty to satisfy the
+    component's ``str``-typed voluptuous schema.
+    """
+    search_types: list[str] = []
+    if req.registry_eligible:
+        search_types.append("entity")
+    if req.body_eligible:
+        search_types.extend(
+            req.parsed_search_types or ["automation", "script", "scene", "helper"]
+        )
+    request: dict[str, Any] = {
+        "search_types": search_types,
+        "exact": req.exact_match,
+        "include_hidden": req.include_hidden,
+        "include_config": req.include_config,
+        "limit": req.limit,
+        "offset": req.offset,
+    }
+    if req.query_text:
+        request["query"] = req.query_text
+    domain_filter = _normalized_domain_filter(req.domain_filter)
+    if domain_filter:
+        request["domain_filter"] = domain_filter
+    area_filter = (req.area_filter or "").strip()
+    if area_filter:
+        request["area_filter"] = area_filter
+    state_filter = (req.state_filter or "").strip()
+    if state_filter:
+        request["state_filter"] = state_filter
+    return request
+
+
+def _shape_component_search_response(
+    req: _ResolvedSearch, component_result: dict[str, Any]
+) -> dict[str, Any]:
+    """Map an ``ha_mcp_tools/search`` result into the ha_search envelope.
+
+    The component returns per-surface records already scored and paginated
+    (``entities`` + config buckets with ``*_total_matches`` / ``*_has_more``).
+    Projection (``result_fields`` on entity records, ``fields`` on the
+    response), by-domain grouping, and the flat pagination / partial-mirror
+    finalisation all stay server-side and reuse the same helpers the legacy
+    path uses (``_apply_search_outcome`` and friends), so the shape is
+    identical to the legacy response by construction.
+    """
+    response = _new_search_response(req.query, req.parsed_search_types)
+    _emit_intent_skip_warning(response, req.body_skipped_by_intent_gate)
+
+    if req.registry_eligible:
+        parsed_result_fields = _parse_component_result_fields(req.result_fields)
+        # Normalize to the documented entity-record key set (the same six keys
+        # the legacy paths emit and result_fields= advertises). The component
+        # enriches records with area/floor/labels/aliases joins — dropped here
+        # for shape parity with the legacy path; adding enrichment to BOTH
+        # paths together is a separate change.
+        entities = [
+            {key: rec.get(key) for key in _ENTITY_RECORD_KEYS}
+            for rec in _as_record_list(component_result.get("entities"))
+        ]
+        entity_has_more = bool(component_result.get("entity_has_more", False))
+        entity_payload: dict[str, Any] = {
+            "results": entities,
+            "total_matches": int(
+                component_result.get("entity_total_matches", len(entities)) or 0
+            ),
+            "has_more": entity_has_more,
+            "next_offset": (req.offset + req.limit) if entity_has_more else None,
+            "offset": req.offset,
+            "limit": req.limit,
+            "count": len(entities),
+            "search_type": "exact_match" if req.exact_match else "fuzzy_search",
+        }
+        domain_filter = _normalized_domain_filter(req.domain_filter)
+        if domain_filter:
+            entity_payload["domain_filter"] = domain_filter
+        # Order mirrors _search_regular: group by domain first (it projects its
+        # own records), then project the flat results[].
+        _apply_by_domain_grouping(
+            entity_payload,
+            entities,
+            req.group_by_domain,
+            req.per_domain_limit,
+            parsed_result_fields,
+        )
+        _apply_result_fields_to_response(entity_payload, parsed_result_fields)
+        _apply_search_outcome(response, "entities", entity_payload)
+
+    if req.body_eligible:
+        config_has_more = bool(component_result.get("config_has_more", False))
+        config_payload: dict[str, Any] = {
+            "total_matches": int(component_result.get("config_total_matches", 0) or 0),
+            "has_more": config_has_more,
+            "next_offset": (req.offset + req.limit) if config_has_more else None,
+        }
+        for bucket in _CONFIG_BUCKETS:
+            if bucket in component_result:
+                config_payload[bucket] = [
+                    _normalize_component_config_record(bucket, rec, req.include_config)
+                    for rec in _as_record_list(component_result.get(bucket))
+                ]
+        _apply_search_outcome(response, "configs", config_payload)
+
+    # The component reports a single overall partial flag (design § 1). In-process
+    # joins are effectively never partial, but a body too large to serialize can
+    # set it — carry it through honestly rather than assuming completeness.
+    if component_result.get("partial"):
+        response["partial"] = True
+        reason = component_result.get("partial_reason")
+        if isinstance(reason, str) and reason:
+            _merge_partial_reason(response, reason)
+
+    # The component also surfaces intentional per-surface diagnostics (e.g. a
+    # config domain it couldn't read) separately from the overall partial flag.
+    # A non-empty diagnostics map is a genuine incompleteness, so mark the
+    # response partial and fold a readable clause into partial_reason rather than
+    # dropping the component's signal.
+    diagnostics = component_result.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        diag_reason = _format_search_diagnostics(diagnostics)
+        if diag_reason:
+            response["partial"] = True
+            _merge_partial_reason(response, diag_reason)
+
+    response["count"] = len(response["entities"]) + sum(
+        len(response.get(bucket, [])) for bucket in _CONFIG_BUCKETS
+    )
+    _synthesize_combined_pagination(response)
+    _mirror_partial_to_warnings(response)
+    return _project_response_fields(response, req.parsed_fields)
+
+
+@dataclass(frozen=True)
+class _OverviewInputs:
+    """Resolved ``ha_get_overview`` inputs threaded to the routing/assembly.
+
+    All display params (``detail_level`` … ``offset``) stay server-side — the
+    component returns raw slices independent of them; the two include-flags gate
+    which slices it bothers to snapshot.
+    """
+
+    detail_level: str
+    max_entities_per_domain: int | None
+    include_state: bool | None
+    include_entity_id: bool | None
+    domains_filter: list[str] | None
+    limit: int | None
+    offset: int
+    include_notifications: bool
+    include_dismissed_repairs: bool
+
+
+@dataclass(frozen=True)
+class _OverviewSlices:
+    """The component's raw overview slices, adapted to the assembly's shapes.
+
+    ``registry_slices`` bundles the five ``get_system_overview`` inputs — bare
+    ``states`` / ``services`` lists plus the three registries re-wrapped in the
+    ``{success, result}`` envelope ``_extract_registry_list`` / ``load_hidden_set``
+    unwrap. ``config`` is the bare ``get_config()`` dict. ``notifications`` and
+    ``repairs`` are re-wrapped in the WS ``{success, result}`` envelope the
+    ``_fetch_*`` helpers unwrap (``repairs`` nested under ``result.issues``).
+    """
+
+    registry_slices: dict[str, Any]
+    config: dict[str, Any]
+    notifications: dict[str, Any]
+    repairs: dict[str, Any]
+
+
+def _build_component_overview_request(inputs: _OverviewInputs) -> dict[str, Any]:
+    """Translate resolved ha_get_overview inputs into an ``ha_mcp_tools/overview`` request.
+
+    The component returns raw slices independent of the display params
+    (``detail_level`` / ``domains`` / ``limit`` / ``offset`` /
+    ``max_entities_per_domain`` / ``include_state`` / ``include_entity_id`` stay
+    server-side — the server assembles), so only the two fetch-gating flags cross
+    the wire: ``include_notifications`` mirrors the wrapper's flag;
+    ``include_repairs`` is always ``True`` because the wrapper always assembles
+    repairs (``include_dismissed_repairs`` only filters dismissed ones
+    server-side, it never skips the fetch).
+    """
+    return {
+        "include_notifications": inputs.include_notifications,
+        "include_repairs": True,
+    }
+
+
+def _wrap_registry(slice_value: Any) -> dict[str, Any]:
+    """Wrap a bare registry list in the ``{success, result}`` envelope the assembly expects."""
+    return {
+        "success": True,
+        "result": slice_value if isinstance(slice_value, list) else [],
+    }
+
+
+# The always-present overview slices the component returns independent of any
+# request flag. Each must be a list; ``config`` (a dict) is checked separately.
+# A missing/malformed member means the component couldn't assemble a trustworthy
+# snapshot, so the caller falls back to the legacy fetch path rather than serve a
+# silently-degraded overview.
+_REQUIRED_OVERVIEW_LIST_SLICES = (
+    "states",
+    "services",
+    "area_registry",
+    "entity_registry",
+    "device_registry",
+)
+
+
+def _build_overview_slices(component_result: dict[str, Any]) -> _OverviewSlices | None:
+    """Adapt the component's BARE overview slices into the assembly's shapes.
+
+    The component returns bare in-process data (no ``{success, result}`` WS
+    wrapper — design § ha_mcp_tools/overview); the server's ``get_system_overview``
+    + ``_fetch_*`` were written against the wrapped REST/WS payloads, so the three
+    registries and the notifications/repairs reads are re-wrapped here at the
+    seam. ``states`` / ``services`` / ``config`` already match their bare
+    ``get_states()`` / ``get_services()`` / ``get_config()`` shapes.
+
+    Returns ``None`` (⇒ legacy fallback) when the snapshot can't be trusted: any
+    required slice missing/malformed (see ``_REQUIRED_OVERVIEW_LIST_SLICES`` plus
+    ``config``), or the component reported a non-empty ``slice_errors`` list (a
+    per-slice read failure it surfaced instead of silently emptying). The
+    flag-gated ``notifications`` / ``repairs`` slices stay lenient — absent or
+    malformed degrades to empty, matching a request that never asked for them.
+    """
+    result = component_result if isinstance(component_result, dict) else {}
+
+    slice_errors = result.get("slice_errors")
+    if isinstance(slice_errors, list) and slice_errors:
+        return None
+    for key in _REQUIRED_OVERVIEW_LIST_SLICES:
+        if not isinstance(result.get(key), list):
+            return None
+    config = result.get("config")
+    if not isinstance(config, dict):
+        return None
+
+    notifications = result.get("notifications")
+    repairs = result.get("repairs")
+    return _OverviewSlices(
+        registry_slices={
+            "states": result["states"],
+            "services": result["services"],
+            "area_registry": _wrap_registry(result["area_registry"]),
+            "entity_registry": _wrap_registry(result["entity_registry"]),
+            "device_registry": _wrap_registry(result["device_registry"]),
+        },
+        config=config,
+        notifications={
+            "success": True,
+            "result": notifications if isinstance(notifications, list) else [],
+        },
+        repairs={
+            "success": True,
+            "result": {"issues": repairs if isinstance(repairs, list) else []},
+        },
+    )
 
 
 def _normalize_regular_search_result(
@@ -753,6 +1254,9 @@ async def _exact_match_search(
     offset: int = 0,
     include_hidden: bool = True,
     state_filter: str | None = None,
+    *,
+    prefetched_states: list[dict[str, Any]] | None = None,
+    prefetched_registry: Any = None,
 ) -> dict[str, Any]:
     """
     Search entities by substring on entity_id + friendly_name.
@@ -763,22 +1267,49 @@ async def _exact_match_search(
     ``hidden_by`` entities: by default they remain in results but
     receive a score penalty so visible matches sort first; pass
     ``include_hidden=False`` to filter them out entirely.
+
+    ``prefetched_states`` / ``prefetched_registry`` are the snapshots the
+    ha_search orchestrator shares with the config branch when both run (``None``
+    = fetch here). The device registry is fetched only when the loaded visibility
+    config has an area/label dimension that consumes it.
     """
-    # Fetch states + entity registry in parallel. Registry-list failure
-    # is tolerated (we just lose the hidden filter); states-fetch failure
-    # is fatal — auth/connection errors must propagate so the agent sees
-    # "your token is invalid" instead of "zero entities matched".
-    entities_task = client.get_states()
-    registry_task = client.send_websocket_message(
-        {"type": "config/entity_registry/list"}
+    # Fetch states + entity registry in parallel (unless the orchestrator already
+    # shared them). Registry-list failure is tolerated (we just lose the hidden
+    # filter); states-fetch failure is fatal — auth/connection errors must
+    # propagate so the agent sees "your token is invalid" instead of "zero
+    # entities matched". The device registry is gated: it only feeds the
+    # visibility area/label dimensions, so a default/area-free config skips it.
+    need_device = await device_registry_needed_for_visibility()
+    fetch_coros: list[Any] = []
+    fetch_slots: list[str] = []
+    if prefetched_states is None:
+        fetch_coros.append(client.get_states())
+        fetch_slots.append("states")
+    if prefetched_registry is None:
+        fetch_coros.append(
+            client.send_websocket_message({"type": "config/entity_registry/list"})
+        )
+        fetch_slots.append("registry")
+    if need_device:
+        fetch_coros.append(
+            client.send_websocket_message({"type": "config/device_registry/list"})
+        )
+        fetch_slots.append("device")
+    fetched = (
+        await asyncio.gather(*fetch_coros, return_exceptions=True)
+        if fetch_coros
+        else []
     )
-    device_task = client.send_websocket_message({"type": "config/device_registry/list"})
-    gather_results = await asyncio.gather(
-        entities_task, registry_task, device_task, return_exceptions=True
+    slots = dict(zip(fetch_slots, fetched, strict=True))
+    state_result: Any = (
+        prefetched_states if prefetched_states is not None else slots.get("states")
     )
-    state_result: Any = gather_results[0]
-    registry_result: Any = gather_results[1]
-    device_result: Any = gather_results[2]
+    registry_result: Any = (
+        prefetched_registry
+        if prefetched_registry is not None
+        else slots.get("registry")
+    )
+    device_result: Any = slots.get("device")
     _raise_gather_exceptions(state_result, registry_result, device_result)
     all_entities = state_result
     hidden_ids = _build_hidden_ids(registry_result)
@@ -996,13 +1527,12 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Project the response to only the specified top-level "
-                    'keys (e.g. ["entities", "automations"]). Diagnostic / '
-                    "pagination keys are always retained regardless of "
-                    "projection, so narrowing the response shape cannot "
-                    "hide partial / error state. None = full response. "
-                    "Distinct from `result_fields` (which projects each "
-                    "entity record's fields). Available keys: success, "
+                    "Project the response to the named top-level keys "
+                    '(e.g. ["entities", "automations"]); None = full '
+                    "response. Diagnostic / pagination keys are always "
+                    "retained so projection cannot hide partial / error "
+                    "state. Distinct from `result_fields` (which projects "
+                    "each entity record's keys). Available keys: success, "
                     "query, entities, automations, scripts, scenes, "
                     "helpers, dashboards, search_types, search_type, "
                     "entity_total_matches, config_total_matches, count, "
@@ -1037,86 +1567,51 @@ class SearchTools:
     ) -> dict[str, Any]:
         """Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.
 
-        Searches two surfaces in parallel and returns tagged results:
-          - **entities**: matches from the entity registry (entity_id,
-            friendly name, area). Use `domain_filter` and/or `area_filter` to
-            list/narrow. Omit `query` to enumerate entities by domain/area.
+        Two surfaces run in parallel and return tagged results:
+          - **entities**: entity-registry matches (entity_id, friendly name,
+            area). Filter with `domain_filter`/`area_filter`; omit `query` to
+            enumerate a domain/area.
           - **automations / scripts / scenes / helpers / dashboards**: matches
-            *inside* configuration definitions — triggers, actions, sequences,
-            scene entity-sets, helper bodies, dashboard cards. Use `query`
-            with config-body terms; filter with `search_types`.
+            *inside* config definitions — triggers, actions, sequences, scene
+            entity-sets, helper bodies, dashboard cards. Driven by `query`;
+            narrow with `search_types`.
 
-        Eligibility:
-          - Registry (entity) search runs whenever `query`, `domain_filter`,
-            or `area_filter` is set, except when `search_types` is explicitly
-            set (which pins to config-only).
-          - Config-body search runs only when `query` is non-empty AND the
-            caller's inputs do not signal entity-only intent — i.e. when
-            none of `domain_filter`/`area_filter`/`state_filter` is set, OR
-            when `search_types` is explicitly set as an override. The
-            "filter set ⇒ skip body" rule keeps name-based single-entity
-            lookups (e.g. `ha_search("bedroom motion", domain_filter=
-            "binary_sensor")`) off the expensive config-body backend; pass
-            `search_types=[...]` to opt back in (a warning surfaces in the
-            response when the gate fires so the skip is visible).
-
-        Use this whenever you need to find something in HA — without needing
-        to decide between entity-name search vs config-body search up front.
+        Use this whenever you need to find something in HA without deciding
+        entity-name vs config-body search up front.
 
         When NOT to use:
-          - To fetch the state of a known entity_id: use `ha_get_state` (cheaper,
-            no search overhead).
-          - To inspect a specific automation/script/scene config by id: use the
-            matching `ha_config_get_*` tool.
+          - To read a known entity_id's state: use `ha_get_state` (cheaper).
+          - To inspect one automation/script/scene config by id: use the
+            matching `ha_config_get_*`.
           - To list installed add-ons: use `ha_get_addon`.
 
+        Config-body search is skipped when `domain_filter`/`area_filter`/
+        `state_filter` signal entity-only intent (keeping name lookups off the
+        expensive backend); a `warnings[]` entry names the skip. Pass
+        `search_types=[...]` to force config search.
+
         Caveats:
-          - Both surfaces fan out in parallel; response carries `partial: True`
-            plus an `errors[]` array tagged by surface ("entities" / "configs")
-            when one branch raises. Empty `entities`/`automations`/... combined
-            with `partial: True` means "search failed", not "no results".
-          - `partial: True` is ALSO set (with `partial_reason`) when the
-            config-body branch loses data on the per-type fetch paths —
-            either the per-id wall-clock budget exhausts and skips
-            unfetched configs, OR individual fetches raise exceptions
-            (caught at debug-level so they would otherwise be silent), OR
-            an `input_*` helper-type list fetch fails. Helpers run on every
-            default call, so silent per-type-list failures would otherwise
-            leave callers unable to tell a real zero-match from a partial
-            backend outage.
-          - When `partial: True` is set, the `partial_reason` text is
-            also mirrored into `warnings[]` with an `"incomplete results: "`
-            prefix. Agents that read `warnings` consistently (the
-            entity-intent skip warning lands fine) but ignore `partial`
-            still see the truncation diagnostic this way.
-          - When the body branch is skipped by the entity-intent gate above,
-            the response carries a `warnings[]` entry naming the skip
-            reason; pass `search_types=[...]` to override.
-          - The `fields=` parameter projects the response to only the
-            named top-level keys; diagnostic / pagination keys
-            (`success`, `warnings`, `errors`, `partial`, `partial_reason`,
-            `*_total_matches`, `has_more`, `next_offset`, and per-surface
-            counterparts) are always retained so projection cannot hide
-            incomplete-results state. Distinct from `result_fields=`
-            which projects each entity record's fields.
-          - `count` is items in this response (post-pagination), not total
-            matches across the corpus. Use `entity_total_matches` +
-            `config_total_matches` for the totals.
-          - `limit`/`offset` are applied per-surface independently. The flat
-            `has_more` / `next_offset` keys describe the next caller-page
-            (same offset/limit semantics as a single-surface tool — iterate
-            with `offset = next_offset`). Per-surface
-            `entity_has_more`/`entity_next_offset` and
-            `config_has_more`/`config_next_offset` let callers see which
-            surface still has results when only one of two does.
+          - `partial: True` means results are NOT exhaustive — a surface raised,
+            or the config-body branch lost data (per-id time budget exhausted,
+            an individual fetch failed, or a helper-type list fetch failed).
+            Empty buckets with `partial: True` mean "search failed", not "no
+            results". The cause is in `partial_reason`, also mirrored into
+            `warnings[]` with an "incomplete results: " prefix. Do not treat a
+            partial response as complete.
+          - `count` is items in this response (post-pagination), not corpus
+            totals — use `entity_total_matches` + `config_total_matches`.
+          - `limit`/`offset` apply per-surface. Flat `has_more`/`next_offset`
+            page the next call (iterate `offset = next_offset`); per-surface
+            `entity_*`/`config_*` variants show which surface still has results.
+
+        For parameters, schema, and worked examples, see ha_get_skill_guide.
 
         Examples:
             - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
-            - List all calendars: ha_search(domain_filter="calendar")
             - Find a light by name: ha_search("kitchen", domain_filter="light")
-            - Which automations use an entity (no filter, body included): ha_search("light.bed_light")
+            - Which automations use an entity: ha_search("light.bed_light")
             - Scenes touching a light: ha_search("light.kitchen", search_types=["scene"])
-            - Narrow the response to only the entity bucket: ha_search("kitchen", fields=["entities"])
+            - Narrow the response to the entity bucket: ha_search("kitchen", fields=["entities"])
         """
         try:
             parsed_search_types = parse_string_list_param(search_types, "search_types")
@@ -1157,36 +1652,160 @@ class SearchTools:
                 )
             )
 
+        req = _ResolvedSearch(
+            query=query,
+            query_text=query_text,
+            domain_filter=domain_filter,
+            area_filter=area_filter,
+            state_filter=state_filter,
+            parsed_search_types=parsed_search_types,
+            parsed_fields=parsed_fields,
+            result_fields=result_fields,
+            limit=limit,
+            offset=offset,
+            exact_match=exact_match,
+            include_hidden=include_hidden,
+            include_config=include_config,
+            group_by_domain=group_by_domain,
+            per_domain_limit=per_domain_limit,
+            config_time_budget=config_time_budget,
+            registry_eligible=registry_eligible,
+            body_eligible=body_eligible,
+            body_skipped_by_intent_gate=body_skipped_by_intent_gate,
+        )
+
+        # Prefer the custom component's in-process unified search when it
+        # advertises the capability: one WS round-trip replaces the multi-fetch
+        # legacy pipeline. Route all-or-nothing per command and fall back
+        # cleanly when the component is absent, downlevel, or errors — the
+        # taxonomy lives in ``_ha_search_via_component``.
+        #
+        # Only QUERY-DRIVEN searches route through the component. The listing
+        # modes — empty/whitespace query with domain_filter (legacy
+        # ``search_type: domain_listing``) and any area_filter search (legacy
+        # ``area_only`` / ``area_filtered_query``, with their own area-shaped
+        # response keys) — keep the legacy path: their response contracts
+        # differ per mode, and after the request-dedup work they are cheap
+        # registry-only calls, so the component round-trip buys nothing worth
+        # the shape risk.
+        #
+        # The component also applies no entity-visibility filtering, so an
+        # install with an ACTIVE visibility filter (enabled + a hide dimension)
+        # must keep the legacy path, which excludes hidden entities before the
+        # counts/pagination. ``visibility_filter_active`` reloads the same
+        # opt-in config file the legacy filter uses (fail-closed to legacy on a
+        # malformed config). Checked only when the component would otherwise
+        # serve, so the common (no-component / filter-off) install pays nothing;
+        # visibility-enabled installs are the opt-in minority and stay on legacy
+        # until a later capability passes the hide rules to the component.
+        if req.query_text and not (req.area_filter or "").strip():
+            caps = await get_component_caps(self._client)
+            if (
+                component_supports(caps, "search")
+                and not await visibility_filter_active()
+            ):
+                component_response = await self._ha_search_via_component(req, ctx)
+                if component_response is not None:
+                    return component_response
+
+        return await self._legacy_ha_search(req, ctx)
+
+    async def _ha_search_via_component(
+        self, req: _ResolvedSearch, ctx: Context | None
+    ) -> dict[str, Any] | None:
+        """Serve ha_search from the component; ``None`` ⇒ run the legacy path.
+
+        Error taxonomy (design § 4):
+
+        - ``unknown_command`` (component downgraded mid-session, so the cached
+          positive caps are stale): invalidate the caps and return ``None`` so
+          the caller falls back **silently** — an expected, non-actionable
+          transition.
+        - any other ``HomeAssistantCommandError`` (a component handler bug) or a
+          ``HomeAssistantCommandTimeout`` (the component WS search timed out):
+          serve the correct result from the legacy path, append a ``warnings[]``
+          entry, and ``log.warning`` — correct results now, breakage visible.
+        - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
+          propagates; the legacy path depends on the same socket and would fail
+          identically, so surfacing it is correct.
+        """
+        try:
+            raw = await self._send_component_search(req)
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+                return None
+            legacy = await self._legacy_ha_search(req, ctx)
+            legacy.setdefault("warnings", []).append(
+                f"component search path failed ({exc}); served via legacy path"
+            )
+            logger.warning("ha_mcp_tools/search failed; fell back to legacy: %r", exc)
+            return legacy
+        return _shape_component_search_response(req, raw.get("result") or {})
+
+    async def _send_component_search(self, req: _ResolvedSearch) -> dict[str, Any]:
+        """Send one ``ha_mcp_tools/search`` command over the per-client WebSocket."""
+        ws = await get_websocket_client(
+            url=self._client.base_url, token=self._client.token
+        )
+        return await ws.send_command(
+            "ha_mcp_tools/search", **_build_component_search_request(req)
+        )
+
+    async def _legacy_ha_search(
+        self, req: _ResolvedSearch, ctx: Context | None
+    ) -> dict[str, Any]:
+        """Run the multi-fetch REST/WS ha_search orchestration (fallback path).
+
+        Behaviourally unchanged from the pre-component implementation: the two
+        surfaces fan out over shared ``/api/states`` + entity-registry
+        snapshots, gather with per-surface partial handling, and assemble the
+        flat dual-surface envelope.
+        """
+        # When both branches run they each independently fetch the full state
+        # machine (/api/states) and the entity-registry list; fetch each once and
+        # thread the snapshots down so the two branches share one of each instead
+        # of fetching two.
+        shared_states, shared_registry = await _prefetch_shared_search_snapshots(
+            self._client,
+            registry_eligible=req.registry_eligible,
+            body_eligible=req.body_eligible,
+        )
+
         registry_callable_kwargs: dict[str, Any] = {
-            "query": query_text or None,
-            "domain_filter": domain_filter,
-            "area_filter": area_filter,
-            "limit": limit,
-            "offset": offset,
-            "exact_match": exact_match,
-            "include_hidden": include_hidden,
-            "group_by_domain": group_by_domain,
-            "per_domain_limit": per_domain_limit,
-            "state_filter": state_filter,
-            "result_fields": result_fields,
+            "query": req.query_text or None,
+            "domain_filter": req.domain_filter,
+            "area_filter": req.area_filter,
+            "limit": req.limit,
+            "offset": req.offset,
+            "exact_match": req.exact_match,
+            "include_hidden": req.include_hidden,
+            "group_by_domain": req.group_by_domain,
+            "per_domain_limit": req.per_domain_limit,
+            "state_filter": req.state_filter,
+            "result_fields": req.result_fields,
+            "prefetched_states": shared_states,
+            "prefetched_registry": shared_registry,
         }
 
         tasks: list[Any] = []
         labels: list[str] = []
-        if registry_eligible:
+        if req.registry_eligible:
             tasks.append(self._ha_search_entities(**registry_callable_kwargs))
             labels.append("entities")
-        if body_eligible:
+        if req.body_eligible:
             tasks.append(
                 self._ha_deep_search(
-                    query=query_text,
-                    search_types=parsed_search_types,
-                    limit=limit,
-                    offset=offset,
-                    include_config=include_config,
-                    exact_match=exact_match,
-                    config_time_budget=config_time_budget,
+                    query=req.query_text,
+                    search_types=req.parsed_search_types,
+                    limit=req.limit,
+                    offset=req.offset,
+                    include_config=req.include_config,
+                    exact_match=req.exact_match,
+                    config_time_budget=req.config_time_budget,
                     ctx=ctx,
+                    prefetched_states=shared_states,
+                    prefetched_registry=shared_registry,
                 )
             )
             labels.append("configs")
@@ -1196,31 +1815,11 @@ class SearchTools:
         # cancelled before the tasks complete.
         outcomes = await asyncio.gather(*tasks, return_exceptions=True)
 
-        response: dict[str, Any] = {
-            "success": True,
-            "query": query,
-            "entities": [],
-            "entity_total_matches": 0,
-            "automations": [],
-            "scripts": [],
-            "scenes": [],
-            "helpers": [],
-            "search_types": parsed_search_types
-            or ["automation", "script", "scene", "helper"],
-            "config_total_matches": 0,
-            # Pre-init the accumulating diagnostic keys so callers reading
-            # ``response["errors"]`` / ``response["partial"]`` / ``response
-            # ["warnings"]`` get a typed default instead of ``KeyError`` on
-            # the no-error path, and so ``_merge_payload_metadata`` extends
-            # rather than first-wins.
-            "partial": False,
-            "errors": [],
-            "warnings": [],
-        }
+        response = _new_search_response(req.query, req.parsed_search_types)
         # Surface the body-skip so a caller who actually wanted config
         # matches alongside the entity scope can see why their request
         # returned no automations / scripts / etc.
-        _emit_intent_skip_warning(response, body_skipped_by_intent_gate)
+        _emit_intent_skip_warning(response, req.body_skipped_by_intent_gate)
         partial = False
         errors: list[dict[str, str]] = []
         for label, outcome in zip(labels, outcomes, strict=True):
@@ -1250,7 +1849,7 @@ class SearchTools:
         _finalize_partial_state(response, partial_local=partial, errors_local=errors)
         _mirror_partial_to_warnings(response)
 
-        return _project_response_fields(response, parsed_fields)
+        return _project_response_fields(response, req.parsed_fields)
 
     async def _ha_search_entities(
         self,
@@ -1368,6 +1967,9 @@ class SearchTools:
                 ),
             ),
         ] = None,
+        *,
+        prefetched_states: list[dict[str, Any]] | None = None,
+        prefetched_registry: Any = None,
     ) -> dict[str, Any]:
         """Search for entities (lights, sensors, switches, etc.) by name, domain, or area.
 
@@ -1378,6 +1980,10 @@ class SearchTools:
         To enumerate all entities of a domain, omit `query` and pass `domain_filter`. For
         example, `ha_search_entities(domain_filter="calendar")` lists all calendars. At
         least one of `query`, `domain_filter`, or `area_filter` must be set.
+
+        ``prefetched_states`` / ``prefetched_registry`` are the orchestrator's
+        shared snapshots; they only reach the regular (non-area, non-domain-only)
+        path, which is the only one that can run alongside the config branch.
         """
         query, domain_filter, area_filter, parsed_result_fields = (
             _validate_entity_search_params(
@@ -1427,11 +2033,10 @@ class SearchTools:
                 # carry area_result's warnings; forward them here in one place so a
                 # visibility/registry degradation on the area path is not silently
                 # dropped (mirrors the non-area path's merge_visibility_warnings).
-                # The builders wrap their payload via add_timezone_metadata into
-                # {"data": {...}, "metadata": {...}}, and the ha_search orchestrator
-                # unwraps ["data"] before merging metadata — so the warnings must
-                # live inside ["data"], not at the wrapper's top level, or the
-                # unwrap drops them.
+                # The builders now return the search dict directly (no
+                # add_timezone_metadata wrapper), so warnings merge into that dict;
+                # the ``["data"]`` unwrap is a defensive holdover for a hypothetical
+                # future wrapped payload.
                 warn_target = (
                     area_search["data"]
                     if isinstance(area_search, dict) and "data" in area_search
@@ -1464,6 +2069,8 @@ class SearchTools:
                 group_by_domain_bool,
                 per_domain_limit_int,
                 parsed_result_fields,
+                prefetched_states=prefetched_states,
+                prefetched_registry=prefetched_registry,
             )
 
         except ToolError:
@@ -1636,7 +2243,10 @@ class SearchTools:
         )
         _apply_result_fields_to_response(search_data, parsed_result_fields)
 
-        return await add_timezone_metadata(self._client, search_data)
+        # No add_timezone_metadata: entity records carry no timestamp fields, so
+        # the enrichment converted nothing and its /api/config fetch was pure
+        # waste (the orchestrator discards its metadata wrapper anyway).
+        return search_data
 
     async def _search_area_only_populated(
         self,
@@ -1711,7 +2321,8 @@ class SearchTools:
         )
         _apply_result_fields_to_response(area_search_data, parsed_result_fields)
 
-        return await add_timezone_metadata(self._client, area_search_data)
+        # No add_timezone_metadata — see _search_area_with_query.
+        return area_search_data
 
     async def _search_area_only(
         self,
@@ -1756,7 +2367,8 @@ class SearchTools:
             empty_area_data["state_filter"] = state_filter
         if group_by_domain_bool:
             empty_area_data["by_domain"] = {}
-        return await add_timezone_metadata(self._client, empty_area_data)
+        # No add_timezone_metadata — see _search_area_with_query.
+        return empty_area_data
 
     async def _search_domain_only(
         self,
@@ -1773,20 +2385,26 @@ class SearchTools:
         """List all entities of a single domain (empty query + domain_filter)."""
         # Fetch states + registry list in parallel. Registry-list failure is
         # tolerated (we just lose the hidden filter); states-fetch failure is
-        # fatal — auth/connection errors must propagate.
-        states_task = self._client.get_states()
-        registry_task = self._client.send_websocket_message(
-            {"type": "config/entity_registry/list"}
-        )
-        device_task = self._client.send_websocket_message(
-            {"type": "config/device_registry/list"}
-        )
-        gather_results = await asyncio.gather(
-            states_task, registry_task, device_task, return_exceptions=True
-        )
+        # fatal — auth/connection errors must propagate. The device registry is
+        # gated: it only feeds the visibility area/label dimensions, so a
+        # default/area-free config skips the fetch entirely.
+        need_device = await device_registry_needed_for_visibility()
+        fetch_coros: list[Any] = [
+            self._client.get_states(),
+            self._client.send_websocket_message(
+                {"type": "config/entity_registry/list"}
+            ),
+        ]
+        if need_device:
+            fetch_coros.append(
+                self._client.send_websocket_message(
+                    {"type": "config/device_registry/list"}
+                )
+            )
+        gather_results = await asyncio.gather(*fetch_coros, return_exceptions=True)
         states_result: Any = gather_results[0]
         registry_result: Any = gather_results[1]
-        device_result: Any = gather_results[2]
+        device_result: Any = gather_results[2] if need_device else None
         if isinstance(states_result, BaseException):
             raise states_result
         # CancelledError must propagate; gather captures it like any other
@@ -1862,10 +2480,8 @@ class SearchTools:
                 domain_filter, results, per_domain_limit_int, parsed_result_fields
             )
 
-        return await add_timezone_metadata(
-            self._client,
-            merge_visibility_warnings(domain_list_data, visibility_warnings),
-        )
+        # No add_timezone_metadata — see _search_area_with_query.
+        return merge_visibility_warnings(domain_list_data, visibility_warnings)
 
     async def _search_regular(
         self,
@@ -1879,8 +2495,16 @@ class SearchTools:
         group_by_domain_bool: bool,
         per_domain_limit_int: int | None,
         parsed_result_fields: list[str] | None,
+        *,
+        prefetched_states: list[dict[str, Any]] | None = None,
+        prefetched_registry: Any = None,
     ) -> dict[str, Any]:
-        """Perform exact-match or fuzzy entity search (no area/domain-listing shortcuts)."""
+        """Perform exact-match or fuzzy entity search (no area/domain-listing shortcuts).
+
+        ``prefetched_states`` / ``prefetched_registry`` are the snapshots the
+        ha_search orchestrator shares with the config branch when both run; they
+        are threaded into whichever backend this call uses (``None`` = fetch).
+        """
         result: dict[str, Any]
         warning: str | None = None
         search_type = "exact_match" if exact_match_bool else "fuzzy_search"
@@ -1897,6 +2521,8 @@ class SearchTools:
                 offset,
                 include_hidden=include_hidden_bool,
                 state_filter=state_filter,
+                prefetched_states=prefetched_states,
+                prefetched_registry=prefetched_registry,
             )
         else:
             # Fuzzy mode: BM25 → substring fallback on exception only.
@@ -1907,6 +2533,8 @@ class SearchTools:
                     offset=offset,
                     domain_filter=domain_filter,
                     include_hidden=include_hidden_bool,
+                    prefetched_states=prefetched_states,
+                    prefetched_registry=prefetched_registry,
                 )
                 search_type = "fuzzy_search"
             except asyncio.CancelledError:
@@ -1928,6 +2556,8 @@ class SearchTools:
                     offset,
                     include_hidden=include_hidden_bool,
                     state_filter=state_filter,
+                    prefetched_states=prefetched_states,
+                    prefetched_registry=prefetched_registry,
                 )
                 warning = "Fuzzy search unavailable, using substring match"
                 search_type = "exact_match"
@@ -1967,7 +2597,8 @@ class SearchTools:
 
         _apply_result_fields_to_response(result, parsed_result_fields)
 
-        return await add_timezone_metadata(self._client, result)
+        # No add_timezone_metadata — see _search_area_with_query.
+        return result
 
     @tool(
         name="ha_get_overview",
@@ -2146,23 +2777,19 @@ class SearchTools:
 
         parsed_domains = parse_string_list_param(domains, "domains", allow_csv=True)
 
-        result = await self._smart_tools.get_system_overview(
-            detail_level,
-            max_entities_per_domain,
-            include_state_bool,
-            include_entity_id_bool,
-            domains_filter=parsed_domains,
-            limit=limit,
-            offset=offset,
+        result = await self._collect_overview(
+            _OverviewInputs(
+                detail_level=detail_level,
+                max_entities_per_domain=max_entities_per_domain,
+                include_state=include_state_bool,
+                include_entity_id=include_entity_id_bool,
+                domains_filter=parsed_domains,
+                limit=limit,
+                offset=offset,
+                include_notifications=include_notifications_bool,
+                include_dismissed_repairs=include_dismissed_repairs_bool,
+            )
         )
-        result = cast(dict[str, Any], result)
-
-        await self._fetch_system_info(result, detail_level)
-
-        if include_notifications_bool:
-            await self._fetch_notifications(result)
-
-        await self._fetch_repairs(result, include_dismissed_repairs_bool)
 
         settings = get_global_settings()
         if settings.enable_tool_search:
@@ -2238,11 +2865,23 @@ class SearchTools:
         return projected
 
     async def _fetch_system_info(
-        self, result: dict[str, Any], detail_level: str
+        self,
+        result: dict[str, Any],
+        detail_level: str,
+        *,
+        prefetched_config: dict[str, Any] | None = None,
     ) -> None:
-        """Fetch HA config and populate result['system_info']; tolerates failure."""
+        """Populate result['system_info'] from HA config; tolerates failure.
+
+        ``prefetched_config`` (the component's ``config`` slice, already the bare
+        ``get_config()`` dict) is used verbatim when given, skipping the fetch.
+        """
         try:
-            config = await self._client.get_config()
+            config = (
+                prefetched_config
+                if prefetched_config is not None
+                else await self._client.get_config()
+            )
             system_info: dict[str, Any] = {
                 "base_url": self._client.base_url,
                 "version": config.get("version"),
@@ -2281,13 +2920,27 @@ class SearchTools:
             if "system_summary" in result:
                 result["system_summary"].setdefault("version", "unknown")
 
-    async def _fetch_notifications(self, result: dict[str, Any]) -> None:
-        """Fetch active persistent notifications and attach them to result."""
+    async def _fetch_notifications(
+        self,
+        result: dict[str, Any],
+        *,
+        prefetched_notifications: dict[str, Any] | None = None,
+    ) -> None:
+        """Attach active persistent notifications to result.
+
+        ``prefetched_notifications`` (the component's ``notifications`` slice
+        re-wrapped in the ``{success, result}`` envelope) is unwrapped by the same
+        code as the live fetch when given, skipping the WS call.
+        """
         result["notification_count"] = 0
         result["notifications"] = []
         try:
-            ws_result = await self._client.send_websocket_message(
-                {"type": "persistent_notification/get"}
+            ws_result = (
+                prefetched_notifications
+                if prefetched_notifications is not None
+                else await self._client.send_websocket_message(
+                    {"type": "persistent_notification/get"}
+                )
             )
             if ws_result.get("success"):
                 notifications = ws_result.get("result", [])
@@ -2307,14 +2960,28 @@ class SearchTools:
             )
 
     async def _fetch_repairs(
-        self, result: dict[str, Any], include_dismissed_repairs_bool: bool
+        self,
+        result: dict[str, Any],
+        include_dismissed_repairs_bool: bool,
+        *,
+        prefetched_repairs: dict[str, Any] | None = None,
     ) -> None:
-        """Fetch active repairs issues and attach them to result."""
+        """Attach active repairs issues to result.
+
+        ``prefetched_repairs`` (the component's ``repairs`` slice re-wrapped in the
+        ``{success, result: {issues: [...]}}`` envelope) is unwrapped, filtered
+        (``filter_active_repairs``), and projected by the same code as the live
+        fetch when given, skipping the WS call.
+        """
         result["repair_count"] = 0
         result["repairs"] = []
         try:
-            repairs_result = await self._client.send_websocket_message(
-                {"type": "repairs/list_issues"}
+            repairs_result = (
+                prefetched_repairs
+                if prefetched_repairs is not None
+                else await self._client.send_websocket_message(
+                    {"type": "repairs/list_issues"}
+                )
             )
             if repairs_result.get("success"):
                 all_issues = repairs_result.get("result", {}).get("issues", [])
@@ -2340,6 +3007,139 @@ class SearchTools:
         except Exception as e:
             logger.warning("Failed to fetch repairs for overview: %s", e, exc_info=True)
             result["repairs_error"] = f"Could not fetch repairs: {e}"
+
+    async def _collect_overview(self, inputs: _OverviewInputs) -> dict[str, Any]:
+        """Assemble the HA-sourced overview, preferring the in-process component.
+
+        The component's ``ha_mcp_tools/overview`` returns the eight raw reads the
+        legacy path makes today (states + services + the three registries +
+        config + notifications + repairs) in one WebSocket round-trip; the server
+        feeds those slices into its **unchanged** assembly
+        (``get_system_overview`` + ``system_info`` / ``notifications`` /
+        ``repairs``), so the two paths are byte-identical by construction. Routed
+        all-or-nothing per the ``ha_search`` precedent: gated on the ``overview``
+        capability AND an inactive entity-visibility filter. The filter is applied
+        server-side over the slices either way, so the bypass is a simplification,
+        not a correctness requirement — an active filter that respects Assist
+        exposure would need extra WS reads inside ``load_hidden_set`` that the
+        single round-trip does not carry, so it keeps the legacy path (mirroring
+        search; applying the filter over the slices can come later). The
+        server-side-only fields (``tool_discovery``, ``settings_url``,
+        ``read_only_mode``, ``ha_mcp_update``) and the ``fields=`` projection are
+        applied by ``ha_get_overview`` after this, identically on both paths.
+        """
+        caps = await get_component_caps(self._client)
+        if (
+            component_supports(caps, "overview")
+            and not await visibility_filter_active()
+        ):
+            component_result = await self._overview_via_component(inputs)
+            if component_result is not None:
+                return component_result
+        return await self._assemble_overview(inputs, None)
+
+    async def _overview_via_component(
+        self, inputs: _OverviewInputs
+    ) -> dict[str, Any] | None:
+        """Serve the overview from the component's slices; ``None`` ⇒ run legacy.
+
+        Error taxonomy (design § 4), mirroring ``_ha_search_via_component``:
+
+        - ``unknown_command`` (the component was downgraded mid-session, so the
+          cached positive caps are stale): invalidate the caps and return
+          ``None`` so the caller falls back **silently** — an expected,
+          non-actionable transition.
+        - any other ``HomeAssistantCommandError`` (a component handler bug) or a
+          ``HomeAssistantCommandTimeout`` (the component WS overview timed out):
+          serve the correct result from the legacy path, append a ``warnings[]``
+          entry, and ``log.warning`` — correct results now, breakage visible.
+        - a malformed slice payload (a required slice missing/malformed, or a
+          non-empty ``slice_errors`` — ``_build_overview_slices`` returns
+          ``None``): treated like the command-error branch (legacy + warning +
+          log), so a partial snapshot never serves a silently-degraded overview.
+        - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
+          propagates; the legacy path depends on the same socket and would fail
+          identically, so surfacing it is correct.
+        """
+        try:
+            raw = await self._send_component_overview(inputs)
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+                return None
+            legacy = await self._assemble_overview(inputs, None)
+            legacy.setdefault("warnings", []).append(
+                f"component overview path failed ({exc}); served via legacy path"
+            )
+            logger.warning("ha_mcp_tools/overview failed; fell back to legacy: %r", exc)
+            return legacy
+        slices = _build_overview_slices(raw.get("result") or {})
+        if slices is None:
+            legacy = await self._assemble_overview(inputs, None)
+            legacy.setdefault("warnings", []).append(
+                "component overview returned malformed slices; served via legacy path"
+            )
+            logger.warning(
+                "ha_mcp_tools/overview returned malformed slices; fell back to legacy"
+            )
+            return legacy
+        return await self._assemble_overview(inputs, slices)
+
+    async def _send_component_overview(self, inputs: _OverviewInputs) -> dict[str, Any]:
+        """Send one ``ha_mcp_tools/overview`` command over the per-client WebSocket."""
+        ws = await get_websocket_client(
+            url=self._client.base_url, token=self._client.token
+        )
+        return await ws.send_command(
+            "ha_mcp_tools/overview",
+            **_build_component_overview_request(inputs),
+        )
+
+    async def _assemble_overview(
+        self, inputs: _OverviewInputs, prefetched: _OverviewSlices | None
+    ) -> dict[str, Any]:
+        """Assemble the overview from slices — prefetched or legacy-fetched.
+
+        Identical assembly either way: ``get_system_overview``'s join plus the
+        wrapper's ``system_info`` / ``notifications`` / ``repairs``, with the
+        entity-visibility filter applied server-side over the (prefetched or
+        fetched) registry + states. ``prefetched`` carries the component's raw
+        slices adapted to the shapes the assembly consumes; ``None`` runs the
+        original per-read REST/WS fetches. Byte-parity between the two is by
+        construction — same code, only the data source differs.
+        """
+        result = await self._smart_tools.get_system_overview(
+            inputs.detail_level,
+            inputs.max_entities_per_domain,
+            inputs.include_state,
+            inputs.include_entity_id,
+            domains_filter=inputs.domains_filter,
+            limit=inputs.limit,
+            offset=inputs.offset,
+            prefetched_slices=prefetched.registry_slices if prefetched else None,
+        )
+        result = cast(dict[str, Any], result)
+
+        await self._fetch_system_info(
+            result,
+            inputs.detail_level,
+            prefetched_config=prefetched.config if prefetched else None,
+        )
+
+        if inputs.include_notifications:
+            await self._fetch_notifications(
+                result,
+                prefetched_notifications=(
+                    prefetched.notifications if prefetched else None
+                ),
+            )
+
+        await self._fetch_repairs(
+            result,
+            inputs.include_dismissed_repairs,
+            prefetched_repairs=prefetched.repairs if prefetched else None,
+        )
+        return result
 
     async def _ha_deep_search(
         self,
@@ -2409,6 +3209,9 @@ class SearchTools:
             ),
         ] = None,
         ctx: Context | None = None,
+        *,
+        prefetched_states: list[dict[str, Any]] | None = None,
+        prefetched_registry: Any = None,
     ) -> dict[str, Any]:
         """Search inside automation, script, scene, helper, and dashboard *configurations* — not for finding entity IDs.
 
@@ -2462,6 +3265,8 @@ class SearchTools:
                 exact_match=exact_match_bool,
                 config_time_budget=config_time_budget,
                 ctx=ctx,
+                prefetched_states=prefetched_states,
+                prefetched_registry=prefetched_registry,
             )
             return cast(dict[str, Any], result)
         except ToolError:

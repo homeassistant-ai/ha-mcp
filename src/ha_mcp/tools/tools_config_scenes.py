@@ -248,32 +248,17 @@ class ConfigSceneTools:
                 ],
                 context={"scene_id": scene_id},
             )
-            # Issue #1168 R3 blockers 3 + 6: unwrap the rest-client envelope
-            # so the response carries the scene body directly (no nested
-            # `success`/`scene_id`/`config` chain), and use the storage key
-            # consistently for `scene_id` regardless of whether the caller
-            # passed the entity_id slug or the storage key.
-            envelope = await self._client.get_scene_config(scene_id)
-            actual_config = envelope.get("config", envelope)
-            resolved_id = envelope.get("scene_id", scene_id)
-            config_hash_value = compute_config_hash(actual_config)
-
-            # Resolve real entity_id via registry — see _resolve_scene_entity_id
-            # for the reasoning. Category fetch on the wrong entity_id is a
-            # silent no-op, masking real category assignments.
-            entity_id = await self._resolve_scene_entity_id(resolved_id)
-            cat_id = await fetch_entity_category(self._client, entity_id, "scene")
-
-            response: dict[str, Any] = {
-                "success": True,
-                "action": "get",
-                "scene_id": resolved_id,
-                "config": actual_config,
-                "config_hash": config_hash_value,
-            }
-            if cat_id:
-                response["category"] = cat_id
-            return response
+            # Scenes ALWAYS take the legacy path — deliberately no component
+            # routing here, unlike the automation/script gets. Scenes do not
+            # retain their raw storage body in memory: HomeAssistantScene's
+            # ``scene_config.states`` holds runtime State OBJECTS built at
+            # setup, not the storage ``entities`` dict, so a component-served
+            # body can neither match the REST body byte-for-byte nor produce
+            # a stable ``config_hash`` — and the get -> surgical-edit -> set
+            # round-trip depends on both (caught live by the scene lifecycle
+            # e2e suite). automation/script expose ``raw_config`` (the exact
+            # storage dict), which is why their gets DO route.
+            return await self._legacy_get_scene(scene_id)
         except ToolError:
             raise
         except Exception as e:
@@ -298,6 +283,43 @@ class ConfigSceneTools:
             # explicit raise makes the function's exit unambiguous (no implicit
             # ``return None`` fall-through) and is never reached at runtime.
             raise
+
+    async def _legacy_get_scene(self, scene_id: str) -> dict[str, Any]:
+        """Assemble the scene-get response from the REST/WS pipeline.
+
+        The multi-fetch path: id-resolution WS + per-id config REST +
+        ``_resolve_scene_entity_id`` WS + ``fetch_entity_category`` WS. This is
+        the ONLY scene-get path — see ``ha_config_get_scene`` for why scenes
+        never route through the component's ``config_get`` (their in-memory
+        ``scene_config.states`` is runtime State objects, not the storage
+        ``entities`` dict).
+        """
+        # Issue #1168 R3 blockers 3 + 6: unwrap the rest-client envelope
+        # so the response carries the scene body directly (no nested
+        # `success`/`scene_id`/`config` chain), and use the storage key
+        # consistently for `scene_id` regardless of whether the caller
+        # passed the entity_id slug or the storage key.
+        envelope = await self._client.get_scene_config(scene_id)
+        actual_config = envelope.get("config", envelope)
+        resolved_id = envelope.get("scene_id", scene_id)
+        config_hash_value = compute_config_hash(actual_config)
+
+        # Resolve real entity_id via registry — see _resolve_scene_entity_id
+        # for the reasoning. Category fetch on the wrong entity_id is a
+        # silent no-op, masking real category assignments.
+        entity_id = await self._resolve_scene_entity_id(resolved_id)
+        cat_id = await fetch_entity_category(self._client, entity_id, "scene")
+
+        response: dict[str, Any] = {
+            "success": True,
+            "action": "get",
+            "scene_id": resolved_id,
+            "config": actual_config,
+            "config_hash": config_hash_value,
+        }
+        if cat_id:
+            response["category"] = cat_id
+        return response
 
     async def _get_scene_config_internal(
         self, scene_id: str
