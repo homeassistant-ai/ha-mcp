@@ -24,11 +24,13 @@ import asyncio
 import inspect
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import Annotated, Any
 from unittest.mock import MagicMock
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
+
+from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
 
 from .test_config_param_no_string_schema import (
     _BULK_TOOLS,
@@ -124,6 +126,55 @@ def test_dict_param_rejects_unparseable_string(
     ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
     with pytest.raises(ValidationError):
         TypeAdapter(ann).validate_python("definitely not json {")
+
+
+@pytest.mark.parametrize(
+    ("malformed", "detail"),
+    [
+        ('{"alias": "Test",}', "line 1 column 17"),
+        ("  [1, 2,]", "line 1 column 8"),
+    ],
+)
+def test_json_like_malformed_string_preserves_decode_location(malformed, detail):
+    """Malformed container JSON reports its parse location instead of dict_type."""
+    module, register_fn, tool_name, param_name = _DICT_PARAMS[0]
+    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+
+    with pytest.raises(ValidationError) as exc_info:
+        TypeAdapter(ann).validate_python(malformed)
+
+    error = exc_info.value.errors(include_url=False)[0]
+    assert error["type"] == "value_error"
+    assert "Invalid JSON" in error["msg"]
+    assert detail in error["msg"]
+
+
+@pytest.mark.parametrize(
+    "jinja_template",
+    [
+        "{{ states('light.kitchen') }}",
+        "{% if is_state('light.kitchen', 'on') %}on{% endif %}",
+        "{# explanatory comment #}",
+    ],
+)
+def test_jinja_templates_pass_through_for_string_union(jinja_template):
+    """Jinja strings remain available to the string arm of union parameters."""
+    annotation = Annotated[str | dict[str, Any], JSON_STRING_COERCION]
+
+    assert TypeAdapter(annotation).validate_python(jinja_template) == jinja_template
+
+
+def test_malformed_json_containing_jinja_preserves_decode_location():
+    """Jinja inside a JSON-like container does not suppress decoder details."""
+    annotation = Annotated[str | dict[str, Any], JSON_STRING_COERCION]
+
+    with pytest.raises(ValidationError) as exc_info:
+        TypeAdapter(annotation).validate_python('{"option": {{ template }}}')
+
+    error = exc_info.value.errors(include_url=False)[0]
+    assert error["type"] == "value_error"
+    assert "Invalid JSON" in error["msg"]
+    assert "line 1 column 13" in error["msg"]
 
 
 @pytest.mark.parametrize(

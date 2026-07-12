@@ -142,15 +142,23 @@ def parse_json_param(
 def _loads_if_json_container_str(value: Any) -> Any:
     """Parse a JSON-encoded object/array string into its container value.
 
-    Anything that isn't a string encoding a JSON object or array passes
-    through unchanged, so Pydantic still raises dict_type/list_type for
-    genuinely-malformed input (which ValidationErrorMiddleware rewrites
-    into an actionable message).
+    A string that starts like an object or array but contains malformed JSON
+    raises with the decoder location so ValidationErrorMiddleware can return
+    an actionable error. Jinja templates and other strings pass through
+    unchanged, leaving Pydantic to select the expected parameter type.
     """
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
-        except (ValueError, RecursionError):
+        except json.JSONDecodeError as exc:
+            is_container_like = re.match(r"\s*[\[{]", value) is not None
+            is_standalone_jinja = re.match(r"\s*{[{%#]", value) is not None
+            if is_container_like and not is_standalone_jinja:
+                raise ValueError(
+                    f"Invalid JSON at line {exc.lineno} column {exc.colno}: {exc.msg}"
+                ) from exc
+            return value
+        except RecursionError:
             # RecursionError (deeply-nested input) must not escape: Pydantic
             # only converts ValueError/AssertionError into ValidationError.
             return value
