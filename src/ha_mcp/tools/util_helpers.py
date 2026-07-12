@@ -2236,3 +2236,35 @@ def merge_visibility_warnings(
     if warnings:
         response.setdefault("warnings", []).extend(warnings)
     return response
+
+
+# Error strings produced by the pooled WebSocket path when the transport (not
+# the command) fails: the manager's connect raise, send timeouts, and socket
+# drops. ``send_websocket_message`` collapses these into
+# ``{"success": False, "error": ...}``, so callers that attach domain-specific
+# suggestions must first check the shape or an HA restart gets presented as a
+# domain problem (issue #1832 review).
+WS_CONNECTION_SIGNATURES = (
+    "failed to connect",
+    "timed out",
+    "timeout",
+    "connection closed",
+    # reset_connection: "WebSocket connection to Home Assistant closed while
+    # waiting for a response" — "connection closed" is not adjacent there.
+    "closed while waiting",
+    # listener close reason: "connection dropped without a close frame".
+    "connection dropped",
+    "disconnected",
+    "not connected",
+    "not authenticated",
+)
+
+
+def is_connection_error_message(error_msg: Any) -> bool:
+    """True when a pooled-WS failure payload is connection/transport-shaped.
+
+    Accepts any payload shape: HA error frames can carry a dict (or None)
+    in the error slot, so the value is stringified before matching.
+    """
+    lowered = str(error_msg).lower()
+    return any(sig in lowered for sig in WS_CONNECTION_SIGNATURES)
