@@ -271,7 +271,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     # is not re-injected on an empty submit. (Applies to every
                     # optional text field below.) Only a genuinely saved
                     # override is suggested; the normalized "no override" state
-                    # renders an EMPTY field — the help text says "leave blank",
+                    # renders an EMPTY field — the help text says "Leave empty",
                     # and pre-filling DEFAULT_PIP_SPEC would show the STABLE dist
                     # name even on the dev channel.
                     description={"suggested_value": opts.get(OPT_PIP_SPEC, "")},
@@ -360,14 +360,16 @@ class HaMcpServerOptionsFlow(OptionsFlow):
 
     @staticmethod
     def _normalize(user_input: dict[str, Any]) -> dict[str, Any]:
-        """Collapse the default pip spec to empty so it is not stored as an override.
+        """Normalize the submitted options before they are persisted.
 
-        The pip-spec field is pre-filled with ``DEFAULT_PIP_SPEC`` (the unpinned
-        ``ha-mcp`` distribution) as a hint. Persisting that value verbatim would
-        read as an intentional override and disable the stable channel's
-        automatic updates. Collapsing "equals the default" (or empty) to empty
-        keeps the entry tracking the selected channel; a genuine override (any
-        other string) is stored as-is.
+        Collapses the pip-spec field to empty when it is empty or equals
+        ``DEFAULT_PIP_SPEC`` (the unpinned ``ha-mcp`` distribution): the field is
+        pre-filled with the saved override or blank, but a user may also type the
+        default dist name, and persisting it verbatim would read as an
+        intentional override and disable the stable channel's automatic updates.
+        Empty means "no override" (track the selected channel); any other string
+        is a genuine override, stored as-is. Also strips the URL / secret
+        override fields, and drops a blank ``server_url`` so its default applies.
         """
         cleaned = dict(user_input)
         if cleaned.get(OPT_PIP_SPEC, "").strip() in ("", DEFAULT_PIP_SPEC):
@@ -379,6 +381,15 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         ):
             cleaned[key] = str(cleaned.get(key, "") or "").strip()
         cleaned[OPT_EXTERNAL_URL] = cleaned[OPT_EXTERNAL_URL].rstrip("/")
+        # server_url gets no _normalize-forced empty like the fields above; strip
+        # it and drop it entirely when blank so a whitespace-only value can't be
+        # stored verbatim (it would bypass the consumer's empty -> loopback
+        # fallback and break the HA connection).
+        server_url = str(cleaned.get(OPT_SERVER_URL, "") or "").strip().rstrip("/")
+        if server_url:
+            cleaned[OPT_SERVER_URL] = server_url
+        else:
+            cleaned.pop(OPT_SERVER_URL, None)
         return cleaned
 
     async def _versions_hint(self) -> str:

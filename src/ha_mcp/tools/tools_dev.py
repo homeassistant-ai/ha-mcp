@@ -105,12 +105,13 @@ def _spawn_background(coro: Any) -> None:
 def _field_prefill(item: dict[str, Any]) -> Any:
     """Return a serialized options-flow field's current value.
 
-    Reads ``description.suggested_value`` first: HA renders a persisted option
-    there (via ``add_suggested_values_to_schema``), and the component's
-    clearable text fields carry their value there rather than as a schema
-    ``default`` (a ``default`` equal to the value would make the field
-    impossible to clear). Falls back to ``default`` then ``value`` for the
-    dropdown/toggle fields. Mirrors ``tools_integrations.options_from_form_flow``.
+    Reads ``description.suggested_value`` first: a persisted option is
+    serialized there (as ``add_suggested_values_to_schema`` does; this component
+    sets it directly on the ``vol.Optional`` marker), and the clearable text
+    fields carry their value there rather than as a schema ``default`` (a
+    ``default`` equal to the value would make the field impossible to clear).
+    Falls back to ``default`` then ``value`` for the dropdown/toggle fields.
+    Mirrors ``tools_integrations.options_from_form_flow``.
     """
     description = item.get("description")
     if isinstance(description, dict) and description.get("suggested_value") is not None:
@@ -129,7 +130,8 @@ async def find_server_config_entry(
     ``(entry_id, open_flow, current_options)`` with the options flow left
     OPEN (callers must submit or abort it), or ``None`` when no server
     entry exists. ``current_options`` maps schema field names to their current
-    values (persisted ``suggested_value`` first, else the schema ``default``).
+    values (persisted ``suggested_value`` first, else the schema ``default`` or
+    ``value``, via ``_field_prefill``).
 
     Module-level (not a DevTools method) so the settings UI's embedded
     restart handler can share it.
@@ -433,7 +435,16 @@ class DevTools:
         await asyncio.sleep(_SELF_ACTION_FLUSH_DELAY_S)
         try:
             result = await self._client.submit_options_flow_step(flow_id, user_input)
-            logger.info("Deferred options submit result: %s", result.get("type"))
+            if result.get("type") == "create_entry":
+                logger.info("Deferred options submit applied")
+            else:
+                # Fire-and-forget: no caller is left to raise to, so a rejected
+                # self-restart must at least be discoverable in the log.
+                logger.warning(
+                    "Deferred options submit was not applied (type=%s, errors=%s)",
+                    result.get("type"),
+                    result.get("errors") or result.get("reason"),
+                )
         except Exception:
             logger.exception("Deferred options-flow submit failed")
 
@@ -852,11 +863,9 @@ class DevTools:
                 )
             )
         entry_id, flow, current = found
-        # The component's options flow pre-fills its optional text fields via
-        # suggested_value so the UI can clear them, which makes an OMITTED field
-        # read as "cleared", not "unchanged". Resend the user's current
-        # overrides (server URL, connect secrets, any pip-spec pin) so a
-        # channel/pip-spec change here does not blank them.
+        # Resend the user's current overrides (see _PRESERVED_OPTION_KEYS) so a
+        # channel/pip-spec change here does not blank them — an omitted optional
+        # field reads as "cleared", not "unchanged".
         user_input: dict[str, Any] = {
             key: current[key] for key in _PRESERVED_OPTION_KEYS if current.get(key)
         }

@@ -350,11 +350,16 @@ class TestServerOptionsFlow:
         }
         # regenerate_secrets is a one-shot action, never pre-filled True;
         # enable_webhook / enable_startup_notification / enable_sidebar_panel
-        # default on when unsaved.
-        assert defaults.pop(const.OPT_REGENERATE_SECRETS) is False
-        assert defaults.pop(const.OPT_ENABLE_WEBHOOK) is True
-        assert defaults.pop(const.OPT_ENABLE_STARTUP_NOTIFICATION) is True
-        assert defaults.pop(const.OPT_ENABLE_SIDEBAR_PANEL) is True
+        # default on when unsaved. Pop off the schema (not inside assert, which
+        # `python -O` would strip) before comparing the remainder.
+        regenerate_default = defaults.pop(const.OPT_REGENERATE_SECRETS)
+        assert regenerate_default is False
+        webhook_default = defaults.pop(const.OPT_ENABLE_WEBHOOK)
+        assert webhook_default is True
+        notification_default = defaults.pop(const.OPT_ENABLE_STARTUP_NOTIFICATION)
+        assert notification_default is True
+        panel_default = defaults.pop(const.OPT_ENABLE_SIDEBAR_PANEL)
+        assert panel_default is True
         assert defaults == {k: v for k, v in saved.items() if k not in text_fields}
 
     def test_init_submit_round_trips_input_into_entry(self):
@@ -394,6 +399,31 @@ class TestServerOptionsFlow:
             )
         )
         assert result["data"][const.OPT_PIP_SPEC] == ""
+
+    def test_server_url_whitespace_is_dropped_to_default(self):
+        # A whitespace-only Home Assistant URL must not be stored verbatim: it is
+        # truthy, so it would bypass the consumer's empty -> loopback fallback and
+        # break the connection. _normalize drops it so the default applies.
+        flow = _make_options_flow()
+        result = asyncio.run(
+            flow.async_step_init(
+                {const.OPT_CHANNEL: const.CHANNEL_STABLE, const.OPT_SERVER_URL: "   "}
+            )
+        )
+        assert const.OPT_SERVER_URL not in result["data"]
+
+    def test_server_url_trailing_slash_stripped(self):
+        # A real URL is kept, with any trailing slash trimmed.
+        flow = _make_options_flow()
+        result = asyncio.run(
+            flow.async_step_init(
+                {
+                    const.OPT_CHANNEL: const.CHANNEL_STABLE,
+                    const.OPT_SERVER_URL: "http://ha.local:8123/",
+                }
+            )
+        )
+        assert result["data"][const.OPT_SERVER_URL] == "http://ha.local:8123"
 
     def test_pip_spec_field_empty_when_no_override(self):
         # The "leave blank to follow the channel" field must actually BE

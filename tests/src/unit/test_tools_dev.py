@@ -353,6 +353,28 @@ class TestManageServer:
             },
         )
 
+    async def test_update_source_new_pip_spec_wins_over_preserved(self):
+        # A caller-supplied pip_spec must override the preserved (suggested_value)
+        # pin, not be clobbered by it: the preserve dict is seeded first, then the
+        # explicit pip_spec overwrites it.
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}],
+            flows=[dict(_SERVER_FLOW_WITH_OVERRIDES)],
+        )
+        await DevTools(client).ha_dev_manage_server(
+            action="update_source", pip_spec="ha-mcp==2.0.0"
+        )
+        client.submit_options_flow_step.assert_awaited_once_with(
+            "flow-1",
+            {
+                "pip_spec": "ha-mcp==2.0.0",
+                "server_url": "http://ha.local:8123",
+                "external_url": "https://ext.example.com",
+                "webhook_id_override": "hook123",
+                "secret_path_override": "/secret",
+            },
+        )
+
     async def test_update_source_surfaces_flow_rejection(self):
         client = _mock_client(
             entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
