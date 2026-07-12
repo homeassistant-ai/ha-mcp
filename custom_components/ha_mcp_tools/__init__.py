@@ -891,9 +891,7 @@ def _read_file_sync(target_file: Path) -> dict[str, Any]:
     if not target_file.is_file():
         return {"_error": "not_a_file"}
     stat = target_file.stat()
-    # encoding pinned: HA config files are UTF-8 by definition; the locale
-    # default only matches that on Linux (Windows dev machines get cp1252).
-    content = target_file.read_text(encoding="utf-8")
+    content = target_file.read_text()
     return {"content": content, "size": stat.st_size, "mtime": stat.st_mtime}
 
 
@@ -922,7 +920,7 @@ def _write_file_sync(
             "_error": "no_parent",
             "parent": parent,
         }
-    target_file.write_text(content, encoding="utf-8")
+    target_file.write_text(content)
     stat = target_file.stat()
     return {"size": stat.st_size, "mtime": stat.st_mtime, "is_new": not exists}
 
@@ -946,7 +944,7 @@ def _replace_file_sync(target_file: Path, content: str) -> dict[str, Any]:
     """
     target_file.parent.mkdir(parents=True, exist_ok=True)
     tmp_file = target_file.with_suffix(".tmp")
-    tmp_file.write_text(content, encoding="utf-8")
+    tmp_file.write_text(content)
     os.replace(str(tmp_file), str(target_file))
     stat = target_file.stat()
     return {"size": stat.st_size, "mtime": stat.st_mtime}
