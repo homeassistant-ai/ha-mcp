@@ -154,7 +154,7 @@ def test_json_like_malformed_string_preserves_decode_location(malformed, detail)
     [
         "{{ states('light.kitchen') }}",
         "{% if is_state('light.kitchen', 'on') %}on{% endif %}",
-        '{"option": {{ template }}}',
+        "{# explanatory comment #}",
     ],
 )
 def test_jinja_templates_pass_through_for_string_union(jinja_template):
@@ -162,6 +162,19 @@ def test_jinja_templates_pass_through_for_string_union(jinja_template):
     annotation = Annotated[str | dict[str, Any], JSON_STRING_COERCION]
 
     assert TypeAdapter(annotation).validate_python(jinja_template) == jinja_template
+
+
+def test_malformed_json_containing_jinja_preserves_decode_location():
+    """Jinja inside a JSON-like container does not suppress decoder details."""
+    annotation = Annotated[str | dict[str, Any], JSON_STRING_COERCION]
+
+    with pytest.raises(ValidationError) as exc_info:
+        TypeAdapter(annotation).validate_python('{"option": {{ template }}}')
+
+    error = exc_info.value.errors(include_url=False)[0]
+    assert error["type"] == "value_error"
+    assert "Invalid JSON" in error["msg"]
+    assert "line 1 column 13" in error["msg"]
 
 
 @pytest.mark.parametrize(
