@@ -202,6 +202,43 @@ class TestAddonStructure:
             'start.py exports os.environ["READ_ONLY_MODE"] — they must match'
         )
 
+    def test_start_py_wires_strict_mandatory_bps_env(self):
+        """start.py must read the ``enable_strict_mandatory_bps`` addon option
+        and export it as ``ENABLE_STRICT_MANDATORY_BPS``, and that env name
+        must match the one ``config.FEATURE_FLAG_FIELDS`` registers for the
+        ``enable_strict_mandatory_bps`` flag — otherwise the addon toggle
+        would write to a phantom env var the server never reads. Source-level
+        contract mirroring the read_only_mode wiring test (issue #1779)."""
+        start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
+        assert 'config.get("enable_strict_mandatory_bps"' in start_src, (
+            "start.py must read the enable_strict_mandatory_bps addon option"
+        )
+        assert 'os.environ["ENABLE_STRICT_MANDATORY_BPS"]' in start_src, (
+            "start.py must export the ENABLE_STRICT_MANDATORY_BPS env var the "
+            "server reads"
+        )
+
+        # The env name start.py writes must equal the one config.py registers
+        # for enable_strict_mandatory_bps. Regex the FeatureFlagField entry
+        # from config.py source rather than importing ha_mcp (tests/addon has
+        # no src on sys.path by default).
+        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config.py").read_text(
+            encoding="utf-8"
+        )
+        m = re.search(
+            r'FeatureFlagField\(\s*"enable_strict_mandatory_bps"\s*,\s*"([^"]+)"',
+            config_src,
+        )
+        assert m is not None, (
+            "config.py FEATURE_FLAG_FIELDS must register an "
+            "enable_strict_mandatory_bps entry"
+        )
+        assert m.group(1) == "ENABLE_STRICT_MANDATORY_BPS", (
+            f"enable_strict_mandatory_bps env name in config.py is "
+            f"{m.group(1)!r}, but start.py exports "
+            'os.environ["ENABLE_STRICT_MANDATORY_BPS"] — they must match'
+        )
+
     @pytest.mark.skipif(
         sys.platform == "win32", reason="Unix permissions not applicable on Windows"
     )

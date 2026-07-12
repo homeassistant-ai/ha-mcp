@@ -57,6 +57,8 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     ALLOWED_WRITE_DIRS,
 )
 
+from ._symlink_support import symlink_or_skip  # noqa: E402
+
 
 class TestIsPathAllowedForDir:
     """Test _is_path_allowed_for_dir function."""
@@ -690,7 +692,7 @@ class TestMigrateLegacyBackupDir:
         legacy.mkdir(parents=True)
         target = tmp_path / "elsewhere.bak"
         target.write_text("target content")
-        (legacy / "link.bak").symlink_to(target)
+        symlink_or_skip(legacy / "link.bak", target)
         (legacy / "real.bak").write_text("real content")
 
         moved, failed = _migrate_legacy_backup_dir(tmp_path)
@@ -792,7 +794,7 @@ class TestListLegacyBackupsSync:
         (d / "subdir").mkdir()
         target = tmp_path / "outside.bak"
         target.write_text("x: 9")
-        (d / "link.bak").symlink_to(target)
+        symlink_or_skip(d / "link.bak", target)
 
         out = _list_legacy_backups_sync(d)
 
@@ -824,7 +826,9 @@ class TestReadLegacyBackupSync:
 
     def test_reads_content(self, tmp_path):
         f = tmp_path / "configuration.yaml.20260101_120000.bak"
-        f.write_text("a: 1\nb: 2\n")
+        # newline pinned so the on-disk byte count matches len() on Windows
+        # too (text mode would write CRLF and break the size assertion).
+        f.write_text("a: 1\nb: 2\n", newline="\n")
         out = _read_legacy_backup_sync(f)
         assert out["content"] == "a: 1\nb: 2\n"
         assert out["size"] == len("a: 1\nb: 2\n")
@@ -843,7 +847,7 @@ class TestReadLegacyBackupSync:
         target = tmp_path / "real.bak"
         target.write_text("a: 1")
         link = tmp_path / "link.bak"
-        link.symlink_to(target)
+        symlink_or_skip(link, target)
         assert _read_legacy_backup_sync(link) == {"_error": "not_a_file"}
 
 
@@ -942,7 +946,7 @@ class TestDenyFloor:
 
     def test_symlink_into_storage_blocked(self, tmp_path):
         (tmp_path / ".storage").mkdir()
-        (tmp_path / "evil").symlink_to(tmp_path / ".storage")
+        symlink_or_skip(tmp_path / "evil", tmp_path / ".storage")
         assert _violates_deny_floor(tmp_path, "evil/auth") is True
         assert _is_path_allowed_for_read(tmp_path, "evil/auth", ["evil"]) is False
         assert (
@@ -958,7 +962,7 @@ class TestDenyFloor:
         # so the floor must catch the resolved target's basename.
         (tmp_path / "secrets.yaml").write_text("api_key: SECRET\n")
         (tmp_path / "www").mkdir()
-        (tmp_path / "www" / "notes.txt").symlink_to(tmp_path / "secrets.yaml")
+        symlink_or_skip(tmp_path / "www" / "notes.txt", tmp_path / "secrets.yaml")
         assert _violates_deny_floor(tmp_path, "www/notes.txt") is True
         assert _is_path_allowed_for_read(tmp_path, "www/notes.txt") is False
 
@@ -1000,7 +1004,7 @@ class TestDenyFloor:
         (config_dir / "www").mkdir()
         # www/link -> config_dir; "www/link/../escaped" -> config_dir/../escaped
         # = tmp_path/escaped, OUTSIDE the config dir.
-        (config_dir / "www" / "link").symlink_to(config_dir)
+        symlink_or_skip(config_dir / "www" / "link", config_dir)
         escape = os.path.join("www", "link", "..", "escaped.txt")
         assert _is_path_allowed_for_read(config_dir, escape) is False
         assert _is_path_allowed_for_dir(config_dir, escape, ALLOWED_WRITE_DIRS) is False
@@ -1136,6 +1140,8 @@ class TestExtraDirsReadWrite:
         # A multi-segment entry grants the dir itself and paths under it
         # (the normalizer accepts nested entries, so enforcement must honor
         # them — not silently store a dead entry).
+        if sys.platform == "win32":
+            pytest.skip("Linux path semantics (normpath flips / to \\ on Windows)")
         extra = ["foo/bar"]
         assert _is_path_allowed_for_read(tmp_path, "foo/bar", extra) is True
         assert _is_path_allowed_for_read(tmp_path, "foo/bar/x.py", extra) is True
@@ -1167,6 +1173,8 @@ class TestNormalizeExtraDir:
         assert _normalize_extra_dir("  pyscript/  ", tmp_path) == "pyscript"
 
     def test_accepts_nested_dir(self, tmp_path):
+        if sys.platform == "win32":
+            pytest.skip("Linux path semantics (normpath flips / to \\ on Windows)")
         assert _normalize_extra_dir("foo/bar", tmp_path) == "foo/bar"
 
     def test_rejects_empty_and_root(self, tmp_path):
@@ -1391,7 +1399,7 @@ class TestResolvesWithin:
         base.mkdir()
         outside = tmp_path / "outside"
         outside.mkdir()
-        (base / "link").symlink_to(outside)
+        symlink_or_skip(base / "link", outside)
         # base/link/x resolves to outside/x — escapes base.
         assert _resolves_within(base, "link/x") is False
 
@@ -1403,7 +1411,7 @@ class TestResolvesWithin:
         base.mkdir()
         target = tmp_path / "target"
         target.mkdir()
-        (base / "link").symlink_to(target)
+        symlink_or_skip(base / "link", target)
         # base/link/../escape -> target/../escape -> tmp_path/escape (outside base)
         assert _resolves_within(base, "link/../escape") is False
 
@@ -1422,7 +1430,7 @@ class TestVolumeSymlinkEscape:
         # Treat the tmp volume as a recognized HAOS sibling-volume root.
         monkeypatch.setattr(comp, "ALLOWED_VOLUME_ROOTS", (str(volume),))
         # vol/link -> volume's parent; vol/link/../escaped escapes the volume.
-        (volume / "link").symlink_to(tmp_path)
+        symlink_or_skip(volume / "link", tmp_path)
         extra = [str(volume)]
         escape = str(volume / "link" / ".." / "escaped.txt")
         assert _is_path_allowed_for_read(config_dir, escape, extra) is False
@@ -1441,7 +1449,7 @@ class TestVolumeSymlinkEscape:
         (volume / "real").mkdir()
         monkeypatch.setattr(comp, "ALLOWED_VOLUME_ROOTS", (str(volume),))
         # A symlink that stays inside the volume is fine.
-        (volume / "link").symlink_to(volume / "real")
+        symlink_or_skip(volume / "link", volume / "real")
         extra = [str(volume)]
         ok = str(volume / "link" / "f.txt")
         assert _is_path_allowed_for_read(config_dir, ok, extra) is True
@@ -1462,7 +1470,7 @@ class TestVolumeSymlinkEscape:
         volume.mkdir()
         monkeypatch.setattr(comp, "ALLOWED_VOLUME_ROOTS", (str(volume),))
         (volume / "secrets.yaml").write_text("api_key: SECRET\n")
-        (volume / "notes.txt").symlink_to(volume / "secrets.yaml")
+        symlink_or_skip(volume / "notes.txt", volume / "secrets.yaml")
         extra = [str(volume)]
         assert (
             _is_path_allowed_for_read(config_dir, str(volume / "notes.txt"), extra)
@@ -1483,7 +1491,7 @@ class TestVolumeSymlinkEscape:
         volume.mkdir()
         monkeypatch.setattr(comp, "ALLOWED_VOLUME_ROOTS", (str(volume),))
         (volume / ".storage").mkdir()
-        (volume / "link").symlink_to(volume / ".storage")
+        symlink_or_skip(volume / "link", volume / ".storage")
         extra = [str(volume)]
         target = str(volume / "link" / "auth")
         assert _is_path_allowed_for_read(config_dir, target, extra) is False
@@ -1503,7 +1511,7 @@ class TestVolumeSymlinkEscape:
         volume.mkdir()
         monkeypatch.setattr(comp, "ALLOWED_VOLUME_ROOTS", (str(volume),))
         (volume / "secrets.yaml").write_text("x: y\n")
-        (volume / "innocent").symlink_to(volume / "secrets.yaml")
+        symlink_or_skip(volume / "innocent", volume / "secrets.yaml")
         assert _normalize_extra_dir(str(volume / "innocent"), tmp_path) is None
 
 

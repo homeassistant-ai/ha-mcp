@@ -41,10 +41,14 @@ async def inprocess_mcp_client(ha_url: str, ha_token: str) -> AsyncIterator[Clie
 
     prev_url = os.environ.get("HOMEASSISTANT_URL")
     prev_token = os.environ.get("HOMEASSISTANT_TOKEN")
+    prev_strict = os.environ.get("ENABLE_STRICT_MANDATORY_BPS")
     prev_settings = ha_mcp.config._settings
     try:
         os.environ["HOMEASSISTANT_URL"] = ha_url
         os.environ["HOMEASSISTANT_TOKEN"] = ha_token
+        # Strict best-practices gate (#1779) defaults ON with its parent; pin it
+        # OFF so the story setup/verify/teardown keyless writes aren't blocked.
+        os.environ["ENABLE_STRICT_MANDATORY_BPS"] = "false"
         ha_mcp.config._settings = None
         await websocket_manager.disconnect()
 
@@ -62,4 +66,8 @@ async def inprocess_mcp_client(ha_url: str, ha_token: str) -> AsyncIterator[Clie
             os.environ.pop("HOMEASSISTANT_TOKEN", None)
         else:
             os.environ["HOMEASSISTANT_TOKEN"] = prev_token
+        if prev_strict is None:
+            os.environ.pop("ENABLE_STRICT_MANDATORY_BPS", None)
+        else:
+            os.environ["ENABLE_STRICT_MANDATORY_BPS"] = prev_strict
         ha_mcp.config._settings = prev_settings

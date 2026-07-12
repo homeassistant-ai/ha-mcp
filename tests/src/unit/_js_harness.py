@@ -161,11 +161,18 @@ def run_script(
         "broadcastChannelUnavailable": broadcast_channel_unavailable,
     }
 
+    # encoding pinned: node emits UTF-8; without it, text=True decodes with
+    # the locale codepage (cp1252 on Windows), the reader thread crashes on
+    # the first non-cp1252 char and stdout comes back None. errors="replace"
+    # keeps malformed bytes from killing the reader the same way — they
+    # degrade to U+FFFD and surface in the harness's own error reporting.
     proc = subprocess.run(
         [_node_binary(), str(HARNESS_PATH)],
         input=json.dumps(request),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout_s,
         check=False,
     )
@@ -203,6 +210,8 @@ def extract_astro_frontmatter_vars(
         input=json.dumps({"path": str(astro_path), "names": names}),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
         timeout=15,
     )

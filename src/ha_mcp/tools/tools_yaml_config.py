@@ -22,6 +22,7 @@ from pydantic import Field
 
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
+from ..strict_bps import BestPracticeKeyParam
 from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
@@ -250,6 +251,9 @@ class YamlConfigTools:
             bool,
             Field(default=True),
         ] = True,
+        # BestPracticeKey (#1779): consumed by StrictBpsMiddleware, never read
+        # here — see strict_bps.py for the declaration contract.
+        BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
         """Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT). MUST call ha_get_skill_guide first.
 

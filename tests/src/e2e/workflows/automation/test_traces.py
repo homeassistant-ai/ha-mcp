@@ -15,6 +15,7 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ...utilities.entity_finders import find_test_light_entity
 from ...utilities.wait_helpers import wait_for_condition
 
 logger = logging.getLogger(__name__)
@@ -26,26 +27,8 @@ class TestAutomationTraces:
     """Test automation trace retrieval functionality."""
 
     async def _find_test_light_entity(self, mcp_client) -> str:
-        """Find a suitable light entity for testing."""
-        search_result = await mcp_client.call_tool(
-            "ha_search",
-            {"query": "light", "domain_filter": "light", "limit": 20},
-        )
-
-        search_data = parse_mcp_result(search_result)
-
-        results = search_data.get("entities", [])
-
-        if not results:
-            pytest.skip("No light entities available for testing")
-
-        # Prefer demo entities
-        for entity in results:
-            entity_id = entity.get("entity_id", "")
-            if "demo" in entity_id.lower() or "test" in entity_id.lower():
-                return entity_id
-
-        return results[0].get("entity_id", "")
+        """Delegates to the suite-wide helper in utilities.entity_finders."""
+        return await find_test_light_entity(mcp_client)
 
     async def test_automation_trace_after_trigger(
         self, mcp_client, cleanup_tracker, test_data_factory

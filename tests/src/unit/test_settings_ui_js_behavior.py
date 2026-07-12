@@ -3090,6 +3090,215 @@ class TestYamlPackagesSubFlagNesting:
         )
 
 
+class TestStrictMandatoryBpsSubFlagNesting:
+    """JSDOM coverage for the strict-mode sub-row nested under
+    enable_mandatory_bps (issue #1779). Non-beta: the only gate is the
+    parent toggle (no beta master), so the dim/disable pattern keys off
+    parentOn alone."""
+
+    def _payload(self, parent_on: bool) -> dict[str, dict]:
+        flag = lambda name, value, env: {  # noqa: E731
+            "value": value,
+            "origin": "default",
+            "editable": True,
+            "type": "bool",
+            "env_var": env,
+        }
+        return {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_mandatory_bps": flag(
+                            "enable_mandatory_bps",
+                            parent_on,
+                            "ENABLE_MANDATORY_BPS",
+                        ),
+                        "enable_strict_mandatory_bps": flag(
+                            "enable_strict_mandatory_bps",
+                            False,
+                            "ENABLE_STRICT_MANDATORY_BPS",
+                        ),
+                    },
+                    # Strict mode is NON-beta, so it is absent from
+                    # beta_sub_flags; renderSubFlagRows nests it
+                    # under enable_mandatory_bps instead.
+                    "beta_sub_flags": [],
+                },
+            },
+        }
+
+    def test_sub_row_renders_even_when_parent_off(self, settings_script: str) -> None:
+        """The strict sub-row renders even when the parent is off — the user
+        needs to see what they CAN enable once they flip the parent on."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(parent_on=False),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        rows = re.findall(
+            r'<div[^>]*class="[^"]*mandatory-bps-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert len(rows) == 1, (
+            f"expected 1 mandatory-bps-sub row, got {len(rows)}; tail: "
+            f"{result.dom[-2000:]}"
+        )
+
+    def test_dimmed_when_parent_off(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(parent_on=False),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        rows = re.findall(
+            r'<div[^>]*class="[^"]*mandatory-bps-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert rows
+        for row in rows:
+            assert "dimmed" in row, (
+                f"expected dimmed on mandatory-bps-sub row when parent off: {row}"
+            )
+
+    def test_enabled_when_parent_on(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(parent_on=True),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        rows = re.findall(
+            r'<div[^>]*class="[^"]*mandatory-bps-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert rows
+        for row in rows:
+            assert "dimmed" not in row, f"unexpected dimmed when parent on: {row}"
+
+    def test_subrow_input_disabled_when_parent_off(self, settings_script: str) -> None:
+        """The ``dimmed`` class is cosmetic — assert the actual <input>
+        ``.disabled`` PROPERTY is true when the parent is off, so a dimmed
+        sub-row genuinely can't be toggled."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(parent_on=False),
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              const row = document.querySelector('.mandatory-bps-sub');
+              const input = row.querySelector('input[type="checkbox"]');
+              const probe = document.createElement('div');
+              probe.id = 'bpsProbe';
+              probe.dataset.disabled = String(input.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'id="bpsProbe"[^>]*data-disabled="([^"]*)"', result.dom)
+        assert m is not None, f"probe div missing; tail: {result.dom[-1500:]}"
+        assert m.group(1) == "true", (
+            "sub-row <input> must be .disabled when the parent is off"
+        )
+
+    def test_subrow_input_enabled_when_parent_on(self, settings_script: str) -> None:
+        """With the parent on, the strict sub-row <input> is actually
+        interactive (``.disabled === false``)."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(parent_on=True),
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              const row = document.querySelector('.mandatory-bps-sub');
+              const input = row.querySelector('input[type="checkbox"]');
+              const probe = document.createElement('div');
+              probe.id = 'bpsProbe';
+              probe.dataset.disabled = String(input.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'id="bpsProbe"[^>]*data-disabled="([^"]*)"', result.dom)
+        assert m is not None, f"probe div missing; tail: {result.dom[-1500:]}"
+        assert m.group(1) == "false", (
+            "sub-row <input> must be interactive when the parent is on"
+        )
+
+    def test_parent_flip_live_rerenders_subrow(self, settings_script: str) -> None:
+        """Render with the parent ON, then flip enable_mandatory_bps OFF via a
+        DOM change event: the strict sub-row must dim + its <input> disable
+        synchronously (the parent's change handler mutates the live cache and
+        re-renders), and flipping the parent back ON must re-enable it. Guards
+        the live-toggle UX that a page reload would otherwise mask."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(parent_on=True),
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              const subState = () => {
+                const row = document.querySelector('.mandatory-bps-sub');
+                const input = row.querySelector('input[type="checkbox"]');
+                return { dimmed: row.className.includes('dimmed'),
+                         disabled: input.disabled };
+              };
+              const flipParent = (checked) => {
+                const parent = document.querySelector(
+                  'input[name="feature:enable_mandatory_bps"]');
+                parent.checked = checked;
+                parent.dispatchEvent(new Event('change'));
+              };
+              const initial = subState();
+              flipParent(false);
+              const afterOff = subState();
+              flipParent(true);
+              const afterOn = subState();
+              const probe = document.createElement('div');
+              probe.id = 'bpsLiveProbe';
+              probe.dataset.initialDimmed = String(initial.dimmed);
+              probe.dataset.initialDisabled = String(initial.disabled);
+              probe.dataset.offDimmed = String(afterOff.dimmed);
+              probe.dataset.offDisabled = String(afterOff.disabled);
+              probe.dataset.onDimmed = String(afterOn.dimmed);
+              probe.dataset.onDisabled = String(afterOn.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+
+        def _probe(attr: str) -> str:
+            m = re.search(rf'id="bpsLiveProbe"[^>]*{attr}="([^"]*)"', result.dom)
+            assert m is not None, (
+                f"probe attr {attr} missing; tail: {result.dom[-1500:]}"
+            )
+            return m.group(1)
+
+        # Baseline: parent ON → sub-row live and interactive.
+        assert _probe("data-initial-dimmed") == "false"
+        assert _probe("data-initial-disabled") == "false"
+        # Parent flipped OFF → sub-row dims and disables without a reload.
+        assert _probe("data-off-dimmed") == "true", (
+            "strict sub-row must dim when the parent is flipped off live"
+        )
+        assert _probe("data-off-disabled") == "true", (
+            "strict sub-row <input> must disable when the parent is flipped off live"
+        )
+        # Parent flipped back ON → sub-row re-enables.
+        assert _probe("data-on-dimmed") == "false", (
+            "strict sub-row must un-dim when the parent is flipped back on"
+        )
+        assert _probe("data-on-disabled") == "false", (
+            "strict sub-row <input> must re-enable when the parent is flipped back on"
+        )
+
+
 class TestReadOnlyModeToggle:
     """Read Only Mode (#1569): the Tools-tab toggle posts to the
     feature-flag endpoint, and render() forces write-capable tool rows

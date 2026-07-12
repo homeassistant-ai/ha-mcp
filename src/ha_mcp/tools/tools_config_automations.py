@@ -23,6 +23,7 @@ from ..errors import (
     create_error_response,
     create_validation_error,
 )
+from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
@@ -517,6 +518,9 @@ class AutomationConfigTools:
             bool,
             Field(default=True),
         ] = True,
+        # BestPracticeKey (#1779): consumed by StrictBpsMiddleware, never read
+        # here — see strict_bps.py for the declaration contract.
+        BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant automation. MUST call ha_get_skill_guide first.

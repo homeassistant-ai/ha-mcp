@@ -257,6 +257,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # queues a pointless approval request.
         self._apply_read_only_middleware()
 
+        # Strict mandatory best-practices gate (#1779) — always installed,
+        # self-no-ops at call time. Registered immediately AFTER the
+        # read-only middleware so a read-only rejection wins over the
+        # strict-BPS one (a write blocked by read-only mode should not be
+        # asked for an acknowledgment key it could never usefully supply).
+        self._apply_strict_bps_middleware()
+
         # Wire tool security policies middleware (#966) — opt-in via
         # ENABLE_TOOL_SECURITY_POLICIES. Must come last so the middleware
         # wraps the final tool surface (including the search proxies).
@@ -1041,6 +1048,41 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         self.mcp.add_middleware(ReadOnlyMiddleware(list_tools=_list_all_tools))
 
+    def _apply_strict_bps_middleware(self) -> None:
+        """Install the strict best-practices gate (#1779).
+
+        Always installed — the middleware self-no-ops at call time
+        (consults ``strict_bps_effective()`` per call), so a toggle applies
+        live in standalone-HTTP/embedded mode like ``read_only_mode``
+        (other modes pick it up on restart).
+
+        Also emits a startup WARNING when the child flag is on while its
+        parent (``enable_mandatory_bps``) is off: strict mode is inert in
+        that configuration, and env-var users (Docker, uvx, pip) would
+        otherwise have no signal that their strict toggle does nothing.
+        Precedent: the lite-docstrings warning.
+        """
+        from .strict_bps import StrictBpsMiddleware
+
+        if self.settings.enable_strict_mandatory_bps and (
+            not self.settings.enable_mandatory_bps
+        ):
+            logger.warning(
+                "ENABLE_STRICT_MANDATORY_BPS is on but ENABLE_MANDATORY_BPS is "
+                "off — strict best-practices mode is INERT. The strict gate only "
+                "engages when the mandatory-BPS master switch is also on. Enable "
+                "ENABLE_MANDATORY_BPS to activate the acknowledgment gate."
+            )
+
+        # Unfiltered catalog lookup so the gate can pass through calls to
+        # gate-map tools that never registered (e.g. ha_config_set_yaml with
+        # yaml editing off) — those get FastMCP's unknown-tool error instead
+        # of a key-fetch misdirection (#1820 review).
+        async def _list_all_tools() -> Any:
+            return await self.mcp.local_provider._list_tools()
+
+        self.mcp.add_middleware(StrictBpsMiddleware(list_tools=_list_all_tools))
+
     # Shared action-phrased keyword block for retrieval. Some MCP clients
     # (Claude Code, others) rank candidate tools by token-overlap between
     # the user's natural-language query and each tool's `description`
@@ -1295,14 +1337,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 ),
             ] = None,
         ) -> dict[str, Any]:
-            # ``skills_dir`` is captured from the enclosing scope at
-            # registration time. The current ``_get_skills_dir()`` is
-            # effectively static per process (it inspects an on-disk
-            # path that doesn't change), so the closure is fine. If a
-            # future change makes the skills location dynamic (env-var
-            # override, etc.), the closure won't pick that up — re-read
-            # via ``self._get_skills_dir()`` here instead.
-            return self._handle_skill_guide_call(skills_dir, skill, file)
+            # Re-read the skills dir live on every call (#1820 review):
+            # the strict-BPS gate also reads it live, so a registration-time
+            # capture deadlocks the one recovery path — vendor absent at
+            # boot (gate fails open), operator runs `git submodule update
+            # --init` in place, the gate flips ON, but a captured None here
+            # would keep the acknowledgment key unobtainable until restart.
+            return self._handle_skill_guide_call(self._get_skills_dir(), skill, file)
 
         self.mcp.tool(
             name=SKILL_TOOL_NAME,
@@ -1560,10 +1601,24 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # parsing the (potentially large) content body. Scoped to the
         # best-practice skill because that's the one the write-tool
         # MandatoryBPS param gates; other skills (if any) are unrelated.
+        from .strict_bps import strict_bps_ack_line, strict_bps_effective
         from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
 
+        is_best_practices = skill == _HA_BEST_PRACTICES_SKILL_NAME
+
+        # Publish the acknowledgment key inside the best-practices content
+        # itself (#1779) when strict mode is effective — this Tier-3 read is
+        # the ONLY caller-facing surface that carries the key. Prepended to
+        # the content body so a model that reads the guide obtains the key
+        # it must pass as BestPracticeKey on gated writes. The skill://
+        # resource surface reads raw files and does NOT get this line; that
+        # is accepted — resource-preferring clients recover via the block
+        # error's suggestion, which points them back at this tool.
+        if is_best_practices and strict_bps_effective():
+            content = f"{strict_bps_ack_line()}\n\n{content}"
+
         response: dict[str, Any] = {}
-        if skill == _HA_BEST_PRACTICES_SKILL_NAME:
+        if is_best_practices:
             response["skill_content_hint"] = _SKILL_GUIDE_MANDATORYBPS_HINT
         response.update(
             {

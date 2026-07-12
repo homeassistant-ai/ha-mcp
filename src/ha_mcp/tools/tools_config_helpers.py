@@ -23,6 +23,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from ..strict_bps import BestPracticeKeyParam
 from .auto_backup import with_auto_backup
 from .component_api import (
     component_supports,
@@ -4104,6 +4105,9 @@ class HelperConfigTools:
             bool,
             Field(default=True),
         ] = True,
+        # BestPracticeKey (#1779): consumed by StrictBpsMiddleware, never read
+        # here — see strict_bps.py for the declaration contract.
+        BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
         """
         Create or update Home Assistant helper entities and config subentries

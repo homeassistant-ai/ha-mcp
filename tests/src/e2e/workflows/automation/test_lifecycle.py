@@ -18,6 +18,7 @@ from ...utilities.assertions import (
     safe_call_tool,
     wait_for_automation,
 )
+from ...utilities.entity_finders import find_test_light_entity
 from ...utilities.wait_helpers import (
     wait_for_entity_state,
     wait_for_ha_event,
@@ -1114,25 +1115,10 @@ async def test_automation_creation_returns_verified_entity(
 async def _find_test_light_entity(mcp_client) -> str:
     """Find a suitable light entity for testing.
 
-    Prefers demo/test entities, falls back to first available light.
-    Shared helper used by multiple test classes in this module.
+    Shared helper used by multiple test classes in this module; delegates
+    to the suite-wide implementation in utilities.entity_finders.
     """
-    search_result = await mcp_client.call_tool(
-        "ha_search",
-        {"query": "light", "domain_filter": "light", "limit": 20},
-    )
-    search_data = parse_mcp_result(search_result)
-    results = search_data.get("entities", [])
-    if not results:
-        pytest.skip("No light entities available for testing")
-    for entity in results:
-        entity_id = entity.get("entity_id", "")
-        if "demo" in entity_id.lower() or "test" in entity_id.lower():
-            return entity_id
-    entity_id = results[0].get("entity_id", "")
-    if not entity_id:
-        pytest.skip("No valid light entity found for testing")
-    return entity_id
+    return await find_test_light_entity(mcp_client)
 
 
 @pytest.mark.automation

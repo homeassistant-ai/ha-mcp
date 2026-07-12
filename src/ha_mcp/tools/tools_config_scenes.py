@@ -21,6 +21,7 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
+from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
@@ -522,6 +523,9 @@ class ConfigSceneTools:
             bool,
             Field(default=True),
         ] = True,
+        # BestPracticeKey (#1779): consumed by StrictBpsMiddleware, never read
+        # here — see strict_bps.py for the declaration contract.
+        BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant scene. MUST call ha_get_skill_guide first.

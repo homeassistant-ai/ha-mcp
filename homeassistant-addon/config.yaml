@@ -50,6 +50,7 @@ options:
   enable_tool_security_policies: false
   read_only_mode: false
   enable_mandatory_bps: true
+  enable_strict_mandatory_bps: true
   disabled_tools: ""
   pinned_tools: ""
   enable_auto_backup: true
@@ -64,6 +65,7 @@ schema:
   enable_tool_security_policies: bool?
   read_only_mode: bool?
   enable_mandatory_bps: bool?
+  enable_strict_mandatory_bps: bool?
   disabled_tools: str?
   pinned_tools: str?
   enable_auto_backup: bool?

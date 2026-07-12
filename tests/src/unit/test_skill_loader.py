@@ -16,6 +16,8 @@ import pytest
 
 from ha_mcp.utils import skill_loader
 
+from ._symlink_support import symlink_or_skip
+
 
 @pytest.fixture
 def fake_skills_dir(tmp_path: Path) -> Path:
@@ -83,7 +85,7 @@ def test_resolve_skill_files_rejects_symlink(
     target = tmp_path / "outside.md"
     target.write_text("escaped\n")
     link = skill_dir / "references" / "evil.md"
-    link.symlink_to(target)
+    symlink_or_skip(link, target)
 
     result = skill_loader.resolve_skill_files(
         fake_skills_dir,

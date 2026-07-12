@@ -16,6 +16,7 @@ from pydantic import Field
 
 from ..dashboard_screenshot.capture import FULL_PAGE_PARAM_DESC
 from ..errors import ErrorCode, create_error_response
+from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
@@ -1668,6 +1669,9 @@ class DashboardConfigTools:
             bool,
             Field(default=True),
         ] = True,
+        # BestPracticeKey (#1779): consumed by StrictBpsMiddleware, never read
+        # here — see strict_bps.py for the declaration contract.
+        BestPracticeKey: BestPracticeKeyParam = None,
         return_screenshot: Annotated[
             bool,
             Field(

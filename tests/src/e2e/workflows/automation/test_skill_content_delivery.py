@@ -21,7 +21,8 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result, safe_call_tool
+from ...utilities.assertions import safe_call_tool
+from ...utilities.entity_finders import find_test_light_entity
 
 logger = logging.getLogger(__name__)
 
@@ -36,15 +37,8 @@ class TestSkillContentDelivery:
     """End-to-end skill_content delivery on ha_config_set_automation."""
 
     async def _find_test_light_entity(self, mcp_client) -> str:
-        """Find a light entity to use as the automation target."""
-        search = await mcp_client.call_tool(
-            "ha_search",
-            {"query": "light", "domain_filter": "light", "limit": 5},
-        )
-        data = parse_mcp_result(search)
-        results = data.get("entities", [])
-        assert results, "no light entities found in test HA instance"
-        return results[0]["entity_id"]
+        """Delegates to the suite-wide helper in utilities.entity_finders."""
+        return await find_test_light_entity(mcp_client)
 
     async def test_default_mandatorybps_attaches_canonical_skill_content(
         self, mcp_client, cleanup_tracker, test_data_factory
