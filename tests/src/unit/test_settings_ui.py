@@ -835,7 +835,9 @@ class TestRestartAddon:
         cm.__aenter__ = AsyncMock(return_value=mock_client)
         cm.__aexit__ = AsyncMock(return_value=None)
         factory = MagicMock(return_value=cm)
-        patcher = patch("ha_mcp.settings_ui.make_supervisor_httpx_client", factory)
+        patcher = patch(
+            "ha_mcp.settings_ui._supervisor.make_supervisor_httpx_client", factory
+        )
         return patcher, mock_client
 
     @pytest.mark.asyncio
@@ -971,7 +973,7 @@ class TestRestartAddon:
 
         schedule_mock = MagicMock()
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._schedule_supervisor_self_restart",
+            "ha_mcp.settings_ui._supervisor._schedule_supervisor_self_restart",
             schedule_mock,
         )
         resp = await restart(request)
@@ -1056,7 +1058,7 @@ class TestRestartAddon:
 
         schedule_mock = MagicMock()
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._schedule_supervisor_self_restart",
+            "ha_mcp.settings_ui._supervisor._schedule_supervisor_self_restart",
             schedule_mock,
         )
 
@@ -1453,7 +1455,9 @@ class TestSupervisorOptionsHelpers:
         cm.__aenter__ = AsyncMock(return_value=mock_client)
         cm.__aexit__ = AsyncMock(return_value=None)
         factory = MagicMock(return_value=cm)
-        patcher = patch("ha_mcp.settings_ui.make_supervisor_httpx_client", factory)
+        patcher = patch(
+            "ha_mcp.settings_ui._supervisor.make_supervisor_httpx_client", factory
+        )
         return patcher, mock_client
 
     @pytest.mark.asyncio
@@ -1828,10 +1832,12 @@ class TestSaveBackupConfigAddonMode:
         merge_mock = AsyncMock(return_value=(True, None))
         schedule_mock = MagicMock()
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+            "ha_mcp.settings_ui._supervisor._supervisor_merge_and_post_options",
+            merge_mock,
         )
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._schedule_supervisor_self_restart", schedule_mock
+            "ha_mcp.settings_ui._supervisor._schedule_supervisor_self_restart",
+            schedule_mock,
         )
 
         resp = await post_handler(
@@ -1876,10 +1882,12 @@ class TestSaveBackupConfigAddonMode:
         )
         schedule_mock = MagicMock()
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+            "ha_mcp.settings_ui._supervisor._supervisor_merge_and_post_options",
+            merge_mock,
         )
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._schedule_supervisor_self_restart", schedule_mock
+            "ha_mcp.settings_ui._supervisor._schedule_supervisor_self_restart",
+            schedule_mock,
         )
 
         resp = await post_handler(self._make_request({"enable_auto_backup": True}))
@@ -1916,10 +1924,12 @@ class TestSaveBackupConfigAddonMode:
         )
         schedule_mock = MagicMock()
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+            "ha_mcp.settings_ui._supervisor._supervisor_merge_and_post_options",
+            merge_mock,
         )
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._schedule_supervisor_self_restart", schedule_mock
+            "ha_mcp.settings_ui._supervisor._schedule_supervisor_self_restart",
+            schedule_mock,
         )
 
         resp = await post_handler(self._make_request({"enable_auto_backup": True}))
@@ -1983,10 +1993,12 @@ class TestSaveFeatureFlagsAddonMode:
         merge_mock = AsyncMock(return_value=(True, None))
         schedule_mock = MagicMock()
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+            "ha_mcp.settings_ui._supervisor._supervisor_merge_and_post_options",
+            merge_mock,
         )
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._schedule_supervisor_self_restart", schedule_mock
+            "ha_mcp.settings_ui._supervisor._schedule_supervisor_self_restart",
+            schedule_mock,
         )
 
         resp = await post_handler(
@@ -2027,10 +2039,12 @@ class TestSaveFeatureFlagsAddonMode:
         )
         schedule_mock = MagicMock()
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+            "ha_mcp.settings_ui._supervisor._supervisor_merge_and_post_options",
+            merge_mock,
         )
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._schedule_supervisor_self_restart", schedule_mock
+            "ha_mcp.settings_ui._supervisor._schedule_supervisor_self_restart",
+            schedule_mock,
         )
 
         resp = await post_handler(
@@ -2759,7 +2773,8 @@ class TestGetHandlersAddonLiveOptions:
             return {"enable_tool_search": True}, None
 
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+            "ha_mcp.settings_ui._supervisor._supervisor_fetch_current_options",
+            fake_fetch,
         )
         server = MagicMock()
         server.settings.verify_ssl = True
@@ -2785,7 +2800,8 @@ class TestGetHandlersAddonLiveOptions:
             return {"backup_hint": "weak", "verify_ssl": False}, None
 
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+            "ha_mcp.settings_ui._supervisor._supervisor_fetch_current_options",
+            fake_fetch,
         )
         server = MagicMock()
         server.settings.verify_ssl = True
@@ -2819,7 +2835,8 @@ class TestGetHandlersAddonLiveOptions:
             return {}, _SupervisorOptionsError.transport("supervisor unreachable")
 
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+            "ha_mcp.settings_ui._supervisor._supervisor_fetch_current_options",
+            fake_fetch,
         )
         server = MagicMock()
         server.settings.verify_ssl = True
@@ -2852,7 +2869,8 @@ class TestGetHandlersAddonLiveOptions:
             return {}, _SupervisorOptionsError.transport("supervisor unreachable")
 
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+            "ha_mcp.settings_ui._supervisor._supervisor_fetch_current_options",
+            fake_fetch,
         )
         server = MagicMock()
         server.settings.verify_ssl = True
@@ -2888,7 +2906,8 @@ class TestGetHandlersAddonLiveOptions:
             return {"fuzzy_threshold": 99}, None
 
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+            "ha_mcp.settings_ui._supervisor._supervisor_fetch_current_options",
+            fake_fetch,
         )
         server = MagicMock()
         server.settings.verify_ssl = True
@@ -2921,7 +2940,8 @@ class TestGetHandlersAddonLiveOptions:
             return {"enable_beta_features": True}, None  # saved, not yet restarted
 
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+            "ha_mcp.settings_ui._supervisor._supervisor_fetch_current_options",
+            fake_fetch,
         )
         server = MagicMock()
         server.settings.verify_ssl = True
@@ -2965,7 +2985,8 @@ class TestGetHandlersAddonLiveOptions:
             return {"enable_tool_search": True}, None  # stale live value
 
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+            "ha_mcp.settings_ui._supervisor._supervisor_fetch_current_options",
+            fake_fetch,
         )
         server = MagicMock()
         server.settings.verify_ssl = True
@@ -2995,7 +3016,8 @@ class TestGetHandlersAddonLiveOptions:
             return {}, None
 
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+            "ha_mcp.settings_ui._supervisor._supervisor_fetch_current_options",
+            fake_fetch,
         )
         # server=None is the second short-circuit condition; both hold here.
         handlers = build_settings_handlers(server=None)
@@ -3326,7 +3348,8 @@ class TestAdvancedSettingsEndpoints:
         _reset_global_settings()
         merge_mock = AsyncMock(return_value=(True, None))
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+            "ha_mcp.settings_ui._supervisor._supervisor_merge_and_post_options",
+            merge_mock,
         )
         server = MagicMock()
         server.settings.verify_ssl = True
@@ -3371,7 +3394,8 @@ class TestAdvancedSettingsEndpoints:
             )
         )
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+            "ha_mcp.settings_ui._supervisor._supervisor_merge_and_post_options",
+            merge_mock,
         )
         server = MagicMock()
         server.settings.verify_ssl = True
@@ -3884,10 +3908,11 @@ class TestBetaMasterGateInSave:
         fetch_mock = AsyncMock(return_value=(current_options, None))
         merge_mock = AsyncMock(return_value=(True, None))
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_fetch_current_options", fetch_mock
+            "ha_mcp.settings_ui._supervisor._supervisor_fetch_current_options",
+            fetch_mock,
         )
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._supervisor_merge_and_post_options",
+            "ha_mcp.settings_ui._supervisor._supervisor_merge_and_post_options",
             merge_mock,
         )
         # Mark the master env var as set so get_feature_flag_origin

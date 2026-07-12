@@ -426,7 +426,9 @@ class TestManageServer:
     async def test_restart_addon_schedules_supervisor_restart(self, monkeypatch):
         monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
         reset_global_settings()
-        with patch("ha_mcp.settings_ui._schedule_supervisor_self_restart") as sched:
+        with patch(
+            "ha_mcp.settings_ui._supervisor._schedule_supervisor_self_restart"
+        ) as sched:
             result = await DevTools(_mock_client()).ha_dev_manage_server(
                 action="restart"
             )
@@ -478,7 +480,7 @@ class TestManageSettingsAddonOrigin:
             return True, None
 
         monkeypatch.setattr(
-            settings_ui, "_supervisor_merge_and_post_options", _fake_merge
+            settings_ui._supervisor, "_supervisor_merge_and_post_options", _fake_merge
         )
         result = await DevTools(MagicMock()).ha_dev_manage_settings(
             action="set", setting="enable_tool_search", value=True
@@ -497,7 +499,7 @@ class TestManageSettingsAddonOrigin:
             return False, SimpleNamespace(message="schema says no")
 
         monkeypatch.setattr(
-            settings_ui, "_supervisor_merge_and_post_options", _fake_merge
+            settings_ui._supervisor, "_supervisor_merge_and_post_options", _fake_merge
         )
         with pytest.raises(ToolError, match="Supervisor rejected"):
             await DevTools(MagicMock()).ha_dev_manage_settings(
