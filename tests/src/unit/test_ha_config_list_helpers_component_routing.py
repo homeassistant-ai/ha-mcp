@@ -43,6 +43,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
 )
 from ha_mcp.tools import component_api, tools_config_helpers
+from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
 from ha_mcp.tools.tools_config_helpers import (
     SIMPLE_HELPER_TYPES,
     _shape_collection_helper_record,
@@ -603,9 +604,11 @@ def test_collection_record_falls_back_to_object_id_without_storage_id() -> None:
 def _component_all_result() -> dict[str, Any]:
     """Merged component output: one collection helper + one flow helper.
 
-    ``covered_types`` is the realistic universe the component enumerates — every
-    simple type EXCEPT ``tag`` (which has no state entity) plus the flow type it
-    returned. So only ``tag`` should fall back to the legacy per-type list.
+    ``covered_types`` mirrors the real component: every simple type EXCEPT
+    ``tag`` (which has no state entity) plus the FULL flow universe
+    (``covered |= FLOW_HELPER_DOMAINS`` component-side — not just types with
+    instances). So only ``tag`` falls back to the legacy per-type list, and no
+    flow type triggers the incomplete-coverage hard error.
     """
     return {
         "helpers": [
@@ -628,7 +631,7 @@ def _component_all_result() -> dict[str, Any]:
             },
         ],
         "count": 2,
-        "covered_types": sorted((SIMPLE_HELPER_TYPES - {"tag"}) | {"template"}),
+        "covered_types": sorted((SIMPLE_HELPER_TYPES - {"tag"}) | FLOW_HELPER_TYPES),
     }
 
 

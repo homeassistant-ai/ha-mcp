@@ -490,6 +490,52 @@ def _parse_time_range(
     return start_dt, end_dt
 
 
+_WS_CONNECTION_SIGNATURES = (
+    "failed to connect",
+    "timed out",
+    "timeout",
+    "connection closed",
+    "disconnected",
+    "not connected",
+)
+
+
+def _raise_recorder_ws_failure(
+    kind: str,
+    error_msg: str,
+    entity_id_list: list[str],
+    suggestions: list[str],
+) -> None:
+    """Raise the structured error for a failed recorder WS call.
+
+    The pooled ``send_websocket_message`` collapses transport failures into
+    ``{"success": False, "error": ...}`` — classify connection-shaped errors
+    as CONNECTION_FAILED (retry/connectivity guidance) instead of presenting
+    recorder-retention suggestions during an HA restart or WS outage.
+    """
+    lowered = error_msg.lower()
+    if any(sig in lowered for sig in _WS_CONNECTION_SIGNATURES):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
+                f"Failed to retrieve {kind}: {error_msg}",
+                context={"entity_ids": entity_id_list},
+                suggestions=[
+                    "Home Assistant may be restarting or unreachable — retry shortly",
+                    "Check the connection to Home Assistant",
+                ],
+            )
+        )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Failed to retrieve {kind}: {error_msg}",
+            context={"entity_ids": entity_id_list},
+            suggestions=suggestions,
+        )
+    )
+
+
 async def _fetch_history(
     client: Any,
     entity_id_list: list[str],
@@ -528,18 +574,15 @@ async def _fetch_history(
     )
 
     if not response.get("success"):
-        error_msg = response.get("error", "Unknown error")
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to retrieve history: {error_msg}",
-                context={"entity_ids": entity_id_list},
-                suggestions=[
-                    "Verify entity IDs exist using ha_search()",
-                    "Check that entities are recorded (not excluded from recorder)",
-                    "Ensure time range is within recorder retention period (~10 days)",
-                ],
-            )
+        _raise_recorder_ws_failure(
+            "history",
+            response.get("error", "Unknown error"),
+            entity_id_list,
+            suggestions=[
+                "Verify entity IDs exist using ha_search()",
+                "Check that entities are recorded (not excluded from recorder)",
+                "Ensure time range is within recorder retention period (~10 days)",
+            ],
         )
 
     result_data = response.get("result", {})
@@ -694,18 +737,15 @@ async def _fetch_statistics(
     )
 
     if not response.get("success"):
-        error_msg = response.get("error", "Unknown error")
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to retrieve statistics: {error_msg}",
-                context={"entity_ids": entity_id_list},
-                suggestions=[
-                    "Verify entities have state_class attribute (measurement, total, total_increasing)",
-                    "Use ha_search() to check entity attributes",
-                    "Statistics are only available for entities that track numeric values",
-                ],
-            )
+        _raise_recorder_ws_failure(
+            "statistics",
+            response.get("error", "Unknown error"),
+            entity_id_list,
+            suggestions=[
+                "Verify entities have state_class attribute (measurement, total, total_increasing)",
+                "Use ha_search() to check entity attributes",
+                "Statistics are only available for entities that track numeric values",
+            ],
         )
 
     result_data = response.get("result", {})

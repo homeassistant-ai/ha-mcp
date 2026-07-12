@@ -256,7 +256,9 @@ class ZoneTools:
     async def _send_component_zone_list(self) -> dict[str, Any]:
         """Send one ``ha_mcp_tools/helpers_list`` zone query over the per-client WS."""
         ws = await get_websocket_client(
-            url=self._client.base_url, token=self._client.token
+            url=self._client.base_url,
+            token=self._client.token,
+            verify_ssl=getattr(self._client, "verify_ssl", None),
         )
         return await ws.send_command(
             "ha_mcp_tools/helpers_list",

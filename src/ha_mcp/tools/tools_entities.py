@@ -1149,13 +1149,34 @@ class EntityTools:
         for eid in eligible_ids:
             if eid in refetched_raw:
                 entry_by_id[eid] = _format_entity_entry(refetched_raw[eid])
+        # An id whose refetch failed AND that has no earlier registry snapshot
+        # (expose-only bulk never populates one) would otherwise be reported
+        # as a success row with entity_entry=None — e.g. a typo'd or deleted
+        # entity. The old per-entity path raised for exactly this case.
+        still_eligible: list[str] = []
+        newly_failed: list[dict[str, Any]] = []
+        for eid in eligible_ids:
+            if eid in refetch_errors and entry_by_id.get(eid) is None:
+                newly_failed.append(
+                    {
+                        "entity_id": eid,
+                        "error": (
+                            "Exposure command was sent, but the entity could "
+                            "not be verified in the registry: "
+                            f"{refetch_errors[eid]}"
+                        ),
+                    }
+                )
+            else:
+                still_eligible.append(eid)
         if refetch_errors:
             logger.warning(
                 "Bulk exposure applied but post-exposure refresh failed "
-                "for %d id(s); returning pre-exposure snapshot",
+                "for %d id(s); %d had a pre-exposure snapshot to return",
                 len(refetch_errors),
+                len(refetch_errors) - len(newly_failed),
             )
-        return eligible_ids, []
+        return still_eligible, newly_failed
 
     async def _bulk_update_entities(
         self,

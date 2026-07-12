@@ -3896,11 +3896,25 @@ class HelperConfigTools:
         ``helpers_list`` it serves the merged listing; otherwise — or if the
         component call fails — this raises COMPONENT_NOT_INSTALLED via
         :func:`_raise_all_requires_component` rather than returning an empty list.
+        A raw transport failure (e.g. the WS cannot connect right after an HA
+        restart) becomes the structured error the rest of the tool uses — never
+        an unclassified exception.
         """
-        caps = await get_component_caps(self._client)
-        response = None
-        if component_supports(caps, "helpers_list"):
-            response = await self._all_helpers_via_component()
+        response: dict[str, Any] | None = None
+        try:
+            caps = await get_component_caps(self._client)
+            if component_supports(caps, "helpers_list"):
+                response = await self._all_helpers_via_component()
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"helper_type": "all"},
+                suggestions=[
+                    "Home Assistant may be restarting or unreachable — retry shortly",
+                ],
+            )
         if response is None:
             _raise_all_requires_component()
         return response
@@ -3930,7 +3944,9 @@ class HelperConfigTools:
         (``type_filter=None`` component-side).
         """
         ws = await get_websocket_client(
-            url=self._client.base_url, token=self._client.token
+            url=self._client.base_url,
+            token=self._client.token,
+            verify_ssl=getattr(self._client, "verify_ssl", None),
         )
         return await ws.send_command(
             "ha_mcp_tools/helpers_list",
@@ -3966,14 +3982,33 @@ class HelperConfigTools:
                 helpers.append(shaped)
 
         covered = result.get("covered_types")
-        if isinstance(covered, list):
-            for helper_type in sorted(SIMPLE_HELPER_TYPES - set(covered)):
-                legacy = await self._legacy_helper_list(helper_type)
-                for item in legacy.get("helpers", []):
-                    if isinstance(item, dict):
-                        row = dict(item)
-                        row.setdefault("helper_type", helper_type)
-                        helpers.append(row)
+        covered_set = set(covered) if isinstance(covered, list) else set()
+        # Flow helper types have no legacy ``{type}/list`` fallback — if the
+        # component did not authoritatively cover one, a "successful" merged
+        # listing would silently omit it. Mirror the single-type taxonomy:
+        # hard error, never a partial inventory reported as complete.
+        uncovered_flow = sorted(FLOW_HELPER_TYPES - covered_set)
+        if uncovered_flow:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.COMPONENT_NOT_INSTALLED,
+                    "The ha_mcp_tools component response did not cover flow "
+                    f"helper type(s): {', '.join(uncovered_flow)} — cannot "
+                    "return a complete all-types listing.",
+                    context={"helper_type": "all", "uncovered": uncovered_flow},
+                    suggestions=[
+                        "Update the ha_mcp_tools custom component",
+                        "List helper types individually instead of 'all'",
+                    ],
+                )
+            )
+        for helper_type in sorted(SIMPLE_HELPER_TYPES - covered_set):
+            legacy = await self._legacy_helper_list(helper_type)
+            for item in legacy.get("helpers", []):
+                if isinstance(item, dict):
+                    row = dict(item)
+                    row.setdefault("helper_type", helper_type)
+                    helpers.append(row)
 
         return {
             "success": True,
