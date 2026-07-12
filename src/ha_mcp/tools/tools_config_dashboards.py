@@ -7,14 +7,33 @@ This module provides tools for managing dashboard metadata and content.
 import json
 import logging
 import re
-from typing import Annotated, Any, cast, overload
+from dataclasses import dataclass, replace
+from typing import Annotated, Any, Literal, cast, overload
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
-from ..dashboard_screenshot.capture import FULL_PAGE_PARAM_DESC
+from ..dashboard_screenshot.capture import (
+    DEFAULT_HEIGHT,
+    DEFAULT_RENDER_TIMEOUT_SECONDS,
+    DEFAULT_WAIT_MS,
+    DEFAULT_WIDTH,
+    FULL_PAGE_PARAM_DESC,
+    Orientation,
+    ScreenshotFormat,
+    ViewportPreset,
+)
+from ..dashboard_screenshot.content import (
+    dashboard_image_content,
+    dashboard_screenshot_metadata,
+)
+from ..dashboard_screenshot.paths import (
+    dashboard_frontend_path,
+    dashboard_render_paths,
+    resolve_dashboard_view,
+)
 from ..errors import ErrorCode, create_error_response
 from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
@@ -43,6 +62,25 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _DashboardScreenshotOptions:
+    """Shared render options for get/set screenshot paths."""
+
+    view_path: str | None = None
+    width: int = DEFAULT_WIDTH
+    height: int | Literal["auto"] = DEFAULT_HEIGHT
+    viewport_presets: list[ViewportPreset] | None = None
+    orientation: Orientation | None = None
+    zoom: float = 1.0
+    wait_ms: int = DEFAULT_WAIT_MS
+    full_page: bool = False
+    theme: str | None = None
+    dark_mode: bool = False
+    language: str | None = None
+    image_format: ScreenshotFormat = "png"
+    render_timeout_seconds: float = DEFAULT_RENDER_TIMEOUT_SECONDS
 
 
 # dashboard-guide.md + dashboard-cards.md cover layout patterns and the
@@ -940,30 +978,129 @@ async def _lazy_resolve_and_retry(
 
 def _dashboard_frontend_path(url_path: str | None) -> str:
     """Map a dashboard url_path to its Lovelace frontend path for screenshots."""
-    if not url_path or url_path == "default":
-        return "lovelace"
-    return url_path
+    return dashboard_frontend_path(url_path)
+
+
+def _attach_dashboard_render_paths(
+    result: dict[str, Any],
+    url_path: str | None,
+    config: dict[str, Any] | None,
+) -> None:
+    """Attach canonical per-view render routes without mutating config."""
+    render_paths, warnings = dashboard_render_paths(url_path, config)
+    result["render_paths"] = render_paths
+    if warnings:
+        result.setdefault("warnings", []).extend(warnings)
+
+
+async def _attach_dashboard_render_paths_after_write(
+    client: Any,
+    result: dict[str, Any],
+    url_path: str,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Attach post-write render routes without turning metadata into failure."""
+    if config is None:
+        try:
+            config, _ = await _get_dashboard_config_internal(client, url_path)
+        except ToolError as exc:
+            result.setdefault("warnings", []).append(
+                "Canonical render paths unavailable after the dashboard write: "
+                f"{extract_tool_error_message(exc)}"
+            )
+            return None
+        except Exception as exc:
+            # The dashboard write already committed. Metadata enrichment must
+            # not turn a successful mutation into a reported failure when the
+            # follow-up read hits a raw transport or parsing exception.
+            logger.warning(
+                "Could not fetch canonical render paths after writing %s: %s",
+                url_path,
+                exc,
+                exc_info=True,
+            )
+            result.setdefault("warnings", []).append(
+                f"Canonical render paths unavailable after the dashboard write: {exc}"
+            )
+            return None
+    _attach_dashboard_render_paths(result, url_path, config)
+    return config
 
 
 def _note_screenshot_ignored(
     result: dict[str, Any],
     *,
     include_screenshot: bool,
-    full_page: bool,
+    full_page: bool = False,
+    options: _DashboardScreenshotOptions | None = None,
     mode: str,
 ) -> None:
     """Warn when a screenshot was requested in a mode that can't render one.
 
-    ``include_screenshot`` / ``full_page`` are only honoured in get mode. In
-    list and search mode they are accepted but inapplicable, so surface a
+    Screenshot options are only honoured in get mode. In list and search mode
+    they are accepted but inapplicable, so surface a
     ``warnings`` entry rather than dropping the request as a silent no-op
     (matches the warn-don't-fail contract the params document)."""
-    if include_screenshot or full_page:
+    capture_options = options or _DashboardScreenshotOptions(full_page=full_page)
+    if include_screenshot or capture_options != _DashboardScreenshotOptions():
         result.setdefault("warnings", []).append(
-            f"include_screenshot/full_page is ignored in {mode} mode; call "
+            f"include_screenshot and screenshot render options are ignored in {mode} "
+            "mode; call "
             "ha_config_get_dashboard with a url_path (and no search criteria) "
             "to get a screenshot."
         )
+
+
+async def _capture_dashboard_screenshot_result(
+    result: dict[str, Any],
+    url_path: str | None,
+    *,
+    client: Any | None,
+    config: dict[str, Any] | None,
+    options: _DashboardScreenshotOptions,
+) -> ToolResult:
+    """Render configured captures and attach their ordered MCP metadata."""
+    from ..dashboard_screenshot import capture as screenshot_capture
+
+    render_path = _dashboard_frontend_path(url_path)
+    if options.view_path is not None or config is not None:
+        if config is None:
+            if client is None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        "Dashboard client is unavailable for view_path resolution.",
+                    )
+                )
+            config, _ = await _get_dashboard_config_internal(client, url_path)
+        target = resolve_dashboard_view(
+            url_path or "default", config, options.view_path
+        )
+        render_path = target.render_path
+        if target.warnings:
+            result.setdefault("warnings", []).extend(target.warnings)
+
+    captures = await screenshot_capture.capture_dashboard_images(
+        render_path,
+        width=options.width,
+        height=options.height,
+        viewport_presets=options.viewport_presets,
+        orientation=options.orientation,
+        zoom=options.zoom,
+        wait_ms=options.wait_ms,
+        full_page=options.full_page,
+        theme=options.theme,
+        dark_mode=options.dark_mode,
+        language=options.language,
+        image_format=options.image_format,
+        render_timeout_seconds=options.render_timeout_seconds,
+    )
+    result["screenshot_render_path"] = render_path
+    result["screenshots"] = dashboard_screenshot_metadata(captures, render_path)
+    return ToolResult(
+        content=dashboard_image_content(captures),
+        structured_content=result,
+    )
 
 
 async def _maybe_attach_screenshot(
@@ -971,19 +1108,19 @@ async def _maybe_attach_screenshot(
     url_path: str | None,
     requested: bool,
     *,
+    client: Any | None = None,
+    config: dict[str, Any] | None = None,
+    options: _DashboardScreenshotOptions | None = None,
     full_page: bool = False,
     raise_on_failure: bool = False,
 ) -> "dict[str, Any] | ToolResult":
-    """Optionally render the dashboard and attach it as an image content block.
+    """Optionally render a dashboard and attach ordered native image blocks.
 
     Shared by ``ha_config_get_dashboard`` (include_screenshot) and
     ``ha_config_set_dashboard`` (return_screenshot). On success returns a
     FastMCP ``ToolResult`` carrying ``result`` as structured_content plus the
-    PNG as an image content block — so structured_content is present on both
-    the screenshot and no-screenshot paths (a bare ``[dict, Image]`` list
-    would drop structured_content because the Image isn't JSON-serializable).
-    ``full_page`` captures the whole scrollable dashboard rather than the
-    viewport.
+    images as content blocks. Render metadata is added to the existing result
+    dict, preserving its structured response contract.
 
     ``raise_on_failure`` governs what a capture failure does. The set path
     (``return_screenshot``) leaves it False: a screenshot failure must never
@@ -995,10 +1132,16 @@ async def _maybe_attach_screenshot(
     warning the caller may never inspect. A disabled feature flag is always a
     warning either way — it is an expected configuration state, not a failure.
     """
+    capture_options = options or _DashboardScreenshotOptions(full_page=full_page)
+    if options is not None and full_page and not capture_options.full_page:
+        capture_options = replace(capture_options, full_page=True)
+
     if not requested:
-        if full_page:
+        defaults = _DashboardScreenshotOptions()
+        if capture_options != defaults:
             result.setdefault("warnings", []).append(
-                "full_page is ignored because no screenshot was requested "
+                "Screenshot render options are ignored because no screenshot "
+                "was requested "
                 "(set include_screenshot / return_screenshot to use it)."
             )
         return result
@@ -1013,16 +1156,12 @@ async def _maybe_attach_screenshot(
         return result
 
     try:
-        from fastmcp.utilities.types import Image
-
-        from ..dashboard_screenshot.capture import capture_dashboard_png
-
-        png = await capture_dashboard_png(
-            _dashboard_frontend_path(url_path), full_page=full_page
-        )
-        return ToolResult(
-            content=[Image(data=png, format="png").to_image_content()],
-            structured_content=result,
+        return await _capture_dashboard_screenshot_result(
+            result,
+            url_path,
+            client=client,
+            config=config,
+            options=capture_options,
         )
     except ToolError as e:
         if raise_on_failure:
@@ -1121,7 +1260,7 @@ class DashboardConfigTools:
         include_screenshot: Annotated[
             bool,
             Field(
-                description="Get mode only: also return a rendered PNG of the "
+                description="Get mode only: also return rendered image(s) of the "
                 "dashboard for visual verification. Requires the 'dashboard "
                 "screenshot' beta feature + engine add-on/sidecar. If the "
                 "feature is disabled the config is returned with a warning; if "
@@ -1130,10 +1269,72 @@ class DashboardConfigTools:
                 "list/search mode."
             ),
         ] = False,
+        view_path: Annotated[
+            str | None,
+            Field(
+                description="With include_screenshot: stable Lovelace "
+                "views[].path to render. Omit to render the dashboard base route."
+            ),
+        ] = None,
+        width: Annotated[
+            int,
+            Field(description="Screenshot viewport width in px.", ge=64, le=4096),
+        ] = DEFAULT_WIDTH,
+        height: Annotated[
+            int | Literal["auto"],
+            Field(
+                description="Screenshot viewport height in px (64-4096), or "
+                "'auto' for content height."
+            ),
+        ] = DEFAULT_HEIGHT,
+        viewport_presets: Annotated[
+            list[ViewportPreset] | None,
+            Field(
+                description="With include_screenshot: ordered mobile, tablet, "
+                "and/or desktop captures. Overrides width/height.",
+                min_length=1,
+                max_length=3,
+            ),
+        ] = None,
+        orientation: Annotated[
+            Orientation | None,
+            Field(description="Optional portrait or landscape viewport layout."),
+        ] = None,
+        zoom: Annotated[
+            float,
+            Field(description="Screenshot page zoom factor.", ge=0.1, le=5.0),
+        ] = 1.0,
+        wait_ms: Annotated[
+            int,
+            Field(description="Screenshot render-settle delay in ms.", ge=0, le=30000),
+        ] = DEFAULT_WAIT_MS,
         full_page: Annotated[
             bool,
-            Field(description=f"With include_screenshot: {FULL_PAGE_PARAM_DESC}."),
+            Field(
+                description=f"With include_screenshot: {FULL_PAGE_PARAM_DESC}; "
+                "uses Puppet auto-height (currently capped at 4000 px)."
+            ),
         ] = False,
+        theme: Annotated[
+            str | None,
+            Field(description="Screenshot frontend theme name."),
+        ] = None,
+        dark_mode: Annotated[
+            bool,
+            Field(description="Render the screenshot theme in dark mode."),
+        ] = False,
+        language: Annotated[
+            str | None,
+            Field(description="Screenshot frontend language code."),
+        ] = None,
+        image_format: Annotated[
+            ScreenshotFormat,
+            Field(description="Screenshot format: png, jpeg, webp, or bmp."),
+        ] = "png",
+        render_timeout_seconds: Annotated[
+            float,
+            Field(description="Screenshot HTTP timeout in seconds.", ge=1, le=300),
+        ] = DEFAULT_RENDER_TIMEOUT_SECONDS,
     ) -> "dict[str, Any] | ToolResult":
         """
         Get dashboard info - list all dashboards, get config, or search for cards.
@@ -1184,6 +1385,21 @@ class DashboardConfigTools:
 
         Note: YAML-mode dashboards (defined in configuration.yaml) are not included in list.
         """
+        screenshot_options = _DashboardScreenshotOptions(
+            view_path=view_path,
+            width=width,
+            height=height,
+            viewport_presets=viewport_presets,
+            orientation=orientation,
+            zoom=zoom,
+            wait_ms=wait_ms,
+            full_page=full_page,
+            theme=theme,
+            dark_mode=dark_mode,
+            language=language,
+            image_format=image_format,
+            render_timeout_seconds=render_timeout_seconds,
+        )
         search_mode = (
             entity_id is not None or card_type is not None or heading is not None
         )
@@ -1196,7 +1412,8 @@ class DashboardConfigTools:
         try:
             if list_only:
                 return await self._get_dashboard_list_mode(
-                    include_screenshot=include_screenshot, full_page=full_page
+                    include_screenshot=include_screenshot,
+                    screenshot_options=screenshot_options,
                 )
 
             # ``url_path`` is optional in this tool (omitted with
@@ -1227,7 +1444,7 @@ class DashboardConfigTools:
                     heading=heading,
                     include_config=include_config,
                     include_screenshot=include_screenshot,
-                    full_page=full_page,
+                    screenshot_options=screenshot_options,
                 )
 
             return await self._get_dashboard_get_mode(
@@ -1235,7 +1452,7 @@ class DashboardConfigTools:
                 resolved_url_path=resolved_url_path,
                 force_reload=force_reload,
                 include_screenshot=include_screenshot,
-                full_page=full_page,
+                screenshot_options=screenshot_options,
             )
         except ToolError:
             raise
@@ -1271,7 +1488,10 @@ class DashboardConfigTools:
             return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _get_dashboard_list_mode(
-        self, *, include_screenshot: bool, full_page: bool
+        self,
+        *,
+        include_screenshot: bool,
+        screenshot_options: _DashboardScreenshotOptions,
     ) -> dict[str, Any]:
         """``list_only=True`` mode: list all storage-mode dashboards."""
         dashboards = await fetch_dashboards_list(self._client) or []
@@ -1284,7 +1504,7 @@ class DashboardConfigTools:
         _note_screenshot_ignored(
             list_result,
             include_screenshot=include_screenshot,
-            full_page=full_page,
+            options=screenshot_options,
             mode="list",
         )
         return list_result
@@ -1470,7 +1690,7 @@ class DashboardConfigTools:
         heading: str | None,
         include_config: bool,
         include_screenshot: bool,
-        full_page: bool,
+        screenshot_options: _DashboardScreenshotOptions,
     ) -> dict[str, Any]:
         """Search mode: find cards, badges, or header cards matching criteria."""
         (
@@ -1497,7 +1717,7 @@ class DashboardConfigTools:
         _note_screenshot_ignored(
             search_result,
             include_screenshot=include_screenshot,
-            full_page=full_page,
+            options=screenshot_options,
             mode="search",
         )
         return search_result
@@ -1509,7 +1729,7 @@ class DashboardConfigTools:
         resolved_url_path: list[str | None],
         force_reload: bool,
         include_screenshot: bool,
-        full_page: bool,
+        screenshot_options: _DashboardScreenshotOptions,
     ) -> "dict[str, Any] | ToolResult":
         """Get mode: return the full Lovelace config for a single dashboard."""
         data: dict[str, Any] = {"type": "lovelace/config", "force": force_reload}
@@ -1568,6 +1788,11 @@ class DashboardConfigTools:
             "config_hash": config_hash,
             "config_size_bytes": config_size,
         }
+        _attach_dashboard_render_paths(
+            get_result,
+            url_path,
+            config if isinstance(config, dict) else None,
+        )
         # Surface the original caller-passed identifier when the lazy
         # resolver canonicalised it (parity with delete_dashboard's
         # resolved_id field). Caller can use this to detect that their
@@ -1588,7 +1813,9 @@ class DashboardConfigTools:
             get_result,
             url_path,
             include_screenshot,
-            full_page=full_page,
+            client=self._client,
+            config=config if isinstance(config, dict) else None,
+            options=screenshot_options,
             raise_on_failure=True,
         )
 
@@ -1675,17 +1902,79 @@ class DashboardConfigTools:
         return_screenshot: Annotated[
             bool,
             Field(
-                description="After writing, also return a rendered PNG of the "
+                description="After writing, also return rendered image(s) of the "
                 "dashboard so you can see what it looks like in a single call "
                 "(the dashboard creation/iteration loop). Requires the "
                 "'dashboard screenshot' beta feature + engine add-on/sidecar; "
                 "if unavailable, the write result is returned with a warning."
             ),
         ] = False,
+        view_path: Annotated[
+            str | None,
+            Field(
+                description="With return_screenshot: stable Lovelace "
+                "views[].path to render."
+            ),
+        ] = None,
+        width: Annotated[
+            int,
+            Field(description="Screenshot viewport width in px.", ge=64, le=4096),
+        ] = DEFAULT_WIDTH,
+        height: Annotated[
+            int | Literal["auto"],
+            Field(
+                description="Screenshot viewport height in px (64-4096), or "
+                "'auto' for content height."
+            ),
+        ] = DEFAULT_HEIGHT,
+        viewport_presets: Annotated[
+            list[ViewportPreset] | None,
+            Field(
+                description="With return_screenshot: ordered mobile, tablet, "
+                "and/or desktop captures. Overrides width/height.",
+                min_length=1,
+                max_length=3,
+            ),
+        ] = None,
+        orientation: Annotated[
+            Orientation | None,
+            Field(description="Optional portrait or landscape viewport layout."),
+        ] = None,
+        zoom: Annotated[
+            float,
+            Field(description="Screenshot page zoom factor.", ge=0.1, le=5.0),
+        ] = 1.0,
+        wait_ms: Annotated[
+            int,
+            Field(description="Screenshot render-settle delay in ms.", ge=0, le=30000),
+        ] = DEFAULT_WAIT_MS,
         full_page: Annotated[
             bool,
-            Field(description=f"With return_screenshot: {FULL_PAGE_PARAM_DESC}."),
+            Field(
+                description=f"With return_screenshot: {FULL_PAGE_PARAM_DESC}; "
+                "uses Puppet auto-height (currently capped at 4000 px)."
+            ),
         ] = False,
+        theme: Annotated[
+            str | None,
+            Field(description="Screenshot frontend theme name."),
+        ] = None,
+        dark_mode: Annotated[
+            bool,
+            Field(description="Render the screenshot theme in dark mode."),
+        ] = False,
+        language: Annotated[
+            str | None,
+            Field(description="Screenshot frontend language code."),
+        ] = None,
+        image_format: Annotated[
+            ScreenshotFormat,
+            Field(description="Screenshot format: png, jpeg, webp, or bmp."),
+        ] = "png",
+        render_timeout_seconds: Annotated[
+            float,
+            Field(description="Screenshot HTTP timeout in seconds.", ge=1, le=300),
+        ] = DEFAULT_RENDER_TIMEOUT_SECONDS,
     ) -> "dict[str, Any] | ToolResult":
         """
         Create or update a Home Assistant dashboard. MUST call ha_get_skill_guide first.
@@ -1808,6 +2097,21 @@ class DashboardConfigTools:
         entry in configuration.yaml but does NOT touch the dashboard
         body in the referenced .yaml file.
         """
+        screenshot_options = _DashboardScreenshotOptions(
+            view_path=view_path,
+            width=width,
+            height=height,
+            viewport_presets=viewport_presets,
+            orientation=orientation,
+            zoom=zoom,
+            wait_ms=wait_ms,
+            full_page=full_page,
+            theme=theme,
+            dark_mode=dark_mode,
+            language=language,
+            image_format=image_format,
+            render_timeout_seconds=render_timeout_seconds,
+        )
         try:
             (
                 url_path,
@@ -1837,6 +2141,8 @@ class DashboardConfigTools:
                     python_transform,
                     pre_resolved_from,
                     MandatoryBPS,
+                    return_screenshot=return_screenshot,
+                    screenshot_options=screenshot_options,
                 )
 
             return await self._run_dashboard_config_update(
@@ -1850,7 +2156,7 @@ class DashboardConfigTools:
                 pre_resolved_from=pre_resolved_from,
                 pre_fetched_dashboards=pre_fetched_dashboards,
                 return_screenshot=return_screenshot,
-                full_page=full_page,
+                screenshot_options=screenshot_options,
                 MandatoryBPS=MandatoryBPS,
             )
 
@@ -2034,8 +2340,8 @@ class DashboardConfigTools:
 
     async def _save_dashboard_python_transform(
         self, url_path: str, transformed_config: dict[str, Any]
-    ) -> str | None:
-        """Save the transformed config and return the authoritative post-save hash."""
+    ) -> tuple[dict[str, Any], str]:
+        """Save transformed config and return its authoritative config and hash."""
         save_data: dict[str, Any] = {
             "type": "lovelace/config/save",
             "config": transformed_config,
@@ -2062,10 +2368,10 @@ class DashboardConfigTools:
             )
 
         # Re-fetch to get authoritative hash (HA may normalize after save)
-        _, new_config_hash = await _get_dashboard_config_internal(
+        post_save_config, new_config_hash = await _get_dashboard_config_internal(
             self._client, url_path
         )
-        return new_config_hash
+        return post_save_config, new_config_hash
 
     async def _run_dashboard_python_transform(
         self,
@@ -2074,7 +2380,10 @@ class DashboardConfigTools:
         python_transform: str,
         pre_resolved_from: str | None,
         MandatoryBPS: bool,
-    ) -> dict[str, Any]:
+        *,
+        return_screenshot: bool,
+        screenshot_options: _DashboardScreenshotOptions,
+    ) -> "dict[str, Any] | ToolResult":
         """Execute python_transform mode and return the tool response."""
         if config_hash is None:
             raise_tool_error(
@@ -2095,7 +2404,7 @@ class DashboardConfigTools:
         transformed_config = self._apply_dashboard_python_transform(
             url_path, python_transform, current_config
         )
-        new_config_hash = await self._save_dashboard_python_transform(
+        post_save_config, new_config_hash = await self._save_dashboard_python_transform(
             url_path, transformed_config
         )
 
@@ -2109,8 +2418,16 @@ class DashboardConfigTools:
         }
         if pre_resolved_from is not None:
             transform_result["resolved_from"] = pre_resolved_from
+        _attach_dashboard_render_paths(transform_result, url_path, post_save_config)
         _attach_dashboard_skill(transform_result, MandatoryBPS)
-        return transform_result
+        return await _maybe_attach_screenshot(
+            transform_result,
+            url_path,
+            return_screenshot,
+            client=self._client,
+            config=post_save_config,
+            options=screenshot_options,
+        )
 
     async def _lookup_existing_dashboards(
         self, url_path: str, pre_fetched_dashboards: list[dict[str, Any]] | None
@@ -2360,10 +2677,10 @@ class DashboardConfigTools:
         config: dict[str, Any] | str,
         config_hash: str | None,
         dashboard_exists: bool,
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str | None, dict[str, Any]]:
         """Parse + validate ``config`` and save it as a full replacement.
 
-        Returns ``(config_updated, hint)``.
+        Returns ``(config_updated, hint, saved_config)``.
         """
         parsed_config = parse_json_param(config, "config")
         if parsed_config is None or not isinstance(parsed_config, dict):
@@ -2384,7 +2701,7 @@ class DashboardConfigTools:
             hint = await self._check_dashboard_replace_hash(url_path, config_hash)
 
         await self._save_dashboard_config(url_path, config_dict)
-        return True, hint
+        return True, hint, config_dict
 
     async def _run_dashboard_config_update(
         self,
@@ -2399,7 +2716,7 @@ class DashboardConfigTools:
         pre_resolved_from: str | None,
         pre_fetched_dashboards: list[dict[str, Any]] | None,
         return_screenshot: bool,
-        full_page: bool,
+        screenshot_options: _DashboardScreenshotOptions,
         MandatoryBPS: bool,
     ) -> "dict[str, Any] | ToolResult":
         """Execute config-replacement mode (create-or-update) and return the tool response."""
@@ -2418,8 +2735,13 @@ class DashboardConfigTools:
         )
 
         config_updated = False
+        render_config: dict[str, Any] | None = None
         if config is not None:
-            config_updated, config_hint = await self._apply_dashboard_config(
+            (
+                config_updated,
+                config_hint,
+                render_config,
+            ) = await self._apply_dashboard_config(
                 url_path, config, config_hash, dashboard_exists
             )
             if config_hint:
@@ -2445,9 +2767,17 @@ class DashboardConfigTools:
             # an existing dashboard was updated instead.
             result_dict["resolved_from"] = pre_resolved_from
 
+        render_config = await _attach_dashboard_render_paths_after_write(
+            self._client, result_dict, url_path, render_config
+        )
         _attach_dashboard_skill(result_dict, MandatoryBPS)
         return await _maybe_attach_screenshot(
-            result_dict, url_path, return_screenshot, full_page=full_page
+            result_dict,
+            url_path,
+            return_screenshot,
+            client=self._client,
+            config=render_config,
+            options=screenshot_options,
         )
 
     @tool(

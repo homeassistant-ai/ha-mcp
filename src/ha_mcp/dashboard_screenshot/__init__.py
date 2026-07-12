@@ -1,6 +1,6 @@
 """Dashboard screenshot support (opt-in, beta).
 
-Renders a Home Assistant Lovelace dashboard view to a PNG via a separate,
+Renders Home Assistant Lovelace dashboard views via a separate,
 single-purpose headless-Chromium screenshot engine (balloob's Puppet add-on,
 or a docker-compose sidecar).
 
@@ -13,16 +13,22 @@ from __future__ import annotations
 
 from .capture import (
     DEFAULT_HEIGHT,
+    DEFAULT_RENDER_TIMEOUT_SECONDS,
     DEFAULT_WAIT_MS,
     DEFAULT_WIDTH,
+    DashboardImageCapture,
+    capture_dashboard_images,
     capture_dashboard_png,
 )
 from .provision import resolve_engine_url
 
 __all__ = [
     "DEFAULT_HEIGHT",
+    "DEFAULT_RENDER_TIMEOUT_SECONDS",
     "DEFAULT_WAIT_MS",
     "DEFAULT_WIDTH",
+    "DashboardImageCapture",
+    "capture_dashboard_images",
     "capture_dashboard_png",
     "resolve_engine_url",
 ]

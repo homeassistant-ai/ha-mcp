@@ -267,7 +267,7 @@ class Settings(BaseSettings):
 
     # Dashboard screenshot mode — the ``ha_get_dashboard_screenshot`` tool
     # plus the ``include_screenshot`` / ``return_screenshot`` params on the
-    # dashboard get/set tools. Renders a Lovelace view to a PNG via a
+    # dashboard get/set tools. Renders responsive Lovelace images via a
     # separate, opt-in headless-Chromium screenshot add-on (balloob's Puppet
     # add-on, or a docker-compose sidecar). Off by default; nothing heavy is
     # pulled unless the user enables it AND installs the engine.

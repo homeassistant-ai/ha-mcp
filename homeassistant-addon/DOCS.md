@@ -512,7 +512,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_get_camera_image` — Retrieve a snapshot image from a Home Assistant camera entity.
 
 ### Dashboard
-- `ha_get_dashboard_screenshot` **(beta — dev channel only)** — Get a rendered PNG image of a Home Assistant Lovelace dashboard view.
+- `ha_get_dashboard_screenshot` **(beta — dev channel only)** — Get one or more responsive images of a Home Assistant Lovelace dashboard view.
 
 ### Dashboards
 - `ha_config_delete_dashboard` — Delete a storage-mode dashboard completely.

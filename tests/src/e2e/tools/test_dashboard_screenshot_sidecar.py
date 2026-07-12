@@ -12,6 +12,7 @@ A faithful FAKE engine stands in for ha-puppet, mirroring the real engine's
 HTTP contract so the capture client is exercised against the same wire shape it
 will hit in production: ``GET /<dashboard-path>?viewport=WxH&zoom=N&wait=ms&
 format=png`` returning an ``image/png`` body sized to the requested viewport.
+For ``WIDTHxauto``, the fake uses a deterministic simulated content height.
 What is covered end-to-end here:
 
 * the explicit-URL resolution branch + the httpx capture client + the request
@@ -51,6 +52,7 @@ from ha_mcp.server import HomeAssistantSmartMCPServer
 pytestmark = [pytest.mark.container_only]
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_AUTO_CONTENT_HEIGHT = 1733
 
 
 # ---------------------------------------------------------------------------
@@ -93,11 +95,20 @@ class _FakeEngine:
         class _Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 parsed = urlparse(self.path)
-                params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+                params = {
+                    k: v[0]
+                    for k, v in parse_qs(parsed.query, keep_blank_values=True).items()
+                }
                 recorded.append({"path": parsed.path, "params": params})
                 viewport = params.get("viewport", "1280x800")
                 try:
-                    width, height = (int(x) for x in viewport.split("x"))
+                    width_text, height_text = viewport.split("x")
+                    width = int(width_text)
+                    height = (
+                        _AUTO_CONTENT_HEIGHT
+                        if height_text.lower() == "auto"
+                        else int(height_text)
+                    )
                 except ValueError:
                     self.send_error(400, "bad viewport")
                     return
@@ -195,6 +206,15 @@ def _extract_png_bytes(result: Any) -> bytes | None:
     return None
 
 
+def _image_blocks(result: Any) -> list[Any]:
+    """Return native MCP image content blocks in their transport order."""
+    return [
+        block
+        for block in (getattr(result, "content", None) or [])
+        if getattr(block, "type", None) == "image"
+    ]
+
+
 def _png_dimensions(data: bytes) -> tuple[int, int]:
     assert data[:8] == _PNG_MAGIC, f"not a PNG (magic={data[:8]!r})"
     width, height = struct.unpack(">II", data[16:24])
@@ -248,14 +268,80 @@ async def test_get_dashboard_screenshot_returns_png(
     assert last["params"].get("format") == "png", last["params"]
 
 
-async def test_full_page_requests_tall_viewport(
+async def test_structured_named_view_returns_ordered_responsive_images(
     screenshot_mcp_client: Client, fake_engine: _FakeEngine
 ) -> None:
-    """full_page=True asks the engine for a tall viewport so below-the-fold
-    content is captured. The fake engine sizes the PNG to the viewport, so the
-    returned image height equals FULL_PAGE_HEIGHT regardless of the height arg."""
-    from ha_mcp.dashboard_screenshot.capture import FULL_PAGE_HEIGHT
+    """Structured addressing and preset batching survive the full MCP stack."""
+    url_path = "screenshot-responsive-e2e"
+    config = {
+        "views": [
+            {
+                "title": "Home",
+                "path": "home",
+                "cards": [{"type": "markdown", "content": "# Responsive"}],
+            }
+        ]
+    }
+    try:
+        setup = _parse_payload(
+            await screenshot_mcp_client.call_tool(
+                "ha_config_set_dashboard",
+                {"url_path": url_path, "config": config, "title": "Responsive"},
+            )
+        )
+        assert setup.get("success"), f"dashboard create failed: {setup}"
+        assert setup["render_paths"][0]["dashboard_url_path"] == url_path
+        assert setup["render_paths"][0]["view_path"] == "home"
+        request_count = len(fake_engine.requests)
 
+        result = await screenshot_mcp_client.call_tool(
+            "ha_get_dashboard_screenshot",
+            {
+                "dashboard_url_path": url_path,
+                "view_path": "home",
+                "viewport_presets": ["mobile", "desktop"],
+                "theme": "backend-selected-theme",
+                "dark_mode": True,
+                "language": "de",
+                "wait_ms": 17,
+            },
+        )
+        payload = _parse_payload(result)
+        images = _image_blocks(result)
+
+        assert len(images) == 2
+        assert payload["render_path"] == f"{url_path}/home"
+        assert payload["stable_addressing"] is True
+        assert payload["screenshot_count"] == 2
+        assert [item["content_index"] for item in payload["screenshots"]] == [0, 1]
+        assert [item["viewport"]["preset"] for item in payload["screenshots"]] == [
+            "mobile",
+            "desktop",
+        ]
+
+        requests = fake_engine.requests[request_count:]
+        assert [request["params"]["viewport"] for request in requests] == [
+            "390x844",
+            "1280x800",
+        ]
+        assert all(request["path"].endswith(f"{url_path}/home") for request in requests)
+        assert all(
+            request["params"]["theme"] == "backend-selected-theme"
+            for request in requests
+        )
+        assert all(request["params"]["dark"] == "" for request in requests)
+        assert all(request["params"]["lang"] == "de" for request in requests)
+        assert all(request["params"]["wait"] == "17" for request in requests)
+    finally:
+        await screenshot_mcp_client.call_tool(
+            "ha_config_delete_dashboard", {"url_path": url_path}
+        )
+
+
+async def test_full_page_requests_native_auto_height(
+    screenshot_mcp_client: Client, fake_engine: _FakeEngine
+) -> None:
+    """full_page=True uses Puppet's content-sized WIDTHxauto request."""
     result = await screenshot_mcp_client.call_tool(
         "ha_get_dashboard_screenshot",
         {
@@ -267,9 +353,9 @@ async def test_full_page_requests_tall_viewport(
     )
     png = _extract_png_bytes(result)
     assert png is not None, "full_page render returned no image"
-    assert _png_dimensions(png) == (1024, FULL_PAGE_HEIGHT)
+    assert _png_dimensions(png) == (1024, _AUTO_CONTENT_HEIGHT)
     last = fake_engine.requests[-1]
-    assert last["params"].get("viewport") == f"1024x{FULL_PAGE_HEIGHT}", last["params"]
+    assert last["params"].get("viewport") == "1024xauto", last["params"]
 
 
 async def test_get_dashboard_include_screenshot(
@@ -286,6 +372,7 @@ async def test_get_dashboard_include_screenshot(
         "views": [
             {
                 "title": "Sidecar Get E2E",
+                "path": "overview",
                 "cards": [{"type": "markdown", "content": "# Sidecar Get E2E"}],
             }
         ]
@@ -305,6 +392,8 @@ async def test_get_dashboard_include_screenshot(
         )
         payload = _parse_payload(result)
         assert payload.get("success"), f"get_dashboard failed: {payload}"
+        assert payload["render_paths"][0]["dashboard_url_path"] == url_path
+        assert payload["render_paths"][0]["view_path"] == "overview"
         png = _extract_png_bytes(result)
         assert png is not None, (
             f"include_screenshot=True returned no image (warnings: {payload.get('warnings')})"
@@ -325,6 +414,7 @@ async def test_set_dashboard_return_screenshot(
         "views": [
             {
                 "title": "Sidecar E2E",
+                "path": "overview",
                 "cards": [{"type": "markdown", "content": "# Sidecar E2E"}],
             }
         ]
@@ -341,6 +431,8 @@ async def test_set_dashboard_return_screenshot(
         )
         payload = _parse_payload(result)
         assert payload.get("success"), f"set_dashboard failed: {payload}"
+        assert payload["render_paths"][0]["dashboard_url_path"] == url_path
+        assert payload["render_paths"][0]["view_path"] == "overview"
         png = _extract_png_bytes(result)
         assert png is not None, (
             f"return_screenshot=True returned no image (warnings: {payload.get('warnings')})"

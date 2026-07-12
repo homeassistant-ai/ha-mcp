@@ -16,7 +16,7 @@ against a mock engine in the HAOS inaddon lane
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -132,6 +132,50 @@ class TestRegistrationGate:
         mcp = _RecordingMcp()
         mod.register_dashboard_screenshot_tools(mcp, client=None)
         assert len(mcp.added) == 1
+
+
+class TestStandaloneScreenshotTool:
+    async def test_structured_target_returns_ordered_images_and_metadata(
+        self, monkeypatch: Any
+    ) -> None:
+        from fastmcp.tools.tool import ToolResult
+
+        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
+            return DashboardRenderTarget(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                render_path="wall-panel/home",
+                view_index=0,
+                stable=True,
+            )
+
+        async def capture(*_a: Any, **_kw: Any) -> list[Any]:
+            return [
+                _fake_dashboard_capture(width=390, height=844, preset="mobile"),
+                _fake_dashboard_capture(width=1280, height=800, preset="desktop"),
+            ]
+
+        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
+        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
+
+        result = await mod.DashboardScreenshotTools(
+            object()
+        ).ha_get_dashboard_screenshot(
+            dashboard_url_path="wall-panel",
+            view_path="home",
+            viewport_presets=["mobile", "desktop"],
+        )
+
+        assert isinstance(result, ToolResult)
+        assert len(result.content) == 2
+        assert result.structured_content["render_path"] == "wall-panel/home"
+        assert result.structured_content["screenshot_count"] == 2
+        assert [
+            item["content_index"] for item in result.structured_content["screenshots"]
+        ] == [0, 1]
 
 
 # ---------------------------------------------------------------------------
@@ -293,17 +337,25 @@ class TestDiscoverEngineViaSupervisor:
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, content: bytes, text: str = "") -> None:
+    def __init__(
+        self,
+        status_code: int,
+        content: bytes,
+        text: str = "",
+        content_type: str = "image/png",
+    ) -> None:
         self.status_code = status_code
         self.content = content
         self.text = text
+        self.headers = {"content-type": content_type}
 
 
 class _FakeAsyncClient:
     """Minimal async-context httpx.AsyncClient stand-in."""
 
     last_get: ClassVar[dict[str, Any]] = {}
-    _next: ClassVar[_FakeResponse]
+    gets: ClassVar[list[dict[str, Any]]] = []
+    _next: ClassVar[_FakeResponse | Exception]
 
     def __init__(self, *_a: Any, **_kw: Any) -> None:
         pass
@@ -318,6 +370,9 @@ class _FakeAsyncClient:
         self, url: str, params: dict[str, Any] | None = None
     ) -> _FakeResponse:
         _FakeAsyncClient.last_get = {"url": url, "params": params}
+        _FakeAsyncClient.gets.append(_FakeAsyncClient.last_get)
+        if isinstance(_FakeAsyncClient._next, Exception):
+            raise _FakeAsyncClient._next
         return _FakeAsyncClient._next
 
 
@@ -344,9 +399,8 @@ class TestCapture:
         assert got["params"]["wait"] == "2000"
         assert got["params"]["format"] == "png"
 
-    async def test_full_page_overrides_height(self, monkeypatch: Any) -> None:
-        """full_page=True asks the engine for a tall viewport (FULL_PAGE_HEIGHT),
-        ignoring the requested height, so content below the fold is captured."""
+    async def test_full_page_uses_native_auto_height(self, monkeypatch: Any) -> None:
+        """full_page=True uses Puppet's content-sized viewport request."""
         from ha_mcp.dashboard_screenshot import capture
 
         async def fake_resolve() -> str:
@@ -360,7 +414,100 @@ class TestCapture:
             "lovelace/0", width=1024, height=480, full_page=True
         )
         got = _FakeAsyncClient.last_get
-        assert got["params"]["viewport"] == f"1024x{capture.FULL_PAGE_HEIGHT}"
+        assert got["params"]["viewport"] == "1024xauto"
+
+    async def test_batch_presets_forward_deterministic_context(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient.gets = []
+        _FakeAsyncClient._next = _FakeResponse(200, b"jpeg", content_type="image/jpeg")
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        captures = await capture.capture_dashboard_images(
+            "wall-panel/home",
+            viewport_presets=["mobile", "desktop"],
+            orientation="landscape",
+            zoom=1.25,
+            wait_ms=1234,
+            theme="Gerry Dark",
+            dark_mode=True,
+            language="de",
+            image_format="jpeg",
+            render_timeout_seconds=90,
+        )
+
+        assert [item.preset for item in captures] == ["mobile", "desktop"]
+        assert [(item.width, item.height) for item in captures] == [
+            (844, 390),
+            (1280, 800),
+        ]
+        assert all(item.mime_type == "image/jpeg" for item in captures)
+        assert all(item.requested["theme"] == "Gerry Dark" for item in captures)
+        assert [request["params"]["viewport"] for request in _FakeAsyncClient.gets] == [
+            "844x390",
+            "1280x800",
+        ]
+        for request in _FakeAsyncClient.gets:
+            assert request["params"] == {
+                "viewport": request["params"]["viewport"],
+                "zoom": "1.25",
+                "wait": "1234",
+                "format": "jpeg",
+                "theme": "Gerry Dark",
+                "dark": "",
+                "lang": "de",
+            }
+
+    async def test_rejects_unexpected_content_type(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient._next = _FakeResponse(
+            200, b"not a jpeg", content_type="image/png"
+        )
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        with pytest.raises(ToolError) as exc_info:
+            await capture.capture_dashboard_images("lovelace/0", image_format="jpeg")
+        assert "unexpected content type" in str(exc_info.value).lower()
+
+    async def test_timeout_has_distinct_structured_error(
+        self, monkeypatch: Any
+    ) -> None:
+        import httpx
+
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient._next = httpx.ReadTimeout("render too slow")
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        with pytest.raises(ToolError) as exc_info:
+            await capture.capture_dashboard_images(
+                "lovelace/0", render_timeout_seconds=1
+            )
+        assert "TIMEOUT_API_REQUEST" in str(exc_info.value)
+
+    async def test_rejects_duplicate_viewport_presets(self) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        with pytest.raises(ToolError) as exc_info:
+            await capture.capture_dashboard_images(
+                "lovelace/0", viewport_presets=["mobile", "mobile"]
+            )
+        assert "without duplicate presets" in str(exc_info.value)
 
     async def test_http_error_raises_toolerror(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
@@ -439,6 +586,66 @@ class TestCapture:
 # ---------------------------------------------------------------------------
 
 
+def _fake_dashboard_capture(
+    *,
+    width: int = 1280,
+    height: int | Literal["auto"] = 800,
+    preset: Literal["mobile", "tablet", "desktop"] | None = None,
+) -> Any:
+    from ha_mcp.dashboard_screenshot.capture import DashboardImageCapture
+
+    return DashboardImageCapture(
+        data=b"\x89PNG\r\n\x1a\nfake",
+        width=width,
+        height=height,
+        preset=preset,
+        orientation="landscape",
+        image_format="png",
+        mime_type="image/png",
+        size_bytes=12,
+        requested={
+            "zoom": 1.0,
+            "wait_ms": 2500,
+            "full_page": height == "auto",
+            "orientation": None,
+            "theme": None,
+            "dark_mode": False,
+            "language": None,
+            "render_timeout_seconds": 60.0,
+        },
+    )
+
+
+def test_multiple_capture_content_and_metadata_stay_ordered() -> None:
+    from ha_mcp.dashboard_screenshot.content import (
+        dashboard_image_content,
+        dashboard_screenshot_metadata,
+    )
+
+    captures = [
+        _fake_dashboard_capture(width=390, height=844, preset="mobile"),
+        _fake_dashboard_capture(width=1280, height=800, preset="desktop"),
+    ]
+
+    content = dashboard_image_content(captures)
+    metadata = dashboard_screenshot_metadata(captures, "wall-panel/home")
+
+    assert [block.mimeType for block in content] == ["image/png", "image/png"]
+    assert [item["content_index"] for item in metadata] == [0, 1]
+    assert [item["viewport"]["preset"] for item in metadata] == [
+        "mobile",
+        "desktop",
+    ]
+    assert all(item["render_path"] == "wall-panel/home" for item in metadata)
+    assert all(len(item["image"]["sha256"]) == 64 for item in metadata)
+    assert metadata[0]["engine_request"]["viewport"] == "390x844"
+    assert metadata[0]["engine_request"]["format"] == "png"
+    assert metadata[0]["local_capture_options"] == {
+        "full_page": False,
+        "render_timeout_seconds": 60.0,
+    }
+
+
 class TestMaybeAttachScreenshot:
     async def test_skips_when_not_requested(self) -> None:
         from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
@@ -470,10 +677,10 @@ class TestMaybeAttachScreenshot:
             lambda: SimpleNamespace(enable_dashboard_screenshot=True),
         )
 
-        async def boom(*_a: Any, **_kw: Any) -> bytes:
+        async def boom(*_a: Any, **_kw: Any) -> list[Any]:
             raise ToolError("engine unreachable")
 
-        monkeypatch.setattr(capture, "capture_dashboard_png", boom)
+        monkeypatch.setattr(capture, "capture_dashboard_images", boom)
 
         result: dict[str, Any] = {"success": True}
         out = await _maybe_attach_screenshot(result, "my-dash", requested=True)
@@ -493,12 +700,12 @@ class TestMaybeAttachScreenshot:
 
         seen: dict[str, Any] = {}
 
-        async def record(_path: str, **kw: Any) -> bytes:
+        async def record(_path: str, **kw: Any) -> list[Any]:
             seen["full_page"] = kw.get("full_page")
             seen["path"] = _path
-            return b"\x89PNG\r\n\x1a\nfake"
+            return [_fake_dashboard_capture(height="auto")]
 
-        monkeypatch.setattr(capture, "capture_dashboard_png", record)
+        monkeypatch.setattr(capture, "capture_dashboard_images", record)
 
         await _maybe_attach_screenshot(
             {"success": True}, "my-dash", requested=True, full_page=True
@@ -521,10 +728,10 @@ class TestMaybeAttachScreenshot:
             lambda: SimpleNamespace(enable_dashboard_screenshot=True),
         )
 
-        async def ok(*_a: Any, **_kw: Any) -> bytes:
-            return b"\x89PNG\r\n\x1a\nfake"
+        async def ok(*_a: Any, **_kw: Any) -> list[Any]:
+            return [_fake_dashboard_capture()]
 
-        monkeypatch.setattr(capture, "capture_dashboard_png", ok)
+        monkeypatch.setattr(capture, "capture_dashboard_images", ok)
 
         result: dict[str, Any] = {"success": True}
         out = await _maybe_attach_screenshot(result, "my-dash", requested=True)
@@ -535,6 +742,82 @@ class TestMaybeAttachScreenshot:
         assert out.structured_content == result
         assert len(out.content) == 1
         assert out.content[0].type == "image"
+        assert result["screenshot_render_path"] == "my-dash"
+        assert result["screenshots"][0]["content_index"] == 0
+        assert result["screenshots"][0]["frontend_context_confirmed"] is False
+
+    async def test_named_view_and_batch_options_pass_through(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+        from ha_mcp.tools.tools_config_dashboards import (
+            _DashboardScreenshotOptions,
+            _maybe_attach_screenshot,
+        )
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+        )
+        seen: dict[str, Any] = {}
+
+        async def record(path: str, **kwargs: Any) -> list[Any]:
+            seen["path"] = path
+            seen["kwargs"] = kwargs
+            return [
+                _fake_dashboard_capture(width=390, height=844, preset="mobile"),
+                _fake_dashboard_capture(width=1280, height=800, preset="desktop"),
+            ]
+
+        monkeypatch.setattr(capture, "capture_dashboard_images", record)
+        result: dict[str, Any] = {"success": True}
+        out = await _maybe_attach_screenshot(
+            result,
+            "wall-panel",
+            requested=True,
+            config={"views": [{"title": "Home", "path": "home"}]},
+            options=_DashboardScreenshotOptions(
+                view_path="home",
+                viewport_presets=["mobile", "desktop"],
+                theme="Gerry Dark",
+                dark_mode=True,
+                language="de",
+            ),
+        )
+
+        assert seen["path"] == "wall-panel/home"
+        assert seen["kwargs"]["viewport_presets"] == ["mobile", "desktop"]
+        assert seen["kwargs"]["theme"] == "Gerry Dark"
+        assert len(out.content) == 2
+        assert result["screenshot_render_path"] == "wall-panel/home"
+
+    async def test_base_route_warning_is_preserved_when_config_is_available(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+        )
+
+        async def ok(*_args: Any, **_kwargs: Any) -> list[Any]:
+            return [_fake_dashboard_capture()]
+
+        monkeypatch.setattr(capture, "capture_dashboard_images", ok)
+        result: dict[str, Any] = {"success": True}
+
+        await _maybe_attach_screenshot(
+            result,
+            "wall-panel",
+            requested=True,
+            config={"views": [{"title": "Home", "path": "home"}]},
+        )
+
+        assert any("currently first" in warning for warning in result["warnings"])
 
     async def test_get_path_raises_on_capture_failure(self, monkeypatch: Any) -> None:
         """raise_on_failure (the get path) propagates the engine error instead
@@ -548,10 +831,10 @@ class TestMaybeAttachScreenshot:
             lambda: SimpleNamespace(enable_dashboard_screenshot=True),
         )
 
-        async def boom(*_a: Any, **_kw: Any) -> bytes:
+        async def boom(*_a: Any, **_kw: Any) -> list[Any]:
             raise ToolError("engine unreachable")
 
-        monkeypatch.setattr(capture, "capture_dashboard_png", boom)
+        monkeypatch.setattr(capture, "capture_dashboard_images", boom)
 
         with pytest.raises(ToolError):
             await _maybe_attach_screenshot(
@@ -568,7 +851,93 @@ class TestMaybeAttachScreenshot:
             result, "my-dash", requested=False, full_page=True
         )
         assert out is result
-        assert any("full_page is ignored" in w for w in result.get("warnings", []))
+        assert any(
+            "render options are ignored" in w for w in result.get("warnings", [])
+        )
+
+
+async def test_post_write_render_path_fetch_failure_is_only_a_warning(
+    monkeypatch: Any,
+) -> None:
+    from ha_mcp.tools import tools_config_dashboards as dashboard_tools
+
+    async def boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("websocket disconnected")
+
+    monkeypatch.setattr(dashboard_tools, "_get_dashboard_config_internal", boom)
+    result: dict[str, Any] = {"success": True, "action": "update"}
+
+    config_result = await dashboard_tools._attach_dashboard_render_paths_after_write(
+        object(), result, "wall-panel"
+    )
+
+    assert config_result is None
+    assert result["success"] is True
+    assert any("websocket disconnected" in warning for warning in result["warnings"])
+
+
+async def test_python_transform_can_return_screenshot_from_post_save_config(
+    monkeypatch: Any,
+) -> None:
+    from ha_mcp.tools import tools_config_dashboards as dashboard_tools
+
+    tools = dashboard_tools.DashboardConfigTools(object())
+    current = {"views": [{"title": "Old", "path": "home"}]}
+    transformed = {"views": [{"title": "New", "path": "home"}]}
+    seen: dict[str, Any] = {}
+
+    async def fetch_and_verify(_url_path: str, _config_hash: str) -> dict[str, Any]:
+        return current
+
+    def apply_transform(
+        _url_path: str, _expression: str, _config: dict[str, Any]
+    ) -> dict[str, Any]:
+        return transformed
+
+    async def save_transform(
+        _url_path: str, _config: dict[str, Any]
+    ) -> tuple[dict[str, Any], str]:
+        return transformed, "new-hash"
+
+    async def attach(
+        result: dict[str, Any],
+        url_path: str,
+        requested: bool,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        seen.update(
+            result=result,
+            url_path=url_path,
+            requested=requested,
+            config=kwargs["config"],
+        )
+        return result
+
+    monkeypatch.setattr(tools, "_fetch_and_verify_dashboard_hash", fetch_and_verify)
+    monkeypatch.setattr(tools, "_apply_dashboard_python_transform", apply_transform)
+    monkeypatch.setattr(tools, "_save_dashboard_python_transform", save_transform)
+    monkeypatch.setattr(dashboard_tools, "_maybe_attach_screenshot", attach)
+
+    result = await tools._run_dashboard_python_transform(
+        "wall-panel",
+        "old-hash",
+        "config['views'][0]['title'] = 'New'",
+        None,
+        False,
+        return_screenshot=True,
+        screenshot_options=dashboard_tools._DashboardScreenshotOptions(
+            view_path="home"
+        ),
+    )
+
+    assert result["config_hash"] == "new-hash"
+    assert result["render_paths"][0]["render_path"] == "wall-panel/home"
+    assert seen == {
+        "result": result,
+        "url_path": "wall-panel",
+        "requested": True,
+        "config": transformed,
+    }
 
 
 class TestDashboardFrontendPath:
@@ -611,3 +980,57 @@ class TestNoteScreenshotIgnored:
             result, include_screenshot=False, full_page=False, mode="list"
         )
         assert "warnings" not in result
+
+    def test_warns_when_non_default_render_option_is_set(self) -> None:
+        from ha_mcp.tools.tools_config_dashboards import (
+            _DashboardScreenshotOptions,
+            _note_screenshot_ignored,
+        )
+
+        result: dict[str, Any] = {"success": True}
+        _note_screenshot_ignored(
+            result,
+            include_screenshot=False,
+            options=_DashboardScreenshotOptions(language="de"),
+            mode="search",
+        )
+        assert any("ignored in search mode" in w for w in result["warnings"])
+
+
+def test_public_screenshot_option_names_stay_in_parity() -> None:
+    import inspect
+
+    from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
+    from ha_mcp.tools.tools_dashboard_screenshot import DashboardScreenshotTools
+
+    shared = {
+        "view_path",
+        "width",
+        "height",
+        "viewport_presets",
+        "orientation",
+        "zoom",
+        "wait_ms",
+        "full_page",
+        "theme",
+        "dark_mode",
+        "language",
+        "image_format",
+        "render_timeout_seconds",
+    }
+
+    standalone = set(
+        inspect.signature(
+            DashboardScreenshotTools.ha_get_dashboard_screenshot
+        ).parameters
+    )
+    get_options = set(
+        inspect.signature(DashboardConfigTools.ha_config_get_dashboard).parameters
+    )
+    set_options = set(
+        inspect.signature(DashboardConfigTools.ha_config_set_dashboard).parameters
+    )
+
+    assert shared <= standalone
+    assert shared <= get_options
+    assert shared <= set_options
