@@ -31,7 +31,7 @@ remove_legacy_cron_entries() {
     # hamcp-test-env invocation and the later destructive re-clone job. The
     # latter predates systemd and deletes the live checkout before setup runs.
     filtered=$(printf '%s\n' "$current" | grep -Ev \
-        'hamcp-test-env|ha-mcp-cron\.log|rm -rf (ha-mcp/?|[^ ]*/ha-mcp/?)' || true)
+        'hamcp-test-env|ha-mcp-cron\.log|rm -rf (ha-mcp|[^ ]*/ha-mcp)/?([[:space:]]|$)' || true)
     if [[ "$filtered" != "$current" ]]; then
         info "Removing legacy ha-mcp cron entries for $owner..."
         if [[ -n "$filtered" ]]; then
@@ -96,7 +96,7 @@ fi
 
 #=============================================================================
 # 5. HA-MCP REPO
-if [[ -e "$SETUP_HOME/ha-mcp" && ! -d "$SETUP_HOME/ha-mcp/.git" ]]; then
+if [[ ( -e "$SETUP_HOME/ha-mcp" || -L "$SETUP_HOME/ha-mcp" ) && ! -d "$SETUP_HOME/ha-mcp/.git" ]]; then
     BROKEN_REPO="$SETUP_HOME/ha-mcp.incomplete.$(date +%Y%m%d%H%M%S)"
     warn "$SETUP_HOME/ha-mcp is not a git checkout; moving it to $BROKEN_REPO"
     mv "$SETUP_HOME/ha-mcp" "$BROKEN_REPO"
