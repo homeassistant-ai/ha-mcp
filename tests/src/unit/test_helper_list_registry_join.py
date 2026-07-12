@@ -214,6 +214,60 @@ class TestListHelpersRegistryJoin:
         assert "entity_id" not in helper
         assert any("registry" in w.lower() for w in result.get("warnings", []))
 
+    async def test_registry_unsuccessful_response_degrades_open_with_warning(
+        self, register_tools, mock_client
+    ):
+        """The registry read never raises in production — the client returns
+        ``{"success": False, ...}`` on failure rather than throwing. That
+        unsuccessful response is a malformed read: the tool must flag it and
+        return the un-enriched list (the branch production actually takes)."""
+
+        async def handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/entity_registry/list":
+                return {"success": False, "error": "registry unavailable"}
+            if msg_type.endswith("/list"):
+                return {"success": True, "result": [{"id": "x", "name": "X"}]}
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=handler)
+
+        result = await register_tools["ha_config_list_helpers"](
+            helper_type="input_boolean"
+        )
+
+        helper = result["helpers"][0]
+        assert helper == {"id": "x", "name": "X"}
+        assert "entity_id" not in helper
+        assert any("registry" in w.lower() for w in result.get("warnings", []))
+
+    async def test_registry_unexpected_shape_degrades_open_without_raising(
+        self, register_tools, mock_client
+    ):
+        """An unexpected record shape (here a non-hashable ``id`` that breaks the
+        registry lookup) must degrade open. Enrichment is cosmetic, so a raise
+        from the join must never turn a list call into a failure — the broad
+        guard converts it to the un-enriched list plus a warning."""
+        list_items = [{"id": ["not", "hashable"], "name": "X"}]
+        registry = [
+            {
+                "entity_id": "input_boolean.x",
+                "unique_id": "x",
+                "platform": "input_boolean",
+                "name": "X",
+            }
+        ]
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=_ws_handler(list_items, registry)
+        )
+
+        result = await register_tools["ha_config_list_helpers"](
+            helper_type="input_boolean"
+        )
+
+        assert result["success"] is True
+        assert any("registry" in w.lower() for w in result.get("warnings", []))
+
     async def test_person_dict_shaped_list_is_flattened_and_enriched(
         self, register_tools, mock_client
     ):

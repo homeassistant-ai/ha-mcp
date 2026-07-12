@@ -148,6 +148,107 @@ class TestInputBooleanCRUD:
             )
         logger.info("Input boolean deletion verified")
 
+    async def test_renamed_helper_surfaces_current_registry_values(
+        self, mcp_client, cleanup_tracker
+    ):
+        """#1794 regression: after a rename the storage collection keeps the
+        creation-time id/name, while ha_config_list_helpers must surface the
+        registry's current entity_id/name — and that surfaced entity_id must be a
+        working key for ha_config_set_helper.
+
+        A dedicated test rather than an extension of the lifecycle case above:
+        the rename swaps the entity_id, so folding it into that flow would leave
+        its later update/delete steps pointing at the stale id.
+        """
+        original_name = "E2E Rename Join"
+        original_entity_id = "input_boolean.e2e_rename_join"
+        new_entity_id = "input_boolean.e2e_rename_join_renamed"
+        new_name = "E2E Rename Join Renamed"
+
+        # CREATE
+        create_data = assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_config_set_helper",
+                {"helper_type": "input_boolean", "name": original_name},
+            ),
+            "Create input_boolean",
+        )
+        assert (
+            get_entity_id_from_response(create_data, "input_boolean")
+            == original_entity_id
+        ), f"unexpected creation entity_id: {create_data}"
+        cleanup_tracker.track("input_boolean", new_entity_id)
+        assert await wait_for_entity_registration(mcp_client, original_entity_id), (
+            f"Entity not registered: {original_entity_id}"
+        )
+
+        # RENAME entity_id + display name (diverges the registry from storage)
+        assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_set_entity",
+                {
+                    "entity_id": original_entity_id,
+                    "new_entity_id": new_entity_id,
+                    "name": new_name,
+                },
+            ),
+            "Rename input_boolean",
+        )
+        assert await wait_for_entity_registration(mcp_client, new_entity_id), (
+            f"Renamed entity not registered: {new_entity_id}"
+        )
+
+        # LIST — the join must surface the renamed entity_id/name; storage keeps
+        # its creation-time id/original_name (the exact divergence #1794 is about).
+        list_data = assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_config_list_helpers", {"helper_type": "input_boolean"}
+            ),
+            "List after rename",
+        )
+        record = next(
+            (
+                h
+                for h in list_data.get("helpers", [])
+                if h.get("original_name") == original_name
+            ),
+            None,
+        )
+        assert record, f"renamed helper not found by original_name: {list_data}"
+        assert record.get("entity_id") == new_entity_id, (
+            f"list must surface the renamed entity_id, got: {record}"
+        )
+        assert record.get("name") == new_name, (
+            f"list must surface the current display name, got: {record}"
+        )
+        assert record.get("entity_id") != f"input_boolean.{record.get('id')}", (
+            f"entity_id should diverge from the storage-id slug after rename: {record}"
+        )
+
+        # ROUND-TRIP — the surfaced entity_id is the working key for set_helper.
+        assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "input_boolean",
+                    "helper_id": record["entity_id"],
+                    "icon": "mdi:check",
+                },
+            ),
+            "Update via surfaced entity_id",
+        )
+        logger.info("Round-tripped set_helper via the surfaced entity_id")
+
+        # CLEANUP
+        await mcp_client.call_tool(
+            "ha_remove_helpers_integrations",
+            {
+                "helper_type": "input_boolean",
+                "target": new_entity_id,
+                "confirm": True,
+            },
+        )
+
     async def test_input_boolean_with_initial_state(self, mcp_client, cleanup_tracker):
         """Test creating input_boolean with initial state."""
         logger.info("Testing input_boolean with initial state")

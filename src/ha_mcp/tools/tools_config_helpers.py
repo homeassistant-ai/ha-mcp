@@ -1400,8 +1400,8 @@ async def _find_collision_in_simple_helpers(
 
 _REGISTRY_JOIN_STALE_WARNING = (
     "Could not read the entity registry, so a renamed helper's 'name' may be the "
-    "creation-time name and no current 'entity_id' is shown; use ha_get_entity for "
-    "the authoritative current values."
+    "creation-time name and no current 'entity_id' is shown; use ha_search to find "
+    "the helper by name for the authoritative current values."
 )
 
 
@@ -1427,42 +1427,53 @@ async def _enrich_helpers_with_current_registry(
     if not items:
         # Nothing to enrich — skip the full-registry fetch entirely.
         return []
+    # Degrade-open: enrichment is cosmetic, so any failure — the registry read,
+    # an unexpected registry shape (e.g. a non-hashable ``id`` breaking the
+    # lookup), or a malformed response — flags the result rather than raising
+    # out and letting the caller's handler turn a list call into a failure.
+    # Mirrors _get_entities_for_config_entry, which reads the same endpoint.
+    # send_websocket_message returns {"success": false, ...} instead of raising,
+    # so the malformed-response check below is the branch production takes.
     try:
         reg_result = await client.send_websocket_message(
             {"type": "config/entity_registry/list"}
         )
-    except (HomeAssistantAPIError, ConnectionError, TimeoutError) as e:
-        logger.debug(f"list_helpers registry enrichment: registry read failed: {e}")
+        # A missing / non-list ``result`` (or a non-dict / unsuccessful response)
+        # is a malformed read, not an empty registry — flag it rather than
+        # silently returning un-enriched records. A present-but-empty ``[]`` is a
+        # legitimate no-match and passes through below without a warning.
+        if not (
+            isinstance(reg_result, dict)
+            and reg_result.get("success")
+            and isinstance(reg_result.get("result"), list)
+        ):
+            logger.debug(
+                "list_helpers registry enrichment: malformed registry response: %r",
+                reg_result,
+            )
+            return [_REGISTRY_JOIN_STALE_WARNING]
+        registry = reg_result["result"]
+        reg_by_uid = {
+            entry["unique_id"]: entry
+            for entry in registry
+            if isinstance(entry, dict)
+            and entry.get("platform") == helper_type
+            and entry.get("unique_id")
+        }
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            entry = reg_by_uid.get(item.get("id"))
+            if entry is None:
+                continue
+            item["entity_id"] = entry.get("entity_id")
+            item["original_name"] = item.get("name")
+            item["name"] = (
+                entry.get("name") or entry.get("original_name") or item.get("name")
+            )
+    except Exception as e:
+        logger.debug(f"list_helpers registry enrichment failed: {e}")
         return [_REGISTRY_JOIN_STALE_WARNING]
-    # A missing / non-list ``result`` (or a non-dict / unsuccessful response) is
-    # a malformed read, not an empty registry — flag it rather than silently
-    # returning un-enriched records. A present-but-empty ``[]`` is a legitimate
-    # no-match and passes through below without a warning.
-    if not (
-        isinstance(reg_result, dict)
-        and reg_result.get("success")
-        and isinstance(reg_result.get("result"), list)
-    ):
-        return [_REGISTRY_JOIN_STALE_WARNING]
-    registry = reg_result["result"]
-    reg_by_uid = {
-        entry["unique_id"]: entry
-        for entry in registry
-        if isinstance(entry, dict)
-        and entry.get("platform") == helper_type
-        and entry.get("unique_id")
-    }
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        entry = reg_by_uid.get(item.get("id"))
-        if entry is None:
-            continue
-        item["entity_id"] = entry.get("entity_id")
-        item["original_name"] = item.get("name")
-        item["name"] = (
-            entry.get("name") or entry.get("original_name") or item.get("name")
-        )
     return []
 
 
@@ -3614,6 +3625,9 @@ class HelperConfigTools:
         For a helper renamed in the UI, id/original_name keep the storage values while
         entity_id/name reflect the current entity registry (entity_id is the identifier
         ha_config_set_helper resolves against, so prefer it over id for a renamed helper).
+        entity_id/original_name are present only for storage-collection helpers matched in
+        the entity registry — types with no backing entity (e.g. tag), and every record when
+        the registry read degrades, carry only id/name (a warning flags the degraded case).
 
         SUPPORTED HELPER TYPES:
         - input_button: Virtual buttons for triggering automations
