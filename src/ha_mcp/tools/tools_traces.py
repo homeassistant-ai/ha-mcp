@@ -231,93 +231,27 @@ class TraceTools:
                 )
 
                 if run_id:
-                    # Get specific trace details
-                    result = await ws_client.send_command(
-                        "trace/get",
-                        domain=domain,
-                        item_id=item_id,
-                        run_id=run_id,
-                    )
-
-                    if not result.get("success"):
-                        err_ctx: dict[str, str] = {"automation_id": automation_id}
-                        if run_id:
-                            err_ctx["run_id"] = run_id
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.SERVICE_CALL_FAILED,
-                                result.get("error", "Failed to retrieve trace"),
-                                context=err_ctx,
-                            )
-                        )
-
-                    trace_data = result.get("result", {})
-                    await safe_progress(
-                        ctx, progress=3, total=3, message="formatting trace"
-                    )
-                    return _format_detailed_trace(
+                    return await self._fetch_trace_detail(
+                        ws_client,
+                        domain,
+                        item_id,
                         automation_id,
                         run_id,
-                        trace_data,
                         deduplicate=deduplicate,
                         detailed=detailed,
                         sections=sections,
+                        ctx=ctx,
                     )
-                else:
-                    # List recent traces
-                    result = await ws_client.send_command(
-                        "trace/list",
-                        domain=domain,
-                        item_id=item_id,
-                    )
-
-                    if not result.get("success"):
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.SERVICE_CALL_FAILED,
-                                result.get("error", "Failed to list traces"),
-                                context={"automation_id": automation_id},
-                            )
-                        )
-
-                    traces_data = result.get("result", [])
-
-                    # If traces are empty, gather diagnostic information
-                    if not traces_data:
-                        await safe_progress(
-                            ctx,
-                            progress=2,
-                            total=3,
-                            message="no traces; gathering diagnostics",
-                        )
-                        diagnostics = await _gather_diagnostics(
-                            ws_client, self._client, automation_id, domain
-                        )
-                        await safe_progress(
-                            ctx, progress=3, total=3, message="diagnostics complete"
-                        )
-                        return _format_trace_list(
-                            automation_id,
-                            traces_data,
-                            limit,
-                            diagnostics,
-                            offset=offset,
-                            order=order,
-                        )
-
-                    await safe_progress(
-                        ctx,
-                        progress=3,
-                        total=3,
-                        message=f"listed {len(traces_data)} traces",
-                    )
-                    return _format_trace_list(
-                        automation_id,
-                        traces_data,
-                        limit,
-                        offset=offset,
-                        order=order,
-                    )
+                return await self._fetch_trace_list(
+                    ws_client,
+                    domain,
+                    item_id,
+                    automation_id,
+                    limit=limit,
+                    offset=offset,
+                    order=order,
+                    ctx=ctx,
+                )
 
             finally:
                 await ws_client.disconnect()
@@ -338,6 +272,113 @@ class TraceTools:
             return (
                 None  # exception_to_structured_error always raises; explicit for CodeQL
             )
+
+    async def _fetch_trace_detail(
+        self,
+        ws_client: Any,
+        domain: str,
+        item_id: str,
+        automation_id: str,
+        run_id: str,
+        *,
+        deduplicate: bool,
+        detailed: bool,
+        sections: str | None,
+        ctx: Context | None,
+    ) -> dict[str, Any]:
+        """Retrieve and format a single trace by run_id."""
+        result = await ws_client.send_command(
+            "trace/get",
+            domain=domain,
+            item_id=item_id,
+            run_id=run_id,
+        )
+
+        if not result.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Failed to retrieve trace"),
+                    context={"automation_id": automation_id, "run_id": run_id},
+                )
+            )
+
+        trace_data = result.get("result", {})
+        await safe_progress(ctx, progress=3, total=3, message="formatting trace")
+        return _format_detailed_trace(
+            automation_id,
+            run_id,
+            trace_data,
+            deduplicate=deduplicate,
+            detailed=detailed,
+            sections=sections,
+        )
+
+    async def _fetch_trace_list(
+        self,
+        ws_client: Any,
+        domain: str,
+        item_id: str,
+        automation_id: str,
+        *,
+        limit: int,
+        offset: int,
+        order: Literal["newest", "oldest"],
+        ctx: Context | None,
+    ) -> dict[str, Any]:
+        """List recent traces, attaching diagnostics when none are stored."""
+        result = await ws_client.send_command(
+            "trace/list",
+            domain=domain,
+            item_id=item_id,
+        )
+
+        if not result.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Failed to list traces"),
+                    context={"automation_id": automation_id},
+                )
+            )
+
+        traces_data = result.get("result", [])
+
+        if not traces_data:
+            await safe_progress(
+                ctx,
+                progress=2,
+                total=3,
+                message="no traces; gathering diagnostics",
+            )
+            diagnostics = await _gather_diagnostics(
+                ws_client, self._client, automation_id, domain
+            )
+            await safe_progress(
+                ctx, progress=3, total=3, message="diagnostics complete"
+            )
+            return _format_trace_list(
+                automation_id,
+                traces_data,
+                limit,
+                diagnostics,
+                offset=offset,
+                order=order,
+            )
+
+        await safe_progress(
+            ctx,
+            progress=3,
+            total=3,
+            message=f"listed {len(traces_data)} traces",
+        )
+        return _format_trace_list(
+            automation_id,
+            traces_data,
+            limit,
+            offset=offset,
+            order=order,
+        )
 
 
 def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -445,48 +486,11 @@ async def _gather_diagnostics(
             # Check if tracing is stored - only for automations
             # (scripts always store traces when enabled)
             if domain == "automation":
-                # Try to get automation config to check stored_traces setting
-                try:
-                    unique_id = attributes.get("id")
-                    if unique_id:
-                        config_result = await ws_client.send_command(
-                            "automation/config",
-                            entity_id=automation_id,
-                        )
-                        if config_result.get("success"):
-                            config = config_result.get("result", {})
-                            # stored_traces defaults to True if not specified
-                            stored_traces = config.get("stored_traces")
-                            if stored_traces is not None and stored_traces <= 0:
-                                diagnostics["trace_storage_enabled"] = False
-                except Exception as e:
-                    logger.debug(f"Could not get automation config: {e}")
-
-            # Generate suggestion based on diagnostics
-            suggestions = []
-
-            if not diagnostics["automation_enabled"]:
-                suggestions.append(
-                    f"The {domain} is currently disabled (state: off). "
-                    "Enable it to start recording traces."
-                )
-            elif diagnostics["last_triggered"] is None:
-                suggestions.append(
-                    f"The {domain} has never been triggered. "
-                    "Wait for it to trigger or manually trigger it to generate traces."
-                )
-            elif not diagnostics["trace_storage_enabled"]:
-                suggestions.append(
-                    "Trace storage is disabled for this automation. "
-                    "Set 'stored_traces' to a positive number in the automation config."
-                )
-            else:
-                suggestions.append(
-                    "Traces may have been cleared or expired. "
-                    "Home Assistant only keeps a limited number of recent traces."
+                diagnostics["trace_storage_enabled"] = await _is_trace_storage_enabled(
+                    ws_client, automation_id, attributes
                 )
 
-            diagnostics["suggestion"] = " ".join(suggestions)
+            diagnostics["suggestion"] = _diagnostic_suggestion(diagnostics, domain)
 
     except Exception as e:
         # Entity doesn't exist or error occurred
@@ -497,6 +501,53 @@ async def _gather_diagnostics(
         )
 
     return diagnostics
+
+
+async def _is_trace_storage_enabled(
+    ws_client: HomeAssistantWebSocketClient,
+    automation_id: str,
+    attributes: dict[str, Any],
+) -> bool:
+    """Return whether stored_traces is enabled for an automation (defaults True)."""
+    try:
+        unique_id = attributes.get("id")
+        if unique_id:
+            config_result = await ws_client.send_command(
+                "automation/config",
+                entity_id=automation_id,
+            )
+            if config_result.get("success"):
+                config = config_result.get("result", {})
+                # stored_traces defaults to True if not specified
+                stored_traces = config.get("stored_traces")
+                if stored_traces is not None and stored_traces <= 0:
+                    return False
+    except Exception as e:
+        logger.debug(f"Could not get automation config: {e}")
+    return True
+
+
+def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
+    """Build a helpful hint explaining why no traces are available."""
+    if not diagnostics["automation_enabled"]:
+        return (
+            f"The {domain} is currently disabled (state: off). "
+            "Enable it to start recording traces."
+        )
+    if diagnostics["last_triggered"] is None:
+        return (
+            f"The {domain} has never been triggered. "
+            "Wait for it to trigger or manually trigger it to generate traces."
+        )
+    if not diagnostics["trace_storage_enabled"]:
+        return (
+            "Trace storage is disabled for this automation. "
+            "Set 'stored_traces' to a positive number in the automation config."
+        )
+    return (
+        "Traces may have been cleared or expired. "
+        "Home Assistant only keeps a limited number of recent traces."
+    )
 
 
 def _format_trace_list(
@@ -592,42 +643,7 @@ def _format_detailed_trace(
     }
 
     raw_trace = trace.get("trace", {})
-
-    # Initialize lists
-    triggers = []
-    conditions = []
-    actions = []
-
-    # Home Assistant trace data is stored as a flat dict with path keys
-    # e.g. "trigger/0": [...], "action/0": [...], "action/0/1": [...]
-    for path, steps in raw_trace.items():
-        if not isinstance(steps, list):
-            continue
-
-        for step in steps:
-            # Create a copy to avoid modifying original
-            step_info = step.copy()
-            step_info["path"] = path
-
-            if path == "trigger" or path.startswith("trigger/"):
-                triggers.append(step_info)
-            elif path == "condition" or path.startswith("condition/"):
-                conditions.append(step_info)
-            elif (
-                path == "action"
-                or path.startswith("action/")
-                or path.startswith("sequence/")
-                or (domain == "script" and (path.split("/")[0].isdigit()))
-            ):
-                actions.append(step_info)
-
-    # Sort by timestamp (if available) or path to maintain execution order
-    def sort_key(item: dict[str, Any]) -> tuple[str, str]:
-        return (item.get("timestamp", ""), item.get("path", ""))
-
-    triggers.sort(key=sort_key)
-    conditions.sort(key=sort_key)
-    actions.sort(key=sort_key)
+    triggers, conditions, actions = _classify_trace_steps(raw_trace, domain)
 
     _populate_trigger_info(result, triggers, trace)
     _populate_condition_results(result, conditions)
@@ -658,32 +674,84 @@ def _format_detailed_trace(
         if trace.get("context"):
             result["context"] = trace["context"]
 
-    # Filter to requested sections if specified.
-    # Maps user-facing section names to result dict keys.
     if sections:
-        section_key_map = {
-            "trigger": "trigger",
-            "conditions": "condition_results",
-            "actions": "action_trace",
-            "config": "config_summary",
-            "error": "error",
-            "logbook": "logbook_entries",
-            "context": "context",
-        }
-        requested = {s.strip().lower() for s in sections.split(",")}
-        keep_keys = {section_key_map[s] for s in requested if s in section_key_map}
-        # Always keep metadata keys
-        keep_keys |= {
-            "success",
-            "automation_id",
-            "run_id",
-            "timestamp",
-            "state",
-            "script_execution",
-        }
-        result = {k: v for k, v in result.items() if k in keep_keys}
+        result = _filter_trace_sections(result, sections)
 
     return result
+
+
+def _classify_trace_steps(
+    raw_trace: dict[str, Any], domain: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Group flat trace path entries into sorted trigger/condition/action lists."""
+    buckets: dict[str, list[dict[str, Any]]] = {
+        "trigger": [],
+        "condition": [],
+        "action": [],
+    }
+
+    # Home Assistant trace data is stored as a flat dict with path keys
+    # e.g. "trigger/0": [...], "action/0": [...], "action/0/1": [...]
+    for path, steps in raw_trace.items():
+        if not isinstance(steps, list):
+            continue
+
+        for step in steps:
+            category = _categorize_step_path(path, domain)
+            if category is None:
+                continue
+            # Create a copy to avoid modifying original
+            step_info = step.copy()
+            step_info["path"] = path
+            buckets[category].append(step_info)
+
+    # Sort by timestamp (if available) or path to maintain execution order
+    def sort_key(item: dict[str, Any]) -> tuple[str, str]:
+        return (item.get("timestamp", ""), item.get("path", ""))
+
+    for steps_list in buckets.values():
+        steps_list.sort(key=sort_key)
+
+    return buckets["trigger"], buckets["condition"], buckets["action"]
+
+
+def _categorize_step_path(path: str, domain: str) -> str | None:
+    """Map a trace path key to 'trigger', 'condition', 'action', or None."""
+    if path == "trigger" or path.startswith("trigger/"):
+        return "trigger"
+    if path == "condition" or path.startswith("condition/"):
+        return "condition"
+    if path == "action" or path.startswith(("action/", "sequence/")):
+        return "action"
+    if domain == "script" and path.split("/")[0].isdigit():
+        return "action"
+    return None
+
+
+def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, Any]:
+    """Filter a formatted trace down to the requested sections plus metadata."""
+    # Maps user-facing section names to result dict keys.
+    section_key_map = {
+        "trigger": "trigger",
+        "conditions": "condition_results",
+        "actions": "action_trace",
+        "config": "config_summary",
+        "error": "error",
+        "logbook": "logbook_entries",
+        "context": "context",
+    }
+    requested = {s.strip().lower() for s in sections.split(",")}
+    keep_keys = {section_key_map[s] for s in requested if s in section_key_map}
+    # Always keep metadata keys
+    keep_keys |= {
+        "success",
+        "automation_id",
+        "run_id",
+        "timestamp",
+        "state",
+        "script_execution",
+    }
+    return {k: v for k, v in result.items() if k in keep_keys}
 
 
 def _populate_trigger_info(
@@ -769,22 +837,11 @@ def _populate_action_trace(
             action_info["error"] = action["error"]
 
         variables = action.get("variables") or action.get("changed_variables", {})
-        if variables and "trigger" not in variables:
-            useful_vars = {k: v for k, v in variables.items() if v is not None}
-            if useful_vars:
-                if deduplicate:
-                    try:
-                        fingerprint = json.dumps(
-                            useful_vars, sort_keys=True, default=str
-                        )
-                    except (TypeError, ValueError):
-                        fingerprint = str(useful_vars)
-
-                    if fingerprint != last_vars_fingerprint:
-                        action_info["variables"] = useful_vars
-                        last_vars_fingerprint = fingerprint
-                else:
-                    action_info["variables"] = useful_vars
+        useful_vars, last_vars_fingerprint = _select_action_variables(
+            variables, deduplicate, last_vars_fingerprint
+        )
+        if useful_vars is not None:
+            action_info["variables"] = useful_vars
 
         if "child_id" in action:
             action_info["child_id"] = action["child_id"]
@@ -792,3 +849,33 @@ def _populate_action_trace(
         action_results.append(action_info)
 
     result["action_trace"] = action_results
+
+
+def _select_action_variables(
+    variables: dict[str, Any],
+    deduplicate: bool,
+    last_fingerprint: str | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Pick the variables to record for an action step, deduplicating if enabled.
+
+    Returns the variables to include (or None to omit) alongside the fingerprint
+    to carry into the next step.
+    """
+    if not variables or "trigger" in variables:
+        return None, last_fingerprint
+
+    useful_vars = {k: v for k, v in variables.items() if v is not None}
+    if not useful_vars:
+        return None, last_fingerprint
+
+    if not deduplicate:
+        return useful_vars, last_fingerprint
+
+    try:
+        fingerprint = json.dumps(useful_vars, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        fingerprint = str(useful_vars)
+
+    if fingerprint == last_fingerprint:
+        return None, last_fingerprint
+    return useful_vars, fingerprint

@@ -8,7 +8,7 @@ and retrieving system version information.
 import asyncio
 import logging
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import httpx
 from fastmcp.exceptions import ToolError
@@ -735,6 +735,152 @@ class UpdateTools:
             if update.get("can_install")
         ]
 
+    async def _handle_get_action(
+        self,
+        entity_ids: list[str] | str | None,
+        include_release_notes: bool,
+    ) -> dict[str, Any]:
+        """Validate the 'get' action's single-entity requirement and fetch details."""
+        ids = [entity_ids] if isinstance(entity_ids, str) else list(entity_ids or [])
+        if len(ids) != 1:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "'get' requires exactly one entity in entity_ids.",
+                    context={"entity_ids": ids},
+                )
+            )
+        return await self._get_update_details(ids[0], bool(include_release_notes))
+
+    async def _verify_targets_exist(
+        self, targets: list[str]
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        """Split targets into (known, not-found errors) against current entity states.
+
+        Explicit-id mode: verify the entities exist up front. HA service
+        calls targeting nonexistent entities no-op silently, which would
+        otherwise read as success.
+        """
+        states = await self._client.get_states()
+        known = {s.get("entity_id") for s in states if isinstance(s, dict)}
+        not_found = [
+            create_error_response(
+                ErrorCode.ENTITY_NOT_FOUND,
+                f"Update entity not found: {eid}",
+                context={"entity_id": eid},
+                suggestions=["Use ha_manage_updates() to list update entities"],
+            )
+            for eid in targets
+            if eid not in known
+        ]
+        return [e for e in targets if e in known], not_found
+
+    async def _call_update_service(
+        self, action: str, targets: list[str], backup: bool
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Call the update service per target, collecting per-item results."""
+        results: list[dict[str, Any]] = []
+        succeeded = 0
+        for eid in targets:
+            data: dict[str, Any] = {"entity_id": eid}
+            if action == "install" and backup:
+                data["backup"] = True
+            try:
+                await self._client.call_service("update", action, data)
+                results.append({"success": True, "entity_id": eid})
+                succeeded += 1
+            except (HomeAssistantConnectionError, HomeAssistantAuthError):
+                # Fatal transport/auth failure — the connection is gone,
+                # so remaining items would fail identically. Propagate to
+                # surface the root cause instead of N per-item errors.
+                raise
+            except Exception as e:
+                # Batch item failure — collect, don't raise.
+                results.append(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        str(e),
+                        context={"entity_id": eid},
+                    )
+                )
+        return results, succeeded
+
+    async def _execute_batch_action(
+        self,
+        action: str,
+        entity_ids: list[str] | str | None,
+        categories: list[str] | str | None,
+        backup: bool,
+    ) -> dict[str, Any]:
+        """Resolve targets, apply the update service, and build the batch response."""
+        targets = await self._resolve_update_targets(action, entity_ids, categories)
+        requested = len(targets)
+
+        results: list[dict[str, Any]] = []
+        if entity_ids:
+            targets, not_found = await self._verify_targets_exist(targets)
+            results.extend(not_found)
+
+        call_results, succeeded = await self._call_update_service(
+            action, targets, backup
+        )
+        results.extend(call_results)
+
+        failed = requested - succeeded
+        response: dict[str, Any] = {
+            # Aggregate convention (matches ha_bulk-style tools): True only
+            # when nothing failed — zero requested counts as success.
+            "success": failed == 0,
+            "action": action,
+            "requested": requested,
+            "succeeded": succeeded,
+            "failed": failed,
+            "results": results,
+        }
+        if not requested:
+            response["note"] = "No matching pending updates to act on."
+        elif action == "install" and succeeded:
+            response["note"] = (
+                "Installs run asynchronously in Home Assistant and can take "
+                "minutes; poll ha_manage_updates(action='list') to track "
+                "progress."
+            )
+        return response
+
+    def _handle_update_error(
+        self,
+        e: Exception,
+        action: str,
+        entity_ids: list[str] | str | None,
+    ) -> NoReturn:
+        """Map a failure to a structured tool error; always raises."""
+        error_msg = str(e)
+        if (
+            action == "get"
+            and entity_ids
+            and ("404" in error_msg or "not found" in error_msg.lower())
+        ):
+            eid = entity_ids if isinstance(entity_ids, str) else entity_ids[0]
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Update entity not found: {eid}",
+                    context={"entity_id": eid},
+                    suggestions=[
+                        "Use ha_manage_updates() without entity_ids to see "
+                        "all available updates"
+                    ],
+                )
+            )
+        logger.error(f"Failed to manage updates: {e}")
+        exception_to_structured_error(
+            e,
+            suggestions=[
+                "Check Home Assistant connection",
+                "Use ha_manage_updates() to inspect available updates",
+            ],
+        )
+
     @tool(
         name="ha_manage_updates",
         tags={"System"},
@@ -836,21 +982,8 @@ class UpdateTools:
                 return await self._list_updates(bool(include_skipped))
 
             if action == "get":
-                ids = (
-                    [entity_ids]
-                    if isinstance(entity_ids, str)
-                    else list(entity_ids or [])
-                )
-                if len(ids) != 1:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "'get' requires exactly one entity in entity_ids.",
-                            context={"entity_ids": ids},
-                        )
-                    )
-                return await self._get_update_details(
-                    ids[0], bool(include_release_notes)
+                return await self._handle_get_action(
+                    entity_ids, bool(include_release_notes)
                 )
 
             if action not in ("install", "skip", "clear_skipped"):
@@ -863,103 +996,14 @@ class UpdateTools:
                     )
                 )
 
-            targets = await self._resolve_update_targets(action, entity_ids, categories)
-
-            results: list[dict[str, Any]] = []
-            requested = len(targets)
-
-            # Explicit-id mode: verify the entities exist up front. HA service
-            # calls targeting nonexistent entities no-op silently, which would
-            # otherwise read as success.
-            if entity_ids:
-                states = await self._client.get_states()
-                known = {s.get("entity_id") for s in states if isinstance(s, dict)}
-                results.extend(
-                    create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
-                        f"Update entity not found: {eid}",
-                        context={"entity_id": eid},
-                        suggestions=["Use ha_manage_updates() to list update entities"],
-                    )
-                    for eid in targets
-                    if eid not in known
-                )
-                targets = [e for e in targets if e in known]
-
-            succeeded = 0
-            for eid in targets:
-                data: dict[str, Any] = {"entity_id": eid}
-                if action == "install" and backup:
-                    data["backup"] = True
-                try:
-                    await self._client.call_service("update", action, data)
-                    results.append({"success": True, "entity_id": eid})
-                    succeeded += 1
-                except (HomeAssistantConnectionError, HomeAssistantAuthError):
-                    # Fatal transport/auth failure — the connection is gone,
-                    # so remaining items would fail identically. Propagate to
-                    # surface the root cause instead of N per-item errors.
-                    raise
-                except Exception as e:
-                    # Batch item failure — collect, don't raise.
-                    results.append(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            str(e),
-                            context={"entity_id": eid},
-                        )
-                    )
-
-            failed = requested - succeeded
-            response: dict[str, Any] = {
-                # Aggregate convention (matches ha_bulk-style tools): True only
-                # when nothing failed — zero requested counts as success.
-                "success": failed == 0,
-                "action": action,
-                "requested": requested,
-                "succeeded": succeeded,
-                "failed": failed,
-                "results": results,
-            }
-            if not requested:
-                response["note"] = "No matching pending updates to act on."
-            elif action == "install" and succeeded:
-                response["note"] = (
-                    "Installs run asynchronously in Home Assistant and can take "
-                    "minutes; poll ha_manage_updates(action='list') to track "
-                    "progress."
-                )
-            return response
+            return await self._execute_batch_action(
+                action, entity_ids, categories, bool(backup)
+            )
 
         except ToolError:
             raise
         except Exception as e:
-            error_msg = str(e)
-            if (
-                action == "get"
-                and entity_ids
-                and ("404" in error_msg or "not found" in error_msg.lower())
-            ):
-                eid = entity_ids if isinstance(entity_ids, str) else entity_ids[0]
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
-                        f"Update entity not found: {eid}",
-                        context={"entity_id": eid},
-                        suggestions=[
-                            "Use ha_manage_updates() without entity_ids to see "
-                            "all available updates"
-                        ],
-                    )
-                )
-            logger.error(f"Failed to manage updates: {e}")
-            exception_to_structured_error(
-                e,
-                suggestions=[
-                    "Check Home Assistant connection",
-                    "Use ha_manage_updates() to inspect available updates",
-                ],
-            )
+            self._handle_update_error(e, action, entity_ids)
             return (
                 None  # exception_to_structured_error always raises; explicit for CodeQL
             )

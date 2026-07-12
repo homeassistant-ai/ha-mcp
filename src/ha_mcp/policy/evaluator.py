@@ -56,6 +56,33 @@ def _ci(x: Any) -> Any:
     return x.lower() if isinstance(x, str) else x
 
 
+def _contains_matches(val: Any, pv: Any) -> bool:
+    if isinstance(val, str) and isinstance(pv, str):
+        return pv.lower() in val.lower()
+    # Mirror the case-insensitive treatment that ``eq`` / ``in`` /
+    # ``not_in`` already apply: a rule listing ``["light.kitchen"]``
+    # must match an LLM passing ``"Light.Kitchen"``. Per-element
+    # ``_ci`` guards non-string entries so mixed-type collections
+    # (e.g. ``[1, "two"]``) keep their natural equality semantics.
+    return isinstance(val, (list, tuple, set)) and any(_ci(pv) == _ci(x) for x in val)
+
+
+def _numeric_matches(val: Any, op: str, pv: Any) -> bool:
+    try:
+        return bool(val > pv) if op == "gt" else bool(val < pv)
+    except TypeError:
+        # Numeric rule against a non-numeric arg value — log so
+        # users can tell their "temperature > 30" rule isn't
+        # silently never firing because the arg is a string.
+        logger.debug(
+            "policy: %s type-mismatch (val=%r pv=%r) — predicate skipped",
+            op,
+            val,
+            pv,
+        )
+        return False
+
+
 def _op_matches(val: Any, op: str, pv: Any) -> bool:
     """Apply one op to one concrete value. Predicate dispatches over
     the candidate values (which may be many for wildcard paths).
@@ -82,39 +109,9 @@ def _op_matches(val: Any, op: str, pv: Any) -> bool:
                 and re.search(pv, val, re.IGNORECASE) is not None
             )
         case "contains":
-            if isinstance(val, str) and isinstance(pv, str):
-                return pv.lower() in val.lower()
-            # Mirror the case-insensitive treatment that ``eq`` / ``in`` /
-            # ``not_in`` already apply: a rule listing ``["light.kitchen"]``
-            # must match an LLM passing ``"Light.Kitchen"``. Per-element
-            # ``_ci`` guards non-string entries so mixed-type collections
-            # (e.g. ``[1, "two"]``) keep their natural equality semantics.
-            return isinstance(val, (list, tuple, set)) and any(
-                _ci(pv) == _ci(x) for x in val
-            )
-        case "gt":
-            try:
-                return bool(val > pv)
-            except TypeError:
-                # Numeric rule against a non-numeric arg value — log so
-                # users can tell their "temperature > 30" rule isn't
-                # silently never firing because the arg is a string.
-                logger.debug(
-                    "policy: gt type-mismatch (val=%r pv=%r) — predicate skipped",
-                    val,
-                    pv,
-                )
-                return False
-        case "lt":
-            try:
-                return bool(val < pv)
-            except TypeError:
-                logger.debug(
-                    "policy: lt type-mismatch (val=%r pv=%r) — predicate skipped",
-                    val,
-                    pv,
-                )
-                return False
+            return _contains_matches(val, pv)
+        case "gt" | "lt":
+            return _numeric_matches(val, op, pv)
     return False
 
 

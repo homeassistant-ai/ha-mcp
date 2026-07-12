@@ -2273,6 +2273,151 @@ class AddOnTools:
             )
         return await self._execute_repository_action(action, repository.strip())
 
+    @staticmethod
+    def _reject_action_mode_conflicts(
+        action: str,
+        path: str | None,
+        config_data: dict[str, Any],
+        array_patch: dict[str, Any] | None,
+    ) -> None:
+        """Raise if lifecycle-action mode is combined with another mode's params."""
+        conflicts = []
+        if path is not None:
+            conflicts.append("path")
+        if config_data:
+            conflicts.append("config parameters")
+        if array_patch is not None:
+            conflicts.append("array_patch")
+        if conflicts:
+            raise_tool_error(
+                create_validation_error(
+                    f"action='{action}' (lifecycle mode) cannot be combined "
+                    f"with {', '.join(conflicts)}. Use one mode at a time.",
+                    parameter="action",
+                )
+            )
+
+    def _reject_config_mode_proxy_params(
+        self,
+        *,
+        method: str,
+        body: dict[str, Any] | str | None,
+        debug: bool,
+        port: int | None,
+        offset: int,
+        limit: int | None,
+        websocket: bool,
+        wait_for_close: bool,
+        message_limit: int | None,
+        message_offset: int,
+        summarize: bool,
+        python_transform: str | None,
+        array_patch: dict[str, Any] | None,
+        request_headers: dict[str, str] | None,
+    ) -> None:
+        """Raise if any proxy-mode-only param is set while config mode is active."""
+        proxy_overrides = self._proxy_overrides_basic(
+            method, body, debug, port, offset, limit, websocket
+        ) + self._proxy_overrides_ws_and_extra(
+            wait_for_close,
+            message_limit,
+            message_offset,
+            summarize,
+            python_transform,
+            array_patch,
+            request_headers,
+        )
+        if proxy_overrides:
+            raise_tool_error(
+                create_validation_error(
+                    f"Proxy-mode parameters cannot be used in config mode: {', '.join(d for _, d in proxy_overrides)}. "
+                    "Remove these parameters or switch to proxy mode by providing 'path'.",
+                    parameter=proxy_overrides[0][0],
+                )
+            )
+
+    async def _execute_ws_proxy(
+        self,
+        slug: str,
+        path: str,
+        body: dict[str, Any] | str | None,
+        debug: bool,
+        port: int | None,
+        wait_for_close: bool,
+        message_limit: int | None,
+        message_offset: int,
+        summarize: bool,
+        python_transform: str | None,
+    ) -> dict[str, Any]:
+        result = await _call_addon_ws(
+            client=self._client,
+            slug=slug,
+            path=path,
+            body=body,
+            timeout=120 if wait_for_close else 10,
+            debug=debug,
+            port=port,
+            wait_for_close=wait_for_close,
+            message_limit=message_limit,
+            message_offset=message_offset,
+            summarize=summarize,
+            python_transform=python_transform,
+        )
+        if not result.get("success"):
+            raise_tool_error(result)
+        return result
+
+    async def _execute_http_proxy(
+        self,
+        *,
+        slug: str,
+        path: str,
+        method: str,
+        body: dict[str, Any] | str | None,
+        debug: bool,
+        port: int | None,
+        offset: int,
+        limit: int | None,
+        python_transform: str | None,
+        request_headers: dict[str, str] | None,
+        message_limit: int | None,
+        message_offset: int,
+        summarize: bool,
+    ) -> dict[str, Any]:
+        valid_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+        if method.upper() not in valid_methods:
+            raise_tool_error(
+                create_validation_error(
+                    f"Invalid HTTP method: {method}. Must be one of: {', '.join(sorted(valid_methods))}",
+                    parameter="method",
+                )
+            )
+        if message_limit is not None or message_offset != 0 or not summarize:
+            raise_tool_error(
+                create_validation_error(
+                    "message_limit / message_offset / summarize apply only to "
+                    "WebSocket mode. Set websocket=True or remove them.",
+                    parameter="message_limit",
+                )
+            )
+
+        result = await _call_addon_api(
+            client=self._client,
+            slug=slug,
+            path=path,
+            method=method,
+            body=body,
+            debug=debug,
+            port=port,
+            offset=offset,
+            limit=limit,
+            python_transform=python_transform,
+            extra_headers=request_headers,
+        )
+        if not result.get("success"):
+            raise_tool_error(result)
+        return result
+
     async def manage_addon(
         self,
         slug: str,
@@ -2326,45 +2471,28 @@ class AddOnTools:
         # Lifecycle mode takes precedence and is mutually exclusive with the
         # proxy / config / array-patch modes.
         if action is not None:
-            conflicts = []
-            if path is not None:
-                conflicts.append("path")
-            if config_data:
-                conflicts.append("config parameters")
-            if array_patch is not None:
-                conflicts.append("array_patch")
-            if conflicts:
-                raise_tool_error(
-                    create_validation_error(
-                        f"action='{action}' (lifecycle mode) cannot be combined "
-                        f"with {', '.join(conflicts)}. Use one mode at a time.",
-                        parameter="action",
-                    )
-                )
+            self._reject_action_mode_conflicts(action, path, config_data, array_patch)
             return await self._execute_action_mode(slug, action)
 
         self._validate_manage_mode(path, config_data)
 
         if config_data:
-            proxy_overrides = self._proxy_overrides_basic(
-                method, body, debug, port, offset, limit, websocket
-            ) + self._proxy_overrides_ws_and_extra(
-                wait_for_close,
-                message_limit,
-                message_offset,
-                summarize,
-                python_transform,
-                array_patch,
-                request_headers,
+            self._reject_config_mode_proxy_params(
+                method=method,
+                body=body,
+                debug=debug,
+                port=port,
+                offset=offset,
+                limit=limit,
+                websocket=websocket,
+                wait_for_close=wait_for_close,
+                message_limit=message_limit,
+                message_offset=message_offset,
+                summarize=summarize,
+                python_transform=python_transform,
+                array_patch=array_patch,
+                request_headers=request_headers,
             )
-            if proxy_overrides:
-                raise_tool_error(
-                    create_validation_error(
-                        f"Proxy-mode parameters cannot be used in config mode: {', '.join(d for _, d in proxy_overrides)}. "
-                        "Remove these parameters or switch to proxy mode by providing 'path'.",
-                        parameter=proxy_overrides[0][0],
-                    )
-                )
             return await self._execute_config_mode(slug, config_data)
 
         # _call_addon_ws does not accept caller headers — reject the combo rather
@@ -2399,43 +2527,20 @@ class AddOnTools:
             )
 
         if websocket:
-            result = await _call_addon_ws(
-                client=self._client,
-                slug=slug,
-                path=path,
-                body=body,
-                timeout=120 if wait_for_close else 10,
-                debug=debug,
-                port=port,
-                wait_for_close=wait_for_close,
-                message_limit=message_limit,
-                message_offset=message_offset,
-                summarize=summarize,
-                python_transform=python_transform,
-            )
-            if not result.get("success"):
-                raise_tool_error(result)
-            return result
-
-        valid_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
-        if method.upper() not in valid_methods:
-            raise_tool_error(
-                create_validation_error(
-                    f"Invalid HTTP method: {method}. Must be one of: {', '.join(sorted(valid_methods))}",
-                    parameter="method",
-                )
-            )
-        if message_limit is not None or message_offset != 0 or not summarize:
-            raise_tool_error(
-                create_validation_error(
-                    "message_limit / message_offset / summarize apply only to "
-                    "WebSocket mode. Set websocket=True or remove them.",
-                    parameter="message_limit",
-                )
+            return await self._execute_ws_proxy(
+                slug,
+                path,
+                body,
+                debug,
+                port,
+                wait_for_close,
+                message_limit,
+                message_offset,
+                summarize,
+                python_transform,
             )
 
-        result = await _call_addon_api(
-            client=self._client,
+        return await self._execute_http_proxy(
             slug=slug,
             path=path,
             method=method,
@@ -2445,11 +2550,11 @@ class AddOnTools:
             offset=offset,
             limit=limit,
             python_transform=python_transform,
-            extra_headers=request_headers,
+            request_headers=request_headers,
+            message_limit=message_limit,
+            message_offset=message_offset,
+            summarize=summarize,
         )
-        if not result.get("success"):
-            raise_tool_error(result)
-        return result
 
 
 def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -> None:

@@ -52,64 +52,20 @@ def get_data_dir() -> Path:
     return _resolve_data_dir()
 
 
-def _resolve_data_dir() -> Path:
-    """Resolve the data directory (uncached); see ``get_data_dir`` for priority."""
-    # ``.strip()``: ``HA_MCP_CONFIG_DIR="   "`` is truthy and ``Path("   ")``
-    # resolves cwd-relative, which would mkdir a literal whitespace-named
-    # directory next to whatever cwd happens to be at startup.
-    config_dir_env = os.environ.get("HA_MCP_CONFIG_DIR", "").strip()
-    preferred: Path | None = None
-    if config_dir_env:
-        custom_dir = Path(config_dir_env)
-        try:
-            custom_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            logger.warning(
-                "HA_MCP_CONFIG_DIR=%s could not be prepared (%s: %s); "
-                "falling back to a tmpdir.",
-                custom_dir,
-                type(e).__name__,
-                e,
-            )
-            preferred = custom_dir
-        else:
-            return custom_dir
-
-    if is_running_in_addon():
-        addon_dir = Path("/data")
-        try:
-            addon_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            logger.warning(
-                "/data is not writable in add-on mode (%s: %s); "
-                "falling back. Set HA_MCP_CONFIG_DIR to override.",
-                type(e).__name__,
-                e,
-            )
-            if preferred is None:
-                preferred = addon_dir
-        else:
-            # Honor an explicit HA_MCP_CONFIG_DIR override even in add-on
-            # mode: if the user set it and its mkdir failed (preferred is
-            # not None), fall through to the tmpdir fallback rather than
-            # silently writing to /data — they chose the override
-            # deliberately.
-            if preferred is None:
-                return addon_dir
-
-    if preferred is None:
-        home_dir = Path.home() / ".ha-mcp"
-        try:
-            home_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            preferred = home_dir
-        else:
-            return home_dir
-
-    fallback = Path(tempfile.gettempdir()) / "ha-mcp"
+def _try_mkdir(path: Path) -> OSError | None:
+    """Create ``path`` (idempotent); return the ``OSError`` on failure, else ``None``."""
     try:
-        fallback.mkdir(parents=True, exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True)
     except OSError as e:
+        return e
+    return None
+
+
+def _prepare_fallback(preferred: Path | None) -> Path:
+    """Return the last-resort ``<tempdir>/ha-mcp``, logging why ``preferred`` was rejected."""
+    fallback = Path(tempfile.gettempdir()) / "ha-mcp"
+    err = _try_mkdir(fallback)
+    if err is not None:
         # Even the tmpdir is unwritable. Return the path anyway: callers
         # that wrap writes in try/except OSError can degrade gracefully
         # (no persistence, but the server still starts). ``error`` rather
@@ -121,8 +77,8 @@ def _resolve_data_dir() -> Path:
             "Set HA_MCP_CONFIG_DIR to a writable path for persistence.",
             preferred,
             fallback,
-            type(e).__name__,
-            e,
+            type(err).__name__,
+            err,
         )
     else:
         logger.warning(
@@ -133,3 +89,52 @@ def _resolve_data_dir() -> Path:
             fallback,
         )
     return fallback
+
+
+def _resolve_data_dir() -> Path:
+    """Resolve the data directory (uncached); see ``get_data_dir`` for priority."""
+    # ``.strip()``: ``HA_MCP_CONFIG_DIR="   "`` is truthy and ``Path("   ")``
+    # resolves cwd-relative, which would mkdir a literal whitespace-named
+    # directory next to whatever cwd happens to be at startup.
+    config_dir_env = os.environ.get("HA_MCP_CONFIG_DIR", "").strip()
+    preferred: Path | None = None
+    if config_dir_env:
+        custom_dir = Path(config_dir_env)
+        err = _try_mkdir(custom_dir)
+        if err is None:
+            return custom_dir
+        logger.warning(
+            "HA_MCP_CONFIG_DIR=%s could not be prepared (%s: %s); "
+            "falling back to a tmpdir.",
+            custom_dir,
+            type(err).__name__,
+            err,
+        )
+        preferred = custom_dir
+
+    if is_running_in_addon():
+        addon_dir = Path("/data")
+        err = _try_mkdir(addon_dir)
+        if err is not None:
+            logger.warning(
+                "/data is not writable in add-on mode (%s: %s); "
+                "falling back. Set HA_MCP_CONFIG_DIR to override.",
+                type(err).__name__,
+                err,
+            )
+            if preferred is None:
+                preferred = addon_dir
+        # Honor an explicit HA_MCP_CONFIG_DIR override even in add-on mode:
+        # if the user set it and its mkdir failed (preferred is not None),
+        # fall through to the tmpdir fallback rather than silently writing
+        # to /data — they chose the override deliberately.
+        elif preferred is None:
+            return addon_dir
+
+    if preferred is None:
+        home_dir = Path.home() / ".ha-mcp"
+        if _try_mkdir(home_dir) is None:
+            return home_dir
+        preferred = home_dir
+
+    return _prepare_fallback(preferred)
