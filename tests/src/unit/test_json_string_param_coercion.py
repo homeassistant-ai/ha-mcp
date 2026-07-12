@@ -24,11 +24,13 @@ import asyncio
 import inspect
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import Annotated, Any
 from unittest.mock import MagicMock
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
+
+from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
 
 from .test_config_param_no_string_schema import (
     _BULK_TOOLS,
@@ -145,6 +147,21 @@ def test_json_like_malformed_string_preserves_decode_location(malformed, detail)
     assert error["type"] == "value_error"
     assert "Invalid JSON" in error["msg"]
     assert detail in error["msg"]
+
+
+@pytest.mark.parametrize(
+    "jinja_template",
+    [
+        "{{ states('light.kitchen') }}",
+        "{% if is_state('light.kitchen', 'on') %}on{% endif %}",
+        '{"option": {{ template }}}',
+    ],
+)
+def test_jinja_templates_pass_through_for_string_union(jinja_template):
+    """Jinja strings remain available to the string arm of union parameters."""
+    annotation = Annotated[str | dict[str, Any], JSON_STRING_COERCION]
+
+    assert TypeAdapter(annotation).validate_python(jinja_template) == jinja_template
 
 
 @pytest.mark.parametrize(

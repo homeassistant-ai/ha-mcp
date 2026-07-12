@@ -144,14 +144,16 @@ def _loads_if_json_container_str(value: Any) -> Any:
 
     A string that starts like an object or array but contains malformed JSON
     raises with the decoder location so ValidationErrorMiddleware can return
-    an actionable error. Other strings pass through unchanged, leaving
-    Pydantic to report the expected parameter type.
+    an actionable error. Jinja templates and other strings pass through
+    unchanged, leaving Pydantic to select the expected parameter type.
     """
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
         except json.JSONDecodeError as exc:
-            if value.lstrip().startswith(("{", "[")):
+            is_container_like = re.match(r"\s*[\[{]", value) is not None
+            contains_jinja = any(marker in value for marker in ("{{", "{%", "{#"))
+            if is_container_like and not contains_jinja:
                 raise ValueError(
                     f"Invalid JSON at line {exc.lineno} column {exc.colno}: {exc.msg}"
                 ) from exc
