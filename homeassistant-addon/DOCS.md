@@ -537,7 +537,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 ### Entity Registry
 - `ha_get_entity` — Get entity registry information for one or more entities.
 - `ha_get_entity_exposure` — Get entity exposure settings - list all or get settings for a specific entity.
-- `ha_remove_entity` — Remove an entity from the Home Assistant entity registry.
+- `ha_remove_entity` — Remove one or more entities from the Home Assistant entity registry.
 - `ha_set_entity` — Update entity properties in the entity registry.
 
 ### Files
