@@ -214,7 +214,17 @@ class EmbeddedServerManager:
                 "Server secret path missing from the config entry; "
                 "reload the integration to regenerate it."
             )
-        if Version(HA_VERSION) < Version(MIN_EMBEDDED_HOME_ASSISTANT_VERSION):
+        try:
+            home_assistant_version = Version(HA_VERSION)
+        except InvalidVersion as err:
+            raise EmbeddedServerError(
+                f"The in-process server could not determine whether Home "
+                f"Assistant {HA_VERSION} satisfies its minimum requirement of "
+                f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION}. Install a standard Home "
+                "Assistant release before reloading this integration.",
+                kind="package",
+            ) from err
+        if home_assistant_version < Version(MIN_EMBEDDED_HOME_ASSISTANT_VERSION):
             raise EmbeddedServerError(
                 f"The in-process server requires Home Assistant "
                 f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION} or newer; this instance "
@@ -486,6 +496,7 @@ class EmbeddedServerManager:
             spec_is_stable
             and stored_spec == self._pip_spec
             and installed_version is not None
+            and _is_compatible_embedded_version(installed_version)
         )
         if fast_path_ok:
             await self._async_process_requirements_fast()
@@ -509,7 +520,12 @@ class EmbeddedServerManager:
                 await self._async_remove_distribution(target_dist)
             await self._async_force_install()
 
-        version = await self._hass.async_add_executor_job(_installed_ha_mcp_version)
+        if not self._pip_spec_override and self._channel == CHANNEL_DEV:
+            version = await self._hass.async_add_executor_job(
+                _installed_ha_mcp_version, target_dist
+            )
+        else:
+            version = await self._hass.async_add_executor_job(_installed_ha_mcp_version)
         if version is None:
             raise EmbeddedServerError(
                 f"Installed the server requirement ({self._pip_spec!r}) but the "
@@ -602,9 +618,7 @@ class EmbeddedServerManager:
         """Remove a distribution from the same target used for installation."""
         target = pip_kwargs(self._hass.config.config_dir).get("target")
         if target is None:
-            await self._hass.async_add_executor_job(
-                _uninstall_distribution, dist_name
-            )
+            await self._hass.async_add_executor_job(_uninstall_distribution, dist_name)
         else:
             await self._hass.async_add_executor_job(
                 partial(_uninstall_distribution, dist_name, target=target)
@@ -979,12 +993,14 @@ def _purge_ha_mcp_modules() -> None:
     _LOGGER.debug("Purged %d cached ha_mcp module(s) before worker start", len(purged))
 
 
-def _installed_ha_mcp_version() -> str | None:
+def _installed_ha_mcp_version(preferred_dist: str | None = None) -> str | None:
     """Return the installed ha-mcp distribution version, or None (blocking).
 
     Invalidates the import caches first so a just-completed pip install is seen.
     Checks both the stable (``ha-mcp``) and dev (``ha-mcp-dev``) distribution
-    names, mirroring ``ha_mcp._version.get_version``.
+    names, mirroring ``ha_mcp._version.get_version``. When ``preferred_dist`` is
+    provided, checks that channel first so stale metadata from a failed
+    best-effort conflicting uninstall cannot mask the package just installed.
     """
     importlib.invalidate_caches()
     # Metadata alone is not proof: a channel switch's best-effort uninstall
@@ -993,7 +1009,13 @@ def _installed_ha_mcp_version() -> str | None:
     # machinery to actually resolve the package before trusting any version.
     if importlib.util.find_spec("ha_mcp") is None:
         return None
-    for dist_name in (DIST_NAME_STABLE, DIST_NAME_DEV):
+    dist_names = (DIST_NAME_STABLE, DIST_NAME_DEV)
+    if preferred_dist in dist_names:
+        dist_names = (
+            preferred_dist,
+            *(name for name in dist_names if name != preferred_dist),
+        )
+    for dist_name in dist_names:
         with suppress(importlib.metadata.PackageNotFoundError):
             return importlib.metadata.version(dist_name)
     return None

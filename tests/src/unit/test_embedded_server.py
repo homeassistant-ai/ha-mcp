@@ -520,7 +520,7 @@ class TestEnsurePackage:
         uninstall.assert_called_once_with(DIST_NAME_STABLE, target="/config/deps")
         install_pkg.assert_called_once()
 
-    async def test_legacy_server_overrides_disabled_auto_update(
+    async def test_legacy_server_overrides_disabled_auto_update_with_bare_stored_spec(
         self, tmp_path, monkeypatch
     ):
         mgr, _hass, _entry = _manager(
@@ -528,7 +528,7 @@ class TestEnsurePackage:
             options={OPT_AUTO_UPDATE: False},
             data={
                 DATA_SECRET_PATH: "/p",
-                DATA_LAST_PIP_SPEC: f"{DIST_NAME_STABLE}==6.2.0",
+                DATA_LAST_PIP_SPEC: DIST_NAME_STABLE,
             },
         )
         install_pkg = MagicMock(return_value=True)
@@ -562,9 +562,7 @@ class TestEnsurePackage:
             MagicMock(side_effect=["6.2.0", "6.2.0"]),
         )
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
-        monkeypatch.setattr(
-            es, "_uninstall_distribution", MagicMock(return_value=True)
-        )
+        monkeypatch.setattr(es, "_uninstall_distribution", MagicMock(return_value=True))
 
         with pytest.raises(es.EmbeddedServerError) as exc:
             await mgr._async_ensure_package()
@@ -601,7 +599,9 @@ class TestEnsurePackage:
         monkeypatch.setattr(es, "async_process_requirements", proc)
         monkeypatch.setattr(es, "install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1.dev5")
+        monkeypatch.setattr(
+            es, "_installed_ha_mcp_version", lambda preferred=None: "7.12.1.dev5"
+        )
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
         uninstall = MagicMock()
         monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
@@ -612,6 +612,35 @@ class TestEnsurePackage:
         install_pkg.assert_called_once()
         assert install_pkg.call_args.args[0] == DEV_PIP_SPEC
         uninstall.assert_not_called()  # the other dist was absent
+
+    async def test_dev_install_validates_target_when_stale_stable_metadata_remains(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEFAULT_PIP_SPEC},
+        )
+        install_pkg = MagicMock(return_value=True)
+        uninstall = MagicMock(return_value=False)
+
+        def installed_version(preferred_dist=None):
+            if preferred_dist == DIST_NAME_DEV:
+                return "7.12.1.dev5"
+            return "6.2.0"
+
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
+        monkeypatch.setattr(
+            es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
+        )
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        uninstall.assert_called_once_with(DIST_NAME_STABLE)
+        install_pkg.assert_called_once()
 
     async def test_channel_switch_uninstalls_other_dist(self, tmp_path, monkeypatch):
         # Switching to dev while stable's distribution is installed uninstalls
@@ -624,7 +653,9 @@ class TestEnsurePackage:
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
+        monkeypatch.setattr(
+            es, "_installed_ha_mcp_version", lambda preferred=None: "7.12.1"
+        )
         monkeypatch.setattr(
             es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
         )
@@ -829,8 +860,7 @@ class TestDistHelpers:
         monkeypatch.setattr(es.subprocess, "run", _run)
 
         assert (
-            es._uninstall_distribution(DIST_NAME_STABLE, target="/config/deps")
-            is True
+            es._uninstall_distribution(DIST_NAME_STABLE, target="/config/deps") is True
         )
 
         args = calls["args"]
@@ -875,6 +905,14 @@ class TestInstalledVersion:
 
         monkeypatch.setattr(importlib.metadata, "version", _version)
         assert es._installed_ha_mcp_version() == "7.9.0.dev5"
+
+    def test_prefers_requested_dist(self, monkeypatch):
+        monkeypatch.setattr(
+            importlib.metadata,
+            "version",
+            lambda name: "7.9.0.dev5" if name == DIST_NAME_DEV else "6.2.0",
+        )
+        assert es._installed_ha_mcp_version(DIST_NAME_DEV) == "7.9.0.dev5"
 
     def test_returns_none_when_absent(self, monkeypatch):
         def _version(name):
@@ -1515,6 +1553,23 @@ class TestLifecycle:
         with pytest.raises(
             es.EmbeddedServerError,
             match=r"requires Home Assistant 2026\.6\.0 or newer",
+        ) as exc:
+            await mgr.async_start()
+
+        assert exc.value.kind == "package"
+        ensure.assert_not_awaited()
+
+    async def test_start_rejects_invalid_home_assistant_version_before_install(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        ensure = AsyncMock()
+        monkeypatch.setattr(es, "HA_VERSION", "custom-build")
+        monkeypatch.setattr(mgr, "_async_ensure_package", ensure)
+
+        with pytest.raises(
+            es.EmbeddedServerError,
+            match="could not determine whether Home Assistant custom-build",
         ) as exc:
             await mgr.async_start()
 
