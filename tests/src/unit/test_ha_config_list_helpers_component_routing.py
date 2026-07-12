@@ -55,6 +55,21 @@ from ._component_routing_helpers import make_ws, patch_ws
 # exact #1794 shape (legacy list would emit only the storage id + stale name).
 _LEGACY_ITEMS = [{"id": "abc123", "name": "Old Name", "icon": "mdi:flash"}]
 
+# Entity-registry entry the legacy path joins onto ``_LEGACY_ITEMS`` (#1794):
+# unique_id ``abc123`` on platform ``input_boolean`` currently lives at
+# ``input_boolean.foo`` with display name "New Name". Enriching the legacy list
+# with this yields the same record the component path emits, so the two paths
+# stay parity-equal instead of the legacy body degrading on an unhandled read.
+_LEGACY_REGISTRY = [
+    {
+        "entity_id": "input_boolean.foo",
+        "unique_id": "abc123",
+        "platform": "input_boolean",
+        "name": "New Name",
+        "original_name": "Old Name",
+    }
+]
+
 _CAPS_HELPERS = {
     "schema_version": 1,
     "component_version": "1.1.0",
@@ -106,8 +121,13 @@ class RoutingClient:
         self.list_calls = 0
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        self.list_calls += 1
         msg_type = msg.get("type", "")
+        # The legacy body joins the entity registry (#1794); serve it, but don't
+        # tally it as a {type}/list fetch — the counter tracks the helper-list
+        # round-trip the routing assertions care about.
+        if msg_type == "config/entity_registry/list":
+            return {"success": True, "result": [dict(e) for e in _LEGACY_REGISTRY]}
+        self.list_calls += 1
         if msg_type == "input_boolean/list":
             return {"success": True, "result": [dict(i) for i in _LEGACY_ITEMS]}
         if msg_type == "tag/list":

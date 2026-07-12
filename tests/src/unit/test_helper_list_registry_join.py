@@ -18,8 +18,18 @@ import pytest
 
 @pytest.fixture
 def mock_client():
-    """Mock client whose WS handler is assembled per-test from canned responses."""
-    return MagicMock()
+    """Mock client for the legacy storage-list path.
+
+    #1812 added a component-backed ``helpers_list`` path ahead of the legacy
+    ``{type}/list`` body these tests target. Leaving ``base_url``/``token``
+    unset makes ``get_component_caps`` return ``None`` via its no-credentials
+    guard, so the tool falls through to the legacy body and the registry join
+    under test actually runs (rather than the component path short-circuiting
+    it). The WS handler is assembled per-test from canned responses."""
+    client = MagicMock()
+    client.base_url = None
+    client.token = None
+    return client
 
 
 @pytest.fixture
