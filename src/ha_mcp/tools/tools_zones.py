@@ -394,6 +394,7 @@ class ZoneTools:
                     ],
                     context={"action": "set"},
                 )
+            fields_to_update: dict[str, Any] = {}
             if zone_id:
                 # UPDATE operation
                 operation = "update"

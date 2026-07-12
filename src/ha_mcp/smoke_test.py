@@ -8,8 +8,8 @@ from typing import Any
 
 # Force UTF-8 encoding on Windows for Unicode output
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr,unused-ignore]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr,unused-ignore]
 
 # Set dummy credentials before any imports try to use them
 os.environ.setdefault("HOMEASSISTANT_URL", "http://smoke-test:8123")
