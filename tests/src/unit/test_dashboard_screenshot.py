@@ -2893,7 +2893,10 @@ class TestPublicScreenshotOptionForwarding:
         monkeypatch.setattr(
             config,
             "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+            lambda: SimpleNamespace(
+                enable_dashboard_screenshot=True,
+                enable_mandatory_bps=False,
+            ),
         )
         capture_call: dict[str, Any] = {}
 
@@ -2934,7 +2937,10 @@ class TestPublicScreenshotOptionForwarding:
         monkeypatch.setattr(
             config,
             "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+            lambda: SimpleNamespace(
+                enable_dashboard_screenshot=True,
+                enable_mandatory_bps=False,
+            ),
         )
         monkeypatch.setattr(
             auto_backup,

@@ -425,6 +425,15 @@ def resolve_dashboard_view(
         )
 
     view_index, _ = matches[0]
+    render_path = _safe_named_render_path(base_path, cleaned_view_path)
+    if render_path is None:
+        return _fallback_view_target(
+            base_path=base_path,
+            view_path=cleaned_view_path,
+            view_index=view_index,
+            views=views,
+            reason="is unsafe for screenshot transport",
+        )
     if _view_path_requires_numeric_fallback(cleaned_view_path, view_index, views):
         return _fallback_view_target(
             base_path=base_path,
@@ -434,15 +443,6 @@ def resolve_dashboard_view(
             reason=(
                 "cannot be selected reliably as a named Home Assistant frontend route"
             ),
-        )
-    render_path = _safe_named_render_path(base_path, cleaned_view_path)
-    if render_path is None:
-        return _fallback_view_target(
-            base_path=base_path,
-            view_path=cleaned_view_path,
-            view_index=view_index,
-            views=views,
-            reason="is unsafe for screenshot transport",
         )
     return DashboardRenderTarget(
         dashboard_url_path=base_path,
