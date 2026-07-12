@@ -233,6 +233,55 @@ def test_value_source_handles_list_shape_services_payload(tmp_path):
     assert r.json()["values"] == ["light", "lock"]
 
 
+def test_value_source_ha_config_entries_filters_malformed(tmp_path):
+    # ha_config_entries (mapped from ha_set_integration's args.entry_id)
+    # keeps only dict entries carrying a string entry_id.
+    client = MagicMock()
+    client._request = AsyncMock(
+        return_value=[
+            {"entry_id": "abc123", "domain": "hue"},
+            {"entry_id": "def456", "domain": "group"},
+            {"no_entry_id": True},
+            "junk",
+            {"entry_id": 42},
+        ]
+    )
+    c = _make_app(tmp_path, _make_server(tools=[], client=client))
+    r = c.get("/api/policy/value-source?source=ha_config_entries")
+    assert r.status_code == 200
+    assert r.json()["values"] == ["abc123", "def456"]
+    client._request.assert_awaited_once_with("GET", "/config/config_entries/entry")
+
+
+def test_value_source_ha_config_entries_non_list_returns_empty(tmp_path):
+    client = MagicMock()
+    client._request = AsyncMock(return_value={"unexpected": "shape"})
+    c = _make_app(tmp_path, _make_server(tools=[], client=client))
+    r = c.get("/api/policy/value-source?source=ha_config_entries")
+    assert r.status_code == 200
+    assert r.json()["values"] == []
+
+
+def test_tool_schema_set_integration_maps_entry_id_value_source(tmp_path):
+    tool = _make_fake_tool(
+        "ha_set_integration",
+        parameters={
+            "properties": {
+                "entry_id": {"type": "string"},
+                "enabled": {"type": "boolean"},
+                "domain": {"type": "string"},
+                "config": {"type": "object"},
+            },
+        },
+        destructive=True,
+    )
+    c = _make_app(tmp_path, _make_server(tools=[tool]))
+    r = c.get("/api/policy/tool-schema?name=ha_set_integration")
+    assert r.status_code == 200
+    vs = r.json()["value_sources"]
+    assert vs["args.entry_id"] == "ha_config_entries"
+
+
 def test_value_source_fetcher_exception_returns_502(tmp_path):
     client = MagicMock()
     client.get_services = AsyncMock(side_effect=RuntimeError("HA unreachable"))

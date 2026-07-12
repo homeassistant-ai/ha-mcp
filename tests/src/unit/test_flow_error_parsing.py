@@ -313,3 +313,78 @@ class TestHandleFlowStepsOptionsFlowError:
         # Issue #1149: data_schema is now attached alongside field_errors.
         assert body.get("data_schema") == intro_schema
         assert body.get("flow_id") == "opt-flow"
+
+
+# ---------------------------------------------------------------------------
+# 5. Undrivable step types (issue #1814)
+# ---------------------------------------------------------------------------
+
+
+class TestUndrivableStepTypes:
+    """External (browser/OAuth) and progress steps cannot be driven over MCP.
+
+    ``_handle_flow_steps`` must surface them as SERVICE_CALL_FAILED with an
+    actionable "complete in the HA UI" suggestion — NOT fall through to the
+    INTERNAL_UNEXPECTED "Unexpected flow result type" branch, which loses
+    the error code the ha_set_integration docstring documents.
+    """
+
+    @pytest.mark.parametrize(
+        "step_type", ["external", "external_done", "progress", "progress_done"]
+    )
+    async def test_undrivable_step_raises_structured_error(
+        self, step_type: str
+    ) -> None:
+        client = AsyncMock()
+        initial_step = {
+            "type": step_type,
+            "flow_id": "oauth-flow",
+            "step_id": "auth",
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=client,
+                flow_id="oauth-flow",
+                initial_step=initial_step,
+                config={},
+                helper_type="some_oauth_integration",
+            )
+
+        body = _parse_tool_error(exc_info.value)
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "cannot be completed via MCP" in body["error"]["message"]
+        assert step_type in body["error"]["message"]
+        # The actionable pointer to the HA UI must survive. A single
+        # suggestion is emitted as the singular ``suggestion`` key.
+        assert "Home Assistant UI" in body["error"].get("suggestion", "")
+        # Nothing was submitted — the step is surfaced, not attempted.
+        client.submit_config_flow_step.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "reason", ["already_configured", "single_instance_allowed"]
+    )
+    async def test_benign_abort_carries_existing_entry_hint(self, reason: str) -> None:
+        # Add-mode drives arbitrary domains, so common benign aborts
+        # (integration already set up) must point the caller at the
+        # existing entry rather than surface as a bare failure.
+        client = AsyncMock()
+        initial_step = {
+            "type": "abort",
+            "flow_id": "dup-flow",
+            "reason": reason,
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=client,
+                flow_id="dup-flow",
+                initial_step=initial_step,
+                config={},
+                helper_type="sun",
+            )
+
+        body = _parse_tool_error(exc_info.value)
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert reason in body["error"]["message"]
+        assert "already set up" in body["error"].get("suggestion", "")
