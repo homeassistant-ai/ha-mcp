@@ -510,6 +510,7 @@ class TestEnsurePackage:
             "_installed_ha_mcp_version",
             MagicMock(side_effect=["6.2.0", "7.12.1"]),
         )
+        monkeypatch.setattr(es, "_installed_dist_version", lambda name: "6.2.0")
         monkeypatch.setattr(
             es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
         )
@@ -561,6 +562,7 @@ class TestEnsurePackage:
             "_installed_ha_mcp_version",
             MagicMock(side_effect=["6.2.0", "6.2.0"]),
         )
+        monkeypatch.setattr(es, "_installed_dist_version", lambda name: None)
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
         monkeypatch.setattr(es, "_uninstall_distribution", MagicMock(return_value=True))
 
@@ -635,6 +637,41 @@ class TestEnsurePackage:
         monkeypatch.setattr(
             es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
         )
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        uninstall.assert_called_once_with(DIST_NAME_STABLE)
+        install_pkg.assert_called_once()
+
+    async def test_dev_cleanup_keeps_compatible_target_with_stale_stable_metadata(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV, OPT_AUTO_UPDATE: False},
+            data={
+                DATA_SECRET_PATH: "/p",
+                DATA_LAST_PIP_SPEC: f"{DIST_NAME_DEV}==7.12.1.dev5",
+            },
+        )
+        install_pkg = MagicMock(return_value=True)
+        uninstall = MagicMock(return_value=True)
+
+        def installed_version(preferred_dist=None):
+            if preferred_dist == DIST_NAME_DEV:
+                return "7.12.1.dev5"
+            return "6.2.0"
+
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
+        monkeypatch.setattr(
+            es,
+            "_installed_dist_version",
+            lambda name: "7.12.1.dev5" if name == DIST_NAME_DEV else "6.2.0",
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
         monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
 
         await mgr._async_ensure_package()

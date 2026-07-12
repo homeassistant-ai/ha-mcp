@@ -502,22 +502,7 @@ class EmbeddedServerManager:
             await self._async_process_requirements_fast()
         else:
             await self._async_remove_conflicting_dist()
-            if (
-                installed_version is not None
-                and not _is_compatible_embedded_version(installed_version)
-                and await self._hass.async_add_executor_job(
-                    _dist_installed, target_dist
-                )
-            ):
-                _LOGGER.warning(
-                    "Removing legacy %s %s before installing %r; the in-process "
-                    "server requires %s or newer",
-                    target_dist,
-                    installed_version,
-                    self._pip_spec,
-                    MIN_EMBEDDED_SERVER_VERSION,
-                )
-                await self._async_remove_distribution(target_dist)
+            await self._async_remove_legacy_target(target_dist, installed_version)
             await self._async_force_install()
 
         if not self._pip_spec_override and self._channel == CHANNEL_DEV:
@@ -544,6 +529,31 @@ class EmbeddedServerManager:
         _LOGGER.info("HA-MCP in-process server package ready (version %s)", version)
         if stored_spec != self._pip_spec:
             self._store_installed_spec()
+
+    async def _async_remove_legacy_target(
+        self, target_dist: str, installed_version: str | None
+    ) -> None:
+        """Remove an incompatible target distribution before reinstalling it."""
+        if installed_version is None or _is_compatible_embedded_version(
+            installed_version
+        ):
+            return
+        target_installed_version = await self._hass.async_add_executor_job(
+            _installed_dist_version, target_dist
+        )
+        if target_installed_version is None or _is_compatible_embedded_version(
+            target_installed_version
+        ):
+            return
+        _LOGGER.warning(
+            "Removing legacy %s %s before installing %r; the in-process "
+            "server requires %s or newer",
+            target_dist,
+            target_installed_version,
+            self._pip_spec,
+            MIN_EMBEDDED_SERVER_VERSION,
+        )
+        await self._async_remove_distribution(target_dist)
 
     async def _async_process_requirements_fast(self) -> None:
         """Fast path: let HA's requirements manager satisfy the override spec."""
