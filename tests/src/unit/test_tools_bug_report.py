@@ -47,6 +47,17 @@ def mock_mcp():
 class TestBugReportTool:
     """Test suite for the ha_report_issue tool."""
 
+    @pytest.fixture(autouse=True)
+    def _stub_component_caps(self):
+        """These tests exercise report assembly, not the component-version
+        probe. Stub the shared caps probe to None so ``_detect_component_version``
+        takes its legacy best-effort path without a live WS round-trip."""
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_component_caps",
+            AsyncMock(return_value=None),
+        ):
+            yield
+
     @pytest.fixture
     def mock_client(self):
         """Create a mock Home Assistant client."""
@@ -725,6 +736,75 @@ class TestBugReportTool:
         assert result["addon_logs"] == ""
         assert "Add-on Container Logs" not in result["formatted_report"]
         assert "Add-on Container Logs" not in result["runtime_bug_template"]
+
+
+class TestDetectComponentVersion:
+    """``_detect_component_version`` prefers the shared cached caps probe and
+    only falls back to the ``get_caller_token`` bootstrap for a component too
+    old for ``ha_mcp_tools/info`` (issue #1813 P5 item 1a)."""
+
+    @staticmethod
+    def _caps(version: str):
+        from ha_mcp.tools.component_api import ComponentCaps
+
+        return ComponentCaps(
+            schema_version=1,
+            component_version=version,
+            capabilities=frozenset({"search"}),
+            limits={},
+        )
+
+    @pytest.mark.asyncio
+    async def test_caps_hit_uses_caps_version_and_skips_service(self):
+        from ha_mcp.tools.tools_bug_report import BugReportTools
+
+        client = MagicMock()
+        client.call_service = AsyncMock()
+        tools = BugReportTools(client)
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_component_caps",
+            AsyncMock(return_value=self._caps("1.3.0")),
+        ):
+            version = await tools._detect_component_version()
+
+        assert version == "1.3.0"
+        client.call_service.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_caps_miss_falls_back_to_bootstrap_service(self):
+        from ha_mcp.tools.tools_bug_report import BugReportTools
+
+        client = MagicMock()
+        client.call_service = AsyncMock(
+            return_value={"service_response": {"version": "0.11.0"}}
+        )
+        tools = BugReportTools(client)
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_component_caps",
+            AsyncMock(return_value=None),
+        ):
+            version = await tools._detect_component_version()
+
+        assert version == "0.11.0"
+        client.call_service.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_caps_hit_empty_version_returns_none_without_service(self):
+        """A caps-present component that reports no version string yields None
+        (guarded even though a real 1.1.0+ component always reports one)."""
+        from ha_mcp.tools.tools_bug_report import BugReportTools
+
+        client = MagicMock()
+        client.call_service = AsyncMock()
+        tools = BugReportTools(client)
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_component_caps",
+            AsyncMock(return_value=self._caps("")),
+        ):
+            version = await tools._detect_component_version()
+
+        assert version is None
+        client.call_service.assert_not_called()
 
 
 class TestFetchCoreErrorLog:

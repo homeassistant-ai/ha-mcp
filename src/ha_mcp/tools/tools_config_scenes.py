@@ -323,7 +323,7 @@ class ConfigSceneTools:
         return response
 
     async def _get_scene_config_internal(
-        self, scene_id: str
+        self, scene_id: str, *, _resolved: bool = False
     ) -> tuple[dict[str, Any], str, str]:
         """Fetch scene config without logging or category injection.
 
@@ -331,8 +331,12 @@ class ConfigSceneTools:
         ``actual_config`` is the inner scene body (not the REST wrapper) and
         ``resolved_id`` is the storage key the rest-client resolved the input
         to (issue #1168 R3 blocker 6). Used by ``_fetch_and_verify_hash``.
+
+        ``_resolved=True`` forwards to ``get_scene_config`` that ``scene_id`` is
+        already a resolved storage key, so the redundant registry lookup is
+        skipped (e.g. the python_transform re-fetch, which already resolved).
         """
-        envelope = await self._client.get_scene_config(scene_id)
+        envelope = await self._client.get_scene_config(scene_id, _resolved=_resolved)
         actual_config = envelope.get("config", envelope)
         resolved_id = envelope.get("scene_id", scene_id.removeprefix("scene."))
         config_hash_value = compute_config_hash(actual_config)
@@ -760,12 +764,13 @@ class ConfigSceneTools:
                     await self._validate_category_id(category)
 
                 result = await self._client.upsert_scene_config(
-                    transformed_config, resolved_id
+                    transformed_config, resolved_id, _resolved=True
                 )
 
                 # Re-fetch to get authoritative hash (HA may normalise after save).
+                # ``resolved_id`` is already the storage key, so skip the re-resolve.
                 _, new_config_hash, _ = await self._get_scene_config_internal(
-                    resolved_id
+                    resolved_id, _resolved=True
                 )
 
                 # Resolve actual entity_id and apply wait + category — same
@@ -887,7 +892,11 @@ class ConfigSceneTools:
                 self._client, config_dict
             )
 
-            result = await self._client.upsert_scene_config(config_dict, resolved_id)
+            # ``resolved_id`` is already the storage key (from the hash-verify
+            # fetch or the resolve above), so skip the redundant re-resolve.
+            result = await self._client.upsert_scene_config(
+                config_dict, resolved_id, _resolved=True
+            )
 
             # Resolve actual entity_id via registry — HA derives scene
             # entity_ids from the 'name' slug, not the scene_id storage key,
@@ -1033,7 +1042,9 @@ class ConfigSceneTools:
             # matching unique_id (e.g. scene_id-as-entity-id slug case).
             entity_id = await self._resolve_scene_entity_id(resolved_id)
 
-            result = await self._client.delete_scene_config(resolved_id)
+            # ``resolved_id`` is already the storage key (resolved above), so
+            # skip the redundant re-resolve inside delete_scene_config.
+            result = await self._client.delete_scene_config(resolved_id, _resolved=True)
 
             if wait:
                 try:

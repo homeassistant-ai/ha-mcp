@@ -50,14 +50,18 @@ class RadioTools:
         self._client = client
 
     async def _resolve_entity_device(self, entity_id: str) -> str:
-        """Resolve an entity_id to its device_id via the entity registry."""
+        """Resolve an entity_id to its device_id via the entity registry.
+
+        Uses HA's targeted ``config/entity_registry/get`` (single-entity
+        lookup) rather than pulling the whole registry list to find one row.
+        """
         result = await self._client.send_websocket_message(
-            {"type": "config/entity_registry/list"}
+            {"type": "config/entity_registry/get", "entity_id": entity_id}
         )
         if result.get("success"):
-            for entry in result.get("result", []):
-                if entry.get("entity_id") == entity_id and entry.get("device_id"):
-                    return str(entry["device_id"])
+            device_id = (result.get("result") or {}).get("device_id")
+            if device_id:
+                return str(device_id)
         raise_tool_error(
             create_error_response(
                 ErrorCode.ENTITY_NOT_FOUND,

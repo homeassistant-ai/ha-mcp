@@ -725,3 +725,76 @@ class TestHacsDownloadRetry:
         # propagating, leaving the other two side_effect slots
         # untouched.
         assert ws_client.send_command.await_count == 3
+
+
+class TestAlreadyInstalledVersion:
+    """The 'already installed' path reports the running component version from
+    the shared caps probe when available, else HACS's installed_version
+    (issue #1813 P5 item 1b)."""
+
+    @staticmethod
+    def _ws_client_installed():
+        ws_client = MagicMock()
+        ws_client.send_command = AsyncMock(
+            side_effect=[
+                # _ensure_hacs_ready: hacs/info ok
+                {"success": True, "result": {}},
+                # repositories/list — repo present AND installed
+                {
+                    "success": True,
+                    "result": [
+                        {
+                            "full_name": MCP_TOOLS_REPO,
+                            "id": 99,
+                            "installed": True,
+                            "installed_version": "1.0.0",
+                        }
+                    ],
+                },
+            ]
+        )
+        return ws_client
+
+    async def _run(self, monkeypatch, ws_client, caps):
+        async def _ok():
+            return None
+
+        monkeypatch.setattr("ha_mcp.tools.tools_hacs._assert_hacs_available", _ok)
+        monkeypatch.setattr(
+            "ha_mcp.client.websocket_client.get_websocket_client",
+            AsyncMock(return_value=ws_client),
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_mcp_component.get_component_caps",
+            AsyncMock(return_value=caps),
+        )
+        client_mock = AsyncMock()
+        client_mock.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        tools = McpComponentTools(client_mock)
+        return await tools.ha_install_mcp_tools(restart=False)
+
+    @pytest.mark.asyncio
+    async def test_reports_caps_version_when_loaded(self, monkeypatch):
+        from ha_mcp.tools.component_api import ComponentCaps
+
+        caps = ComponentCaps(
+            schema_version=1,
+            component_version="1.2.0",
+            capabilities=frozenset({"search"}),
+            limits={},
+        )
+        result = await self._run(monkeypatch, self._ws_client_installed(), caps)
+
+        data = result.get("data", result)
+        assert data["already_installed"] is True
+        assert data["version"] == "1.2.0"
+        assert "1.2.0" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_installed_version_when_caps_none(self, monkeypatch):
+        result = await self._run(monkeypatch, self._ws_client_installed(), None)
+
+        data = result.get("data", result)
+        assert data["already_installed"] is True
+        assert data["version"] == "1.0.0"
+        assert "1.0.0" in data["message"]

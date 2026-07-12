@@ -5,8 +5,9 @@ established in test_history_pagination.py, which exercises param coercion, error
 formatting, and source dispatch.
 """
 
+import contextlib
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -21,17 +22,20 @@ def _make_mock_client() -> MagicMock:
     return client
 
 
-def _make_ws_client_mock(stat_result: dict | None = None) -> MagicMock:
-    ws = MagicMock()
-    ws.disconnect = AsyncMock()
+def _make_ws_dispatcher(stat_result: dict | None = None):
+    """Async ``send_websocket_message`` stand-in for the pooled transport (#1813).
 
-    async def send_command(cmd, **kwargs):
-        if cmd == "recorder/statistics_during_period":
+    The statistics tool now issues its single WS command through the shared
+    pooled ``client.send_websocket_message`` rather than a per-call dedicated
+    connection.
+    """
+
+    async def send_websocket_message(message):
+        if message["type"] == "recorder/statistics_during_period":
             return {"success": True, "result": stat_result or {}}
-        return {"success": False, "error": f"unknown command: {cmd}"}
+        return {"success": False, "error": f"unknown command: {message['type']}"}
 
-    ws.send_command = send_command
-    return ws
+    return send_websocket_message
 
 
 class TestStatisticTypesValidation:
@@ -48,14 +52,14 @@ class TestStatisticTypesValidation:
 
     @pytest.fixture
     def history_tool(self, mock_client):
+        self._mock_client = mock_client
         return HistoryTools(mock_client).ha_get_history
 
     def _patch_ws(self, rows: list[dict] | None = None):
-        ws = _make_ws_client_mock(stat_result={"sensor.test": rows or []})
-        return patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            return_value=(ws, None),
+        self._mock_client.send_websocket_message = _make_ws_dispatcher(
+            stat_result={"sensor.test": rows or []}
         )
+        return contextlib.nullcontext()
 
     @pytest.mark.asyncio
     async def test_empty_list_raises_tool_error(self, history_tool):
@@ -78,23 +82,16 @@ class TestStatisticTypesValidation:
     @pytest.mark.asyncio
     async def test_none_does_not_set_types_in_command(self, history_tool):
         """statistic_types=None must not include 'types' in the WS command (HA returns all)."""
-        ws = _make_ws_client_mock(stat_result={"sensor.test": []})
-        sent_kwargs = {}
+        sent_message = {}
 
-        async def capturing_send(cmd, **kwargs):
-            sent_kwargs.update(kwargs)
+        async def capturing_send(message):
+            sent_message.update(message)
             return {"success": True, "result": {"sensor.test": []}}
 
-        ws.send_command = capturing_send
-        with (
-            patch(
-                "ha_mcp.tools.tools_history.get_connected_ws_client",
-                return_value=(ws, None),
-            ),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: d,
-            ),
+        self._mock_client.send_websocket_message = capturing_send
+        with patch(
+            "ha_mcp.tools.tools_history.add_timezone_metadata",
+            side_effect=lambda _c, d, **_kw: d,
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -102,7 +99,7 @@ class TestStatisticTypesValidation:
                 start_time="7d",
             )
 
-        assert "types" not in sent_kwargs, (
+        assert "types" not in sent_message, (
             "statistic_types=None must not send 'types' to HA — "
             "omitting 'types' lets HA return all available types."
         )
@@ -110,23 +107,16 @@ class TestStatisticTypesValidation:
     @pytest.mark.asyncio
     async def test_valid_list_sets_types_in_command(self, history_tool):
         """statistic_types=['mean', 'sum'] must include types in the WS command."""
-        ws = _make_ws_client_mock(stat_result={"sensor.test": []})
-        sent_kwargs = {}
+        sent_message = {}
 
-        async def capturing_send(cmd, **kwargs):
-            sent_kwargs.update(kwargs)
+        async def capturing_send(message):
+            sent_message.update(message)
             return {"success": True, "result": {"sensor.test": []}}
 
-        ws.send_command = capturing_send
-        with (
-            patch(
-                "ha_mcp.tools.tools_history.get_connected_ws_client",
-                return_value=(ws, None),
-            ),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: d,
-            ),
+        self._mock_client.send_websocket_message = capturing_send
+        with patch(
+            "ha_mcp.tools.tools_history.add_timezone_metadata",
+            side_effect=lambda _c, d, **_kw: d,
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -135,29 +125,22 @@ class TestStatisticTypesValidation:
                 statistic_types=["mean", "sum"],
             )
 
-        assert "types" in sent_kwargs
-        assert set(sent_kwargs["types"]) == {"mean", "sum"}
+        assert "types" in sent_message
+        assert set(sent_message["types"]) == {"mean", "sum"}
 
     @pytest.mark.asyncio
     async def test_comma_separated_string_sets_types_in_command(self, history_tool):
         """statistic_types='mean,sum' (comma-separated string) must send correct types."""
-        ws = _make_ws_client_mock(stat_result={"sensor.test": []})
-        sent_kwargs = {}
+        sent_message = {}
 
-        async def capturing_send(cmd, **kwargs):
-            sent_kwargs.update(kwargs)
+        async def capturing_send(message):
+            sent_message.update(message)
             return {"success": True, "result": {"sensor.test": []}}
 
-        ws.send_command = capturing_send
-        with (
-            patch(
-                "ha_mcp.tools.tools_history.get_connected_ws_client",
-                return_value=(ws, None),
-            ),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: d,
-            ),
+        self._mock_client.send_websocket_message = capturing_send
+        with patch(
+            "ha_mcp.tools.tools_history.add_timezone_metadata",
+            side_effect=lambda _c, d, **_kw: d,
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -166,8 +149,8 @@ class TestStatisticTypesValidation:
                 statistic_types="mean,sum",
             )
 
-        assert "types" in sent_kwargs
-        assert set(sent_kwargs["types"]) == {"mean", "sum"}
+        assert "types" in sent_message
+        assert set(sent_message["types"]) == {"mean", "sum"}
 
     @pytest.mark.asyncio
     async def test_empty_string_list_notation_raises(self, history_tool):

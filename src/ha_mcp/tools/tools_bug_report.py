@@ -32,6 +32,7 @@ from ..utils.usage_logger import (
     get_recent_logs,
     get_startup_logs,
 )
+from .component_api import get_component_caps
 from .helpers import log_tool_usage, register_tool_methods
 from .util_helpers import ANSI_ESCAPE_RE
 
@@ -613,11 +614,21 @@ class BugReportTools:
     async def _detect_component_version(self) -> str | None:
         """Read the ha_mcp_tools custom component's version, best-effort.
 
-        Uses the component's ``get_caller_token`` bootstrap service, whose
-        response carries the manifest version (the same field the filesystem
-        tools' version gate reads). Returns None when the component is not
-        installed or the call fails — the report path must never break on it.
+        Prefers the shared cached capability probe (``get_component_caps`` — one
+        ``ha_mcp_tools/info`` round-trip per client): a component new enough to
+        answer it (1.1.0+) reports its version there, so the report reuses that
+        cached probe instead of a bespoke round-trip. A component in the
+        0.11.0-1.1.0 band has services but no ``info`` command (caps is None),
+        so it falls back to the ``get_caller_token`` bootstrap service, whose
+        response also carries the manifest version. Returns None when the
+        component is not installed or the call fails — the report path must
+        never break on it.
         """
+        # get_component_caps never raises (it caches/returns None on every
+        # failure mode), so no guard is needed around it.
+        caps = await get_component_caps(self._client)
+        if caps is not None:
+            return caps.component_version or None
         try:
             resp = await self._client.call_service(
                 "ha_mcp_tools", "get_caller_token", {}, return_response=True

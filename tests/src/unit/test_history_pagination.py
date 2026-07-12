@@ -5,8 +5,9 @@ pagination with standardized metadata: total_count, offset, limit, count,
 has_more, next_offset.
 """
 
+import contextlib
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -46,21 +47,25 @@ def _make_stat_rows(n: int) -> list[dict]:
     return [{"start": 1700000000 + i * 300, "mean": float(i)} for i in range(n)]
 
 
-def _make_ws_client_mock(
+def _make_ws_dispatcher(
     history_result: dict | None = None, stat_result: dict | None = None
-) -> MagicMock:
-    ws = MagicMock()
-    ws.disconnect = AsyncMock()
+):
+    """Async ``send_websocket_message`` stand-in dispatching on ``message['type']``.
 
-    async def send_command(cmd, **kwargs):
+    Since issue #1813 the history/statistics tools route their single WS command
+    through the shared pooled ``client.send_websocket_message`` rather than a
+    per-call dedicated connection, so tests configure the client method directly.
+    """
+
+    async def send_websocket_message(message):
+        cmd = message["type"]
         if cmd == "history/history_during_period":
             return {"success": True, "result": history_result or {}}
         if cmd == "recorder/statistics_during_period":
             return {"success": True, "result": stat_result or {}}
         return {"success": False, "error": f"unknown command: {cmd}"}
 
-    ws.send_command = send_command
-    return ws
+    return send_websocket_message
 
 
 # ---------------------------------------------------------------------------
@@ -77,14 +82,16 @@ class TestHistoryPagination:
 
     @pytest.fixture
     def history_tool(self, mock_client):
+        self._mock_client = mock_client
         return HistoryTools(mock_client).ha_get_history
 
     def _patch_ws(self, states: list[dict]):
-        ws = _make_ws_client_mock(history_result={"sensor.test": states})
-        return patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            return_value=(ws, None),
+        # Configure the pooled transport on the tool's client; nullcontext keeps
+        # the existing ``with self._patch_ws(...)`` call sites intact.
+        self._mock_client.send_websocket_message = _make_ws_dispatcher(
+            history_result={"sensor.test": states}
         )
+        return contextlib.nullcontext()
 
     @pytest.mark.asyncio
     async def test_default_offset_returns_first_page(self, history_tool):
@@ -206,14 +213,14 @@ class TestStatisticsPagination:
 
     @pytest.fixture
     def history_tool(self, mock_client):
+        self._mock_client = mock_client
         return HistoryTools(mock_client).ha_get_history
 
     def _patch_ws(self, rows: list[dict]):
-        ws = _make_ws_client_mock(stat_result={"sensor.energy": rows})
-        return patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            return_value=(ws, None),
+        self._mock_client.send_websocket_message = _make_ws_dispatcher(
+            stat_result={"sensor.energy": rows}
         )
+        return contextlib.nullcontext()
 
     @pytest.mark.asyncio
     async def test_default_limit_applied(self, history_tool):
@@ -431,14 +438,14 @@ class TestMultiEntityOffsetGuard:
 
     @pytest.fixture
     def history_tool(self, mock_client):
+        self._mock_client = mock_client
         return HistoryTools(mock_client).ha_get_history
 
     def _patch_ws(self):
-        ws = _make_ws_client_mock(history_result={})
-        return patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            return_value=(ws, None),
+        self._mock_client.send_websocket_message = _make_ws_dispatcher(
+            history_result={}
         )
+        return contextlib.nullcontext()
 
     @pytest.mark.asyncio
     async def test_multi_entity_offset_rejected(self, history_tool):
@@ -463,21 +470,15 @@ class TestMultiEntityOffsetGuard:
     async def test_multi_entity_offset_zero_allowed(self, history_tool):
         """offset=0 (default) with multiple entity_ids is allowed."""
         states = _make_history_states(5)
-        ws = _make_ws_client_mock(
+        self._mock_client.send_websocket_message = _make_ws_dispatcher(
             history_result={
                 "sensor.a": states,
                 "sensor.b": states,
             }
         )
-        with (
-            patch(
-                "ha_mcp.tools.tools_history.get_connected_ws_client",
-                return_value=(ws, None),
-            ),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: d,
-            ),
+        with patch(
+            "ha_mcp.tools.tools_history.add_timezone_metadata",
+            side_effect=lambda _c, d, **_kw: d,
         ):
             result = await history_tool(
                 entity_ids=["sensor.a", "sensor.b"],
@@ -505,14 +506,14 @@ class TestHistoryLimitBoundary:
 
     @pytest.fixture
     def history_tool(self, mock_client):
+        self._mock_client = mock_client
         return HistoryTools(mock_client).ha_get_history
 
     def _patch_ws(self, states):
-        ws = _make_ws_client_mock(history_result={"sensor.test": states})
-        return patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            return_value=(ws, None),
+        self._mock_client.send_websocket_message = _make_ws_dispatcher(
+            history_result={"sensor.test": states}
         )
+        return contextlib.nullcontext()
 
     @pytest.mark.asyncio
     async def test_default_limit_applied_history(self, history_tool):

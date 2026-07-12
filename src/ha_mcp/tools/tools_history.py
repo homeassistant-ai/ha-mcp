@@ -22,7 +22,6 @@ from pydantic import Field
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import (
     exception_to_structured_error,
-    get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
@@ -334,21 +333,6 @@ class HistoryTools:
                 message="connecting to Home Assistant WebSocket",
             )
 
-            # Connect to WebSocket (shared by both sources)
-            ws_client, error = await get_connected_ws_client(
-                self._client.base_url,
-                self._client.token,
-                verify_ssl=self._client.verify_ssl,
-            )
-            if error or ws_client is None:
-                raise_tool_error(
-                    error
-                    or create_error_response(
-                        ErrorCode.CONNECTION_FAILED,
-                        "Failed to connect to Home Assistant WebSocket",
-                    )
-                )
-
             await safe_progress(
                 ctx,
                 progress=1,
@@ -356,48 +340,48 @@ class HistoryTools:
                 message=f"querying recorder ({source})",
             )
 
-            try:
-                if source == "statistics":
-                    inner = await _fetch_statistics(
-                        ws_client,
-                        entity_id_list,
-                        start_dt,
-                        end_dt,
-                        period,
-                        statistic_types,
-                        limit,
-                        offset,
-                    )
-                else:
-                    inner = await _fetch_history(
-                        ws_client,
-                        entity_id_list,
-                        start_dt,
-                        end_dt,
-                        minimal_response,
-                        significant_changes_only,
-                        limit,
-                        offset,
-                        _DEFAULT_HISTORY_LIMIT,
-                        _MAX_HISTORY_LIMIT,
-                        order=order,
-                    )
-                await safe_progress(
-                    ctx,
-                    progress=3,
-                    total=3,
-                    message="recorder query complete",
+            # Route through the shared pooled WebSocket (issue #1813) instead of
+            # a dedicated connect/auth handshake per call. Each source issues a
+            # single request/response WS command; the pooled client owns the
+            # connection lifecycle, so there is no per-call connect/disconnect.
+            if source == "statistics":
+                inner = await _fetch_statistics(
+                    self._client,
+                    entity_id_list,
+                    start_dt,
+                    end_dt,
+                    period,
+                    statistic_types,
+                    limit,
+                    offset,
                 )
-                # Wrap first so the outer {"data": ..., "metadata": ...} shape
-                # is always present; then project the inner data dict in-place
-                # when caller requested field projection.
-                _r = await add_timezone_metadata(self._client, inner)
-                if parsed_fields is not None:
-                    _r["data"] = project_fields(_r["data"], parsed_fields)
-                return _r
-            finally:
-                if ws_client:
-                    await ws_client.disconnect()
+            else:
+                inner = await _fetch_history(
+                    self._client,
+                    entity_id_list,
+                    start_dt,
+                    end_dt,
+                    minimal_response,
+                    significant_changes_only,
+                    limit,
+                    offset,
+                    _DEFAULT_HISTORY_LIMIT,
+                    _MAX_HISTORY_LIMIT,
+                    order=order,
+                )
+            await safe_progress(
+                ctx,
+                progress=3,
+                total=3,
+                message="recorder query complete",
+            )
+            # Wrap first so the outer {"data": ..., "metadata": ...} shape
+            # is always present; then project the inner data dict in-place
+            # when caller requested field projection.
+            _r = await add_timezone_metadata(self._client, inner)
+            if parsed_fields is not None:
+                _r["data"] = project_fields(_r["data"], parsed_fields)
+            return _r
 
         except ToolError:
             raise
@@ -507,7 +491,7 @@ def _parse_time_range(
 
 
 async def _fetch_history(
-    ws_client: Any,
+    client: Any,
     entity_id_list: list[str],
     start_dt: datetime,
     end_dt: datetime,
@@ -539,8 +523,8 @@ async def _fetch_history(
         "no_attributes": minimal_response,
     }
 
-    response = await ws_client.send_command(
-        "history/history_during_period", **command_params
+    response = await client.send_websocket_message(
+        {"type": "history/history_during_period", **command_params}
     )
 
     if not response.get("success"):
@@ -624,7 +608,7 @@ async def _fetch_history(
 
 
 async def _fetch_statistics(
-    ws_client: Any,
+    client: Any,
     entity_id_list: list[str],
     start_dt: datetime,
     end_dt: datetime,
@@ -705,8 +689,8 @@ async def _fetch_statistics(
     if stat_types_list is not None:
         command_params["types"] = stat_types_list
 
-    response = await ws_client.send_command(
-        "recorder/statistics_during_period", **command_params
+    response = await client.send_websocket_message(
+        {"type": "recorder/statistics_during_period", **command_params}
     )
 
     if not response.get("success"):

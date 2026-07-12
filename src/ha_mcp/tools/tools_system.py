@@ -23,6 +23,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .util_helpers import (
     JSON_STRING_COERCION,
@@ -229,6 +230,7 @@ class SystemTools:
     async def ha_reload_core(
         self,
         target: str = "all",
+        entry_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Reload Home Assistant configuration without full restart.
@@ -256,6 +258,11 @@ class SystemTools:
           - "zones": Reload zone configurations
           - "core": Reload core configuration (customize, packages)
           - "themes": Reload frontend themes
+        - entry_id: Reload a SINGLE config entry (one integration instance)
+          instead of sweeping subsystems — the fast path after editing a custom
+          component on disk. Pass it alone (leave `target` at its "all" default);
+          combining it with an explicit `target` is a validation error. Find the
+          id via ha_get_integration.
 
         **Example Usage:**
         ```python
@@ -277,6 +284,36 @@ class SystemTools:
         """
         target = target.lower().strip()
 
+        # Single config-entry reload (issue #1813 fold-in): reload just the
+        # integration instance identified by ``entry_id`` rather than sweeping
+        # every reloadable subsystem — the fast path after editing a custom
+        # component on disk. ``target`` defaults to "all" (meaning "no subsystem
+        # chosen"), so entry_id + the default is an entry-only reload; entry_id
+        # paired with an explicit subsystem target is contradictory.
+        if entry_id is not None:
+            entry_id = validate_identifier_not_empty(
+                entry_id,
+                "entry_id",
+                suggestions=[
+                    "Find the entry_id via ha_get_integration",
+                    "Omit entry_id to reload a whole subsystem via target",
+                ],
+            )
+            if target != "all":
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "entry_id cannot be combined with a specific reload "
+                        f"target ('{target}')",
+                        context={"entry_id": entry_id, "target": target},
+                        suggestions=[
+                            "Pass entry_id alone to reload one config entry",
+                            f"Omit entry_id to reload the '{target}' subsystem",
+                        ],
+                    )
+                )
+            return await self._reload_config_entry(entry_id)
+
         if target not in RELOAD_TARGETS:
             raise_tool_error(
                 create_error_response(
@@ -292,23 +329,50 @@ class SystemTools:
 
         try:
             if target == "all":
-                # Reload all reloadable components
+                # Reload all reloadable components. Fire the calls concurrently
+                # but cap the in-flight count with a semaphore so a large
+                # install doesn't hit HA with ~16 simultaneous service calls.
+                # A single failing target must not cancel its siblings, so the
+                # calls are gathered with ``return_exceptions=True`` and
+                # attributed per target below (preserving RELOAD_TARGETS order).
+                reloadable = [
+                    (name, info)
+                    for name, info in RELOAD_TARGETS.items()
+                    if info is not None
+                ]
+                semaphore = asyncio.Semaphore(4)
+
+                async def _reload_one(domain: str, service: str) -> None:
+                    async with semaphore:
+                        await self._client.call_service(domain, service, {})
+
+                outcomes = await asyncio.gather(
+                    *(
+                        _reload_one(domain, service)
+                        for _, (domain, service) in reloadable
+                    ),
+                    return_exceptions=True,
+                )
+
                 results = []
                 errors = []
-
-                for reload_target, service_info in RELOAD_TARGETS.items():
-                    if service_info is None:  # Skip "all" itself
-                        continue
-
-                    domain, service = service_info
-                    try:
-                        await self._client.call_service(domain, service, {})
-                        results.append(reload_target)
-                    except Exception as e:
+                for (reload_target, _), outcome in zip(
+                    reloadable, outcomes, strict=True
+                ):
+                    if isinstance(outcome, BaseException):
+                        # A non-Exception BaseException (CancelledError,
+                        # KeyboardInterrupt, SystemExit) must still unwind the
+                        # request, exactly as the prior sequential
+                        # ``except Exception`` let it propagate — never demote
+                        # it to a per-target warning.
+                        if not isinstance(outcome, Exception):
+                            raise outcome
                         # Some services might not be available in all installations
-                        error_msg = str(e)
+                        error_msg = str(outcome)
                         if "not found" not in error_msg.lower():
                             errors.append(f"{reload_target}: {error_msg}")
+                    else:
+                        results.append(reload_target)
 
                 response: dict[str, Any] = {
                     "success": True,
@@ -353,6 +417,55 @@ class SystemTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+
+    async def _reload_config_entry(self, entry_id: str) -> dict[str, Any]:
+        """Reload a single config entry via the REST config-entries endpoint.
+
+        POSTs to ``/config/config_entries/entry/{entry_id}/reload`` through the
+        REST client's generic request method — the ``/entry/`` path segment the
+        hand-rolled workaround in issue #1813 was easy to get wrong. A 404
+        surfaces as a not-found error naming the ``entry_id``; other failures
+        route through the shared exception classifier. Returns the tool's
+        standard envelope plus ``reloaded``/``entry_id``.
+        """
+        try:
+            await self._client._request(
+                "POST", f"/config/config_entries/entry/{entry_id}/reload"
+            )
+        except ToolError:
+            raise
+        except Exception as e:
+            # Local import mirrors ``_reraise_if_fatal``: rest_client imports
+            # from the tool helpers transitively, so a module-level import
+            # would risk a circular import in the tools package.
+            from ..client.rest_client import HomeAssistantAPIError
+
+            if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Config entry not found: {entry_id}",
+                        context={"entry_id": entry_id},
+                        suggestions=[
+                            "Verify the entry_id via ha_get_integration",
+                        ],
+                    )
+                )
+            exception_to_structured_error(
+                e,
+                context={"entry_id": entry_id},
+                suggestions=[
+                    "Verify the entry_id via ha_get_integration",
+                    "Check Home Assistant logs for details",
+                ],
+            )
+
+        return {
+            "success": True,
+            "message": f"Reloaded config entry {entry_id}",
+            "reloaded": True,
+            "entry_id": entry_id,
+        }
 
     @tool(
         name="ha_get_system_health",

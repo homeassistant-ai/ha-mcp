@@ -42,6 +42,23 @@ def _reset_settings_singleton(tmp_path, monkeypatch):
     get_data_dir.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _default_caps_none():
+    """Default the shared capability probe to None so the availability gate
+    takes its legacy ``get_services()`` path unless a test opts in.
+
+    ``_assert_mcp_tools_available`` now consults ``get_component_caps`` first;
+    with the mock clients these tests use, an unstubbed probe would attempt a
+    live WebSocket round-trip. Tests exercising the caps-first path patch
+    ``get_component_caps`` explicitly, overriding this default.
+    """
+    with patch(
+        "ha_mcp.tools.tools_filesystem.get_component_caps",
+        AsyncMock(return_value=None),
+    ):
+        yield
+
+
 class TestFeatureFlag:
     """Test feature flag functionality.
 
@@ -160,6 +177,94 @@ class TestIsMcpToolsAvailable:
 
         with pytest.raises(Exception, match="Connection failed"):
             await _is_mcp_tools_available(client)
+
+
+class TestAssertMcpToolsAvailableCapsFirst:
+    """``_assert_mcp_tools_available`` consults the shared caps probe first and
+    only falls back to the ``get_services()`` existence probe when caps is None
+    (issue #1813 P5 item 1c)."""
+
+    @staticmethod
+    def _caps(version: str = "1.2.0"):
+        from ha_mcp.tools.component_api import ComponentCaps
+
+        return ComponentCaps(
+            schema_version=1,
+            component_version=version,
+            capabilities=frozenset({"search"}),
+            limits={},
+        )
+
+    @pytest.mark.asyncio
+    async def test_caps_hit_skips_get_services(self):
+        """A caps-present component obviously exists — the get_services probe
+        is skipped entirely."""
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        client = AsyncMock()
+        with patch(
+            "ha_mcp.tools.tools_filesystem.get_component_caps",
+            AsyncMock(return_value=self._caps("1.2.0")),
+        ):
+            await _assert_mcp_tools_available(client)  # must not raise
+
+        client.get_services.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_caps_hit_enforces_min_version(self):
+        """The version gate still fires on the caps path: a caps-present
+        component below MIN_COMPONENT_VERSION raises the actionable error."""
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        client = AsyncMock()
+        with (
+            patch(
+                "ha_mcp.tools.tools_filesystem.get_component_caps",
+                AsyncMock(return_value=self._caps("0.10.0")),
+            ),
+            pytest.raises(ToolError) as exc,
+        ):
+            await _assert_mcp_tools_available(client)
+
+        data = json.loads(str(exc.value))
+        assert data["success"] is False
+        assert "too old" in data["error"]["message"].lower()
+        client.get_services.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_caps_miss_falls_back_to_get_services_present(self):
+        """caps None → the legacy get_services() probe runs; domain present → ok."""
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        client = AsyncMock()
+        client.get_services.return_value = [
+            {"domain": MCP_TOOLS_DOMAIN, "services": {"list_files": {}}}
+        ]
+        with patch(
+            "ha_mcp.tools.tools_filesystem.get_component_caps",
+            AsyncMock(return_value=None),
+        ):
+            await _assert_mcp_tools_available(client)  # must not raise
+
+        client.get_services.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_caps_miss_falls_back_to_get_services_absent(self):
+        """caps None + domain absent → COMPONENT_NOT_INSTALLED via the legacy path."""
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        client = AsyncMock()
+        client.get_services.return_value = [{"domain": "homeassistant", "services": {}}]
+        with (
+            patch(
+                "ha_mcp.tools.tools_filesystem.get_component_caps",
+                AsyncMock(return_value=None),
+            ),
+            pytest.raises(ToolError),
+        ):
+            await _assert_mcp_tools_available(client)
+
+        client.get_services.assert_awaited_once()
 
 
 class TestRegisterFilesystemTools:
