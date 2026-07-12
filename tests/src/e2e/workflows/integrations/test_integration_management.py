@@ -157,7 +157,8 @@ class TestIntegrationManagement:
         container and its config flow exercises both a menu step
         (``group_type``) and a form step through the generic (non-helper)
         driver. The mechanics are identical for any integration domain —
-        the tool no longer gates the handler on the helper allowlist.
+        unlike ha_config_set_helper, the tool does not gate the handler on
+        the helper allowlist.
         """
         # ADD: drive the config flow (menu -> form -> create_entry)
         create_result = await mcp_client.call_tool(

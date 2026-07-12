@@ -1264,7 +1264,7 @@ class IntegrationTools:
         Caveats: adding an integration runs its config flow exactly as the HA
         UI would (may pair devices, scan the network, create entities). Flows
         requiring a browser step (OAuth) or an asynchronous provider step
-        return a structured error instead of being attempted.
+        error out at that step with a structured error instead of completing.
 
         EXAMPLES:
         - Disable: ha_set_integration(entry_id="abc123", enabled=False)
@@ -1389,7 +1389,7 @@ class IntegrationTools:
                 )
             )
 
-        require_restart = result.get("result", {}).get("require_restart", False)
+        require_restart = (result.get("result") or {}).get("require_restart", False)
 
         if require_restart:
             note = "Home Assistant restart required for changes to take effect."

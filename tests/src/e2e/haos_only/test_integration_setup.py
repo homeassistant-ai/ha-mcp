@@ -1,11 +1,10 @@
 """HAOS-only integration setup coverage (issue #1349 item 2).
 
 These tests verify integration surfaces that the testcontainer tier physically
-cannot reach because they depend on either (a) an HA Supervisor that installed
-companion addons whose containers register HA integrations on first boot
-(ESPHome Device Builder → ``esphome`` integration; Node-RED addon → the
-``nodered`` integration), or (b) HA's real Sun-position math (the testcontainer
-stub returns static values from a frozen world clock).
+cannot reach because they depend on either (a) HA's real Sun-position math
+(the testcontainer stub returns static values from a frozen world clock), or
+(b) a Supervisor-backed HA to drive the Local Calendar config-entry lifecycle
+end to end.
 
 Layout:
 

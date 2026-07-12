@@ -1845,7 +1845,7 @@ class TestSetIntegrationModes:
 
     async def _assert_invalid(self, coro, fragment: str):
         with pytest.raises(ToolError) as exc_info:
-            await coro
+            _ = await coro
         err = json.loads(str(exc_info.value))
         assert err["success"] is False
         assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

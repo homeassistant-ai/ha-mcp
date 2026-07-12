@@ -679,10 +679,21 @@ async def _handle_flow_steps(
             return response
 
         if result_type == _FlowType.ABORT:
+            reason = current_step.get("reason")
+            abort_suggestions: list[str] = []
+            if reason in ("already_configured", "single_instance_allowed"):
+                # Common benign aborts on the add-integration path (#1814):
+                # give the caller a route to the existing entry instead of a
+                # bare failure.
+                abort_suggestions.append(
+                    "The integration is already set up — use "
+                    "ha_get_integration() to find the existing entry."
+                )
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    f"Flow aborted: {current_step.get('reason')}",
+                    f"Flow aborted: {reason}",
+                    suggestions=abort_suggestions or None,
                     context={"flow_id": flow_id, "details": current_step},
                 )
             )
