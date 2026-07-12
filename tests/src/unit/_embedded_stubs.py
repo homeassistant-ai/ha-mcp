@@ -621,6 +621,7 @@ def install() -> None:
     setmod("homeassistant.exceptions", HomeAssistantError=HomeAssistantError)
     setmod(
         "homeassistant.const",
+        __version__="2026.6.0",
         Platform=Platform,
         EVENT_HOMEASSISTANT_STARTED=EVENT_HOMEASSISTANT_STARTED,
     )

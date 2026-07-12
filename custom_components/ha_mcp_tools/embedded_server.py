@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Literal
 
 from homeassistant.auth.const import GROUP_ID_ADMIN
 from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.requirements import (
     RequirementsNotFound,
@@ -49,6 +50,7 @@ from homeassistant.requirements import (
     pip_kwargs,
 )
 from homeassistant.util.package import install_package
+from packaging.version import InvalidVersion, Version
 
 from .const import (
     CHANNEL_DEV,
@@ -109,6 +111,12 @@ _PIP_INSTALL_TIMEOUT_SECONDS = 300
 # Uninstall just removes files/metadata, so it is quick; cap it so a wedged
 # subprocess can never tie up an executor thread indefinitely.
 _PIP_UNINSTALL_TIMEOUT_SECONDS = 120
+
+# The in-process connection API was added with the embedded server in 7.10.0.
+# Older distributions can be left behind by an unsupported Core version's
+# constraints and must never enter the worker thread.
+MIN_EMBEDDED_SERVER_VERSION = "7.10.0"
+MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.6.0"
 
 
 class EmbeddedServerError(Exception):
@@ -205,6 +213,14 @@ class EmbeddedServerManager:
             raise EmbeddedServerError(
                 "Server secret path missing from the config entry; "
                 "reload the integration to regenerate it."
+            )
+        if Version(HA_VERSION) < Version(MIN_EMBEDDED_HOME_ASSISTANT_VERSION):
+            raise EmbeddedServerError(
+                f"The in-process server requires Home Assistant "
+                f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION} or newer; this instance "
+                f"is running {HA_VERSION}. Update Home Assistant before "
+                "reloading this integration.",
+                kind="package",
             )
 
         await self._async_ensure_package()
@@ -448,7 +464,19 @@ class EmbeddedServerManager:
             pin_version = await self._hass.async_add_executor_job(
                 _installed_dist_version, target_dist
             )
-            self._pip_spec = self._resolve_pip_spec(pin_version)
+            if pin_version is not None and not _is_compatible_embedded_version(
+                pin_version
+            ):
+                _LOGGER.warning(
+                    "Ignoring auto-update pin to legacy %s %s; the in-process "
+                    "server requires %s or newer",
+                    target_dist,
+                    pin_version,
+                    MIN_EMBEDDED_SERVER_VERSION,
+                )
+                self._pip_spec = target_dist
+            else:
+                self._pip_spec = self._resolve_pip_spec(pin_version)
 
         # A "stable" spec (an explicit override, or a channel pinned because
         # auto-update is off) is eligible for the fast path; an unpinned
@@ -463,6 +491,22 @@ class EmbeddedServerManager:
             await self._async_process_requirements_fast()
         else:
             await self._async_remove_conflicting_dist()
+            if (
+                installed_version is not None
+                and not _is_compatible_embedded_version(installed_version)
+                and await self._hass.async_add_executor_job(
+                    _dist_installed, target_dist
+                )
+            ):
+                _LOGGER.warning(
+                    "Removing legacy %s %s before installing %r; the in-process "
+                    "server requires %s or newer",
+                    target_dist,
+                    installed_version,
+                    self._pip_spec,
+                    MIN_EMBEDDED_SERVER_VERSION,
+                )
+                await self._async_remove_distribution(target_dist)
             await self._async_force_install()
 
         version = await self._hass.async_add_executor_job(_installed_ha_mcp_version)
@@ -470,6 +514,15 @@ class EmbeddedServerManager:
             raise EmbeddedServerError(
                 f"Installed the server requirement ({self._pip_spec!r}) but the "
                 "'ha-mcp' package is still not importable.",
+                kind="package",
+            )
+        if not _is_compatible_embedded_version(version):
+            raise EmbeddedServerError(
+                f"The installer left installed ha-mcp {version}, but this "
+                f"in-process component requires {MIN_EMBEDDED_SERVER_VERSION} "
+                f"or newer. The in-process server requires Home Assistant "
+                f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION} or newer; update Home "
+                "Assistant, restart it, and reload this integration.",
                 kind="package",
             )
         _LOGGER.info("HA-MCP in-process server package ready (version %s)", version)
@@ -509,8 +562,11 @@ class EmbeddedServerManager:
         )
         if not installed:
             raise EmbeddedServerError(
-                f"Could not install the server ({self._pip_spec!r}); see the "
-                "Home Assistant log for the pip output.",
+                f"Could not install the server ({self._pip_spec!r}). The "
+                f"in-process server requires ha-mcp "
+                f"{MIN_EMBEDDED_SERVER_VERSION} or newer and Home Assistant "
+                f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION} or newer. Resolver "
+                "details are logged under homeassistant.util.package.",
                 kind="package",
             )
 
@@ -540,7 +596,19 @@ class EmbeddedServerManager:
             other,
             self._pip_spec,
         )
-        await self._hass.async_add_executor_job(_uninstall_distribution, other)
+        await self._async_remove_distribution(other)
+
+    async def _async_remove_distribution(self, dist_name: str) -> None:
+        """Remove a distribution from the same target used for installation."""
+        target = pip_kwargs(self._hass.config.config_dir).get("target")
+        if target is None:
+            await self._hass.async_add_executor_job(
+                _uninstall_distribution, dist_name
+            )
+        else:
+            await self._hass.async_add_executor_job(
+                partial(_uninstall_distribution, dist_name, target=target)
+            )
 
     def _store_installed_spec(self) -> None:
         """Persist the pip spec just installed so a restart skips the reinstall."""
@@ -960,14 +1028,14 @@ def _installed_dist_version(dist_name: str) -> str | None:
         return None
 
 
-def _uninstall_distribution(dist_name: str) -> None:
+def _uninstall_distribution(dist_name: str, *, target: str | None = None) -> bool:
     """Uninstall a distribution by name (blocking), best-effort.
 
     Mirrors ``homeassistant.util.package.install_package``'s invocation style —
-    ``<python> -m uv pip ...`` with an explicit ``--python`` and no shell — so it
-    targets the same interpreter environment Home Assistant installed the package
-    into. A failure is logged but not raised; the caller treats the cleanup as
-    best-effort.
+    ``<python> -m uv pip ...`` with no shell. An explicit dependency target is
+    used when Home Assistant installs into ``config/deps``; otherwise ``--python``
+    selects Home Assistant's interpreter environment. A failure is logged but
+    not raised; the caller treats the cleanup as best-effort.
     """
     args = [
         sys.executable,
@@ -975,10 +1043,12 @@ def _uninstall_distribution(dist_name: str) -> None:
         "uv",
         "pip",
         "uninstall",
-        "--python",
-        sys.executable,
-        dist_name,
     ]
+    if target is not None:
+        args += ["--target", os.path.abspath(target)]
+    else:
+        args += ["--python", sys.executable]
+    args.append(dist_name)
     try:
         result = subprocess.run(
             args,
@@ -989,7 +1059,7 @@ def _uninstall_distribution(dist_name: str) -> None:
         )
     except (OSError, subprocess.SubprocessError) as err:
         _LOGGER.warning("Could not uninstall %r: %s", dist_name, err)
-        return
+        return False
     if result.returncode != 0:
         _LOGGER.warning(
             "Uninstall of %r exited %d: %s",
@@ -997,3 +1067,13 @@ def _uninstall_distribution(dist_name: str) -> None:
             result.returncode,
             (result.stderr or "").strip(),
         )
+        return False
+    return True
+
+
+def _is_compatible_embedded_version(version: str) -> bool:
+    """Return whether a server distribution provides the embedded API."""
+    try:
+        return Version(version) >= Version(MIN_EMBEDDED_SERVER_VERSION)
+    except InvalidVersion:
+        return False
