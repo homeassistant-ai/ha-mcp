@@ -476,6 +476,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## ⭐ Star History
+## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=homeassistant-ai/ha-mcp&type=Date)](https://star-history.com/#homeassistant-ai/ha-mcp&Date)
+<a href="https://www.star-history.com/?repos=homeassistant-ai%2Fha-mcp&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=homeassistant-ai/ha-mcp&type=date&theme=dark&legend=top-left&sealed_token=Q-MH9ocwRsHw_ar_hpfqQEnHbimdgmBpCS-8O_-4kCHhPgcUTlHh2QCnrPdgMt7pFh8zKHdRBvEGddVGTIhwxt29vMsHu2oc-bBuqP5f8CVgx8ZyupZc5sbxxQ2LFh8HBDKKCzMPHMYr9ciMSBPCBFwHR8c0p_Gol1wb2FyDeKuZ_73XyWAXhvEZypvy" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=homeassistant-ai/ha-mcp&type=date&legend=top-left&sealed_token=Q-MH9ocwRsHw_ar_hpfqQEnHbimdgmBpCS-8O_-4kCHhPgcUTlHh2QCnrPdgMt7pFh8zKHdRBvEGddVGTIhwxt29vMsHu2oc-bBuqP5f8CVgx8ZyupZc5sbxxQ2LFh8HBDKKCzMPHMYr9ciMSBPCBFwHR8c0p_Gol1wb2FyDeKuZ_73XyWAXhvEZypvy" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=homeassistant-ai/ha-mcp&type=date&legend=top-left&sealed_token=Q-MH9ocwRsHw_ar_hpfqQEnHbimdgmBpCS-8O_-4kCHhPgcUTlHh2QCnrPdgMt7pFh8zKHdRBvEGddVGTIhwxt29vMsHu2oc-bBuqP5f8CVgx8ZyupZc5sbxxQ2LFh8HBDKKCzMPHMYr9ciMSBPCBFwHR8c0p_Gol1wb2FyDeKuZ_73XyWAXhvEZypvy" />
+ </picture>
+</a>
