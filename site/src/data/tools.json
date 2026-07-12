@@ -415,6 +415,10 @@
         "MandatoryBPS": {
           "type": "Annotated[bool, Field(default=True)]",
           "default": true
+        },
+        "BestPracticeKey": {
+          "type": "BestPracticeKeyParam",
+          "default": null
         }
       }
     },
@@ -819,6 +823,10 @@
         "MandatoryBPS": {
           "type": "Annotated[bool, Field(default=True)]",
           "default": true
+        },
+        "BestPracticeKey": {
+          "type": "BestPracticeKeyParam",
+          "default": null
         },
         "return_screenshot": {
           "type": "Annotated[bool, Field(description=\"After writing, also return a rendered PNG of the dashboard so you can see what it looks like in a single call (the dashboard creation/iteration loop). Requires the 'dashboard screenshot' beta feature + engine add-on/sidecar; if unavailable, the write result is returned with a warning.\")]",
@@ -1738,6 +1746,10 @@
         "MandatoryBPS": {
           "type": "Annotated[bool, Field(default=True)]",
           "default": true
+        },
+        "BestPracticeKey": {
+          "type": "BestPracticeKeyParam",
+          "default": null
         }
       },
       "required": [
@@ -2461,6 +2473,10 @@
         "MandatoryBPS": {
           "type": "Annotated[bool, Field(default=True)]",
           "default": true
+        },
+        "BestPracticeKey": {
+          "type": "BestPracticeKeyParam",
+          "default": null
         }
       },
       "required": [
@@ -2557,6 +2573,10 @@
         "MandatoryBPS": {
           "type": "Annotated[bool, Field(default=True)]",
           "default": true
+        },
+        "BestPracticeKey": {
+          "type": "BestPracticeKeyParam",
+          "default": null
         }
       },
       "required": [
@@ -2941,6 +2961,10 @@
         "MandatoryBPS": {
           "type": "Annotated[bool, Field(default=True)]",
           "default": true
+        },
+        "BestPracticeKey": {
+          "type": "BestPracticeKeyParam",
+          "default": null
         }
       },
       "required": [
