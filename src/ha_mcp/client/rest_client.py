@@ -1388,8 +1388,12 @@ class HomeAssistantClient:
         for attempt in range(max_retries):
             try:
                 # Use per-client WebSocket keyed to this client's credentials
+                # (verify_ssl included so a verify_ssl=False client never
+                # shares a default-verification pooled connection).
                 ws_client = await get_websocket_client(
-                    url=self.base_url, token=self.token
+                    url=self.base_url,
+                    token=self.token,
+                    verify_ssl=self.verify_ssl,
                 )
 
                 # Special handling for render_template which returns an event with the actual result

@@ -2434,9 +2434,41 @@ class TestReloadCore:
             "success": True,
             "message": "Reloaded config entry abc123",
             "reloaded": True,
+            "require_restart": False,
             "entry_id": "abc123",
         }
         client.call_service.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_entry_id_require_restart_surfaced(self):
+        """Core's require_restart=True (entry cannot hot-reload) must not be
+        reported as a completed reload."""
+        client = MagicMock()
+        client._request = AsyncMock(return_value={"require_restart": True})
+
+        result = await SystemTools(client).ha_reload_core(entry_id="abc123")
+
+        assert result["success"] is True
+        assert result["reloaded"] is False
+        assert result["require_restart"] is True
+        assert "restart" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_entry_id_forbidden_maps_to_cannot_reload_not_auth(self):
+        """Core returns 403 'Entry cannot be reloaded' for OperationNotAllowed;
+        that must surface as a cannot-reload error, not an auth failure."""
+        client = MagicMock()
+        client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 403 - Entry cannot be reloaded", status_code=403
+            )
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await SystemTools(client).ha_reload_core(entry_id="abc123")
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "cannot be reloaded" in err["error"]["message"]
+        assert "abc123" in err["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_entry_id_not_found_maps_to_resource_not_found(self):

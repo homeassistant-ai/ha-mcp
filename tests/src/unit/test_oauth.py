@@ -1334,10 +1334,10 @@ class TestOAuthProxyClient:
             await proxy.send_websocket_message({"type": "get_states"})
 
             # WebSocket client must use server-side URL + per-user token
-            mock_get_ws.assert_awaited_once_with(
-                url="http://homeassistant.local:8123",
-                token="test_ha_token_xyz",
-            )
+            mock_get_ws.assert_awaited_once()
+            kwargs = mock_get_ws.await_args.kwargs
+            assert kwargs["url"] == "http://homeassistant.local:8123"
+            assert kwargs["token"] == "test_ha_token_xyz"
 
 
 class TestWebSocketManagerPool:

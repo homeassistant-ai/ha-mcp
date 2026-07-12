@@ -429,7 +429,7 @@ class SystemTools:
         standard envelope plus ``reloaded``/``entry_id``.
         """
         try:
-            await self._client._request(
+            resp = await self._client._request(
                 "POST", f"/config/config_entries/entry/{entry_id}/reload"
             )
         except ToolError:
@@ -451,6 +451,22 @@ class SystemTools:
                         ],
                     )
                 )
+            if isinstance(e, HomeAssistantAPIError) and e.status_code == 403:
+                # Core returns 403 "Entry cannot be reloaded" for
+                # OperationNotAllowed — an entry whose integration does not
+                # support reload — not an auth problem.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Config entry {entry_id} cannot be reloaded "
+                        "(the integration does not support reload)",
+                        context={"entry_id": entry_id},
+                        suggestions=[
+                            "Restart Home Assistant (ha_restart) to apply "
+                            "changes to this integration",
+                        ],
+                    )
+                )
             exception_to_structured_error(
                 e,
                 context={"entry_id": entry_id},
@@ -460,10 +476,27 @@ class SystemTools:
                 ],
             )
 
+        # Core reports require_restart=True when the entry could not be
+        # hot-reloaded (its state is not recoverable) — a success response
+        # that still needs a restart to take effect.
+        require_restart = isinstance(resp, dict) and bool(resp.get("require_restart"))
+        if require_restart:
+            return {
+                "success": True,
+                "message": (
+                    f"Config entry {entry_id} cannot be hot-reloaded; "
+                    "a Home Assistant restart is required for changes to "
+                    "take effect"
+                ),
+                "reloaded": False,
+                "require_restart": True,
+                "entry_id": entry_id,
+            }
         return {
             "success": True,
             "message": f"Reloaded config entry {entry_id}",
             "reloaded": True,
+            "require_restart": False,
             "entry_id": entry_id,
         }
 

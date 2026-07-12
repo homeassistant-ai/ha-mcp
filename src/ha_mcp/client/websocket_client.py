@@ -1037,7 +1037,7 @@ class WebSocketManager:
     _current_loop: asyncio.AbstractEventLoop | None = None
     _lock: asyncio.Lock | None = None
     _lock_loop: asyncio.AbstractEventLoop | None = None
-    _client_factory: Callable[[str, str], HomeAssistantWebSocketClient] | None = None
+    _client_factory: Callable[..., HomeAssistantWebSocketClient] | None = None
 
     def __new__(cls) -> "WebSocketManager":
         if cls._instance is None:
@@ -1052,8 +1052,7 @@ class WebSocketManager:
     def configure(
         self,
         *,
-        client_factory: Callable[[str, str], HomeAssistantWebSocketClient]
-        | None = None,
+        client_factory: Callable[..., HomeAssistantWebSocketClient] | None = None,
     ) -> None:
         """Configure the manager with injectable dependencies."""
         if client_factory is not None:
@@ -1088,6 +1087,7 @@ class WebSocketManager:
         self,
         url: str | None = None,
         token: str | None = None,
+        verify_ssl: bool | None = None,
     ) -> HomeAssistantWebSocketClient:
         """Get WebSocket client, creating connection if needed.
 
@@ -1100,6 +1100,10 @@ class WebSocketManager:
                  credentials instead of global settings. This is required
                  for OAuth mode where each request has its own credentials.
             token: Optional HA token. Must be provided with url.
+            verify_ssl: TLS verification override, keyed into the pool so a
+                 ``HomeAssistantClient(verify_ssl=False)`` caller never shares
+                 a connection built with default verification. ``None`` keeps
+                 the client's own settings-based default.
         """
         current_loop = asyncio.get_event_loop()
 
@@ -1135,6 +1139,8 @@ class WebSocketManager:
                 ws_token = settings.homeassistant_token
 
             key = self._client_key(ws_url, ws_token)
+            if verify_ssl is not None:
+                key = f"{key}|verify_ssl={verify_ssl}"
 
             # Return existing connected client for these credentials
             existing = self._clients.get(key)
@@ -1148,7 +1154,11 @@ class WebSocketManager:
                 self._last_used.pop(key, None)
 
             factory = self._client_factory or HomeAssistantWebSocketClient
-            client = factory(ws_url, ws_token)
+            client = (
+                factory(ws_url, ws_token)
+                if verify_ssl is None
+                else factory(ws_url, ws_token, verify_ssl=verify_ssl)
+            )
 
             connected = await client.connect()
             if not connected:
@@ -1210,11 +1220,16 @@ websocket_manager = WebSocketManager()
 async def get_websocket_client(
     url: str | None = None,
     token: str | None = None,
+    verify_ssl: bool | None = None,
 ) -> HomeAssistantWebSocketClient:
     """Get the global WebSocket client instance.
 
     Args:
         url: Optional HA URL for per-client credentials (OAuth mode).
         token: Optional HA token for per-client credentials (OAuth mode).
+        verify_ssl: Optional TLS-verification override propagated into the
+            pool key and client construction (None = settings default).
     """
-    return await websocket_manager.get_client(url=url, token=token)
+    return await websocket_manager.get_client(
+        url=url, token=token, verify_ssl=verify_ssl
+    )

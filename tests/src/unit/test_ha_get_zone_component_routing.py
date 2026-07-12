@@ -76,15 +76,18 @@ def _component_zone_result() -> dict[str, Any]:
                 "entity_id": "zone.home",
                 "object_id": "home",
                 "name": "Home",
-                # YAML/config zone: core retains the config but there is no
-                # storage id (the anti-pattern zone/list can't see).
-                "storage_id": None,
+                # YAML/config zone: state-only record. The component backfills
+                # storage_id with the registry unique_id or object_id (it is
+                # NOT None), and the state-attribute body carries core's
+                # editable=False — the actual YAML discriminator.
+                "storage_id": "home",
                 "config": {
                     "name": "Home",
                     "latitude": 41.0,
                     "longitude": -75.0,
                     "radius": 100,
                     "passive": False,
+                    "editable": False,
                 },
             },
         ],

@@ -91,11 +91,16 @@ def _shape_component_zone_record(rec: dict[str, Any]) -> dict[str, Any]:
     """
     config = rec.get("config")
     out: dict[str, Any] = dict(config) if isinstance(config, dict) else {}
+    # storage_id is NOT a YAML discriminator: for state-only records the
+    # component backfills it with the registry unique_id or object_id, so a
+    # YAML zone (incl. ``home``) arrives with a non-null storage_id. The
+    # reliable signal is the body itself — a state-attribute body carries
+    # core's ATTR_EDITABLE (False for YAML zones), while a real storage body
+    # never has the key.
+    is_yaml = out.get("editable") is False
     storage_id = rec.get("storage_id")
-    is_yaml = storage_id is None
     # Storage zones keep their storage id (the key ha_get_zone matches on);
-    # YAML zones fall back to the object_id (e.g. "home") so they can still be
-    # fetched by zone_id — mirrors _shape_collection_helper_record.
+    # YAML zones get their object_id so they can still be fetched by zone_id.
     out["id"] = storage_id if storage_id is not None else rec.get("object_id")
     out["editable"] = not is_yaml
     out["source"] = "yaml" if is_yaml else "storage"

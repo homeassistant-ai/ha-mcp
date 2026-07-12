@@ -1021,6 +1021,7 @@ class EntityTools:
         """
         expose_true = [a for a, v in parsed_expose_to.items() if v]
         expose_false = [a for a, v in parsed_expose_to.items() if not v]
+        applied: list[str] = []
         for assistants, should_expose in [(expose_true, True), (expose_false, False)]:
             if not assistants:
                 continue
@@ -1037,7 +1038,17 @@ class EntityTools:
                 }
             )
             if not result.get("success"):
-                return _extract_ws_error(result)
+                error = _extract_ws_error(result)
+                if applied:
+                    # The earlier assistant group already changed — say so, or
+                    # the all-failed report implies no exposure was touched.
+                    error = (
+                        f"{error} (note: expose changes for "
+                        f"{', '.join(applied)} were already applied before "
+                        "this failure)"
+                    )
+                return error
+            applied.extend(assistants)
         return None
 
     async def _bulk_registry_phase(
@@ -1089,6 +1100,9 @@ class EntityTools:
             return_exceptions=True,
         )
         for eid, result in zip(entity_ids, results, strict=True):
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                # Never swallow cancellation/shutdown into per-entity errors.
+                raise result
             if isinstance(result, BaseException):
                 error_msg = (
                     extract_tool_error_message(result)
@@ -1259,6 +1273,9 @@ class EntityTools:
             return_exceptions=True,
         )
         for chunk, resp in zip(chunks, responses, strict=True):
+            if isinstance(resp, BaseException) and not isinstance(resp, Exception):
+                # Never swallow cancellation/shutdown into per-entity errors.
+                raise resp
             if isinstance(resp, dict) and resp.get("success"):
                 result_map = resp.get("result") or {}
                 for eid in chunk:
