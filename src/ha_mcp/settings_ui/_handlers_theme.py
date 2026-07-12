@@ -17,12 +17,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ..errors import ErrorCode, create_error_response
-from ..utils.data_paths import get_data_dir
 from ._theme import (
-    _THEME_PREFS_FILENAME,
     _get_theme_prefs_lock,
     _load_theme_prefs,
     _sanitize_theme_prefs,
+    theme_prefs_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,7 +61,7 @@ def build_theme_handlers() -> dict[str, Any]:
                 ),
                 status_code=400,
             )
-        path = get_data_dir() / _THEME_PREFS_FILENAME
+        path = theme_prefs_path()
         # Same RMW-under-lock + tmp-then-rename shape as the feature-flag
         # save. One deliberate divergence: a corrupt existing file is
         # overwritten (with a warning) instead of returning 409 — theme

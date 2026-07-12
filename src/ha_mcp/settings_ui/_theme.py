@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import re
+from pathlib import Path
 
 from ..utils.data_paths import get_data_dir
 
@@ -51,6 +52,16 @@ def _get_theme_prefs_lock() -> asyncio.Lock:
     if _THEME_PREFS_LOCK is None:
         _THEME_PREFS_LOCK = asyncio.Lock()
     return _THEME_PREFS_LOCK
+
+
+def theme_prefs_path() -> Path:
+    """Path to the server-side theme-prefs file in the data dir.
+
+    Single lookup point for ``get_data_dir`` across the theme read
+    (``_load_theme_prefs``) and write (``_save_theme_prefs`` handler), so a
+    test patching ``_theme.get_data_dir`` reaches both.
+    """
+    return get_data_dir() / _THEME_PREFS_FILENAME
 
 
 def _sanitize_theme_prefs(raw: object) -> dict[str, str] | None:
@@ -98,7 +109,7 @@ def _load_theme_prefs() -> dict[str, str]:
     trivially re-settable, unlike feature flags there is nothing to
     protect by refusing).
     """
-    path = get_data_dir() / _THEME_PREFS_FILENAME
+    path = theme_prefs_path()
     try:
         raw = json.loads(path.read_text())
     except FileNotFoundError:

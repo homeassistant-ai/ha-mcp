@@ -9,13 +9,10 @@ Works across all installation methods (add-on, Docker, standalone).
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import functools
 import html
 import json
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -24,14 +21,6 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from .._version import is_running_in_addon
-from ..backup_manager import get_backup_manager
-from ..config import (
-    BACKUP_OVERRIDE_FIELDS,
-    _reset_global_settings,
-    get_backup_setting_origin,
-    get_global_settings,
-)
-from ..errors import ErrorCode, create_error_response
 from ..transforms import DEFAULT_PINNED_TOOLS
 from ..utils.data_paths import get_data_dir
 from ._handlers_advanced import build_advanced_handlers
@@ -67,7 +56,7 @@ from ._supervisor import (
     _supervisor_merge_and_post_options,
     _SupervisorOptionsError,
 )
-from ._theme import _load_theme_prefs
+from ._theme import _load_theme_prefs, _sanitize_theme_prefs
 from ._tools_meta import (
     FEATURE_GATED_TOOLS,
     MANDATORY_TOOLS,

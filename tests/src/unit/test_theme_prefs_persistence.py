@@ -105,7 +105,7 @@ class TestLoadThemePrefs:
     def test_missing_file_returns_empty(
         self, monkeypatch: MonkeyPatch, tmp_path: Path
     ) -> None:
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
         assert _load_theme_prefs() == {}
 
     def test_corrupt_json_returns_empty(
@@ -113,7 +113,7 @@ class TestLoadThemePrefs:
     ) -> None:
         path = tmp_path / "theme_prefs.json"
         path.write_text("not valid json {{{")
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
         result = _load_theme_prefs()
         assert result == {}
 
@@ -122,7 +122,7 @@ class TestLoadThemePrefs:
     ) -> None:
         path = tmp_path / "theme_prefs.json"
         path.write_text(json.dumps({"theme": "purple", "fontSize": "200"}))
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
         result = _load_theme_prefs()
         # Both values are out of enum; sanitized to empty.
         assert result == {}
@@ -131,7 +131,7 @@ class TestLoadThemePrefs:
         prefs = {"theme": "light", "fontSize": "130", "contrast": "high"}
         path = tmp_path / "theme_prefs.json"
         path.write_text(json.dumps(prefs))
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
         result = _load_theme_prefs()
         assert result == prefs
 
@@ -147,8 +147,8 @@ class TestLoadThemePrefs:
         """
         path = tmp_path / "theme_prefs.json"
         path.write_text(json.dumps({"theme": "light", "legacy_key": "x"}))
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
-        monkeypatch.setattr("ha_mcp.settings_ui._WARNED_DROPPED_THEME_PREFS", set())
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme._WARNED_DROPPED_THEME_PREFS", set())
         with caplog.at_level("WARNING", logger="ha_mcp.settings_ui"):
             assert _load_theme_prefs() == {"theme": "light"}
             assert _load_theme_prefs() == {"theme": "light"}
@@ -168,7 +168,7 @@ class TestRenderSettingsHtml:
         prefs = {"theme": "light", "fontSize": "130"}
         path = tmp_path / "theme_prefs.json"
         path.write_text(json.dumps(prefs))
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
         html = _render_settings_html()
         # Placeholder should not survive.
         assert "__HA_MCP_THEME_PREFS__" not in html
@@ -180,7 +180,7 @@ class TestRenderSettingsHtml:
         self, monkeypatch: MonkeyPatch, tmp_path: Path
     ) -> None:
         """When prefs are empty, placeholder is replaced with '{}'."""
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
         html = _render_settings_html()
         assert "__HA_MCP_THEME_PREFS__" not in html
         # Empty object is still valid JSON; check for the attribute.
@@ -206,7 +206,7 @@ class TestThemePrefsHandlers:
         prefs = {"theme": "dark", "contrast": "high"}
         path = tmp_path / "theme_prefs.json"
         path.write_text(json.dumps(prefs))
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
 
         handlers = build_settings_handlers(server=None, is_sidecar=True)
         resp = await handlers["get_theme_prefs"](self._make_request())
@@ -219,7 +219,7 @@ class TestThemePrefsHandlers:
     async def test_post_non_dict_body_returns_400(
         self, monkeypatch: MonkeyPatch, tmp_path: Path
     ) -> None:
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
         handlers = build_settings_handlers(server=None, is_sidecar=True)
         resp = await handlers["save_theme_prefs"](self._make_request([1, 2, 3]))
         assert resp.status_code == 400
@@ -230,7 +230,7 @@ class TestThemePrefsHandlers:
     async def test_post_no_valid_fields_returns_400(
         self, monkeypatch: MonkeyPatch, tmp_path: Path
     ) -> None:
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
         handlers = build_settings_handlers(server=None, is_sidecar=True)
         resp = await handlers["save_theme_prefs"](
             self._make_request({"theme": "purple"})  # Invalid enum.
@@ -246,7 +246,7 @@ class TestThemePrefsHandlers:
         """Partial POST merges with existing prefs (RMW under lock)."""
         path = tmp_path / "theme_prefs.json"
         path.write_text(json.dumps({"theme": "dark", "fontSize": "100"}))
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
 
         handlers = build_settings_handlers(server=None, is_sidecar=True)
         # POST only contrast; theme and fontSize should survive.
@@ -268,7 +268,7 @@ class TestThemePrefsHandlers:
         self, monkeypatch: MonkeyPatch, tmp_path: Path
     ) -> None:
         """POST then GET returns the persisted prefs."""
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
         handlers = build_settings_handlers(server=None, is_sidecar=True)
 
         # POST initial prefs.
@@ -288,7 +288,7 @@ class TestThemePrefsHandlers:
         """OSError during write (e.g. read-only fs) returns 500."""
         read_only_dir = tmp_path / "readonly"
         read_only_dir.mkdir()
-        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: read_only_dir)
+        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: read_only_dir)
 
         # Monkeypatch os.replace to raise OSError.
         import os
