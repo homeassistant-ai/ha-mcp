@@ -127,6 +127,27 @@ def test_dict_param_rejects_unparseable_string(
 
 
 @pytest.mark.parametrize(
+    ("malformed", "detail"),
+    [
+        ('{"alias": "Test",}', "line 1 column 17"),
+        ("  [1, 2,]", "line 1 column 8"),
+    ],
+)
+def test_json_like_malformed_string_preserves_decode_location(malformed, detail):
+    """Malformed container JSON reports its parse location instead of dict_type."""
+    module, register_fn, tool_name, param_name = _DICT_PARAMS[0]
+    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+
+    with pytest.raises(ValidationError) as exc_info:
+        TypeAdapter(ann).validate_python(malformed)
+
+    error = exc_info.value.errors(include_url=False)[0]
+    assert error["type"] == "value_error"
+    assert "Invalid JSON" in error["msg"]
+    assert detail in error["msg"]
+
+
+@pytest.mark.parametrize(
     ("module", "register_fn", "tool_name", "param_name"),
     _DICT_PARAMS,
 )
