@@ -1110,7 +1110,7 @@ class TestConfigurePuppetAddon:
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "CONNECTION_FAILED"
-        assert error["error"]["context"]["engine_ready"] is False
+        assert error["engine_ready"] is False
         assert error["settings_changed"] is True
         assert error["restart_requested"] is True
 
@@ -1344,7 +1344,7 @@ class TestConfigurePuppetAddon:
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert error["error"]["context"]["engine_ready"] is False
+        assert error["engine_ready"] is False
         assert calls == [("/addons", "GET"), ("/addons/abc_puppet/info", "GET")]
 
 
