@@ -39,6 +39,7 @@ from ..llm_exposure import LLM_API_CONFIG_KEY
 from ..transforms import DEFAULT_PINNED_TOOLS
 from ..utils.data_paths import get_data_dir
 from . import _persistence, _supervisor
+from ._handlers_theme import build_theme_handlers
 from ._persistence import (
     _atomic_write_json,
     _get_backup_settings_override_path,
@@ -62,12 +63,7 @@ from ._supervisor import (
     _supervisor_merge_and_post_options,
     _SupervisorOptionsError,
 )
-from ._theme import (
-    _THEME_PREFS_FILENAME,
-    _get_theme_prefs_lock,
-    _load_theme_prefs,
-    _sanitize_theme_prefs,
-)
+from ._theme import _load_theme_prefs
 from ._tools_meta import (
     _VALID_STATES,
     FEATURE_GATED_TOOLS,
@@ -433,63 +429,6 @@ def build_settings_handlers(
 
     async def _settings_page(_: Request) -> HTMLResponse:
         return HTMLResponse(_render_settings_html())
-
-    async def _get_theme_prefs(_: Request) -> JSONResponse:
-        return JSONResponse({"prefs": _load_theme_prefs()})
-
-    async def _save_theme_prefs(request: Request) -> JSONResponse:
-        try:
-            body = await request.json()
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Body must be valid JSON",
-                ),
-                status_code=400,
-            )
-        sanitized = _sanitize_theme_prefs(body)
-        if sanitized is None:
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Body must be a JSON object",
-                ),
-                status_code=400,
-            )
-        if not sanitized:
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "No valid theme preference fields in body",
-                ),
-                status_code=400,
-            )
-        path = get_data_dir() / _THEME_PREFS_FILENAME
-        # Same RMW-under-lock + tmp-then-rename shape as the feature-flag
-        # save above. One deliberate divergence: a corrupt existing file is
-        # overwritten (with a warning) instead of returning 409 — theme
-        # prefs are cosmetic and trivially re-settable, so recovering
-        # beats refusing.
-        async with _get_theme_prefs_lock():
-            existing = _load_theme_prefs()
-            existing.update(sanitized)
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            try:
-                tmp.write_text(json.dumps(existing, indent=2))
-                os.replace(tmp, path)
-            except OSError as exc:
-                logger.warning("Could not write %s", path, exc_info=True)
-                with contextlib.suppress(FileNotFoundError, OSError):
-                    tmp.unlink()
-                return JSONResponse(
-                    create_error_response(
-                        ErrorCode.INTERNAL_ERROR,
-                        f"Could not persist theme prefs: {exc}",
-                    ),
-                    status_code=500,
-                )
-        return JSONResponse({"success": True, "applied": sanitized})
 
     async def _get_tools(_: Request) -> JSONResponse:
         if server is not None:
@@ -2586,8 +2525,6 @@ def build_settings_handlers(
         "settings_info": _settings_info,
         "get_feature_flags": _get_feature_flags,
         "save_feature_flags": _save_feature_flags,
-        "get_theme_prefs": _get_theme_prefs,
-        "save_theme_prefs": _save_theme_prefs,
         "get_advanced_settings": _get_advanced_settings,
         "save_advanced_settings": _save_advanced_settings,
         "list_backups": _list_backups,
@@ -2625,6 +2562,7 @@ def build_settings_handlers(
         handlers.update(_build_stub_policy_handlers(data_dir=get_data_dir()))
 
     handlers.update(_build_visibility_handlers(data_dir=get_data_dir()))
+    handlers.update(build_theme_handlers())
 
     return handlers
 
