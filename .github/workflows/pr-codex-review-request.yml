@@ -1,4 +1,8 @@
-name: Request Codex PR Review
+name: Admit Codex PR Review
+
+# Admission and delivery are separate on purpose: every run of the delivery
+# workflow represents exactly one Codex request, giving this workflow a durable,
+# repository-wide counter for the rolling hourly limit.
 
 on:
   pull_request_target:
@@ -7,30 +11,24 @@ on:
     types: [created]
 
 permissions:
+  actions: write
   contents: read
-  issues: write
+  issues: read
   pull-requests: read
 
 jobs:
   request-codex-review:
-    name: Comment @codex review
+    name: Validate and dispatch review
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'pull_request_target' || (github.event_name == 'issue_comment' && github.event.issue.pull_request && (github.event.comment.body == '/review' || github.event.comment.body == '@ghhamcp review') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) }}
+    concurrency:
+      group: codex-review-global-admission
+      cancel-in-progress: false
     steps:
-      - name: Ensure comment token is configured
-        env:
-          GH_TOKEN_CODEX_COMMENT: ${{ secrets.GH_TOKEN_CODEX_COMMENT }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${GH_TOKEN_CODEX_COMMENT:-}" ]]; then
-            echo '::error::GH_TOKEN_CODEX_COMMENT secret is not configured.'
-            exit 1
-          fi
-
-      - name: Post Codex review request
+      - name: Validate and dispatch Codex review request
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GH_TOKEN_CODEX_COMMENT }}
+          github-token: ${{ github.token }}
           script: |
             const issueNumber = context.eventName === 'pull_request_target'
               ? context.payload.pull_request.number
@@ -61,9 +59,29 @@ jobs:
               return;
             }
 
-            await github.rest.issues.createComment({
+            const deliveryWorkflow = 'pr-codex-review-delivery.yml';
+            const recentRuns = await github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: issueNumber,
-              body: '@codex review',
+              workflow_id: deliveryWorkflow,
+              per_page: 100,
+            });
+            const oneHourAgo = Date.now() - 60 * 60 * 1000;
+            const hourlyRequestCount = recentRuns.data.workflow_runs.filter(
+              run => Date.parse(run.created_at) >= oneHourAgo
+            ).length;
+
+            if (hourlyRequestCount >= 20) {
+              core.warning('Global Codex review limit of 20 requests per hour reached; skipping request.');
+              return;
+            }
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: deliveryWorkflow,
+              ref: context.payload.repository.default_branch,
+              inputs: {
+                issue_number: String(issueNumber),
+              },
             });

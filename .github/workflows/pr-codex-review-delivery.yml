@@ -1,0 +1,42 @@
+name: Send Codex PR Review
+run-name: Send Codex PR review for #${{ inputs.issue_number }}
+
+# This workflow is deliberately separate from admission. One run equals one
+# actual Codex request, so its run history is the global rate-limit ledger.
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Pull request number to review
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  send-codex-review:
+    name: Comment @codex review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure comment token is configured
+        env:
+          GH_TOKEN_CODEX_COMMENT: ${{ secrets.GH_TOKEN_CODEX_COMMENT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN_CODEX_COMMENT:-}" ]]; then
+            echo '::error::GH_TOKEN_CODEX_COMMENT secret is not configured.'
+            exit 1
+          fi
+
+      - name: Post Codex review request
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_TOKEN_CODEX_COMMENT }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: '@codex review',
+            });
