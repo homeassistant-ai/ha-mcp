@@ -15,7 +15,7 @@ jobs:
   request-codex-review:
     name: Comment @codex review
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'pull_request_target' || (github.event_name == 'issue_comment' && github.event.issue.pull_request && (github.event.comment.body == '/review' || github.event.comment.body == '@ghhamcp review')) }}
+    if: ${{ github.event_name == 'pull_request_target' || (github.event_name == 'issue_comment' && github.event.issue.pull_request && (github.event.comment.body == '/review' || github.event.comment.body == '@ghhamcp review') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) }}
     steps:
       - name: Ensure comment token is configured
         env:
@@ -32,31 +32,33 @@ jobs:
         with:
           github-token: ${{ secrets.GH_TOKEN_CODEX_COMMENT }}
           script: |
-            const pullRequest = context.payload.pull_request;
             const issueNumber = context.eventName === 'pull_request_target'
-              ? pullRequest.number
+              ? context.payload.pull_request.number
               : context.payload.issue.number;
+            const pullRequest = context.payload.pull_request ?? (await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: issueNumber,
+            })).data;
 
-            if (context.payload.action === 'ready_for_review') {
-              const comments = await github.paginate(
-                github.rest.issues.listComments,
-                {
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issueNumber,
-                  per_page: 100,
-                },
-              );
-              const headSha = pullRequest.head.sha;
-              const alreadyReviewed = comments.some(comment =>
-                comment.user?.login === 'chatgpt-codex-connector[bot]' &&
-                comment.body?.includes(headSha)
-              );
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              },
+            );
+            const headSha = pullRequest.head.sha;
+            const alreadyReviewed = comments.some(comment =>
+              comment.user?.login === 'chatgpt-codex-connector[bot]' &&
+              comment.body?.includes(headSha)
+            );
 
-              if (alreadyReviewed) {
-                core.info(`Codex already reviewed head commit ${headSha}; skipping duplicate request.`);
-                return;
-              }
+            if (alreadyReviewed) {
+              core.info(`Codex already reviewed head commit ${headSha}; skipping duplicate request.`);
+              return;
             }
 
             await github.rest.issues.createComment({
