@@ -693,6 +693,7 @@ class HomeAssistantClient:
                 if isinstance(msg, str) and msg:
                     message = msg
         except json.JSONDecodeError:
+            # Body wasn't a JSON envelope; fall back to raw text below.
             pass
         if not message:
             message = text_body.strip() or reason_phrase or "<empty body>"
