@@ -32,6 +32,7 @@ from .util_helpers import (
     JSON_STRING_COERCION,
     add_timezone_metadata,
     build_pagination_metadata,
+    is_connection_error_message,
     parse_string_list_param,
     project_fields,
 )
@@ -490,16 +491,6 @@ def _parse_time_range(
     return start_dt, end_dt
 
 
-_WS_CONNECTION_SIGNATURES = (
-    "failed to connect",
-    "timed out",
-    "timeout",
-    "connection closed",
-    "disconnected",
-    "not connected",
-)
-
-
 def _raise_recorder_ws_failure(
     kind: str,
     error_msg: str,
@@ -513,8 +504,7 @@ def _raise_recorder_ws_failure(
     as CONNECTION_FAILED (retry/connectivity guidance) instead of presenting
     recorder-retention suggestions during an HA restart or WS outage.
     """
-    lowered = error_msg.lower()
-    if any(sig in lowered for sig in _WS_CONNECTION_SIGNATURES):
+    if is_connection_error_message(error_msg):
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,

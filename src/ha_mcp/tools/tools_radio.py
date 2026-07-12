@@ -31,7 +31,7 @@ from .radio import thread as thread_handler
 from .radio import zigbee as zigbee_handler
 from .radio import zwave as zwave_handler
 from .radio.base import confirm_required, require
-from .util_helpers import JSON_STRING_COERCION
+from .util_helpers import JSON_STRING_COERCION, is_connection_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,20 @@ class RadioTools:
             device_id = (result.get("result") or {}).get("device_id")
             if device_id:
                 return str(device_id)
+        else:
+            error = str(result.get("error", ""))
+            if is_connection_error_message(error):
+                # A transport drop is not evidence the entity is missing.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.CONNECTION_FAILED,
+                        f"Could not resolve entity '{entity_id}': {error}",
+                        context={"entity_id": entity_id},
+                        suggestions=[
+                            "Home Assistant may be restarting or unreachable — retry shortly",
+                        ],
+                    )
+                )
         raise_tool_error(
             create_error_response(
                 ErrorCode.ENTITY_NOT_FOUND,

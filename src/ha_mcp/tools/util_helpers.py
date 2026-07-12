@@ -2236,3 +2236,25 @@ def merge_visibility_warnings(
     if warnings:
         response.setdefault("warnings", []).extend(warnings)
     return response
+
+
+# Error strings produced by the pooled WebSocket path when the transport (not
+# the command) fails: the manager's connect raise, send timeouts, and socket
+# drops. ``send_websocket_message`` collapses these into
+# ``{"success": False, "error": ...}``, so callers that attach domain-specific
+# suggestions must first check the shape or an HA restart gets presented as a
+# domain problem (issue #1832 review).
+WS_CONNECTION_SIGNATURES = (
+    "failed to connect",
+    "timed out",
+    "timeout",
+    "connection closed",
+    "disconnected",
+    "not connected",
+)
+
+
+def is_connection_error_message(error_msg: str) -> bool:
+    """True when a pooled-WS failure string is connection/transport-shaped."""
+    lowered = error_msg.lower()
+    return any(sig in lowered for sig in WS_CONNECTION_SIGNATURES)

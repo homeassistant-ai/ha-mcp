@@ -1650,3 +1650,70 @@ class TestDCRPersistence:
         secret_file = tmp_data_dir / "oauth_hmac_secret"
         assert secret_file.exists()
         assert stat.S_IMODE(secret_file.stat().st_mode) == 0o600
+
+
+class TestWebSocketManagerVerifySslKey:
+    """Pool-key resolution for verify_ssl (issue #1832 review follow-up)."""
+
+    @pytest.fixture(autouse=True)
+    def reset_manager(self):
+        from ha_mcp.client.websocket_client import WebSocketManager
+
+        WebSocketManager._instance = None
+        yield
+        WebSocketManager._instance = None
+
+    @pytest.mark.asyncio
+    async def test_defaulted_verify_ssl_shares_connection_with_omitted(self):
+        """get_client(verify_ssl=<settings default>) and get_client() must key
+        identically — one pooled connection, not a split."""
+        from ha_mcp.client.websocket_client import WebSocketManager
+        from ha_mcp.config import get_global_settings
+
+        mock_client = MagicMock()
+        mock_client.is_connected = True
+        mock_client.connect = AsyncMock(return_value=True)
+
+        calls = []
+
+        def factory(url, token, **kwargs):
+            calls.append(kwargs)
+            return mock_client
+
+        manager = WebSocketManager()
+        manager.configure(client_factory=factory)
+
+        default = get_global_settings().verify_ssl
+        a = await manager.get_client(url="http://ha.local:8123", token="tok")
+        b = await manager.get_client(
+            url="http://ha.local:8123", token="tok", verify_ssl=default
+        )
+        assert a is b
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_verify_ssl_override_gets_isolated_connection(self):
+        """A genuine verify_ssl override must NOT share the default pool entry."""
+        from ha_mcp.client.websocket_client import WebSocketManager
+        from ha_mcp.config import get_global_settings
+
+        default = get_global_settings().verify_ssl
+
+        clients = []
+
+        def factory(url, token, **kwargs):
+            c = MagicMock()
+            c.is_connected = True
+            c.connect = AsyncMock(return_value=True)
+            clients.append(c)
+            return c
+
+        manager = WebSocketManager()
+        manager.configure(client_factory=factory)
+
+        a = await manager.get_client(url="http://ha.local:8123", token="tok")
+        b = await manager.get_client(
+            url="http://ha.local:8123", token="tok", verify_ssl=not default
+        )
+        assert a is not b
+        assert len(clients) == 2

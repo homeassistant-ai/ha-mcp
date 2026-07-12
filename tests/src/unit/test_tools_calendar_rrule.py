@@ -235,3 +235,29 @@ async def test_non_rrule_failure_omits_rrule_suggestion():
     suggestions = _structured_error(exc_info.value)["error"]["suggestions"]
     assert all(not s.startswith("Check RRULE syntax") for s in suggestions)
     client.send_websocket_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rrule_transport_failure_maps_to_connection_error():
+    """A connection-shaped pooled-WS failure surfaces as CONNECTION_FAILED with
+    connectivity guidance — not rrule/calendar suggestions (issue #1832 review)."""
+    client = _make_mock_client(
+        ws_return={
+            "success": False,
+            "error": "Failed to connect to Home Assistant WebSocket",
+        }
+    )
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Weekly sync",
+            start="2026-06-15T10:00:00",
+            end="2026-06-15T10:30:00",
+            rrule="FREQ=WEEKLY;BYDAY=MO;COUNT=10",
+        )
+
+    err = _structured_error(exc_info.value)["error"]
+    assert err["code"] in ("CONNECTION_FAILED", "CONNECTION_TIMEOUT")
+    assert not any("RRULE" in s for s in err.get("suggestions", []))

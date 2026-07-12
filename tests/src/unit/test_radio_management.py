@@ -572,3 +572,23 @@ class TestRadioDispatcherContract:
         # Uses the targeted get keyed by the requested entity_id.
         reg = [m for m in record if m["type"] == "config/entity_registry/get"]
         assert reg and reg[0]["entity_id"] == "light.ghost"
+
+
+@pytest.mark.asyncio
+async def test_resolve_entity_device_connection_failure_not_entity_not_found():
+    """A transport-shaped registry-get failure must surface as a connection
+    error, never ENTITY_NOT_FOUND (issue #1832 review)."""
+    client = _client(
+        {
+            "config/entity_registry/get": {
+                "success": False,
+                "error": "Failed to connect to Home Assistant WebSocket",
+            }
+        },
+    )
+    radio = _capture(register_radio_tools, client)["ha_manage_radio"]
+    with pytest.raises(ToolError) as exc:
+        await radio(radio="matter", action="diagnostics", entity_id="light.real")
+    msg = str(exc.value)
+    assert "CONNECTION_FAILED" in msg
+    assert "ENTITY_NOT_FOUND" not in msg

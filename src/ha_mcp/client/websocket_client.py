@@ -1138,9 +1138,20 @@ class WebSocketManager:
                 ws_url = settings.homeassistant_url
                 ws_token = settings.homeassistant_token
 
-            key = self._client_key(ws_url, ws_token)
-            if verify_ssl is not None:
-                key = f"{key}|verify_ssl={verify_ssl}"
+            # Key on the EFFECTIVE verification mode: a caller passing the
+            # resolved settings default (send_websocket_message) must share
+            # the pooled connection with callers that omit the argument
+            # (listener, HACS, installer) — only a genuine override such as
+            # verify_ssl=False gets its own isolated connection.
+            effective_verify_ssl = (
+                verify_ssl
+                if verify_ssl is not None
+                else get_global_settings().verify_ssl
+            )
+            key = (
+                f"{self._client_key(ws_url, ws_token)}"
+                f"|verify_ssl={effective_verify_ssl}"
+            )
 
             # Return existing connected client for these credentials
             existing = self._clients.get(key)
