@@ -8,6 +8,7 @@ ever flows through ha-mcp or the LLM for screenshots.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from typing import Any, Literal, NoReturn, cast
 from urllib.parse import quote
 
 import httpx
+from fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error
@@ -37,6 +39,13 @@ _MIME_TYPES: dict[ScreenshotFormat, str] = {
     "jpeg": "image/jpeg",
     "webp": "image/webp",
     "bmp": "image/bmp",
+}
+
+_IMAGE_SIGNATURES: dict[ScreenshotFormat, tuple[bytes, ...]] = {
+    "png": (b"\x89PNG\r\n\x1a\n",),
+    "jpeg": (b"\xff\xd8\xff",),
+    "webp": (b"RIFF", b"WEBP"),
+    "bmp": (b"BM",),
 }
 
 # Shared Field-description clause for the ``full_page`` screenshot param, reused
@@ -63,6 +72,13 @@ MAX_ZOOM = 5.0
 MAX_WAIT_MS = 30_000
 MIN_RENDER_TIMEOUT_SECONDS = 1.0
 MAX_RENDER_TIMEOUT_SECONDS = 300.0
+
+# Bound raw response bytes before FastMCP base64-encodes them. These are server
+# safety limits, not claims about a particular MCP client's smaller vision or
+# context-window limits.
+MAX_IMAGE_PAYLOAD_BYTES = 20 * 1024 * 1024
+MAX_BATCH_PAYLOAD_BYTES = 40 * 1024 * 1024
+MAX_ENGINE_ERROR_BODY_BYTES = 300
 
 # Characters/sequences that would let an LLM-supplied path escape the
 # dashboard route and reshape the engine request (scheme, authority,
@@ -190,6 +206,7 @@ def _raise_invalid_parameter(
             suggestions=[f"Pass {parameter} as {expectation}"],
         )
     )
+    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 def _bounded_int(
@@ -202,13 +219,14 @@ def _bounded_int(
     """Validate and return a bounded integer parameter."""
     if isinstance(value, bool) or not isinstance(value, int):
         _raise_invalid_parameter(parameter, value, "an integer")
+    assert type(value) is int
     if not minimum <= value <= maximum:
         _raise_invalid_parameter(
             parameter,
             value,
             f"an integer from {minimum} through {maximum}",
         )
-    return cast(int, value)
+    return value
 
 
 def _bounded_float(
@@ -240,6 +258,14 @@ def _validate_optional_text(parameter: str, value: Any) -> str | None:
     return value
 
 
+def _validate_image_format(value: Any) -> ScreenshotFormat:
+    """Return one supported screenshot format with its literal type preserved."""
+    for candidate in _MIME_TYPES:
+        if value == candidate:
+            return candidate
+    _raise_invalid_parameter("image_format", value, "png, jpeg, webp, or bmp")
+
+
 def _oriented_dimensions(
     width: int,
     height: int,
@@ -264,10 +290,12 @@ def _capture_viewports(
     auto_height = options.full_page or options.height == "auto"
 
     if options.viewport_presets is None:
-        if options.height == "auto":
-            return [_ViewportRequest(None, options.width, "auto", options.orientation)]
+        if auto_height:
+            return [_ViewportRequest(None, options.width, "auto", None)]
+        fixed_height = options.height
+        assert isinstance(fixed_height, int)
         capture_width, capture_height, resolved_orientation = _oriented_dimensions(
-            options.width, options.height, options.orientation
+            options.width, fixed_height, options.orientation
         )
         return [
             _ViewportRequest(
@@ -330,7 +358,7 @@ def _validate_viewport_presets(value: Any) -> list[ViewportPreset] | None:
     return valid_presets
 
 
-def _validate_capture_parameters(
+def validate_capture_parameters(
     *,
     width: Any,
     height: Any,
@@ -368,6 +396,16 @@ def _validate_capture_parameters(
         _raise_invalid_parameter(
             "orientation", orientation, "portrait, landscape, or null"
         )
+    if (
+        orientation is not None
+        and valid_presets is None
+        and (full_page or valid_height == "auto")
+    ):
+        _raise_invalid_parameter(
+            "orientation",
+            orientation,
+            "null when using a custom auto-height viewport, or a named viewport preset",
+        )
     valid_orientation = cast(Orientation | None, orientation)
 
     valid_zoom = _bounded_float("zoom", zoom, minimum=MIN_ZOOM, maximum=MAX_ZOOM)
@@ -380,11 +418,7 @@ def _validate_capture_parameters(
     valid_theme = _validate_optional_text("theme", theme)
     valid_language = _validate_optional_text("language", language)
 
-    if not isinstance(image_format, str) or image_format not in _MIME_TYPES:
-        _raise_invalid_parameter(
-            "image_format", image_format, "png, jpeg, webp, or bmp"
-        )
-    valid_format = cast(ScreenshotFormat, image_format)
+    valid_format = _validate_image_format(image_format)
     valid_timeout = _bounded_float(
         "render_timeout_seconds",
         render_timeout_seconds,
@@ -407,6 +441,347 @@ def _validate_capture_parameters(
     )
 
 
+def _declared_content_length(response: httpx.Response) -> int | None:
+    """Return a trustworthy non-negative Content-Length when one is present."""
+    raw_value = response.headers.get("content-length")
+    if raw_value is None:
+        return None
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
+
+
+async def _read_limited_response(
+    response: httpx.Response, limit_bytes: int
+) -> tuple[bytes, bool]:
+    """Stream at most ``limit_bytes`` and report whether more data existed."""
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        remaining = limit_bytes - len(body)
+        if len(chunk) > remaining:
+            body.extend(chunk[:remaining])
+            return bytes(body), True
+        body.extend(chunk)
+    return bytes(body), False
+
+
+def _raise_payload_too_large(
+    *,
+    request_context: dict[str, Any],
+    capture_count: int,
+    completed_count: int,
+    declared_bytes: int | None,
+    received_bytes: int | None,
+    aggregate_bytes: int,
+    limit_kind: Literal["image", "batch"],
+) -> NoReturn:
+    """Raise the issue #1786 image-size failure class with audit context."""
+    limit_bytes = (
+        MAX_IMAGE_PAYLOAD_BYTES if limit_kind == "image" else MAX_BATCH_PAYLOAD_BYTES
+    )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.IMAGE_PAYLOAD_TOO_LARGE,
+            "Screenshot image payload exceeds the server's safe inline-image "
+            f"{limit_kind} limit.",
+            context={
+                **request_context,
+                "capture_count": capture_count,
+                "completed_count": completed_count,
+                "declared_bytes": declared_bytes,
+                "received_bytes": received_bytes,
+                "aggregate_bytes_before_capture": aggregate_bytes,
+                "limit_kind": limit_kind,
+                "limit_bytes": limit_bytes,
+                "per_image_limit_bytes": MAX_IMAGE_PAYLOAD_BYTES,
+                "batch_limit_bytes": MAX_BATCH_PAYLOAD_BYTES,
+            },
+            suggestions=[
+                "Request fewer viewport presets in one call",
+                "Use png, jpeg, or webp instead of bmp for large captures",
+                "Reduce viewport dimensions or capture a single view",
+            ],
+        )
+    )
+    raise AssertionError("unreachable: raise_tool_error always raises")
+
+
+async def _read_image_response(
+    response: httpx.Response,
+    *,
+    mime_type: str,
+    image_format: ScreenshotFormat,
+    request_context: dict[str, Any],
+    aggregate_bytes: int,
+    remaining_batch_bytes: int,
+) -> bytes:
+    """Validate and stream one successful engine image within payload limits."""
+    response_mime_type = (
+        response.headers.get("content-type", "").partition(";")[0].strip().lower()
+    )
+    if response_mime_type != mime_type:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Screenshot engine returned an unexpected content type.",
+                details=f"Expected {mime_type}, received "
+                f"{response_mime_type or 'no Content-Type header'}.",
+                context={
+                    **request_context,
+                    "expected_content_type": mime_type,
+                    "received_content_type": response_mime_type or None,
+                },
+                suggestions=[
+                    "Verify the URL points to the Puppet screenshot engine",
+                    "Check that the screenshot engine supports the "
+                    + f"requested {image_format} format",
+                ],
+            )
+        )
+
+    declared_bytes = _declared_content_length(response)
+    if declared_bytes is not None and declared_bytes > MAX_IMAGE_PAYLOAD_BYTES:
+        _raise_payload_too_large(
+            request_context=request_context,
+            capture_count=int(request_context["capture_count"]),
+            completed_count=int(request_context["completed_count"]),
+            declared_bytes=declared_bytes,
+            received_bytes=0,
+            aggregate_bytes=aggregate_bytes,
+            limit_kind="image",
+        )
+    if declared_bytes is not None and declared_bytes > remaining_batch_bytes:
+        _raise_payload_too_large(
+            request_context=request_context,
+            capture_count=int(request_context["capture_count"]),
+            completed_count=int(request_context["completed_count"]),
+            declared_bytes=declared_bytes,
+            received_bytes=0,
+            aggregate_bytes=aggregate_bytes,
+            limit_kind="batch",
+        )
+
+    read_limit = min(MAX_IMAGE_PAYLOAD_BYTES, remaining_batch_bytes)
+    image_data, limit_exceeded = await _read_limited_response(response, read_limit)
+    if limit_exceeded:
+        limit_kind: Literal["image", "batch"] = (
+            "image" if remaining_batch_bytes >= MAX_IMAGE_PAYLOAD_BYTES else "batch"
+        )
+        _raise_payload_too_large(
+            request_context=request_context,
+            capture_count=int(request_context["capture_count"]),
+            completed_count=int(request_context["completed_count"]),
+            declared_bytes=declared_bytes,
+            received_bytes=read_limit + 1,
+            aggregate_bytes=aggregate_bytes,
+            limit_kind=limit_kind,
+        )
+    if not image_data:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Screenshot engine returned an empty image for '{request_context['path']}'.",
+                details="The dashboard path may be invalid, or the engine's access "
+                "token may be missing or expired.",
+                context=request_context,
+            )
+        )
+    signatures = _IMAGE_SIGNATURES[image_format]
+    valid_signature = image_data.startswith(signatures[0])
+    if image_format == "webp":
+        valid_signature = valid_signature and image_data[8:12] == signatures[1]
+    if not valid_signature:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Screenshot engine returned bytes that do not match the requested "
+                f"{image_format} image format.",
+                context={
+                    **request_context,
+                    "expected_content_type": mime_type,
+                    "received_content_type": response_mime_type,
+                    "received_signature_hex": image_data[:12].hex(),
+                },
+                suggestions=[
+                    "Verify the URL points to the Puppet screenshot engine",
+                    "Check whether an authentication or proxy page was returned "
+                    + "with an incorrect image Content-Type",
+                ],
+            )
+        )
+    return image_data
+
+
+async def _request_viewport_image(
+    http_client: httpx.AsyncClient,
+    *,
+    url: str,
+    path: str,
+    engine: str,
+    params: dict[str, str],
+    options: _CaptureOptions,
+    viewport: _ViewportRequest,
+    mime_type: str,
+    request_context: dict[str, Any],
+    aggregate_bytes: int,
+    remaining_batch_bytes: int,
+) -> tuple[bytes, int | Literal["auto"], bool]:
+    """Render one viewport, including the legacy full-page compatibility retry."""
+    fallback_used = False
+    capture_height = viewport.height
+    while True:
+        try:
+            async with http_client.stream("GET", url, params=params) as response:
+                if response.status_code >= 400:
+                    error_body, error_truncated = await _read_limited_response(
+                        response, MAX_ENGINE_ERROR_BODY_BYTES
+                    )
+                    error_text = error_body.decode(errors="replace")
+                    if (
+                        response.status_code == 400
+                        and options.full_page
+                        and viewport.height == "auto"
+                        and not fallback_used
+                    ):
+                        # Puppet <2.5.0 does not understand WIDTHxauto.
+                        fallback_used = True
+                        capture_height = MAX_VIEWPORT_DIMENSION
+                        params["viewport"] = (
+                            f"{viewport.width}x{MAX_VIEWPORT_DIMENSION}"
+                        )
+                        continue
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            "Screenshot engine returned HTTP "
+                            f"{response.status_code} for dashboard '{path}'.",
+                            details=error_text + ("…" if error_truncated else ""),
+                            context={
+                                **request_context,
+                                "status_code": response.status_code,
+                                "legacy_full_page_fallback_attempted": fallback_used,
+                            },
+                            suggestions=[
+                                "Verify the dashboard path exists",
+                                "If the engine landed on the login page, its "
+                                + f"access token is missing or invalid — {TOKEN_HINT}",
+                                "Increase wait_ms for heavy chart cards",
+                            ],
+                        )
+                    )
+                image_data = await _read_image_response(
+                    response,
+                    mime_type=mime_type,
+                    image_format=options.image_format,
+                    request_context=request_context,
+                    aggregate_bytes=aggregate_bytes,
+                    remaining_batch_bytes=remaining_batch_bytes,
+                )
+        except httpx.TimeoutException as exc:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.TIMEOUT_API_REQUEST,
+                    "Dashboard screenshot rendering timed out after "
+                    f"{options.render_timeout_seconds:g} seconds.",
+                    details=str(exc),
+                    context={
+                        **request_context,
+                        "engine_url": engine,
+                        "render_timeout_seconds": options.render_timeout_seconds,
+                    },
+                    suggestions=[
+                        "Increase render_timeout_seconds for a slow engine",
+                        "Reduce wait_ms or render fewer viewport presets",
+                        "Check the screenshot engine logs",
+                    ],
+                )
+            )
+        except httpx.HTTPError as exc:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    f"Could not reach the dashboard screenshot engine at {engine}.",
+                    details=str(exc),
+                    context={**request_context, "engine_url": engine},
+                    suggestions=[
+                        "Ensure the Puppet screenshot add-on (or sidecar) "
+                        + "is installed and running",
+                        "If it is running, its access token is likely "
+                        + f"missing or invalid — {TOKEN_HINT}",
+                        "Check HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL on "
+                        + "Docker/Container deployments",
+                    ],
+                )
+            )
+        return image_data, capture_height, fallback_used
+
+
+async def _request_or_collect_failure(
+    http_client: httpx.AsyncClient,
+    *,
+    url: str,
+    path: str,
+    engine: str,
+    params: dict[str, str],
+    options: _CaptureOptions,
+    viewport: _ViewportRequest,
+    mime_type: str,
+    request_context: dict[str, Any],
+    aggregate_bytes: int,
+    remaining_batch_bytes: int,
+    partial_failures: list[dict[str, Any]] | None,
+) -> tuple[bytes, int | Literal["auto"], bool] | None:
+    """Render one viewport or record its structured failure for a partial batch."""
+    try:
+        return await _request_viewport_image(
+            http_client,
+            url=url,
+            path=path,
+            engine=engine,
+            params=params,
+            options=options,
+            viewport=viewport,
+            mime_type=mime_type,
+            request_context=request_context,
+            aggregate_bytes=aggregate_bytes,
+            remaining_batch_bytes=remaining_batch_bytes,
+        )
+    except ToolError as exc:
+        if partial_failures is None:
+            raise
+        try:
+            failure = json.loads(str(exc))
+        except (json.JSONDecodeError, TypeError):
+            failure = None
+        if not isinstance(failure, dict):
+            failure = create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                "Dashboard capture failed with an unstructured error.",
+                details=str(exc),
+                context=request_context,
+            )
+        partial_failures.append(failure)
+        return None
+
+
+def _complete_capture_batch(
+    captures: list[DashboardImageCapture],
+    partial_failures: list[dict[str, Any]] | None,
+) -> list[DashboardImageCapture]:
+    """Return partial successes, but raise when every requested capture failed."""
+    if not captures and partial_failures:
+        aggregate_failure = {
+            **partial_failures[0],
+            "all_captures_failed": True,
+            "failure_count": len(partial_failures),
+            "screenshot_failures": partial_failures,
+        }
+        raise_tool_error(aggregate_failure)
+    return captures
+
+
 async def capture_dashboard_images(
     dashboard_path: str,
     *,
@@ -422,6 +797,7 @@ async def capture_dashboard_images(
     language: str | None = None,
     image_format: ScreenshotFormat = "png",
     render_timeout_seconds: float = DEFAULT_RENDER_TIMEOUT_SECONDS,
+    partial_failures: list[dict[str, Any]] | None = None,
 ) -> list[DashboardImageCapture]:
     """Render one or more ordered dashboard images via the screenshot engine.
 
@@ -431,7 +807,7 @@ async def capture_dashboard_images(
     requesting the engine's native ``WIDTHxauto`` viewport.
     """
     path = _validate_dashboard_path(dashboard_path)
-    options = _validate_capture_parameters(
+    options = validate_capture_parameters(
         width=width,
         height=height,
         viewport_presets=viewport_presets,
@@ -455,7 +831,7 @@ async def capture_dashboard_images(
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(options.render_timeout_seconds)
     ) as http_client:
-        for viewport in viewports:
+        for capture_index, viewport in enumerate(viewports):
             params: dict[str, str] = {
                 "viewport": f"{viewport.width}x{viewport.height}",
                 "zoom": str(options.zoom),
@@ -476,101 +852,60 @@ async def capture_dashboard_images(
                 "width": viewport.width,
                 "height": viewport.height,
                 "requested_format": options.image_format,
+                "capture_index": capture_index,
+                "capture_count": len(viewports),
+                "completed_count": len(captures),
             }
-            try:
-                response = await http_client.get(url, params=params)
-            except httpx.TimeoutException as exc:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.TIMEOUT_API_REQUEST,
-                        "Dashboard screenshot rendering timed out after "
-                        f"{render_timeout_seconds:g} seconds.",
-                        details=str(exc),
-                        context={
-                            **request_context,
-                            "engine_url": engine,
-                            "render_timeout_seconds": render_timeout_seconds,
-                        },
-                        suggestions=[
-                            "Increase render_timeout_seconds for a slow engine",
-                            "Reduce wait_ms or render fewer viewport presets",
-                            "Check the screenshot engine logs",
-                        ],
+            aggregate_bytes = sum(capture.size_bytes for capture in captures)
+            remaining_batch_bytes = MAX_BATCH_PAYLOAD_BYTES - aggregate_bytes
+            if remaining_batch_bytes <= 0:
+                if partial_failures is not None:
+                    partial_failures.append(
+                        create_error_response(
+                            ErrorCode.IMAGE_PAYLOAD_TOO_LARGE,
+                            "Screenshot image batch reached the server's safe "
+                            "inline-image limit.",
+                            context={
+                                **request_context,
+                                "aggregate_bytes_before_capture": aggregate_bytes,
+                                "limit_kind": "batch",
+                                "limit_bytes": MAX_BATCH_PAYLOAD_BYTES,
+                            },
+                        )
                     )
-                )
-            except httpx.HTTPError as exc:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.CONNECTION_FAILED,
-                        f"Could not reach the dashboard screenshot engine at {engine}.",
-                        details=str(exc),
-                        context={**request_context, "engine_url": engine},
-                        suggestions=[
-                            "Ensure the Puppet screenshot add-on (or sidecar) "
-                            "is installed and running",
-                            "If it is running, its access token is likely "
-                            f"missing or invalid — {TOKEN_HINT}",
-                            "Check HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL on "
-                            "Docker/Container deployments",
-                        ],
-                    )
+                    break
+                _raise_payload_too_large(
+                    request_context=request_context,
+                    capture_count=len(viewports),
+                    completed_count=len(captures),
+                    declared_bytes=None,
+                    received_bytes=0,
+                    aggregate_bytes=aggregate_bytes,
+                    limit_kind="batch",
                 )
 
-            if response.status_code >= 400:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Screenshot engine returned HTTP {response.status_code} "
-                        f"for dashboard '{path}'.",
-                        details=response.text[:300],
-                        context={
-                            **request_context,
-                            "status_code": response.status_code,
-                        },
-                        suggestions=[
-                            "Verify the dashboard path exists",
-                            "If the engine landed on the login page, its access "
-                            f"token is missing or invalid — {TOKEN_HINT}",
-                            "Increase wait_ms for heavy chart cards",
-                        ],
-                    )
-                )
-            if not response.content:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Screenshot engine returned an empty image for '{path}'.",
-                        details="The dashboard path may be invalid, or the "
-                        "engine's access token may be missing or expired.",
-                        context=request_context,
-                    )
-                )
-
-            response_mime_type = (
-                response.headers.get("content-type", "")
-                .partition(";")[0]
-                .strip()
-                .lower()
+            outcome = await _request_or_collect_failure(
+                http_client,
+                url=url,
+                path=path,
+                engine=engine,
+                params=params,
+                options=options,
+                viewport=viewport,
+                mime_type=mime_type,
+                request_context=request_context,
+                aggregate_bytes=aggregate_bytes,
+                remaining_batch_bytes=remaining_batch_bytes,
+                partial_failures=partial_failures,
             )
-            if response_mime_type != mime_type:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        "Screenshot engine returned an unexpected content type.",
-                        details=f"Expected {mime_type}, received "
-                        f"{response_mime_type or 'no Content-Type header'}.",
-                        context={
-                            **request_context,
-                            "expected_content_type": mime_type,
-                            "received_content_type": response_mime_type or None,
-                        },
-                        suggestions=[
-                            "Verify the URL points to the Puppet screenshot engine",
-                            "Check that the screenshot engine supports the "
-                            f"requested {image_format} format",
-                        ],
-                    )
-                )
+            if outcome is None:
+                if (
+                    partial_failures
+                    and partial_failures[-1].get("limit_kind") == "batch"
+                ):
+                    break
+                continue
+            image_data, capture_height, fallback_used = outcome
 
             requested = {
                 "zoom": options.zoom,
@@ -581,22 +916,23 @@ async def capture_dashboard_images(
                 "dark_mode": options.dark_mode,
                 "language": options.language,
                 "render_timeout_seconds": options.render_timeout_seconds,
+                "legacy_full_page_fallback": fallback_used,
             }
             captures.append(
                 DashboardImageCapture(
-                    data=response.content,
+                    data=image_data,
                     width=viewport.width,
-                    height=viewport.height,
+                    height=capture_height,
                     preset=viewport.preset,
                     orientation=viewport.orientation,
                     image_format=options.image_format,
                     mime_type=mime_type,
-                    size_bytes=len(response.content),
+                    size_bytes=len(image_data),
                     requested=requested.copy(),
                 )
             )
 
-    return captures
+    return _complete_capture_batch(captures, partial_failures)
 
 
 async def capture_dashboard_png(

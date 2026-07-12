@@ -59,7 +59,7 @@ def test_render_paths_return_canonical_metadata_without_mutating_config(
     config = {
         "title": "House",
         "views": [
-            {"title": "Home", "path": " home ", "cards": [{"type": "clock"}]},
+            {"title": "Home", "path": "home", "cards": [{"type": "clock"}]},
             {"title": "Lights", "path": "lights"},
         ],
     }
@@ -234,7 +234,7 @@ async def test_structured_resolution_returns_canonical_named_view(
             {
                 "views": [
                     {"title": "Home", "path": "home"},
-                    {"title": "Lights", "path": " lights "},
+                    {"title": "Lights", "path": "lights"},
                 ]
             }
         )
@@ -269,6 +269,63 @@ async def test_structured_resolution_maps_transport_failure_to_tool_error() -> N
     error = _tool_error(exc_info)
     assert error["error"]["code"] == "CONNECTION_FAILED"
     assert "disconnected" in error["error"]["details"]
+
+
+@pytest.mark.parametrize(
+    "ha_error",
+    [
+        {
+            "code": "config_not_found",
+            "message": "A localized message that does not contain the path marker",
+        },
+        "Command failed: Unknown config specified: wall-panel",
+    ],
+)
+async def test_dashboard_fetch_maps_only_exact_missing_signals_to_not_found(
+    ha_error: Any,
+) -> None:
+    client = _FakeAsyncClient({"success": False, "error": ha_error})
+
+    with pytest.raises(ToolError) as exc_info:
+        await resolve_dashboard_render_target(
+            client,
+            dashboard_path=None,
+            dashboard_url_path="wall-panel",
+            view_path="home",
+        )
+
+    error = _tool_error(exc_info)
+    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+
+
+@pytest.mark.parametrize(
+    "ha_error",
+    [
+        {"code": "unauthorized", "message": "Forbidden"},
+        {"code": "not_found", "message": "Unknown config specified later"},
+        {
+            "code": "other",
+            "message": "Wrapper contains Unknown config specified: wall-panel",
+        },
+        {"code": None, "message": None},
+        "WebSocket request failed",
+    ],
+)
+async def test_dashboard_fetch_preserves_non_missing_failures(
+    ha_error: Any,
+) -> None:
+    client = _FakeAsyncClient({"success": False, "error": ha_error})
+
+    with pytest.raises(ToolError) as exc_info:
+        await resolve_dashboard_render_target(
+            client,
+            dashboard_path=None,
+            dashboard_url_path="wall-panel",
+            view_path="home",
+        )
+
+    error = _tool_error(exc_info)
+    assert error["error"]["code"] == "SERVICE_CALL_FAILED"
 
 
 @pytest.mark.parametrize(
@@ -351,7 +408,7 @@ async def test_raw_and_structured_addressing_are_mutually_exclusive(
 async def test_raw_numeric_path_warns_with_canonical_stable_view_path() -> None:
     client = _FakeAsyncClient(
         _config_response(
-            {"views": [{"path": "home"}, {"title": "Lights", "path": " lights "}]}
+            {"views": [{"path": "home"}, {"title": "Lights", "path": "lights"}]}
         )
     )
 
@@ -380,6 +437,348 @@ async def test_raw_numeric_path_warns_with_canonical_stable_view_path() -> None:
             "url_path": "wall-panel",
         }
     ]
+
+
+async def test_raw_js_numeric_route_warns_with_canonical_stable_view_path() -> None:
+    client = _FakeAsyncClient(
+        _config_response({"views": [{"path": "home"}, {"path": "lights"}]})
+    )
+
+    target = await resolve_dashboard_render_target(
+        client,
+        dashboard_path="wall-panel/1e0",
+        dashboard_url_path=None,
+        view_path=None,
+    )
+
+    assert target.view_index == 1
+    assert "wall-panel/lights" in target.warnings[0]
+
+
+async def test_raw_default_numeric_path_uses_stored_stable_alias() -> None:
+    client = _FakeAsyncClient(
+        _config_response({"views": [{"title": "Home", "path": "home"}]})
+    )
+
+    target = await resolve_dashboard_render_target(
+        client,
+        dashboard_path="lovelace/0",
+        dashboard_url_path=None,
+        view_path=None,
+    )
+
+    assert target.view_index == 0
+    assert target.stable is False
+    assert "lovelace/home" in target.warnings[0]
+    assert client.requests == [{"type": "lovelace/config", "force": True}]
+
+
+async def test_raw_default_path_allows_known_no_config_fallback() -> None:
+    client = _FakeAsyncClient(
+        {
+            "success": False,
+            "error": {
+                "code": "config_not_found",
+                "message": "No config found",
+            },
+        }
+    )
+
+    target = await resolve_dashboard_render_target(
+        client,
+        dashboard_path="lovelace/0",
+        dashboard_url_path=None,
+        view_path=None,
+    )
+
+    assert target.render_path == "lovelace/0"
+    assert target.view_index == 0
+    assert target.stable is False
+    assert "cannot be verified" in target.warnings[0]
+
+
+async def test_raw_default_path_does_not_hide_permission_failure() -> None:
+    client = _FakeAsyncClient(
+        {
+            "success": False,
+            "error": {"code": "unauthorized", "message": "Forbidden"},
+        }
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await resolve_dashboard_render_target(
+            client,
+            dashboard_path="lovelace/0",
+            dashboard_url_path=None,
+            view_path=None,
+        )
+
+    assert _tool_error(exc_info)["error"]["code"] == "SERVICE_CALL_FAILED"
+
+
+@pytest.mark.parametrize("invalid_result", [None, [], "invalid"])
+async def test_raw_default_path_does_not_hide_malformed_success(
+    invalid_result: Any,
+) -> None:
+    client = _FakeAsyncClient({"success": True, "result": invalid_result})
+
+    with pytest.raises(ToolError) as exc_info:
+        await resolve_dashboard_render_target(
+            client,
+            dashboard_path="lovelace/0",
+            dashboard_url_path=None,
+            view_path=None,
+        )
+
+    error = _tool_error(exc_info)
+    assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert error["payload_type"] == type(invalid_result).__name__
+
+
+@pytest.mark.parametrize("dashboard_url_path", ["", "   "])
+async def test_structured_empty_dashboard_path_is_rejected_without_ws(
+    dashboard_url_path: str,
+) -> None:
+    client = _FakeAsyncClient()
+
+    with pytest.raises(ToolError) as exc_info:
+        await resolve_dashboard_render_target(
+            client,
+            dashboard_path=None,
+            dashboard_url_path=dashboard_url_path,
+            view_path="home",
+        )
+
+    assert _tool_error(exc_info)["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert client.requests == []
+
+
+@pytest.mark.parametrize("raw_view", ["missing", "99"])
+async def test_raw_custom_suffix_must_resolve_to_a_real_view(raw_view: str) -> None:
+    client = _FakeAsyncClient(_config_response({"views": [{"path": "home"}]}))
+
+    with pytest.raises(ToolError) as exc_info:
+        await resolve_dashboard_render_target(
+            client,
+            dashboard_path=f"wall-panel/{raw_view}",
+            dashboard_url_path=None,
+            view_path=None,
+        )
+
+    assert _tool_error(exc_info)["error"]["code"] == "RESOURCE_NOT_FOUND"
+
+
+async def test_raw_duplicate_named_suffix_selects_first_but_is_unstable() -> None:
+    client = _FakeAsyncClient(
+        _config_response({"views": [{"path": "home"}, {"path": "home"}]})
+    )
+
+    target = await resolve_dashboard_render_target(
+        client,
+        dashboard_path="wall-panel/home",
+        dashboard_url_path=None,
+        view_path=None,
+    )
+
+    assert target.view_index == 0
+    assert target.render_path == "wall-panel/home"
+    assert target.stable is False
+    assert "first matching" in target.warnings[0]
+
+
+async def test_raw_strategy_suffix_is_unverified_not_stable() -> None:
+    client = _FakeAsyncClient(
+        _config_response({"strategy": {"type": "original-states"}})
+    )
+
+    target = await resolve_dashboard_render_target(
+        client,
+        dashboard_path="wall-panel/runtime/view",
+        dashboard_url_path=None,
+        view_path=None,
+    )
+
+    assert target.render_path == "wall-panel/runtime/view"
+    assert target.stable is False
+    assert "cannot be verified" in target.warnings[0]
+
+
+async def test_raw_multi_segment_cannot_select_slash_configured_path() -> None:
+    client = _FakeAsyncClient(_config_response({"views": [{"path": "floor/second"}]}))
+
+    with pytest.raises(ToolError) as exc_info:
+        await resolve_dashboard_render_target(
+            client,
+            dashboard_path="wall-panel/floor/second",
+            dashboard_url_path=None,
+            view_path=None,
+        )
+
+    assert _tool_error(exc_info)["error"]["code"] == "RESOURCE_NOT_FOUND"
+
+
+async def test_raw_multi_segment_uses_only_frontend_view_suffix() -> None:
+    client = _FakeAsyncClient(_config_response({"views": [{"path": "floor"}]}))
+
+    target = await resolve_dashboard_render_target(
+        client,
+        dashboard_path="wall-panel/floor/second",
+        dashboard_url_path=None,
+        view_path=None,
+    )
+
+    assert target.view_path == "floor"
+    assert target.render_path == "wall-panel/floor"
+    assert target.stable is True
+
+
+async def test_duplicate_numeric_warning_does_not_recommend_ambiguous_alias() -> None:
+    client = _FakeAsyncClient(
+        _config_response({"views": [{"path": "home"}, {"path": "home"}]})
+    )
+
+    target = await resolve_dashboard_render_target(
+        client,
+        dashboard_path="wall-panel/1",
+        dashboard_url_path=None,
+        view_path=None,
+    )
+
+    assert target.render_path == "wall-panel/1"
+    assert "wall-panel/home" not in target.warnings[0]
+    assert "unique views[].path" in target.warnings[0]
+
+
+async def test_numeric_warning_does_not_recommend_normalization_changed_alias() -> None:
+    client = _FakeAsyncClient(_config_response({"views": [{"path": "."}]}))
+
+    target = await resolve_dashboard_render_target(
+        client,
+        dashboard_path="wall-panel/0",
+        dashboard_url_path=None,
+        view_path=None,
+    )
+
+    assert target.view_index == 0
+    assert "stable render path 'wall-panel'" not in target.warnings[0]
+    assert "unique views[].path" in target.warnings[0]
+
+
+@pytest.mark.parametrize("configured_path", ["1", "01", "1.0", "1e0", "0x1"])
+def test_numeric_coercible_named_path_uses_verified_index_fallback(
+    configured_path: str,
+) -> None:
+    config = {
+        "views": [
+            {"path": "first"},
+            {"path": "second"},
+            {"path": configured_path},
+        ]
+    }
+
+    target = resolve_dashboard_view("wall-panel", config, configured_path)
+
+    assert target.view_index == 2
+    assert target.render_path == "wall-panel/2"
+    assert target.stable is False
+    assert "numeric fallback" in target.warnings[0]
+
+
+def test_numeric_leading_non_number_path_remains_stable() -> None:
+    target = resolve_dashboard_view("wall-panel", {"views": [{"path": "1abc"}]}, "1abc")
+
+    assert target.render_path == "wall-panel/1abc"
+    assert target.stable is True
+
+
+@pytest.mark.parametrize("configured_path", ["1", "1e0"])
+async def test_raw_exact_numeric_path_precedes_index_match(
+    configured_path: str,
+) -> None:
+    client = _FakeAsyncClient(
+        _config_response({"views": [{"path": configured_path}, {"path": "second"}]})
+    )
+
+    target = await resolve_dashboard_render_target(
+        client,
+        dashboard_path=f"wall-panel/{configured_path}",
+        dashboard_url_path=None,
+        view_path=None,
+    )
+
+    assert target.view_index == 0
+    assert target.stable is False
+    assert "wall-panel/second" not in target.warnings[0]
+
+
+async def test_shadowed_numeric_fallback_uses_equivalent_unshadowed_suffix() -> None:
+    config = {
+        "views": [
+            {"path": "1"},
+            {"path": "floor/second"},
+        ]
+    }
+
+    paths, _ = dashboard_render_paths("wall-panel", config)
+    target = resolve_dashboard_view("wall-panel", config, "floor/second")
+    raw_target = await resolve_dashboard_render_target(
+        _FakeAsyncClient(_config_response(config)),
+        dashboard_path="wall-panel/1.0",
+        dashboard_url_path=None,
+        view_path=None,
+    )
+
+    assert paths[1]["render_path"] == "wall-panel/1.0"
+    assert target.render_path == "wall-panel/1.0"
+    assert raw_target.view_index == 1
+
+
+@pytest.mark.parametrize(
+    "configured_path", ["floor/second", "hass-unused-entities", ".", " home "]
+)
+def test_unusable_configured_paths_use_verified_numeric_fallback(
+    configured_path: str,
+) -> None:
+    paths, warnings = dashboard_render_paths(
+        "wall-panel", {"views": [{"path": configured_path}]}
+    )
+
+    assert paths[0]["view_path"] == configured_path
+    assert paths[0]["render_path"] == "wall-panel/0"
+    assert paths[0]["stable"] is False
+    assert paths[0]["invalid_path"] is True
+    assert warnings
+
+
+def test_exact_whitespace_view_path_resolves_to_numeric_fallback() -> None:
+    target = resolve_dashboard_view(
+        "wall-panel", {"views": [{"path": " home "}]}, " home "
+    )
+
+    assert target.view_path == " home "
+    assert target.render_path == "wall-panel/0"
+    assert target.stable is False
+
+
+@pytest.mark.parametrize(
+    "dashboard_path",
+    ["lovelace/hass-unused-entities", "wall-panel/hass-unused-entities"],
+)
+async def test_raw_reserved_view_suffix_is_rejected(
+    dashboard_path: str,
+) -> None:
+    client = _FakeAsyncClient()
+
+    with pytest.raises(ToolError) as exc_info:
+        await resolve_dashboard_render_target(
+            client,
+            dashboard_path=dashboard_path,
+            dashboard_url_path=None,
+            view_path=None,
+        )
+
+    assert _tool_error(exc_info)["error"]["code"] == ("VALIDATION_INVALID_PARAMETER")
+    assert client.requests == []
 
 
 async def test_raw_dashboard_base_is_reported_as_unstable() -> None:
@@ -482,21 +881,21 @@ async def test_structured_addressing_rejects_unsafe_dashboard_before_fetch() -> 
     assert client.requests == []
 
 
-async def test_structured_addressing_rejects_unsafe_named_view() -> None:
+async def test_structured_addressing_falls_back_for_unsafe_named_view() -> None:
     client = _FakeAsyncClient(
         _config_response({"views": [{"path": "home?redirect=evil"}]})
     )
 
-    with pytest.raises(ToolError) as exc_info:
-        await resolve_dashboard_render_target(
-            client,
-            dashboard_path=None,
-            dashboard_url_path="wall-panel",
-            view_path="home?redirect=evil",
-        )
+    target = await resolve_dashboard_render_target(
+        client,
+        dashboard_path=None,
+        dashboard_url_path="wall-panel",
+        view_path="home?redirect=evil",
+    )
 
-    error = _tool_error(exc_info)
-    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert target.render_path == "wall-panel/0"
+    assert target.stable is False
+    assert "unsafe" in target.warnings[0]
     assert client.requests == [
         {
             "type": "lovelace/config",

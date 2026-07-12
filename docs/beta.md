@@ -177,6 +177,23 @@ token grants. If the token is missing or invalid, Puppet lands on the login
 page and (by its design) restarts; ha-mcp surfaces this as a clear "set the
 engine's access token" error rather than a silent failure.
 
+Puppet's theme and dark-mode renderer controls dispatch Home Assistant's
+`settheme` event and can persist preferences on the frontend profile used by
+that token; even a fresh Puppet browser's first default render may save the
+default theme/dark selection. Use a dedicated Puppet account so screenshot QA
+does not alter a person's normal frontend preferences. Language selection is
+local to Puppet's browser session.
+
+On HA OS / Supervised auto-discovery installs, the standalone screenshot tool
+can manage Puppet's non-secret `keep_browser_open` option with
+`puppet_keep_browser_open=true|false`, and can apply it immediately with
+`puppet_restart=true`. This operation is unavailable for explicit sidecar URLs
+and has no slug parameter: it discovers an installed `*_puppet` add-on, verifies
+the Puppet name and schema, merges the one allowed field into the full existing
+options, and can restart only that add-on. It never accepts, exposes, or
+intentionally changes `access_token` or `home_assistant_url`. Omit a dashboard
+target to use this management-only mode.
+
 **Puppet's HTTP listener has no inbound auth, and it publishes host port
 10000.** Anyone who can reach `http://<ha-host>:10000` can pull
 fully-authenticated dashboard renders. Keep it on a trusted network only — do
@@ -204,6 +221,15 @@ ordered batch using `mobile` (390x844), `tablet` (768x1024), and `desktop`
 WebP, and BMP are supported by Puppet and carry their matching MIME type, but
 client/model support for less-common image formats varies.
 
+Raw image responses are streamed under server safety limits of 20 MiB per
+image and 40 MiB per batch before MCP base64 encoding. Oversize responses use
+the distinct `IMAGE_PAYLOAD_TOO_LARGE` error class. If one viewport in a batch
+fails after another succeeded, the successful native image blocks are retained.
+The standalone tool reports `partial=true`; dashboard get/set workflows report
+`screenshot_partial=true`; both include ordered `screenshot_failures` entries
+identifying the failed preset and failure class. The call errors only when every
+requested viewport fails.
+
 The structured `screenshots` metadata binds each image to its `content_index`,
 render path, viewport, engine request, local capture options, byte length, MIME
 type, and SHA-256 digest. Puppet does not report whether Home Assistant accepted
@@ -215,7 +241,10 @@ Pass `height="auto"` or the backwards-compatible `full_page=true` to ask Puppet
 to size the capture to the rendered content. Stock Puppet caps auto-height at
 4000 px. It does not expose scroll position, total page height, or segment
 capture, so dashboards beyond that limit remain clipped; true ordered scroll
-segments require an upstream engine capability.
+segments require an upstream engine capability. For the backwards-compatible
+`full_page=true` alias only, an HTTP 400 from Puppet versions older than 2.5.0
+triggers the legacy 4096 px fixed-height retry and reports
+`legacy_full_page_fallback=true`; explicit `height="auto"` remains strict.
 
 **Current engine limits.** Puppet does not expose a device-pixel-ratio control,
 confirmed applied-context metadata, or segmented scrolling. ha-mcp also cannot
@@ -227,10 +256,12 @@ images remain the only transport, avoiding unauthenticated persisted artifacts.
 both `include_screenshot` and `return_screenshot` return the dashboard config /
 write result with a `warnings` entry. `return_screenshot` (set) also degrades a
 render failure to a warning so it never breaks a write that already committed.
-`include_screenshot` (get) is a pure read where the screenshot *is* the
-requested payload, so a render failure surfaces as an error (matching the
-standalone `ha_get_dashboard_screenshot` tool) rather than a warning a caller
-might miss.
+`include_screenshot` (get) does not commit a dashboard/config write, and the
+screenshot *is* the requested payload, so a total render failure surfaces as
+an error (matching the standalone `ha_get_dashboard_screenshot` tool) rather
+than a warning a caller might miss. Because Puppet can persist theme/dark
+preferences, screenshot operations are blocked in server Read Only Mode;
+ordinary dashboard get/list/search calls remain available.
 
 **Raw rendered paths remain constrained.** `ha_get_dashboard_screenshot`
 validates legacy `dashboard_path` values (rejects URLs, query strings,

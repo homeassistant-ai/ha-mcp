@@ -28,6 +28,7 @@ from ..dashboard_screenshot.capture import (
 from ..dashboard_screenshot.content import (
     dashboard_image_content,
     dashboard_screenshot_metadata,
+    dashboard_screenshot_warnings,
 )
 from ..dashboard_screenshot.paths import (
     dashboard_frontend_path,
@@ -997,34 +998,38 @@ async def _attach_dashboard_render_paths_after_write(
     client: Any,
     result: dict[str, Any],
     url_path: str,
-    config: dict[str, Any] | None = None,
+    fallback_config: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Attach post-write render routes without turning metadata into failure."""
-    if config is None:
-        try:
-            config, _ = await _get_dashboard_config_internal(client, url_path)
-        except ToolError as exc:
-            result.setdefault("warnings", []).append(
-                "Canonical render paths unavailable after the dashboard write: "
-                f"{extract_tool_error_message(exc)}"
-            )
-            return None
-        except Exception as exc:
-            # The dashboard write already committed. Metadata enrichment must
-            # not turn a successful mutation into a reported failure when the
-            # follow-up read hits a raw transport or parsing exception.
-            logger.warning(
-                "Could not fetch canonical render paths after writing %s: %s",
-                url_path,
-                exc,
-                exc_info=True,
-            )
-            result.setdefault("warnings", []).append(
-                f"Canonical render paths unavailable after the dashboard write: {exc}"
-            )
-            return None
-    _attach_dashboard_render_paths(result, url_path, config)
-    return config
+    """Attach authoritative post-write routes without masking a committed write.
+
+    Home Assistant may normalize the submitted dashboard config. Always read it
+    back before claiming canonical render paths. The submitted config remains a
+    screenshot-targeting fallback only when that readback fails.
+    """
+    try:
+        authoritative_config, _ = await _get_dashboard_config_internal(client, url_path)
+    except ToolError as exc:
+        result.setdefault("warnings", []).append(
+            "Canonical render paths unavailable after the dashboard write: "
+            f"{extract_tool_error_message(exc)}"
+        )
+        return fallback_config
+    except Exception as exc:
+        # The dashboard write already committed. Metadata enrichment must not
+        # turn a successful mutation into a reported failure when the follow-up
+        # read hits a raw transport or parsing exception.
+        logger.warning(
+            "Could not fetch canonical render paths after writing %s: %s",
+            url_path,
+            exc,
+            exc_info=True,
+        )
+        result.setdefault("warnings", []).append(
+            f"Canonical render paths unavailable after the dashboard write: {exc}"
+        )
+        return fallback_config
+    _attach_dashboard_render_paths(result, url_path, authoritative_config)
+    return authoritative_config
 
 
 def _note_screenshot_ignored(
@@ -1080,6 +1085,7 @@ async def _capture_dashboard_screenshot_result(
         if target.warnings:
             result.setdefault("warnings", []).extend(target.warnings)
 
+    capture_failures: list[dict[str, Any]] = []
     captures = await screenshot_capture.capture_dashboard_images(
         render_path,
         width=options.width,
@@ -1094,13 +1100,43 @@ async def _capture_dashboard_screenshot_result(
         language=options.language,
         image_format=options.image_format,
         render_timeout_seconds=options.render_timeout_seconds,
+        partial_failures=capture_failures,
     )
-    result["screenshot_render_path"] = render_path
-    result["screenshots"] = dashboard_screenshot_metadata(captures, render_path)
-    return ToolResult(
-        content=dashboard_image_content(captures),
-        structured_content=result,
-    )
+    # Build every fallible image/metadata object before publishing screenshot
+    # fields. The write path can then degrade serialization failures to a
+    # warning without returning content_index entries for images that vanished.
+    try:
+        image_content = dashboard_image_content(captures)
+        screenshot_metadata = dashboard_screenshot_metadata(captures, render_path)
+        structured_result = {
+            **result,
+            "screenshot_render_path": render_path,
+            "screenshots": screenshot_metadata,
+        }
+        if capture_failures:
+            structured_result["screenshot_partial"] = True
+            structured_result["screenshot_failures"] = capture_failures
+        capture_warnings = dashboard_screenshot_warnings(captures)
+        if capture_warnings:
+            structured_result["warnings"] = [
+                *structured_result.get("warnings", []),
+                *capture_warnings,
+            ]
+        return ToolResult(
+            content=image_content,
+            structured_content=structured_result,
+        )
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.IMAGE_SERIALIZATION_FAILED,
+                "Rendered dashboard images could not be packaged into the MCP response.",
+                details=str(exc),
+                context={"capture_count": len(captures), "render_path": render_path},
+            )
+        )
 
 
 async def _maybe_attach_screenshot(
@@ -1125,9 +1161,9 @@ async def _maybe_attach_screenshot(
     ``raise_on_failure`` governs what a capture failure does. The set path
     (``return_screenshot``) leaves it False: a screenshot failure must never
     break a write that already committed, so it degrades to a ``warnings``
-    entry. The get path (``include_screenshot``) passes True: it is a pure
-    read with nothing to protect, and the screenshot is the requested payload,
-    so an engine failure propagates as a ToolError (matching the dedicated
+    entry. The get path (``include_screenshot``) passes True: it does not commit
+    a dashboard/config write, and the screenshot is the requested payload, so
+    an engine failure propagates as a ToolError (matching the dedicated
     ``ha_get_dashboard_screenshot`` tool) instead of being demoted to a
     warning the caller may never inspect. A disabled feature flag is always a
     warning either way — it is an expected configuration state, not a failure.
@@ -1166,10 +1202,7 @@ async def _maybe_attach_screenshot(
     except ToolError as e:
         if raise_on_failure:
             raise
-        result.setdefault("warnings", []).append(
-            f"Screenshot unavailable: {extract_tool_error_message(e)}"
-        )
-        return result
+        return _attach_screenshot_tool_error(result, e)
     except Exception as e:
         # On the set path a screenshot failure must never break a write that
         # already committed, so catch everything non-ToolError (lazy import
@@ -1179,8 +1212,43 @@ async def _maybe_attach_screenshot(
         if raise_on_failure:
             raise
         logger.warning("Dashboard screenshot capture failed: %s", e, exc_info=True)
+        result["screenshot_error"] = {
+            "code": ErrorCode.INTERNAL_ERROR.value,
+            "message": str(e),
+        }
         result.setdefault("warnings", []).append(f"Screenshot unavailable: {e}")
         return result
+
+
+def _attach_screenshot_tool_error(
+    result: dict[str, Any], error: ToolError
+) -> dict[str, Any]:
+    """Preserve a structured capture failure on an already-committed write."""
+    try:
+        error_payload = json.loads(str(error))
+    except (json.JSONDecodeError, TypeError):
+        error_payload = {}
+    if not isinstance(error_payload, dict):
+        error_payload = {}
+    structured_error = error_payload.get("error", {})
+    if not isinstance(structured_error, dict):
+        structured_error = {}
+    screenshot_error: dict[str, Any] = {
+        "code": structured_error.get("code", ErrorCode.INTERNAL_ERROR.value),
+        "message": structured_error.get("message", str(error)),
+    }
+    screenshot_error.update(
+        {
+            key: value
+            for key, value in error_payload.items()
+            if key not in {"success", "error"}
+        }
+    )
+    result["screenshot_error"] = screenshot_error
+    result.setdefault("warnings", []).append(
+        f"Screenshot unavailable: {extract_tool_error_message(error)}"
+    )
+    return result
 
 
 class DashboardConfigTools:
@@ -1193,8 +1261,8 @@ class DashboardConfigTools:
         name="ha_config_get_dashboard",
         tags={"Dashboards"},
         annotations={
+            "destructiveHint": False,
             "idempotentHint": True,
-            "readOnlyHint": True,
             "title": "Get Dashboard",
         },
     )
@@ -1289,6 +1357,7 @@ class DashboardConfigTools:
         ] = DEFAULT_HEIGHT,
         viewport_presets: Annotated[
             list[ViewportPreset] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="With include_screenshot: ordered mobile, tablet, "
                 "and/or desktop captures. Overrides width/height.",
@@ -1317,11 +1386,17 @@ class DashboardConfigTools:
         ] = False,
         theme: Annotated[
             str | None,
-            Field(description="Screenshot frontend theme name."),
+            Field(
+                description="Screenshot frontend theme name. Puppet persists this "
+                "selection on the frontend profile used by its token."
+            ),
         ] = None,
         dark_mode: Annotated[
             bool,
-            Field(description="Render the screenshot theme in dark mode."),
+            Field(
+                description="Render the screenshot theme in dark mode. Puppet may "
+                "persist the theme/dark preference on the profile used by its token."
+            ),
         ] = False,
         language: Annotated[
             str | None,
@@ -1929,6 +2004,7 @@ class DashboardConfigTools:
         ] = DEFAULT_HEIGHT,
         viewport_presets: Annotated[
             list[ViewportPreset] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="With return_screenshot: ordered mobile, tablet, "
                 "and/or desktop captures. Overrides width/height.",
@@ -1957,11 +2033,17 @@ class DashboardConfigTools:
         ] = False,
         theme: Annotated[
             str | None,
-            Field(description="Screenshot frontend theme name."),
+            Field(
+                description="Screenshot frontend theme name. Puppet persists this "
+                "selection on the frontend profile used by its token."
+            ),
         ] = None,
         dark_mode: Annotated[
             bool,
-            Field(description="Render the screenshot theme in dark mode."),
+            Field(
+                description="Render the screenshot theme in dark mode. Puppet may "
+                "persist the theme/dark preference on the profile used by its token."
+            ),
         ] = False,
         language: Annotated[
             str | None,
@@ -2340,8 +2422,8 @@ class DashboardConfigTools:
 
     async def _save_dashboard_python_transform(
         self, url_path: str, transformed_config: dict[str, Any]
-    ) -> tuple[dict[str, Any], str]:
-        """Save transformed config and return its authoritative config and hash."""
+    ) -> tuple[dict[str, Any], str | None, str | None]:
+        """Save transformed config and best-effort reload its authoritative form."""
         save_data: dict[str, Any] = {
             "type": "lovelace/config/save",
             "config": transformed_config,
@@ -2367,11 +2449,32 @@ class DashboardConfigTools:
                 )
             )
 
-        # Re-fetch to get authoritative hash (HA may normalize after save)
-        post_save_config, new_config_hash = await _get_dashboard_config_internal(
-            self._client, url_path
-        )
-        return post_save_config, new_config_hash
+        # HA may normalize after save, so prefer an authoritative re-fetch. The
+        # mutation has already committed at this point: a follow-up read failure
+        # must not make the caller believe the write itself failed.
+        try:
+            post_save_config, new_config_hash = await _get_dashboard_config_internal(
+                self._client, url_path
+            )
+        except ToolError as exc:
+            warning = (
+                "Dashboard was updated, but its authoritative post-save config "
+                f"could not be reloaded: {extract_tool_error_message(exc)}"
+            )
+            return transformed_config, None, warning
+        except Exception as exc:
+            logger.warning(
+                "Could not reload dashboard %s after Python transform: %s",
+                url_path,
+                exc,
+                exc_info=True,
+            )
+            warning = (
+                "Dashboard was updated, but its authoritative post-save config "
+                f"could not be reloaded: {exc}"
+            )
+            return transformed_config, None, warning
+        return post_save_config, new_config_hash, None
 
     async def _run_dashboard_python_transform(
         self,
@@ -2404,21 +2507,28 @@ class DashboardConfigTools:
         transformed_config = self._apply_dashboard_python_transform(
             url_path, python_transform, current_config
         )
-        post_save_config, new_config_hash = await self._save_dashboard_python_transform(
-            url_path, transformed_config
-        )
+        (
+            post_save_config,
+            new_config_hash,
+            post_save_warning,
+        ) = await self._save_dashboard_python_transform(url_path, transformed_config)
 
         transform_result: dict[str, Any] = {
             "success": True,
             "action": "python_transform",
             "url_path": url_path,
             "config_hash": new_config_hash,
+            "write_committed": True,
+            "post_write_verified": post_save_warning is None,
             "python_expression": python_transform,
             "message": f"Dashboard {url_path} updated via Python transform",
         }
         if pre_resolved_from is not None:
             transform_result["resolved_from"] = pre_resolved_from
-        _attach_dashboard_render_paths(transform_result, url_path, post_save_config)
+        if post_save_warning is not None:
+            transform_result["warnings"] = [post_save_warning]
+        if post_save_warning is None:
+            _attach_dashboard_render_paths(transform_result, url_path, post_save_config)
         _attach_dashboard_skill(transform_result, MandatoryBPS)
         return await _maybe_attach_screenshot(
             transform_result,

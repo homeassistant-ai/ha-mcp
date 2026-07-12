@@ -11,7 +11,7 @@ runs real Chromium: that exercises balloob's add-on, not ha-mcp.
 A faithful FAKE engine stands in for ha-puppet, mirroring the real engine's
 HTTP contract so the capture client is exercised against the same wire shape it
 will hit in production: ``GET /<dashboard-path>?viewport=WxH&zoom=N&wait=ms&
-format=png`` returning an ``image/png`` body sized to the requested viewport.
+format=...`` returning a matching native image body sized to the requested viewport.
 For ``WIDTHxauto``, the fake uses a deterministic simulated content height.
 What is covered end-to-end here:
 
@@ -35,6 +35,7 @@ lane would only duplicate this.
 from __future__ import annotations
 
 import base64
+import json
 import struct
 import threading
 import zlib
@@ -44,6 +45,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 from test_constants import TEST_TOKEN
 
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -85,6 +87,29 @@ def _make_png(width: int, height: int) -> bytes:
     )
 
 
+def _make_bmp(width: int, height: int) -> bytes:
+    """Build a valid 24-bit BMP with the requested dimensions."""
+    row_size = (width * 3 + 3) & ~3
+    pixel_data = b"\x00" * (row_size * height)
+    file_size = 14 + 40 + len(pixel_data)
+    file_header = b"BM" + struct.pack("<IHHI", file_size, 0, 0, 54)
+    info_header = struct.pack(
+        "<IIIHHIIIIII",
+        40,
+        width,
+        height,
+        1,
+        24,
+        0,
+        len(pixel_data),
+        2835,
+        2835,
+        0,
+        0,
+    )
+    return file_header + info_header + pixel_data
+
+
 class _FakeEngine:
     """A running fake screenshot engine; records the requests it served."""
 
@@ -101,6 +126,17 @@ class _FakeEngine:
                 }
                 recorded.append({"path": parsed.path, "params": params})
                 viewport = params.get("viewport", "1280x800")
+                if params.get("lang") == "e2e-partial" and viewport.startswith("1280x"):
+                    self.send_error(504, "deterministic desktop failure")
+                    return
+                if params.get("lang") == "e2e-bad-magic":
+                    image = b"<html>not an image</html>"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(image)))
+                    self.end_headers()
+                    self.wfile.write(image)
+                    return
                 try:
                     width_text, height_text = viewport.split("x")
                     width = int(width_text)
@@ -112,12 +148,26 @@ class _FakeEngine:
                 except ValueError:
                     self.send_error(400, "bad viewport")
                     return
-                png = _make_png(width, height)
+                if params.get("lang") == "e2e-legacy" and height_text.lower() == (
+                    "auto"
+                ):
+                    self.send_error(400, "legacy engine rejects auto height")
+                    return
+                image_format = params.get("format", "png")
+                if image_format == "png":
+                    image = _make_png(width, height)
+                    mime_type = "image/png"
+                elif image_format == "bmp":
+                    image = _make_bmp(width, height)
+                    mime_type = "image/bmp"
+                else:
+                    self.send_error(400, "unsupported test format")
+                    return
                 self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                self.send_header("Content-Length", str(len(png)))
+                self.send_header("Content-Type", mime_type)
+                self.send_header("Content-Length", str(len(image)))
                 self.end_headers()
-                self.wfile.write(png)
+                self.wfile.write(image)
 
             def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
                 return  # silence test-server request logging
@@ -268,6 +318,29 @@ async def test_get_dashboard_screenshot_returns_png(
     assert last["params"].get("format") == "png", last["params"]
 
 
+async def test_non_png_format_survives_full_mcp_transport(
+    screenshot_mcp_client: Client, fake_engine: _FakeEngine
+) -> None:
+    """A non-PNG engine response keeps its MIME and bytes through FastMCP."""
+    result = await screenshot_mcp_client.call_tool(
+        "ha_get_dashboard_screenshot",
+        {
+            "dashboard_path": "lovelace/0",
+            "width": 64,
+            "height": 64,
+            "image_format": "bmp",
+        },
+    )
+
+    images = _image_blocks(result)
+    assert len(images) == 1
+    assert images[0].mimeType == "image/bmp"
+    raw = base64.b64decode(images[0].data)
+    assert raw[:2] == b"BM"
+    assert struct.unpack("<II", raw[18:26]) == (64, 64)
+    assert fake_engine.requests[-1]["params"]["format"] == "bmp"
+
+
 async def test_structured_named_view_returns_ordered_responsive_images(
     screenshot_mcp_client: Client, fake_engine: _FakeEngine
 ) -> None:
@@ -338,6 +411,46 @@ async def test_structured_named_view_returns_ordered_responsive_images(
         )
 
 
+async def test_partial_responsive_batch_survives_full_mcp_transport(
+    screenshot_mcp_client: Client,
+) -> None:
+    """One engine failure retains the other native image and ordered context."""
+    result = await screenshot_mcp_client.call_tool(
+        "ha_get_dashboard_screenshot",
+        {
+            "dashboard_path": "lovelace/0",
+            "viewport_presets": ["mobile", "desktop"],
+            "language": "e2e-partial",
+        },
+    )
+
+    payload = _parse_payload(result)
+    images = _image_blocks(result)
+    assert len(images) == 1
+    assert payload["partial"] is True
+    assert payload["screenshot_count"] == 1
+    assert payload["screenshots"][0]["viewport"]["preset"] == "mobile"
+    assert payload["screenshot_failures"][0]["capture_index"] == 1
+    assert payload["screenshot_failures"][0]["preset"] == "desktop"
+    assert payload["screenshot_failures"][0]["error"]["code"] == ("SERVICE_CALL_FAILED")
+
+
+async def test_mislabeled_engine_body_is_rejected_through_mcp(
+    screenshot_mcp_client: Client,
+) -> None:
+    with pytest.raises(ToolError) as exc_info:
+        await screenshot_mcp_client.call_tool(
+            "ha_get_dashboard_screenshot",
+            {"dashboard_path": "lovelace/0", "language": "e2e-bad-magic"},
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["success"] is False
+    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert payload["all_captures_failed"] is True
+    assert payload["screenshot_failures"][0]["received_signature_hex"]
+
+
 async def test_full_page_requests_native_auto_height(
     screenshot_mcp_client: Client, fake_engine: _FakeEngine
 ) -> None:
@@ -356,6 +469,35 @@ async def test_full_page_requests_native_auto_height(
     assert _png_dimensions(png) == (1024, _AUTO_CONTENT_HEIGHT)
     last = fake_engine.requests[-1]
     assert last["params"].get("viewport") == "1024xauto", last["params"]
+
+
+async def test_legacy_full_page_retry_surfaces_warning_through_mcp(
+    screenshot_mcp_client: Client, fake_engine: _FakeEngine
+) -> None:
+    request_count = len(fake_engine.requests)
+    result = await screenshot_mcp_client.call_tool(
+        "ha_get_dashboard_screenshot",
+        {
+            "dashboard_path": "lovelace/0",
+            "width": 900,
+            "full_page": True,
+            "language": "e2e-legacy",
+        },
+    )
+
+    payload = _parse_payload(result)
+    images = _image_blocks(result)
+    assert len(images) == 1
+    assert [
+        request["params"]["viewport"]
+        for request in fake_engine.requests[request_count:]
+    ] == ["900xauto", "900x4096"]
+    assert payload["screenshots"][0]["viewport"]["height"] == 4096
+    assert (
+        payload["screenshots"][0]["local_capture_options"]["legacy_full_page_fallback"]
+        is True
+    )
+    assert any("4096" in warning for warning in payload["warnings"])
 
 
 async def test_get_dashboard_include_screenshot(

@@ -15,14 +15,47 @@ against a mock engine in the HAOS inaddon lane
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, ClassVar, Literal
+from unittest.mock import AsyncMock
 
 import pytest
 from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
 import ha_mcp.config as config
+
+_PNG = b"\x89PNG\r\n\x1a\nunit"
+_JPEG = b"\xff\xd8\xffunit"
+_WEBP = b"RIFF\x04\x00\x00\x00WEBPunit"
+_BMP = b"BM12"
+_PUPPET_SCHEMA = [
+    {"name": "access_token"},
+    {"name": "keep_browser_open"},
+    {"name": "home_assistant_url"},
+]
+
+
+def _puppet_options(*, keep_browser_open: bool) -> dict[str, Any]:
+    return {
+        "access_token": "secret",
+        "keep_browser_open": keep_browser_open,
+        "home_assistant_url": "http://homeassistant:8123",
+    }
+
+
+def _puppet_info(*, state: str, hostname: str | None = None) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "name": "Puppet",
+        "state": state,
+        "schema": _PUPPET_SCHEMA,
+        "options": _puppet_options(keep_browser_open=False),
+    }
+    if hostname is not None:
+        info["hostname"] = hostname
+    return info
 
 
 @pytest.fixture(autouse=True)
@@ -177,6 +210,297 @@ class TestStandaloneScreenshotTool:
             item["content_index"] for item in result.structured_content["screenshots"]
         ] == [0, 1]
 
+    async def test_legacy_full_page_fallback_surfaces_warning(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
+            return DashboardRenderTarget(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                render_path="wall-panel/home",
+                view_index=0,
+                stable=True,
+            )
+
+        async def capture(*_a: Any, **_kw: Any) -> list[Any]:
+            return [
+                _fake_dashboard_capture(height=4096, legacy_full_page_fallback=True)
+            ]
+
+        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
+        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
+
+        result = await mod.DashboardScreenshotTools(
+            object()
+        ).ha_get_dashboard_screenshot(
+            dashboard_url_path="wall-panel", view_path="home", full_page=True
+        )
+
+        assert any(
+            "4096" in warning for warning in result.structured_content["warnings"]
+        )
+        assert (
+            result.structured_content["screenshots"][0]["local_capture_options"][
+                "legacy_full_page_fallback"
+            ]
+            is True
+        )
+
+    async def test_partial_batch_returns_image_and_failure_metadata(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
+            return DashboardRenderTarget(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                render_path="wall-panel/home",
+                view_index=0,
+                stable=True,
+            )
+
+        async def capture(*_a: Any, **kwargs: Any) -> list[Any]:
+            kwargs["partial_failures"].append(
+                {
+                    "success": False,
+                    "error": {"code": "TIMEOUT_API_REQUEST", "message": "timeout"},
+                    "capture_index": 1,
+                    "preset": "desktop",
+                }
+            )
+            return [_fake_dashboard_capture(width=390, height=844, preset="mobile")]
+
+        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
+        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
+
+        result = await mod.DashboardScreenshotTools(
+            object()
+        ).ha_get_dashboard_screenshot(
+            dashboard_url_path="wall-panel",
+            view_path="home",
+            viewport_presets=["mobile", "desktop"],
+        )
+
+        assert len(result.content) == 1
+        assert result.structured_content["partial"] is True
+        assert result.structured_content["screenshot_failures"][0]["preset"] == (
+            "desktop"
+        )
+
+    async def test_puppet_restart_only_returns_management_success(
+        self, monkeypatch: Any
+    ) -> None:
+        from fastmcp.tools.tool import ToolResult
+
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def configure(*_a: Any, **_kw: Any) -> dict[str, Any]:
+            return {
+                "slug": "abc_puppet",
+                "settings_changed": False,
+                "restart_requested": True,
+                "restart_verified": True,
+                "status": "restarted",
+            }
+
+        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
+
+        result = await mod.DashboardScreenshotTools(
+            object()
+        ).ha_get_dashboard_screenshot(puppet_restart=True)
+
+        assert isinstance(result, ToolResult)
+        assert result.content == []
+        assert result.structured_content["action"] == "configure_puppet"
+        assert result.structured_content["screenshot_count"] == 0
+
+    async def test_management_only_rejects_render_options_before_change(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        configure = AsyncMock()
+        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
+
+        with pytest.raises(ToolError) as exc_info:
+            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
+                puppet_keep_browser_open=True,
+                theme="Test Theme",
+            )
+
+        assert "require a dashboard target" in str(exc_info.value)
+        configure.assert_not_awaited()
+
+    async def test_invalid_capture_options_do_not_change_puppet(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
+            return DashboardRenderTarget(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                render_path="wall-panel/home",
+                view_index=0,
+                stable=True,
+            )
+
+        configure = AsyncMock()
+        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
+        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
+
+        with pytest.raises(ToolError):
+            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                viewport_presets=["mobile", "mobile"],
+                puppet_keep_browser_open=True,
+            )
+
+        configure.assert_not_awaited()
+
+    async def test_capture_failure_reports_applied_puppet_configuration(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
+            return DashboardRenderTarget(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                render_path="wall-panel/home",
+                view_index=0,
+                stable=True,
+            )
+
+        applied = {
+            "slug": "abc_puppet",
+            "settings_changed": True,
+            "restart_requested": False,
+            "status": "pending_restart",
+        }
+
+        async def configure(*_a: Any, **_kw: Any) -> dict[str, Any]:
+            return applied
+
+        async def capture(*_a: Any, **_kw: Any) -> list[Any]:
+            raise ToolError(
+                json.dumps(
+                    {
+                        "success": False,
+                        "error": {"code": "CONNECTION_FAILED", "message": "boom"},
+                    }
+                )
+            )
+
+        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
+        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
+        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
+
+        with pytest.raises(ToolError) as exc_info:
+            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                puppet_keep_browser_open=True,
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "CONNECTION_FAILED"
+        assert error["puppet_configuration_applied"] == applied
+
+    async def test_raw_capture_failure_reports_applied_puppet_configuration(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
+            return DashboardRenderTarget(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                render_path="wall-panel/home",
+                view_index=0,
+                stable=True,
+            )
+
+        applied = {"slug": "abc_puppet", "settings_changed": True}
+
+        async def configure(*_a: Any, **_kw: Any) -> dict[str, Any]:
+            return applied
+
+        async def capture(*_a: Any, **_kw: Any) -> list[Any]:
+            raise RuntimeError("unexpected capture failure")
+
+        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
+        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
+        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
+
+        with pytest.raises(ToolError) as exc_info:
+            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                puppet_keep_browser_open=True,
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "INTERNAL_ERROR"
+        assert error["puppet_configuration_applied"] == applied
+
+    async def test_metadata_failure_reports_applied_puppet_configuration(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
+            return DashboardRenderTarget(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                render_path="wall-panel/home",
+                view_index=0,
+                stable=True,
+            )
+
+        applied = {"slug": "abc_puppet", "settings_changed": True}
+
+        async def configure(*_a: Any, **_kw: Any) -> dict[str, Any]:
+            return applied
+
+        async def capture(*_a: Any, **_kw: Any) -> list[Any]:
+            return [_fake_dashboard_capture()]
+
+        def fail_metadata(*_a: Any, **_kw: Any) -> list[dict[str, Any]]:
+            raise RuntimeError("metadata failed")
+
+        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
+        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
+        monkeypatch.setattr(mod, "dashboard_screenshot_metadata", fail_metadata)
+        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
+
+        with pytest.raises(ToolError) as exc_info:
+            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                puppet_keep_browser_open=True,
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "IMAGE_SERIALIZATION_FAILED"
+        assert error["puppet_configuration_applied"] == applied
+
 
 # ---------------------------------------------------------------------------
 # Engine-URL resolution
@@ -281,14 +605,44 @@ class TestDiscoverEngineViaSupervisor:
                         ]
                     }
                 },
-                "/addons/abc_puppet/info": {"data": {"state": "stopped"}},
+                "/addons/abc_puppet/info": {"data": _puppet_info(state="stopped")},
                 "/addons/def_puppet/info": {
-                    "data": {"state": "started", "hostname": "def-puppet"}
+                    "data": _puppet_info(state="started", hostname="def-puppet")
                 },
             },
         )
         url = await provision._discover_engine_url_via_supervisor()
         assert url == "http://def-puppet:10000"
+
+    async def test_multiple_verified_started_matches_fail_closed(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {
+                    "data": {
+                        "addons": [
+                            {"slug": "abc_puppet"},
+                            {"slug": "def_puppet"},
+                        ]
+                    }
+                },
+                "/addons/abc_puppet/info": {
+                    "data": _puppet_info(state="started", hostname="abc-puppet")
+                },
+                "/addons/def_puppet/info": {
+                    "data": _puppet_info(state="started", hostname="def-puppet")
+                },
+            },
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision._discover_engine_url_via_supervisor()
+
+        assert "ambiguous" in str(exc_info.value)
 
     async def test_started_without_hostname_raises(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import provision
@@ -297,7 +651,7 @@ class TestDiscoverEngineViaSupervisor:
             monkeypatch,
             {
                 "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
-                "/addons/def_puppet/info": {"data": {"state": "started"}},
+                "/addons/def_puppet/info": {"data": _puppet_info(state="started")},
             },
         )
         with pytest.raises(ToolError) as exc:
@@ -311,7 +665,7 @@ class TestDiscoverEngineViaSupervisor:
             monkeypatch,
             {
                 "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
-                "/addons/def_puppet/info": {"data": {"state": "stopped"}},
+                "/addons/def_puppet/info": {"data": _puppet_info(state="stopped")},
             },
         )
         with pytest.raises(ToolError) as exc:
@@ -331,6 +685,501 @@ class TestDiscoverEngineViaSupervisor:
         assert "supervisor" in str(exc.value).lower()
 
 
+class TestConfigurePuppetAddon:
+    @pytest.fixture(autouse=True)
+    def _supervisor_environment(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+
+    async def test_no_supervisor_token_fails_before_api_call(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        supervisor_call = AsyncMock()
+        monkeypatch.delenv("SUPERVISOR_TOKEN")
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(dashboard_screenshot_engine_url=""),
+        )
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision.configure_puppet_addon(
+                object(), keep_browser_open=True, restart=False
+            )
+
+        assert "auto-discovery" in str(exc_info.value)
+        supervisor_call.assert_not_awaited()
+
+    async def test_explicit_engine_fails_before_api_call(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        supervisor_call = AsyncMock()
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(
+                dashboard_screenshot_engine_url="http://sidecar:10000"
+            ),
+        )
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision.configure_puppet_addon(
+                object(), keep_browser_open=True, restart=False
+            )
+
+        assert "auto-discovery" in str(exc_info.value)
+        supervisor_call.assert_not_awaited()
+
+    async def test_multiple_started_puppets_fail_closed(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        calls: list[tuple[str, str]] = []
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            **_kwargs: Any,
+        ) -> dict[str, Any]:
+            calls.append((endpoint, method))
+            if endpoint == "/addons":
+                return {
+                    "success": True,
+                    "result": {
+                        "addons": [
+                            {"slug": "abc_puppet"},
+                            {"slug": "def_puppet"},
+                        ]
+                    },
+                }
+            return {
+                "success": True,
+                "result": {
+                    "name": "Puppet",
+                    "state": "started",
+                    "schema": _PUPPET_SCHEMA,
+                    "options": _puppet_options(keep_browser_open=False),
+                },
+            }
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision.configure_puppet_addon(
+                object(), keep_browser_open=True, restart=False
+            )
+
+        assert "ambiguous" in str(exc_info.value)
+        assert all(method == "GET" for _, method in calls)
+
+    async def test_incomplete_options_fail_before_write(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        calls: list[tuple[str, str]] = []
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            **_kwargs: Any,
+        ) -> dict[str, Any]:
+            calls.append((endpoint, method))
+            if endpoint == "/addons":
+                return {
+                    "success": True,
+                    "result": {"addons": [{"slug": "abc_puppet"}]},
+                }
+            return {
+                "success": True,
+                "result": {
+                    "name": "Puppet",
+                    "state": "started",
+                    "schema": _PUPPET_SCHEMA,
+                    "options": {"keep_browser_open": False},
+                },
+            }
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision.configure_puppet_addon(
+                object(), keep_browser_open=True, restart=False
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["missing_options"] == ["access_token", "home_assistant_url"]
+        assert all(method == "GET" for _, method in calls)
+
+    @pytest.mark.parametrize(
+        ("options", "expected_text"),
+        [
+            (None, "complete options object"),
+            (
+                {
+                    "access_token": 123,
+                    "home_assistant_url": None,
+                    "keep_browser_open": "false",
+                },
+                "unexpected Puppet option types",
+            ),
+        ],
+    )
+    async def test_malformed_options_fail_before_write(
+        self, monkeypatch: Any, options: Any, expected_text: str
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        calls: list[tuple[str, str]] = []
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            **_kwargs: Any,
+        ) -> dict[str, Any]:
+            calls.append((endpoint, method))
+            if endpoint == "/addons":
+                return {
+                    "success": True,
+                    "result": {"addons": [{"slug": "abc_puppet"}]},
+                }
+            return {
+                "success": True,
+                "result": {
+                    "name": "Puppet",
+                    "state": "started",
+                    "schema": _PUPPET_SCHEMA,
+                    "options": options,
+                },
+            }
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision.configure_puppet_addon(
+                object(), keep_browser_open=True, restart=False
+            )
+
+        assert expected_text in str(exc_info.value)
+        assert all(method == "GET" for _, method in calls)
+
+    async def test_setting_update_is_merged_and_hard_scoped_to_puppet(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        calls: list[dict[str, Any]] = []
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            data: dict[str, Any] | None = None,
+            timeout: int | None = None,
+        ) -> dict[str, Any]:
+            calls.append(
+                {
+                    "endpoint": endpoint,
+                    "method": method,
+                    "data": data,
+                    "timeout": timeout,
+                }
+            )
+            if endpoint == "/addons":
+                return {
+                    "success": True,
+                    "result": {
+                        "addons": [
+                            {"slug": "other_addon", "state": "started"},
+                            {"slug": "abc_puppet", "state": "started"},
+                        ]
+                    },
+                }
+            if endpoint == "/addons/abc_puppet/info":
+                return {
+                    "success": True,
+                    "result": {
+                        "name": "Puppet",
+                        "state": "started",
+                        "schema": _PUPPET_SCHEMA,
+                        "options": _puppet_options(keep_browser_open=False),
+                    },
+                }
+            assert endpoint == "/addons/abc_puppet/options"
+            return {"success": True, "result": {}}
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+
+        result = await provision.configure_puppet_addon(
+            object(), keep_browser_open=True, restart=False
+        )
+
+        assert result["settings_changed"] is True
+        assert result["status"] == "pending_restart"
+        assert all("other_addon" not in call["endpoint"] for call in calls)
+        post = calls[-1]
+        assert post["endpoint"] == "/addons/abc_puppet/options"
+        assert post["method"] == "POST"
+        assert post["data"] == {
+            "options": {
+                "access_token": "secret",
+                "keep_browser_open": True,
+                "home_assistant_url": "http://homeassistant:8123",
+            }
+        }
+        assert "access_token" not in result
+        assert "home_assistant_url" not in result
+
+    async def test_restart_is_verified_started(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        calls: list[tuple[str, str, int | None]] = []
+        info_calls = 0
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            data: dict[str, Any] | None = None,
+            timeout: int | None = None,
+        ) -> dict[str, Any]:
+            nonlocal info_calls
+            calls.append((endpoint, method, timeout))
+            if endpoint == "/addons":
+                return {
+                    "success": True,
+                    "result": {"addons": [{"slug": "abc_puppet", "state": "started"}]},
+                }
+            if endpoint == "/addons/abc_puppet/info":
+                info_calls += 1
+                return {
+                    "success": True,
+                    "result": {
+                        "name": "Puppet",
+                        "state": "stopped" if info_calls == 2 else "started",
+                        "schema": _PUPPET_SCHEMA,
+                        "options": _puppet_options(keep_browser_open=False),
+                    },
+                }
+            assert endpoint == "/addons/abc_puppet/restart"
+            return {"success": True, "result": {}}
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+        monkeypatch.setattr(provision.asyncio, "sleep", AsyncMock())
+
+        result = await provision.configure_puppet_addon(
+            object(), keep_browser_open=None, restart=True
+        )
+
+        assert result["restart_verified"] is True
+        assert result["status"] == "restarted"
+        assert ("/addons/abc_puppet/restart", "POST", 120) in calls
+        assert info_calls == 3
+
+    async def test_schema_mismatch_fails_before_any_write(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        calls: list[str] = []
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            data: dict[str, Any] | None = None,
+            timeout: int | None = None,
+        ) -> dict[str, Any]:
+            calls.append(endpoint)
+            if endpoint == "/addons":
+                return {
+                    "success": True,
+                    "result": {"addons": [{"slug": "fake_puppet", "state": "started"}]},
+                }
+            return {
+                "success": True,
+                "result": {
+                    "name": "Not Puppet",
+                    "schema": [{"name": "keep_browser_open"}],
+                    "options": {},
+                },
+            }
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision.configure_puppet_addon(
+                object(), keep_browser_open=True, restart=True
+            )
+
+        assert "CONFIG_VALIDATION_FAILED" in str(exc_info.value)
+        assert calls == ["/addons", "/addons/fake_puppet/info"]
+
+    async def test_unchanged_value_skips_options_post(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        calls: list[tuple[str, str]] = []
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            data: dict[str, Any] | None = None,
+            timeout: int | None = None,
+        ) -> dict[str, Any]:
+            calls.append((endpoint, method))
+            if endpoint == "/addons":
+                return {
+                    "success": True,
+                    "result": {"addons": [{"slug": "abc_puppet", "state": "started"}]},
+                }
+            assert endpoint == "/addons/abc_puppet/info"
+            return {
+                "success": True,
+                "result": {
+                    "name": "Puppet",
+                    "state": "started",
+                    "schema": _PUPPET_SCHEMA,
+                    "options": _puppet_options(keep_browser_open=True),
+                },
+            }
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+
+        result = await provision.configure_puppet_addon(
+            object(), keep_browser_open=True, restart=False
+        )
+
+        assert result["settings_changed"] is False
+        assert result["status"] == "unchanged"
+        assert calls == [("/addons", "GET"), ("/addons/abc_puppet/info", "GET")]
+
+    async def test_restart_timeout_reports_prior_setting_change(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        info_calls = 0
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            data: dict[str, Any] | None = None,
+            timeout: int | None = None,
+        ) -> dict[str, Any]:
+            nonlocal info_calls
+            if endpoint == "/addons":
+                return {
+                    "success": True,
+                    "result": {"addons": [{"slug": "abc_puppet", "state": "started"}]},
+                }
+            if endpoint == "/addons/abc_puppet/info":
+                info_calls += 1
+                return {
+                    "success": True,
+                    "result": {
+                        "name": "Puppet",
+                        "state": "started" if info_calls == 1 else "stopped",
+                        "schema": _PUPPET_SCHEMA,
+                        "options": _puppet_options(keep_browser_open=False),
+                    },
+                }
+            assert endpoint in {
+                "/addons/abc_puppet/options",
+                "/addons/abc_puppet/restart",
+            }
+            return {"success": True, "result": {}}
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+        monkeypatch.setattr(provision.asyncio, "sleep", AsyncMock())
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision.configure_puppet_addon(
+                object(), keep_browser_open=True, restart=True
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert error["settings_changed"] is True
+        assert error["restart_requested"] is True
+        assert info_calls == 21
+
+    async def test_restart_poll_tool_error_preserves_restart_context(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.tools import tools_addons
+
+        info_calls = 0
+
+        async def supervisor_call(
+            _client: Any,
+            endpoint: str,
+            method: str = "GET",
+            **_kwargs: Any,
+        ) -> dict[str, Any]:
+            nonlocal info_calls
+            if endpoint == "/addons":
+                return {
+                    "success": True,
+                    "result": {"addons": [{"slug": "abc_puppet"}]},
+                }
+            if endpoint == "/addons/abc_puppet/info":
+                info_calls += 1
+                if info_calls > 1:
+                    raise ToolError(
+                        json.dumps(
+                            {
+                                "success": False,
+                                "error": {
+                                    "code": "CONNECTION_FAILED",
+                                    "message": "poll disconnected",
+                                },
+                            }
+                        )
+                    )
+                return {
+                    "success": True,
+                    "result": {
+                        "name": "Puppet",
+                        "state": "started",
+                        "schema": _PUPPET_SCHEMA,
+                        "options": _puppet_options(keep_browser_open=False),
+                    },
+                }
+            assert endpoint == "/addons/abc_puppet/restart"
+            return {"success": True, "result": {}}
+
+        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision.configure_puppet_addon(
+                object(), keep_browser_open=None, restart=True
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "CONNECTION_FAILED"
+        assert error["settings_changed"] is False
+        assert error["restart_requested"] is True
+        assert info_calls == 2
+
+
 # ---------------------------------------------------------------------------
 # Capture HTTP client
 # ---------------------------------------------------------------------------
@@ -343,11 +1192,36 @@ class _FakeResponse:
         content: bytes,
         text: str = "",
         content_type: str = "image/png",
+        content_length: int | None = None,
+        chunks: list[bytes] | None = None,
     ) -> None:
         self.status_code = status_code
         self.content = content
         self.text = text
         self.headers = {"content-type": content_type}
+        if content_length is not None:
+            self.headers["content-length"] = str(content_length)
+        self._chunks = chunks
+        self.iterated = False
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        self.iterated = True
+        chunks = self._chunks if self._chunks is not None else [self.content]
+        for chunk in chunks:
+            yield chunk
+
+
+class _FakeStreamContext:
+    def __init__(self, response: _FakeResponse | Exception) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _FakeResponse:
+        if isinstance(self._response, Exception):
+            raise self._response
+        return self._response
+
+    async def __aexit__(self, *_a: Any) -> None:
+        return None
 
 
 class _FakeAsyncClient:
@@ -355,7 +1229,7 @@ class _FakeAsyncClient:
 
     last_get: ClassVar[dict[str, Any]] = {}
     gets: ClassVar[list[dict[str, Any]]] = []
-    _next: ClassVar[_FakeResponse | Exception]
+    _next: ClassVar[_FakeResponse | Exception | list[_FakeResponse | Exception]]
 
     def __init__(self, *_a: Any, **_kw: Any) -> None:
         pass
@@ -366,14 +1240,18 @@ class _FakeAsyncClient:
     async def __aexit__(self, *_a: Any) -> None:
         return None
 
-    async def get(
-        self, url: str, params: dict[str, Any] | None = None
-    ) -> _FakeResponse:
-        _FakeAsyncClient.last_get = {"url": url, "params": params}
+    def stream(
+        self, method: str, url: str, params: dict[str, Any] | None = None
+    ) -> _FakeStreamContext:
+        _FakeAsyncClient.last_get = {
+            "url": url,
+            "params": dict(params) if params is not None else None,
+        }
         _FakeAsyncClient.gets.append(_FakeAsyncClient.last_get)
-        if isinstance(_FakeAsyncClient._next, Exception):
-            raise _FakeAsyncClient._next
-        return _FakeAsyncClient._next
+        next_response = _FakeAsyncClient._next
+        if isinstance(next_response, list):
+            next_response = next_response.pop(0)
+        return _FakeStreamContext(next_response)
 
 
 class TestCapture:
@@ -416,6 +1294,342 @@ class TestCapture:
         got = _FakeAsyncClient.last_get
         assert got["params"]["viewport"] == "1024xauto"
 
+    async def test_auto_height_and_full_page_are_true_custom_aliases(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient.gets = []
+        _FakeAsyncClient._next = _FakeResponse(200, _PNG)
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        explicit = await capture.capture_dashboard_images(
+            "lovelace/0", width=700, height="auto"
+        )
+        alias_a = await capture.capture_dashboard_images(
+            "lovelace/0", width=700, height=480, full_page=True
+        )
+        alias_b = await capture.capture_dashboard_images(
+            "lovelace/0", width=700, height=1600, full_page=True
+        )
+
+        assert [request["params"]["viewport"] for request in _FakeAsyncClient.gets] == [
+            "700xauto",
+            "700xauto",
+            "700xauto",
+        ]
+        assert [(item.width, item.height, item.orientation) for item in explicit] == [
+            (700, "auto", None)
+        ]
+        assert [(item.width, item.height, item.orientation) for item in alias_a] == [
+            (700, "auto", None)
+        ]
+        assert [(item.width, item.height, item.orientation) for item in alias_b] == [
+            (700, "auto", None)
+        ]
+
+    async def test_custom_auto_height_rejects_orientation(self) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        with pytest.raises(ToolError) as exc_info:
+            await capture.capture_dashboard_images(
+                "lovelace/0", height="auto", orientation="landscape"
+            )
+
+        assert "custom auto-height viewport" in str(exc_info.value)
+
+    async def test_preset_full_page_keeps_orientation_support(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient._next = _FakeResponse(200, _PNG)
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        result = await capture.capture_dashboard_images(
+            "lovelace/0",
+            viewport_presets=["mobile"],
+            orientation="landscape",
+            full_page=True,
+        )
+
+        assert _FakeAsyncClient.last_get["params"]["viewport"] == "844xauto"
+        assert (result[0].width, result[0].height, result[0].orientation) == (
+            844,
+            "auto",
+            "landscape",
+        )
+
+    async def test_full_page_retries_legacy_fixed_height_on_empty_400(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient.gets = []
+        _FakeAsyncClient._next = [
+            _FakeResponse(400, b"", content_type="text/plain"),
+            _FakeResponse(200, _PNG),
+        ]
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        result = await capture.capture_dashboard_images(
+            "lovelace/0", width=900, full_page=True
+        )
+
+        assert [request["params"]["viewport"] for request in _FakeAsyncClient.gets] == [
+            "900xauto",
+            "900x4096",
+        ]
+        assert result[0].height == 4096
+        assert result[0].requested["legacy_full_page_fallback"] is True
+
+    async def test_explicit_auto_does_not_use_legacy_full_page_fallback(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient.gets = []
+        _FakeAsyncClient._next = _FakeResponse(400, b"", content_type="text/plain")
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        with pytest.raises(ToolError):
+            await capture.capture_dashboard_images("lovelace/0", height="auto")
+
+        assert len(_FakeAsyncClient.gets) == 1
+
+    async def test_declared_oversize_rejected_before_body_read(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        response = _FakeResponse(200, b"12345", content_length=5)
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
+        monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 8)
+        _FakeAsyncClient._next = response
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        with pytest.raises(ToolError) as exc_info:
+            await capture.capture_dashboard_images("lovelace/0")
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
+        assert error["limit_kind"] == "image"
+        assert response.iterated is False
+
+    async def test_chunked_oversize_stops_at_limit(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
+        monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 8)
+        _FakeAsyncClient._next = _FakeResponse(200, b"", chunks=[b"123", b"45"])
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        with pytest.raises(ToolError) as exc_info:
+            await capture.capture_dashboard_images("lovelace/0")
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
+        assert error["received_bytes"] == 5
+
+    async def test_exact_payload_boundary_succeeds(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
+        monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 8)
+        _FakeAsyncClient._next = _FakeResponse(
+            200, _BMP, content_type="image/bmp", content_length=4
+        )
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        result = await capture.capture_dashboard_images(
+            "lovelace/0", image_format="bmp"
+        )
+
+        assert result[0].data == _BMP
+
+    async def test_batch_limit_identifies_second_capture(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
+        monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 6)
+        _FakeAsyncClient._next = _FakeResponse(
+            200, _BMP, content_type="image/bmp", content_length=4
+        )
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        with pytest.raises(ToolError) as exc_info:
+            await capture.capture_dashboard_images(
+                "lovelace/0",
+                viewport_presets=["mobile", "desktop"],
+                image_format="bmp",
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
+        assert error["limit_kind"] == "batch"
+        assert error["capture_index"] == 1
+        assert error["completed_count"] == 1
+        assert error["preset"] == "desktop"
+
+    async def test_partial_batch_retains_success_and_structured_failure(
+        self, monkeypatch: Any
+    ) -> None:
+        import httpx
+
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient._next = [
+            _FakeResponse(200, _PNG),
+            httpx.ReadTimeout("desktop timed out"),
+        ]
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        failures: list[dict[str, Any]] = []
+
+        result = await capture.capture_dashboard_images(
+            "lovelace/0",
+            viewport_presets=["mobile", "desktop"],
+            partial_failures=failures,
+        )
+
+        assert [item.preset for item in result] == ["mobile"]
+        assert failures[0]["error"]["code"] == "TIMEOUT_API_REQUEST"
+        assert failures[0]["capture_index"] == 1
+        assert failures[0]["completed_count"] == 1
+        assert failures[0]["preset"] == "desktop"
+
+    async def test_partial_batch_continues_after_first_failure(
+        self, monkeypatch: Any
+    ) -> None:
+        import httpx
+
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient._next = [
+            httpx.ReadTimeout("mobile timed out"),
+            _FakeResponse(200, _PNG),
+        ]
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        failures: list[dict[str, Any]] = []
+
+        result = await capture.capture_dashboard_images(
+            "lovelace/0",
+            viewport_presets=["mobile", "desktop"],
+            partial_failures=failures,
+        )
+
+        assert [item.preset for item in result] == ["desktop"]
+        assert failures[0]["capture_index"] == 0
+        assert failures[0]["completed_count"] == 0
+        assert failures[0]["preset"] == "mobile"
+
+    async def test_all_failed_batch_raises_ordered_aggregate(
+        self, monkeypatch: Any
+    ) -> None:
+        import httpx
+
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient._next = [
+            httpx.ReadTimeout("mobile timed out"),
+            httpx.ReadTimeout("desktop timed out"),
+        ]
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        failures: list[dict[str, Any]] = []
+
+        with pytest.raises(ToolError) as exc_info:
+            await capture.capture_dashboard_images(
+                "lovelace/0",
+                viewport_presets=["mobile", "desktop"],
+                partial_failures=failures,
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "TIMEOUT_API_REQUEST"
+        assert error["all_captures_failed"] is True
+        assert error["failure_count"] == 2
+        assert [
+            failure["capture_index"] for failure in error["screenshot_failures"]
+        ] == [0, 1]
+        assert [failure["preset"] for failure in error["screenshot_failures"]] == [
+            "mobile",
+            "desktop",
+        ]
+
+    async def test_batch_cap_returns_prior_capture_as_partial(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
+        monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 6)
+        _FakeAsyncClient._next = _FakeResponse(
+            200, _BMP, content_type="image/bmp", content_length=4
+        )
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        failures: list[dict[str, Any]] = []
+
+        result = await capture.capture_dashboard_images(
+            "lovelace/0",
+            viewport_presets=["mobile", "desktop"],
+            image_format="bmp",
+            partial_failures=failures,
+        )
+
+        assert [item.preset for item in result] == ["mobile"]
+        assert failures[0]["error"]["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
+        assert failures[0]["limit_kind"] == "batch"
+        assert failures[0]["capture_index"] == 1
+
     async def test_batch_presets_forward_deterministic_context(
         self, monkeypatch: Any
     ) -> None:
@@ -426,7 +1640,7 @@ class TestCapture:
 
         monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
         _FakeAsyncClient.gets = []
-        _FakeAsyncClient._next = _FakeResponse(200, b"jpeg", content_type="image/jpeg")
+        _FakeAsyncClient._next = _FakeResponse(200, _JPEG, content_type="image/jpeg")
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         captures = await capture.capture_dashboard_images(
@@ -479,6 +1693,73 @@ class TestCapture:
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images("lovelace/0", image_format="jpeg")
         assert "unexpected content type" in str(exc_info.value).lower()
+
+    @pytest.mark.parametrize(
+        ("image_format", "mime_type", "body"),
+        [
+            ("png", "image/png", _PNG),
+            ("jpeg", "image/jpeg", _JPEG),
+            ("webp", "image/webp", _WEBP),
+            ("bmp", "image/bmp", _BMP),
+        ],
+    )
+    async def test_accepts_matching_image_signatures(
+        self,
+        monkeypatch: Any,
+        image_format: Literal["png", "jpeg", "webp", "bmp"],
+        mime_type: str,
+        body: bytes,
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient._next = _FakeResponse(200, body, content_type=mime_type)
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        result = await capture.capture_dashboard_images(
+            "lovelace/0", image_format=image_format
+        )
+
+        assert result[0].data == body
+
+    @pytest.mark.parametrize(
+        ("image_format", "mime_type"),
+        [
+            ("png", "image/png"),
+            ("jpeg", "image/jpeg"),
+            ("webp", "image/webp"),
+            ("bmp", "image/bmp"),
+        ],
+    )
+    async def test_rejects_mislabeled_non_image_bytes(
+        self,
+        monkeypatch: Any,
+        image_format: Literal["png", "jpeg", "webp", "bmp"],
+        mime_type: str,
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient._next = _FakeResponse(
+            200, b"<html>login</html>", content_type=mime_type
+        )
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        with pytest.raises(ToolError) as exc_info:
+            await capture.capture_dashboard_images(
+                "lovelace/0", image_format=image_format
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert error["requested_format"] == image_format
+        assert error["received_signature_hex"]
 
     async def test_timeout_has_distinct_structured_error(
         self, monkeypatch: Any
@@ -591,18 +1872,22 @@ def _fake_dashboard_capture(
     width: int = 1280,
     height: int | Literal["auto"] = 800,
     preset: Literal["mobile", "tablet", "desktop"] | None = None,
+    image_format: Literal["png", "jpeg", "webp", "bmp"] = "png",
+    mime_type: str = "image/png",
+    data: bytes = b"\x89PNG\r\n\x1a\nfake",
+    legacy_full_page_fallback: bool = False,
 ) -> Any:
     from ha_mcp.dashboard_screenshot.capture import DashboardImageCapture
 
     return DashboardImageCapture(
-        data=b"\x89PNG\r\n\x1a\nfake",
+        data=data,
         width=width,
         height=height,
         preset=preset,
         orientation="landscape",
-        image_format="png",
-        mime_type="image/png",
-        size_bytes=12,
+        image_format=image_format,
+        mime_type=mime_type,
+        size_bytes=len(data),
         requested={
             "zoom": 1.0,
             "wait_ms": 2500,
@@ -612,6 +1897,7 @@ def _fake_dashboard_capture(
             "dark_mode": False,
             "language": None,
             "render_timeout_seconds": 60.0,
+            "legacy_full_page_fallback": legacy_full_page_fallback,
         },
     )
 
@@ -643,7 +1929,36 @@ def test_multiple_capture_content_and_metadata_stay_ordered() -> None:
     assert metadata[0]["local_capture_options"] == {
         "full_page": False,
         "render_timeout_seconds": 60.0,
+        "legacy_full_page_fallback": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("image_format", "mime_type", "data"),
+    [
+        ("jpeg", "image/jpeg", b"jpeg"),
+        ("webp", "image/webp", b"webp"),
+        ("bmp", "image/bmp", b"bmp"),
+    ],
+)
+def test_non_png_native_content_preserves_mime(
+    image_format: Literal["jpeg", "webp", "bmp"],
+    mime_type: str,
+    data: bytes,
+) -> None:
+    from ha_mcp.dashboard_screenshot.content import dashboard_image_content
+
+    content = dashboard_image_content(
+        [
+            _fake_dashboard_capture(
+                image_format=image_format,
+                mime_type=mime_type,
+                data=data,
+            )
+        ]
+    )
+
+    assert content[0].mimeType == mime_type
 
 
 class TestMaybeAttachScreenshot:
@@ -739,12 +2054,47 @@ class TestMaybeAttachScreenshot:
         # present on both the screenshot and no-screenshot paths, plus the PNG
         # as an image content block.
         assert isinstance(out, ToolResult)
-        assert out.structured_content == result
+        assert out.structured_content["success"] is True
         assert len(out.content) == 1
         assert out.content[0].type == "image"
-        assert result["screenshot_render_path"] == "my-dash"
-        assert result["screenshots"][0]["content_index"] == 0
-        assert result["screenshots"][0]["frontend_context_confirmed"] is False
+        assert out.structured_content["screenshot_render_path"] == "my-dash"
+        assert out.structured_content["screenshots"][0]["content_index"] == 0
+        assert (
+            out.structured_content["screenshots"][0]["frontend_context_confirmed"]
+            is False
+        )
+        assert "screenshots" not in result
+
+    async def test_legacy_fallback_warning_is_preserved_on_config_path(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+        )
+
+        async def ok(*_a: Any, **_kw: Any) -> list[Any]:
+            return [
+                _fake_dashboard_capture(height=4096, legacy_full_page_fallback=True)
+            ]
+
+        monkeypatch.setattr(capture, "capture_dashboard_images", ok)
+
+        out = await _maybe_attach_screenshot(
+            {"success": True}, "my-dash", requested=True, full_page=True
+        )
+
+        assert any("4096" in warning for warning in out.structured_content["warnings"])
+        assert (
+            out.structured_content["screenshots"][0]["local_capture_options"][
+                "legacy_full_page_fallback"
+            ]
+            is True
+        )
 
     async def test_named_view_and_batch_options_pass_through(
         self, monkeypatch: Any
@@ -790,7 +2140,108 @@ class TestMaybeAttachScreenshot:
         assert seen["kwargs"]["viewport_presets"] == ["mobile", "desktop"]
         assert seen["kwargs"]["theme"] == "Gerry Dark"
         assert len(out.content) == 2
-        assert result["screenshot_render_path"] == "wall-panel/home"
+        assert out.structured_content["screenshot_render_path"] == "wall-panel/home"
+
+    async def test_partial_batch_metadata_is_preserved_on_config_path(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+        )
+
+        async def partial(*_args: Any, **kwargs: Any) -> list[Any]:
+            kwargs["partial_failures"].append(
+                {
+                    "success": False,
+                    "error": {"code": "TIMEOUT_API_REQUEST", "message": "timeout"},
+                    "capture_index": 1,
+                    "preset": "desktop",
+                }
+            )
+            return [_fake_dashboard_capture(width=390, height=844, preset="mobile")]
+
+        monkeypatch.setattr(capture, "capture_dashboard_images", partial)
+
+        out = await _maybe_attach_screenshot(
+            {"success": True}, "wall-panel", requested=True
+        )
+
+        assert len(out.content) == 1
+        assert out.structured_content["screenshot_partial"] is True
+        assert out.structured_content["screenshot_failures"][0]["preset"] == ("desktop")
+
+    @pytest.mark.parametrize("raw_error", ["null", "[]"])
+    async def test_non_object_tool_error_never_breaks_committed_result(
+        self, monkeypatch: Any, raw_error: str
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+        )
+
+        async def fail(*_args: Any, **_kwargs: Any) -> list[Any]:
+            raise ToolError(raw_error)
+
+        monkeypatch.setattr(capture, "capture_dashboard_images", fail)
+        result: dict[str, Any] = {"success": True, "write_committed": True}
+
+        out = await _maybe_attach_screenshot(result, "wall-panel", requested=True)
+
+        assert out is result
+        assert out["success"] is True
+        assert out["screenshot_error"]["code"] == "INTERNAL_ERROR"
+
+    async def test_serialization_failure_does_not_publish_false_image_metadata(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+        from ha_mcp.tools import tools_config_dashboards as dashboard_tools
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+        )
+
+        async def ok(*_args: Any, **_kwargs: Any) -> list[Any]:
+            return [_fake_dashboard_capture()]
+
+        def serialization_failure(*_args: Any, **_kwargs: Any) -> list[Any]:
+            raise ToolError(
+                json.dumps(
+                    {
+                        "success": False,
+                        "error": {
+                            "code": "IMAGE_SERIALIZATION_FAILED",
+                            "message": "encode failed",
+                        },
+                    }
+                )
+            )
+
+        monkeypatch.setattr(capture, "capture_dashboard_images", ok)
+        monkeypatch.setattr(
+            dashboard_tools, "dashboard_image_content", serialization_failure
+        )
+        result: dict[str, Any] = {"success": True, "write_committed": True}
+
+        out = await dashboard_tools._maybe_attach_screenshot(
+            result, "wall-panel", requested=True
+        )
+
+        assert out is result
+        assert out["screenshot_error"]["code"] == "IMAGE_SERIALIZATION_FAILED"
+        assert "screenshots" not in out
+        assert "screenshot_render_path" not in out
 
     async def test_base_route_warning_is_preserved_when_config_is_available(
         self, monkeypatch: Any
@@ -873,7 +2324,52 @@ async def test_post_write_render_path_fetch_failure_is_only_a_warning(
 
     assert config_result is None
     assert result["success"] is True
+    assert "render_paths" not in result
     assert any("websocket disconnected" in warning for warning in result["warnings"])
+
+
+async def test_post_write_render_paths_use_authoritative_readback(
+    monkeypatch: Any,
+) -> None:
+    from ha_mcp.tools import tools_config_dashboards as dashboard_tools
+
+    submitted = {"views": [{"title": "Home", "path": "submitted"}]}
+    authoritative = {"views": [{"title": "Home", "path": "normalized"}]}
+
+    async def readback(*_args: Any, **_kwargs: Any) -> tuple[dict[str, Any], str]:
+        return authoritative, "hash"
+
+    monkeypatch.setattr(dashboard_tools, "_get_dashboard_config_internal", readback)
+    result: dict[str, Any] = {"success": True, "action": "update"}
+
+    config_result = await dashboard_tools._attach_dashboard_render_paths_after_write(
+        object(), result, "wall-panel", submitted
+    )
+
+    assert config_result is authoritative
+    assert result["render_paths"][0]["render_path"] == "wall-panel/normalized"
+
+
+async def test_post_write_readback_failure_keeps_only_screenshot_fallback(
+    monkeypatch: Any,
+) -> None:
+    from ha_mcp.tools import tools_config_dashboards as dashboard_tools
+
+    fallback = {"views": [{"title": "Home", "path": "submitted"}]}
+
+    async def boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("readback failed")
+
+    monkeypatch.setattr(dashboard_tools, "_get_dashboard_config_internal", boom)
+    result: dict[str, Any] = {"success": True, "action": "update"}
+
+    config_result = await dashboard_tools._attach_dashboard_render_paths_after_write(
+        object(), result, "wall-panel", fallback
+    )
+
+    assert config_result is fallback
+    assert "render_paths" not in result
+    assert any("readback failed" in warning for warning in result["warnings"])
 
 
 async def test_python_transform_can_return_screenshot_from_post_save_config(
@@ -896,8 +2392,8 @@ async def test_python_transform_can_return_screenshot_from_post_save_config(
 
     async def save_transform(
         _url_path: str, _config: dict[str, Any]
-    ) -> tuple[dict[str, Any], str]:
-        return transformed, "new-hash"
+    ) -> tuple[dict[str, Any], str, str | None]:
+        return transformed, "new-hash", None
 
     async def attach(
         result: dict[str, Any],
@@ -938,6 +2434,49 @@ async def test_python_transform_can_return_screenshot_from_post_save_config(
         "requested": True,
         "config": transformed,
     }
+
+
+async def test_python_transform_post_save_read_failure_reports_committed_write(
+    monkeypatch: Any,
+) -> None:
+    from ha_mcp.tools import tools_config_dashboards as dashboard_tools
+
+    tools = dashboard_tools.DashboardConfigTools(object())
+    transformed = {"views": [{"title": "New", "path": "home"}]}
+
+    async def fetch_and_verify(_url_path: str, _config_hash: str) -> dict[str, Any]:
+        return {"views": [{"title": "Old", "path": "home"}]}
+
+    def apply_transform(
+        _url_path: str, _expression: str, _config: dict[str, Any]
+    ) -> dict[str, Any]:
+        return transformed
+
+    async def save_transform(
+        _url_path: str, _config: dict[str, Any]
+    ) -> tuple[dict[str, Any], str | None, str | None]:
+        return transformed, None, "authoritative reload failed"
+
+    monkeypatch.setattr(tools, "_fetch_and_verify_dashboard_hash", fetch_and_verify)
+    monkeypatch.setattr(tools, "_apply_dashboard_python_transform", apply_transform)
+    monkeypatch.setattr(tools, "_save_dashboard_python_transform", save_transform)
+
+    result = await tools._run_dashboard_python_transform(
+        "wall-panel",
+        "old-hash",
+        "config['views'][0]['title'] = 'New'",
+        None,
+        False,
+        return_screenshot=False,
+        screenshot_options=dashboard_tools._DashboardScreenshotOptions(),
+    )
+
+    assert result["success"] is True
+    assert result["write_committed"] is True
+    assert result["post_write_verified"] is False
+    assert result["config_hash"] is None
+    assert "authoritative reload failed" in result["warnings"][0]
+    assert "render_paths" not in result
 
 
 class TestDashboardFrontendPath:

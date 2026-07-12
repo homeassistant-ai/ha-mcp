@@ -47,6 +47,7 @@ CATALOG = [
     make_tool("ha_unannotated", None),
     make_tool("ha_manage_backup", False),
     make_tool("ha_manage_addon", False),
+    make_tool("ha_config_get_dashboard", False),
 ]
 
 
@@ -96,6 +97,21 @@ class TestHelpers:
 
 class TestExemptionRules:
     """Argument-level write detection for the exempt mixed tools."""
+
+    @pytest.mark.parametrize(
+        ("args", "allowed"),
+        [
+            ({}, True),
+            ({"list_only": True}, True),
+            ({"include_screenshot": False}, True),
+            ({"include_screenshot": True}, False),
+            ({"include_screenshot": "false"}, False),
+            ({"include_screenshot": 1}, False),
+        ],
+    )
+    def test_get_dashboard(self, args, allowed):
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_config_get_dashboard"].blocked_write
+        assert (rule(args) is None) is allowed
 
     @pytest.mark.parametrize(
         ("args", "allowed"),
@@ -405,6 +421,57 @@ class TestMiddleware:
         )
         assert result == "backups"
 
+    async def test_dashboard_config_read_passes_without_screenshot(self, read_only_on):
+        mw = make_middleware()
+        call_next = AsyncMock(return_value="dashboard")
+
+        result = await mw.on_call_tool(
+            make_context(
+                "ha_config_get_dashboard",
+                {"url_path": "wall-panel", "include_screenshot": False},
+            ),
+            call_next,
+        )
+
+        assert result == "dashboard"
+
+    async def test_dashboard_config_screenshot_is_blocked(self, read_only_on):
+        mw = make_middleware()
+        call_next = AsyncMock()
+
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_config_get_dashboard",
+                    {"url_path": "wall-panel", "include_screenshot": True},
+                ),
+                call_next,
+            )
+
+        body = expect_read_only_error(excinfo)
+        assert body["tool_name"] == "ha_config_get_dashboard"
+        call_next.assert_not_called()
+
+    async def test_proxied_dashboard_screenshot_is_blocked(self, read_only_on):
+        mw = make_middleware()
+        call_next = AsyncMock()
+
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_call_write_tool",
+                    {
+                        "name": "ha_config_get_dashboard",
+                        "arguments": {"include_screenshot": True},
+                    },
+                ),
+                call_next,
+            )
+
+        body = expect_read_only_error(excinfo)
+        assert body["tool_name"] == "ha_config_get_dashboard"
+        call_next.assert_not_called()
+
     async def test_exempt_tool_write_action_blocked(self, read_only_on):
         mw = make_middleware()
         call_next = AsyncMock()
@@ -450,6 +517,7 @@ class TestTransform:
             "ha_search",
             "ha_manage_backup",
             "ha_manage_addon",
+            "ha_config_get_dashboard",
         }
 
     async def test_get_tool_hides_write_tool(self, read_only_on):
@@ -463,6 +531,7 @@ class TestTransform:
         for tool in (
             make_tool("ha_get_state", True),
             make_tool("ha_manage_backup", False),
+            make_tool("ha_config_get_dashboard", False),
         ):
             call_next = AsyncMock(return_value=tool)
             assert await transform.get_tool(tool.name, call_next) is tool
@@ -480,6 +549,7 @@ class TestExemptTableContract:
         must be deliberate (each entry means 'this tool stays callable
         in read-only mode')."""
         assert set(READ_ONLY_EXEMPT_TOOLS) == {
+            "ha_config_get_dashboard",
             "ha_manage_backup",
             "ha_manage_addon",
             "ha_manage_energy_prefs",
@@ -502,6 +572,7 @@ _SRC_TOOLS_DIR = Path(__file__).resolve().parents[3] / "src" / "ha_mcp" / "tools
 
 # Module that defines each exempt tool's ``@tool`` / ``@mcp.tool`` method.
 _EXEMPT_TOOL_MODULES = {
+    "ha_config_get_dashboard": "tools_config_dashboards.py",
     "ha_manage_backup": "backup.py",
     "ha_manage_addon": "tools_addons.py",
     "ha_manage_energy_prefs": "tools_energy.py",
@@ -520,6 +591,7 @@ _EXEMPT_TOOL_MODULES = {
 # tool likewise fails this test, telling the maintainer to re-review the
 # read-only predicate.
 _EXEMPT_INSPECTED_ARGS = {
+    "ha_config_get_dashboard": {"include_screenshot"},
     "ha_manage_backup": {"scope", "action"},
     "ha_manage_addon": {
         "action",
@@ -561,6 +633,28 @@ _ADDON_CONFIG_WRITE_PARAMS_MANIFEST = (
 # dispatch fields the predicate inspects) would silently classify as a
 # read in Read Only Mode.
 _EXEMPT_GATED_OR_READ_ARGS = {
+    "ha_config_get_dashboard": {
+        "url_path",
+        "list_only",
+        "force_reload",
+        "entity_id",
+        "card_type",
+        "heading",
+        "include_config",
+        "view_path",
+        "width",
+        "height",
+        "viewport_presets",
+        "orientation",
+        "zoom",
+        "wait_ms",
+        "full_page",
+        "theme",
+        "dark_mode",
+        "language",
+        "image_format",
+        "render_timeout_seconds",
+    },
     "ha_manage_backup": {
         # Consumed only under the (scope, action) dispatch the predicate
         # inspects: snapshot create/restore payloads...

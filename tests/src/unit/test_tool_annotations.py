@@ -1,8 +1,10 @@
 """Tests for tool annotations compliance with MCP Directory Policy.
 
-Every tool MUST have exactly one of:
+Every tool MUST declare its safety behavior with one of:
 - readOnlyHint: true - For tools that only read data
 - destructiveHint: true - For tools that modify data or have side effects
+- destructiveHint: false - For non-read-only tools whose side effects are not
+  destructive (for example, a reversible setting update or restart)
 
 Additionally, every tool SHOULD have a title for UI display.
 """
@@ -26,6 +28,10 @@ def _parse_decorator_args(decorator_args: str, func_name: str, file_name: str) -
         "destructiveHint" in decorator_args
         and "True" in decorator_args.split("destructiveHint")[1][:20]
     )
+    has_explicit_non_destructive = (
+        "destructiveHint" in decorator_args
+        and "False" in decorator_args.split("destructiveHint")[1][:20]
+    )
     has_title = "title" in decorator_args
     has_tags = "tags=" in decorator_args or "tags =" in decorator_args
 
@@ -34,6 +40,7 @@ def _parse_decorator_args(decorator_args: str, func_name: str, file_name: str) -
         "function": func_name,
         "has_read_only_hint": has_read_only,
         "has_destructive_hint": has_destructive,
+        "has_explicit_non_destructive_hint": has_explicit_non_destructive,
         "has_title": has_title,
         "has_tags": has_tags,
         "decorator_args": decorator_args.strip(),
@@ -82,6 +89,7 @@ def extract_tool_decorators(file_path: Path) -> list[dict]:
                 "function": func_name,
                 "has_read_only_hint": False,
                 "has_destructive_hint": False,
+                "has_explicit_non_destructive_hint": False,
                 "has_title": False,
                 "decorator_args": "",
             }
@@ -108,7 +116,7 @@ class TestToolAnnotations:
     """Test suite for MCP tool annotation compliance."""
 
     def test_all_tools_have_required_hint(self):
-        """Every tool must have exactly one of readOnlyHint or destructiveHint."""
+        """Every tool must explicitly describe read-only/destructive behavior."""
         tools = get_all_tools()
 
         missing_hints = []
@@ -117,8 +125,9 @@ class TestToolAnnotations:
         for tool in tools:
             has_read = tool["has_read_only_hint"]
             has_destructive = tool["has_destructive_hint"]
+            has_non_destructive = tool["has_explicit_non_destructive_hint"]
 
-            if not has_read and not has_destructive:
+            if not has_read and not has_destructive and not has_non_destructive:
                 missing_hints.append(f"{tool['file']}:{tool['function']}")
             elif has_read and has_destructive:
                 both_hints.append(f"{tool['file']}:{tool['function']}")

@@ -345,6 +345,7 @@ Toggles all write tools off, and removes ability for tools to make any write or 
 
 Mixed read/write tools whose read functionality exists nowhere else stay available with their write operations blocked:
 
+- `ha_config_get_dashboard` — config/list/search reads only; screenshot renders are blocked because Puppet can persist frontend theme/dark preferences
 - `ha_manage_backup` — only listing and viewing per-edit backups
 - `ha_manage_addon` — only HTTP GET proxy reads of add-on APIs
 - `ha_manage_energy_prefs` — only `mode='get'` and `dry_run=true` previews
@@ -416,9 +417,11 @@ The add-on uses Home Assistant Supervisor's built-in authentication. No tokens o
 The add-on requests `hassio_role: manager` (declared in `config.yaml`).
 `manager` is required for the Supervisor REST endpoints used to fetch
 add-on and system-service logs (`/addons/<slug>/logs`, `/<service>/logs`,
-`/core/logs`) — `default` returns 403 (see #1116). The role also grants
-start/stop/install/update on other add-ons, but ha-mcp only uses the
-read-side capabilities.
+`/core/logs`) — `default` returns 403 (see #1116). The role also supports
+explicit add-on management through `ha_manage_addon`. When dashboard
+screenshots are enabled, `ha_get_dashboard_screenshot` may update only the
+schema-verified Puppet add-on's `keep_browser_open` option and restart that
+same add-on; it accepts no caller-supplied slug for those operations.
 
 ---
 
@@ -512,7 +515,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_get_camera_image` — Retrieve a snapshot image from a Home Assistant camera entity.
 
 ### Dashboard
-- `ha_get_dashboard_screenshot` **(beta — dev channel only)** — Get one or more responsive images of a Home Assistant Lovelace dashboard view.
+- `ha_get_dashboard_screenshot` **(beta — dev channel only)** — Get one or more responsive images of a Home Assistant Lovelace dashboard view; can also update/restart only the schema-verified Puppet add-on's non-secret `keep_browser_open` setting.
 
 ### Dashboards
 - `ha_config_delete_dashboard` — Delete a storage-mode dashboard completely.

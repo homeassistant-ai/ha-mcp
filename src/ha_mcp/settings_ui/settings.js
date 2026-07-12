@@ -1549,7 +1549,7 @@ const FEATURE_META = {
   },
   read_only_mode: {
     label: "Read Only Mode",
-    help: "Turns all write tools off and blocks tools from making any write or destructive calls. Mixed read/write tools (backups, Apps (add-ons), energy preferences, voice pipelines, and code mode when enabled) stay listed with their write operations blocked server-side. The AI gets a clear READ_ONLY_MODE error if it tries. Mirrors the toggle at the top of the Tools tab. Off by default. Requires restart to take effect (applies live in standalone HTTP mode).",
+    help: "Turns all write tools off and blocks tools from making any write or destructive calls. Mixed read/write tools (dashboard configuration, backups, Apps (add-ons), energy preferences, voice pipelines, and code mode when enabled) stay listed with their write operations blocked server-side. Dashboard screenshots remain blocked because Puppet can persist frontend preferences. The AI gets a clear READ_ONLY_MODE error if it tries. Mirrors the toggle at the top of the Tools tab. Off by default. Requires restart to take effect (applies live in standalone HTTP mode).",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",

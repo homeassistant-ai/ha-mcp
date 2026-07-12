@@ -25,10 +25,12 @@ Tests:
 1. The addon reaches ``started`` and serves screenshots.
 2. ``ha_get_dashboard_screenshot`` returns a valid, correctly-sized PNG of
    the default dashboard (engine render + tool wiring + Image return).
-3. ``ha_config_get_dashboard(include_screenshot=True)`` returns config + PNG.
-4. ``ha_config_set_dashboard(return_screenshot=True)`` returns the write
+3. The screenshot tool can merge/restart only Puppet's ``keep_browser_open``
+   setting and the engine returns to service.
+4. ``ha_config_get_dashboard(include_screenshot=True)`` returns config + PNG.
+5. ``ha_config_set_dashboard(return_screenshot=True)`` returns the write
    result + a PNG (the dashboard create-and-see loop).
-5. AUTH PROOF: replacing the valid token with a deliberately-invalid one means
+6. AUTH PROOF: replacing the valid token with a deliberately-invalid one means
    HA Core rejects it, so the engine cannot render and the tool fails — it does
    NOT reproduce the working render. The contrast proves the configured access
    token is what authenticates (fails closed: if the token were ignored, both
@@ -38,6 +40,7 @@ Tests:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import struct
 import time
@@ -282,8 +285,16 @@ async def screenshot_engine_started(
         "ha_container_with_fresh_config did not expose an HA access token; "
         "the screenshot engine cannot authenticate without one."
     )
-    await _set_options(mcp_client, SCREENSHOT_ADDON_SLUG, {"access_token": token})
-    result = await _addon_action(mcp_client, SCREENSHOT_ADDON_SLUG, "start")
+    original_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
+    original_options = dict(original_detail.get("options") or {})
+    original_state = str(original_detail.get("state") or "stopped")
+    await _set_options(
+        mcp_client,
+        SCREENSHOT_ADDON_SLUG,
+        {**original_options, "access_token": token},
+    )
+    action = "restart" if original_state == "started" else "start"
+    result = await _addon_action(mcp_client, SCREENSHOT_ADDON_SLUG, action)
     assert result.get("success"), (
         f"Fixture failed to start screenshot engine addon: {result}"
     )
@@ -292,13 +303,24 @@ async def screenshot_engine_started(
     try:
         yield
     finally:
-        try:
-            await _addon_action(mcp_client, SCREENSHOT_ADDON_SLUG, "stop")
-            await _wait_for_state(
-                mcp_client, SCREENSHOT_ADDON_SLUG, STOPPED_STATES, timeout=30.0
-            )
-        except Exception:  # pragma: no cover - cleanup best-effort
-            LOG.exception("Teardown stop of screenshot engine addon failed")
+        await _set_options(mcp_client, SCREENSHOT_ADDON_SLUG, original_options)
+        restore_action = "restart" if original_state == "started" else "stop"
+        restore_result = await _addon_action(
+            mcp_client, SCREENSHOT_ADDON_SLUG, restore_action
+        )
+        assert restore_result.get("success"), (
+            "Fixture failed to restore screenshot engine state"
+        )
+        expected_state: str | frozenset[str] = (
+            "started" if original_state == "started" else STOPPED_STATES
+        )
+        await _wait_for_state(
+            mcp_client, SCREENSHOT_ADDON_SLUG, expected_state, timeout=30.0
+        )
+        restored_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
+        assert dict(restored_detail.get("options") or {}) == original_options, (
+            "Fixture failed to restore screenshot engine options"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +337,53 @@ async def test_addon_started_after_fixture(
         f"Screenshot engine should be ``started`` after fixture; "
         f"got state={detail.get('state')!r}"
     )
+
+
+async def test_screenshot_tool_scopes_setting_and_restart_to_puppet(
+    mcp_client: Any, screenshot_engine_started: Any
+) -> None:
+    """The integrated setting path mutates/restarts only discovered Puppet."""
+    detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
+    prior_keep_open = (detail.get("options") or {}).get("keep_browser_open")
+    assert isinstance(prior_keep_open, bool)
+    changed_keep_open = not prior_keep_open
+    try:
+        raw = await mcp_client.call_tool(
+            "ha_get_dashboard_screenshot",
+            {
+                "dashboard_path": DEFAULT_DASHBOARD_PATH,
+                "puppet_keep_browser_open": changed_keep_open,
+                "puppet_restart": True,
+            },
+        )
+        payload = parse_mcp_result(raw)
+        assert payload.get("success"), payload
+        png = _extract_png_bytes(raw)
+        assert png is not None
+        _png_dimensions(png)
+        assert payload["screenshot_count"] == 1
+        assert payload["puppet_configuration"]["slug"] == SCREENSHOT_ADDON_SLUG
+        assert payload["puppet_configuration"]["restart_verified"] is True
+        detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
+        assert detail.get("options", {}).get("keep_browser_open") is changed_keep_open
+        assert detail.get("state") == "started"
+        await _wait_engine_serving(mcp_client, context="Puppet settings restart")
+    finally:
+        restore = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_get_dashboard_screenshot",
+                {
+                    "puppet_keep_browser_open": prior_keep_open,
+                    "puppet_restart": True,
+                },
+            )
+        )
+        assert restore.get("success"), restore
+        await _wait_engine_serving(mcp_client, context="Puppet settings restore")
+        restored_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
+        assert (restored_detail.get("options") or {}).get(
+            "keep_browser_open"
+        ) is prior_keep_open
 
 
 async def test_get_dashboard_screenshot_returns_png(
@@ -461,7 +530,8 @@ async def test_token_is_what_authenticates(
         await _set_options(
             mcp_client, slug, {"access_token": "invalid-token-for-e2e-contrast"}
         )
-        await _addon_action(mcp_client, slug, "restart")
+        restart_result = await _addon_action(mcp_client, slug, "restart")
+        assert restart_result.get("success"), "Invalid-token restart failed"
         await _wait_for_state(mcp_client, slug, "started")
 
         outcome = await _engine_outcome_after_restart(mcp_client)
@@ -477,14 +547,15 @@ async def test_token_is_what_authenticates(
             )
     finally:
         await _set_options(mcp_client, slug, {"access_token": good_token})
-        await _addon_action(mcp_client, slug, "restart")
+        restore_result = await _addon_action(mcp_client, slug, "restart")
+        assert restore_result.get("success"), "Valid-token restore restart failed"
         await _wait_for_state(mcp_client, slug, "started")
+        await _wait_engine_serving(mcp_client, context="token restore")
         # Confirm the valid token actually re-committed, so a leaked invalid
         # token can't poison a retry's baseline within the session.
         detail = await _get_addon_detail(mcp_client, slug)
         assert (detail.get("options") or {}).get("access_token", "") == good_token, (
-            "Restore of the valid token did not commit; "
-            f"options.access_token unexpected: {detail.get('options')}"
+            "Restore of the valid token did not commit"
         )
 
 
@@ -492,17 +563,40 @@ async def _engine_outcome_after_restart(mcp_client: Any) -> bytes | None:
     """Return the rendered PNG after a restart, or None if the engine responds
     but cannot render (raises a non-transient ToolError).
 
-    Retries only on transient transport blips / cold-start (AssertionError on a
-    not-yet-PNG body); a ToolError from the engine itself is a terminal
-    "responded but could not render" signal and returns None.
+    Retries transient transport/timeouts and cold-start responses. Only a
+    structured, non-transient engine/render ToolError is terminal evidence
+    that the invalid credential was actually exercised.
     """
     deadline = time.monotonic() + _ENGINE_READY_TIMEOUT
     last_err: Exception | None = None
     while time.monotonic() < deadline:
         try:
             return await _screenshot(mcp_client, DEFAULT_DASHBOARD_PATH)
-        except ToolError:
-            return None
+        except ToolError as exc:
+            try:
+                payload = json.loads(str(exc))
+            except (json.JSONDecodeError, TypeError):
+                payload = None
+            error = payload.get("error") if isinstance(payload, dict) else None
+            code = error.get("code") if isinstance(error, dict) else None
+            if code == "SERVICE_CALL_FAILED" and payload.get("status_code") == 502:
+                return None
+            if (
+                code
+                in {
+                    "CONNECTION_FAILED",
+                    "CONNECTION_TIMEOUT",
+                    "TIMEOUT_API_REQUEST",
+                    "TIMEOUT_OPERATION",
+                }
+                or code is None
+            ):
+                last_err = exc
+            else:
+                raise AssertionError(
+                    "Invalid-token proof received an unexpected screenshot error "
+                    f"class: code={code!r}, status={payload.get('status_code') if isinstance(payload, dict) else None!r}"
+                ) from exc
         except _ENGINE_POLL_RETRY_ERRORS as exc:
             last_err = exc
         await asyncio.sleep(2.0)
