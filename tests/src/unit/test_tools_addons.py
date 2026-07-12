@@ -3652,28 +3652,27 @@ class TestSupervisorApiCall:
     async def test_schema_error_on_options_endpoint_classified_as_validation_failed(
         self,
     ):
-        """POST /addons/*/options schema reject => VALIDATION_FAILED via classifier."""
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
+        """POST /addons/*/options schema reject => VALIDATION_FAILED via classifier.
+
+        The pooled client (issue #1813) collapses the WS command failure into
+        ``{"success": False, "error": ...}``; _supervisor_api_call re-raises it
+        as HomeAssistantCommandError so the same classifier maps the schema
+        message to VALIDATION_FAILED.
+        """
         from ha_mcp.tools.tools_addons import _supervisor_api_call
 
-        mock_ws = MagicMock()
-        mock_ws.disconnect = AsyncMock()
-        mock_ws.send_command = AsyncMock(
-            side_effect=HomeAssistantCommandError(
-                "Command failed: Missing option 'authorized_keys' in ssh "
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: Missing option 'authorized_keys' in ssh "
                 "in SSH (core_ssh)",
-            )
+            }
         )
 
-        with (
-            patch(
-                "ha_mcp.tools.tools_addons.get_connected_ws_client",
-                return_value=(mock_ws, None),
-            ),
-            pytest.raises(ToolError) as exc_info,
-        ):
+        with pytest.raises(ToolError) as exc_info:
             await _supervisor_api_call(
-                _make_mock_client(),
+                client,
                 "/addons/core_ssh/options",
                 method="POST",
                 data={"options": {"ssh": {"sftp": True}}},
@@ -3691,26 +3690,19 @@ class TestSupervisorApiCall:
         because "authorized_keys" contains "auth"; the phrase-list fix
         in _classify_by_message closes that without endpoint gating.
         """
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
         from ha_mcp.tools.tools_addons import _supervisor_api_call
 
-        mock_ws = MagicMock()
-        mock_ws.disconnect = AsyncMock()
-        mock_ws.send_command = AsyncMock(
-            side_effect=HomeAssistantCommandError(
-                "Command failed: Missing option 'authorized_keys' in ssh",
-            )
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: Missing option 'authorized_keys' in ssh",
+            }
         )
 
-        with (
-            patch(
-                "ha_mcp.tools.tools_addons.get_connected_ws_client",
-                return_value=(mock_ws, None),
-            ),
-            pytest.raises(ToolError) as exc_info,
-        ):
+        with pytest.raises(ToolError) as exc_info:
             await _supervisor_api_call(
-                _make_mock_client(),
+                client,
                 "/addons/core_ssh/info",
                 method="GET",
             )
@@ -3729,31 +3721,34 @@ class TestSupervisorApiCallTimeout:
 
     @pytest.mark.asyncio
     async def test_long_timeout_extends_local_wait(self):
-        """timeout=1800 forwards to Supervisor AND extends the local await."""
+        """timeout=1800 forwards to Supervisor AND extends the local await.
+
+        The control fields ride inside the pooled ``send_websocket_message``
+        payload (issue #1813): ``timeout`` reaches Supervisor, ``_wait_timeout``
+        is consumed by send_command and never leaves the process.
+        """
         from ha_mcp.tools.tools_addons import _supervisor_api_call
 
-        mock_ws = MagicMock()
-        mock_ws.disconnect = AsyncMock()
-        mock_ws.send_command = AsyncMock(return_value={"success": True, "result": {}})
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {}}
+        )
 
-        with patch(
-            "ha_mcp.tools.tools_addons.get_connected_ws_client",
-            return_value=(mock_ws, None),
-        ):
-            await _supervisor_api_call(
-                _make_mock_client(),
-                "/store/addons/local_ha_mcp_screenshot/install",
-                method="POST",
-                timeout=1800,
-            )
+        await _supervisor_api_call(
+            client,
+            "/store/addons/local_ha_mcp_screenshot/install",
+            method="POST",
+            timeout=1800,
+        )
 
-        kwargs = mock_ws.send_command.call_args.kwargs
+        message = client.send_websocket_message.call_args.args[0]
+        assert message["type"] == "supervisor/api"
         # Supervisor-side proxy timeout is forwarded as the command field...
-        assert kwargs["timeout"] == 1800
+        assert message["timeout"] == 1800
         # ...and the client's own await outlasts it by a margin (the old
         # hard-coded 30s default would have fired ~1770s too early). The
-        # control kwarg is underscored so it can't collide with a message field.
-        assert kwargs["_wait_timeout"] == 1815.0
+        # control key is underscored so it can't collide with a message field.
+        assert message["_wait_timeout"] == 1815.0
 
     @pytest.mark.asyncio
     async def test_no_timeout_keeps_default_local_wait(self):
@@ -3761,19 +3756,16 @@ class TestSupervisorApiCallTimeout:
         and no ``timeout`` field is forwarded to Supervisor."""
         from ha_mcp.tools.tools_addons import _supervisor_api_call
 
-        mock_ws = MagicMock()
-        mock_ws.disconnect = AsyncMock()
-        mock_ws.send_command = AsyncMock(return_value={"success": True, "result": {}})
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {}}
+        )
 
-        with patch(
-            "ha_mcp.tools.tools_addons.get_connected_ws_client",
-            return_value=(mock_ws, None),
-        ):
-            await _supervisor_api_call(_make_mock_client(), "/addons", method="GET")
+        await _supervisor_api_call(client, "/addons", method="GET")
 
-        kwargs = mock_ws.send_command.call_args.kwargs
-        assert kwargs["_wait_timeout"] == 30.0
-        assert "timeout" not in kwargs
+        message = client.send_websocket_message.call_args.args[0]
+        assert message["_wait_timeout"] == 30.0
+        assert "timeout" not in message
 
 
 class TestManageAddonActionMode:

@@ -270,106 +270,101 @@ class TestSummarizeBackup:
 
 
 class TestListBackups:
-    """list_backups surfaces HA's backup/info inventory, newest first (#1586)."""
+    """list_backups surfaces HA's backup/info inventory, newest first (#1586).
+
+    Since issue #1813 the single ``backup/info`` query routes through the shared
+    pooled client (``client.send_websocket_message``) instead of a per-call
+    dedicated WebSocket connection.
+    """
 
     @staticmethod
-    def _client() -> MagicMock:
+    def _client(info_response: dict) -> MagicMock:
         client = MagicMock()
         client.base_url = "http://test"
         client.token = "token"
         client.verify_ssl = False
+        client.send_websocket_message = AsyncMock(return_value=info_response)
         return client
 
     @pytest.mark.asyncio
     async def test_lists_backups_newest_first(self):
-        ws = AsyncMock()
-        ws.send_command.return_value = {
-            "success": True,
-            "result": {
-                "backups": [
-                    {
-                        "backup_id": "old",
-                        "name": "Old",
-                        "date": "2026-06-01T00:00:00+00:00",
-                        "agents": {"backup.local": {"size": 10}},
-                    },
-                    {
-                        "backup_id": "new",
-                        "name": "New",
-                        "date": "2026-06-10T00:00:00+00:00",
-                        "agents": {"backup.local": {"size": 20}},
-                    },
-                ]
-            },
-        }
-        with patch(
-            "ha_mcp.tools.backup.get_connected_ws_client",
-            new=AsyncMock(return_value=(ws, None)),
-        ):
-            result = await list_backups(self._client())
+        client = self._client(
+            {
+                "success": True,
+                "result": {
+                    "backups": [
+                        {
+                            "backup_id": "old",
+                            "name": "Old",
+                            "date": "2026-06-01T00:00:00+00:00",
+                            "agents": {"backup.local": {"size": 10}},
+                        },
+                        {
+                            "backup_id": "new",
+                            "name": "New",
+                            "date": "2026-06-10T00:00:00+00:00",
+                            "agents": {"backup.local": {"size": 20}},
+                        },
+                    ]
+                },
+            }
+        )
+        with patch("ha_mcp.tools.backup.get_connected_ws_client") as dedicated:
+            result = await list_backups(client)
 
         assert result["success"] is True
         assert result["count"] == 2
         assert result["total"] == 2
         assert [b["backup_id"] for b in result["backups"]] == ["new", "old"]
-        ws.send_command.assert_awaited_with("backup/info")
+        # Pooled transport, single command, no per-call dedicated connection.
+        client.send_websocket_message.assert_awaited_once_with({"type": "backup/info"})
+        dedicated.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_limit_truncates_but_reports_total(self):
-        ws = AsyncMock()
-        ws.send_command.return_value = {
-            "success": True,
-            "result": {
-                "backups": [
-                    {
-                        "backup_id": f"b{i}",
-                        "date": f"2026-06-{i + 1:02d}T00:00:00+00:00",
-                    }
-                    for i in range(5)
-                ]
-            },
-        }
-        with patch(
-            "ha_mcp.tools.backup.get_connected_ws_client",
-            new=AsyncMock(return_value=(ws, None)),
-        ):
-            result = await list_backups(self._client(), limit=2)
+        client = self._client(
+            {
+                "success": True,
+                "result": {
+                    "backups": [
+                        {
+                            "backup_id": f"b{i}",
+                            "date": f"2026-06-{i + 1:02d}T00:00:00+00:00",
+                        }
+                        for i in range(5)
+                    ]
+                },
+            }
+        )
+        result = await list_backups(client, limit=2)
 
         assert result["count"] == 2
         assert result["total"] == 5
 
     @pytest.mark.asyncio
     async def test_backup_info_failure_raises(self):
-        ws = AsyncMock()
-        ws.send_command.return_value = {"success": False, "error": "nope"}
-        with (
-            patch(
-                "ha_mcp.tools.backup.get_connected_ws_client",
-                new=AsyncMock(return_value=(ws, None)),
-            ),
-            pytest.raises(ToolError),
-        ):
-            await list_backups(self._client())
+        # The pooled client collapses a failed WS command into
+        # ``{"success": False, ...}``; the guard raises a structured ToolError.
+        client = self._client({"success": False, "error": "nope"})
+        with pytest.raises(ToolError):
+            await list_backups(client)
 
     @pytest.mark.asyncio
     async def test_undated_entry_sinks_last(self):
         # An entry with a missing/unparseable date must not crash the sort
         # (datetime vs None) — it sinks below dated entries via the floor.
-        ws = AsyncMock()
-        ws.send_command.return_value = {
-            "success": True,
-            "result": {
-                "backups": [
-                    {"backup_id": "undated"},
-                    {"backup_id": "dated", "date": "2026-06-10T00:00:00+00:00"},
-                ]
-            },
-        }
-        with patch(
-            "ha_mcp.tools.backup.get_connected_ws_client",
-            new=AsyncMock(return_value=(ws, None)),
-        ):
-            result = await list_backups(self._client())
+        client = self._client(
+            {
+                "success": True,
+                "result": {
+                    "backups": [
+                        {"backup_id": "undated"},
+                        {"backup_id": "dated", "date": "2026-06-10T00:00:00+00:00"},
+                    ]
+                },
+            }
+        )
+        result = await list_backups(client)
 
         assert result["success"] is True
         assert [b["backup_id"] for b in result["backups"]] == ["dated", "undated"]

@@ -12,8 +12,19 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
+from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from .auto_backup import with_auto_backup
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -23,6 +34,88 @@ from .helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _build_zone_result(
+    zones: list[dict[str, Any]], zone_id: str | None
+) -> dict[str, Any]:
+    """Assemble the ha_get_zone response from a list of zone records.
+
+    Shared by the legacy ``zone/list`` path and the component ``helpers_list``
+    path so the two produce an identical envelope. Without ``zone_id`` returns
+    the full list; with one, returns that single zone or raises
+    RESOURCE_NOT_FOUND — byte-identical to the original inline logic.
+    """
+    if zone_id is None:
+        return {
+            "success": True,
+            "count": len(zones),
+            "zones": zones,
+            "message": f"Found {len(zones)} zone(s)",
+        }
+
+    zone = next((z for z in zones if z.get("id") == zone_id), None)
+    if zone is None:
+        available_ids = [z.get("id") for z in zones[:10]]  # Show first 10
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Zone not found: {zone_id}",
+                context={
+                    "zone_id": zone_id,
+                    "available_zone_ids": available_ids,
+                },
+                suggestions=[
+                    "Use ha_get_zone() without zone_id to see all available zones"
+                ],
+            )
+        )
+    return {
+        "success": True,
+        "zone_id": zone_id,
+        "zone": zone,
+    }
+
+
+def _shape_component_zone_record(rec: dict[str, Any]) -> dict[str, Any]:
+    """Map one component ``helpers_list`` zone record onto the legacy zone shape.
+
+    The legacy ``zone/list`` record is the storage body itself (``id`` = storage
+    id, ``name``, ``latitude`` / ``longitude`` / ``radius`` / ``passive`` /
+    ``icon``). The component supplies that same body as ``config`` plus the
+    authoritative ``storage_id`` — ``None`` for a YAML-defined zone, whose config
+    core's ``Zone.__init__`` still retains, so ``home`` and other YAML zones that
+    ``zone/list`` structurally omits come through here. Keep the legacy body and
+    additively stamp an ``editable`` / ``source`` discriminator derived from
+    ``storage_id is None`` (YAML zones are not editable via the storage API).
+    """
+    config = rec.get("config")
+    out: dict[str, Any] = dict(config) if isinstance(config, dict) else {}
+    # storage_id is NOT a YAML discriminator: for state-only records the
+    # component backfills it with the registry unique_id or object_id, so a
+    # YAML zone (incl. ``home``) arrives with a non-null storage_id. The
+    # reliable signal is the body itself — a state-attribute body carries
+    # core's ATTR_EDITABLE (False for YAML zones), while a real storage body
+    # never has the key.
+    is_yaml = out.get("editable") is False
+    storage_id = rec.get("storage_id")
+    # Storage zones keep their storage id (the key ha_get_zone matches on);
+    # YAML zones get their object_id so they can still be fetched by zone_id.
+    out["id"] = storage_id if storage_id is not None else rec.get("object_id")
+    out["editable"] = not is_yaml
+    out["source"] = "yaml" if is_yaml else "storage"
+    return out
+
+
+def _shape_component_zone_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Reshape the component's zone ``helpers_list`` result into legacy rows."""
+    raw = result.get("helpers")
+    records = raw if isinstance(raw, list) else []
+    return [
+        _shape_component_zone_record(rec)
+        for rec in records
+        if isinstance(rec, dict) and rec.get("helper_type") == "zone"
+    ]
 
 
 class ZoneTools:
@@ -63,10 +156,26 @@ class ZoneTools:
         - List all zones: ha_get_zone()
         - Get specific zone: ha_get_zone(zone_id="abc123")
 
-        **NOTE:** This returns storage-based zones (created via UI/API), not YAML-defined zones.
-        The 'home' zone is typically defined in YAML and may not appear in this list.
+        **NOTE:** With the ha_mcp_tools custom component installed, YAML-defined
+        zones — including the auto-synthesized 'home' zone — are included and
+        marked ``editable=false`` / ``source="yaml"`` (storage zones created via
+        UI/API are ``source="storage"``). Without the component, only storage
+        zones are listed and YAML-defined zones such as 'home' will not appear.
         """
         try:
+            # Prefer the ha_mcp_tools component's helpers_list: core's zone/list
+            # serves only the storage collection, so YAML-defined zones —
+            # including the auto-synthesized 'home' zone — are structurally
+            # absent. The component enumerates them (each with storage_id=None),
+            # filling that gap. Falls back cleanly to the legacy zone/list body
+            # below when the component is absent, downlevel, or errors — the
+            # taxonomy lives in ``_get_zone_via_component``.
+            caps = await get_component_caps(self._client)
+            if component_supports(caps, "helpers_list"):
+                component_response = await self._get_zone_via_component(zone_id)
+                if component_response is not None:
+                    return component_response
+
             message: dict[str, Any] = {
                 "type": "zone/list",
             }
@@ -82,39 +191,7 @@ class ZoneTools:
                     )
                 )
 
-            zones = result.get("result", [])
-
-            if zone_id is None:
-                return {
-                    "success": True,
-                    "count": len(zones),
-                    "zones": zones,
-                    "message": f"Found {len(zones)} zone(s)",
-                }
-
-            zone = next((z for z in zones if z.get("id") == zone_id), None)
-
-            if zone is None:
-                available_ids = [z.get("id") for z in zones[:10]]  # Show first 10
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Zone not found: {zone_id}",
-                        context={
-                            "zone_id": zone_id,
-                            "available_zone_ids": available_ids,
-                        },
-                        suggestions=[
-                            "Use ha_get_zone() without zone_id to see all available zones"
-                        ],
-                    )
-                )
-
-            return {
-                "success": True,
-                "zone_id": zone_id,
-                "zone": zone,
-            }
+            return _build_zone_result(result.get("result", []), zone_id)
 
         except ToolError:
             raise
@@ -130,6 +207,78 @@ class ZoneTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+
+    async def _get_zone_via_component(
+        self, zone_id: str | None
+    ) -> dict[str, Any] | None:
+        """Serve ha_get_zone from the component's helpers_list; ``None`` ⇒ legacy.
+
+        Error taxonomy mirrors ``_list_helpers_via_component`` in
+        tools_config_helpers (§ 4). ``zone`` is always in the collection
+        universe, so there is a legacy fallback for every failure:
+
+        - ``unknown_command`` (cached caps went stale after a component
+          downgrade): invalidate the caps and return ``None`` so the caller
+          serves the byte-identical legacy ``zone/list`` body, silently.
+        - any other ``HomeAssistantCommandError`` / ``HomeAssistantCommandTimeout``:
+          serve the correct result from the legacy zone list, append a
+          ``warnings[]`` entry, and ``log.warning``.
+        - a response that does not authoritatively enumerate ``zone`` (an older
+          component with no ``covered_types``): fall back to legacy silently.
+        - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
+          propagates to the tool's structured-error handler; the legacy path
+          shares the same socket and would fail identically.
+        """
+        try:
+            raw = await self._send_component_zone_list()
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+                return None
+            response = _build_zone_result(await self._legacy_zone_rows(), zone_id)
+            response.setdefault("warnings", []).append(
+                f"component zone listing failed ({exc}); served via legacy path"
+            )
+            logger.warning(
+                "ha_mcp_tools/helpers_list (zone) failed; fell back to legacy: %r",
+                exc,
+            )
+            return response
+        result = raw.get("result") or {}
+        covered = result.get("covered_types")
+        if not (isinstance(covered, list) and "zone" in covered):
+            # The component did not authoritatively enumerate zones (older
+            # component with no covered_types): don't trust its list — fall back
+            # to the legacy storage-only path silently.
+            return None
+        return _build_zone_result(_shape_component_zone_rows(result), zone_id)
+
+    async def _send_component_zone_list(self) -> dict[str, Any]:
+        """Send one ``ha_mcp_tools/helpers_list`` zone query over the per-client WS."""
+        ws = await get_websocket_client(
+            url=self._client.base_url,
+            token=self._client.token,
+            verify_ssl=getattr(self._client, "verify_ssl", None),
+        )
+        return await ws.send_command(
+            "ha_mcp_tools/helpers_list",
+            helper_types=["zone"],
+            include_flow_helpers=False,
+        )
+
+    async def _legacy_zone_rows(self) -> list[dict[str, Any]]:
+        """Fetch storage zones via the legacy ``zone/list`` WS command."""
+        result = await self._client.send_websocket_message({"type": "zone/list"})
+        if not result.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Failed to get zones"),
+                    context={},
+                )
+            )
+        rows: list[dict[str, Any]] = result.get("result", [])
+        return rows
 
     @staticmethod
     def _validate_coordinates(
@@ -252,6 +401,7 @@ class ZoneTools:
                     ],
                     context={"action": "set"},
                 )
+            fields_to_update: dict[str, Any] = {}
             if zone_id:
                 # UPDATE operation
                 operation = "update"

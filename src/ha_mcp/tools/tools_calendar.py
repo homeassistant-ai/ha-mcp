@@ -15,11 +15,11 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import HomeAssistantCommandError
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
-    get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
@@ -199,35 +199,20 @@ class CalendarTools:
         if location is not None:
             event["location"] = location
 
-        ws_client, conn_error = await get_connected_ws_client(
-            self._client.base_url,
-            self._client.token,
-            verify_ssl=self._client.verify_ssl,
+        # Route through the shared pooled WebSocket (issue #1813) instead of a
+        # dedicated connect/auth handshake per call. The pooled path collapses a
+        # failed WS command into ``{"success": False, "error": ...}``; re-raise
+        # it as the same ``HomeAssistantCommandError`` the dedicated send_command
+        # used to raise so the caller's error handler still attaches the
+        # rrule-specific suggestions.
+        result = await self._client.send_websocket_message(
+            {"type": "calendar/event/create", "entity_id": entity_id, "event": event}
         )
-        if conn_error or ws_client is None:
-            raise_tool_error(
-                conn_error
-                or create_error_response(
-                    ErrorCode.CONNECTION_FAILED,
-                    "Failed to connect to Home Assistant WebSocket",
-                    context={"entity_id": entity_id},
-                )
+        if not result.get("success"):
+            raise HomeAssistantCommandError(
+                str(result.get("error", "calendar/event/create failed"))
             )
-
-        try:
-            return await ws_client.send_command(
-                "calendar/event/create", entity_id=entity_id, event=event
-            )
-        finally:
-            # Guard disconnect: a transport-teardown error here would
-            # otherwise replace the original send_command exception.
-            try:
-                await ws_client.disconnect()
-            except Exception as disconnect_error:
-                logger.debug(
-                    f"WebSocket disconnect after create_event for "
-                    f"{entity_id}: {disconnect_error}"
-                )
+        return result
 
     async def _create_simple_calendar_event(
         self,
@@ -541,35 +526,18 @@ class CalendarTools:
             if recurrence_range:
                 ws_kwargs["recurrence_range"] = recurrence_range
 
-            ws_client, conn_error = await get_connected_ws_client(
-                self._client.base_url,
-                self._client.token,
-                verify_ssl=self._client.verify_ssl,
+            # Route through the shared pooled WebSocket (issue #1813) instead of a
+            # dedicated connect/auth handshake per call. Re-raise a failed WS
+            # command as the same ``HomeAssistantCommandError`` the dedicated
+            # send_command used to raise so the outer handler builds the
+            # delete-specific suggestions (404 / not-supported).
+            result = await self._client.send_websocket_message(
+                {"type": "calendar/event/delete", **ws_kwargs}
             )
-            if conn_error or ws_client is None:
-                raise_tool_error(
-                    conn_error
-                    or create_error_response(
-                        ErrorCode.CONNECTION_FAILED,
-                        "Failed to connect to Home Assistant WebSocket",
-                        context={"entity_id": entity_id, "uid": uid},
-                    )
+            if not result.get("success"):
+                raise HomeAssistantCommandError(
+                    str(result.get("error", "calendar/event/delete failed"))
                 )
-
-            try:
-                result = await ws_client.send_command(
-                    "calendar/event/delete", **ws_kwargs
-                )
-            finally:
-                # Guard disconnect: a transport-teardown error here would
-                # otherwise replace the original send_command exception.
-                try:
-                    await ws_client.disconnect()
-                except Exception as disconnect_error:
-                    logger.debug(
-                        f"WebSocket disconnect after delete_event for "
-                        f"{entity_id} uid={uid}: {disconnect_error}"
-                    )
 
             return {
                 "success": True,

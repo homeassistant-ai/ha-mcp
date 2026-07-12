@@ -899,22 +899,15 @@ async def list_backups(client: HomeAssistantClient, limit: int = 200) -> dict[st
     confirm a specific backup landed; they had to already know the ID. Newest
     first. Read-only: no safety backup, no restart.
     """
-    ws_client = None
     try:
-        ws_client, error = await get_connected_ws_client(
-            client.base_url, client.token, verify_ssl=client.verify_ssl
-        )
-        if error:
-            raise_tool_error(
-                error
-                or create_error_response(
-                    ErrorCode.CONNECTION_FAILED,
-                    "Failed to connect to Home Assistant WebSocket to list backups",
-                )
-            )
-        ws_client = cast(HomeAssistantWebSocketClient, ws_client)
-
-        info = await ws_client.send_command("backup/info")
+        # Route through the shared pooled WebSocket (issue #1813) rather than a
+        # dedicated connect/auth handshake per call. ``list_backups`` issues a
+        # single request/response ``backup/info`` command; the pooled client
+        # owns the connection lifecycle, so there is no per-call connect or
+        # disconnect. A failed command surfaces as ``success=False`` and is
+        # handled by the guard below (send_websocket_message never raises for
+        # WS command failures).
+        info = await client.send_websocket_message({"type": "backup/info"})
         if not info.get("success"):
             raise_tool_error(
                 create_error_response(
@@ -955,18 +948,6 @@ async def list_backups(client: HomeAssistantClient, limit: int = 200) -> dict[st
             suggestions=["Check Home Assistant connection and the backup integration"],
         )
         return None  # unreachable: exception_to_structured_error always raises
-    finally:
-        # Always disconnect WebSocket — narrow to transport errors; a
-        # programming error during cleanup should still surface.
-        if ws_client:
-            try:
-                await ws_client.disconnect()
-            except (TimeoutError, OSError, ConnectionError) as err:
-                logger.debug(
-                    "ws disconnect (cleanup) transport error: %s: %s",
-                    type(err).__name__,
-                    err,
-                )
 
 
 # Valid (scope, action) combinations. Anything outside this set is

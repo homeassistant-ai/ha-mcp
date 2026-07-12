@@ -954,6 +954,120 @@ class TestSceneResponseShape:
 
 
 @pytest.mark.asyncio
+class TestSceneResolutionDedup:
+    """Issue #1813 P5 item 3: each scene tool call resolves the storage key
+    exactly once. The tool pre-resolves for its own use (entity_id resolver,
+    response echo) and threads ``_resolved=True`` into the rest-client method
+    so it does not resolve a second time. The client stub here mirrors the real
+    rest-client (re-resolves unless ``_resolved=True``), so the total
+    ``resolve_scene_id`` count across a full tool call is observable — it would
+    be 2 (set/remove) or 3 (python_transform) without the dedup."""
+
+    @staticmethod
+    def _dedup_client():
+        client = MagicMock()
+        resolve = AsyncMock(side_effect=lambda sid: sid.removeprefix("scene."))
+        client.resolve_scene_id = resolve
+
+        async def _get(scene_id, *, _resolved=False):
+            rid = scene_id if _resolved else await resolve(scene_id)
+            return {
+                "success": True,
+                "scene_id": rid,
+                "config": {
+                    "name": "Test Scene",
+                    "entities": {"light.kitchen": {"state": "on"}},
+                },
+            }
+
+        async def _upsert(config, scene_id, *, _resolved=False):
+            rid = scene_id if _resolved else await resolve(scene_id)
+            return {"success": True, "scene_id": rid, "result": "ok"}
+
+        async def _delete(scene_id, *, _resolved=False):
+            rid = scene_id if _resolved else await resolve(scene_id)
+            return {"success": True, "scene_id": rid, "operation": "deleted"}
+
+        client.get_scene_config = AsyncMock(side_effect=_get)
+        client.upsert_scene_config = AsyncMock(side_effect=_upsert)
+        client.delete_scene_config = AsyncMock(side_effect=_delete)
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        # Registry list empty → _resolve_scene_entity_id falls back to the
+        # naive slug (does not touch resolve_scene_id).
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client.get_entity_state = AsyncMock(
+            return_value={
+                "state": "2026-05-08T07:00:00+00:00",
+                "entity_id": "scene.test_scene",
+            }
+        )
+        return client
+
+    @staticmethod
+    def _tools(client, monkeypatch):
+        monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
+        return ConfigSceneTools(client)
+
+    async def test_set_scene_config_resolves_once(self, monkeypatch):
+        client = self._dedup_client()
+        tools = self._tools(client, monkeypatch)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={
+                "name": "Test Scene",
+                "entities": {"light.kitchen": {"state": "on"}},
+            },
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["scene_id"] == "test_scene"
+        assert client.resolve_scene_id.await_count == 1
+        _, kwargs = client.upsert_scene_config.call_args
+        assert kwargs.get("_resolved") is True
+
+    async def test_remove_scene_resolves_once(self, monkeypatch):
+        client = self._dedup_client()
+        tools = self._tools(client, monkeypatch)
+
+        result = await tools.ha_config_remove_scene(scene_id="test_scene", wait=False)
+
+        assert result["success"] is True
+        assert result["scene_id"] == "test_scene"
+        assert client.resolve_scene_id.await_count == 1
+        _, kwargs = client.delete_scene_config.call_args
+        assert kwargs.get("_resolved") is True
+
+    async def test_python_transform_resolves_once(self, monkeypatch):
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        client = self._dedup_client()
+        tools = self._tools(client, monkeypatch)
+
+        # The transform-path hash-verify fetch returns the stub's inner config;
+        # the hash must match to clear the optimistic-locking gate.
+        seed_hash = compute_config_hash(
+            {"name": "Test Scene", "entities": {"light.kitchen": {"state": "on"}}}
+        )
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            python_transform="config['entities']['light.kitchen']['state'] = 'off'",
+            config_hash=seed_hash,
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "python_transform"
+        # One resolution total despite hash-verify fetch + upsert + re-fetch.
+        assert client.resolve_scene_id.await_count == 1
+
+
+@pytest.mark.asyncio
 class TestPythonTransformOrphanMetadata:
     """Issue #1168 R3 blocker 5: a python_transform comprehension that
     filters ``entities`` leaves ``metadata`` orphan entries on disk

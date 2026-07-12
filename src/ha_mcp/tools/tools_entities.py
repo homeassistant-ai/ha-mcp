@@ -18,6 +18,7 @@ from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
+    extract_tool_error_message,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
@@ -31,6 +32,69 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Bounds the per-frame size of a bulk config/entity_registry/get_entries call
+# (extended entries, ~1KB each) so a large id list can't produce an over-cap
+# WebSocket frame. Matches the chunk size smart_search uses for the same
+# command. Typical bulk calls fit in a single chunk (one WS message).
+_GET_ENTRIES_CHUNK_SIZE = 500
+
+# Max entity IDs accepted by the bulk-removal path of ha_remove_entity. Mirrors
+# the cap the other bulk tools use (ha_get_state's _get_bulk_entity_states).
+_MAX_BULK_REMOVE = 100
+
+
+def _format_fetched_entity(entry: dict[str, Any]) -> dict[str, Any]:
+    """Project a raw HA entity-registry extended dict into ha_get_entity's shape.
+
+    Shared by the single-entity get, the bulk get_entries backend, and the
+    unique_id resolver so every ha_get_entity response carries the same keys.
+    """
+    return {
+        "entity_id": entry.get("entity_id"),
+        "name": entry.get("name"),
+        "original_name": entry.get("original_name"),
+        "icon": entry.get("icon"),
+        "area_id": entry.get("area_id"),
+        "disabled_by": entry.get("disabled_by"),
+        "hidden_by": entry.get("hidden_by"),
+        "enabled": entry.get("disabled_by") is None,
+        "hidden": entry.get("hidden_by") is not None,
+        "aliases": entry.get("aliases", []),
+        "labels": entry.get("labels", []),
+        "categories": entry.get("categories", {}),
+        "device_class": entry.get("device_class"),
+        "original_device_class": entry.get("original_device_class"),
+        "options": entry.get("options", {}),
+        "platform": entry.get("platform"),
+        "device_id": entry.get("device_id"),
+        "config_entry_id": entry.get("config_entry_id"),
+        "unique_id": entry.get("unique_id"),
+    }
+
+
+def _match_registry_by_unique_id(
+    entries: list[dict[str, Any]],
+    unique_id: str,
+    domain: str | None,
+    platform: str | None,
+) -> list[dict[str, Any]]:
+    """Return formatted registry entries matching unique_id (+ optional filters).
+
+    ``domain`` is compared against the entity_id prefix (the registry's unique
+    key uses the entity domain); ``platform`` against the entry's platform.
+    """
+    matches: list[dict[str, Any]] = []
+    for entry in entries:
+        if entry.get("unique_id") != unique_id:
+            continue
+        entry_domain = (entry.get("entity_id") or "").split(".")[0]
+        if domain is not None and entry_domain != domain:
+            continue
+        if platform is not None and entry.get("platform") != platform:
+            continue
+        matches.append(_format_fetched_entity(entry))
+    return matches
 
 
 def _format_entity_entry(entry: dict[str, Any]) -> dict[str, Any]:
@@ -171,33 +235,32 @@ def _parse_get_entity_ids(
     """Parse entity_id into (entity_ids, is_bulk, early_response). early_response is non-None for empty list."""
     if isinstance(entity_id, str):
         return [entity_id], False, None
-    elif isinstance(entity_id, list):
-        if not entity_id:
-            return (
-                [],
-                False,
-                {
-                    "success": True,
-                    "entity_entries": [],
-                    "count": 0,
-                    "message": "No entities requested",
-                },
-            )
-        if not all(isinstance(e, str) for e in entity_id):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "All entity_id values must be strings",
-                )
-            )
-        return entity_id, True, None
-    else:
+    if not isinstance(entity_id, list):
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
             )
         )
+    if not entity_id:
+        return (
+            [],
+            False,
+            {
+                "success": True,
+                "entity_entries": [],
+                "count": 0,
+                "message": "No entities requested",
+            },
+        )
+    if not all(isinstance(e, str) for e in entity_id):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "All entity_id values must be strings",
+            )
+        )
+    return entity_id, True, None
 
 
 def _validate_enabled_constraint(
@@ -942,6 +1005,247 @@ class EntityTools:
             device_rename_result,
         )
 
+    async def _bulk_apply_expose(
+        self,
+        entity_ids: list[str],
+        parsed_expose_to: dict[str, bool],
+    ) -> str | None:
+        """Expose/hide many entities in one homeassistant/expose_entity call per set.
+
+        The command's schema accepts the full entity_ids list, so bulk exposure
+        needs at most two WS calls (one for the assistants being turned on, one
+        for those being turned off) regardless of entity count — not one per
+        entity. Returns None on success, or the error message on the first
+        failing set. A failure is batch-level: it applies to every id in the
+        list, so the caller maps the returned message onto all of them.
+        """
+        expose_true = [a for a, v in parsed_expose_to.items() if v]
+        expose_false = [a for a, v in parsed_expose_to.items() if not v]
+        applied: list[str] = []
+        for assistants, should_expose in [(expose_true, True), (expose_false, False)]:
+            if not assistants:
+                continue
+            logger.info(
+                f"{'Exposing' if should_expose else 'Hiding'} {len(entity_ids)} "
+                f"entities {'to' if should_expose else 'from'} {assistants}"
+            )
+            result = await self._client.send_websocket_message(
+                {
+                    "type": "homeassistant/expose_entity",
+                    "assistants": assistants,
+                    "entity_ids": entity_ids,
+                    "should_expose": should_expose,
+                }
+            )
+            if not result.get("success"):
+                error = _extract_ws_error(result)
+                if applied:
+                    # The earlier assistant group already changed — say so, or
+                    # the all-failed report implies no exposure was touched.
+                    error = (
+                        f"{error} (note: expose changes for "
+                        f"{', '.join(applied)} were already applied before "
+                        "this failure)"
+                    )
+                return error
+            applied.extend(assistants)
+        return None
+
+    async def _bulk_registry_phase(
+        self,
+        entity_ids: list[str],
+        parsed_categories: dict[str, str | None] | None,
+        parsed_labels: list[str] | None,
+        label_operation: str,
+    ) -> tuple[
+        dict[str, dict[str, Any] | None],
+        dict[str, list[str]],
+        list[dict[str, Any]],
+        list[str],
+    ]:
+        """Per-entity label/category updates (no expose).
+
+        HA's entity_registry/update is single-entity, so this stays a
+        per-entity fan-out. Returns (entry_by_id, updates_by_id, failed,
+        eligible_ids); eligible_ids are the ids whose registry update
+        succeeded (all ids when there is no registry work — expose-only bulk).
+        """
+        entry_by_id: dict[str, dict[str, Any] | None] = {}
+        updates_by_id: dict[str, list[str]] = {}
+        failed: list[dict[str, Any]] = []
+
+        if parsed_labels is None and parsed_categories is None:
+            for eid in entity_ids:
+                updates_by_id[eid] = []
+            return entry_by_id, updates_by_id, failed, list(entity_ids)
+
+        eligible_ids: list[str] = []
+        results = await asyncio.gather(
+            *[
+                self._update_single_entity(
+                    eid,
+                    None,  # area_id not supported in bulk
+                    None,  # name not supported in bulk
+                    None,  # icon not supported in bulk
+                    None,  # enabled not supported in bulk
+                    None,  # hidden not supported in bulk
+                    None,  # aliases not supported in bulk
+                    parsed_categories,
+                    parsed_labels,
+                    label_operation,
+                    None,  # expose_to batched separately below
+                )
+                for eid in entity_ids
+            ],
+            return_exceptions=True,
+        )
+        for eid, result in zip(entity_ids, results, strict=True):
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                # Never swallow cancellation/shutdown into per-entity errors.
+                raise result
+            if isinstance(result, BaseException):
+                error_msg = (
+                    extract_tool_error_message(result)
+                    if isinstance(result, ToolError)
+                    else str(result)
+                )
+                failed.append({"entity_id": eid, "error": error_msg})
+            else:
+                # _update_single_entity returns success-shape or raises
+                # ToolError (caught above as BaseException).
+                entry_by_id[eid] = result.get("entity_entry")
+                updates_by_id[eid] = list(result.get("updates") or [])
+                eligible_ids.append(eid)
+        return entry_by_id, updates_by_id, failed, eligible_ids
+
+    async def _bulk_expose_phase(
+        self,
+        eligible_ids: list[str],
+        parsed_expose_to: dict[str, bool],
+        entry_by_id: dict[str, dict[str, Any] | None],
+        updates_by_id: dict[str, list[str]],
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        """Batch-expose eligible_ids, then refetch their post-exposure state.
+
+        Returns (still_eligible_ids, newly_failed). A batched-expose failure
+        is reported against every eligible id (the command acts on the whole
+        list atomically) — matching the old per-entity path where each entity
+        raised on its own expose failure — and clears eligibility. On success,
+        options mutate, so a single get_entries refetch refreshes each
+        entity_entry; a refetch failure keeps the pre-exposure snapshot since
+        the exposure already committed.
+        """
+        expose_error = await self._bulk_apply_expose(eligible_ids, parsed_expose_to)
+        if expose_error is not None:
+            failed = [
+                {"entity_id": eid, "error": f"Exposure failed: {expose_error}"}
+                for eid in eligible_ids
+            ]
+            return [], failed
+
+        for eid in eligible_ids:
+            updates_by_id[eid].append(f"expose_to={parsed_expose_to}")
+        refetched_raw, refetch_errors = await self._get_entries_raw(eligible_ids)
+        for eid in eligible_ids:
+            if eid in refetched_raw:
+                entry_by_id[eid] = _format_entity_entry(refetched_raw[eid])
+        # An id whose refetch failed AND that has no earlier registry snapshot
+        # (expose-only bulk never populates one) would otherwise be reported
+        # as a success row with entity_entry=None — e.g. a typo'd or deleted
+        # entity. The old per-entity path raised for exactly this case.
+        still_eligible: list[str] = []
+        newly_failed: list[dict[str, Any]] = []
+        for eid in eligible_ids:
+            if eid in refetch_errors and entry_by_id.get(eid) is None:
+                newly_failed.append(
+                    {
+                        "entity_id": eid,
+                        "error": (
+                            "Exposure command was sent, but the entity could "
+                            "not be verified in the registry: "
+                            f"{refetch_errors[eid]}"
+                        ),
+                    }
+                )
+            else:
+                still_eligible.append(eid)
+        if refetch_errors:
+            logger.warning(
+                "Bulk exposure applied but post-exposure refresh failed "
+                "for %d id(s); %d had a pre-exposure snapshot to return",
+                len(refetch_errors),
+                len(refetch_errors) - len(newly_failed),
+            )
+        return still_eligible, newly_failed
+
+    async def _bulk_update_entities(
+        self,
+        entity_ids: list[str],
+        parsed_categories: dict[str, str | None] | None,
+        parsed_labels: list[str] | None,
+        label_operation: str,
+        parsed_expose_to: dict[str, bool] | None,
+    ) -> dict[str, Any]:
+        """Apply bulk label/category/expose updates across many entities.
+
+        Registry work runs per-entity (_bulk_registry_phase); only the
+        expose_to phase is batched into one homeassistant/expose_entity call
+        per assistant-set (_bulk_expose_phase).
+        """
+        logger.info(f"Bulk updating {len(entity_ids)} entities")
+        if (
+            parsed_labels is None
+            and parsed_categories is None
+            and parsed_expose_to is None
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "No updates specified",
+                    suggestions=[
+                        "Provide at least one of: labels, categories, or expose_to"
+                    ],
+                )
+            )
+
+        (
+            entry_by_id,
+            updates_by_id,
+            failed,
+            eligible_ids,
+        ) = await self._bulk_registry_phase(
+            entity_ids, parsed_categories, parsed_labels, label_operation
+        )
+
+        if parsed_expose_to is not None and eligible_ids:
+            eligible_ids, expose_failed = await self._bulk_expose_phase(
+                eligible_ids, parsed_expose_to, entry_by_id, updates_by_id
+            )
+            failed.extend(expose_failed)
+
+        succeeded_ids = set(eligible_ids)
+        succeeded_list = [
+            {
+                "entity_id": eid,
+                "entity_entry": entry_by_id.get(eid),
+                "updates": updates_by_id.get(eid, []),
+            }
+            for eid in entity_ids
+            if eid in succeeded_ids
+        ]
+
+        response: dict[str, Any] = {
+            "success": len(failed) == 0,
+            "total": len(entity_ids),
+            "succeeded_count": len(succeeded_list),
+            "failed_count": len(failed),
+            "succeeded": succeeded_list,
+        }
+        if failed:
+            response["failed"] = failed
+            response["partial"] = len(succeeded_list) > 0
+        return response
+
     async def _fetch_entity(self, eid: str) -> dict[str, Any]:
         """Fetch a single entity from the registry."""
         message: dict[str, Any] = {
@@ -953,28 +1257,132 @@ class EntityTools:
         if not result.get("success"):
             raise ValueError(_extract_ws_error(result))
 
-        entry = result.get("result") or {}
-        return {
-            "entity_id": entry.get("entity_id"),
-            "name": entry.get("name"),
-            "original_name": entry.get("original_name"),
-            "icon": entry.get("icon"),
-            "area_id": entry.get("area_id"),
-            "disabled_by": entry.get("disabled_by"),
-            "hidden_by": entry.get("hidden_by"),
-            "enabled": entry.get("disabled_by") is None,
-            "hidden": entry.get("hidden_by") is not None,
-            "aliases": entry.get("aliases", []),
-            "labels": entry.get("labels", []),
-            "categories": entry.get("categories", {}),
-            "device_class": entry.get("device_class"),
-            "original_device_class": entry.get("original_device_class"),
-            "options": entry.get("options", {}),
-            "platform": entry.get("platform"),
-            "device_id": entry.get("device_id"),
-            "config_entry_id": entry.get("config_entry_id"),
-            "unique_id": entry.get("unique_id"),
+        return _format_fetched_entity(result.get("result") or {})
+
+    async def _get_entries_raw(
+        self, entity_ids: list[str]
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        """Bulk-fetch registry entries via chunked config/entity_registry/get_entries.
+
+        Returns ``(raw_entries, errors)``: ``raw_entries`` maps a found
+        entity_id to HA's raw extended registry dict; ``errors`` maps a failed
+        entity_id to a message. A ``null`` in HA's entries map (id not in the
+        registry) and a chunk-level WS failure both land in ``errors`` — this
+        reproduces the per-id not-found contract of the old one-get-per-id
+        fan-out, where every id got its own error. Callers project the raw
+        entries through whichever formatter their response shape needs.
+        """
+        raw: dict[str, dict[str, Any]] = {}
+        errors: dict[str, str] = {}
+        if not entity_ids:
+            return raw, errors
+
+        chunks = [
+            entity_ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
+            for i in range(0, len(entity_ids), _GET_ENTRIES_CHUNK_SIZE)
+        ]
+        responses = await asyncio.gather(
+            *(
+                self._client.send_websocket_message(
+                    {
+                        "type": "config/entity_registry/get_entries",
+                        "entity_ids": chunk,
+                    }
+                )
+                for chunk in chunks
+            ),
+            return_exceptions=True,
+        )
+        for chunk, resp in zip(chunks, responses, strict=True):
+            if isinstance(resp, BaseException) and not isinstance(resp, Exception):
+                # Never swallow cancellation/shutdown into per-entity errors.
+                raise resp
+            if isinstance(resp, dict) and resp.get("success"):
+                result_map = resp.get("result") or {}
+                for eid in chunk:
+                    entry = result_map.get(eid)
+                    if entry is None:
+                        errors[eid] = "Entity not found"
+                    else:
+                        raw[eid] = entry
+                continue
+            # Whole-chunk failure (WS raised, or success=False): every id in
+            # the chunk failed, mirroring the old per-id fan-out behaviour.
+            msg = _extract_ws_error(resp) if isinstance(resp, dict) else str(resp)
+            for eid in chunk:
+                errors[eid] = msg
+        return raw, errors
+
+    async def _resolve_by_unique_id(
+        self,
+        unique_id: str,
+        domain: str | None,
+        platform: str | None,
+    ) -> dict[str, Any]:
+        """Resolve a stable unique_id to its entity_id(s) via one registry list.
+
+        The registry's unique key is (domain, platform, unique_id), so the same
+        unique_id can appear under multiple platforms — every match is returned
+        with a ``matches`` count so callers can disambiguate. ``domain`` /
+        ``platform`` narrow the match set when provided.
+        """
+        list_resp = await self._client.send_websocket_message(
+            {"type": "config/entity_registry/list"}
+        )
+        if not list_resp.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to list entity registry: {_extract_ws_error(list_resp)}",
+                    context={"unique_id": unique_id},
+                    suggestions=["Check Home Assistant connection and retry"],
+                )
+            )
+
+        matches = _match_registry_by_unique_id(
+            list_resp.get("result") or [], unique_id, domain, platform
+        )
+
+        if not matches:
+            filters = {"unique_id": unique_id}
+            if domain is not None:
+                filters["domain"] = domain
+            if platform is not None:
+                filters["platform"] = platform
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"No entity found with unique_id '{unique_id}'"
+                    + (
+                        f" (domain={domain}, platform={platform})"
+                        if domain is not None or platform is not None
+                        else ""
+                    ),
+                    context=filters,
+                    suggestions=[
+                        "unique_id must match exactly — it is the integration's "
+                        + "internal id, not the entity_id",
+                        "Drop the domain/platform filters if you set them",
+                        "Use ha_search() to browse entities and their platforms",
+                    ],
+                )
+            )
+
+        # config/entity_registry/list carries as_partial_dict, which omits
+        # aliases and the device_class override — those come back as their
+        # defaults ([] / None) in resolver mode. Callers needing them can
+        # re-query ha_get_entity(entity_id=...) with a resolved id.
+        response: dict[str, Any] = {
+            "success": True,
+            "unique_id": unique_id,
+            "matches": len(matches),
+            "entity_entries": matches,
         }
+        if domain is not None:
+            response["domain"] = domain
+        if platform is not None:
+            response["platform"] = platform
+        return response
 
     @tool(
         name="ha_set_entity",
@@ -1295,57 +1703,14 @@ class EntityTools:
                     parsed_options=parsed_options,
                 )
 
-            # Bulk case - process each entity
-            logger.info(f"Bulk updating {len(entity_ids)} entities")
-            results = await asyncio.gather(
-                *[
-                    self._update_single_entity(
-                        eid,
-                        None,  # area_id not supported in bulk
-                        None,  # name not supported in bulk
-                        None,  # icon not supported in bulk
-                        None,  # enabled not supported in bulk
-                        None,  # hidden not supported in bulk
-                        None,  # aliases not supported in bulk
-                        parsed_categories,
-                        parsed_labels,
-                        label_operation,
-                        parsed_expose_to,
-                    )
-                    for eid in entity_ids
-                ],
-                return_exceptions=True,
+            # Bulk case
+            return await self._bulk_update_entities(
+                entity_ids,
+                parsed_categories,
+                parsed_labels,
+                label_operation,
+                parsed_expose_to,
             )
-
-            # Aggregate results
-            succeeded_list: list[dict[str, Any]] = []
-            failed: list[dict[str, Any]] = []
-            for eid, result in zip(entity_ids, results, strict=True):
-                if isinstance(result, BaseException):
-                    failed.append({"entity_id": eid, "error": str(result)})
-                else:
-                    # _update_single_entity always returns success-shape or
-                    # raises ToolError (caught above as BaseException), so the
-                    # `result.get("success") is False` branch is unreachable.
-                    succeeded_list.append(
-                        {
-                            "entity_id": eid,
-                            "entity_entry": result.get("entity_entry"),
-                            "updates": result.get("updates"),
-                        }
-                    )
-
-            response: dict[str, Any] = {
-                "success": len(failed) == 0,
-                "total": len(entity_ids),
-                "succeeded_count": len(succeeded_list),
-                "failed_count": len(failed),
-                "succeeded": succeeded_list,
-            }
-            if failed:
-                response["failed"] = failed
-                response["partial"] = len(succeeded_list) > 0
-            return response
 
         except ToolError:
             raise
@@ -1367,17 +1732,51 @@ class EntityTools:
     async def ha_get_entity(
         self,
         entity_id: Annotated[
-            str | list[str],
+            str | list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Entity ID or list of entity IDs to retrieve (e.g., 'sensor.temperature' or ['light.living_room', 'switch.porch'])"
+                description="Entity ID or list of entity IDs to retrieve (e.g., 'sensor.temperature' or ['light.living_room', 'switch.porch']). Mutually exclusive with unique_id.",
+                default=None,
             ),
-        ],
+        ] = None,
+        unique_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Resolve a stable integration unique_id to its entity_id(s) "
+                    "(entity_id is mutable, unique_id is not). Mutually exclusive "
+                    "with entity_id. Optionally narrow with domain/platform."
+                ),
+                default=None,
+            ),
+        ] = None,
+        domain: Annotated[
+            str | None,
+            Field(
+                description="Resolver filter (unique_id mode only): restrict matches to this entity domain, e.g. 'sensor'.",
+                default=None,
+            ),
+        ] = None,
+        platform: Annotated[
+            str | None,
+            Field(
+                description="Resolver filter (unique_id mode only): restrict matches to this integration platform, e.g. 'hue'.",
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Get entity registry information for one or more entities.
 
         Returns detailed entity registry metadata including area assignment,
         custom name/icon, enabled/hidden state, aliases, labels, and more.
+
+        RESOLVER MODE:
+        Pass unique_id (instead of entity_id) to resolve a stable integration
+        unique_id to its entity_id(s). Since the registry's unique key is
+        (domain, platform, unique_id), the same unique_id can match multiple
+        platforms — all matches are returned in entity_entries with a `matches`
+        count. Narrow with domain/platform. Resolver reads as_partial_dict, so
+        aliases and the device_class override come back as defaults ([]/null).
 
         RELATED TOOLS:
         - ha_set_entity(): Modify entity properties (area, name, icon, enabled, hidden, aliases)
@@ -1417,62 +1816,47 @@ class EntityTools:
         - unique_id: Integration's unique identifier
         """
         try:
-            entity_ids, is_bulk, early_response = _parse_get_entity_ids(entity_id)
-            if early_response is not None:
-                return early_response
-
-            # Single entity case
-            if not is_bulk:
-                eid = entity_ids[0]
-                logger.info(f"Getting entity registry entry for {eid}")
-                try:
-                    result = await self._fetch_entity(eid)
-                except ValueError as e:
+            # Resolver mode (unique_id) is mutually exclusive with entity_id.
+            if unique_id is not None:
+                if entity_id is not None:
                     raise_tool_error(
                         create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            f"Entity not found: {e}",
-                            context={"entity_id": eid},
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "Provide exactly one of entity_id or unique_id, not both.",
                             suggestions=[
-                                "Use ha_search() to find valid entity IDs",
-                                "Check the entity_id spelling and format (e.g., 'sensor.temperature')",
+                                "Pass unique_id alone to resolve it to entity_id(s)",
+                                "Pass entity_id alone to look an entity up directly",
                             ],
                         )
                     )
-                return {
-                    "success": True,
-                    "entity_id": eid,
-                    "entity_entry": result,
-                }
+                logger.info(f"Resolving unique_id '{unique_id}' to entity_id(s)")
+                return await self._resolve_by_unique_id(unique_id, domain, platform)
 
-            # Bulk case - fetch all entities
-            logger.info(
-                f"Getting entity registry entries for {len(entity_ids)} entities"
-            )
-            results = await asyncio.gather(
-                *[self._fetch_entity(eid) for eid in entity_ids],
-                return_exceptions=True,
-            )
+            if entity_id is None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_MISSING_PARAMETER,
+                        "Provide entity_id (an id or list) or unique_id.",
+                        suggestions=[
+                            "ha_get_entity('sensor.temperature')",
+                            "ha_get_entity(unique_id='abc123') to resolve a unique_id",
+                        ],
+                    )
+                )
+            # domain/platform are resolver-only filters (unique_id is None here).
+            if domain is not None or platform is not None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "domain/platform are resolver filters — they only apply "
+                        "when unique_id is provided.",
+                        suggestions=[
+                            "Drop domain/platform, or pass unique_id to use them",
+                        ],
+                    )
+                )
 
-            entity_entries: list[dict[str, Any]] = []
-            errors: list[dict[str, Any]] = []
-            for eid, fetch_result in zip(entity_ids, results, strict=True):
-                if isinstance(fetch_result, BaseException):
-                    errors.append({"entity_id": eid, "error": str(fetch_result)})
-                else:
-                    entity_entries.append(fetch_result)
-
-            response: dict[str, Any] = {
-                "success": True,
-                "count": len(entity_entries),
-                "entity_entries": entity_entries,
-            }
-            if errors:
-                response["errors"] = errors
-                response["suggestions"] = [
-                    "Use ha_search() to find valid entity IDs for failed lookups"
-                ]
-            return response
+            return await self._get_by_entity_id(entity_id)
 
         except ToolError:
             raise
@@ -1484,6 +1868,148 @@ class EntityTools:
             )
             return None  # unreachable: exception_to_structured_error always raises
 
+    async def _get_by_entity_id(self, entity_id: str | list[str]) -> dict[str, Any]:
+        """Look up entities by entity_id (single or bulk list)."""
+        entity_ids, is_bulk, early_response = _parse_get_entity_ids(entity_id)
+        if early_response is not None:
+            return early_response
+
+        # Single entity case
+        if not is_bulk:
+            eid = entity_ids[0]
+            logger.info(f"Getting entity registry entry for {eid}")
+            try:
+                result = await self._fetch_entity(eid)
+            except ValueError as e:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Entity not found: {e}",
+                        context={"entity_id": eid},
+                        suggestions=[
+                            "Use ha_search() to find valid entity IDs",
+                            "Check the entity_id spelling and format (e.g., 'sensor.temperature')",
+                        ],
+                    )
+                )
+            return {
+                "success": True,
+                "entity_id": eid,
+                "entity_entry": result,
+            }
+
+        # Bulk case - fetch all entities in one chunked get_entries call
+        # (native HA bulk command) instead of one registry get per id.
+        logger.info(f"Getting entity registry entries for {len(entity_ids)} entities")
+        raw_map, error_map = await self._get_entries_raw(entity_ids)
+
+        # Iterate the requested ids (not the map) to preserve request order and
+        # duplicate handling; each id is classified found/error exactly as the
+        # old per-id fan-out did.
+        entity_entries: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for eid in entity_ids:
+            raw = raw_map.get(eid)
+            if raw is not None:
+                entity_entries.append(_format_fetched_entity(raw))
+            else:
+                errors.append(
+                    {
+                        "entity_id": eid,
+                        "error": error_map.get(eid, "Entity not found"),
+                    }
+                )
+
+        response: dict[str, Any] = {
+            "success": True,
+            "count": len(entity_entries),
+            "entity_entries": entity_entries,
+        }
+        if errors:
+            response["errors"] = errors
+            response["suggestions"] = [
+                "Use ha_search() to find valid entity IDs for failed lookups"
+            ]
+        return response
+
+    async def _bulk_remove_entities(self, entity_ids: list[str]) -> dict[str, Any]:
+        """Remove many entities sequentially, classifying each outcome.
+
+        Registry writes are NOT parallelized (per the removal WS command's
+        write semantics). Each id lands in exactly one bucket: ``removed``,
+        ``skipped`` (not-found is idempotent success, not an error), or
+        ``errors`` (any other failure, carrying code + message).
+        """
+        if not isinstance(entity_ids, list):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"entity_id must be a string or list of strings, got "
+                    f"{type(entity_ids).__name__}",
+                )
+            )
+        if not entity_ids:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "entity_id list cannot be empty",
+                )
+            )
+        if not all(isinstance(e, str) for e in entity_ids):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "All entity_id values must be strings",
+                )
+            )
+        if len(entity_ids) > _MAX_BULK_REMOVE:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Too many entity IDs: {len(entity_ids)} exceeds maximum "
+                    f"of {_MAX_BULK_REMOVE}",
+                )
+            )
+        for eid in entity_ids:
+            validate_identifier_not_empty(
+                eid,
+                "entity_id",
+                suggestions=["Use ha_search() to find valid entity IDs"],
+            )
+
+        logger.info(f"Bulk removing {len(entity_ids)} entities")
+        removed: list[str] = []
+        skipped: list[str] = []
+        errors: list[dict[str, str]] = []
+        for eid in entity_ids:
+            result = await self._client.send_websocket_message(
+                {"type": "config/entity_registry/remove", "entity_id": eid}
+            )
+            if result.get("success"):
+                removed.append(eid)
+                continue
+            error_msg = _extract_ws_error(result)
+            # Same not-found detection as the single path — HA surfaces the
+            # error as a plain string; already-absent is idempotent success.
+            if "not found" in error_msg.lower():
+                skipped.append(eid)
+            else:
+                errors.append(
+                    {
+                        "entity_id": eid,
+                        "code": ErrorCode.SERVICE_CALL_FAILED.value,
+                        "message": error_msg,
+                    }
+                )
+
+        return {
+            "success": len(errors) == 0,
+            "total": len(entity_ids),
+            "removed": removed,
+            "skipped": skipped,
+            "errors": errors,
+        }
+
     @tool(
         name="ha_remove_entity",
         tags={"Entity Registry"},
@@ -1493,22 +2019,27 @@ class EntityTools:
             "title": "Remove Entity",
         },
     )
+    # Single-entity removal is snapshotted via id_param. A bulk (list) call
+    # stringifies to a non-matching target, so its pre-write snapshot is a
+    # best-effort no-op — bulk removal is not individually backed up (the
+    # decorator captures one entity per call).
     @with_auto_backup(domain="entity", id_param="entity_id")
     @log_tool_usage
     async def ha_remove_entity(
         self,
         entity_id: Annotated[
-            str,
+            str | list[str],
+            JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Entity ID to remove from the entity registry "
-                    "(e.g., 'sensor.old_temperature'). "
-                    "This permanently removes the entity registration."
+                    "Entity ID, or a list of entity IDs, to remove from the "
+                    "entity registry (e.g., 'sensor.old_temperature'). "
+                    "Permanently removes the registration(s)."
                 )
             ),
         ],
     ) -> dict[str, Any]:
-        """Remove an entity from the Home Assistant entity registry.
+        """Remove one or more entities from the Home Assistant entity registry.
 
         Permanently removes the entity registration from Home Assistant.
         The entity will no longer appear in the UI or be available to automations.
@@ -1519,9 +2050,19 @@ class EntityTools:
           may be re-added automatically on the next HA restart or reload
         - This action cannot be undone without restoring from backup
 
+        BULK MODE:
+        Pass a list of entity IDs to remove up to 100 at once — handy for
+        clearing the restored=true orphans an integration leaves behind after
+        its filters change. Removals run sequentially and return:
+          {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}
+        where skipped = ids already absent (not-found is idempotent, not an
+        error). Bulk mode is NOT auto-backed-up (the snapshot is single-entity);
+        single-id removal still is.
+
         EXAMPLES:
         - Remove orphaned sensor: ha_remove_entity("sensor.old_temperature")
         - Remove stale helper entry: ha_remove_entity("input_boolean.deleted_helper")
+        - Bulk cleanup: ha_remove_entity(["sensor.orphan_1", "sensor.orphan_2"])
 
         NOTE: For most use cases, consider disabling instead:
         ha_set_entity(entity_id="sensor.old", enabled=False)
@@ -1531,6 +2072,10 @@ class EntityTools:
         - ha_get_entity: Check entity details before removal
         """
         try:
+            # List mode: bulk removal with a per-id classification envelope.
+            if not isinstance(entity_id, str):
+                return await self._bulk_remove_entities(entity_id)
+
             # Empty/whitespace entity_id would reach the registry-remove WS
             # command and surface as a misleading HA "entity not found".
             validate_identifier_not_empty(

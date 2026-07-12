@@ -385,15 +385,17 @@ async def test_capsless_client_uses_legacy(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_visibility_active_bypasses_component(tmp_path, monkeypatch) -> None:
-    """An ACTIVE entity-visibility filter forces the legacy path.
+async def test_visibility_active_still_routes_through_component(
+    tmp_path, monkeypatch
+) -> None:
+    """An ACTIVE entity-visibility filter still routes through the component.
 
-    The filter is applied server-side over the slices either way, so this is a
-    retained simplification (mirroring search): an active filter with
-    ``respect_assist_exposure`` needs extra WS reads inside ``load_hidden_set``
-    that the single overview round-trip doesn't carry, so a visibility-enabled
-    install keeps the legacy path. Either way the denied entity is excluded from
-    the counts / samples.
+    Unlike ``ha_search``, the overview consumer applies the visibility filter
+    server-side over the component's slices: ``get_system_overview`` calls
+    ``load_hidden_set`` unconditionally and ``_build_overview_slices`` hands it
+    the same registry + states envelope the legacy fetch produces. So a
+    visibility-enabled install still takes the one-round-trip component path,
+    and the denied entity is excluded from the counts / samples all the same.
     """
     save_visibility_config(
         tmp_path,
@@ -416,15 +418,66 @@ async def test_visibility_active_bypasses_component(tmp_path, monkeypatch) -> No
     with patch_ws(ws, tools_search):
         resp = await overview(detail_level="standard")
 
-    # The component overview command must never run while the filter is active.
-    assert not any(
+    # The component overview command runs even with the filter active.
+    assert any(
         c.args[0] == "ha_mcp_tools/overview" for c in ws.send_command.call_args_list
-    ), "component overview must not run while the visibility filter is active"
-    # Legacy inventory served the request, and the denied entity is gone from
-    # the (visibility-filtered) domain stats.
-    assert client.get_states_calls == 1
+    ), "component overview should serve while the visibility filter is active"
+    # No legacy fetch, and the denied entity is gone from the
+    # (server-side visibility-filtered) domain stats.
+    assert client.total_legacy_fetches() == 0
     assert resp["system_summary"]["total_entities"] == 1
     assert "light" not in resp["domain_stats"]
+
+
+@pytest.mark.asyncio
+async def test_component_and_legacy_parity_visibility_active(
+    tmp_path, monkeypatch
+) -> None:
+    """With an ACTIVE filter, the component path is byte-identical to legacy.
+
+    The visibility filter is applied server-side over whichever data source
+    fed the assembly, so the two final responses must be equal even when a
+    hide dimension is active — pinning that routing an active-visibility
+    overview through the component drops or reshapes nothing.
+    """
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True,
+            exclude_categories=[],
+            deny_entity_ids=["light.kitchen"],
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    _quiet_tail(monkeypatch)
+
+    # Legacy run (info → unknown_command ⇒ no caps ⇒ legacy per-read fetch path).
+    ws_legacy = make_ws(
+        "ha_mcp_tools/overview",
+        info_exc=HomeAssistantCommandError(
+            "Command failed: no info", "unknown_command"
+        ),
+    )
+    client_legacy = OverviewRoutingClient()
+    with patch_ws(ws_legacy, tools_search):
+        legacy = await _build_overview_tool(client_legacy)(detail_level="standard")
+
+    # Component run: the same eight reads, delivered as raw slices in one call.
+    ws_component = make_ws(
+        "ha_mcp_tools/overview",
+        info_result=_CAPS_OVERVIEW,
+        cmd_result=_overview_slices(),
+    )
+    client_component = OverviewRoutingClient()
+    with patch_ws(ws_component, tools_search):
+        component = await _build_overview_tool(client_component)(
+            detail_level="standard"
+        )
+
+    assert component == legacy
+    # The denied entity is excluded on both paths.
+    assert component["system_summary"]["total_entities"] == 1
+    assert client_component.total_legacy_fetches() == 0
 
 
 @pytest.mark.asyncio

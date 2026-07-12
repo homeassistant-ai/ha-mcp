@@ -1212,24 +1212,24 @@ class TestHaSetEntityBulkOperations:
 
     @pytest.mark.asyncio
     async def test_bulk_expose_to(self, mock_mcp, mock_client):
-        """Bulk operation should update expose_to on multiple entities."""
-        entity_entry = {
-            "entity_id": "light.test",
-            "name": None,
-            "original_name": "Test",
-            "icon": None,
-            "area_id": None,
-            "disabled_by": None,
-            "hidden_by": None,
-            "aliases": [],
-            "labels": [],
-        }
+        """Bulk expose sends ONE expose_entity call with the full id list, then a
+        single get_entries refetch — not one expose + one get per entity."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
-                {"success": True},  # expose call for light.a
-                {"success": True, "result": entity_entry},  # get entity for light.a
-                {"success": True},  # expose call for light.b
-                {"success": True, "result": entity_entry},  # get entity for light.b
+                {"success": True},  # single batched expose call for [a, b]
+                {  # single get_entries refetch for [a, b]
+                    "success": True,
+                    "result": {
+                        "light.a": {
+                            "entity_id": "light.a",
+                            "options": {"conversation": {"should_expose": True}},
+                        },
+                        "light.b": {
+                            "entity_id": "light.b",
+                            "options": {"conversation": {"should_expose": True}},
+                        },
+                    },
+                },
             ]
         )
         register_entity_tools(mock_mcp, mock_client)
@@ -1242,6 +1242,21 @@ class TestHaSetEntityBulkOperations:
 
         assert result["success"] is True
         assert result["succeeded_count"] == 2
+        # Exactly two WS calls: one batched expose + one batched refetch.
+        assert mock_client.send_websocket_message.call_count == 2
+        expose_call = mock_client.send_websocket_message.call_args_list[0][0][0]
+        assert expose_call["type"] == "homeassistant/expose_entity"
+        assert expose_call["entity_ids"] == ["light.a", "light.b"]
+        assert expose_call["should_expose"] is True
+        refetch_call = mock_client.send_websocket_message.call_args_list[1][0][0]
+        assert refetch_call["type"] == "config/entity_registry/get_entries"
+        assert refetch_call["entity_ids"] == ["light.a", "light.b"]
+        # entity_entry reflects the post-exposure refetch (options carry the
+        # new should_expose), formatted through the same shape as before.
+        entries = {e["entity_id"]: e for e in result["succeeded"]}
+        assert entries["light.a"]["entity_entry"]["options"] == {
+            "conversation": {"should_expose": True}
+        }
 
     @pytest.mark.asyncio
     async def test_bulk_rejects_single_entity_params(self, mock_mcp, mock_client):

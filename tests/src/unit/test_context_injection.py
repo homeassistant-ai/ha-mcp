@@ -130,19 +130,13 @@ async def test_ha_get_history_works_without_ctx() -> None:
     client = _mock_ha_client()
     history_tool = HistoryTools(client).ha_get_history
 
-    fake_ws = AsyncMock()
-    fake_ws.disconnect = AsyncMock()
     fake_result = {"success": True, "source": "history", "entities": []}
 
-    with (
-        patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            new=AsyncMock(return_value=(fake_ws, None)),
-        ),
-        patch(
-            "ha_mcp.tools.tools_history._fetch_history",
-            new=AsyncMock(return_value=fake_result),
-        ),
+    # Pooled transport (#1813): ha_get_history calls _fetch_history directly with
+    # the shared client; there is no per-call dedicated connect/disconnect.
+    with patch(
+        "ha_mcp.tools.tools_history._fetch_history",
+        new=AsyncMock(return_value=fake_result),
     ):
         result = await history_tool(entity_ids="sensor.test")
 
@@ -150,7 +144,6 @@ async def test_ha_get_history_works_without_ctx() -> None:
     # — the inner payload must round-trip unchanged under fields=None.
     assert result["data"] == fake_result
     assert "metadata" in result
-    fake_ws.disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -160,19 +153,11 @@ async def test_ha_get_history_emits_progress_with_ctx() -> None:
     history_tool = HistoryTools(client).ha_get_history
     ctx = _make_ctx()
 
-    fake_ws = AsyncMock()
-    fake_ws.disconnect = AsyncMock()
     fake_result = {"success": True, "source": "history", "entities": []}
 
-    with (
-        patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            new=AsyncMock(return_value=(fake_ws, None)),
-        ),
-        patch(
-            "ha_mcp.tools.tools_history._fetch_history",
-            new=AsyncMock(return_value=fake_result),
-        ),
+    with patch(
+        "ha_mcp.tools.tools_history._fetch_history",
+        new=AsyncMock(return_value=fake_result),
     ):
         result = await history_tool(entity_ids="sensor.test", ctx=ctx)
 
@@ -514,19 +499,11 @@ async def test_ha_get_history_statistics_emits_progress() -> None:
     history_tool = HistoryTools(client).ha_get_history
     ctx = _make_ctx()
 
-    fake_ws = AsyncMock()
-    fake_ws.disconnect = AsyncMock()
     fake_result = {"success": True, "source": "statistics", "entities": []}
 
-    with (
-        patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            new=AsyncMock(return_value=(fake_ws, None)),
-        ),
-        patch(
-            "ha_mcp.tools.tools_history._fetch_statistics",
-            new=AsyncMock(return_value=fake_result),
-        ),
+    with patch(
+        "ha_mcp.tools.tools_history._fetch_statistics",
+        new=AsyncMock(return_value=fake_result),
     ):
         result = await history_tool(
             entity_ids="sensor.test", source="statistics", period="day", ctx=ctx

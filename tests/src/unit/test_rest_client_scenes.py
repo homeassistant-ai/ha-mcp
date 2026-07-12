@@ -264,3 +264,63 @@ class TestResolveSceneId:
         result = await mock_client.resolve_scene_id("test_scene")
 
         assert result == "test_scene"
+
+
+class TestSceneResolvedShortCircuit:
+    """``_resolved=True`` skips the redundant ``resolve_scene_id`` lookup on the
+    get/upsert/delete scene methods (issue #1813 P5 item 3). ``_make_mock_client``
+    makes ``send_websocket_message`` raise, so ``assert_not_called`` proves the
+    resolver was skipped rather than merely falling back."""
+
+    @pytest.fixture
+    def mock_client(self):
+        return _make_mock_client()
+
+    @pytest.mark.asyncio
+    async def test_get_scene_resolved_skips_lookup(self, mock_client):
+        mock_client._request = AsyncMock(return_value={"name": "S", "entities": {}})
+
+        result = await mock_client.get_scene_config("storage_key", _resolved=True)
+
+        assert result["scene_id"] == "storage_key"
+        mock_client.send_websocket_message.assert_not_called()
+        mock_client._request.assert_called_once_with(
+            "GET", "config/scene/config/storage_key"
+        )
+
+    @pytest.mark.asyncio
+    async def test_upsert_scene_resolved_skips_lookup(self, mock_client):
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        result = await mock_client.upsert_scene_config(
+            {"entities": {"light.k": {"state": "on"}}}, "storage_key", _resolved=True
+        )
+
+        assert result["scene_id"] == "storage_key"
+        mock_client.send_websocket_message.assert_not_called()
+        assert mock_client._request.call_args[0][1] == "config/scene/config/storage_key"
+
+    @pytest.mark.asyncio
+    async def test_delete_scene_resolved_skips_lookup(self, mock_client):
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        result = await mock_client.delete_scene_config("storage_key", _resolved=True)
+
+        assert result["scene_id"] == "storage_key"
+        mock_client.send_websocket_message.assert_not_called()
+        mock_client._request.assert_called_once_with(
+            "DELETE", "config/scene/config/storage_key"
+        )
+
+    @pytest.mark.asyncio
+    async def test_delete_scene_default_still_resolves(self, mock_client):
+        """Contrast: without ``_resolved`` the registry resolver is consulted."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"result": {"unique_id": "storage_key"}}
+        )
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        result = await mock_client.delete_scene_config("movie_night")
+
+        assert result["scene_id"] == "storage_key"
+        mock_client.send_websocket_message.assert_called_once()

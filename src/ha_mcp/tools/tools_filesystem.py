@@ -25,6 +25,7 @@ from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .component_api import ComponentCaps, get_component_caps
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -311,13 +312,45 @@ async def _is_mcp_tools_available(client: Any) -> bool:
     )
 
 
+def _assert_caps_version_ok(caps: ComponentCaps) -> None:
+    """Reject a caps-present component below ``MIN_COMPONENT_VERSION``.
+
+    ``get_component_caps`` only returns caps for a component new enough to
+    answer ``ha_mcp_tools/info`` (shipped in 1.1.0, already past the 0.11.0
+    floor), so this is a defensive belt mirroring the authoritative gate in
+    ``_fetch_caller_token`` and never fires in practice. An empty / unparseable
+    ``component_version`` (never emitted by a real caps-present component) is
+    left to that downstream token-fetch gate rather than rejected here.
+    """
+    try:
+        parsed = _version_tuple(caps.component_version)
+    except ValueError:
+        return
+    if parsed < _version_tuple(MIN_COMPONENT_VERSION):
+        _raise_component_too_old(f"reported version is {caps.component_version}")
+
+
 async def _assert_mcp_tools_available(client: Any) -> None:
     """Raise ToolError if ha_mcp_tools is not available.
 
+    Caps-first: a component that answers ``ha_mcp_tools/info``
+    (``get_component_caps`` returns caps) obviously exists — reuse that shared
+    cached probe and enforce ``MIN_COMPONENT_VERSION`` from
+    ``caps.component_version`` (info shipped in 1.1.0, already past the floor).
+    Legacy fallback: caps is None for a component in the 0.11.0-1.1.0 band
+    (services, no info command) or an absent one, so fall back to the per-call
+    ``get_services()`` existence probe.
+
     Must be called within a try block that handles API errors via
     exception_to_structured_error, so connection failures are classified
-    correctly rather than masked as COMPONENT_NOT_INSTALLED.
+    correctly rather than masked as COMPONENT_NOT_INSTALLED. ``get_component_caps``
+    returns None (not raises) on a transport failure, so the legacy
+    ``get_services()`` probe still surfaces the connection error to that handler.
     """
+    caps = await get_component_caps(client)
+    if caps is not None:
+        _assert_caps_version_ok(caps)
+        return
     if not await _is_mcp_tools_available(client):
         raise_tool_error(
             create_error_response(

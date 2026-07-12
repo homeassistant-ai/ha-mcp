@@ -18,6 +18,7 @@ from pydantic import Field
 
 from ..client.rest_client import HomeAssistantCommandError
 from ..errors import ErrorCode, create_error_response
+from .component_api import get_component_caps
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -314,13 +315,24 @@ class McpComponentTools:
 
             # If already installed, return success
             if existing_repo and existing_repo.get("installed"):
+                # Caps-first: a loaded 1.1.0+ component reports its running
+                # version via the shared cached ``ha_mcp_tools/info`` probe;
+                # reuse it. Legacy fallback: caps is None for an
+                # installed-but-not-yet-loaded component (needs a restart) or one
+                # too old for the info command, so use HACS's installed_version.
+                caps = await get_component_caps(self._client)
+                version = (
+                    caps.component_version
+                    if caps is not None and caps.component_version
+                    else existing_repo.get("installed_version")
+                )
                 return await add_timezone_metadata(
                     self._client,
                     {
                         "success": True,
                         "already_installed": True,
-                        "version": existing_repo.get("installed_version"),
-                        "message": f"ha_mcp_tools is already installed (version {existing_repo.get('installed_version')})",
+                        "version": version,
+                        "message": f"ha_mcp_tools is already installed (version {version})",
                         "services": [
                             "ha_mcp_tools.list_files - List files in allowed directories",
                         ],

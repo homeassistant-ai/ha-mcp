@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.tools import tools_history
 from ha_mcp.tools.tools_history import HistoryTools
 
 
@@ -27,15 +28,19 @@ class TestHaGetHistoryExceptionSuggestions:
         return tools.ha_get_history
 
     @pytest.mark.asyncio
-    async def test_statistics_exception_includes_state_class_hint(self, history_tool):
-        """Unexpected exception with source=statistics surfaces state_class suggestion."""
-        with (
-            patch(
-                "ha_mcp.tools.tools_history.get_connected_ws_client",
-                side_effect=RuntimeError("unexpected"),
-            ),
-            pytest.raises(ToolError) as exc_info,
-        ):
+    async def test_statistics_exception_includes_state_class_hint(
+        self, history_tool, mock_client
+    ):
+        """Unexpected exception with source=statistics surfaces state_class suggestion.
+
+        The pooled WS call now raises inside _fetch_statistics; the failure
+        propagates to ha_get_history's ``except Exception`` exactly as the old
+        dedicated-connection failure did.
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=RuntimeError("unexpected")
+        )
+        with pytest.raises(ToolError) as exc_info:
             await history_tool(entity_ids="sensor.test", source="statistics")
 
         suggestions = json.loads(str(exc_info.value))["error"]["suggestions"]
@@ -43,16 +48,13 @@ class TestHaGetHistoryExceptionSuggestions:
 
     @pytest.mark.asyncio
     async def test_history_exception_does_not_include_state_class_hint(
-        self, history_tool
+        self, history_tool, mock_client
     ):
         """Unexpected exception with source=history does not surface state_class suggestion."""
-        with (
-            patch(
-                "ha_mcp.tools.tools_history.get_connected_ws_client",
-                side_effect=RuntimeError("unexpected"),
-            ),
-            pytest.raises(ToolError) as exc_info,
-        ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=RuntimeError("unexpected")
+        )
+        with pytest.raises(ToolError) as exc_info:
             await history_tool(entity_ids="sensor.test", source="history")
 
         suggestions = json.loads(str(exc_info.value))["error"]["suggestions"]
@@ -97,19 +99,9 @@ class TestHaGetHistoryFieldsProjection:
     def history_tool(self, mock_client):
         return HistoryTools(mock_client).ha_get_history
 
-    def _ws_patch(self):
-        ws = AsyncMock()
-        ws.disconnect = AsyncMock()
-        return patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            new_callable=AsyncMock,
-            return_value=(ws, None),
-        )
-
     @pytest.mark.asyncio
     async def test_no_fields_returns_full_response(self, history_tool):
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_history",
                 new_callable=AsyncMock,
@@ -130,7 +122,6 @@ class TestHaGetHistoryFieldsProjection:
     @pytest.mark.asyncio
     async def test_single_field_projects_to_that_key_plus_success(self, history_tool):
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_history",
                 new_callable=AsyncMock,
@@ -145,7 +136,6 @@ class TestHaGetHistoryFieldsProjection:
     @pytest.mark.asyncio
     async def test_multiple_fields_projects_correctly(self, history_tool):
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_history",
                 new_callable=AsyncMock,
@@ -161,7 +151,6 @@ class TestHaGetHistoryFieldsProjection:
     @pytest.mark.asyncio
     async def test_success_always_present_regardless_of_fields(self, history_tool):
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_history",
                 new_callable=AsyncMock,
@@ -176,7 +165,6 @@ class TestHaGetHistoryFieldsProjection:
     async def test_unknown_field_emits_warning(self, history_tool):
         """Unknown fields key emits a diagnostic warning instead of being silently dropped."""
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_history",
                 new_callable=AsyncMock,
@@ -249,19 +237,9 @@ class TestHaGetHistoryStatisticsFieldsProjection:
     def history_tool(self, mock_client):
         return HistoryTools(mock_client).ha_get_history
 
-    def _ws_patch(self):
-        ws = AsyncMock()
-        ws.disconnect = AsyncMock()
-        return patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            new_callable=AsyncMock,
-            return_value=(ws, None),
-        )
-
     @pytest.mark.asyncio
     async def test_no_fields_returns_full_response(self, history_tool):
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_statistics",
                 new_callable=AsyncMock,
@@ -284,7 +262,6 @@ class TestHaGetHistoryStatisticsFieldsProjection:
     @pytest.mark.asyncio
     async def test_single_field_projection(self, history_tool):
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_statistics",
                 new_callable=AsyncMock,
@@ -300,7 +277,6 @@ class TestHaGetHistoryStatisticsFieldsProjection:
     @pytest.mark.asyncio
     async def test_stats_specific_key_period_type(self, history_tool):
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_statistics",
                 new_callable=AsyncMock,
@@ -316,7 +292,6 @@ class TestHaGetHistoryStatisticsFieldsProjection:
     @pytest.mark.asyncio
     async def test_success_always_present(self, history_tool):
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_statistics",
                 new_callable=AsyncMock,
@@ -332,7 +307,6 @@ class TestHaGetHistoryStatisticsFieldsProjection:
     async def test_unknown_field_emits_warning(self, history_tool):
         """Unknown fields key emits a diagnostic warning instead of being silently dropped."""
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_statistics",
                 new_callable=AsyncMock,
@@ -382,20 +356,10 @@ class TestHaGetHistoryOrder:
     def history_tool(self, mock_client):
         return HistoryTools(mock_client).ha_get_history
 
-    def _ws_patch(self):
-        ws = AsyncMock()
-        ws.disconnect = AsyncMock()
-        return patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            new_callable=AsyncMock,
-            return_value=(ws, None),
-        )
-
     @pytest.mark.asyncio
     async def test_order_desc_default_passed_to_fetch_history(self, history_tool):
         """Default order='desc' is threaded through to _fetch_history."""
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_history",
                 new_callable=AsyncMock,
@@ -410,7 +374,6 @@ class TestHaGetHistoryOrder:
     async def test_order_asc_passed_to_fetch_history(self, history_tool):
         """order='asc' is passed through to _fetch_history unchanged."""
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_history",
                 new_callable=AsyncMock,
@@ -437,7 +400,6 @@ class TestHaGetHistoryOrder:
             "query_params": {"limit": 100, "offset": 0},
         }
         with (
-            self._ws_patch(),
             patch(
                 "ha_mcp.tools.tools_history._fetch_statistics",
                 new_callable=AsyncMock,
@@ -449,3 +411,46 @@ class TestHaGetHistoryOrder:
             )
         # _fetch_statistics should be called, not _fetch_history
         mock_stats.assert_called_once()
+
+
+class TestHaGetHistoryPooledTransport:
+    """The single recorder query routes through the shared pooled client
+    (``client.send_websocket_message``) rather than a per-call dedicated
+    WebSocket connection (issue #1813)."""
+
+    @staticmethod
+    def _client(ws_return) -> MagicMock:
+        client = MagicMock()
+        client.base_url = "http://ha.local"
+        client.token = "tok"
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.send_websocket_message = AsyncMock(return_value=ws_return)
+        return client
+
+    @pytest.mark.asyncio
+    async def test_history_routes_through_pooled_client(self):
+        client = self._client({"success": True, "result": {"sensor.temp": []}})
+        tool = HistoryTools(client).ha_get_history
+        with patch(
+            "ha_mcp.tools.tools_history.add_timezone_metadata",
+            side_effect=lambda _c, d, **_kw: d,
+        ):
+            await tool(entity_ids="sensor.temp")
+
+        client.send_websocket_message.assert_awaited_once()
+        message = client.send_websocket_message.await_args.args[0]
+        assert message["type"] == "history/history_during_period"
+        # The dedicated-connection helper is gone from the module namespace,
+        # so the tool cannot fall back to a per-call connect/auth handshake.
+        assert not hasattr(tools_history, "get_connected_ws_client")
+
+    @pytest.mark.asyncio
+    async def test_pooled_failure_surfaces_structured_error(self):
+        # send_websocket_message collapses a failed WS command into
+        # ``{"success": False, ...}``; the fetch guard raises SERVICE_CALL_FAILED.
+        client = self._client({"success": False, "error": "recorder unavailable"})
+        tool = HistoryTools(client).ha_get_history
+        with pytest.raises(ToolError) as exc_info:
+            await tool(entity_ids="sensor.temp")
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "SERVICE_CALL_FAILED"

@@ -43,7 +43,9 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
 )
 from ha_mcp.tools import component_api, tools_config_helpers
+from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
 from ha_mcp.tools.tools_config_helpers import (
+    SIMPLE_HELPER_TYPES,
     _shape_collection_helper_record,
     register_config_helper_tools,
 )
@@ -594,3 +596,116 @@ def test_collection_record_falls_back_to_object_id_without_storage_id() -> None:
     }
     out = _shape_collection_helper_record(rec)
     assert out["id"] == "guest_mode"
+
+
+# --- all-types (helper_type="all") bulk mode -------------------------------------
+
+
+def _component_all_result() -> dict[str, Any]:
+    """Merged component output: one collection helper + one flow helper.
+
+    ``covered_types`` mirrors the real component: every simple type EXCEPT
+    ``tag`` (which has no state entity) plus the FULL flow universe
+    (``covered |= FLOW_HELPER_DOMAINS`` component-side — not just types with
+    instances). So only ``tag`` falls back to the legacy per-type list, and no
+    flow type triggers the incomplete-coverage hard error.
+    """
+    return {
+        "helpers": [
+            {
+                "helper_type": "input_boolean",
+                "object_id": "abc123",
+                "entity_id": "input_boolean.foo",
+                "name": "New Name",
+                "kind": "collection",
+                "storage_id": "abc123",
+                "config": {"id": "abc123", "name": "Old Name", "icon": "mdi:flash"},
+            },
+            {
+                "helper_type": "template",
+                "entry_id": "cfgentry123",
+                "entity_id": "sensor.templated",
+                "name": "Templated Sensor",
+                "kind": "flow",
+                "options": {"state": "{{ 1 + 1 }}"},
+            },
+        ],
+        "count": 2,
+        "covered_types": sorted((SIMPLE_HELPER_TYPES - {"tag"}) | FLOW_HELPER_TYPES),
+    }
+
+
+@pytest.mark.asyncio
+async def test_all_types_via_component_returns_merged_listing() -> None:
+    """helper_type='all' merges component records + a legacy tag fallback."""
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_all_result(),
+    )
+    client = RoutingClient()
+    list_helpers = _build_list_helpers(client)
+
+    with patch_ws(ws, tools_config_helpers):
+        resp = await list_helpers(helper_type="all")
+
+    assert resp["success"] is True
+    assert resp["helper_type"] == "all"
+    # Collection + flow (component) + tag (legacy covered_types fallback).
+    assert resp["count"] == 3
+    by_type = {h.get("helper_type"): h for h in resp["helpers"]}
+    assert set(by_type) == {"input_boolean", "template", "tag"}
+    # Collection record: #1794 shape preserved and self-describes its type.
+    assert by_type["input_boolean"]["id"] == "abc123"
+    assert by_type["input_boolean"]["entity_id"] == "input_boolean.foo"
+    assert by_type["input_boolean"]["name"] == "New Name"
+    # Flow record: entry_id + options carried through.
+    assert by_type["template"]["entry_id"] == "cfgentry123"
+    assert by_type["template"]["options"] == {"state": "{{ 1 + 1 }}"}
+    # Tag came from the legacy fallback (the only uncovered simple type).
+    assert by_type["tag"]["id"] == "tag-42"
+    assert client.list_calls == 1
+    # The component command requests all types (no helper_types filter).
+    (call,) = _helpers_calls(ws)
+    assert "helper_types" not in call.kwargs
+    assert call.kwargs["include_flow_helpers"] is True
+
+
+@pytest.mark.asyncio
+async def test_all_types_without_component_raises_component_required() -> None:
+    """helper_type='all' with no component surface → hard COMPONENT_NOT_INSTALLED."""
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_exc=HomeAssistantCommandError(
+            "Command failed: no info", "unknown_command"
+        ),
+    )
+    client = RoutingClient()
+    list_helpers = _build_list_helpers(client)
+
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
+        await list_helpers(helper_type="all")
+
+    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    # Never falls back to any legacy list and never issues the component command.
+    assert client.list_calls == 0
+    assert not _helpers_calls(ws)
+
+
+@pytest.mark.asyncio
+async def test_all_types_component_error_raises_component_required() -> None:
+    """A component handler error on helper_type='all' → same hard error, no legacy."""
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
+    )
+    client = RoutingClient()
+    list_helpers = _build_list_helpers(client)
+
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
+        await list_helpers(helper_type="all")
+
+    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    # No legacy all-types path exists, so nothing is served from legacy.
+    assert client.list_calls == 0

@@ -1388,8 +1388,12 @@ class HomeAssistantClient:
         for attempt in range(max_retries):
             try:
                 # Use per-client WebSocket keyed to this client's credentials
+                # (verify_ssl included so a verify_ssl=False client never
+                # shares a default-verification pooled connection).
                 ws_client = await get_websocket_client(
-                    url=self.base_url, token=self.token
+                    url=self.base_url,
+                    token=self.token,
+                    verify_ssl=self.verify_ssl,
                 )
 
                 # Special handling for render_template which returns an event with the actual result
@@ -1642,9 +1646,17 @@ class HomeAssistantClient:
             )
         return bare_id
 
-    async def get_scene_config(self, scene_id: str) -> dict[str, Any]:
-        """Get Home Assistant scene configuration by scene_id."""
-        resolved_id = await self.resolve_scene_id(scene_id)
+    async def get_scene_config(
+        self, scene_id: str, *, _resolved: bool = False
+    ) -> dict[str, Any]:
+        """Get Home Assistant scene configuration by scene_id.
+
+        ``_resolved=True`` signals ``scene_id`` is already the resolved storage
+        key (the caller ran :meth:`resolve_scene_id`), skipping the redundant
+        registry lookup. ``resolve_scene_id`` is idempotent, so the result is
+        identical either way.
+        """
+        resolved_id = scene_id if _resolved else await self.resolve_scene_id(scene_id)
         try:
             endpoint = f"config/scene/config/{resolved_id}"
             response = await self._request("GET", endpoint)
@@ -1662,10 +1674,15 @@ class HomeAssistantClient:
             raise
 
     async def upsert_scene_config(
-        self, config: dict[str, Any], scene_id: str
+        self, config: dict[str, Any], scene_id: str, *, _resolved: bool = False
     ) -> dict[str, Any]:
-        """Create or update Home Assistant scene configuration."""
-        resolved_id = await self.resolve_scene_id(scene_id)
+        """Create or update Home Assistant scene configuration.
+
+        ``_resolved=True`` signals ``scene_id`` is already the resolved storage
+        key, skipping the redundant registry lookup (``resolve_scene_id`` is
+        idempotent, so the endpoint id is unchanged).
+        """
+        resolved_id = scene_id if _resolved else await self.resolve_scene_id(scene_id)
         try:
             endpoint = f"config/scene/config/{resolved_id}"
 
@@ -1699,9 +1716,16 @@ class HomeAssistantClient:
             logger.error(f"Failed to upsert scene config for {scene_id}: {e}")
             raise
 
-    async def delete_scene_config(self, scene_id: str) -> dict[str, Any]:
-        """Delete Home Assistant scene configuration."""
-        resolved_id = await self.resolve_scene_id(scene_id)
+    async def delete_scene_config(
+        self, scene_id: str, *, _resolved: bool = False
+    ) -> dict[str, Any]:
+        """Delete Home Assistant scene configuration.
+
+        ``_resolved=True`` signals ``scene_id`` is already the resolved storage
+        key, skipping the redundant registry lookup (``resolve_scene_id`` is
+        idempotent, so the endpoint id is unchanged).
+        """
+        resolved_id = scene_id if _resolved else await self.resolve_scene_id(scene_id)
         try:
             endpoint = f"config/scene/config/{resolved_id}"
             response = await self._request("DELETE", endpoint)

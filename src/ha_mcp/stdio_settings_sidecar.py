@@ -125,7 +125,7 @@ def _pid_alive(pid: int) -> bool:
         # ctypes.windll.kernel32 (no external deps).
         import ctypes
 
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined,unused-ignore]
         SYNCHRONIZE = 0x00100000
         handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
         if not handle:
@@ -394,13 +394,13 @@ def _do_spawn() -> None:
         # mode the user saw.
         pythonw = Path(sys.executable).with_name("pythonw.exe")
         cmd_python = str(pythonw) if pythonw.exists() else sys.executable
-        startupinfo = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
-        startupinfo.wShowWindow = subprocess.SW_HIDE  # type: ignore[attr-defined]
+        startupinfo = subprocess.STARTUPINFO()  # type: ignore[attr-defined,unused-ignore]
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined,unused-ignore]
+        startupinfo.wShowWindow = subprocess.SW_HIDE  # type: ignore[attr-defined,unused-ignore]
         popen_kwargs["startupinfo"] = startupinfo
         popen_kwargs["creationflags"] = (
-            subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
-            | subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+            subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined,unused-ignore]
+            | subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined,unused-ignore]
         )
         cmd = [cmd_python, "-m", "ha_mcp.stdio_settings_sidecar"]
     else:

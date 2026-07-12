@@ -3578,6 +3578,26 @@ def _raise_flow_requires_component(helper_type: str) -> NoReturn:
     )
 
 
+def _raise_all_requires_component() -> NoReturn:
+    """Raise the structured error for all-types listing with no component path.
+
+    ``helper_type="all"`` has no legacy equivalent — there is no single WS
+    command that enumerates every helper type — so, like a flow-based type, it
+    is served exclusively through the ha_mcp_tools component. When the component
+    is absent, downlevel, or its call fails, this is a hard error: never a
+    silent empty list, never a partial legacy fallback.
+    """
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.COMPONENT_NOT_INSTALLED,
+            "Listing all helper types in one call (helper_type='all') requires "
+            "the ha_mcp_tools custom component (>= 1.1.0); without it, list a "
+            "specific helper_type instead.",
+            context={"helper_type": "all"},
+        )
+    )
+
+
 class HelperConfigTools:
     """Encapsulates helper configuration tools for ha_config_list_helpers and ha_config_set_helper."""
 
@@ -3610,13 +3630,15 @@ class HelperConfigTools:
                 "zone",
                 "person",
                 "tag",
+                "all",
             ]
             | SUPPORTED_HELPERS,
             Field(
                 description=(
                     "Helper type to list. Storage types are listed on all "
                     "installs; flow-based types require the ha_mcp_tools "
-                    "custom component."
+                    "custom component. Pass 'all' to list every helper type in "
+                    "one call (also requires the ha_mcp_tools component)."
                 )
             ),
         ],
@@ -3658,6 +3680,7 @@ class HelperConfigTools:
         - List all zones: ha_config_list_helpers("zone")
         - List all persons: ha_config_list_helpers("person")
         - List all tags: ha_config_list_helpers("tag")
+        - List every helper type at once: ha_config_list_helpers("all")
 
         **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
 
@@ -3666,8 +3689,20 @@ class HelperConfigTools:
         through it; storage types are listed on all installs. Requesting a flow
         type without the component returns a COMPONENT_NOT_INSTALLED error.
 
+        Pass helper_type="all" to enumerate every helper type in a single call.
+        Each record carries its own ``helper_type``. This mode is component-only
+        (there is no single built-in command that lists all types): without the
+        ha_mcp_tools component it returns a COMPONENT_NOT_INSTALLED error rather
+        than a partial or empty list.
+
         For detailed helper documentation, use ha_get_skill_guide.
         """
+        # All-types mode: one merged component listing across every helper type.
+        # No legacy equivalent exists (no single WS command enumerates all
+        # types), so it is component-only — see ``_list_all_helpers``.
+        if helper_type == "all":
+            return await self._list_all_helpers()
+
         # Flow-based helper types have no ``{type}/list`` command, so only the
         # component's ``helpers_list`` can enumerate them: they are served
         # exclusively through the component path (never the legacy body, never a
@@ -3851,6 +3886,136 @@ class HelperConfigTools:
             "count": len(items),
             "helpers": items,
             "message": f"Found {len(items)} {helper_type} helper(s)",
+        }
+
+    async def _list_all_helpers(self) -> dict[str, Any]:
+        """Serve ``helper_type="all"``: one merged component listing, or a hard error.
+
+        All-types mode has no legacy equivalent, so it is component-only
+        (mirroring the flow-helper precedent). When the component advertises
+        ``helpers_list`` it serves the merged listing; otherwise — or if the
+        component call fails — this raises COMPONENT_NOT_INSTALLED via
+        :func:`_raise_all_requires_component` rather than returning an empty list.
+        A raw transport failure (e.g. the WS cannot connect right after an HA
+        restart) becomes the structured error the rest of the tool uses — never
+        an unclassified exception.
+        """
+        response: dict[str, Any] | None = None
+        try:
+            caps = await get_component_caps(self._client)
+            if component_supports(caps, "helpers_list"):
+                response = await self._all_helpers_via_component()
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"helper_type": "all"},
+                suggestions=[
+                    "Home Assistant may be restarting or unreachable — retry shortly",
+                ],
+            )
+        if response is None:
+            _raise_all_requires_component()
+        return response
+
+    async def _all_helpers_via_component(self) -> dict[str, Any] | None:
+        """Serve all-types from the component; ``None`` ⇒ raise component-required.
+
+        There is no legacy all-types path, so — unlike single-type storage
+        listing — every component failure resolves to the same hard error the
+        caller raises (mirroring the flow-helper taxonomy). ``unknown_command``
+        additionally invalidates the now-stale positive caps.
+        """
+        try:
+            raw = await self._send_component_all_helpers()
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+            logger.warning("ha_mcp_tools/helpers_list (all) failed: %r", exc)
+            return None
+        return await self._shape_all_helpers_response(raw.get("result") or {})
+
+    async def _send_component_all_helpers(self) -> dict[str, Any]:
+        """Send one all-types ``ha_mcp_tools/helpers_list`` command (no type filter).
+
+        Omitting ``helper_types`` makes the component return every storage +
+        flow helper it can enumerate in a single round-trip
+        (``type_filter=None`` component-side).
+        """
+        ws = await get_websocket_client(
+            url=self._client.base_url,
+            token=self._client.token,
+            verify_ssl=getattr(self._client, "verify_ssl", None),
+        )
+        return await ws.send_command(
+            "ha_mcp_tools/helpers_list",
+            include_flow_helpers=True,
+        )
+
+    async def _shape_all_helpers_response(
+        self, result: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Map an all-types ``helpers_list`` result into the merged listing envelope.
+
+        Each record is shaped by kind (flow → ``_shape_flow_helper_record``,
+        collection → ``_shape_collection_helper_record``) and stamped with its
+        own ``helper_type`` so records of different types stay distinguishable in
+        the flat list. Respecting ``covered_types`` (mirroring the single-type
+        path): a simple type the component could not enumerate from the state
+        machine — ``tag`` has no state entity — is fetched per-type via its
+        legacy ``{type}/list`` and merged, so ``all`` never silently drops it.
+        """
+        raw = result.get("helpers")
+        records = raw if isinstance(raw, list) else []
+        helpers: list[dict[str, Any]] = []
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            if rec.get("kind") == "flow":
+                helpers.append(_shape_flow_helper_record(rec))
+            else:
+                shaped = _shape_collection_helper_record(rec)
+                # All-types records span many types, so each self-describes its
+                # type (single-type mode carries it at the envelope top instead).
+                shaped["helper_type"] = rec.get("helper_type")
+                helpers.append(shaped)
+
+        covered = result.get("covered_types")
+        covered_set = set(covered) if isinstance(covered, list) else set()
+        # Flow helper types have no legacy ``{type}/list`` fallback — if the
+        # component did not authoritatively cover one, a "successful" merged
+        # listing would silently omit it. Mirror the single-type taxonomy:
+        # hard error, never a partial inventory reported as complete.
+        uncovered_flow = sorted(FLOW_HELPER_TYPES - covered_set)
+        if uncovered_flow:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.COMPONENT_NOT_INSTALLED,
+                    "The ha_mcp_tools component response did not cover flow "
+                    f"helper type(s): {', '.join(uncovered_flow)} — cannot "
+                    "return a complete all-types listing.",
+                    context={"helper_type": "all", "uncovered": uncovered_flow},
+                    suggestions=[
+                        "Update the ha_mcp_tools custom component",
+                        "List helper types individually instead of 'all'",
+                    ],
+                )
+            )
+        for helper_type in sorted(SIMPLE_HELPER_TYPES - covered_set):
+            legacy = await self._legacy_helper_list(helper_type)
+            for item in legacy.get("helpers", []):
+                if isinstance(item, dict):
+                    row = dict(item)
+                    row.setdefault("helper_type", helper_type)
+                    helpers.append(row)
+
+        return {
+            "success": True,
+            "helper_type": "all",
+            "count": len(helpers),
+            "helpers": helpers,
+            "message": f"Found {len(helpers)} helper(s)",
         }
 
     @tool(

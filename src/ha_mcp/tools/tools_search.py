@@ -3017,22 +3017,21 @@ class SearchTools:
         feeds those slices into its **unchanged** assembly
         (``get_system_overview`` + ``system_info`` / ``notifications`` /
         ``repairs``), so the two paths are byte-identical by construction. Routed
-        all-or-nothing per the ``ha_search`` precedent: gated on the ``overview``
-        capability AND an inactive entity-visibility filter. The filter is applied
-        server-side over the slices either way, so the bypass is a simplification,
-        not a correctness requirement — an active filter that respects Assist
-        exposure would need extra WS reads inside ``load_hidden_set`` that the
-        single round-trip does not carry, so it keeps the legacy path (mirroring
-        search; applying the filter over the slices can come later). The
-        server-side-only fields (``tool_discovery``, ``settings_url``,
+        all-or-nothing per the ``ha_search`` precedent, gated solely on the
+        ``overview`` capability. Unlike ``ha_search``, an active
+        entity-visibility filter does NOT force the legacy path here:
+        ``get_system_overview`` calls ``load_hidden_set`` unconditionally and
+        ``_build_overview_slices`` hands it the same registry + states envelope
+        the legacy fetch produces, so the filter is applied server-side over the
+        component's slices and the output stays byte-identical to legacy
+        (``load_hidden_set`` reaches any extra data it needs — e.g. the
+        Assist-exposure dimension — through the ``client`` it is already passed).
+        The server-side-only fields (``tool_discovery``, ``settings_url``,
         ``read_only_mode``, ``ha_mcp_update``) and the ``fields=`` projection are
         applied by ``ha_get_overview`` after this, identically on both paths.
         """
         caps = await get_component_caps(self._client)
-        if (
-            component_supports(caps, "overview")
-            and not await visibility_filter_active()
-        ):
+        if component_supports(caps, "overview"):
             component_result = await self._overview_via_component(inputs)
             if component_result is not None:
                 return component_result

@@ -22,10 +22,9 @@ from pydantic import Field
 from websockets.asyncio.client import ClientConnection
 
 from .._version import is_running_in_addon
-from ..client.rest_client import HomeAssistantClient
+from ..client.rest_client import HomeAssistantClient, HomeAssistantCommandError
 from ..errors import (
     ErrorCode,
-    create_connection_error,
     create_error_response,
     create_validation_error,
 )
@@ -36,7 +35,6 @@ from ..utils.python_sandbox import (
 )
 from .helpers import (
     exception_to_structured_error,
-    get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
     validate_identifier_not_empty,
@@ -233,16 +231,7 @@ async def _supervisor_api_call(
     Returns:
         The "result" field from a successful response, or an error dict.
     """
-    ws_client = None
     try:
-        ws_client, error = await get_connected_ws_client(
-            client.base_url, client.token, verify_ssl=client.verify_ssl
-        )
-        if error or ws_client is None:
-            return error or create_connection_error(
-                "Failed to establish WebSocket connection",
-            )
-
         kwargs: dict[str, Any] = {"endpoint": endpoint, "method": method}
         if data is not None:
             kwargs["data"] = data
@@ -256,29 +245,20 @@ async def _supervisor_api_call(
             kwargs["timeout"] = timeout
             wait_timeout = float(timeout) + 15.0
 
-        result = await ws_client.send_command(
-            "supervisor/api", _wait_timeout=wait_timeout, **kwargs
+        # Route through the shared pooled WebSocket (issue #1813) rather than
+        # opening a dedicated connect/auth handshake per call. ``_wait_timeout``
+        # is consumed by send_command (it never reaches Home Assistant). The
+        # pooled path collapses a failed WS command into
+        # ``{"success": False, "error": ...}``; re-raise it as the same
+        # ``HomeAssistantCommandError`` the dedicated send_command used to raise
+        # so the classifier below maps schema/not-found/etc. identically.
+        result = await client.send_websocket_message(
+            {"type": "supervisor/api", "_wait_timeout": wait_timeout, **kwargs}
         )
 
         if not result.get("success"):
-            error_msg = str(result.get("error", ""))
-            if "not_found" in error_msg.lower() or "unknown" in error_msg.lower():
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        "Supervisor API not available",
-                        details=str(result),
-                        suggestions=[
-                            "This feature requires Home Assistant OS or Supervised installation",
-                        ],
-                    )
-                )
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Supervisor API call failed: {endpoint}",
-                    details=str(result),
-                )
+            raise HomeAssistantCommandError(
+                str(result.get("error", f"Supervisor API call failed: {endpoint}"))
             )
 
         return {"success": True, "result": result.get("result", {})}
@@ -293,14 +273,6 @@ async def _supervisor_api_call(
             suggestions=["Check Home Assistant connection and Supervisor availability"],
         )
         return None  # unreachable: exception_to_structured_error always raises
-    finally:
-        if ws_client:
-            try:
-                await ws_client.disconnect()
-            except Exception:
-                # Best-effort cleanup: the WS connection is being torn down, so a
-                # disconnect failure is non-fatal and must not mask the real result.
-                pass
 
 
 def _addon_connection_failure_suggestions(

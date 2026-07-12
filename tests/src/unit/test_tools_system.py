@@ -873,6 +873,7 @@ class TestGetSystemHealthGather:
 
         mock_zha.assert_awaited_once()
         # Helper called with ws_client + full=True
+        assert mock_zha.await_args is not None
         assert mock_zha.await_args.kwargs == {"full": True}
 
     @pytest.mark.asyncio
@@ -1080,6 +1081,7 @@ class TestGetSystemHealthDiagnostics:
         ):
             result = await tools.ha_get_system_health(include="diagnostics")
         # Positional config_entry_id is None, not "".
+        assert mock_fetch.await_args is not None
         assert mock_fetch.await_args.args[1] is None
         assert result["diagnostics"]["config_entry_id"] is None
 
@@ -2294,3 +2296,228 @@ class TestHomeAssistantConnectionErrorPropagation:
         msg = str(excinfo.value)
         assert "CONNECTION_FAILED" in msg
         assert "ws gone" in msg
+
+
+class TestReloadCore:
+    """``ha_reload_core``: bounded-concurrency sweep (Item 2) and single
+    config-entry reload via ``entry_id`` (Item 3 — issue #1813 fold-in)."""
+
+    @staticmethod
+    def _reloadable_count() -> int:
+        from ha_mcp.tools.tools_system import RELOAD_TARGETS
+
+        return sum(1 for info in RELOAD_TARGETS.values() if info is not None)
+
+    @pytest.mark.asyncio
+    async def test_all_mode_respects_semaphore_bound(self):
+        """target='all' fires every reloadable subsystem concurrently but the
+        in-flight count never exceeds the Semaphore(4) bound — and, since the
+        target set is far larger than 4, actually saturates it (proving the
+        calls are not silently serial)."""
+        max_bound = 4
+
+        class _ConcurrencyClient:
+            def __init__(self) -> None:
+                self.in_flight = 0
+                self.max_in_flight = 0
+                self.calls: list[tuple[str, str]] = []
+
+            async def call_service(self, domain, service, data):
+                self.in_flight += 1
+                self.max_in_flight = max(self.max_in_flight, self.in_flight)
+                self.calls.append((domain, service))
+                # Hold the slot so overlap is forced and the counter can climb.
+                await asyncio.sleep(0.01)
+                self.in_flight -= 1
+                return []
+
+        client = _ConcurrencyClient()
+        result = await SystemTools(client).ha_reload_core(target="all")
+
+        expected = self._reloadable_count()
+        assert len(client.calls) == expected
+        assert client.max_in_flight <= max_bound
+        assert client.max_in_flight == min(max_bound, expected)
+        assert result["success"] is True
+        assert len(result["reloaded"]) == expected
+        assert "warnings" not in result
+
+    @pytest.mark.asyncio
+    async def test_all_mode_one_failing_target_reports_per_target(self):
+        """A single failing subsystem lands in ``warnings``; every sibling still
+        reloads and is attempted — the failure must not cancel the gather."""
+
+        class _OneFailClient:
+            def __init__(self, fail_domain: str) -> None:
+                self.fail_domain = fail_domain
+                self.calls: list[tuple[str, str]] = []
+
+            async def call_service(self, domain, service, data):
+                self.calls.append((domain, service))
+                if domain == self.fail_domain:
+                    raise RuntimeError("template reload blew up")
+                return []
+
+        client = _OneFailClient("template")
+        result = await SystemTools(client).ha_reload_core(target="all")
+
+        expected = self._reloadable_count()
+        # Every target attempted despite the failure — no sibling was cancelled.
+        assert len(client.calls) == expected
+        assert result["success"] is True
+        assert "templates" not in result["reloaded"]
+        assert len(result["reloaded"]) == expected - 1
+        warnings = result["warnings"]
+        assert any(
+            "templates" in w and "template reload blew up" in w for w in warnings
+        )
+
+    @pytest.mark.asyncio
+    async def test_all_mode_not_found_errors_suppressed(self):
+        """A target whose service is unavailable ('not found') is silently
+        skipped, not surfaced as a warning (some helpers aren't installed)."""
+
+        class _NotFoundClient:
+            async def call_service(self, domain, service, data):
+                if domain == "template":
+                    raise RuntimeError("Service template.reload not found")
+                return []
+
+        result = await SystemTools(_NotFoundClient()).ha_reload_core(target="all")
+
+        assert result["success"] is True
+        assert "templates" not in result["reloaded"]
+        assert "warnings" not in result
+
+    @pytest.mark.asyncio
+    async def test_single_target_unchanged(self):
+        """Single-target mode still issues exactly one service call and returns
+        the single-target envelope (unaffected by the concurrency rework)."""
+        client = AsyncMock()
+        client.call_service.return_value = []
+
+        result = await SystemTools(client).ha_reload_core(target="automations")
+
+        client.call_service.assert_awaited_once_with("automation", "reload", {})
+        assert result == {
+            "success": True,
+            "message": "Successfully reloaded automations",
+            "target": "automations",
+            "service": "automation.reload",
+        }
+
+    @pytest.mark.asyncio
+    async def test_invalid_target_rejected(self):
+        """An unknown target still raises VALIDATION_INVALID_PARAMETER before
+        any service call (unchanged guard)."""
+        client = AsyncMock()
+        with pytest.raises(ToolError) as excinfo:
+            await SystemTools(client).ha_reload_core(target="bogus")
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        client.call_service.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_entry_id_reload_happy_path_exact_url(self):
+        """entry_id reloads exactly one config entry via the REST endpoint,
+        hitting the exact path including the ``/entry/`` segment; the sweep path
+        (call_service) is never touched."""
+        client = MagicMock()
+        client._request = AsyncMock(return_value={})
+
+        result = await SystemTools(client).ha_reload_core(entry_id="abc123")
+
+        client._request.assert_awaited_once_with(
+            "POST", "/config/config_entries/entry/abc123/reload"
+        )
+        assert result == {
+            "success": True,
+            "message": "Reloaded config entry abc123",
+            "reloaded": True,
+            "require_restart": False,
+            "entry_id": "abc123",
+        }
+        client.call_service.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_entry_id_require_restart_surfaced(self):
+        """Core's require_restart=True (entry cannot hot-reload) must not be
+        reported as a completed reload."""
+        client = MagicMock()
+        client._request = AsyncMock(return_value={"require_restart": True})
+
+        result = await SystemTools(client).ha_reload_core(entry_id="abc123")
+
+        assert result["success"] is True
+        assert result["reloaded"] is False
+        assert result["require_restart"] is True
+        assert "restart" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_entry_id_forbidden_maps_to_cannot_reload_not_auth(self):
+        """Core returns 403 'Entry cannot be reloaded' for OperationNotAllowed;
+        that must surface as a cannot-reload error, not an auth failure."""
+        client = MagicMock()
+        client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 403 - Entry cannot be reloaded", status_code=403
+            )
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await SystemTools(client).ha_reload_core(entry_id="abc123")
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "cannot be reloaded" in err["error"]["message"]
+        assert "abc123" in err["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_entry_id_not_found_maps_to_resource_not_found(self):
+        """A 404 from the reload endpoint becomes a RESOURCE_NOT_FOUND error
+        that names the entry_id."""
+        client = MagicMock()
+        client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 404 - Config entry not found", status_code=404
+            )
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await SystemTools(client).ha_reload_core(entry_id="missing_entry")
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "missing_entry" in err["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_entry_id_non_404_failure_raises_tool_error(self):
+        """A non-404 backend failure still surfaces as a ToolError (routed
+        through the shared exception classifier), not a silent success."""
+        client = MagicMock()
+        client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError("API error: 500 - boom", status_code=500)
+        )
+        with pytest.raises(ToolError):
+            await SystemTools(client).ha_reload_core(entry_id="abc123")
+
+    @pytest.mark.asyncio
+    async def test_entry_id_with_explicit_target_conflict(self):
+        """entry_id combined with an explicit subsystem target is a validation
+        error — the reload endpoint is never hit."""
+        client = MagicMock()
+        client._request = AsyncMock()
+        with pytest.raises(ToolError) as excinfo:
+            await SystemTools(client).ha_reload_core(
+                target="scripts", entry_id="abc123"
+            )
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        client._request.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_entry_id_empty_rejected(self):
+        """An empty/whitespace entry_id is rejected before any REST call."""
+        client = MagicMock()
+        client._request = AsyncMock()
+        with pytest.raises(ToolError) as excinfo:
+            await SystemTools(client).ha_reload_core(entry_id="   ")
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        client._request.assert_not_awaited()
