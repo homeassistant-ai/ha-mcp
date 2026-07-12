@@ -18,6 +18,14 @@ from datetime import timedelta
 
 DOMAIN = "ha_mcp_tools"
 
+# Component version, kept in lockstep with ``manifest.json``'s ``version``.
+# ``ha_mcp_tools/info`` reports this so the server can display/debug the running
+# component build; ``TestManifestVersionParity`` pins the two together so a
+# manifest bump that forgets this constant (or vice-versa) fails in CI. The
+# capability negotiation — not this version — gates each WS command (see
+# ``websocket_api.CAPABILITIES``).
+COMPONENT_VERSION = "1.1.0"
+
 # Config-entry discriminator (``entry.data[CONF_ENTRY_TYPE]``). A missing value
 # means "tools" so the pre-existing services entry keeps working across the
 # component update with no migration.

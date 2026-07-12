@@ -88,9 +88,9 @@ These run the server outside Home Assistant — useful for **Container** / **Cor
   > ⚠️ **stdio has known transport issues.** The stdio transport has connection problems that streamable HTTP does not ([#1713](https://github.com/homeassistant-ai/ha-mcp/issues/1713)). It is recommended only for demo/testing tinkering — for a real setup, use the custom component or an HTTP method above.
 
 <details>
-<summary><b>🌐 Remote access (Nabu Casa / Webhook Proxy add-on)</b></summary>
+<summary><b>🌐 Remote access (Nabu Casa / Webhook Proxy add-on / OpenAI Tunnel)</b></summary>
 
-> **Using the HA-MCP custom component?** You do not need this — the component has its own built-in webhook for remote access (see the **Get Started** quick start at the top). This proxy is for the **add-on** (it can also front another external server via its `mcp_server_url` option).
+> **Using the HA-MCP custom component?** You do not need the **Webhook Proxy** — the component has its own built-in webhook for remote access (see the **Get Started** quick start at the top). The proxy is for the **add-on** (it can also front another external server via its `mcp_server_url` option). The **OpenAI Tunnel** below is different: it applies to **any** install method when Home Assistant isn't publicly reachable at all (no Nabu Casa or reverse proxy).
 
 Already have **Nabu Casa** or another reverse proxy pointing at your Home Assistant? The Webhook Proxy add-on routes MCP traffic through your existing setup — no separate tunnel or port forwarding needed.
 
@@ -103,6 +103,8 @@ Already have **Nabu Casa** or another reverse proxy pointing at your Home Assist
 4. Configure your AI client with that URL
 
 For other remote access methods (Cloudflare Tunnel, custom reverse proxy), see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
+
+**ChatGPT / Codex behind a firewall (OpenAI Tunnel).** ChatGPT connectors normally require a publicly reachable URL. If you can't (or don't want to) expose one, the community [OpenAI Tunnel for HA-MCP](https://github.com/norpol/hass-codex-tunnel-mcp) integration by [@norpol](https://github.com/norpol) runs OpenAI's [`tunnel-client`](https://github.com/openai/tunnel-client) inside Home Assistant and connects your local MCP server URL to an OpenAI-hosted tunnel over an outbound-only connection — no port forwarding, reverse proxy, or public URL. Point it at your ha-mcp URL, then attach the ChatGPT connector to the same tunnel ID. See the [FAQ entry](https://homeassistant-ai.github.io/ha-mcp/faq/#openai-tunnel) and [#1811](https://github.com/homeassistant-ai/ha-mcp/issues/1811).
 
 [Webhook proxy documentation →](https://github.com/homeassistant-ai/ha-mcp/blob/master/homeassistant-addon-webhook-proxy/DOCS.md)
 
@@ -233,7 +235,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **HACS** | `ha_get_hacs_info`, `ha_manage_hacs` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_remove_helpers_integrations` |
 | **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logs` |
-| **Integrations** | `ha_get_integration`, `ha_get_system_health`, `ha_set_integration_enabled` |
+| **Integrations** | `ha_get_integration`, `ha_get_system_health`, `ha_set_integration` |
 | **Labels & Categories** | `ha_config_get_category`, `ha_config_get_label`, `ha_config_remove_category`, `ha_config_remove_label`, `ha_config_set_category`, `ha_config_set_label` |
 | **Matter** | `ha_manage_radio` |
 | **Scenes** | `ha_config_get_scene`, `ha_config_remove_scene`, `ha_config_set_scene` |
@@ -464,6 +466,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@jasonjhofmann](https://github.com/jasonjhofmann)** — Recurring calendar events via `rrule` support in `ha_config_set_calendar_event`.
 - **[@vpciii](https://github.com/vpciii)** — Coerce JSON-encoded strings on dict/list tool params.
 - **[@pburtchaell](https://github.com/pburtchaell)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
+- **[@norpol](https://github.com/norpol)** — Built the [OpenAI Tunnel for HA-MCP](https://github.com/norpol/hass-codex-tunnel-mcp) companion integration, connecting ChatGPT to a firewalled Home Assistant MCP server (#1811).
 ---
 
 ## 💬 Community
@@ -473,6 +476,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## ⭐ Star History
+## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=homeassistant-ai/ha-mcp&type=Date)](https://star-history.com/#homeassistant-ai/ha-mcp&Date)
+<a href="https://www.star-history.com/?repos=homeassistant-ai%2Fha-mcp&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=homeassistant-ai/ha-mcp&type=date&theme=dark&legend=top-left&sealed_token=Q-MH9ocwRsHw_ar_hpfqQEnHbimdgmBpCS-8O_-4kCHhPgcUTlHh2QCnrPdgMt7pFh8zKHdRBvEGddVGTIhwxt29vMsHu2oc-bBuqP5f8CVgx8ZyupZc5sbxxQ2LFh8HBDKKCzMPHMYr9ciMSBPCBFwHR8c0p_Gol1wb2FyDeKuZ_73XyWAXhvEZypvy" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=homeassistant-ai/ha-mcp&type=date&legend=top-left&sealed_token=Q-MH9ocwRsHw_ar_hpfqQEnHbimdgmBpCS-8O_-4kCHhPgcUTlHh2QCnrPdgMt7pFh8zKHdRBvEGddVGTIhwxt29vMsHu2oc-bBuqP5f8CVgx8ZyupZc5sbxxQ2LFh8HBDKKCzMPHMYr9ciMSBPCBFwHR8c0p_Gol1wb2FyDeKuZ_73XyWAXhvEZypvy" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=homeassistant-ai/ha-mcp&type=date&legend=top-left&sealed_token=Q-MH9ocwRsHw_ar_hpfqQEnHbimdgmBpCS-8O_-4kCHhPgcUTlHh2QCnrPdgMt7pFh8zKHdRBvEGddVGTIhwxt29vMsHu2oc-bBuqP5f8CVgx8ZyupZc5sbxxQ2LFh8HBDKKCzMPHMYr9ciMSBPCBFwHR8c0p_Gol1wb2FyDeKuZ_73XyWAXhvEZypvy" />
+ </picture>
+</a>

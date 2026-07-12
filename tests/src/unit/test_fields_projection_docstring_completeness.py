@@ -201,7 +201,7 @@ _PAREN_NOTE_RE = re.compile(r"\([^)]*\)")
 
 
 def _read_module(rel_path: str) -> ast.Module:
-    return ast.parse((SRC_ROOT / rel_path).read_text())
+    return ast.parse((SRC_ROOT / rel_path).read_text(encoding="utf-8"))
 
 
 def _find_function(
@@ -618,7 +618,7 @@ def test_tool_specs_covers_every_fields_using_tool() -> None:
     tools_dir = SRC_ROOT / "tools"
     discovered: set[str] = set()
     for path in sorted(tools_dir.glob("tools_*.py")):
-        module = ast.parse(path.read_text())
+        module = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(module):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue

@@ -467,6 +467,90 @@ async def _fetch_assist_exposure(
         return None, False
 
 
+def config_needs_device_registry(config: VisibilityConfig) -> bool:
+    """Whether an enabled visibility config has a dimension that reads the device registry.
+
+    The device registry (``config/device_registry/list``) only supplies the
+    device-inherited area/labels consumed by the area/label exclude *and* allow
+    dimensions (see ``_effective_area`` / ``_effective_labels``). A disabled
+    config, or an enabled one with none of those four dimensions set (the
+    default), never touches it, so fetching it there is pure waste.
+    """
+    return config.enabled and bool(
+        config.exclude_areas
+        or config.exclude_labels
+        or config.allow_areas
+        or config.allow_labels
+    )
+
+
+def config_has_active_hide_dimensions(config: VisibilityConfig) -> bool:
+    """Whether an enabled visibility config has any dimension that can hide.
+
+    An ``enabled=True`` config with every dimension cleared (including
+    ``exclude_categories=[]``) hides nothing, so a query search can still route
+    through the in-process ha_mcp_tools component. Any active dimension — a known
+    ``exclude_category``, ``exclude_hidden``, a deny/allow list, an area/label
+    exclude/allow, or ``respect_assist_exposure`` — means the component (which
+    applies no visibility filtering) would surface entities the server hides, so
+    the query must stay on the legacy path. Mirrors the dimension set the
+    ``hidden_entity_ids`` resolver actually consults, so a config that hides
+    something here is exactly one that would hide something there.
+    """
+    if not config.enabled:
+        return False
+    return bool(
+        (set(config.exclude_categories) & KNOWN_ENTITY_CATEGORIES)
+        or config.exclude_hidden
+        or config.deny_entity_ids
+        or config.exclude_areas
+        or config.exclude_labels
+        or config.allow_entity_ids
+        or config.allow_areas
+        or config.allow_labels
+        or config.respect_assist_exposure
+    )
+
+
+async def visibility_filter_active() -> bool:
+    """Load the visibility config off-loop; report whether the filter can hide.
+
+    ``ha_search`` routing gates the component fast path on this: a query search
+    must NOT route through the ha_mcp_tools component while the filter is active,
+    because the component does not apply the server's opt-in visibility filter
+    and would leak entities the legacy path hides. Reuses the same loader the
+    legacy filter uses (``load_visibility_config`` over ``get_data_dir()``), so a
+    test that redirects ``resolver.get_data_dir`` steers both.
+
+    Fails **closed** to ``True`` (keep the legacy, filter-applying path) on a load
+    error: a missing config file returns a disabled default (not an error, → the
+    component), but a *malformed* enabled config raising here would otherwise
+    silently route to the unfiltered component — so on any exception keep legacy,
+    where ``load_hidden_set`` surfaces the load-failure warning.
+    """
+    try:
+        config = await asyncio.to_thread(load_visibility_config, get_data_dir())
+    except Exception:
+        return True
+    return config_has_active_hide_dimensions(config)
+
+
+async def device_registry_needed_for_visibility() -> bool:
+    """Load the visibility config off-loop and report whether the device-registry
+    fetch is needed by any active area/label dimension.
+
+    Fail-open to ``False``: a default install (no config file) or an unloadable
+    config resolves to disabled, which needs no device registry. The
+    operator-facing load-failure warning is owned by the ``load_hidden_set`` call
+    that runs right after — this gate only decides whether to spend the fetch.
+    """
+    try:
+        config = await asyncio.to_thread(load_visibility_config, get_data_dir())
+    except Exception:
+        return False
+    return config_needs_device_registry(config)
+
+
 async def load_hidden_set(
     registry_result: object,
     states_result: object | None = None,

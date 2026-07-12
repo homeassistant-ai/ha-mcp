@@ -241,6 +241,67 @@ class TestSendCommandErrorContract:
         assert "Command failed:" in str(exc_info.value)
         assert "system_health failure" in str(exc_info.value)
 
+    @pytest.mark.asyncio
+    async def test_send_command_attaches_structured_error_code(self):
+        """send_command threads HA's error ``code`` onto the exception.
+
+        The ``code`` lets routing (e.g. the component gate) key off the stable
+        HA error code instead of matching the message string.
+        """
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _resolve_with_failure(message: dict) -> None:
+            message_id = message["id"]
+            future = client._state._pending_requests.get(message_id)
+            assert future is not None, "send_command did not register a pending future"
+            future.set_result(
+                {
+                    "id": message_id,
+                    "type": "result",
+                    "success": False,
+                    "error": {
+                        "code": "unknown_command",
+                        "message": "Unknown command.",
+                    },
+                }
+            )
+
+        client.send_json_message = _resolve_with_failure  # type: ignore[method-assign]
+
+        with pytest.raises(HomeAssistantCommandError) as exc_info:
+            await client.send_command("ha_mcp_tools/info")
+        assert exc_info.value.code == "unknown_command"
+        # Message contract is unchanged.
+        assert "Command failed:" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_send_command_string_error_leaves_code_none(self):
+        """A bare-string error payload carries no code, so ``code`` stays None."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _resolve_with_failure(message: dict) -> None:
+            message_id = message["id"]
+            future = client._state._pending_requests.get(message_id)
+            assert future is not None, "send_command did not register a pending future"
+            future.set_result(
+                {
+                    "id": message_id,
+                    "type": "result",
+                    "success": False,
+                    "error": "bare string error",
+                }
+            )
+
+        client.send_json_message = _resolve_with_failure  # type: ignore[method-assign]
+
+        with pytest.raises(HomeAssistantCommandError) as exc_info:
+            await client.send_command("test/ping")
+        assert exc_info.value.code is None
+
 
 class TestSendCommandWaitTimeout:
     """``send_command``'s local await honors the ``_wait_timeout`` argument.

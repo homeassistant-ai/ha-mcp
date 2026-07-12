@@ -388,27 +388,20 @@ class AutomationConfigTools:
                     "Use ha_search(domain_filter='automation') to list automations",
                 ],
             )
-            normalized_config, config_hash = await self._get_automation_config_internal(
-                identifier
-            )
 
-            # Resolve entity_id and fetch category from entity registry
-            # (injected after hash so transient registry failures don't affect the hash)
-            entity_id = await self._resolve_automation_entity_id(identifier)
-            if entity_id:
-                cat_id = await fetch_entity_category(
-                    self._client, entity_id, "automation"
-                )
-                if cat_id:
-                    normalized_config["category"] = cat_id
-
-            return {
-                "success": True,
-                "action": "get",
-                "automation_id": entity_id or identifier,
-                "config": normalized_config,
-                "config_hash": config_hash,
-            }
+            # Automation gets ALWAYS take the legacy path — the component's
+            # in-process ``config_get`` was withdrawn. It served
+            # ``entity.raw_config``, which is only the storage body as of the
+            # last COMPLETED async reload, with no version marker to tell a
+            # fresh body from a stale one. A get racing a reload returned the
+            # pre-edit body and broke the get -> python_transform -> set
+            # round-trip (caught live by the automation python_transform e2e on
+            # the arm/HAOS runners). The legacy REST config endpoint reads the
+            # config FILE, which is fresh the instant a write lands, so it stays
+            # the sole path. Scenes were already legacy-only (no storage body in
+            # memory at all); automations join them here for freshness. A
+            # file-reading ``config_get`` may return later (issue #1813).
+            return await self._legacy_get_automation(identifier)
         except ToolError:
             raise
         except Exception as e:
@@ -422,6 +415,36 @@ class AutomationConfigTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+
+    async def _legacy_get_automation(self, identifier: str) -> dict[str, Any]:
+        """Assemble the automation-get response from the REST/WS pipeline.
+
+        The multi-fetch path: per-id config REST + state-lookup entity_id
+        resolution + ``fetch_entity_category`` WS call. This is the ONLY
+        automation-get path — see ``ha_config_get_automation`` for why
+        automation gets never route through the component's ``config_get``
+        (its ``raw_config`` freshness lags the config file between a write and
+        the next completed reload).
+        """
+        normalized_config, config_hash = await self._get_automation_config_internal(
+            identifier
+        )
+
+        # Resolve entity_id and fetch category from entity registry
+        # (injected after hash so transient registry failures don't affect the hash)
+        entity_id = await self._resolve_automation_entity_id(identifier)
+        if entity_id:
+            cat_id = await fetch_entity_category(self._client, entity_id, "automation")
+            if cat_id:
+                normalized_config["category"] = cat_id
+
+        return {
+            "success": True,
+            "action": "get",
+            "automation_id": entity_id or identifier,
+            "config": normalized_config,
+            "config_hash": config_hash,
+        }
 
     @tool(
         name="ha_config_set_automation",

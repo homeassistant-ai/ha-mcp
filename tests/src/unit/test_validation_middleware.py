@@ -93,6 +93,31 @@ async def test_string_for_list_gives_actionable_message():
 
 
 @pytest.mark.asyncio
+async def test_malformed_json_container_preserves_decoder_location():
+    """JSON-like strings retain the decoder detail through FastMCP middleware."""
+    from typing import Annotated
+
+    from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
+
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_coerced_dict(
+        config: Annotated[dict, JSON_STRING_COERCION],
+    ) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_test_coerced_dict", {"config": '{"key": }'})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "config" in msg
+    assert "Invalid JSON" in msg
+    assert "line 1 column 9" in msg
+
+
+@pytest.mark.asyncio
 async def test_multiple_type_errors_are_joined():
     """Multiple bad params surface together, joined by ';'."""
     mcp = _make_mcp()

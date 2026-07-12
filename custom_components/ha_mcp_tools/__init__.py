@@ -55,6 +55,7 @@ from .const import (
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
 )
+from .websocket_api import async_register_commands
 from .yaml_rt import apply_seq_indent, detect_seq_indent, make_yaml, yaml_dumps
 
 _LOGGER = logging.getLogger(__name__)
@@ -2482,6 +2483,12 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         schema=SERVICE_READ_LEGACY_BACKUP_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
+
+    # Register the in-process ha_mcp_tools/* WebSocket commands (info + search)
+    # the server calls behind a capability gate. Idempotent, and independent of
+    # the caller-token gate above — HA core authenticates the WS connection and
+    # @require_admin gates each command (see websocket_api.py).
+    async_register_commands(hass)
 
     _LOGGER.info("HA MCP Tools initialized with file management services")
     return True

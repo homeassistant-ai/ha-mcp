@@ -156,41 +156,20 @@ class ConfigScriptTools:
                     "Use ha_search(domain_filter='script') to list scripts",
                 ],
             )
-            config_result = await self._fetch_script_config_envelope(script_id)
-            # Extract actual script config body and compute hash before category injection
-            actual_config = config_result.get("config", config_result)
-            config_hash_value = compute_config_hash(actual_config)
 
-            # Fetch category from entity registry (best-effort)
-            # (injected after hash so transient registry failures don't affect the hash)
-            entity_id = f"script.{script_id}"
-            cat_id = await fetch_entity_category(self._client, entity_id, "script")
-            if cat_id:
-                config_result["category"] = cat_id
-
-            # Issue #1334: return the canonical storage key from the
-            # rest_client envelope so callers can thread the result into
-            # subsequent ha_config_*_script calls without re-resolving.
-            # Falls back to the input when the rest_client response omits
-            # the key — a contract violation that we surface via warning
-            # rather than mask silently.
-            canonical_id = config_result.get("script_id")
-            if canonical_id is None:
-                logger.warning(
-                    "get_script_config envelope missing 'script_id' for "
-                    "input %r; falling back to caller input. This indicates "
-                    "a rest_client contract violation.",
-                    script_id,
-                )
-                canonical_id = script_id
-
-            return {
-                "success": True,
-                "action": "get",
-                "script_id": canonical_id,
-                "config": config_result,
-                "config_hash": config_hash_value,
-            }
+            # Script gets ALWAYS take the legacy path — the component's
+            # in-process ``config_get`` was withdrawn. It served
+            # ``entity.raw_config``, which is only the storage body as of the
+            # last COMPLETED async reload, with no version marker to tell a
+            # fresh body from a stale one. A get racing a reload returned the
+            # pre-edit body and broke the get -> python_transform -> set
+            # round-trip (caught live by the automation/script config e2e on the
+            # arm/HAOS runners). The legacy REST config endpoint reads the config
+            # FILE, which is fresh the instant a write lands, so it stays the
+            # sole path. Scenes were already legacy-only (no storage body in
+            # memory at all); scripts join them here for freshness. A
+            # file-reading ``config_get`` may return later (issue #1813).
+            return await self._legacy_get_script(script_id)
         except ToolError:
             raise
         except Exception as e:
@@ -204,6 +183,51 @@ class ConfigScriptTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+
+    async def _legacy_get_script(self, script_id: str) -> dict[str, Any]:
+        """Assemble the script-get response from the REST/WS pipeline.
+
+        The multi-fetch path: id-resolution WS + per-id config REST +
+        ``fetch_entity_category`` WS call. This is the ONLY script-get path —
+        see ``ha_config_get_script`` for why script gets never route through the
+        component's ``config_get`` (its ``raw_config`` freshness lags the config
+        file between a write and the next completed reload).
+        """
+        config_result = await self._fetch_script_config_envelope(script_id)
+        # Extract actual script config body and compute hash before category injection
+        actual_config = config_result.get("config", config_result)
+        config_hash_value = compute_config_hash(actual_config)
+
+        # Fetch category from entity registry (best-effort)
+        # (injected after hash so transient registry failures don't affect the hash)
+        entity_id = f"script.{script_id}"
+        cat_id = await fetch_entity_category(self._client, entity_id, "script")
+        if cat_id:
+            config_result["category"] = cat_id
+
+        # Issue #1334: return the canonical storage key from the
+        # rest_client envelope so callers can thread the result into
+        # subsequent ha_config_*_script calls without re-resolving.
+        # Falls back to the input when the rest_client response omits
+        # the key — a contract violation that we surface via warning
+        # rather than mask silently.
+        canonical_id = config_result.get("script_id")
+        if canonical_id is None:
+            logger.warning(
+                "get_script_config envelope missing 'script_id' for "
+                "input %r; falling back to caller input. This indicates "
+                "a rest_client contract violation.",
+                script_id,
+            )
+            canonical_id = script_id
+
+        return {
+            "success": True,
+            "action": "get",
+            "script_id": canonical_id,
+            "config": config_result,
+            "config_hash": config_hash_value,
+        }
 
     async def _list_script_entity_ids(self) -> list[str]:
         """Best-effort list of bare script IDs (up to 10) from the entity registry.

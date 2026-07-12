@@ -885,7 +885,7 @@ class TestFlowHelperDirectGuard:
 #      would reach the destructive backend call on every routing path
 #      (simple-helper WS delete, flow-helper entry-resolution, direct
 #      config-entry delete). Single up-front guard closes all three.
-#   2. ``ha_set_integration_enabled`` — empty/whitespace ``entry_id`` would
+#   2. ``ha_set_integration`` — empty/whitespace ``entry_id`` would
 #      reach the ``config_entries/disable`` WS message and surface as a
 #      misleading HA "config entry not found".
 
@@ -921,15 +921,26 @@ class TestIntegrationsIdentifierValidation:
         tools._client.delete_config_entry.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_set_integration_enabled_rejects_empty_entry_id(self, tools, bad):
+    async def test_set_integration_rejects_empty_entry_id(self, tools, bad):
         # ``entry_id`` is passed straight into ``config_entries/disable``;
         # without the guard, ``entry_id=""`` would surface as a misleading
         # HA "config entry not found".
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_set_integration_enabled(entry_id=bad, enabled=False)
+            await tools.ha_set_integration(entry_id=bad, enabled=False)
         _assert_invalid_param(excinfo)
         assert '"parameter": "entry_id"' in str(excinfo.value), str(excinfo.value)
         tools._client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_integration_rejects_empty_domain(self, tools, bad):
+        # ``domain`` is passed straight into ``start_config_flow``; without
+        # the guard, ``domain=""`` would surface as a misleading HA
+        # "Invalid handler specified".
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_integration(domain=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "domain"' in str(excinfo.value), str(excinfo.value)
+        tools._client.start_config_flow.assert_not_called()
 
 
 # --- tools_calendar.py (Round-4 sibling sweep) ---------------------------

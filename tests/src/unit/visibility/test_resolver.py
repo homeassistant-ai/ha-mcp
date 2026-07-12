@@ -1,7 +1,14 @@
+import asyncio
 import logging
 
+from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
-from ha_mcp.visibility.resolver import hidden_entity_ids
+from ha_mcp.visibility.persistence import save_visibility_config
+from ha_mcp.visibility.resolver import (
+    config_has_active_hide_dimensions,
+    hidden_entity_ids,
+    visibility_filter_active,
+)
 
 
 def _reg(*entries):
@@ -66,6 +73,83 @@ def test_category_exclude():
     )
     cfg = VisibilityConfig(enabled=True, exclude_categories=["diagnostic"])
     assert _hidden(reg, cfg) == {"sensor.batt"}
+
+
+# ---------------------------------------------------------------------------
+# config_has_active_hide_dimensions / visibility_filter_active — the ha_search
+# component-routing gate (a query search must NOT hit the visibility-blind
+# component while the filter can hide something).
+# ---------------------------------------------------------------------------
+def test_active_dimensions_disabled_is_inactive():
+    # Even with every dimension populated, a disabled config hides nothing.
+    cfg = VisibilityConfig(enabled=False, deny_entity_ids=["light.x"])
+    assert config_has_active_hide_dimensions(cfg) is False
+
+
+def test_active_dimensions_enabled_but_all_cleared_is_inactive():
+    # enabled=True with exclude_categories emptied and no other dimension hides
+    # nothing → the component may still serve.
+    cfg = VisibilityConfig(enabled=True, exclude_categories=[])
+    assert config_has_active_hide_dimensions(cfg) is False
+
+
+def test_active_dimensions_default_enabled_is_active():
+    # The bare enabled config keeps its default exclude_categories
+    # (diagnostic/config) — an active dimension.
+    assert config_has_active_hide_dimensions(VisibilityConfig(enabled=True)) is True
+
+
+def test_active_dimensions_each_dimension_activates():
+    for kwargs in (
+        {"deny_entity_ids": ["light.x"]},
+        {"exclude_hidden": True},
+        {"exclude_areas": ["garage"]},
+        {"exclude_labels": ["hidden"]},
+        {"allow_entity_ids": ["light.only"]},
+        {"allow_areas": ["kitchen"]},
+        {"allow_labels": ["ok"]},
+        {"respect_assist_exposure": True},
+    ):
+        cfg = VisibilityConfig(enabled=True, exclude_categories=[], **kwargs)
+        assert config_has_active_hide_dimensions(cfg) is True, kwargs
+
+
+def test_active_dimensions_unknown_category_only_is_inactive():
+    # A typo'd category is not one the resolver would ever hide on, so it does
+    # not, by itself, force the legacy path.
+    cfg = VisibilityConfig(enabled=True, exclude_categories=["typo_not_a_category"])
+    assert config_has_active_hide_dimensions(cfg) is False
+
+
+def _active(tmp_path, monkeypatch, config=None):
+    if config is not None:
+        save_visibility_config(tmp_path, config)
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    return asyncio.run(visibility_filter_active())
+
+
+def test_filter_active_missing_file_routes_to_component(tmp_path, monkeypatch):
+    # No config file → disabled default → inactive (component may serve).
+    assert _active(tmp_path, monkeypatch) is False
+
+
+def test_filter_active_enabled_deny_is_active(tmp_path, monkeypatch):
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], deny_entity_ids=["input_boolean.probe"]
+    )
+    assert _active(tmp_path, monkeypatch, cfg) is True
+
+
+def test_filter_active_disabled_is_inactive(tmp_path, monkeypatch):
+    assert _active(tmp_path, monkeypatch, VisibilityConfig(enabled=False)) is False
+
+
+def test_filter_active_malformed_config_fails_closed_to_legacy(tmp_path, monkeypatch):
+    # A malformed enabled config must NOT silently route to the unfiltered
+    # component: visibility_filter_active fails closed to True (keep legacy).
+    (tmp_path / "entity_visibility.json").write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    assert asyncio.run(visibility_filter_active()) is True
 
 
 def test_denylist_and_area_and_label_union():

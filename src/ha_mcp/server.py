@@ -735,6 +735,22 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "For routing guidance and the full allowlist, see "
             "ha_get_skill_guide."
         ),
+        "ha_search": (
+            "Search Home Assistant for entities (by name, domain, or area) AND "
+            "inside automation/script/scene/helper/dashboard configs, in one "
+            "call. Returns tagged buckets — `entities` plus per-config-type "
+            "lists — paginated per-surface and combined "
+            "(`has_more`/`next_offset`).\n\n"
+            "Config-body search is skipped when domain/area/state filters signal "
+            "entity-only intent; a warning names the skip — pass `search_types` "
+            "to force it.\n\n"
+            "`partial: True` means results are NOT exhaustive: a surface failed "
+            "or the config branch lost data. Empty buckets with `partial: True` "
+            'mean "search failed", not "no results" — see `partial_reason` '
+            "(also mirrored into `warnings`). Do not treat a partial response as "
+            "complete.\n\n"
+            "For parameters, schema, and examples, see ha_get_skill_guide."
+        ),
     }
 
     # Description overrides that REPLACE the original description for BM25.

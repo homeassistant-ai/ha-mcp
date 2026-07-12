@@ -5,7 +5,10 @@ import logging
 from typing import Any
 
 from ...utils.fuzzy_search import calculate_partial_ratio
-from ...visibility.resolver import load_hidden_set
+from ...visibility.resolver import (
+    device_registry_needed_for_visibility,
+    load_hidden_set,
+)
 from ..helpers import exception_to_structured_error
 from ..util_helpers import merge_visibility_warnings
 from ._base import _SearchBase
@@ -29,6 +32,9 @@ class EntitySearchMixin(_SearchBase):
         include_attributes: bool = False,
         domain_filter: str | None = None,
         include_hidden: bool = True,
+        *,
+        prefetched_states: list[dict[str, Any]] | None = None,
+        prefetched_registry: Any = None,
     ) -> dict[str, Any]:
         """
         Search entities with fuzzy matching and typo tolerance.
@@ -43,6 +49,11 @@ class EntitySearchMixin(_SearchBase):
                 set in the entity registry are still returned but receive
                 a score penalty so they sort below comparable visible
                 matches. Pass False to filter them out entirely.
+            prefetched_states: Pre-fetched ``get_states()`` list shared by the
+                ha_search orchestrator when both search branches run; ``None``
+                means fetch here.
+            prefetched_registry: Pre-fetched ``config/entity_registry/list``
+                response shared the same way; ``None`` means fetch here.
 
         Returns:
             Dictionary with search results and metadata
@@ -55,7 +66,10 @@ class EntitySearchMixin(_SearchBase):
                 domain_filter = domain_filter.strip().lower()
 
             entities, visibility_warnings = await self._fetch_search_entities(
-                domain_filter, include_hidden
+                domain_filter,
+                include_hidden,
+                prefetched_states=prefetched_states,
+                prefetched_registry=prefetched_registry,
             )
 
             # Perform fuzzy search - returns (paginated_results, total_count)
@@ -234,48 +248,101 @@ class EntitySearchMixin(_SearchBase):
         return aliases_map, warnings
 
     async def _fetch_search_entities(
-        self, domain_filter: str | None, include_hidden: bool
+        self,
+        domain_filter: str | None,
+        include_hidden: bool,
+        *,
+        prefetched_states: list[dict[str, Any]] | None = None,
+        prefetched_registry: Any = None,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         """Fetch + enrich the entity set fed into the fuzzy search layer.
 
         Fetches states + the slim entity-registry list in parallel (the slim
         view gives ``hidden_by`` and the ids needed for the alias batch fetch;
-        aliases live only in ``get_entries``), filters hidden entities, enriches
-        survivors with aliases + hidden_by, then applies the optional domain
-        filter.
+        aliases live only in ``get_entries``), filters hidden entities, applies
+        the optional domain filter, then enriches the survivors with aliases +
+        hidden_by. The domain filter runs *before* the alias fetch so the chunked
+        alias WS calls only cover entities that survive it. states/registry may be
+        pre-fetched and shared by the ha_search orchestrator (``None`` = fetch
+        here); the device registry is fetched only when a visibility area/label
+        dimension will consume it.
         """
-        results = await asyncio.gather(
-            self.client.get_states(),
-            self.client.send_websocket_message({"type": "config/entity_registry/list"}),
-            self.client.send_websocket_message({"type": "config/device_registry/list"}),
-            return_exceptions=True,
+        need_device = await device_registry_needed_for_visibility()
+        fetch_coros: list[Any] = []
+        fetch_slots: list[str] = []
+        if prefetched_states is None:
+            fetch_coros.append(self.client.get_states())
+            fetch_slots.append("states")
+        if prefetched_registry is None:
+            fetch_coros.append(
+                self.client.send_websocket_message(
+                    {"type": "config/entity_registry/list"}
+                )
+            )
+            fetch_slots.append("registry")
+        if need_device:
+            fetch_coros.append(
+                self.client.send_websocket_message(
+                    {"type": "config/device_registry/list"}
+                )
+            )
+            fetch_slots.append("device")
+        fetched = (
+            await asyncio.gather(*fetch_coros, return_exceptions=True)
+            if fetch_coros
+            else []
         )
+        slots = dict(zip(fetch_slots, fetched, strict=True))
+        states_result: Any = (
+            prefetched_states if prefetched_states is not None else slots.get("states")
+        )
+        registry_result: Any = (
+            prefetched_registry
+            if prefetched_registry is not None
+            else slots.get("registry")
+        )
+        device_result: Any = slots.get("device")
         # States-fetch failure is fatal — auth/connection errors must propagate
         # so the caller sees the real cause instead of a bogus "zero matches"
         # with success=True.
-        if isinstance(results[0], BaseException):
-            raise results[0]
+        if isinstance(states_result, BaseException):
+            raise states_result
         # CancelledError on the registry tasks must propagate too; gather captures
         # it like any other exception when return_exceptions=True.
-        if isinstance(results[1], asyncio.CancelledError):
-            raise results[1]
-        if isinstance(results[2], asyncio.CancelledError):
-            raise results[2]
-        entities = results[0]
+        if isinstance(registry_result, asyncio.CancelledError):
+            raise registry_result
+        if isinstance(device_result, asyncio.CancelledError):
+            raise device_result
+        entities = states_result
 
-        # Opt-in visibility filter. results[1] is the unprojected registry, so
-        # entity_category/hidden_by/area_id/labels are present (the slim map
-        # below drops them); results[2] is the device registry, which lets the
-        # area/label dimensions match a device-bound entity by its device's
-        # area/labels. Fails open; do NOT wrap in try/except or the failure mode
-        # inverts.
+        # Opt-in visibility filter. registry_result is the unprojected registry,
+        # so entity_category/hidden_by/area_id/labels are present (the slim map
+        # below drops them); device_result is the device registry (``None`` when
+        # no area/label dimension needs it), which lets the area/label dimensions
+        # match a device-bound entity by its device's area/labels. Fails open; do
+        # NOT wrap in try/except or the failure mode inverts.
         visibility_hidden, visibility_warnings = await load_hidden_set(
-            results[1], results[0], self.client, results[2]
+            registry_result, states_result, self.client, device_result
         )
-        registry_slim = self._build_registry_slim(results[1])
+        registry_slim = self._build_registry_slim(registry_result)
         survivor_ids, survivor_states = self._filter_hidden_entities(
             entities, registry_slim, include_hidden, visibility_hidden
         )
+
+        # Apply the domain filter before the alias fetch. The old order fetched
+        # aliases for every survivor and filtered at the very end; the final set
+        # and its order are identical (each survivor keeps its own aliases), so
+        # this only shrinks the alias WS fan-out.
+        if domain_filter:
+            domain_prefix = f"{domain_filter}."
+            kept = [
+                (eid, state)
+                for eid, state in zip(survivor_ids, survivor_states, strict=True)
+                if eid.startswith(domain_prefix)
+            ]
+            survivor_ids = [eid for eid, _ in kept]
+            survivor_states = [state for _, state in kept]
+
         aliases_map, alias_warnings = await self._fetch_entity_aliases(survivor_ids)
         visibility_warnings = [*visibility_warnings, *alias_warnings]
 
@@ -293,12 +360,6 @@ class EntitySearchMixin(_SearchBase):
                 }
             )
 
-        if domain_filter:
-            enriched = [
-                e
-                for e in enriched
-                if e.get("entity_id", "").startswith(f"{domain_filter}.")
-            ]
         return enriched, visibility_warnings
 
     @staticmethod

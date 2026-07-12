@@ -34,6 +34,7 @@ const withBase = (path: string) => {
         <li class="ml-4"><a href="#uv-tls-interception" class="text-blue-400 hover:underline">uvx Certificate Errors (proxy / antivirus)</a></li>
         <li class="ml-4"><a href="#webhook-proxy" class="text-blue-400 hover:underline">Webhook Proxy Alternative</a></li>
         <li class="ml-4"><a href="#webhook-proxy-security" class="text-blue-400 hover:underline">Webhook Proxy: securing the URL</a></li>
+        <li class="ml-4"><a href="#openai-tunnel" class="text-blue-400 hover:underline">ChatGPT Behind a Firewall (OpenAI Tunnel)</a></li>
         <li class="ml-4"><a href="#antigravity-troubleshooting" class="text-blue-400 hover:underline">Antigravity Client Troubleshooting</a></li>
         <li class="ml-4"><a href="#claude-ai-connection" class="text-blue-400 hover:underline">Claude.ai Connection Issues</a></li>
         <li class="ml-4"><a href="#quick-test" class="text-blue-400 hover:underline">Test ha-mcp Without Configuring a Client</a></li>
@@ -356,6 +357,17 @@ source ~/.zshrc
           <p class="text-slate-300 font-medium mb-1">Getting "Invalid client id" — or OAuth/credential changes not taking effect</p>
           <p class="text-slate-300 mb-3">The OAuth provider's HTTP views are bound into Home Assistant's HTTP layer when the integration first loads, and HA can't re-register or drop them on a config reload (the webhook endpoint itself re-registers on reload — it's specifically the OAuth views). So toggling OAuth on/off, regenerating credentials, or reinstalling the app only takes effect after a <strong>full Home Assistant restart</strong> (Settings → System → Restart) — reloading the integration or restarting the app is not enough. After restarting, delete and re-add the Claude.ai connector with the current URL (and current Client ID/Secret, if OAuth is on).</p>
           <p class="text-slate-400 text-sm">Beta status: the OAuth flow is built against the MCP 2025-06-18 spec and tested with Claude.ai. Other clients' OAuth coverage may vary. Report issues on GitHub.</p>
+        </div>
+
+        <div class="faq-item" id="openai-tunnel">
+          <h3 class="text-lg font-medium text-white mb-2">ChatGPT behind a firewall? Try the community OpenAI Tunnel integration</h3>
+          <p class="text-slate-300 mb-3">ChatGPT connectors require a URL reachable from the public internet. If your Home Assistant sits behind a firewall or CGNAT and you don't want to expose it, the community-maintained <a href="https://github.com/norpol/hass-codex-tunnel-mcp" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">OpenAI Tunnel for HA-MCP</a> integration by <a href="https://github.com/norpol" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">@norpol</a> is an outbound-only alternative:</p>
+          <ul class="text-slate-300 space-y-2 list-disc list-inside mb-3">
+            <li>It downloads, verifies, and supervises OpenAI's <a href="https://github.com/openai/tunnel-client" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer"><code class="bg-slate-800 px-1 rounded">tunnel-client</code></a> as a Home Assistant subprocess (installed as a HACS custom repository; Linux <code class="bg-slate-800 px-1 rounded">amd64</code>/<code class="bg-slate-800 px-1 rounded">aarch64</code> on HA OS / Supervised initially).</li>
+            <li>The client connects your MCP server URL to an OpenAI-hosted tunnel, so ChatGPT, Codex, and other OpenAI products can reach it — no port forwarding, reverse proxy, or public URL needed.</li>
+            <li>Create a tunnel on the <a href="https://platform.openai.com/settings/organization/tunnels" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">Tunnels page</a> and a runtime API key with <strong>Tunnels Read</strong> and <strong>Tunnels Use</strong> permissions on the <a href="https://platform.openai.com/settings/organization/api-keys" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">API keys page</a>, point the integration at your local ha-mcp URL, and add the ChatGPT connector using the same tunnel ID.</li>
+          </ul>
+          <p class="text-slate-400 text-sm">See the <a href="https://github.com/norpol/hass-codex-tunnel-mcp#readme" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">integration's README</a> for full setup and <a href="https://github.com/homeassistant-ai/ha-mcp/issues/1811" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#1811</a> for background. This is a third-party project — report tunnel issues on its tracker, not here.</p>
         </div>
 
         <div class="faq-item">
