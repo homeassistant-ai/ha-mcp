@@ -98,17 +98,27 @@ class TestStrictBpsEffective:
             Settings(_env_file=None, ENABLE_MANDATORY_BPS="garbage")  # type: ignore[call-arg]
 
         monkeypatch.setattr("ha_mcp.config.get_global_settings", _boom)
+        monkeypatch.setattr("ha_mcp.strict_bps._DEGRADE_WARNED", set())
         with caplog.at_level(logging.WARNING, logger="ha_mcp.strict_bps"):
             assert strict_bps_effective() is False
-        assert any("settings lookup failed" in r.getMessage() for r in caplog.records)
+            # Warn-once: a second degraded call must not log again.
+            assert strict_bps_effective() is False
+        warned = [
+            r for r in caplog.records if "settings lookup failed" in r.getMessage()
+        ]
+        assert len(warned) == 1
 
     def test_missing_skills_dir_fails_open(self, monkeypatch, caplog):
         """Both flags on but skills-vendor absent ⇒ False (key unobtainable)."""
         _patch_settings(monkeypatch, parent=True, child=True)
         _patch_skills_dir(monkeypatch, None)
+        monkeypatch.setattr("ha_mcp.strict_bps._DEGRADE_WARNED", set())
         with caplog.at_level(logging.WARNING, logger="ha_mcp.strict_bps"):
             assert strict_bps_effective() is False
-        assert any("skills-vendor" in r.getMessage() for r in caplog.records)
+            # Warn-once: a second degraded call must not log again.
+            assert strict_bps_effective() is False
+        warned = [r for r in caplog.records if "skills-vendor" in r.getMessage()]
+        assert len(warned) == 1
 
 
 # ---------------------------------------------------------------------------

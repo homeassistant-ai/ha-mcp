@@ -42,7 +42,14 @@ _BEST_PRACTICES_SKILL = "home-assistant-best-practices"
 _AUTOMATION_PATTERNS_REF = "references/automation-patterns.md"
 
 
-async def _build_strict_server(container_info, monkeypatch, tmp_path, *, strict: bool):
+async def _build_strict_server(
+    container_info,
+    monkeypatch,
+    tmp_path,
+    *,
+    strict: bool,
+    extra_env: dict[str, str] | None = None,
+):
     if container_info.get("backend") == "haos_inaddon":
         pytest.skip(
             "Inaddon backend uses the addon's own MCP endpoint; this test "
@@ -53,6 +60,8 @@ async def _build_strict_server(container_info, monkeypatch, tmp_path, *, strict:
     # Parent master switch defaults ON, but pin it explicitly so the gate's
     # effective state is deterministic regardless of ambient env.
     monkeypatch.setenv("ENABLE_MANDATORY_BPS", "true")
+    for key, value in (extra_env or {}).items():
+        monkeypatch.setenv(key, value)
     monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
     get_data_dir.cache_clear()
 
@@ -90,6 +99,38 @@ async def strict_disabled_mcp(ha_container_with_fresh_config, monkeypatch, tmp_p
     """In-process server with strict mode explicitly disabled (baseline)."""
     server, ha_client = await _build_strict_server(
         ha_container_with_fresh_config, monkeypatch, tmp_path, strict=False
+    )
+    client = Client(server.mcp)
+    async with client:
+        yield client, server
+    await ha_client.close()
+    get_data_dir.cache_clear()
+
+
+@pytest.fixture
+async def strict_bps_toolsearch_mcp(
+    ha_container_with_fresh_config, monkeypatch, tmp_path
+):
+    """Strict-mode server with tool search on so the write proxy exists.
+
+    ``ENABLE_TOOL_SEARCH=true`` installs the CategorizedSearchTransform,
+    which registers ``ha_call_write_tool``. The middleware deliberately
+    does NOT unwrap that proxy envelope — it relies on the proxy's
+    ``ctx.fastmcp.call_tool(name, arguments)`` re-dispatch re-entering the
+    middleware chain with the REAL inner tool name. These tests pin that
+    re-entry (mirrors ``readonly_toolsearch_mcp`` in test_readonly_mode.py).
+    """
+    if get_skills_dir() is None:
+        pytest.skip(
+            "skills-vendor submodule absent — the strict-BPS gate fails open, "
+            "so there is nothing to assert. Run `git submodule update --init`."
+        )
+    server, ha_client = await _build_strict_server(
+        ha_container_with_fresh_config,
+        monkeypatch,
+        tmp_path,
+        strict=True,
+        extra_env={"ENABLE_TOOL_SEARCH": "true"},
     )
     client = Client(server.mcp)
     async with client:
@@ -204,3 +245,46 @@ async def test_keyless_write_succeeds_when_strict_disabled(strict_disabled_mcp):
     assert result.get("success"), (
         f"keyless write should succeed when strict off: {result}"
     )
+
+
+@pytest.mark.asyncio
+async def test_proxy_dispatched_keyless_write_blocked(strict_bps_toolsearch_mcp):
+    """The gate never unwraps the ``ha_call_write_tool`` envelope — it
+    relies on the proxy re-dispatch re-entering the middleware chain with
+    the real inner name. A keyless proxied write of a gated tool must hit
+    the strict block, proving the re-entry is real (not a bypass)."""
+    client, _server = strict_bps_toolsearch_mcp
+    light = await find_test_light_entity(client)
+    config = _automation_config("Strict BPS Proxy Keyless E2E", light)
+
+    body = await _expect_bps_blocked(
+        client,
+        "ha_call_write_tool",
+        {"name": "ha_config_set_automation", "arguments": {"config": config}},
+    )
+    # The inner (real) tool name is what the block reports, not the proxy —
+    # confirming the re-dispatch re-entered the gate with the gated inner name.
+    assert body.get("tool_name") == "ha_config_set_automation", body
+    assert body.get("strict_mandatory_bps") is True, body
+    # The block error must still not leak the key through the proxy path.
+    assert STRICT_BPS_ACK_KEY not in str(body)
+
+
+@pytest.mark.asyncio
+async def test_proxy_dispatched_keyed_write_succeeds(strict_bps_toolsearch_mcp):
+    """The SAME proxied write, now carrying ``BestPracticeKey`` in the
+    inner ``arguments``, passes the gate on re-entry and creates the
+    automation — the key survives the proxy envelope to the middleware."""
+    client, _server = strict_bps_toolsearch_mcp
+    light = await find_test_light_entity(client)
+    config = _automation_config("Strict BPS Proxy WithKey E2E", light)
+
+    result = await safe_call_tool(
+        client,
+        "ha_call_write_tool",
+        {
+            "name": "ha_config_set_automation",
+            "arguments": {"config": config, "BestPracticeKey": STRICT_BPS_ACK_KEY},
+        },
+    )
+    assert result.get("success"), f"keyed proxied write should succeed: {result}"

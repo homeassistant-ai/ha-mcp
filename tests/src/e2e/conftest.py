@@ -2459,6 +2459,10 @@ async def stdio_mcp_client(
         # Keep startup snappy — the connection retry is irrelevant here,
         # the test container is already up by the time this fixture runs.
         "HA_MAX_RETRIES": "1",
+        # Same pin as the session-server env blocks (#1779): strict mode
+        # defaults ON and would prepend the acknowledgment line to tier-3
+        # skill content, breaking the content == on-disk-bytes assertions.
+        "ENABLE_STRICT_MANDATORY_BPS": "false",
     }
 
     # ``args`` is a required positional on the base ``StdioTransport``

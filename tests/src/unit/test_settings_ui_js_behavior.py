@@ -3231,6 +3231,73 @@ class TestStrictMandatoryBpsSubFlagNesting:
             "sub-row <input> must be interactive when the parent is on"
         )
 
+    def test_parent_flip_live_rerenders_subrow(self, settings_script: str) -> None:
+        """Render with the parent ON, then flip enable_mandatory_bps OFF via a
+        DOM change event: the strict sub-row must dim + its <input> disable
+        synchronously (the parent's change handler mutates the live cache and
+        re-renders), and flipping the parent back ON must re-enable it. Guards
+        the live-toggle UX that a page reload would otherwise mask."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(parent_on=True),
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              const subState = () => {
+                const row = document.querySelector('.mandatory-bps-sub');
+                const input = row.querySelector('input[type="checkbox"]');
+                return { dimmed: row.className.includes('dimmed'),
+                         disabled: input.disabled };
+              };
+              const flipParent = (checked) => {
+                const parent = document.querySelector(
+                  'input[name="feature:enable_mandatory_bps"]');
+                parent.checked = checked;
+                parent.dispatchEvent(new Event('change'));
+              };
+              const initial = subState();
+              flipParent(false);
+              const afterOff = subState();
+              flipParent(true);
+              const afterOn = subState();
+              const probe = document.createElement('div');
+              probe.id = 'bpsLiveProbe';
+              probe.dataset.initialDimmed = String(initial.dimmed);
+              probe.dataset.initialDisabled = String(initial.disabled);
+              probe.dataset.offDimmed = String(afterOff.dimmed);
+              probe.dataset.offDisabled = String(afterOff.disabled);
+              probe.dataset.onDimmed = String(afterOn.dimmed);
+              probe.dataset.onDisabled = String(afterOn.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+
+        def _probe(attr: str) -> str:
+            m = re.search(rf'id="bpsLiveProbe"[^>]*{attr}="([^"]*)"', result.dom)
+            assert m is not None, (
+                f"probe attr {attr} missing; tail: {result.dom[-1500:]}"
+            )
+            return m.group(1)
+
+        # Baseline: parent ON → sub-row live and interactive.
+        assert _probe("data-initial-dimmed") == "false"
+        assert _probe("data-initial-disabled") == "false"
+        # Parent flipped OFF → sub-row dims and disables without a reload.
+        assert _probe("data-off-dimmed") == "true", (
+            "strict sub-row must dim when the parent is flipped off live"
+        )
+        assert _probe("data-off-disabled") == "true", (
+            "strict sub-row <input> must disable when the parent is flipped off live"
+        )
+        # Parent flipped back ON → sub-row re-enables.
+        assert _probe("data-on-dimmed") == "false", (
+            "strict sub-row must un-dim when the parent is flipped back on"
+        )
+        assert _probe("data-on-disabled") == "false", (
+            "strict sub-row <input> must re-enable when the parent is flipped back on"
+        )
+
 
 class TestReadOnlyModeToggle:
     """Read Only Mode (#1569): the Tools-tab toggle posts to the

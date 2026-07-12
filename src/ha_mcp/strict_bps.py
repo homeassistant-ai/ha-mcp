@@ -13,8 +13,9 @@ writing.
 Strict mode is *effective* only when BOTH ``enable_mandatory_bps`` (the
 parent, #1182) and ``enable_strict_mandatory_bps`` (the child, #1779) are
 on — see :func:`strict_bps_effective`. Both flags are read live per
-request so a settings-UI toggle takes effect without a restart, mirroring
-``read_only_mode``.
+request, mirroring ``read_only_mode``: a settings-UI toggle applies live
+when the UI shares the server process (standalone HTTP / embedded);
+other modes pick the change up on restart.
 
 The six write tools declare the ``BestPracticeKey`` parameter on their
 signatures purely so FastMCP's pydantic validation accepts it and
@@ -25,16 +26,30 @@ schema-validating clients will send it; the tool bodies never read it —
 from __future__ import annotations
 
 import logging
-from typing import Any, NoReturn
+from typing import Annotated, Any, NoReturn
 
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from .errors import ErrorCode, create_error_response
 from .tools.helpers import raise_tool_error
 from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
 
 logger = logging.getLogger(__name__)
+
+# Degrade warnings fire once per process per branch (mirrors config.py's
+# _BETA_GATE_LOGGED): strict_bps_effective() runs on every gated write and
+# every best-practices skill read, so an unguarded warning would flood the
+# logs for the whole life of a misconfigured install.
+_DEGRADE_WARNED: set[str] = set()
+
+
+def _warn_degraded_once(branch: str, message: str, *, exc_info: bool = False) -> None:
+    if branch in _DEGRADE_WARNED:
+        return
+    _DEGRADE_WARNED.add(branch)
+    logger.warning(message, exc_info=exc_info)
+
 
 # Single source of truth for the acknowledgment key literal. It is published
 # ONLY by ``strict_bps_ack_line`` (surfaced through ha_get_skill_guide Tier 3
@@ -45,6 +60,21 @@ STRICT_BPS_ACK_KEY = "bps-ack-1779"
 # The write-tool parameter that carries the acknowledgment key. Declared on
 # each of the six gated tools (adjacent to ``MandatoryBPS``) but read only here.
 STRICT_BPS_KEY_PARAM = "BestPracticeKey"
+
+# Shared annotation for that parameter — the single source of the schema
+# description the six signatures publish. The parameter NAME must still be
+# the literal ``BestPracticeKey`` in each ``def`` (identifiers can't be
+# aliased); the wiring test pins name and schema against live registration.
+BestPracticeKeyParam = Annotated[
+    str | None,
+    Field(
+        default=None,
+        description=(
+            "Acknowledgment key published in the home-assistant-best-practices "
+            "skill content; required when strict best-practices mode is enabled."
+        ),
+    ),
+]
 
 # The six gated write tools mapped to the first canonical skill reference file
 # the block error should direct the model to read. Each value is the FIRST
@@ -90,8 +120,10 @@ def strict_bps_effective() -> bool:
     try:
         settings = get_global_settings()
     except ValidationError:
-        logger.warning(
-            "strict-BPS settings lookup failed; gate disabled", exc_info=True
+        _warn_degraded_once(
+            "settings",
+            "strict-BPS settings lookup failed; gate disabled",
+            exc_info=True,
         )
         return False
 
@@ -99,11 +131,12 @@ def strict_bps_effective() -> bool:
         return False
 
     if get_skills_dir() is None:
-        logger.warning(
+        _warn_degraded_once(
+            "skills-vendor",
             "strict-BPS gate disabled: skills-vendor submodule is missing, so "
             "the acknowledgment key is unobtainable — allowing gated writes "
             "through rather than locking them out. Run "
-            "`git submodule update --init` on the server install."
+            "`git submodule update --init` on the server install.",
         )
         return False
 
@@ -158,12 +191,14 @@ class StrictBpsMiddleware(Middleware):
     gated tools it always consumes (strips) the ``BestPracticeKey`` argument,
     and blocks the call when strict mode is effective and the supplied key
     was missing or wrong. Consults the live flags per call (via
-    :func:`strict_bps_effective`), so toggling strict mode is restart-free
-    like ``read_only_mode``.
+    :func:`strict_bps_effective`), so a toggle applies live in
+    standalone-HTTP/embedded mode like ``read_only_mode`` (other modes
+    pick it up on restart).
 
     Proxied calls (``ha_call_write_tool`` etc.) re-enter the middleware
-    chain with the REAL tool name after the proxy dispatches (see
-    read_only.py:433-441 and transforms/categorized_search.py:451), so no
+    chain with the REAL tool name after the proxy dispatches (see the
+    proxy-handling comment in ReadOnlyMiddleware.on_call_tool and the
+    re-dispatch in transforms/categorized_search.py), so no
     proxy-envelope unwrapping is needed here — the gated inner name is
     seen on the re-entry.
     """

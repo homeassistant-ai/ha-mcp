@@ -18,6 +18,7 @@ from pydantic import AliasChoices, Field
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
+from ..strict_bps import BestPracticeKeyParam
 from .auto_backup import with_auto_backup
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
@@ -3819,13 +3820,7 @@ class HelperConfigTools:
         ] = True,
         # BestPracticeKey (#1779): consumed by StrictBpsMiddleware, never read
         # here — see strict_bps.py for the declaration contract.
-        BestPracticeKey: Annotated[
-            str | None,
-            Field(
-                default=None,
-                description="Acknowledgment key published in the home-assistant-best-practices skill content; required when strict best-practices mode is enabled.",
-            ),
-        ] = None,
+        BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
         """
         Create or update Home Assistant helper entities and config subentries

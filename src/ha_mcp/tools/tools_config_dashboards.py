@@ -16,6 +16,7 @@ from pydantic import Field
 
 from ..dashboard_screenshot.capture import FULL_PAGE_PARAM_DESC
 from ..errors import ErrorCode, create_error_response
+from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
@@ -1670,13 +1671,7 @@ class DashboardConfigTools:
         ] = True,
         # BestPracticeKey (#1779): consumed by StrictBpsMiddleware, never read
         # here — see strict_bps.py for the declaration contract.
-        BestPracticeKey: Annotated[
-            str | None,
-            Field(
-                default=None,
-                description="Acknowledgment key published in the home-assistant-best-practices skill content; required when strict best-practices mode is enabled.",
-            ),
-        ] = None,
+        BestPracticeKey: BestPracticeKeyParam = None,
         return_screenshot: Annotated[
             bool,
             Field(

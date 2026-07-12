@@ -1557,7 +1557,7 @@ const FEATURE_META = {
   },
   enable_strict_mandatory_bps: {
     label: "Strict best-practices mode",
-    help: "Strict mode: prevents the client from using the tool until it can prove that it read the best practices. While on, the six best-practice write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked and return an error directing the client to read the best-practices skill via ha_get_skill_guide and pass back the acknowledgment key it obtains there. Nested under \"Attach best-practice skills on writes\" above and inert while that parent toggle is off. Requires restart to take effect.",
+    help: "Strict mode: prevents the client from using the tool until it can prove that it read the best practices. While on, the six best-practice write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked and return an error directing the client to read the best-practices skill via ha_get_skill_guide and pass back the acknowledgment key it obtains there. Nested under \"Attach best-practice skills on writes\" above and inert while that parent toggle is off. Requires restart to take effect (applies live in standalone HTTP mode).",
   },
   // Master beta toggle — gates the 5 sub-flags below at runtime
   // (see config.py:_apply_feature_flag_overrides master gate). UI

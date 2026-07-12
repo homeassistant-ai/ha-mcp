@@ -4013,6 +4013,51 @@ class TestStrictMandatoryBpsGateInSave:
         get_data_dir.cache_clear()
         _reset_global_settings()
 
+    @pytest.mark.asyncio
+    async def test_accepts_parent_off_alone_and_preserves_strict_value(
+        self, monkeypatch, tmp_path
+    ):
+        """Parent + strict both persisted on, then POST {enable_mandatory_bps:
+        false} with NO enable_strict_mandatory_bps in the payload → 200. The
+        gate rejects only a payload that *writes* a truthy child against an
+        off parent; turning the parent off alone is accepted (the runtime gate
+        renders strict inert without clobbering its saved value). Mirrors the
+        beta gate's test_save_features_master_off_preserves_subflag_values."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Pre-existing state: parent on + strict on (strict live/persisted true).
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps(
+                {
+                    "enable_mandatory_bps": True,
+                    "enable_strict_mandatory_bps": True,
+                }
+            )
+        )
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        # User flips ONLY the parent off — strict absent from the payload.
+        req.json = AsyncMock(return_value={"flags": {"enable_mandatory_bps": False}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        on_disk = json.loads((tmp_path / "feature_flags.json").read_text())
+        assert on_disk["enable_mandatory_bps"] is False
+        # Strict value is PRESERVED so flipping the parent back on restores it.
+        assert on_disk["enable_strict_mandatory_bps"] is True, (
+            "strict value was clobbered on parent-off — should have stayed True"
+        )
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
 
 class TestIngressOnlyGuard:
     """`_ingress_only` admits only the Supervisor (HA ingress) source IP."""

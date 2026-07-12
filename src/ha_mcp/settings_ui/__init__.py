@@ -1251,7 +1251,6 @@ def _schedule_supervisor_self_restart(
 def _reject_child_flags_without_parent(
     raw_flags: dict[str, Any],
     parent_field: str,
-    parent_default: bool,
     child_fields: Container[str],
     message: Callable[[list[str]], str],
     suggestions: list[str],
@@ -1261,8 +1260,8 @@ def _reject_child_flags_without_parent(
 
     A child flag is only valid when ``parent_field`` is truthy AFTER the
     merge. The post-merge parent is derived from the payload (if present),
-    else the live ``Settings`` value, else ``parent_default`` — the same
-    value the runtime gate will see. A child turned truthy against an
+    else the live ``Settings`` value — the same value the runtime gate
+    will see. A child turned truthy against an
     off parent would be forced back off at runtime, so reject it now
     rather than let the user learn the save was a no-op at next startup.
     Turning the parent off alone is NOT rejected: children absent from the
@@ -1276,7 +1275,7 @@ def _reject_child_flags_without_parent(
     effective_parent = bool(
         raw_flags.get(
             parent_field,
-            getattr(get_global_settings(), parent_field, parent_default),
+            getattr(get_global_settings(), parent_field),
         )
     )
     if rejected and not effective_parent:
@@ -2010,7 +2009,6 @@ def build_settings_handlers(
         beta_rejection = _reject_child_flags_without_parent(
             raw_flags,
             "enable_beta_features",
-            False,
             _BETA_SUB,
             lambda rejected: (
                 "Cannot enable beta sub-flag(s) "
@@ -2037,7 +2035,6 @@ def build_settings_handlers(
         strict_rejection = _reject_child_flags_without_parent(
             raw_flags,
             "enable_mandatory_bps",
-            True,
             ("enable_strict_mandatory_bps",),
             lambda _rejected: (
                 "Cannot enable strict best-practices mode "

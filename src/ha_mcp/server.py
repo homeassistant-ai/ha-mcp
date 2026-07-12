@@ -1036,8 +1036,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         """Install the strict best-practices gate (#1779).
 
         Always installed — the middleware self-no-ops at call time
-        (consults ``strict_bps_effective()`` per call), so toggling strict
-        mode is restart-free like ``read_only_mode``.
+        (consults ``strict_bps_effective()`` per call), so a toggle applies
+        live in standalone-HTTP/embedded mode like ``read_only_mode``
+        (other modes pick it up on restart).
 
         Also emits a startup WARNING when the child flag is on while its
         parent (``enable_mandatory_bps``) is off: strict mode is inert in
