@@ -1009,12 +1009,11 @@ def _installed_ha_mcp_version(preferred_dist: str | None = None) -> str | None:
     # machinery to actually resolve the package before trusting any version.
     if importlib.util.find_spec("ha_mcp") is None:
         return None
-    dist_names = (DIST_NAME_STABLE, DIST_NAME_DEV)
-    if preferred_dist in dist_names:
-        dist_names = (
-            preferred_dist,
-            *(name for name in dist_names if name != preferred_dist),
-        )
+    dist_names = (
+        (DIST_NAME_DEV, DIST_NAME_STABLE)
+        if preferred_dist == DIST_NAME_DEV
+        else (DIST_NAME_STABLE, DIST_NAME_DEV)
+    )
     for dist_name in dist_names:
         with suppress(importlib.metadata.PackageNotFoundError):
             return importlib.metadata.version(dist_name)
