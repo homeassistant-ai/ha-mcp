@@ -1,6 +1,8 @@
 """Unit tests for tools_traces detailed trace formatting."""
 
-from ha_mcp.tools.tools_traces import _format_detailed_trace
+from typing import Any, ClassVar
+
+from ha_mcp.tools.tools_traces import _filter_trace_sections, _format_detailed_trace
 
 
 class TestFormatDetailedTrace:
@@ -491,3 +493,87 @@ class TestFormatDetailedTrace:
         }
         result = _format_detailed_trace("automation.x", "1", trace)
         assert "error" not in result["condition_results"][0]
+
+
+class TestFilterTraceSections:
+    """Test _filter_trace_sections function."""
+
+    FULL_RESULT: ClassVar[dict[str, Any]] = {
+        "success": True,
+        "automation_id": "automation.x",
+        "run_id": "1",
+        "timestamp": {"start": "t0"},
+        "state": "stopped",
+        "trigger": {"platform": "time"},
+        "condition_results": [{"result": True}],
+        "action_trace": [{"path": "action/0"}],
+        "config_summary": {"alias": "Test"},
+        "error": "boom",
+        "logbook_entries": [{"name": "Test"}],
+        "context": {"id": "ctx1"},
+    }
+
+    def test_single_section_keeps_only_that_section_plus_metadata(self):
+        result = _filter_trace_sections(dict(self.FULL_RESULT), "actions")
+
+        assert "action_trace" in result
+        for dropped in (
+            "trigger",
+            "condition_results",
+            "config_summary",
+            "error",
+            "logbook_entries",
+            "context",
+        ):
+            assert dropped not in result
+        for metadata_key in (
+            "success",
+            "automation_id",
+            "run_id",
+            "timestamp",
+            "state",
+        ):
+            assert metadata_key in result
+
+    def test_comma_separated_sections_keeps_all_requested(self):
+        result = _filter_trace_sections(dict(self.FULL_RESULT), "trigger,conditions")
+
+        assert "trigger" in result
+        assert "condition_results" in result
+        for dropped in (
+            "action_trace",
+            "config_summary",
+            "error",
+            "logbook_entries",
+            "context",
+        ):
+            assert dropped not in result
+
+    def test_unknown_section_is_silently_dropped(self):
+        result = _filter_trace_sections(dict(self.FULL_RESULT), "not_a_real_section")
+
+        for key in (
+            "trigger",
+            "condition_results",
+            "action_trace",
+            "config_summary",
+            "error",
+            "logbook_entries",
+            "context",
+        ):
+            assert key not in result
+        for metadata_key in (
+            "success",
+            "automation_id",
+            "run_id",
+            "timestamp",
+            "state",
+        ):
+            assert metadata_key in result
+
+    def test_whitespace_and_case_are_normalized(self):
+        result = _filter_trace_sections(dict(self.FULL_RESULT), " Actions , Trigger ")
+
+        assert "action_trace" in result
+        assert "trigger" in result
+        assert "condition_results" not in result

@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -84,22 +84,7 @@ def extract_section(body: str, anchor: str) -> str | None:
     lines = body.splitlines(keepends=True)
     section_start: int | None = None
     section_level: int | None = None
-    in_fence = False
-    for i, line in enumerate(lines):
-        # Skip fenced code blocks — YAML/bash examples use ``# comment``
-        # which would otherwise be misread as a markdown H1 heading and
-        # silently close a section after its first code example.
-        stripped = line.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        m = _HEADING_LINE_RE.match(line)
-        if not m:
-            continue
-        level = len(m.group(1))
-        heading = m.group(2)
+    for i, level, heading in _iter_headings(lines):
         if section_start is None:
             if _slugify(heading) == target:
                 section_start = i
@@ -110,6 +95,27 @@ def extract_section(body: str, anchor: str) -> str | None:
     if section_start is not None:
         return "".join(lines[section_start:])
     return None
+
+
+def _iter_headings(lines: list[str]) -> Iterator[tuple[int, int, str]]:
+    """Yield ``(index, level, heading_text)`` for each markdown heading line.
+
+    Lines inside fenced code blocks (```` ``` ```` or ``~~~``) are skipped so
+    that ``# comment`` lines in YAML/bash examples aren't misread as an H1
+    heading and made to silently close a section after its first code example.
+    """
+    in_fence = False
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        m = _HEADING_LINE_RE.match(line)
+        if not m:
+            continue
+        yield i, len(m.group(1)), m.group(2)
 
 
 def _skills_dir_at(root: Path) -> Path | None:

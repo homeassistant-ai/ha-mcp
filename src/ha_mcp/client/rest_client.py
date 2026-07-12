@@ -191,6 +191,25 @@ class HomeAssistantClient:
         await self.httpx_client.aclose()
         logger.debug("Closed Home Assistant client")
 
+    @staticmethod
+    def _error_message_from_response(
+        response: httpx.Response,
+    ) -> tuple[str, dict[str, Any]]:
+        """Build a human message and structured error data from a 4xx/5xx body.
+
+        Prefers the JSON ``message`` field; falls back to reason phrase or a
+        placeholder when the body is empty or unparseable.
+        """
+        try:
+            error_data = response.json()
+        except Exception:
+            error_data = {"message": response.text}
+
+        message = error_data.get("message")
+        if not message or not message.strip():
+            message = response.reason_phrase or "<empty body>"
+        return message, error_data
+
     async def _raw_request(
         self, method: str, endpoint: str, **kwargs: Any
     ) -> httpx.Response:
@@ -216,14 +235,7 @@ class HomeAssistantClient:
                     raise HomeAssistantAuthError("Invalid authentication token")
 
                 if response.status_code >= 400:
-                    try:
-                        error_data = response.json()
-                    except Exception:
-                        error_data = {"message": response.text}
-
-                    message = error_data.get("message")
-                    if not message or not message.strip():
-                        message = response.reason_phrase or "<empty body>"
+                    message, error_data = self._error_message_from_response(response)
 
                     if (
                         response.status_code in _RETRYABLE_STATUS
@@ -665,6 +677,27 @@ class HomeAssistantClient:
         )
         return response.text
 
+    @staticmethod
+    def _supervisor_error_message(text_body: str, reason_phrase: str) -> str:
+        """Extract a human message from a Supervisor 4xx/5xx body.
+
+        Supervisor returns ``{"result":"error","message":"..."}`` on some paths;
+        prefer that message, then fall back to the raw text, reason phrase, or a
+        placeholder.
+        """
+        message = ""
+        try:
+            envelope = json.loads(text_body) if text_body else None
+            if isinstance(envelope, dict):
+                msg = envelope.get("message")
+                if isinstance(msg, str) and msg:
+                    message = msg
+        except json.JSONDecodeError:
+            pass
+        if not message:
+            message = text_body.strip() or reason_phrase or "<empty body>"
+        return message
+
     async def _supervisor_logs_get(self, path: str, lines: int | None = None) -> str:
         """Fetch ``text/plain`` logs from a Supervisor REST endpoint.
 
@@ -751,22 +784,7 @@ class HomeAssistantClient:
             )
         if response.status_code >= 400:
             text_body = response.text
-            # Supervisor returns {"result":"error","message":"..."} JSON on
-            # some 4xx paths. Try parsing that first so the user sees the
-            # human message instead of a JSON blob; then fall back to the
-            # text body, then reason_phrase, then a placeholder.
-            message = ""
-            try:
-                envelope = json.loads(text_body) if text_body else None
-                if isinstance(envelope, dict):
-                    msg = envelope.get("message")
-                    if isinstance(msg, str) and msg:
-                        message = msg
-            except json.JSONDecodeError:
-                # Body wasn't a JSON envelope; fall back to raw text below.
-                pass
-            if not message:
-                message = text_body.strip() or response.reason_phrase or "<empty body>"
+            message = self._supervisor_error_message(text_body, response.reason_phrase)
             logger.warning(
                 "Supervisor returned %s for /%s/logs: %s",
                 response.status_code,

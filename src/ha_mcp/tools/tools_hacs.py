@@ -597,6 +597,22 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     register_tool_methods(mcp, HacsTools(client))
 
 
+def _score_repo_against_query(
+    query_lower: str, name: str, full_name: str, description: str, authors: str
+) -> int:
+    """Compute a relevance score for a repo's text fields against a query."""
+    score = 0
+    if query_lower in name:
+        score += 100
+    if query_lower in full_name:
+        score += 50
+    if query_lower in description:
+        score += 30
+    if query_lower in authors:
+        score += 20
+    return score
+
+
 def _filter_and_score_repos(
     all_repositories: list[dict[str, Any]],
     query: str,
@@ -619,15 +635,9 @@ def _filter_and_score_repos(
 
         # Calculate relevance score (all repos match when query is empty)
         if query_lower:
-            score = 0
-            if query_lower in name:
-                score += 100
-            if query_lower in full_name:
-                score += 50
-            if query_lower in description:
-                score += 30
-            if query_lower in authors:
-                score += 20
+            score = _score_repo_against_query(
+                query_lower, name, full_name, description, authors
+            )
             if score == 0:
                 continue
         else:
@@ -737,6 +747,131 @@ async def _find_repo_in_list_by_full_name(
     return None
 
 
+async def _last_chance_lookup_after_shutdown(
+    ws_client: Any, full_name_lower: str
+) -> dict[str, Any] | None:
+    """One list lookup after a queue shutdown, swallowing transport errors.
+
+    The teardown that shut the queue probably killed the WS, so the list
+    call itself may fail; report "not found" rather than leaking a
+    connection error out of what callers see as a wait timeout.
+    """
+    try:
+        return await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantCommandError,
+        OSError,
+    ) as last_e:
+        logger.debug(
+            "Last-chance list lookup after queue shutdown failed: %s",
+            last_e,
+        )
+        return None
+
+
+async def _repo_from_matching_dispatch(
+    ws_client: Any, event: dict[str, Any], full_name: str, full_name_lower: str
+) -> dict[str, Any] | None:
+    """Resolve a dispatch event to the full repo entry if it targets our repo.
+
+    Returns the repo dict when the event is for ``full_name`` and the
+    follow-up list lookup succeeds, else ``None`` (unrelated dispatch,
+    no-payload nudge, or a lookup that raced the registration).
+    """
+    # HACS dispatch payload shape:
+    #   {"action": "registration"|"install"|"uninstall",
+    #    "repository": <full_name>, "repository_id": <id>}
+    # Older/empty dispatches may send ``{}`` or ``None``; accept those.
+    payload = event.get("event") or {}
+    if not (
+        isinstance(payload, dict)
+        and payload.get("repository", "").lower() == full_name_lower
+    ):
+        return None
+
+    # Matching repo dispatched — fetch the full entry since the event
+    # payload only carries the three fields above and callers need more.
+    repo = await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
+    if repo is not None:
+        logger.info(f"Found {full_name} -> id={repo.get('id')} (HACS dispatch event)")
+    return repo
+
+
+async def _poll_queue_for_registration(
+    ws_client: Any,
+    queue: Any,
+    full_name: str,
+    full_name_lower: str,
+    timeout: float,
+    backstop_poll_interval: float,
+) -> dict[str, Any] | None:
+    """Wait on the subscription queue for our repo, with a wall-clock backstop.
+
+    Assumes the caller already subscribed and did the post-subscribe
+    sample. Returns the repo dict once seen, or ``None`` on timeout.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            # Operator-visible breadcrumb: a None return here means
+            # we subscribed successfully but the event-driven path
+            # didn't surface the repo within the budget. Different
+            # signature from "subscribe failed" or "matching event
+            # for wrong repo" — useful when diagnosing flakes.
+            logger.warning(
+                "wait_for_repo_registration timed out for %s after %.1fs",
+                full_name,
+                timeout,
+            )
+            return None
+
+        # Wait for HACS to nudge us; if it doesn't, fall through
+        # to a re-check at ``backstop_poll_interval``. Distinguish
+        # "true backstop tick fired" from "wall-clock budget about
+        # to exhaust" — the latter must NOT trigger an extra list
+        # call right before the next iteration would exit anyway.
+        wait_for = min(remaining, backstop_poll_interval)
+        was_backstop_tick = remaining >= backstop_poll_interval
+        try:
+            event = await asyncio.wait_for(queue.get(), timeout=wait_for)
+        except TimeoutError:
+            event = None
+        except asyncio.QueueShutDown:
+            return await _last_chance_lookup_after_shutdown(ws_client, full_name_lower)
+
+        if event is not None:
+            repo = await _repo_from_matching_dispatch(
+                ws_client, event, full_name, full_name_lower
+            )
+            if repo is not None:
+                return repo
+            # Unrelated dispatch, no-payload nudge, or a lookup that
+            # raced the registration — go back to waiting. Re-listing
+            # on every dispatch would defeat using the dispatcher as
+            # the signal (HACS' list payload is 2 MB+ on busy installs);
+            # we only re-list on the backstop tick.
+            continue
+
+        # event is None.
+        if not was_backstop_tick:
+            # The wait timed out because the wall-clock budget was about
+            # to exhaust, not because the backstop cadence fired — loop
+            # and let ``remaining <= 0`` exit cleanly without a list call.
+            continue
+
+        # True backstop poll: HACS dispatcher has been quiet for
+        # ``backstop_poll_interval``. Belt-and-braces re-check the list
+        # in case HACS dropped/lost a dispatch event.
+        repo = await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
+        if repo is not None:
+            logger.info(
+                f"Found {full_name} -> id={repo.get('id')} (backstop poll sample)"
+            )
+            return repo
+
+
 async def wait_for_repo_registration(
     ws_client: Any,
     full_name: str,
@@ -807,106 +942,14 @@ async def wait_for_repo_registration(
             )
             return repo
 
-        deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                # Operator-visible breadcrumb: a None return here means
-                # we subscribed successfully but the event-driven path
-                # didn't surface the repo within the budget. Different
-                # signature from "subscribe failed" or "matching event
-                # for wrong repo" — useful when diagnosing flakes.
-                logger.warning(
-                    "wait_for_repo_registration timed out for %s after %.1fs",
-                    full_name,
-                    timeout,
-                )
-                return None
-
-            # Wait for HACS to nudge us; if it doesn't, fall through
-            # to a re-check at ``backstop_poll_interval``. Distinguish
-            # "true backstop tick fired" from "wall-clock budget about
-            # to exhaust" — the latter must NOT trigger an extra list
-            # call right before the next iteration would exit anyway.
-            wait_for = min(remaining, backstop_poll_interval)
-            was_backstop_tick = remaining >= backstop_poll_interval
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=wait_for)
-            except TimeoutError:
-                event = None
-            except asyncio.QueueShutDown:
-                # Connection was torn down — try one last list lookup
-                # in case the repo registered before the shutdown.
-                # The list call itself may fail (the same teardown that
-                # shut the queue probably killed the WS), so swallow
-                # transport errors here and report "not found" rather
-                # than leaking a HomeAssistantConnectionError out of
-                # what callers see as a wait timeout.
-                try:
-                    return await _find_repo_in_list_by_full_name(
-                        ws_client, full_name_lower
-                    )
-                except (
-                    HomeAssistantConnectionError,
-                    HomeAssistantCommandError,
-                    OSError,
-                ) as last_e:
-                    logger.debug(
-                        "Last-chance list lookup after queue shutdown failed: %s",
-                        last_e,
-                    )
-                    return None
-
-            if event is not None:
-                # HACS dispatch payload shape:
-                #   {"action": "registration"|"install"|"uninstall",
-                #    "repository": <full_name>, "repository_id": <id>}
-                # Older/empty dispatches may send ``{}`` or ``None``;
-                # accept those without raising.
-                payload = event.get("event") or {}
-                if (
-                    isinstance(payload, dict)
-                    and payload.get("repository", "").lower() == full_name_lower
-                ):
-                    # Matching repo dispatched — fetch the full entry
-                    # since the event payload only carries the three
-                    # fields above and callers usually need more.
-                    repo = await _find_repo_in_list_by_full_name(
-                        ws_client, full_name_lower
-                    )
-                    if repo is not None:
-                        logger.info(
-                            f"Found {full_name} -> id={repo.get('id')} "
-                            "(HACS dispatch event)"
-                        )
-                        return repo
-                    # Matching event but list lookup raced — the repo
-                    # may show up on the next dispatch. Fall through to
-                    # the queue wait without spamming a re-list.
-                # Unrelated repo's dispatch (or no-payload nudge) — go
-                # back to waiting. Re-listing here on every dispatch
-                # would defeat the point of using the dispatcher as
-                # the signal (HACS' list payload is 2 MB+ on busy
-                # installs); we only re-list on the backstop tick.
-                continue
-
-            # event is None.
-            if not was_backstop_tick:
-                # The wait timed out because the wall-clock budget
-                # was about to exhaust, not because the backstop
-                # cadence fired — loop and let ``remaining <= 0``
-                # exit cleanly without burning a list call.
-                continue
-
-            # True backstop poll: HACS dispatcher has been quiet for
-            # ``backstop_poll_interval``. Belt-and-braces re-check
-            # the list in case HACS dropped/lost a dispatch event.
-            repo = await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
-            if repo is not None:
-                logger.info(
-                    f"Found {full_name} -> id={repo.get('id')} (backstop poll sample)"
-                )
-                return repo
+        return await _poll_queue_for_registration(
+            ws_client,
+            queue,
+            full_name,
+            full_name_lower,
+            timeout,
+            backstop_poll_interval,
+        )
     finally:
         # ``asyncio.shield`` so a cancellation of the surrounding task
         # (caller timed out, server torn down) does not also cancel the
