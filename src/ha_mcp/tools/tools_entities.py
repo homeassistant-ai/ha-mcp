@@ -18,6 +18,7 @@ from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
+    extract_tool_error_message,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
@@ -234,33 +235,32 @@ def _parse_get_entity_ids(
     """Parse entity_id into (entity_ids, is_bulk, early_response). early_response is non-None for empty list."""
     if isinstance(entity_id, str):
         return [entity_id], False, None
-    elif isinstance(entity_id, list):
-        if not entity_id:
-            return (
-                [],
-                False,
-                {
-                    "success": True,
-                    "entity_entries": [],
-                    "count": 0,
-                    "message": "No entities requested",
-                },
-            )
-        if not all(isinstance(e, str) for e in entity_id):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "All entity_id values must be strings",
-                )
-            )
-        return entity_id, True, None
-    else:
+    if not isinstance(entity_id, list):
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
             )
         )
+    if not entity_id:
+        return (
+            [],
+            False,
+            {
+                "success": True,
+                "entity_entries": [],
+                "count": 0,
+                "message": "No entities requested",
+            },
+        )
+    if not all(isinstance(e, str) for e in entity_id):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "All entity_id values must be strings",
+            )
+        )
+    return entity_id, True, None
 
 
 def _validate_enabled_constraint(
@@ -1090,7 +1090,12 @@ class EntityTools:
         )
         for eid, result in zip(entity_ids, results, strict=True):
             if isinstance(result, BaseException):
-                failed.append({"entity_id": eid, "error": str(result)})
+                error_msg = (
+                    extract_tool_error_message(result)
+                    if isinstance(result, ToolError)
+                    else str(result)
+                )
+                failed.append({"entity_id": eid, "error": error_msg})
             else:
                 # _update_single_entity returns success-shape or raises
                 # ToolError (caught above as BaseException).
@@ -1318,7 +1323,7 @@ class EntityTools:
                     context=filters,
                     suggestions=[
                         "unique_id must match exactly — it is the integration's "
-                        "internal id, not the entity_id",
+                        + "internal id, not the entity_id",
                         "Drop the domain/platform filters if you set them",
                         "Use ha_search() to browse entities and their platforms",
                     ],

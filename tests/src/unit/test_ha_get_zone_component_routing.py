@@ -218,8 +218,8 @@ async def test_yaml_home_zone_additive_row_with_discriminator() -> None:
     assert home["editable"] is False
     assert home["source"] == "yaml"
     assert home["latitude"] == 41.0
-    # YAML zones carry no storage id.
-    assert "id" not in home
+    # YAML zones carry the object_id so they remain fetchable by zone_id.
+    assert home["id"] == "home"
 
 
 @pytest.mark.asyncio

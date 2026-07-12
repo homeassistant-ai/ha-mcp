@@ -93,10 +93,10 @@ def _shape_component_zone_record(rec: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = dict(config) if isinstance(config, dict) else {}
     storage_id = rec.get("storage_id")
     is_yaml = storage_id is None
-    if storage_id is not None:
-        # Storage zones keep their storage id (the key ha_get_zone matches on);
-        # the component reads it from the real storage collection.
-        out["id"] = storage_id
+    # Storage zones keep their storage id (the key ha_get_zone matches on);
+    # YAML zones fall back to the object_id (e.g. "home") so they can still be
+    # fetched by zone_id — mirrors _shape_collection_helper_record.
+    out["id"] = storage_id if storage_id is not None else rec.get("object_id")
     out["editable"] = not is_yaml
     out["source"] = "yaml" if is_yaml else "storage"
     return out

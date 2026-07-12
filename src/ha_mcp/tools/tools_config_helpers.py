@@ -3898,11 +3898,12 @@ class HelperConfigTools:
         :func:`_raise_all_requires_component` rather than returning an empty list.
         """
         caps = await get_component_caps(self._client)
+        response = None
         if component_supports(caps, "helpers_list"):
             response = await self._all_helpers_via_component()
-            if response is not None:
-                return response
-        _raise_all_requires_component()
+        if response is None:
+            _raise_all_requires_component()
+        return response
 
     async def _all_helpers_via_component(self) -> dict[str, Any] | None:
         """Serve all-types from the component; ``None`` ⇒ raise component-required.
