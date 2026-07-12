@@ -122,6 +122,25 @@ def _compute_per_key_hashes(prefs: dict[str, Any]) -> dict[_PrefsKey, str]:
     }
 
 
+def _merge_submitted_keys(
+    base: dict[str, Any], config: dict[str, Any]
+) -> dict[str, Any]:
+    """Return a copy of ``base`` with each top-level key present in
+    ``config`` merged in (full-replace per key, matching the
+    ``energy/save_prefs`` semantics).
+
+    Shared by ``_set_prefs``'s save-payload construction (step 3) and its
+    effective-new-state hash computation (step 5) — both merge only the
+    top-level keys actually submitted in ``config`` over a different base
+    dict (the save-payload envelope vs. the current prefs snapshot).
+    """
+    merged = dict(base)
+    for key in _PREFS_TOP_LEVEL_KEYS:
+        if key in config:
+            merged[key] = config[key]
+    return merged
+
+
 def _is_no_prefs_error(error_msg: str) -> bool:
     """Return True if an error string from send_websocket_message indicates
     ``ERR_NOT_FOUND "No prefs"`` from HA Core's energy/get_prefs handler.
@@ -170,6 +189,89 @@ def _flatten_validation_errors(raw: Any) -> list[dict[str, str]]:
     return errors
 
 
+def _shape_check_energy_source_entry(
+    idx: int, entry: dict[str, Any]
+) -> list[dict[str, str]]:
+    """Validate a single ``energy_sources`` entry: ``type`` presence/validity
+    and the type-specific ``stat_energy_from`` requirement.
+
+    Split out of ``_shape_check`` to keep its per-entry dispatch flat; see
+    that function's docstring for the overall shape-check contract.
+    """
+    errors: list[dict[str, str]] = []
+    valid_types = "|".join(_ENERGY_SOURCE_TYPES)
+    entry_type = entry.get("type")
+    if entry_type is None:
+        errors.append(
+            {
+                "path": f"energy_sources[{idx}]",
+                "message": f"energy_sources entries require 'type' ({valid_types})",
+            }
+        )
+    elif entry_type not in _ENERGY_SOURCE_TYPES:
+        errors.append(
+            {
+                "path": f"energy_sources[{idx}].type",
+                "message": f"invalid type '{entry_type}' (must be one of {valid_types})",
+            }
+        )
+    elif entry_type in _STAT_FROM_SOURCE_TYPES and "stat_energy_from" not in entry:
+        errors.append(
+            {
+                "path": f"energy_sources[{idx}]",
+                "message": f"{entry_type} entries require 'stat_energy_from'",
+            }
+        )
+    return errors
+
+
+def _shape_check_consumption_entry(
+    key: str, idx: int, entry: dict[str, Any]
+) -> list[dict[str, str]]:
+    """Validate a single ``device_consumption`` / ``device_consumption_water``
+    entry: the ``stat_consumption`` requirement shared by both lists.
+
+    Split out of ``_shape_check`` to keep its per-entry dispatch flat; see
+    that function's docstring for the overall shape-check contract.
+    """
+    if "stat_consumption" not in entry:
+        return [
+            {
+                "path": f"{key}[{idx}]",
+                "message": f"{key} entries require 'stat_consumption'",
+            }
+        ]
+    return []
+
+
+def _shape_check_key_entries(
+    key: str, value: list[Any], allowed_indices: set[int] | None
+) -> list[dict[str, str]]:
+    """Validate all (or ``allowed_indices``-scoped) entries of one top-level
+    key's list: dict-shape and the type-specific required fields.
+
+    Split out of ``_shape_check`` to keep its top-level key loop flat; see
+    that function's docstring for the overall shape-check contract.
+    """
+    errors: list[dict[str, str]] = []
+    for idx, entry in enumerate(value):
+        if allowed_indices is not None and idx not in allowed_indices:
+            continue
+        if not isinstance(entry, dict):
+            errors.append(
+                {
+                    "path": f"{key}[{idx}]",
+                    "message": "entry must be a dict",
+                }
+            )
+            continue
+        if key == "energy_sources":
+            errors.extend(_shape_check_energy_source_entry(idx, entry))
+        if key in ("device_consumption", "device_consumption_water"):
+            errors.extend(_shape_check_consumption_entry(key, idx, entry))
+    return errors
+
+
 def _shape_check(
     config: dict[str, Any],
     validate_only: dict[str, set[int]] | None = None,
@@ -212,58 +314,7 @@ def _shape_check(
         allowed_indices: set[int] | None = (
             validate_only[key] if validate_only is not None else None
         )
-        for idx, entry in enumerate(value):
-            if allowed_indices is not None and idx not in allowed_indices:
-                continue
-            if not isinstance(entry, dict):
-                errors.append(
-                    {
-                        "path": f"{key}[{idx}]",
-                        "message": "entry must be a dict",
-                    }
-                )
-                continue
-            if key == "energy_sources":
-                valid_types = "|".join(_ENERGY_SOURCE_TYPES)
-                entry_type = entry.get("type")
-                if entry_type is None:
-                    errors.append(
-                        {
-                            "path": f"{key}[{idx}]",
-                            "message": f"energy_sources entries require 'type' ({valid_types})",
-                        }
-                    )
-                elif entry_type not in _ENERGY_SOURCE_TYPES:
-                    errors.append(
-                        {
-                            "path": f"{key}[{idx}].type",
-                            "message": f"invalid type '{entry_type}' (must be one of {valid_types})",
-                        }
-                    )
-                elif (
-                    entry_type in _STAT_FROM_SOURCE_TYPES
-                    and "stat_energy_from" not in entry
-                ):
-                    errors.append(
-                        {
-                            "path": f"{key}[{idx}]",
-                            "message": f"{entry_type} entries require 'stat_energy_from'",
-                        }
-                    )
-            if key == "device_consumption" and "stat_consumption" not in entry:
-                errors.append(
-                    {
-                        "path": f"{key}[{idx}]",
-                        "message": "device_consumption entries require 'stat_consumption'",
-                    }
-                )
-            if key == "device_consumption_water" and "stat_consumption" not in entry:
-                errors.append(
-                    {
-                        "path": f"{key}[{idx}]",
-                        "message": "device_consumption_water entries require 'stat_consumption'",
-                    }
-                )
+        errors.extend(_shape_check_key_entries(key, value, allowed_indices))
 
     return errors
 
@@ -787,144 +838,12 @@ class EnergyTools:
             # mode='set' callers fall through to a fresh read here. Map
             # "No prefs" (never configured) to empty default so the
             # hash-check works on fresh installations too.
-            if current_prefs is None:
-                current_result = await self._client.send_websocket_message(
-                    {
-                        "type": "energy/get_prefs",
-                    }
-                )
-                if current_result.get("success"):
-                    current_prefs = current_result.get("result") or _default_prefs()
-                else:
-                    error = current_result.get("error") or "Unknown error"
-                    if _is_no_prefs_error(str(error)):
-                        current_prefs = _default_prefs()
-                    else:
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.SERVICE_CALL_FAILED,
-                                f"Failed to re-read prefs for hash check: {error}",
-                                context={"mode": "set"},
-                            )
-                        )
-                        # unreachable; appeases type checkers
-                        current_prefs = {}
+            current_prefs = await self._resolve_current_prefs(current_prefs)
 
-            if isinstance(config_hash, dict):
-                # Per-key form: validate (and hence allow saving) only the
-                # top-level keys whose hashes were supplied. Fail-closed on
-                # unknown keys (no silent-drop) so a typo in both 'config'
-                # and 'config_hash' cannot coincide as an empty no-op
-                # success at the save endpoint.
-                _valid = set(_PREFS_TOP_LEVEL_KEYS)
-                invalid_config_keys = sorted(set(config) - _valid)
-                invalid_hash_keys = sorted(set(config_hash) - _valid)
-                if invalid_config_keys or invalid_hash_keys:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            "Unknown top-level key(s) in 'config' or "
-                            "'config_hash' (per-key form)",
-                            context={
-                                "mode": "set",
-                                "invalid_config_keys": invalid_config_keys,
-                                "invalid_hash_keys": invalid_hash_keys,
-                                "valid_keys": list(_PREFS_TOP_LEVEL_KEYS),
-                            },
-                            suggestions=[
-                                "Use only 'energy_sources', "
-                                "'device_consumption', or "
-                                "'device_consumption_water'",
-                            ],
-                        )
-                    )
-
-                submitted_keys = set(config)
-                hashed_keys = set(config_hash)
-                if not submitted_keys:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            "'config' must include at least one top-level "
-                            "key when using per-key config_hash",
-                            context={"mode": "set"},
-                            suggestions=[
-                                "Include the top-level key(s) you want to "
-                                "save in 'config' alongside their per-key "
-                                "hashes in 'config_hash'",
-                            ],
-                        )
-                    )
-                if submitted_keys != hashed_keys:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            "Per-key config_hash keys must match the "
-                            "top-level keys submitted in 'config'",
-                            context={
-                                "mode": "set",
-                                "submitted_keys": sorted(submitted_keys),
-                                "hashed_keys": sorted(hashed_keys),
-                                "missing_in_hash": sorted(submitted_keys - hashed_keys),
-                                "extra_in_hash": sorted(hashed_keys - submitted_keys),
-                            },
-                            suggestions=[
-                                "Pass exactly one config_hash_per_key entry per top-level key in 'config'",
-                                "Use the str form of config_hash to lock the full prefs blob instead",
-                            ],
-                        )
-                    )
-
-                # ``submitted_keys`` was validated against
-                # ``_PREFS_TOP_LEVEL_KEYS`` above, so each ``key`` is in
-                # fact a ``_PrefsKey``. Mypy can't narrow ``str`` from
-                # ``sorted(set[str])`` automatically, hence the explicit
-                # ``cast`` at the dict subscript.
-                mismatched_keys = [
-                    key
-                    for key in sorted(submitted_keys)
-                    if config_hash[cast(_PrefsKey, key)]
-                    != compute_config_hash({key: current_prefs.get(key, [])})
-                ]
-                if mismatched_keys:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_LOCKED,
-                            "Energy prefs modified since last read on "
-                            f"top-level key(s): {', '.join(mismatched_keys)}"
-                            " (conflict)",
-                            context={
-                                "mode": "set",
-                                "mismatched_keys": mismatched_keys,
-                            },
-                            suggestions=[
-                                "Call ha_manage_energy_prefs(mode='get') again",
-                                "Re-apply your changes to the fresh config",
-                                "Pass the new config_hash_per_key back in",
-                            ],
-                        )
-                    )
-            else:
-                current_hash = compute_config_hash(current_prefs)
-                if current_hash != config_hash:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_LOCKED,
-                            "Energy prefs modified since last read (conflict)",
-                            context={"mode": "set"},
-                            suggestions=[
-                                "Call ha_manage_energy_prefs(mode='get') again",
-                                "Re-apply your changes to the fresh config",
-                                "Pass the new config_hash back in",
-                            ],
-                        )
-                    )
+            self._check_config_hash(config, config_hash, current_prefs)
 
             # 3. Save
-            save_payload: dict[str, Any] = {"type": "energy/save_prefs"}
-            for key in _PREFS_TOP_LEVEL_KEYS:
-                if key in config:
-                    save_payload[key] = config[key]
+            save_payload = _merge_submitted_keys({"type": "energy/save_prefs"}, config)
 
             save_result = await self._client.send_websocket_message(save_payload)
             if not save_result.get("success"):
@@ -941,38 +860,15 @@ class EnergyTools:
                 )
 
             # 4. Post-save validation against the newly-persisted state
-            post_save_errors: list[dict[str, str]] = []
-            post_save_validate_error: str | None = None
-            try:
-                validate_result = await self._client.send_websocket_message(
-                    {
-                        "type": "energy/validate",
-                    }
-                )
-                if validate_result.get("success"):
-                    post_save_errors = _flatten_validation_errors(
-                        validate_result.get("result", {})
-                    )
-                else:
-                    post_save_validate_error = (
-                        validate_result.get("error") or "unknown error"
-                    )
-                    logger.warning(
-                        f"energy/validate (post-save) failed: {post_save_validate_error}"
-                    )
-            except Exception as e:
-                # Post-save validate failure is non-fatal — the save itself
-                # succeeded. Log and continue.
-                logger.warning(f"Post-save energy/validate failed: {e}")
-                post_save_validate_error = str(e)
+            (
+                post_save_errors,
+                post_save_validate_error,
+            ) = await self._post_save_validate()
 
             # 5. Compute new hash from the effective new state (current
             # merged with the submitted keys; save_prefs does not echo it
             # back).
-            new_prefs = {**current_prefs}
-            for key in _PREFS_TOP_LEVEL_KEYS:
-                if key in config:
-                    new_prefs[key] = config[key]
+            new_prefs = _merge_submitted_keys(current_prefs, config)
             new_hash = compute_config_hash(new_prefs)
 
             response: dict[str, Any] = {
@@ -1012,6 +908,206 @@ class EnergyTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+
+    async def _resolve_current_prefs(
+        self, current_prefs: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Return ``current_prefs`` if supplied, else fetch a fresh snapshot.
+
+        Extracted from ``_set_prefs`` step 2 (snapshot acquisition).
+        Convenience modes pass their already-fetched snapshot in to skip
+        the re-read; external mode='set' callers fall through to a fresh
+        read here. Maps "No prefs" (never configured) to the empty default
+        so the hash-check works on fresh installations too.
+        """
+        if current_prefs is not None:
+            return current_prefs
+
+        current_result = await self._client.send_websocket_message(
+            {
+                "type": "energy/get_prefs",
+            }
+        )
+        if current_result.get("success"):
+            result: dict[str, Any] = current_result.get("result") or _default_prefs()
+            return result
+
+        error = current_result.get("error") or "Unknown error"
+        if _is_no_prefs_error(str(error)):
+            return _default_prefs()
+
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to re-read prefs for hash check: {error}",
+                context={"mode": "set"},
+            )
+        )
+        # unreachable; appeases type checkers
+        return {}
+
+    @staticmethod
+    def _check_config_hash(
+        config: dict[str, Any],
+        config_hash: str | dict[_PrefsKey, str],
+        current_prefs: dict[str, Any],
+    ) -> None:
+        """Verify ``config_hash`` against ``current_prefs``; raises
+        ``ToolError`` on mismatch or malformed per-key input.
+
+        Extracted from ``_set_prefs`` step 2 (hash check). Handles both
+        hash forms: a ``dict[_PrefsKey, str]`` (per-key lock) and a plain
+        ``str`` (full-blob lock). See the ``_set_prefs`` docstring, and the
+        ``ha_manage_energy_prefs`` tool docstring, for the full agent-facing
+        contract this enforces.
+        """
+        if isinstance(config_hash, dict):
+            # Per-key form: validate (and hence allow saving) only the
+            # top-level keys whose hashes were supplied. Fail-closed on
+            # unknown keys (no silent-drop) so a typo in both 'config'
+            # and 'config_hash' cannot coincide as an empty no-op
+            # success at the save endpoint.
+            _valid = set(_PREFS_TOP_LEVEL_KEYS)
+            invalid_config_keys = sorted(set(config) - _valid)
+            invalid_hash_keys = sorted(set(config_hash) - _valid)
+            if invalid_config_keys or invalid_hash_keys:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_FAILED,
+                        "Unknown top-level key(s) in 'config' or "
+                        "'config_hash' (per-key form)",
+                        context={
+                            "mode": "set",
+                            "invalid_config_keys": invalid_config_keys,
+                            "invalid_hash_keys": invalid_hash_keys,
+                            "valid_keys": list(_PREFS_TOP_LEVEL_KEYS),
+                        },
+                        suggestions=[
+                            "Use only 'energy_sources', "
+                            "'device_consumption', or "
+                            "'device_consumption_water'",
+                        ],
+                    )
+                )
+
+            submitted_keys = set(config)
+            hashed_keys = set(config_hash)
+            if not submitted_keys:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_FAILED,
+                        "'config' must include at least one top-level "
+                        "key when using per-key config_hash",
+                        context={"mode": "set"},
+                        suggestions=[
+                            "Include the top-level key(s) you want to "
+                            "save in 'config' alongside their per-key "
+                            "hashes in 'config_hash'",
+                        ],
+                    )
+                )
+            if submitted_keys != hashed_keys:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_FAILED,
+                        "Per-key config_hash keys must match the "
+                        "top-level keys submitted in 'config'",
+                        context={
+                            "mode": "set",
+                            "submitted_keys": sorted(submitted_keys),
+                            "hashed_keys": sorted(hashed_keys),
+                            "missing_in_hash": sorted(submitted_keys - hashed_keys),
+                            "extra_in_hash": sorted(hashed_keys - submitted_keys),
+                        },
+                        suggestions=[
+                            "Pass exactly one config_hash_per_key entry per top-level key in 'config'",
+                            "Use the str form of config_hash to lock the full prefs blob instead",
+                        ],
+                    )
+                )
+
+            # ``submitted_keys`` was validated against
+            # ``_PREFS_TOP_LEVEL_KEYS`` above, so each ``key`` is in
+            # fact a ``_PrefsKey``. Mypy can't narrow ``str`` from
+            # ``sorted(set[str])`` automatically, hence the explicit
+            # ``cast`` at the dict subscript.
+            mismatched_keys = [
+                key
+                for key in sorted(submitted_keys)
+                if config_hash[cast(_PrefsKey, key)]
+                != compute_config_hash({key: current_prefs.get(key, [])})
+            ]
+            if mismatched_keys:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_LOCKED,
+                        "Energy prefs modified since last read on "
+                        f"top-level key(s): {', '.join(mismatched_keys)}"
+                        " (conflict)",
+                        context={
+                            "mode": "set",
+                            "mismatched_keys": mismatched_keys,
+                        },
+                        suggestions=[
+                            "Call ha_manage_energy_prefs(mode='get') again",
+                            "Re-apply your changes to the fresh config",
+                            "Pass the new config_hash_per_key back in",
+                        ],
+                    )
+                )
+        else:
+            current_hash = compute_config_hash(current_prefs)
+            if current_hash != config_hash:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_LOCKED,
+                        "Energy prefs modified since last read (conflict)",
+                        context={"mode": "set"},
+                        suggestions=[
+                            "Call ha_manage_energy_prefs(mode='get') again",
+                            "Re-apply your changes to the fresh config",
+                            "Pass the new config_hash back in",
+                        ],
+                    )
+                )
+
+    async def _post_save_validate(self) -> tuple[list[dict[str, str]], str | None]:
+        """Call ``energy/validate`` after a save and return
+        ``(errors, failure_message)``.
+
+        Extracted from ``_set_prefs`` step 4 (post-save validation). A
+        post-save validate failure is non-fatal — the save itself already
+        succeeded — so failures are captured as a message rather than
+        raised. Returns a populated (possibly empty on success) error list
+        and ``None`` on a successful validate call, or an empty error list
+        and a failure message when the validate call itself fails
+        (transport/timeout, etc.).
+        """
+        post_save_errors: list[dict[str, str]] = []
+        post_save_validate_error: str | None = None
+        try:
+            validate_result = await self._client.send_websocket_message(
+                {
+                    "type": "energy/validate",
+                }
+            )
+            if validate_result.get("success"):
+                post_save_errors = _flatten_validation_errors(
+                    validate_result.get("result", {})
+                )
+            else:
+                post_save_validate_error = (
+                    validate_result.get("error") or "unknown error"
+                )
+                logger.warning(
+                    f"energy/validate (post-save) failed: {post_save_validate_error}"
+                )
+        except Exception as e:
+            # Post-save validate failure is non-fatal — the save itself
+            # succeeded. Log and continue.
+            logger.warning(f"Post-save energy/validate failed: {e}")
+            post_save_validate_error = str(e)
+        return post_save_errors, post_save_validate_error
 
     # ------------------------------------------------------------------
     # Convenience modes — atomic read-modify-write (no caller hash)
@@ -1296,6 +1392,76 @@ class EnergyTools:
         {"success", "mode", "config_hash", "target_key", "new_count", "message"}
     )
 
+    async def _mutate_atomic_preview(
+        self,
+        *,
+        mode: str,
+        target_key: str,
+        mutator: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
+        preview_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Dry-run path for ``_mutate_atomic``.
+
+        Runs the mutator against a fresh read (so duplicate / not-found
+        errors surface), shape-checks the resulting list as a backstop
+        mirroring the real-run path through ``_set_prefs`` — keeps
+        dry_run/real-run shape-equivalent if the entry-construction logic
+        ever changes — then returns ``preview_payload`` plus the new shape
+        without writing. See ``_appended_tail_indices`` for the
+        validate_only contract.
+        """
+        current = await self._get_prefs()
+        current_config: dict[str, Any] = current["config"]
+        existing_list = list(current_config.get(target_key, []))
+        new_list = mutator(existing_list)
+
+        appended_indices = _appended_tail_indices(existing_list, new_list)
+        shape_errors = _shape_check(
+            {target_key: new_list},
+            validate_only={target_key: appended_indices},
+        )
+        if shape_errors:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    f"Resulting {target_key} shape invalid: "
+                    f"{len(shape_errors)} error(s)",
+                    context={
+                        "mode": mode,
+                        "target_key": target_key,
+                        "shape_errors": shape_errors,
+                    },
+                )
+            )
+
+        return {
+            "success": True,
+            "mode": mode,
+            "dry_run": True,
+            **preview_payload,
+            "current_count": len(existing_list),
+            "new_count": len(new_list),
+        }
+
+    @staticmethod
+    def _is_hash_conflict(exc: ToolError) -> bool:
+        """Return True if ``exc`` is a ``_set_prefs`` ``ToolError`` raised
+        for ``RESOURCE_LOCKED`` (hash mismatch / concurrent modification).
+
+        ``raise_tool_error`` serialises the structured error as JSON in the
+        exception message, so we parse rather than substring-match.
+        """
+        try:
+            parsed = json.loads(str(exc))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return False
+        if not isinstance(parsed, dict):
+            return False
+        err_dict = parsed.get("error")
+        if not isinstance(err_dict, dict):
+            return False
+        return bool(err_dict.get("code") == ErrorCode.RESOURCE_LOCKED.value)
+
     async def _mutate_atomic(
         self,
         *,
@@ -1328,42 +1494,12 @@ class EnergyTools:
         """
         try:
             if dry_run:
-                current = await self._get_prefs()
-                current_config: dict[str, Any] = current["config"]
-                existing_list = list(current_config.get(target_key, []))
-                new_list = mutator(existing_list)
-
-                # Backstop shape-check, mirroring the real-run path through
-                # ``_set_prefs`` — keeps dry_run/real-run shape-equivalent if
-                # the entry-construction logic ever changes. See
-                # ``_appended_tail_indices`` for the validate_only contract.
-                appended_indices = _appended_tail_indices(existing_list, new_list)
-                shape_errors = _shape_check(
-                    {target_key: new_list},
-                    validate_only={target_key: appended_indices},
+                return await self._mutate_atomic_preview(
+                    mode=mode,
+                    target_key=target_key,
+                    mutator=mutator,
+                    preview_payload=preview_payload,
                 )
-                if shape_errors:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            f"Resulting {target_key} shape invalid: "
-                            f"{len(shape_errors)} error(s)",
-                            context={
-                                "mode": mode,
-                                "target_key": target_key,
-                                "shape_errors": shape_errors,
-                            },
-                        )
-                    )
-
-                return {
-                    "success": True,
-                    "mode": mode,
-                    "dry_run": True,
-                    **preview_payload,
-                    "current_count": len(existing_list),
-                    "new_count": len(new_list),
-                }
 
             max_attempts = 2
             for attempt in range(max_attempts):
@@ -1390,21 +1526,7 @@ class EnergyTools:
                 except ToolError as exc:
                     # _set_prefs raises ToolError(RESOURCE_LOCKED) on hash mismatch.
                     # Retry once with a fresh read in case of a benign race.
-                    # raise_tool_error serialises the structured error as JSON in
-                    # the exception message, so we parse rather than substring-match.
-                    err_code: str | None = None
-                    try:
-                        parsed = json.loads(str(exc))
-                    except (json.JSONDecodeError, TypeError, ValueError):
-                        parsed = None
-                    if isinstance(parsed, dict):
-                        err_dict = parsed.get("error")
-                        if isinstance(err_dict, dict):
-                            err_code = err_dict.get("code")
-                    if (
-                        err_code == ErrorCode.RESOURCE_LOCKED.value
-                        and attempt + 1 < max_attempts
-                    ):
+                    if self._is_hash_conflict(exc) and attempt + 1 < max_attempts:
                         logger.warning(
                             f"{mode} on {target_key}: hash conflict on attempt "
                             f"{attempt + 1}, retrying"
