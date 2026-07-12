@@ -1818,3 +1818,132 @@ class TestIncludeKnxProject:
 
         assert result.get("warnings")
         assert any("include_knx_project" in w for w in result["warnings"])
+
+
+class TestSetIntegrationModes:
+    """Unit tests for ha_set_integration mode routing (issue #1814).
+
+    The three modes — enable/disable, add (config flow), update options
+    (options flow) — are mutually exclusive; the flow drivers themselves
+    are covered by test_flow_error_parsing and the e2e suite, so these
+    tests pin only the routing and parameter-validation layer.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"require_restart": False}}
+        )
+        client.start_config_flow = AsyncMock()
+        client.start_options_flow = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        return IntegrationTools(mock_client)
+
+    async def _assert_invalid(self, coro, fragment: str):
+        with pytest.raises(ToolError) as exc_info:
+            await coro
+        err = json.loads(str(exc_info.value))
+        assert err["success"] is False
+        assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert fragment in err["error"]["message"], err["error"]["message"]
+
+    # === Mutual exclusion ===
+
+    async def test_domain_and_entry_id_rejected(self, tools, mock_client):
+        await self._assert_invalid(
+            tools.ha_set_integration(entry_id="abc", domain="hue"),
+            "not both",
+        )
+        mock_client.start_config_flow.assert_not_called()
+        mock_client.send_websocket_message.assert_not_called()
+
+    async def test_enabled_and_domain_rejected(self, tools, mock_client):
+        await self._assert_invalid(
+            tools.ha_set_integration(domain="hue", enabled=True),
+            "mutually exclusive",
+        )
+        mock_client.start_config_flow.assert_not_called()
+
+    async def test_enabled_and_config_rejected(self, tools, mock_client):
+        await self._assert_invalid(
+            tools.ha_set_integration(entry_id="abc", enabled=True, config={"x": 1}),
+            "mutually exclusive",
+        )
+        mock_client.send_websocket_message.assert_not_called()
+        mock_client.start_options_flow.assert_not_called()
+
+    # === Nothing-to-do guards ===
+
+    async def test_no_arguments_rejected(self, tools):
+        await self._assert_invalid(tools.ha_set_integration(), "Nothing to do")
+
+    async def test_entry_id_alone_rejected(self, tools):
+        await self._assert_invalid(
+            tools.ha_set_integration(entry_id="abc"), "Nothing to do"
+        )
+
+    # === Mode delegation ===
+
+    async def test_add_mode_delegates_to_create_config_entry(self, tools, mock_client):
+        sentinel = {"success": True, "entry_id": "new123", "domain": "workday"}
+        with patch(
+            "ha_mcp.tools.tools_integrations.create_config_entry",
+            new=AsyncMock(return_value=sentinel),
+        ) as create_mock:
+            result = await tools.ha_set_integration(
+                domain="workday", config={"name": "Workday"}
+            )
+        create_mock.assert_awaited_once_with(
+            mock_client, "workday", {"name": "Workday"}
+        )
+        assert result is sentinel
+
+    async def test_add_mode_defaults_config_to_empty_dict(self, tools, mock_client):
+        with patch(
+            "ha_mcp.tools.tools_integrations.create_config_entry",
+            new=AsyncMock(return_value={"success": True}),
+        ) as create_mock:
+            await tools.ha_set_integration(domain="sun")
+        create_mock.assert_awaited_once_with(mock_client, "sun", {})
+
+    async def test_options_mode_delegates_to_update_config_entry_options(
+        self, tools, mock_client
+    ):
+        sentinel = {"success": True, "entry_id": "abc", "updated": True}
+        with patch(
+            "ha_mcp.tools.tools_integrations.update_config_entry_options",
+            new=AsyncMock(return_value=sentinel),
+        ) as update_mock:
+            result = await tools.ha_set_integration(
+                entry_id="abc", config={"scan_interval": 30}
+            )
+        update_mock.assert_awaited_once_with(mock_client, "abc", {"scan_interval": 30})
+        assert result is sentinel
+
+    async def test_enable_disable_mode_still_works(self, tools, mock_client):
+        result = await tools.ha_set_integration(entry_id="abc", enabled=False)
+        assert result["success"] is True
+        assert result["entry_id"] == "abc"
+        assert result["require_restart"] is False
+        mock_client.send_websocket_message.assert_awaited_once_with(
+            {
+                "type": "config_entries/disable",
+                "entry_id": "abc",
+                "disabled_by": "user",
+            }
+        )
+
+    async def test_enable_mode_sends_disabled_by_none(self, tools, mock_client):
+        result = await tools.ha_set_integration(entry_id="abc", enabled=True)
+        assert result["success"] is True
+        mock_client.send_websocket_message.assert_awaited_once_with(
+            {
+                "type": "config_entries/disable",
+                "entry_id": "abc",
+                "disabled_by": None,
+            }
+        )

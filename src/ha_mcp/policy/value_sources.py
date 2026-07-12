@@ -40,7 +40,7 @@ VALUE_SOURCE_REGISTRY: dict[tuple[str, str], str] = {
     ("ha_get_history", "args.entity_ids"): "ha_entities",
     ("ha_remove_entity", "args.entity_id"): "ha_entities",
     ("ha_get_entity_exposure", "args.entity_id"): "ha_entities",
-    ("ha_set_integration_enabled", "args.entity_id"): "ha_entities",
+    ("ha_set_integration", "args.entry_id"): "ha_config_entries",
 }
 
 # Fetched-value TTL cache so the UI can click through path options
@@ -171,8 +171,24 @@ async def _fetch_ha_entities(client: Any, params: dict[str, str]) -> list[str]:
     return out
 
 
+async def _fetch_ha_config_entries(client: Any, _params: dict[str, str]) -> list[str]:
+    entries = await client._request("GET", "/config/config_entries/entry")
+    if not isinstance(entries, list):
+        logger.warning(
+            "ha_config_entries: config entry list returned unexpected shape %s",
+            type(entries).__name__,
+        )
+        return []
+    return [
+        e["entry_id"]
+        for e in entries
+        if isinstance(e, dict) and isinstance(e.get("entry_id"), str)
+    ]
+
+
 _FETCHERS: dict[str, Callable[[Any, dict[str, str]], Awaitable[list[str]]]] = {
     "ha_domains": _fetch_ha_domains,
     "ha_services": _fetch_ha_services,
     "ha_entities": _fetch_ha_entities,
+    "ha_config_entries": _fetch_ha_config_entries,
 }

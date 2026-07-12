@@ -65,6 +65,13 @@ FLOW_HELPER_TYPES: frozenset[str] = frozenset(
 
 # Keys used to specify a menu selection — stripped before submitting form data.
 _MENU_SELECTION_KEYS = frozenset({"group_type", "next_step_id", "menu_option"})
+
+# Flow step types an MCP client cannot drive: external steps need a browser
+# (OAuth / cloud authorization), progress steps wait on HA-side async work.
+# Surfaced as structured errors instead of attempted (issue #1814).
+_UNDRIVABLE_STEP_TYPES = frozenset(
+    {"external", "external_done", "progress", "progress_done"}
+)
 _RECONFIGURE_SUCCESS_REASONS = frozenset(
     {
         "reauth_successful",
@@ -722,6 +729,21 @@ async def _handle_flow_steps(
                 current_step=current_step,
             )
 
+        elif result_type in _UNDRIVABLE_STEP_TYPES:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Flow reached a '{result_type}' step that cannot be "
+                    "completed via MCP (browser/OAuth authorization or an "
+                    "asynchronous provider step)",
+                    suggestions=[
+                        "Complete this flow in the Home Assistant UI "
+                        "(Settings > Devices & Services)."
+                    ],
+                    context={"flow_id": flow_id, "details": current_step},
+                )
+            )
+
         else:
             raise_tool_error(
                 create_error_response(
@@ -981,30 +1003,35 @@ async def get_user_step_field_names(client: Any, helper_type: str) -> set[str] |
                 )
 
 
-async def update_flow_helper(
+async def update_config_entry_options(
     client: Any,
-    helper_type: str,
-    config_dict: dict[str, Any],
     entry_id: str,
+    config_dict: dict[str, Any],
+    *,
+    expected_domain: str | None = None,
+    noun: str = "integration",
 ) -> dict[str, Any]:
-    """Update an existing flow-based helper via its options flow.
+    """Update an existing config entry via its options flow.
 
-    Verifies the entry domain matches helper_type, starts an options flow,
-    walks the flow steps, and returns the result. Aborts the flow on error.
+    When ``expected_domain`` is provided, verifies the entry's domain matches
+    it first (the helper path passes the helper_type; the generic
+    ``ha_set_integration`` path passes ``None`` to accept any domain). Starts
+    an options flow, walks the flow steps, and returns the result. Aborts the
+    flow on error. ``noun`` only affects response wording.
     """
     config_entry = await client.get_config_entry(entry_id)
     actual_domain = config_entry.get("domain")
-    if actual_domain != helper_type:
+    if expected_domain is not None and actual_domain != expected_domain:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"entry_id '{entry_id}' belongs to domain '{actual_domain}', not '{helper_type}'",
+                f"entry_id '{entry_id}' belongs to domain '{actual_domain}', not '{expected_domain}'",
                 suggestions=[
-                    f"Use ha_get_integration(domain='{helper_type}') to find valid entry IDs",
+                    f"Use ha_get_integration(domain='{expected_domain}') to find valid entry IDs",
                 ],
                 context={
                     "entry_id": entry_id,
-                    "expected": helper_type,
+                    "expected": expected_domain,
                     "actual": actual_domain,
                 },
             )
@@ -1032,7 +1059,7 @@ async def update_flow_helper(
             flow_result,
             config_dict,
             submit_fn=client.submit_options_flow_step,
-            helper_type=helper_type,
+            helper_type=expected_domain,
         )
     except Exception:
         try:
@@ -1048,9 +1075,87 @@ async def update_flow_helper(
         "success": True,
         "entry_id": entry_id,
         "title": entry.get("title"),
-        "domain": helper_type,
-        "message": f"{helper_type} helper updated successfully",
+        "domain": actual_domain,
+        "message": f"{actual_domain} {noun} updated successfully",
         "updated": True,
+    }
+    if result.get("warnings"):
+        response["warnings"] = result["warnings"]
+    return response
+
+
+async def update_flow_helper(
+    client: Any,
+    helper_type: str,
+    config_dict: dict[str, Any],
+    entry_id: str,
+) -> dict[str, Any]:
+    """Update an existing flow-based helper via its options flow.
+
+    Verifies the entry domain matches helper_type, starts an options flow,
+    walks the flow steps, and returns the result. Aborts the flow on error.
+    """
+    return await update_config_entry_options(
+        client,
+        entry_id,
+        config_dict,
+        expected_domain=helper_type,
+        noun="helper",
+    )
+
+
+async def create_config_entry(
+    client: Any,
+    domain: str,
+    config_dict: dict[str, Any],
+    *,
+    noun: str = "integration",
+) -> dict[str, Any]:
+    """Create a config entry by driving ``domain``'s config flow.
+
+    Starts a config flow, walks the flow steps (menus and multi-step forms),
+    and returns the result. Aborts the flow on error. ``noun`` only affects
+    response wording.
+    """
+    flow_result = await client.start_config_flow(domain)
+    flow_id = flow_result.get("flow_id")
+
+    if not flow_id:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Failed to start config flow",
+                suggestions=[
+                    f"Check that the {noun} domain exists and Home Assistant is reachable"
+                ],
+                context={"domain": domain, "details": flow_result},
+            )
+        )
+
+    try:
+        result = await _handle_flow_steps(
+            client,
+            flow_id,
+            flow_result,
+            config_dict,
+            helper_type=domain,
+        )
+    except Exception:
+        try:
+            await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+        except Exception as abort_err:
+            logger.warning(
+                f"Failed to abort config flow {flow_id} after error: {abort_err}"
+            )
+        raise
+
+    entry = result["entry"].get("result", {})
+    response = {
+        "success": True,
+        "entry_id": entry.get("entry_id"),
+        "title": entry.get("title"),
+        "domain": domain,
+        "message": f"{domain} {noun} created successfully",
     }
     if result.get("warnings"):
         response["warnings"] = result["warnings"]
@@ -1067,46 +1172,4 @@ async def create_flow_helper(
     Starts a config flow, walks the flow steps, and returns the result.
     Aborts the flow on error.
     """
-    flow_result = await client.start_config_flow(helper_type)
-    flow_id = flow_result.get("flow_id")
-
-    if not flow_id:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Failed to start config flow",
-                suggestions=[
-                    "Check that the helper type is supported and Home Assistant is reachable"
-                ],
-                context={"helper_type": helper_type, "details": flow_result},
-            )
-        )
-
-    try:
-        result = await _handle_flow_steps(
-            client,
-            flow_id,
-            flow_result,
-            config_dict,
-            helper_type=helper_type,
-        )
-    except Exception:
-        try:
-            await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
-        except Exception as abort_err:
-            logger.warning(
-                f"Failed to abort config flow {flow_id} after error: {abort_err}"
-            )
-        raise
-
-    entry = result["entry"].get("result", {})
-    response = {
-        "success": True,
-        "entry_id": entry.get("entry_id"),
-        "title": entry.get("title"),
-        "domain": helper_type,
-        "message": f"{helper_type} helper created successfully",
-    }
-    if result.get("warnings"):
-        response["warnings"] = result["warnings"]
-    return response
+    return await create_config_entry(client, helper_type, config_dict, noun="helper")

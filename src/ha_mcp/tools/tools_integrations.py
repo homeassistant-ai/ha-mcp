@@ -20,7 +20,12 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
-from .config_entry_flow import FLOW_HELPER_TYPES, iter_schema_fields
+from .config_entry_flow import (
+    FLOW_HELPER_TYPES,
+    create_config_entry,
+    iter_schema_fields,
+    update_config_entry_options,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -1181,25 +1186,139 @@ class IntegrationTools:
         return [match[1] for match in matches]
 
     @tool(
-        name="ha_set_integration_enabled",
+        name="ha_set_integration",
         tags={"Integrations"},
-        annotations={"destructiveHint": True, "title": "Set Integration Enabled"},
+        annotations={"destructiveHint": True, "title": "Set Integration"},
     )
     @with_auto_backup(domain="integration", id_param="entry_id")
     @log_tool_usage
-    async def ha_set_integration_enabled(
+    async def ha_set_integration(
         self,
-        entry_id: Annotated[str, Field(description="Config entry ID")],
-        enabled: Annotated[bool, Field(description="True to enable, False to disable")],
+        entry_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Config entry ID of an existing integration (enable/disable "
+                    "and options-update modes). Omit when adding via 'domain'."
+                ),
+                default=None,
+            ),
+        ] = None,
+        enabled: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "True to enable, False to disable the entry. Requires "
+                    "entry_id; mutually exclusive with 'domain' and 'config'."
+                ),
+                default=None,
+            ),
+        ] = None,
+        domain: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Integration domain to add (e.g. 'workday', "
+                    "'local_calendar') — starts and drives that domain's "
+                    "config flow. Pass the flow's form fields in 'config'."
+                ),
+                default=None,
+            ),
+        ] = None,
+        config: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Flow form data. With 'domain': input for the new "
+                    "integration's config flow. With 'entry_id' alone: input "
+                    "for the entry's options flow (updates its options). "
+                    "Multi-step flows consume keys per step; menu steps take "
+                    "'next_step_id'. The step's data_schema is returned on "
+                    "validation errors so field names can be corrected."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Enable/disable integration (config entry).
+        """Manage an integration (config entry): enable/disable, add, or update options.
 
-        Use ha_get_integration() to find entry IDs.
+        Modes (pick one):
+        - Enable/disable: entry_id + enabled.
+        - Add integration: domain (+ config) — drives the domain's config
+          flow, including menus and multi-step forms.
+        - Update options: entry_id + config — drives the entry's options
+          flow (what the "Configure" button does in the HA UI).
+
+        WHEN NOT TO USE:
+        - Helpers (template, group, utility_meter, ...): use
+          ha_config_set_helper.
+        - Config subentries: use
+          ha_config_set_helper(helper_type='config_subentry').
+        - Removing an entry: use ha_remove_helpers_integrations.
+
+        Use ha_get_integration() to find entry IDs, and
+        ha_get_integration(entry_id=..., include_schema=True) to inspect the
+        options fields before an update.
+
+        Caveats: adding an integration runs its config flow exactly as the HA
+        UI would (may pair devices, scan the network, create entities). Flows
+        requiring a browser step (OAuth) or an asynchronous provider step
+        return a structured error instead of being attempted.
+
+        EXAMPLES:
+        - Disable: ha_set_integration(entry_id="abc123", enabled=False)
+        - Add: ha_set_integration(domain="workday", config={"name": "Workday"})
+        - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
         """
         try:
+            if domain is not None and entry_id is not None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Pass either 'domain' (add a new integration) or "
+                        "'entry_id' (modify an existing one), not both",
+                        context={"entry_id": entry_id, "domain": domain},
+                    )
+                )
+            if enabled is not None and (domain is not None or config is not None):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "'enabled' is mutually exclusive with 'domain' and "
+                        "'config' — enable/disable is a separate call",
+                        context={"entry_id": entry_id, "domain": domain},
+                    )
+                )
+
+            if domain is not None:
+                # Add mode: drive the domain's config flow.
+                validate_identifier_not_empty(
+                    domain,
+                    "domain",
+                    suggestions=[
+                        "Pass the integration domain, e.g. 'workday' or "
+                        "'local_calendar'",
+                    ],
+                )
+                return await create_config_entry(self._client, domain, config or {})
+
+            if entry_id is None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Nothing to do — provide 'domain' to add an "
+                        "integration, or 'entry_id' with 'enabled' "
+                        "(enable/disable) or 'config' (update options)",
+                        suggestions=[
+                            "Use ha_get_integration() to find valid config entry IDs",
+                        ],
+                    )
+                )
+
             # Empty/whitespace entry_id would surface as a misleading HA
-            # "config entry not found" from ``config_entries/disable``.
-            validate_identifier_not_empty(
+            # "config entry not found" from the backend call.
+            entry_id = validate_identifier_not_empty(
                 entry_id,
                 "entry_id",
                 suggestions=[
@@ -1207,52 +1326,87 @@ class IntegrationTools:
                 ],
             )
 
-            message = {
-                "type": "config_entries/disable",
-                "entry_id": entry_id,
-                "disabled_by": None if enabled else "user",
-            }
+            if enabled is not None:
+                return await self._set_entry_enabled(entry_id, enabled)
 
-            result = await self._client.send_websocket_message(message)
+            if config is not None:
+                # Options mode: drive the entry's options flow.
+                return await update_config_entry_options(self._client, entry_id, config)
 
-            if not result.get("success"):
-                error_msg = result.get("error", {})
-                if isinstance(error_msg, dict):
-                    error_msg = error_msg.get("message", str(error_msg))
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to {'enable' if enabled else 'disable'} integration: {error_msg}",
-                        context={"entry_id": entry_id},
-                    )
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Nothing to do — pass 'enabled' to enable/disable the "
+                    "entry, or 'config' to update its options",
+                    context={"entry_id": entry_id},
                 )
-
-            # Get updated entry info
-            require_restart = result.get("result", {}).get("require_restart", False)
-
-            if require_restart:
-                note = "Home Assistant restart required for changes to take effect."
-            else:
-                note = (
-                    "Integration has been loaded."
-                    if enabled
-                    else "Integration has been unloaded."
-                )
-
-            return {
-                "success": True,
-                "message": f"Integration {'enabled' if enabled else 'disabled'} successfully",
-                "entry_id": entry_id,
-                "require_restart": require_restart,
-                "note": note,
-            }
+            )
+            return None  # unreachable: raise_tool_error raises
 
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Failed to set integration enabled: {e}")
-            exception_to_structured_error(e, context={"entry_id": entry_id})
+            logger.error(f"Failed to set integration: {e}")
+            error_context: dict[str, Any] = {}
+            if entry_id is not None:
+                error_context["entry_id"] = entry_id
+            if domain is not None:
+                error_context["domain"] = domain
+            exception_to_structured_error(
+                e,
+                context=error_context,
+                suggestions=[
+                    "Verify the integration domain is spelled correctly and "
+                    "is installed (custom integrations must be installed "
+                    "before a config flow can start)",
+                ]
+                if domain is not None
+                else [
+                    "Use ha_get_integration() to find valid config entry IDs",
+                ],
+            )
             return None  # unreachable: exception_to_structured_error raises
+
+    async def _set_entry_enabled(self, entry_id: str, enabled: bool) -> dict[str, Any]:
+        """Enable or disable a config entry via ``config_entries/disable``."""
+        message = {
+            "type": "config_entries/disable",
+            "entry_id": entry_id,
+            "disabled_by": None if enabled else "user",
+        }
+
+        result = await self._client.send_websocket_message(message)
+
+        if not result.get("success"):
+            error_msg = result.get("error", {})
+            if isinstance(error_msg, dict):
+                error_msg = error_msg.get("message", str(error_msg))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to {'enable' if enabled else 'disable'} integration: {error_msg}",
+                    context={"entry_id": entry_id},
+                )
+            )
+
+        require_restart = result.get("result", {}).get("require_restart", False)
+
+        if require_restart:
+            note = "Home Assistant restart required for changes to take effect."
+        else:
+            note = (
+                "Integration has been loaded."
+                if enabled
+                else "Integration has been unloaded."
+            )
+
+        return {
+            "success": True,
+            "message": f"Integration {'enabled' if enabled else 'disabled'} successfully",
+            "entry_id": entry_id,
+            "require_restart": require_restart,
+            "note": note,
+        }
 
     @tool(
         name="ha_remove_helpers_integrations",

@@ -9,14 +9,13 @@ stub returns static values from a frozen world clock).
 
 Layout:
 
-* ESPHome companion integration loaded (auto-registered by addon install).
-* ESPHome surfaces at least one entity (proves background platform setup ran).
-* Node-RED companion integration loaded (auto-registered by addon install).
-* Node-RED disable / re-enable round-trip via ``ha_set_integration_enabled``.
 * Sun integration's ``sun.sun`` exposes realistic next_dawn / next_dusk
   attributes within 24h of the test-process clock.
 * Local Calendar config-entry lifecycle: create entry → entity registers →
   add event → retrieve event → tear down the config entry.
+
+(The ESPHome / Node-RED companion-integration tests this module originally
+held were deleted — see the NOTE below.)
 
 All tests are marker-gated to the HAOS backend and run without ``pytest.skip``;
 absent fixtures fail loudly.
@@ -41,16 +40,6 @@ from ..utilities.wait_helpers import wait_for_tool_result
 LOG = logging.getLogger(__name__)
 
 pytestmark = [pytest.mark.haos_only]
-
-
-def _find_entry_for_domain(
-    entries: list[dict[str, Any]], domain: str
-) -> dict[str, Any] | None:
-    """Return the first entry in ``entries`` whose domain matches ``domain``."""
-    for entry in entries:
-        if entry.get("domain") == domain:
-            return entry
-    return None
 
 
 # NOTE: ``test_esphome_companion_integration_loaded``,

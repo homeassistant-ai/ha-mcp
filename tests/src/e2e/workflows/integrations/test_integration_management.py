@@ -42,7 +42,7 @@ class TestIntegrationManagement:
 
         # DISABLE
         disable_result = await mcp_client.call_tool(
-            "ha_set_integration_enabled", {"entry_id": entry_id, "enabled": False}
+            "ha_set_integration", {"entry_id": entry_id, "enabled": False}
         )
         assert_mcp_success(disable_result, "Disable integration")
 
@@ -56,7 +56,7 @@ class TestIntegrationManagement:
 
         # RE-ENABLE
         enable_result = await mcp_client.call_tool(
-            "ha_set_integration_enabled", {"entry_id": entry_id, "enabled": True}
+            "ha_set_integration", {"entry_id": entry_id, "enabled": True}
         )
         assert_mcp_success(enable_result, "Re-enable integration")
 
@@ -144,11 +144,110 @@ class TestIntegrationManagement:
         """Test error handling for non-existent integration."""
         data = await safe_call_tool(
             mcp_client,
-            "ha_set_integration_enabled",
+            "ha_set_integration",
             {"entry_id": "nonexistent_entry_id", "enabled": True},
         )
         # Should fail - either through validation or API error
         assert not data.get("success", False)
+
+    async def test_add_integration_and_update_options_cycle(self, mcp_client):
+        """Add-mode + options-mode round-trip via ha_set_integration (#1814).
+
+        Uses the ``group`` domain because it is always present in the test
+        container and its config flow exercises both a menu step
+        (``group_type``) and a form step through the generic (non-helper)
+        driver. The mechanics are identical for any integration domain —
+        the tool no longer gates the handler on the helper allowlist.
+        """
+        # ADD: drive the config flow (menu -> form -> create_entry)
+        create_result = await mcp_client.call_tool(
+            "ha_set_integration",
+            {
+                "domain": "group",
+                "config": {
+                    "group_type": "light",
+                    "name": "test_set_integration_add_e2e",
+                    "entities": [],
+                    "hide_members": False,
+                },
+            },
+        )
+        data = assert_mcp_success(create_result, "Add integration via config flow")
+        entry_id = data["entry_id"]
+        assert data["domain"] == "group"
+
+        try:
+            # Wait until the entry is registered
+            await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_integration",
+                arguments={"entry_id": entry_id},
+                predicate=lambda d: d.get("success") is True,
+                description="added integration entry is registered",
+            )
+
+            # UPDATE OPTIONS: drive the options flow on the same entry
+            update_result = await mcp_client.call_tool(
+                "ha_set_integration",
+                {
+                    "entry_id": entry_id,
+                    "config": {"entities": [], "hide_members": True},
+                },
+            )
+            update_data = assert_mcp_success(
+                update_result, "Update integration options via options flow"
+            )
+            assert update_data.get("updated") is True
+            assert update_data.get("entry_id") == entry_id
+
+            # Verify the option persisted (single-entry mode probes options)
+            verify_data = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_integration",
+                arguments={"entry_id": entry_id},
+                predicate=lambda d: (
+                    d.get("entry", {}).get("options", {}).get("hide_members") is True
+                ),
+                description="updated option is readable back",
+            )
+            assert verify_data["entry"]["options"]["hide_members"] is True
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": entry_id, "confirm": True},
+            )
+
+    async def test_add_integration_unknown_domain_fails(self, mcp_client):
+        """Add mode surfaces a structured error for an unknown domain."""
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_set_integration",
+            {"domain": "definitely_not_a_real_domain_xyz"},
+        )
+        assert not data.get("success", False)
+
+    async def test_update_options_unsupported_entry_fails(self, mcp_client):
+        """Options mode surfaces a structured error when the entry has no
+        options flow (supports_options=false)."""
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
+        data = assert_mcp_success(list_result, "List integrations")
+        no_options_entry = next(
+            (e for e in data.get("entries", []) if not e.get("supports_options")),
+            None,
+        )
+        if no_options_entry is None:
+            pytest.skip("No integration without options flow found")
+
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_set_integration",
+            {
+                "entry_id": no_options_entry["entry_id"],
+                "config": {"anything": True},
+            },
+        )
+        assert not result.get("success", False)
 
     async def test_delete_config_entry_nonexistent_raises(self, mcp_client):
         """
