@@ -62,20 +62,26 @@ class TestConfigPersistence:
     def test_save_and_load(self, tmp_path: Path):
         config = {"tools": {"ha_get_hacs_info": "disabled", "ha_restart": "pinned"}}
         config_path = tmp_path / "tool_config.json"
-        with patch("ha_mcp.settings_ui._get_config_path", return_value=config_path):
+        with patch(
+            "ha_mcp.settings_ui._persistence._get_config_path", return_value=config_path
+        ):
             save_tool_config(config)
             loaded = load_tool_config()
         assert loaded == config
 
     def test_load_missing_file(self, tmp_path: Path):
         config_path = tmp_path / "nonexistent.json"
-        with patch("ha_mcp.settings_ui._get_config_path", return_value=config_path):
+        with patch(
+            "ha_mcp.settings_ui._persistence._get_config_path", return_value=config_path
+        ):
             assert load_tool_config() == {}
 
     def test_load_corrupt_file(self, tmp_path: Path):
         config_path = tmp_path / "corrupt.json"
         config_path.write_text("not json {{{")
-        with patch("ha_mcp.settings_ui._get_config_path", return_value=config_path):
+        with patch(
+            "ha_mcp.settings_ui._persistence._get_config_path", return_value=config_path
+        ):
             assert load_tool_config() == {}
 
     def test_seed_from_env_vars(self, tmp_path: Path):
@@ -83,7 +89,9 @@ class TestConfigPersistence:
         settings = MagicMock()
         settings.disabled_tools = "ha_get_hacs_info,ha_manage_hacs"
         settings.pinned_tools = "ha_restart"
-        with patch("ha_mcp.settings_ui._get_config_path", return_value=config_path):
+        with patch(
+            "ha_mcp.settings_ui._persistence._get_config_path", return_value=config_path
+        ):
             config = load_tool_config(settings)
         assert config["tools"]["ha_get_hacs_info"] == "disabled"
         assert config["tools"]["ha_manage_hacs"] == "disabled"
@@ -258,7 +266,9 @@ class TestConfigPath:
         unreadable_dir = tmp_path / "unreadable"
         unreadable_dir.mkdir()
         cfg_path = unreadable_dir / "tool_config.json"
-        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: cfg_path)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence._get_config_path", lambda: cfg_path
+        )
 
         original_read = Path.read_text
 
@@ -291,7 +301,9 @@ class TestConfigPath:
         locked_dir.mkdir()
         cfg_path = locked_dir / "tool_config.json"
         cfg_path.write_text("{}")
-        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: cfg_path)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence._get_config_path", lambda: cfg_path
+        )
         os.chmod(locked_dir, 0o000)
         try:
             assert load_tool_config() == {}
@@ -305,13 +317,17 @@ class TestSaveToolConfig:
 
     def test_returns_true_on_success(self, tmp_path):
         cfg_path = tmp_path / "tool_config.json"
-        with patch("ha_mcp.settings_ui._get_config_path", return_value=cfg_path):
+        with patch(
+            "ha_mcp.settings_ui._persistence._get_config_path", return_value=cfg_path
+        ):
             assert save_tool_config({"tools": {"x": "disabled"}}) is True
         assert cfg_path.exists()
 
     def test_returns_false_on_oserror(self, monkeypatch, tmp_path):
         cfg_path = tmp_path / "tool_config.json"
-        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: cfg_path)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence._get_config_path", lambda: cfg_path
+        )
 
         # ``save_tool_config`` now writes via ``_atomic_write_json``
         # (tmp + ``os.replace``) so a read-only filesystem can surface
@@ -323,7 +339,9 @@ class TestSaveToolConfig:
         def fake_atomic_write(path: Path, payload: dict) -> None:
             raise OSError(30, "Read-only file system")
 
-        monkeypatch.setattr("ha_mcp.settings_ui._atomic_write_json", fake_atomic_write)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence._atomic_write_json", fake_atomic_write
+        )
         assert save_tool_config({"tools": {"x": "disabled"}}) is False
 
 
@@ -633,7 +651,7 @@ class TestSaveToolsValidation:
         # Patch76 G3: a JSON array body would AttributeError on body.get
         # → 500. Must be a structured 400 instead.
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_config_path",
+            "ha_mcp.settings_ui._persistence._get_config_path",
             lambda: tmp_path / "tool_config.json",
         )
         save = self._capture_handler(monkeypatch)
@@ -645,7 +663,7 @@ class TestSaveToolsValidation:
     @pytest.mark.asyncio
     async def test_rejects_non_dict_body_null(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_config_path",
+            "ha_mcp.settings_ui._persistence._get_config_path",
             lambda: tmp_path / "tool_config.json",
         )
         save = self._capture_handler(monkeypatch)
@@ -655,7 +673,7 @@ class TestSaveToolsValidation:
     @pytest.mark.asyncio
     async def test_rejects_non_dict_states(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_config_path",
+            "ha_mcp.settings_ui._persistence._get_config_path",
             lambda: tmp_path / "tool_config.json",
         )
         save = self._capture_handler(monkeypatch)
@@ -665,7 +683,9 @@ class TestSaveToolsValidation:
     @pytest.mark.asyncio
     async def test_drops_garbage_state_values(self, monkeypatch, tmp_path):
         config_path = tmp_path / "tool_config.json"
-        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence._get_config_path", lambda: config_path
+        )
         save = self._capture_handler(monkeypatch)
         resp = await save(
             self._make_request(
@@ -688,8 +708,12 @@ class TestSaveToolsValidation:
         surface as a 500 to the UI — otherwise the JS shows "Saved" while
         the change was lost."""
         config_path = tmp_path / "tool_config.json"
-        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
-        monkeypatch.setattr("ha_mcp.settings_ui.save_tool_config", lambda _: False)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence._get_config_path", lambda: config_path
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence.save_tool_config", lambda _: False
+        )
         save = self._capture_handler(monkeypatch)
         resp = await save(self._make_request({"states": {"ha_good_tool": "disabled"}}))
         assert resp.status_code == 500
@@ -707,7 +731,9 @@ class TestSaveToolsValidation:
         reject true value mismatches.
         """
         config_path = tmp_path / "tool_config.json"
-        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence._get_config_path", lambda: config_path
+        )
         monkeypatch.setenv("DISABLED_TOOLS", "ha_pinned_off")
         monkeypatch.setenv("PINNED_TOOLS", "ha_pinned_on")
         from ha_mcp.config import _reset_global_settings
@@ -741,7 +767,9 @@ class TestSaveToolsValidation:
         / PINNED_TOOLS, which is operator-level intent.
         """
         config_path = tmp_path / "tool_config.json"
-        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence._get_config_path", lambda: config_path
+        )
         monkeypatch.setenv("DISABLED_TOOLS", "ha_pinned_off")
         monkeypatch.delenv("PINNED_TOOLS", raising=False)
         from ha_mcp.config import _reset_global_settings
@@ -1087,7 +1115,7 @@ class TestBackupSettingsOverridePersistence:
         )
 
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            "ha_mcp.settings_ui._persistence._get_backup_settings_override_path",
             lambda: tmp_path / "backup_settings.json",
         )
         payload = {
@@ -1102,7 +1130,7 @@ class TestBackupSettingsOverridePersistence:
         from ha_mcp.settings_ui import _load_backup_settings_override
 
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            "ha_mcp.settings_ui._persistence._get_backup_settings_override_path",
             lambda: tmp_path / "absent.json",
         )
         assert _load_backup_settings_override() == {}
@@ -1113,7 +1141,7 @@ class TestBackupSettingsOverridePersistence:
         path = tmp_path / "backup_settings.json"
         path.write_text("not valid json {{{")
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            "ha_mcp.settings_ui._persistence._get_backup_settings_override_path",
             lambda: path,
         )
         assert _load_backup_settings_override() == {}
@@ -1124,7 +1152,7 @@ class TestBackupSettingsOverridePersistence:
         path = tmp_path / "backup_settings.json"
         path.write_text("[1, 2, 3]")
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            "ha_mcp.settings_ui._persistence._get_backup_settings_override_path",
             lambda: path,
         )
         assert _load_backup_settings_override() == {}
@@ -1305,7 +1333,7 @@ class TestSaveBackupConfigEndpoint:
     @pytest.mark.asyncio
     async def test_rejects_non_object_body(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            "ha_mcp.settings_ui._persistence._get_backup_settings_override_path",
             lambda: tmp_path / "backup_settings.json",
         )
         handlers = self._capture_handlers(monkeypatch)
@@ -1315,7 +1343,7 @@ class TestSaveBackupConfigEndpoint:
     @pytest.mark.asyncio
     async def test_rejects_out_of_range_throttle(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            "ha_mcp.settings_ui._persistence._get_backup_settings_override_path",
             lambda: tmp_path / "backup_settings.json",
         )
         handlers = self._capture_handlers(monkeypatch)
@@ -1329,7 +1357,7 @@ class TestSaveBackupConfigEndpoint:
     @pytest.mark.asyncio
     async def test_rejects_out_of_range_retain(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            "ha_mcp.settings_ui._persistence._get_backup_settings_override_path",
             lambda: tmp_path / "backup_settings.json",
         )
         handlers = self._capture_handlers(monkeypatch)
@@ -1341,7 +1369,7 @@ class TestSaveBackupConfigEndpoint:
     @pytest.mark.asyncio
     async def test_rejects_unknown_only_body(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            "ha_mcp.settings_ui._persistence._get_backup_settings_override_path",
             lambda: tmp_path / "backup_settings.json",
         )
         handlers = self._capture_handlers(monkeypatch)
@@ -1351,7 +1379,7 @@ class TestSaveBackupConfigEndpoint:
     @pytest.mark.asyncio
     async def test_env_pinned_field_returns_409(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            "ha_mcp.settings_ui._persistence._get_backup_settings_override_path",
             lambda: tmp_path / "backup_settings.json",
         )
         monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
@@ -1373,7 +1401,7 @@ class TestSaveBackupConfigEndpoint:
 
         override_path = tmp_path / "backup_settings.json"
         monkeypatch.setattr(
-            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            "ha_mcp.settings_ui._persistence._get_backup_settings_override_path",
             lambda: override_path,
         )
         # Critical: the get_data_dir patch is what the *config* module reads
@@ -2614,7 +2642,7 @@ class TestEnvPinnedTools:
 
         _reset_global_settings()
         monkeypatch.setattr(
-            sui,
+            sui._persistence,
             "load_tool_metadata_cache",
             lambda: [
                 {
@@ -3794,7 +3822,7 @@ class TestBetaMasterGateInSave:
         # Wrap _get_override_file_lock so we can count entries.
         from ha_mcp import settings_ui as ui_mod
 
-        real_get_lock = ui_mod._get_override_file_lock
+        real_get_lock = ui_mod._persistence._get_override_file_lock
         entries = {"count": 0}
 
         class CountingLock:
@@ -3811,7 +3839,7 @@ class TestBetaMasterGateInSave:
         def patched_get_lock():
             return CountingLock(real_get_lock())
 
-        monkeypatch.setattr(ui_mod, "_get_override_file_lock", patched_get_lock)
+        monkeypatch.setattr(ui_mod._persistence, "_get_override_file_lock", patched_get_lock)
         _reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
@@ -3846,7 +3874,7 @@ class TestBetaMasterGateInSave:
         get_data_dir.cache_clear()
         from ha_mcp import settings_ui as ui_mod
 
-        real_get_lock = ui_mod._get_override_file_lock
+        real_get_lock = ui_mod._persistence._get_override_file_lock
         entries = {"count": 0}
 
         class CountingLock:
@@ -3863,7 +3891,7 @@ class TestBetaMasterGateInSave:
         def patched_get_lock():
             return CountingLock(real_get_lock())
 
-        monkeypatch.setattr(ui_mod, "_get_override_file_lock", patched_get_lock)
+        monkeypatch.setattr(ui_mod._persistence, "_get_override_file_lock", patched_get_lock)
         _reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()

@@ -374,7 +374,10 @@ class DevTools:
         import json
 
         from ..config import _FEATURE_FLAG_OVERRIDE_FILENAME
-        from ..settings_ui import _atomic_write_json, _get_override_file_lock
+        from ..settings_ui._persistence import (
+            _atomic_write_json,
+            _get_override_file_lock,
+        )
         from ..utils.data_paths import get_data_dir
 
         path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
