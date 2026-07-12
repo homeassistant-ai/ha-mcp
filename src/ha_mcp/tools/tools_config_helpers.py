@@ -3469,6 +3469,14 @@ def _shape_collection_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
         out["entity_id"] = entity_id
     name = rec.get("name")
     if name is not None:
+        # The storage body's ``name`` is the creation-time name (a rename
+        # updates the registry, not the body — #1794); preserve it as
+        # ``original_name`` before the current display name overrides it, so a
+        # component-served record carries the same additive shape as the legacy
+        # join (both paths promise entity_id/original_name in the docstring).
+        original_name = out.get("name")
+        if original_name is not None:
+            out["original_name"] = original_name
         out["name"] = name
     return out
 
