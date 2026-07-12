@@ -14,7 +14,7 @@ import asyncio
 import logging
 from collections.abc import Iterator
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
@@ -625,6 +625,74 @@ async def _submit_step(
         raise
 
 
+def _finish_flow_entry(
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    supplied_keys: list[str],
+    saw_form_step: bool,
+    any_form_key_consumed: bool,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the CREATE_ENTRY success response, or raise on total key miss.
+
+    When the flow presented at least one form step, the caller supplied
+    config keys, and NONE were consumed by any form (typos / wrong field
+    names), the flow was walked on empty forms and HA saved form defaults —
+    not the caller's values. A success + warning there reads as "done" to an
+    LLM caller, so fail loudly with the schema route instead. Partial
+    consumption — and flows that complete without any form step (instant
+    creates) — keep the established success + warnings contract.
+    """
+    if supplied_keys and saw_form_step and not any_form_key_consumed:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Flow completed without consuming any of the supplied "
+                "config keys — every form step was submitted empty, so "
+                "the flow saved its defaults, not your values",
+                suggestions=[
+                    "Check the field names against the flow's data_schema — "
+                    "ha_get_integration(entry_id=..., include_schema=True) "
+                    "shows the accepted fields — then retry with corrected "
+                    "keys.",
+                ],
+                context={
+                    "flow_id": flow_id,
+                    "supplied_keys": supplied_keys,
+                    "details": current_step,
+                },
+            )
+        )
+    response: dict[str, Any] = {"success": True, "entry": current_step}
+    warnings = _ignored_keys_warnings(ignored_config_keys, remaining_config)
+    if warnings:
+        response["warnings"] = warnings
+    return response
+
+
+def _raise_flow_abort(flow_id: str, current_step: dict[str, Any]) -> NoReturn:
+    """Raise the structured error for an ABORT flow step."""
+    reason = current_step.get("reason")
+    abort_suggestions: list[str] = []
+    if reason in ("already_configured", "single_instance_allowed"):
+        # Common benign aborts on the add-integration path (#1814): give the
+        # caller a route to the existing entry instead of a bare failure.
+        abort_suggestions.append(
+            "The integration is already set up — use "
+            "ha_get_integration() to find the existing entry."
+        )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Flow aborted: {reason}",
+            suggestions=abort_suggestions or None,
+            context={"flow_id": flow_id, "details": current_step},
+        )
+    )
+
+
 async def _handle_flow_steps(
     client: Any,
     flow_id: str,
@@ -657,8 +725,12 @@ async def _handle_flow_steps(
 
     Returns:
         ``{"success": True, "entry": result}`` on success, plus ``warnings``
-        when caller-supplied config keys were not declared by any flow step.
-        Raises ToolError on any failure.
+        when SOME caller-supplied config keys were not declared by any flow
+        step. When the flow presented at least one form step and NONE of the
+        supplied keys were consumed, raises ``VALIDATION_INVALID_PARAMETER``
+        instead of reporting a misleading success — the flow completed on
+        empty forms (defaults), applying nothing the caller asked for (see
+        :func:`_finish_flow_entry`). Raises ToolError on any failure.
     """
     if submit_fn is None:
         submit_fn = client.submit_config_flow_step
@@ -666,37 +738,27 @@ async def _handle_flow_steps(
     current_step = initial_step
     last_menu_choice: str | None = None
     ignored_config_keys: set[str] = set()
+    supplied_keys = sorted(k for k in config if k not in _MENU_SELECTION_KEYS)
+    saw_form_step = False
+    any_form_key_consumed = False
     max_steps = 10
 
     for step_num in range(max_steps):
         result_type = current_step.get("type")
 
         if result_type == _FlowType.CREATE_ENTRY:
-            response: dict[str, Any] = {"success": True, "entry": current_step}
-            warnings = _ignored_keys_warnings(ignored_config_keys, remaining_config)
-            if warnings:
-                response["warnings"] = warnings
-            return response
+            return _finish_flow_entry(
+                flow_id,
+                current_step,
+                supplied_keys=supplied_keys,
+                saw_form_step=saw_form_step,
+                any_form_key_consumed=any_form_key_consumed,
+                ignored_config_keys=ignored_config_keys,
+                remaining_config=remaining_config,
+            )
 
         if result_type == _FlowType.ABORT:
-            reason = current_step.get("reason")
-            abort_suggestions: list[str] = []
-            if reason in ("already_configured", "single_instance_allowed"):
-                # Common benign aborts on the add-integration path (#1814):
-                # give the caller a route to the existing entry instead of a
-                # bare failure.
-                abort_suggestions.append(
-                    "The integration is already set up — use "
-                    "ha_get_integration() to find the existing entry."
-                )
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Flow aborted: {reason}",
-                    suggestions=abort_suggestions or None,
-                    context={"flow_id": flow_id, "details": current_step},
-                )
-            )
+            _raise_flow_abort(flow_id, current_step)
 
         if result_type == _FlowType.MENU:
             menu_choice = _handle_menu_step(flow_id, current_step, remaining_config)
@@ -720,12 +782,15 @@ async def _handle_flow_steps(
             # step's data_schema, leaving any other keys in remaining_config
             # for subsequent steps (HA can present multi-step forms, e.g.
             # statistics: user step then pick-characteristic step).
+            saw_form_step = True
             form_data = _handle_form_step(
                 flow_id,
                 current_step,
                 remaining_config,
                 ignored_config_keys,
             )
+            if form_data:
+                any_form_key_consumed = True
             logger.debug(
                 f"Flow step {step_num}: form submit "
                 f"(step_id={current_step.get('step_id')}, keys={list(form_data.keys())})"

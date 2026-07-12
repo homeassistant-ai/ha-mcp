@@ -584,3 +584,113 @@ class TestSubmitStep:
 
         assert exc_info.value is err
         assert exc_info.value.status_code == 500
+
+
+class TestAllKeysIgnoredIsAnError:
+    """When NONE of the supplied config keys match any step's schema, the
+    walker must raise instead of reporting a misleading "updated
+    successfully" — the flow completed on empty forms (defaults), applying
+    nothing the caller asked for. Partial consumption keeps the established
+    success + warnings contract (covered above).
+    """
+
+    async def test_all_supplied_keys_ignored_raises(self) -> None:
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(side_effect=[final_entry])
+        initial_step = {
+            "type": "form",
+            "flow_id": "flow-typo",
+            "step_id": "init",
+            "data_schema": [{"name": "hide_members"}, {"name": "entities"}],
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-typo",
+                initial_step=initial_step,
+                config={"typo_key": 5, "another_typo": True},
+                submit_fn=submit_fn,
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "without consuming any" in body["error"]["message"]
+        assert body.get("supplied_keys") == ["another_typo", "typo_key"]
+        # The empty form WAS submitted (single-step flows commit before the
+        # mismatch is knowable) — the error is about the outcome contract.
+        submit_fn.assert_awaited_once()
+        assert submit_fn.await_args.args[1] == {}
+
+    async def test_empty_config_still_succeeds(self) -> None:
+        # config={} supplies nothing, so nothing was ignored — deliberate
+        # empty submits (confirm-only flows) must keep working.
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(side_effect=[final_entry])
+        initial_step = {
+            "type": "form",
+            "flow_id": "flow-confirm",
+            "step_id": "confirm",
+            "data_schema": [],
+        }
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-confirm",
+            initial_step=initial_step,
+            config={},
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        assert "warnings" not in result
+
+    async def test_menu_only_selection_still_succeeds(self) -> None:
+        # A caller whose config is JUST a menu selection consumed by a menu
+        # step supplied no form keys — that's a complete, valid intent.
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(side_effect=[final_entry])
+        initial_step = {
+            "type": "menu",
+            "flow_id": "flow-menu",
+            "step_id": "user",
+            "menu_options": ["light", "switch"],
+        }
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-menu",
+            initial_step=initial_step,
+            config={"group_type": "light"},
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        assert submit_fn.await_args.args[1] == {"next_step_id": "light"}
+
+    async def test_instant_create_entry_keeps_success_with_warning(self) -> None:
+        # Flows that complete with NO form step (instant creates — the mock
+        # shape used across test_helper_update_persistence, and real
+        # confirm-less integrations) had no form for the keys to match, so
+        # the established success + ignored-keys warning contract holds.
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-instant",
+            initial_step={
+                "type": "create_entry",
+                "flow_id": "flow-instant",
+                "result": {"entry_id": "e1"},
+            },
+            config={"name": "x", "source": "sensor.a"},
+            submit_fn=AsyncMock(),
+        )
+
+        assert result["success"] is True
+        assert result["warnings"] == [
+            "Ignored config keys not declared by the Home Assistant flow "
+            "schema: name, source"
+        ]
