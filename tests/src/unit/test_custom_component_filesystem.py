@@ -35,15 +35,20 @@ sys.modules["homeassistant.loader"] = MagicMock()
 from custom_components.ha_mcp_tools import (  # noqa: E402
     _decode_legacy_backup_name,
     _delete_file_sync,
+    _detect_package_dirs,
     _extract_yaml_subtree,
     _is_path_allowed_for_dir,
     _is_path_allowed_for_read,
     _is_within_config_dir,
     _list_files_sync,
     _list_legacy_backups_sync,
+    _load_package_dir_markers,
     _mask_secrets_content,
     _migrate_legacy_backup_dir,
     _normalize_extra_dir,
+    _package_folder_relative_to_config,
+    _parse_and_validate_yaml_path,
+    _path_in_package_dir,
     _read_file_sync,
     _read_legacy_backup_sync,
     _resolves_within,
@@ -55,6 +60,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     ALLOWED_READ_DIRS,
     ALLOWED_VOLUME_ROOTS,
     ALLOWED_WRITE_DIRS,
+    ALLOWED_YAML_KEYS,
 )
 
 from ._symlink_support import symlink_or_skip  # noqa: E402
@@ -1550,3 +1556,215 @@ class TestExtractYamlSubtree:
         # Malformed YAML yields None (the edit itself would then fail and
         # report the parse error); capture just skips.
         assert _extract_yaml_subtree("key: [1, 2\n", "key") is None
+
+
+class TestRecorderYamlKey:
+    """#1852: recorder is editable via edit_yaml_config / ha_config_set_yaml.
+
+    recorder is YAML-only (no UI or storage-mode helper) and has no
+    code-execution surface, so it belongs in the plain ALLOWED_YAML_KEYS set
+    (editable in configuration.yaml and package files alike).
+    """
+
+    def test_recorder_in_allowed_keys(self):
+        assert "recorder" in ALLOWED_YAML_KEYS
+
+    def test_recorder_parses_as_single_key(self):
+        kind, parts, err = _parse_and_validate_yaml_path("recorder")
+        assert err is None
+        assert kind == "single"
+        assert parts == ("recorder",)
+
+    def test_recorder_accepted_in_configuration_yaml(self):
+        # Not a packages-only key, so it validates even outside a package file.
+        _, _, err = _parse_and_validate_yaml_path("recorder", is_package=False)
+        assert err is None
+
+
+def _fake_hass_fs(config_dir):
+    """A hass whose executor offload actually runs the given function."""
+    hass = MagicMock()
+    hass.config.config_dir = str(config_dir)
+    hass.config.path = lambda name, cd=str(config_dir): os.path.join(cd, name)
+
+    async def _run(func, *args):
+        return func(*args)
+
+    hass.async_add_executor_job = _run
+    return hass
+
+
+def _write_config(tmp_path, text, name="configuration.yaml"):
+    p = tmp_path / name
+    p.write_text(text, encoding="utf-8")
+    return str(p)
+
+
+class TestLoadPackageDirMarkers:
+    """#1854: the packages folder argument is read from the include directive."""
+
+    def test_no_packages(self, tmp_path):
+        p = _write_config(tmp_path, "default_config:\n")
+        assert _load_package_dir_markers(p) == set()
+
+    def test_single_include_dir_named(self, tmp_path):
+        p = _write_config(
+            tmp_path, "homeassistant:\n  packages: !include_dir_named custom_packages\n"
+        )
+        assert _load_package_dir_markers(p) == {"custom_packages"}
+
+    def test_include_dir_merge_named(self, tmp_path):
+        p = _write_config(
+            tmp_path,
+            "homeassistant:\n  packages: !include_dir_merge_named integrations\n",
+        )
+        assert _load_package_dir_markers(p) == {"integrations"}
+
+    def test_named_group_mapping(self, tmp_path):
+        p = _write_config(
+            tmp_path, "homeassistant:\n  packages:\n    grp: !include_dir_named pkgs\n"
+        )
+        assert _load_package_dir_markers(p) == {"pkgs"}
+
+    def test_inline_packages_declare_no_folder(self, tmp_path):
+        p = _write_config(
+            tmp_path,
+            "homeassistant:\n  packages:\n    inline_pkg:\n      light: []\n",
+        )
+        assert _load_package_dir_markers(p) == set()
+
+    def test_other_ha_tags_ignored(self, tmp_path):
+        p = _write_config(
+            tmp_path,
+            "homeassistant:\n  packages: !include_dir_named custom_packages\n"
+            "recorder:\n  db_url: !secret db_url\n",
+        )
+        assert _load_package_dir_markers(p) == {"custom_packages"}
+
+    def test_absolute_include_returned_raw(self, tmp_path):
+        # Absolute args are returned as-is here; relativization happens in
+        # _package_folder_relative_to_config.
+        p = _write_config(
+            tmp_path,
+            "homeassistant:\n  packages: !include_dir_named /config/integrations\n",
+        )
+        assert _load_package_dir_markers(p) == {"/config/integrations"}
+
+    def test_follows_split_homeassistant_include(self, tmp_path):
+        # #1854 review: the homeassistant section split into another file. The
+        # included file holds the body of the section (no homeassistant: wrapper).
+        _write_config(
+            tmp_path, "packages: !include_dir_named integrations\n", name="ha.yaml"
+        )
+        p = _write_config(
+            tmp_path, "default_config:\nhomeassistant: !include ha.yaml\n"
+        )
+        assert _load_package_dir_markers(p) == {"integrations"}
+
+    def test_missing_file_returns_empty(self, tmp_path):
+        assert _load_package_dir_markers(str(tmp_path / "nope.yaml")) == set()
+
+    def test_malformed_yaml_returns_empty(self, tmp_path):
+        assert (
+            _load_package_dir_markers(_write_config(tmp_path, "key: [1, 2\n")) == set()
+        )
+
+
+class TestPackageFolderRelativeToConfig:
+    """#1854 review: normalize/relativize captured folder arguments."""
+
+    def test_plain_relative(self):
+        assert (
+            _package_folder_relative_to_config("integrations", "/config")
+            == "integrations"
+        )
+
+    def test_absolute_under_config_relativized(self):
+        assert (
+            _package_folder_relative_to_config("/config/integrations", "/config")
+            == "integrations"
+        )
+
+    def test_absolute_outside_config_dropped(self):
+        assert _package_folder_relative_to_config("/etc/pkgs", "/config") is None
+
+    def test_parent_escape_dropped(self):
+        assert _package_folder_relative_to_config("../evil", "/config") is None
+
+    def test_config_root_dropped(self):
+        assert _package_folder_relative_to_config("/config", "/config") is None
+
+
+class TestPathInPackageDir:
+    """#1854 review: literal folder matching (glob-metachar safe)."""
+
+    def test_flat_and_nested(self):
+        dirs = {"packages", "custom_packages"}
+        assert _path_in_package_dir("packages/foo.yaml", dirs)
+        assert _path_in_package_dir("custom_packages/sub/foo.yaml", dirs)
+
+    def test_non_yaml_rejected(self):
+        assert not _path_in_package_dir("packages/foo.txt", {"packages"})
+
+    def test_sibling_prefix_not_matched(self):
+        assert not _path_in_package_dir("packagesX/foo.yaml", {"packages"})
+
+    def test_glob_metachar_folder_literal(self):
+        # A folder named 'pkg[1]' must match its own path literally, not 'pkg1'.
+        assert _path_in_package_dir("pkg[1]/foo.yaml", {"pkg[1]"})
+        assert not _path_in_package_dir("pkg1/foo.yaml", {"pkg[1]"})
+
+    def test_default_packages_when_none(self):
+        assert _path_in_package_dir("packages/foo.yaml", None)
+
+
+class TestDetectPackageDirs:
+    """#1854: detection reads configuration.yaml and adds the packages fallback."""
+
+    async def test_default_when_no_packages(self, tmp_path):
+        _write_config(tmp_path, "default_config:\n")
+        assert await _detect_package_dirs(_fake_hass_fs(tmp_path)) == {"packages"}
+
+    async def test_detects_custom_folder(self, tmp_path):
+        _write_config(
+            tmp_path, "homeassistant:\n  packages: !include_dir_named integrations\n"
+        )
+        assert await _detect_package_dirs(_fake_hass_fs(tmp_path)) == {
+            "packages",
+            "integrations",
+        }
+
+    async def test_relativizes_absolute_include(self, tmp_path):
+        cfg = str(tmp_path)
+        _write_config(
+            tmp_path,
+            f"homeassistant:\n  packages: !include_dir_named {cfg}/integrations\n",
+        )
+        assert await _detect_package_dirs(_fake_hass_fs(tmp_path)) == {
+            "packages",
+            "integrations",
+        }
+
+    async def test_missing_config_falls_back(self, tmp_path):
+        # No configuration.yaml written -> unreadable -> default only.
+        assert await _detect_package_dirs(_fake_hass_fs(tmp_path)) == {"packages"}
+
+
+class TestReadAllowlistPackageFolder:
+    """#1854: the read allowlist honours the configured packages folder.
+
+    The pre-write backup snapshots a file by reading it, so the read path must
+    accept the same non-default packages folder the YAML editor writes to.
+    """
+
+    def test_custom_folder_allowed_when_detected(self, tmp_path):
+        assert _is_path_allowed_for_read(
+            tmp_path, "integrations/lights.yaml", None, {"packages", "integrations"}
+        )
+
+    def test_custom_folder_rejected_when_not_detected(self, tmp_path):
+        # Default set is {"packages"} only — an unconfigured folder is not read.
+        assert not _is_path_allowed_for_read(tmp_path, "integrations/lights.yaml")
+
+    def test_default_packages_folder_still_allowed(self, tmp_path):
+        assert _is_path_allowed_for_read(tmp_path, "packages/foo.yaml")

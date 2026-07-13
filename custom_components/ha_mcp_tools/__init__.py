@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import voluptuous as vol
+import yaml  # type: ignore[import-untyped]
 from homeassistant.components import persistent_notification
 from homeassistant.config import async_check_ha_config_file
 from homeassistant.config_entries import ConfigEntry
@@ -665,6 +666,163 @@ def _matches_extra_dir(normalized: str, extra_dirs: list[str] | None) -> bool:
     return any(normalized == d or normalized.startswith(d + os.sep) for d in extra_dirs)
 
 
+class _PackagesDir(str):
+    """Marker for the folder argument of a packages ``!include_dir_*named``."""
+
+
+def _capture_packages_dir(loader: yaml.Loader, node: yaml.nodes.Node) -> _PackagesDir:
+    """Construct a packages include-dir tag as its folder-name argument."""
+    return _PackagesDir(str(node.value))
+
+
+def _follow_include(loader: yaml.Loader, node: yaml.nodes.Node) -> Any:
+    """Follow ``!include`` so a split ``homeassistant:`` / ``packages:`` block in
+    another file is still seen during folder discovery (#1854 review).
+
+    Depth-guarded and best-effort: an unreadable/unparseable target (or a
+    string-stream loader with no base path) yields ``None``, like any other tag.
+    Only the referenced file's structure is read; every other HA tag inside it
+    is still dropped by the ignore constructor.
+    """
+    depth = getattr(loader, "_pkg_include_depth", 0)
+    name = getattr(loader, "name", "")
+    if depth >= 8 or not isinstance(name, str) or not name or name.startswith("<"):
+        return None
+    path = os.path.join(os.path.dirname(name), str(node.value))
+    try:
+        with open(path, encoding="utf-8") as handle:
+            sub = _PackagesDirLoader(handle)
+            sub._pkg_include_depth = depth + 1
+            try:
+                return sub.get_single_data()
+            finally:
+                sub.dispose()
+    except (OSError, yaml.YAMLError):
+        return None
+
+
+def _ignore_unknown_tag(
+    loader: yaml.Loader, tag_suffix: str, node: yaml.nodes.Node
+) -> None:
+    """Drop any other HA custom tag (``!secret`` / ``!env_var`` / ...).
+
+    Folder discovery only needs the ``homeassistant: packages:`` structure, so
+    unresolved tags are irrelevant — turning them into ``None`` lets
+    configuration.yaml parse structurally without resolving secrets, which is
+    what keeps this from being fragile hand-parsing.
+    """
+    return None
+
+
+class _PackagesDirLoader(yaml.SafeLoader):
+    """SafeLoader that captures packages include-dir folder names, follows
+    ``!include``, and ignores every other HA custom tag."""
+
+
+_PackagesDirLoader.add_constructor("!include_dir_named", _capture_packages_dir)
+_PackagesDirLoader.add_constructor("!include_dir_merge_named", _capture_packages_dir)
+_PackagesDirLoader.add_constructor("!include", _follow_include)
+_PackagesDirLoader.add_multi_constructor("!", _ignore_unknown_tag)
+
+
+def _extract_package_dir_markers(data: object) -> set[str]:
+    """Return the raw folder argument(s) of the packages include directive(s) in
+    a parsed configuration mapping. Inline packages declare no folder."""
+    if not isinstance(data, dict):
+        return set()
+    core = data.get("homeassistant")
+    if not isinstance(core, dict):
+        return set()
+    packages = core.get("packages")
+    markers: list[_PackagesDir] = []
+    if isinstance(packages, _PackagesDir):
+        markers.append(packages)
+    elif isinstance(packages, dict):
+        markers.extend(v for v in packages.values() if isinstance(v, _PackagesDir))
+    return {str(m) for m in markers}
+
+
+def _load_package_dir_markers(config_path: str) -> set[str]:
+    """Parse configuration.yaml (following ``!include``) and return the raw
+    folder argument(s) of every packages ``!include_dir_*named`` directive.
+
+    Blocking (opens files) — call via an executor. Returns raw strings, possibly
+    absolute; the caller relativizes and filters them against the config dir.
+    """
+    try:
+        with open(config_path, encoding="utf-8") as handle:
+            loader = _PackagesDirLoader(handle)
+            try:
+                data = loader.get_single_data()
+            finally:
+                loader.dispose()
+    except (OSError, yaml.YAMLError):
+        return set()
+    return _extract_package_dir_markers(data)
+
+
+def _package_folder_relative_to_config(raw: str, config_dir: str) -> str | None:
+    """Normalize a captured packages-folder argument to a config-relative folder
+    name, or ``None`` if it escapes the config dir.
+
+    An absolute include under the config dir (``!include_dir_named
+    /config/integrations``) is expressed relative to it; an absolute path
+    elsewhere, a parent escape, or the config root itself is dropped.
+    """
+    if raw.startswith("/"):
+        norm = os.path.normpath(raw)
+        if norm == config_dir or norm.startswith(config_dir + os.sep):
+            rel = os.path.relpath(norm, config_dir)
+            return rel if rel != "." else None
+        return None
+    folder = os.path.normpath(raw)
+    if folder and folder != "." and not folder.startswith(".."):
+        return folder
+    return None
+
+
+async def _detect_package_dirs(hass: HomeAssistant) -> set[str]:
+    """Return the config-relative folder name(s) HA loads packages from.
+
+    Home Assistant binds packages via ``homeassistant: packages:
+    !include_dir_named <folder>`` (or ``!include_dir_merge_named``), where
+    ``<folder>`` is any user-chosen directory — not necessarily ``packages``
+    (issue #1854). The folder is read straight from that directive in
+    configuration.yaml (following ``!include`` for a split ``homeassistant:``
+    section), so it is found even when the folder is still empty (the first
+    package is about to be created), a nested layout resolves to the configured
+    include root, and an in-config absolute include is relativized.
+
+    Always includes the built-in ``"packages"`` default, and degrades to just
+    that if configuration.yaml can't be read.
+    """
+    dirs = {"packages"}
+    config_path = hass.config.path(ALLOWED_YAML_CONFIG_FILES[0])
+    # normpath is a pure string transform (no I/O), so ASYNC240 doesn't apply.
+    config_dir = os.path.normpath(hass.config.config_dir)  # noqa: ASYNC240
+    markers = await hass.async_add_executor_job(_load_package_dir_markers, config_path)
+    for raw in markers:
+        folder = _package_folder_relative_to_config(raw, config_dir)
+        if folder:
+            dirs.add(folder)
+    return dirs
+
+
+def _path_in_package_dir(normalized: str, package_dirs: set[str] | None) -> bool:
+    """True if ``normalized`` is a ``*.yaml`` file at any depth under one of the
+    configured package folders.
+
+    Literal folder match (not ``fnmatch``), so a folder name containing glob
+    metacharacters — valid on HA's Linux filesystem — is matched as the literal
+    include root rather than a wildcard (#1854 review).
+    """
+    if not normalized.endswith(".yaml"):
+        return False
+    return any(
+        normalized.startswith(folder + "/") for folder in (package_dirs or {"packages"})
+    )
+
+
 def _is_path_allowed_for_dir(
     config_dir: Path,
     rel_path: str,
@@ -717,16 +875,23 @@ def _is_path_allowed_for_dir(
 
 
 def _is_path_allowed_for_read(
-    config_dir: Path, rel_path: str, extra_dirs: list[str] | None = None
+    config_dir: Path,
+    rel_path: str,
+    extra_dirs: list[str] | None = None,
+    package_dirs: set[str] | None = None,
 ) -> bool:
     """Check if a path is allowed for reading.
 
     Allowed:
     - Files directly in config dir: configuration.yaml, automations.yaml, etc.
     - Files in allowed directories: www/, themes/, custom_templates/
-    - Files matching patterns: packages/*.yaml, custom_components/**/*.py
+    - Files matching patterns: <packages-folder>/*.yaml, custom_components/**/*.py
     - User-configured extra directories (``extra_dirs``), granted read+write
       (issue #1567)
+
+    ``package_dirs`` is the set of configured packages folder name(s) (issue
+    #1854); it defaults to ``{"packages"}`` when not supplied so callers that
+    don't resolve the live config keep the historical behaviour.
 
     The non-overridable deny floor is checked first, so a custom directory can
     never reach ``.storage`` or an unmasked ``secrets.yaml``.
@@ -768,11 +933,10 @@ def _is_path_allowed_for_read(
     if parts and parts[0] in ALLOWED_READ_DIRS:
         return True
 
-    # Check for packages/*.yaml pattern. ``fnmatch``'s ``*`` matches
-    # ``/`` too, so this pattern alone covers nested paths
-    # (``packages/sub/foo.yaml``) — no explicit recursive variant
-    # needed.
-    if fnmatch.fnmatch(normalized, "packages/*.yaml"):
+    # Check for <packages-folder>/*.yaml at any depth. The configured folder(s)
+    # default to {"packages"} (issue #1854); literal match so a folder name with
+    # glob metacharacters is treated as the include root, not a wildcard.
+    if _path_in_package_dir(normalized, package_dirs):
         return True
 
     # Check for custom_components/**/*.py pattern
@@ -1103,19 +1267,44 @@ def _build_edit_yaml_config_handler(
             }
 
         is_config_yaml = normalized in ALLOWED_YAML_CONFIG_FILES
-        # ``fnmatch``'s ``*`` matches ``/`` too, so this single
-        # pattern covers both flat ``packages/foo.yaml`` and nested
-        # ``packages/sub/foo.yaml``. The recursive variant
-        # ``packages/**/*.yaml`` is mathematically a subset of this
-        # one (``**`` reduces to ``*`` in fnmatch), so it's omitted.
-        is_package = fnmatch.fnmatch(normalized, "packages/*.yaml")
         is_theme = fnmatch.fnmatch(normalized, "themes/*.yaml")
+        # Package files may live under any folder the user binds via
+        # ``homeassistant: packages: !include_dir_named <folder>`` — not just the
+        # default ``packages`` (issue #1854). The configured folder(s) are
+        # detected at runtime (parsing configuration.yaml), so only do that work
+        # when the target isn't already a config-root or theme file. The set
+        # always includes ``"packages"`` as a fallback.
+        package_dirs: set[str] = set()
+        is_package = False
+        if not is_config_yaml and not is_theme:
+            package_dirs = await _detect_package_dirs(hass)
+            is_package = _path_in_package_dir(normalized, package_dirs)
         if not is_config_yaml and not is_package and not is_theme:
+            allowed_pkg = ", ".join(
+                f"{folder}/*.yaml" for folder in sorted(package_dirs)
+            )
             return {
                 "success": False,
                 "error": (
                     f"File '{rel_path}' is not allowed. "
-                    f"Only {', '.join(ALLOWED_YAML_CONFIG_FILES)}, packages/*.yaml, and themes/*.yaml are supported."
+                    f"Only {', '.join(ALLOWED_YAML_CONFIG_FILES)}, {allowed_pkg}, and themes/*.yaml are supported."
+                ),
+            }
+
+        # Symlink-safe containment (parity with the read path, issue #1586): the
+        # write target is ``config_dir / normalized``, so a package/theme folder
+        # that is (or contains) a symlink escaping the config dir — or a path
+        # resolving into the deny floor (.storage / secrets.yaml) — must be
+        # rejected before writing, exactly as read_file already does.
+        if _violates_deny_floor(config_dir, normalized) or not _resolves_within(
+            config_dir, rel_path
+        ):
+            _LOGGER.warning("Rejected YAML edit escaping the config dir: %s", rel_path)
+            return {
+                "success": False,
+                "error": (
+                    f"Path '{rel_path}' resolves outside the config directory or "
+                    "into a protected location and cannot be edited."
                 ),
             }
 
@@ -1968,14 +2157,21 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         tail_lines = call.data.get("tail_lines")
         yaml_path = call.data.get("yaml_path")
 
-        # Security check
+        # Security check. Package files may live under a non-default folder
+        # (issue #1854), so resolve the configured folder(s) — the same way the
+        # YAML editor does — and honour them here too, otherwise the pre-write
+        # backup snapshot (a read of the target) blocks edits to those files.
         extra_dirs = _current_extra_dirs()
-        if not _is_path_allowed_for_read(config_dir, rel_path, extra_dirs):
+        package_dirs = await _detect_package_dirs(hass)
+        if not _is_path_allowed_for_read(
+            config_dir, rel_path, extra_dirs, package_dirs
+        ):
             _LOGGER.warning("Attempted to read disallowed path: %s", rel_path)
             allowed_patterns = (
                 ALLOWED_READ_FILES
                 + [f"{d}/**" for d in ALLOWED_READ_DIRS]
-                + ["packages/*.yaml", "custom_components/**/*.py"]
+                + [f"{d}/*.yaml" for d in sorted(package_dirs)]
+                + ["custom_components/**/*.py"]
                 + [f"{d}/**" for d in extra_dirs]
             )
             return {
