@@ -18,7 +18,6 @@ from .capture import (
     DEFAULT_WIDTH,
     DashboardImageCapture,
     capture_dashboard_images,
-    capture_dashboard_png,
 )
 from .provision import resolve_engine_url
 
@@ -29,6 +28,5 @@ __all__ = [
     "DEFAULT_WIDTH",
     "DashboardImageCapture",
     "capture_dashboard_images",
-    "capture_dashboard_png",
     "resolve_engine_url",
 ]

@@ -206,7 +206,6 @@ def _raise_invalid_parameter(
             suggestions=[f"Pass {parameter} as {expectation}"],
         )
     )
-    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 def _bounded_int(
@@ -470,8 +469,6 @@ async def _read_limited_response(
 def _raise_payload_too_large(
     *,
     request_context: dict[str, Any],
-    capture_count: int,
-    completed_count: int,
     declared_bytes: int | None,
     received_bytes: int | None,
     aggregate_bytes: int,
@@ -488,8 +485,8 @@ def _raise_payload_too_large(
             f"{limit_kind} limit.",
             context={
                 **request_context,
-                "capture_count": capture_count,
-                "completed_count": completed_count,
+                "capture_count": int(request_context["capture_count"]),
+                "completed_count": int(request_context["completed_count"]),
                 "declared_bytes": declared_bytes,
                 "received_bytes": received_bytes,
                 "aggregate_bytes_before_capture": aggregate_bytes,
@@ -505,7 +502,6 @@ def _raise_payload_too_large(
             ],
         )
     )
-    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 async def _read_image_response(
@@ -545,8 +541,6 @@ async def _read_image_response(
     if declared_bytes is not None and declared_bytes > MAX_IMAGE_PAYLOAD_BYTES:
         _raise_payload_too_large(
             request_context=request_context,
-            capture_count=int(request_context["capture_count"]),
-            completed_count=int(request_context["completed_count"]),
             declared_bytes=declared_bytes,
             received_bytes=0,
             aggregate_bytes=aggregate_bytes,
@@ -555,8 +549,6 @@ async def _read_image_response(
     if declared_bytes is not None and declared_bytes > remaining_batch_bytes:
         _raise_payload_too_large(
             request_context=request_context,
-            capture_count=int(request_context["capture_count"]),
-            completed_count=int(request_context["completed_count"]),
             declared_bytes=declared_bytes,
             received_bytes=0,
             aggregate_bytes=aggregate_bytes,
@@ -571,8 +563,6 @@ async def _read_image_response(
         )
         _raise_payload_too_large(
             request_context=request_context,
-            capture_count=int(request_context["capture_count"]),
-            completed_count=int(request_context["completed_count"]),
             declared_bytes=declared_bytes,
             received_bytes=read_limit + 1,
             aggregate_bytes=aggregate_bytes,
@@ -859,30 +849,21 @@ async def capture_dashboard_images(
             aggregate_bytes = sum(capture.size_bytes for capture in captures)
             remaining_batch_bytes = MAX_BATCH_PAYLOAD_BYTES - aggregate_bytes
             if remaining_batch_bytes <= 0:
-                if partial_failures is not None:
-                    partial_failures.append(
-                        create_error_response(
-                            ErrorCode.IMAGE_PAYLOAD_TOO_LARGE,
-                            "Screenshot image batch reached the server's safe "
-                            "inline-image limit.",
-                            context={
-                                **request_context,
-                                "aggregate_bytes_before_capture": aggregate_bytes,
-                                "limit_kind": "batch",
-                                "limit_bytes": MAX_BATCH_PAYLOAD_BYTES,
-                            },
-                        )
+                assert partial_failures is not None
+                partial_failures.append(
+                    create_error_response(
+                        ErrorCode.IMAGE_PAYLOAD_TOO_LARGE,
+                        "Screenshot image batch reached the server's safe "
+                        "inline-image limit.",
+                        context={
+                            **request_context,
+                            "aggregate_bytes_before_capture": aggregate_bytes,
+                            "limit_kind": "batch",
+                            "limit_bytes": MAX_BATCH_PAYLOAD_BYTES,
+                        },
                     )
-                    break
-                _raise_payload_too_large(
-                    request_context=request_context,
-                    capture_count=len(viewports),
-                    completed_count=len(captures),
-                    declared_bytes=None,
-                    received_bytes=0,
-                    aggregate_bytes=aggregate_bytes,
-                    limit_kind="batch",
                 )
+                break
 
             outcome = await _request_or_collect_failure(
                 http_client,
@@ -933,32 +914,3 @@ async def capture_dashboard_images(
             )
 
     return _complete_capture_batch(captures, partial_failures)
-
-
-async def capture_dashboard_png(
-    dashboard_path: str,
-    *,
-    width: int = DEFAULT_WIDTH,
-    height: int = DEFAULT_HEIGHT,
-    zoom: float = 1.0,
-    wait_ms: int = DEFAULT_WAIT_MS,
-    full_page: bool = False,
-) -> bytes:
-    """Render ``dashboard_path`` to PNG bytes via the screenshot engine.
-
-    This compatibility wrapper returns the first image from
-    :func:`capture_dashboard_images`. With ``full_page=True``, ``height`` is
-    ignored and the engine receives its native ``WIDTHxauto`` viewport.
-
-    Raises :class:`ToolError` if the engine is unreachable or returns an error.
-    """
-    captures = await capture_dashboard_images(
-        dashboard_path,
-        width=width,
-        height=height,
-        zoom=zoom,
-        wait_ms=wait_ms,
-        full_page=full_page,
-        image_format="png",
-    )
-    return captures[0].data

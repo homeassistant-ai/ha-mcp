@@ -292,172 +292,6 @@ class TestStandaloneScreenshotTool:
             "desktop"
         )
 
-    async def test_puppet_restart_only_returns_management_success(
-        self, monkeypatch: Any
-    ) -> None:
-        from fastmcp.tools.tool import ToolResult
-
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_dashboard_screenshot as mod
-
-        async def configure(*_a: Any, **_kw: Any) -> dict[str, Any]:
-            return {
-                "slug": "abc_puppet",
-                "settings_changed": False,
-                "restart_requested": True,
-                "restart_verified": True,
-                "status": "restarted",
-            }
-
-        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
-
-        result = await mod.DashboardScreenshotTools(
-            object()
-        ).ha_get_dashboard_screenshot(puppet_restart=True)
-
-        assert isinstance(result, ToolResult)
-        assert result.content == []
-        assert result.structured_content["action"] == "configure_puppet"
-        assert result.structured_content["screenshot_count"] == 0
-
-    async def test_management_only_rejects_render_options_before_change(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_dashboard_screenshot as mod
-
-        configure = AsyncMock()
-        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
-
-        with pytest.raises(ToolError) as exc_info:
-            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
-                puppet_keep_browser_open=True,
-                theme="Test Theme",
-            )
-
-        assert "require a dashboard target" in str(exc_info.value)
-        configure.assert_not_awaited()
-
-    async def test_invalid_capture_options_do_not_change_puppet(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
-        from ha_mcp.tools import tools_dashboard_screenshot as mod
-
-        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
-            return DashboardRenderTarget(
-                dashboard_url_path="wall-panel",
-                view_path="home",
-                render_path="wall-panel/home",
-                view_index=0,
-                stable=True,
-            )
-
-        configure = AsyncMock()
-        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
-        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
-
-        with pytest.raises(ToolError):
-            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
-                dashboard_url_path="wall-panel",
-                view_path="home",
-                viewport_presets=["mobile", "mobile"],
-                puppet_keep_browser_open=True,
-            )
-
-        configure.assert_not_awaited()
-
-    async def test_capture_failure_reports_applied_puppet_configuration(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
-        from ha_mcp.tools import tools_dashboard_screenshot as mod
-
-        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
-            return DashboardRenderTarget(
-                dashboard_url_path="wall-panel",
-                view_path="home",
-                render_path="wall-panel/home",
-                view_index=0,
-                stable=True,
-            )
-
-        applied = {
-            "slug": "abc_puppet",
-            "settings_changed": True,
-            "restart_requested": False,
-            "status": "pending_restart",
-        }
-
-        async def configure(*_a: Any, **_kw: Any) -> dict[str, Any]:
-            return applied
-
-        async def capture(*_a: Any, **_kw: Any) -> list[Any]:
-            raise ToolError(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": {"code": "CONNECTION_FAILED", "message": "boom"},
-                    }
-                )
-            )
-
-        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
-        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
-        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
-
-        with pytest.raises(ToolError) as exc_info:
-            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
-                dashboard_url_path="wall-panel",
-                view_path="home",
-                puppet_keep_browser_open=True,
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "CONNECTION_FAILED"
-        assert error["puppet_configuration_applied"] == applied
-
-    async def test_raw_capture_failure_reports_applied_puppet_configuration(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
-        from ha_mcp.tools import tools_dashboard_screenshot as mod
-
-        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
-            return DashboardRenderTarget(
-                dashboard_url_path="wall-panel",
-                view_path="home",
-                render_path="wall-panel/home",
-                view_index=0,
-                stable=True,
-            )
-
-        applied = {"slug": "abc_puppet", "settings_changed": True}
-
-        async def configure(*_a: Any, **_kw: Any) -> dict[str, Any]:
-            return applied
-
-        async def capture(*_a: Any, **_kw: Any) -> list[Any]:
-            raise RuntimeError("unexpected capture failure")
-
-        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
-        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
-        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
-
-        with pytest.raises(ToolError) as exc_info:
-            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
-                dashboard_url_path="wall-panel",
-                view_path="home",
-                puppet_keep_browser_open=True,
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "INTERNAL_ERROR"
-        assert error["puppet_configuration_applied"] == applied
-
     async def test_raw_capture_failure_without_management_is_structured(
         self, monkeypatch: Any
     ) -> None:
@@ -489,49 +323,6 @@ class TestStandaloneScreenshotTool:
         assert error["error"]["code"] == "INTERNAL_ERROR"
         assert error["error"]["details"] == "unexpected capture failure"
         assert error["dashboard_path"] == "wall-panel/home"
-
-    async def test_metadata_failure_reports_applied_puppet_configuration(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
-        from ha_mcp.tools import tools_dashboard_screenshot as mod
-
-        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
-            return DashboardRenderTarget(
-                dashboard_url_path="wall-panel",
-                view_path="home",
-                render_path="wall-panel/home",
-                view_index=0,
-                stable=True,
-            )
-
-        applied = {"slug": "abc_puppet", "settings_changed": True}
-
-        async def configure(*_a: Any, **_kw: Any) -> dict[str, Any]:
-            return applied
-
-        async def capture(*_a: Any, **_kw: Any) -> list[Any]:
-            return [_fake_dashboard_capture()]
-
-        def fail_metadata(*_a: Any, **_kw: Any) -> list[dict[str, Any]]:
-            raise RuntimeError("metadata failed")
-
-        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
-        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
-        monkeypatch.setattr(mod, "dashboard_screenshot_metadata", fail_metadata)
-        monkeypatch.setattr(provision, "configure_puppet_addon", configure)
-
-        with pytest.raises(ToolError) as exc_info:
-            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
-                dashboard_url_path="wall-panel",
-                view_path="home",
-                puppet_keep_browser_open=True,
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "IMAGE_SERIALIZATION_FAILED"
-        assert error["puppet_configuration_applied"] == applied
 
 
 # ---------------------------------------------------------------------------
@@ -760,700 +551,6 @@ class TestDiscoverEngineViaSupervisor:
         assert "Supervisor" in error["error"]["message"]
 
 
-class TestConfigurePuppetAddon:
-    @pytest.fixture(autouse=True)
-    def _supervisor_environment(self, monkeypatch: Any) -> None:
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
-
-    async def test_no_supervisor_token_fails_before_api_call(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        supervisor_call = AsyncMock()
-        monkeypatch.delenv("SUPERVISOR_TOKEN")
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(dashboard_screenshot_engine_url=""),
-        )
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision.configure_puppet_addon(
-                object(), keep_browser_open=True, restart=False
-            )
-
-        assert "auto-discovery" in str(exc_info.value)
-        supervisor_call.assert_not_awaited()
-
-    async def test_explicit_engine_fails_before_api_call(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        supervisor_call = AsyncMock()
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(
-                dashboard_screenshot_engine_url="http://sidecar:10000"
-            ),
-        )
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision.configure_puppet_addon(
-                object(), keep_browser_open=True, restart=False
-            )
-
-        assert "auto-discovery" in str(exc_info.value)
-        supervisor_call.assert_not_awaited()
-
-    async def test_multiple_started_puppets_fail_closed(self, monkeypatch: Any) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        calls: list[tuple[str, str]] = []
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            **_kwargs: Any,
-        ) -> dict[str, Any]:
-            calls.append((endpoint, method))
-            if endpoint == "/addons":
-                return {
-                    "success": True,
-                    "result": {
-                        "addons": [
-                            {"slug": "abc_puppet"},
-                            {"slug": "def_puppet"},
-                        ]
-                    },
-                }
-            return {
-                "success": True,
-                "result": {
-                    "name": "Puppet",
-                    "state": "started",
-                    "schema": _PUPPET_SCHEMA,
-                    "options": _puppet_options(keep_browser_open=False),
-                },
-            }
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision.configure_puppet_addon(
-                object(), keep_browser_open=True, restart=False
-            )
-
-        assert "ambiguous" in str(exc_info.value)
-        assert all(method == "GET" for _, method in calls)
-
-    async def test_incomplete_options_fail_before_write(self, monkeypatch: Any) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        calls: list[tuple[str, str]] = []
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            **_kwargs: Any,
-        ) -> dict[str, Any]:
-            calls.append((endpoint, method))
-            if endpoint == "/addons":
-                return {
-                    "success": True,
-                    "result": {"addons": [{"slug": "abc_puppet"}]},
-                }
-            return {
-                "success": True,
-                "result": {
-                    "name": "Puppet",
-                    "state": "started",
-                    "schema": _PUPPET_SCHEMA,
-                    "options": {"keep_browser_open": False},
-                },
-            }
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision.configure_puppet_addon(
-                object(), keep_browser_open=True, restart=False
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["missing_options"] == ["access_token", "home_assistant_url"]
-        assert all(method == "GET" for _, method in calls)
-
-    @pytest.mark.parametrize(
-        ("options", "expected_text"),
-        [
-            (None, "complete options object"),
-            (
-                {
-                    "access_token": 123,
-                    "home_assistant_url": None,
-                    "keep_browser_open": "false",
-                },
-                "unexpected Puppet option types",
-            ),
-        ],
-    )
-    async def test_malformed_options_fail_before_write(
-        self, monkeypatch: Any, options: Any, expected_text: str
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        calls: list[tuple[str, str]] = []
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            **_kwargs: Any,
-        ) -> dict[str, Any]:
-            calls.append((endpoint, method))
-            if endpoint == "/addons":
-                return {
-                    "success": True,
-                    "result": {"addons": [{"slug": "abc_puppet"}]},
-                }
-            return {
-                "success": True,
-                "result": {
-                    "name": "Puppet",
-                    "state": "started",
-                    "schema": _PUPPET_SCHEMA,
-                    "options": options,
-                },
-            }
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision.configure_puppet_addon(
-                object(), keep_browser_open=True, restart=False
-            )
-
-        assert expected_text in str(exc_info.value)
-        assert all(method == "GET" for _, method in calls)
-
-    async def test_setting_update_is_merged_and_hard_scoped_to_puppet(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        calls: list[dict[str, Any]] = []
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            data: dict[str, Any] | None = None,
-            timeout: int | None = None,
-        ) -> dict[str, Any]:
-            calls.append(
-                {
-                    "endpoint": endpoint,
-                    "method": method,
-                    "data": data,
-                    "timeout": timeout,
-                }
-            )
-            if endpoint == "/addons":
-                return {
-                    "success": True,
-                    "result": {
-                        "addons": [
-                            {"slug": "other_addon", "state": "started"},
-                            {"slug": "abc_puppet", "state": "started"},
-                        ]
-                    },
-                }
-            if endpoint == "/addons/abc_puppet/info":
-                return {
-                    "success": True,
-                    "result": {
-                        "name": "Puppet",
-                        "state": "started",
-                        "schema": _PUPPET_SCHEMA,
-                        "options": _puppet_options(keep_browser_open=False),
-                    },
-                }
-            assert endpoint == "/addons/abc_puppet/options"
-            return {"success": True, "result": {}}
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-
-        result = await provision.configure_puppet_addon(
-            object(), keep_browser_open=True, restart=False
-        )
-
-        assert result["settings_changed"] is True
-        assert result["status"] == "pending_restart"
-        assert all("other_addon" not in call["endpoint"] for call in calls)
-        post = calls[-1]
-        assert post["endpoint"] == "/addons/abc_puppet/options"
-        assert post["method"] == "POST"
-        assert post["data"] == {
-            "options": {
-                "access_token": "secret",
-                "keep_browser_open": True,
-                "home_assistant_url": "http://homeassistant:8123",
-            }
-        }
-        assert "access_token" not in result
-        assert "home_assistant_url" not in result
-
-    async def test_restart_is_verified_started(self, monkeypatch: Any) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        calls: list[tuple[str, str, int | None]] = []
-        info_calls = 0
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            data: dict[str, Any] | None = None,
-            timeout: int | None = None,
-        ) -> dict[str, Any]:
-            nonlocal info_calls
-            calls.append((endpoint, method, timeout))
-            if endpoint == "/addons":
-                return {
-                    "success": True,
-                    "result": {"addons": [{"slug": "abc_puppet", "state": "started"}]},
-                }
-            if endpoint == "/addons/abc_puppet/info":
-                info_calls += 1
-                return {
-                    "success": True,
-                    "result": {
-                        "name": "Puppet",
-                        "state": "stopped" if info_calls == 2 else "started",
-                        "hostname": "puppet-engine",
-                        "schema": _PUPPET_SCHEMA,
-                        "options": _puppet_options(keep_browser_open=False),
-                    },
-                }
-            assert endpoint == "/addons/abc_puppet/restart"
-            return {"success": True, "result": {}}
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-        monkeypatch.setattr(provision.asyncio, "sleep", AsyncMock())
-        ready = AsyncMock()
-        monkeypatch.setattr(provision, "_wait_for_puppet_engine_ready", ready)
-
-        result = await provision.configure_puppet_addon(
-            object(), keep_browser_open=None, restart=True
-        )
-
-        assert result["restart_verified"] is True
-        assert result["status"] == "restarted"
-        assert ("/addons/abc_puppet/restart", "POST", 120) in calls
-        assert info_calls == 3
-        ready.assert_awaited_once_with("puppet-engine")
-
-    async def test_restart_waits_until_engine_root_is_ready(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            **_kwargs: Any,
-        ) -> dict[str, Any]:
-            if endpoint == "/addons":
-                return {"success": True, "result": {"addons": [{"slug": "abc_puppet"}]}}
-            if endpoint == "/addons/abc_puppet/info":
-                return {
-                    "success": True,
-                    "result": {
-                        "name": "Puppet",
-                        "state": "started",
-                        "hostname": "puppet-engine",
-                        "schema": _PUPPET_SCHEMA,
-                        "options": _puppet_options(keep_browser_open=False),
-                    },
-                }
-            assert endpoint == "/addons/abc_puppet/restart"
-            return {"success": True, "result": {}}
-
-        outcomes: list[Exception | int] = [
-            provision.httpx.ConnectError("not listening"),
-            404,
-            503,
-            200,
-        ]
-
-        class ProbeClient:
-            async def __aenter__(self) -> ProbeClient:
-                return self
-
-            async def __aexit__(self, *_args: Any) -> None:
-                return None
-
-            async def get(self, _url: str) -> Any:
-                outcome = outcomes.pop(0)
-                if isinstance(outcome, Exception):
-                    raise outcome
-                return SimpleNamespace(status_code=outcome)
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-        monkeypatch.setattr(
-            provision.httpx, "AsyncClient", lambda **_kwargs: ProbeClient()
-        )
-        sleep = AsyncMock()
-        monkeypatch.setattr(provision.asyncio, "sleep", sleep)
-
-        result = await provision.configure_puppet_addon(
-            object(), keep_browser_open=None, restart=True
-        )
-
-        assert result["restart_verified"] is True
-        assert outcomes == []
-        assert sleep.await_count == 3
-        sleep.assert_awaited_with(provision._PUPPET_ENGINE_READY_POLL_INTERVAL_SECONDS)
-
-    async def test_restart_readiness_timeout_preserves_applied_context(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            **_kwargs: Any,
-        ) -> dict[str, Any]:
-            if endpoint == "/addons":
-                return {"success": True, "result": {"addons": [{"slug": "abc_puppet"}]}}
-            if endpoint == "/addons/abc_puppet/info":
-                return {
-                    "success": True,
-                    "result": {
-                        "name": "Puppet",
-                        "state": "started",
-                        "hostname": "puppet-engine",
-                        "schema": _PUPPET_SCHEMA,
-                        "options": _puppet_options(keep_browser_open=False),
-                    },
-                }
-            if endpoint == "/addons/abc_puppet/options":
-                return {"success": True, "result": {}}
-            assert endpoint == "/addons/abc_puppet/restart"
-            return {"success": True, "result": {}}
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-
-        class UnreadyClient:
-            async def __aenter__(self) -> UnreadyClient:
-                return self
-
-            async def __aexit__(self, *_args: Any) -> None:
-                return None
-
-            async def get(self, _url: str) -> Any:
-                raise provision.httpx.ConnectError("not listening")
-
-        monkeypatch.setattr(provision, "_PUPPET_ENGINE_READY_TIMEOUT_SECONDS", 0)
-        monkeypatch.setattr(
-            provision.httpx, "AsyncClient", lambda **_kwargs: UnreadyClient()
-        )
-        monkeypatch.setattr(provision.asyncio, "sleep", AsyncMock())
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision.configure_puppet_addon(
-                object(), keep_browser_open=True, restart=True
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "CONNECTION_FAILED"
-        assert error["engine_ready"] is False
-        assert error["settings_changed"] is True
-        assert error["restart_requested"] is True
-
-    async def test_restart_readiness_rejects_permanent_client_error(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-
-        class ClientErrorResponse:
-            async def __aenter__(self) -> ClientErrorResponse:
-                return self
-
-            async def __aexit__(self, *_args: Any) -> None:
-                return None
-
-            async def get(self, _url: str) -> Any:
-                return SimpleNamespace(status_code=404)
-
-        monkeypatch.setattr(provision, "_PUPPET_ENGINE_READY_TIMEOUT_SECONDS", 0)
-        monkeypatch.setattr(
-            provision.httpx,
-            "AsyncClient",
-            lambda **_kwargs: ClientErrorResponse(),
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision._wait_for_puppet_engine_ready("puppet-engine")
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "CONNECTION_FAILED"
-        assert error["error"]["details"] == "HTTP 404"
-        assert error["engine_ready"] is False
-
-    async def test_schema_mismatch_fails_before_any_write(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        calls: list[str] = []
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            data: dict[str, Any] | None = None,
-            timeout: int | None = None,
-        ) -> dict[str, Any]:
-            calls.append(endpoint)
-            if endpoint == "/addons":
-                return {
-                    "success": True,
-                    "result": {"addons": [{"slug": "fake_puppet", "state": "started"}]},
-                }
-            return {
-                "success": True,
-                "result": {
-                    "name": "Not Puppet",
-                    "schema": [{"name": "keep_browser_open"}],
-                    "options": {},
-                },
-            }
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision.configure_puppet_addon(
-                object(), keep_browser_open=True, restart=True
-            )
-
-        assert "CONFIG_VALIDATION_FAILED" in str(exc_info.value)
-        assert calls == ["/addons", "/addons/fake_puppet/info"]
-
-    async def test_unchanged_value_skips_options_post(self, monkeypatch: Any) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        calls: list[tuple[str, str]] = []
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            data: dict[str, Any] | None = None,
-            timeout: int | None = None,
-        ) -> dict[str, Any]:
-            calls.append((endpoint, method))
-            if endpoint == "/addons":
-                return {
-                    "success": True,
-                    "result": {"addons": [{"slug": "abc_puppet", "state": "started"}]},
-                }
-            assert endpoint == "/addons/abc_puppet/info"
-            return {
-                "success": True,
-                "result": {
-                    "name": "Puppet",
-                    "state": "started",
-                    "schema": _PUPPET_SCHEMA,
-                    "options": _puppet_options(keep_browser_open=True),
-                },
-            }
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-
-        result = await provision.configure_puppet_addon(
-            object(), keep_browser_open=True, restart=False
-        )
-
-        assert result["settings_changed"] is False
-        assert result["status"] == "unchanged"
-        assert calls == [("/addons", "GET"), ("/addons/abc_puppet/info", "GET")]
-
-    async def test_restart_timeout_reports_prior_setting_change(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        info_calls = 0
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            data: dict[str, Any] | None = None,
-            timeout: int | None = None,
-        ) -> dict[str, Any]:
-            nonlocal info_calls
-            if endpoint == "/addons":
-                return {
-                    "success": True,
-                    "result": {"addons": [{"slug": "abc_puppet", "state": "started"}]},
-                }
-            if endpoint == "/addons/abc_puppet/info":
-                info_calls += 1
-                return {
-                    "success": True,
-                    "result": {
-                        "name": "Puppet",
-                        "state": "started" if info_calls == 1 else "stopped",
-                        "hostname": "puppet-engine",
-                        "schema": _PUPPET_SCHEMA,
-                        "options": _puppet_options(keep_browser_open=False),
-                    },
-                }
-            assert endpoint in {
-                "/addons/abc_puppet/options",
-                "/addons/abc_puppet/restart",
-            }
-            return {"success": True, "result": {}}
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-        monkeypatch.setattr(provision.asyncio, "sleep", AsyncMock())
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision.configure_puppet_addon(
-                object(), keep_browser_open=True, restart=True
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert error["settings_changed"] is True
-        assert error["restart_requested"] is True
-        assert info_calls == 21
-
-    async def test_restart_poll_tool_error_preserves_restart_context(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        info_calls = 0
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            **_kwargs: Any,
-        ) -> dict[str, Any]:
-            nonlocal info_calls
-            if endpoint == "/addons":
-                return {
-                    "success": True,
-                    "result": {"addons": [{"slug": "abc_puppet"}]},
-                }
-            if endpoint == "/addons/abc_puppet/info":
-                info_calls += 1
-                if info_calls > 1:
-                    raise ToolError(
-                        json.dumps(
-                            {
-                                "success": False,
-                                "error": {
-                                    "code": "CONNECTION_FAILED",
-                                    "message": "poll disconnected",
-                                },
-                            }
-                        )
-                    )
-                return {
-                    "success": True,
-                    "result": {
-                        "name": "Puppet",
-                        "state": "started",
-                        "hostname": "puppet-engine",
-                        "schema": _PUPPET_SCHEMA,
-                        "options": _puppet_options(keep_browser_open=False),
-                    },
-                }
-            assert endpoint == "/addons/abc_puppet/restart"
-            return {"success": True, "result": {}}
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision.configure_puppet_addon(
-                object(), keep_browser_open=None, restart=True
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "CONNECTION_FAILED"
-        assert error["settings_changed"] is False
-        assert error["restart_requested"] is True
-        assert info_calls == 2
-
-    async def test_restart_without_hostname_fails_before_options_write(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-        from ha_mcp.tools import tools_addons
-
-        calls: list[tuple[str, str]] = []
-
-        async def supervisor_call(
-            _client: Any,
-            endpoint: str,
-            method: str = "GET",
-            **_kwargs: Any,
-        ) -> dict[str, Any]:
-            calls.append((endpoint, method))
-            if endpoint == "/addons":
-                return {"success": True, "result": {"addons": [{"slug": "abc_puppet"}]}}
-            assert endpoint == "/addons/abc_puppet/info"
-            return {
-                "success": True,
-                "result": {
-                    "name": "Puppet",
-                    "state": "started",
-                    "schema": _PUPPET_SCHEMA,
-                    "options": _puppet_options(keep_browser_open=False),
-                },
-            }
-
-        monkeypatch.setattr(tools_addons, "_supervisor_api_call", supervisor_call)
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision.configure_puppet_addon(
-                object(), keep_browser_open=True, restart=True
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert error["engine_ready"] is False
-        assert calls == [("/addons", "GET"), ("/addons/abc_puppet/info", "GET")]
-
-
 # ---------------------------------------------------------------------------
 # Capture HTTP client
 # ---------------------------------------------------------------------------
@@ -1540,10 +637,10 @@ class TestCapture:
         _FakeAsyncClient._next = _FakeResponse(200, png)
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
-        out = await capture.capture_dashboard_png(
+        captures = await capture.capture_dashboard_images(
             "lovelace/0", width=640, height=480, zoom=1.5, wait_ms=2000
         )
-        assert out == png
+        assert captures[0].data == png
         got = _FakeAsyncClient.last_get
         assert got["url"] == "http://engine:10000/lovelace/0"
         assert got["params"]["viewport"] == "640x480"
@@ -1562,7 +659,7 @@ class TestCapture:
         _FakeAsyncClient._next = _FakeResponse(200, b"\x89PNG\r\n\x1a\nfake")
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
-        await capture.capture_dashboard_png(
+        await capture.capture_dashboard_images(
             "lovelace/0", width=1024, height=480, full_page=True
         )
         got = _FakeAsyncClient.last_get
@@ -2075,7 +1172,7 @@ class TestCapture:
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         with pytest.raises(ToolError):
-            await capture.capture_dashboard_png("lovelace/0")
+            await capture.capture_dashboard_images("lovelace/0")
 
     async def test_empty_body_raises_toolerror(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
@@ -2088,7 +1185,7 @@ class TestCapture:
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         with pytest.raises(ToolError):
-            await capture.capture_dashboard_png("lovelace/0")
+            await capture.capture_dashboard_images("lovelace/0")
 
     @pytest.mark.parametrize("path", ["/", "/.", "", "  ", "//"])
     async def test_root_or_empty_path_rejected(self, path: str) -> None:
@@ -2132,7 +1229,7 @@ class TestCapture:
         _FakeAsyncClient._next = _FakeResponse(200, b"\x89PNG\r\n\x1a\nfake")
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
-        await capture.capture_dashboard_png("my dash/0")
+        await capture.capture_dashboard_images("my dash/0")
         assert _FakeAsyncClient.last_get["url"] == "http://engine:10000/my%20dash/0"
 
 
@@ -2800,9 +1897,11 @@ class TestDashboardFrontendPath:
     def test_maps_default_and_passes_through(
         self, url_path: str | None, expected: str
     ) -> None:
-        from ha_mcp.tools.tools_config_dashboards import _dashboard_frontend_path
+        # The tools_config_dashboards wrapper was inlined away; this now
+        # exercises the underlying paths.py implementation directly.
+        from ha_mcp.dashboard_screenshot.paths import dashboard_frontend_path
 
-        assert _dashboard_frontend_path(url_path) == expected
+        assert dashboard_frontend_path(url_path) == expected
 
 
 class TestNoteScreenshotIgnored:
@@ -2850,39 +1949,31 @@ class TestNoteScreenshotIgnored:
 
 
 class TestPublicScreenshotOptionForwarding:
-    """Public dashboard get/set methods forward every shared render option."""
+    """Public dashboard get/set methods forward view_path only.
 
-    _OPTIONS: ClassVar[dict[str, Any]] = {
-        "view_path": "home",
-        "width": 901,
-        "height": "auto",
-        "viewport_presets": ["tablet"],
-        "orientation": "landscape",
-        "zoom": 1.25,
-        "wait_ms": 17,
-        "full_page": True,
-        "theme": "Test Theme",
-        "dark_mode": True,
-        "language": "de",
-        "image_format": "webp",
-        "render_timeout_seconds": 77,
-    }
+    The advanced render params (width, zoom, theme, etc.) live solely on the
+    dedicated ha_get_dashboard_screenshot tool (progressive disclosure) — the
+    config tools no longer accept them, so capture always runs with
+    screenshot-option defaults besides view_path.
+    """
 
     @staticmethod
     def _assert_capture_call(capture_call: dict[str, Any]) -> None:
+        from dataclasses import asdict
+
+        from ha_mcp.tools.tools_config_dashboards import _DashboardScreenshotOptions
+
         assert capture_call["path"] == "wall-panel/home"
+        defaults = asdict(_DashboardScreenshotOptions())
+        del defaults["view_path"]
         assert {
             key: value
             for key, value in capture_call.items()
             if key not in {"path", "partial_failures"}
-        } == {
-            key: value
-            for key, value in TestPublicScreenshotOptionForwarding._OPTIONS.items()
-            if key != "view_path"
-        }
+        } == defaults
         assert capture_call["partial_failures"] == []
 
-    async def test_get_include_screenshot_forwards_all_options(
+    async def test_get_include_screenshot_forwards_view_path(
         self, monkeypatch: Any
     ) -> None:
         from fastmcp.tools.tool import ToolResult
@@ -2919,13 +2010,13 @@ class TestPublicScreenshotOptionForwarding:
         ).ha_config_get_dashboard(
             url_path="wall-panel",
             include_screenshot=True,
-            **self._OPTIONS,
+            view_path="home",
         )
 
         assert isinstance(result, ToolResult)
         self._assert_capture_call(capture_call)
 
-    async def test_set_return_screenshot_forwards_all_options(
+    async def test_set_return_screenshot_forwards_view_path(
         self, monkeypatch: Any
     ) -> None:
         from fastmcp.tools.tool import ToolResult
@@ -2974,7 +2065,7 @@ class TestPublicScreenshotOptionForwarding:
             config=dashboard_config,
             return_screenshot=True,
             MandatoryBPS=False,
-            **self._OPTIONS,
+            view_path="home",
         )
 
         assert isinstance(result, ToolResult)
@@ -2982,13 +2073,19 @@ class TestPublicScreenshotOptionForwarding:
 
 
 def test_public_screenshot_option_names_stay_in_parity() -> None:
+    """view_path is the only render option shared with the config tools.
+
+    Progressive disclosure: the advanced render params below live solely on
+    the dedicated ha_get_dashboard_screenshot tool. The config tools
+    (ha_config_get_dashboard / ha_config_set_dashboard) intentionally do not
+    accept them — this guards against them silently reappearing there.
+    """
     import inspect
 
     from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
     from ha_mcp.tools.tools_dashboard_screenshot import DashboardScreenshotTools
 
-    shared = {
-        "view_path",
+    advanced = {
         "width",
         "height",
         "viewport_presets",
@@ -3015,6 +2112,8 @@ def test_public_screenshot_option_names_stay_in_parity() -> None:
         inspect.signature(DashboardConfigTools.ha_config_set_dashboard).parameters
     )
 
-    assert shared <= standalone
-    assert shared <= get_options
-    assert shared <= set_options
+    assert {"view_path", *advanced} <= standalone
+    assert "view_path" in get_options
+    assert "view_path" in set_options
+    assert not (advanced & get_options)
+    assert not (advanced & set_options)

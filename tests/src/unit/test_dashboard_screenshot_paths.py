@@ -357,6 +357,20 @@ def test_named_view_resolution_reports_missing_and_ambiguous_paths(
     assert error["available_view_paths"] == available
 
 
+def test_named_view_resolution_rejects_strategy_dashboard() -> None:
+    """A structured strategy-dashboard + named view_path is rejected: strategy
+    dashboards generate their views at runtime, so a static named view_path
+    can never resolve."""
+    with pytest.raises(ToolError) as exc_info:
+        resolve_dashboard_view(
+            "wall-panel", {"strategy": {"type": "original-states"}}, "some-view"
+        )
+
+    error = _tool_error(exc_info)
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "do not expose static named view paths" in error["error"]["message"]
+
+
 @pytest.mark.parametrize(
     ("config", "expected_index", "warning_text"),
     [
