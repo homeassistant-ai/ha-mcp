@@ -645,13 +645,30 @@ The `custom_components/ha_mcp_tools/` integration ships separately from the
 `ha-mcp` server package (it reaches the HA instance via HACS), so CI cannot
 fully validate a component change before merge.
 
-- **Bump `manifest.json`'s `version` on every component change.** When the
-  change adds a service or argument the server depends on, raise
-  `MIN_COMPONENT_VERSION` in `src/ha_mcp/tools/tools_filesystem.py` to match in
-  the same PR. `get_caller_token` reports the manifest version and the server
-  gates on it, so without a bump the old and new component are
-  indistinguishable: a caller on the old version passes the gate and then hits
-  raw "service not found" errors instead of an actionable "update" prompt.
+- **Version bumps ride the stable release cycle — do not bump per PR or per
+  push.** The component version (`manifest.json` `version` + `COMPONENT_VERSION`
+  in `const.py`, kept in lockstep by the parity test) should lead the last
+  **stable** release by exactly one pending version, so everything merged since
+  the last stable cut ships together under one number on the next stable
+  release. Check the pending state with `git show
+  stable:custom_components/ha_mcp_tools/const.py | grep COMPONENT_VERSION` vs
+  master, then:
+  - **Level with stable** (no pending version yet): bump once — patch by
+    default — to open the pending version.
+  - **Already ahead of stable** (a pending version exists): do **not** bump;
+    your change rides under the existing pending version.
+  - Raise the pending version further only to **escalate the bump level** — e.g.
+    the pending version is a patch but your change warrants a minor — and then
+    go straight to that minor, not an extra patch. Never go past the current
+    pending version otherwise; per-revision bumps skip never-shipped numbers and
+    desync the version from the release cycle.
+- **When the change adds a service or argument the server depends on**, raise
+  `MIN_COMPONENT_VERSION` in `src/ha_mcp/tools/tools_filesystem.py` to match the
+  pending version in the same PR. `get_caller_token` reports the manifest
+  version and the server gates on it, so without the gate the old and new
+  component are indistinguishable: a caller on the old version passes the check
+  and then hits raw "service not found" errors instead of an actionable
+  "update" prompt.
 - **Keep the component backward-compatible with the released server.** The
   component (HACS) and the server (add-on / PyPI / Docker) follow the same
   release cycle but are updated independently per install, so a new component
