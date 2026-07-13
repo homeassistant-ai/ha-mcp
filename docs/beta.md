@@ -184,15 +184,9 @@ default theme/dark selection. Use a dedicated Puppet account so screenshot QA
 does not alter a person's normal frontend preferences. Language selection is
 local to Puppet's browser session.
 
-On HA OS / Supervised auto-discovery installs, the standalone screenshot tool
-can manage Puppet's non-secret `keep_browser_open` option with
-`puppet_keep_browser_open=true|false`, and can apply it immediately with
-`puppet_restart=true`. This operation is unavailable for explicit sidecar URLs
-and has no slug parameter: it discovers an installed `*_puppet` add-on, verifies
-the Puppet name and schema, merges the one allowed field into the full existing
-options, and can restart only that add-on. It never accepts, exposes, or
-intentionally changes `access_token` or `home_assistant_url`. Omit a dashboard
-target to use this management-only mode.
+To change the Puppet engine add-on's own options (such as `keep_browser_open`)
+or to restart it, use `ha_manage_addon`; the screenshot tools only render and
+never modify the engine add-on's configuration.
 
 **Puppet's HTTP listener has no inbound auth, and it publishes host port
 10000.** Anyone who can reach `http://<ha-host>:10000` can pull
@@ -204,7 +198,7 @@ security.")
 **Charts are best-effort.** Canvas cards (ApexCharts, mini-graph-card,
 history-graph) paint after the dashboard reports "loaded". The default
 render-settle is generous, but a heavy chart card may still come back blank;
-raise `wait_ms` on any of the three screenshot paths for those.
+raise `wait_ms` on the standalone `ha_get_dashboard_screenshot` tool for those.
 
 **Prefer stable view addressing.** The standalone tool accepts
 `dashboard_url_path` plus the view's configured `views[].path`; dashboard get
@@ -213,11 +207,14 @@ responses expose `render_paths` for every static view. The legacy raw
 returns a warning when that view has a stable named path. Strategy dashboards
 generate views at runtime and therefore expose only their dashboard base route.
 
-**Responsive and deterministic requests.** All three screenshot paths accept
-the same width, height, zoom, wait, orientation, theme, dark-mode, language,
-image-format, and render-timeout controls. `viewport_presets` renders an
-ordered batch using `mobile` (390x844), `tablet` (768x1024), and `desktop`
-(1280x800); every image is returned as a native MCP image block. PNG, JPEG,
+**Responsive and deterministic requests.** The standalone
+`ha_get_dashboard_screenshot` tool accepts the full width, height, zoom, wait,
+orientation, theme, dark-mode, language, image-format, and render-timeout
+controls; the dashboard get/set workflows expose only `include_screenshot` /
+`return_screenshot` plus `view_path` and render at defaults. `viewport_presets`
+(standalone only) renders an ordered batch using `mobile` (390x844), `tablet`
+(768x1024), and `desktop` (1280x800); every image is returned as a native MCP
+image block. PNG, JPEG,
 WebP, and BMP are supported by Puppet and carry their matching MIME type, but
 client/model support for less-common image formats varies.
 
