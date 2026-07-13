@@ -148,7 +148,9 @@ class TestLoadThemePrefs:
         path = tmp_path / "theme_prefs.json"
         path.write_text(json.dumps({"theme": "light", "legacy_key": "x"}))
         monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: tmp_path)
-        monkeypatch.setattr("ha_mcp.settings_ui._theme._WARNED_DROPPED_THEME_PREFS", set())
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._theme._WARNED_DROPPED_THEME_PREFS", set()
+        )
         with caplog.at_level("WARNING", logger="ha_mcp.settings_ui"):
             assert _load_theme_prefs() == {"theme": "light"}
             assert _load_theme_prefs() == {"theme": "light"}
@@ -288,7 +290,9 @@ class TestThemePrefsHandlers:
         """OSError during write (e.g. read-only fs) returns 500."""
         read_only_dir = tmp_path / "readonly"
         read_only_dir.mkdir()
-        monkeypatch.setattr("ha_mcp.settings_ui._theme.get_data_dir", lambda: read_only_dir)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._theme.get_data_dir", lambda: read_only_dir
+        )
 
         # Monkeypatch os.replace to raise OSError.
         import os

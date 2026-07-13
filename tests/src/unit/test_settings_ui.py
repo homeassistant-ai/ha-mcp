@@ -1033,7 +1033,9 @@ class TestRestartAddon:
         cm.__aenter__ = AsyncMock(return_value=mock_client)
         cm.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("ha_mcp.settings_ui._handlers_server.httpx.AsyncClient", return_value=cm):
+        with patch(
+            "ha_mcp.settings_ui._handlers_server.httpx.AsyncClient", return_value=cm
+        ):
             resp = await restart(request)
 
         assert resp.status_code == 200
@@ -3839,7 +3841,9 @@ class TestBetaMasterGateInSave:
         def patched_get_lock():
             return CountingLock(real_get_lock())
 
-        monkeypatch.setattr(ui_mod._persistence, "_get_override_file_lock", patched_get_lock)
+        monkeypatch.setattr(
+            ui_mod._persistence, "_get_override_file_lock", patched_get_lock
+        )
         _reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
@@ -3891,7 +3895,9 @@ class TestBetaMasterGateInSave:
         def patched_get_lock():
             return CountingLock(real_get_lock())
 
-        monkeypatch.setattr(ui_mod._persistence, "_get_override_file_lock", patched_get_lock)
+        monkeypatch.setattr(
+            ui_mod._persistence, "_get_override_file_lock", patched_get_lock
+        )
         _reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
