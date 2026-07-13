@@ -456,7 +456,7 @@ def _parse_saved_tools_payload(raw: str, path: Path) -> dict[str, Any] | None:
 
 
 def _validate_saved_tool_entry(
-    name: Any, info: Any, path: Path
+    name: object, info: object, path: Path
 ) -> dict[str, str] | None:
     """Validate and normalize a single saved-tool entry from the on-disk file.
 

@@ -1632,15 +1632,7 @@ def _coerce_backup_int_value(field_name: str, raw: object) -> tuple[bool, Any]:
             type(raw).__name__,
         )
         return False, None
-    try:
-        coerced = int(raw)
-    except (ValueError, TypeError):
-        logger.warning(
-            "backup_settings.json: %s value %r is not coercible to int; ignoring",
-            field_name,
-            raw,
-        )
-        return False, None
+    coerced = int(raw)
     if field_name == "auto_backup_throttle_minutes" and not 0 <= coerced <= 1440:
         logger.warning(
             "backup_settings.json: auto_backup_throttle_minutes=%d out of "
