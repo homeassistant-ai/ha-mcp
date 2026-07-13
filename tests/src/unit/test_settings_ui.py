@@ -2174,6 +2174,57 @@ class TestSaveFeatureFlagsStandaloneMode:
         get_data_dir.cache_clear()
         _reset_global_settings()
 
+    @pytest.mark.asyncio
+    async def test_flat_body_rejected_not_silent_noop(self, monkeypatch, tmp_path):
+        """A flat body (missing the ``flags`` wrapper) must 400, not
+        silently no-op with ``success``/``restart_required`` (#1840).
+
+        Before the fix, ``POST {"enable_lite_docstrings": true}``
+        returned ``{"success": true, "applied": {}, "mode": "file",
+        "restart_required": true}`` — worse than a plain no-op, since a
+        caller believed the flag changed and a restart was pending when
+        nothing happened. No override file should be written either.
+        """
+        post_handler = self._capture_post_handler(monkeypatch, tmp_path)
+
+        resp = await post_handler(self._make_request({"enable_lite_docstrings": True}))
+
+        assert resp.status_code == 400
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        # A rejected save must not persist anything.
+        assert not (tmp_path / "feature_flags.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_empty_flags_object_rejected(self, monkeypatch, tmp_path):
+        """An explicitly empty ``flags`` object applies nothing and must
+        400 rather than falsely reporting ``restart_required`` (#1840)."""
+        post_handler = self._capture_post_handler(monkeypatch, tmp_path)
+
+        resp = await post_handler(self._make_request({"flags": {}}))
+
+        assert resp.status_code == 400
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert not (tmp_path / "feature_flags.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_non_dict_flags_rejected(self, monkeypatch, tmp_path):
+        """``flags`` present but not an object (e.g. a list) must 400."""
+        post_handler = self._capture_post_handler(monkeypatch, tmp_path)
+
+        resp = await post_handler(
+            self._make_request({"flags": ["enable_lite_docstrings"]})
+        )
+
+        assert resp.status_code == 400
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert not (tmp_path / "feature_flags.json").exists()
+
 
 class TestSaveToolsResponseShape:
     """Pins the unified ``{success, applied, mode, restart_required}``

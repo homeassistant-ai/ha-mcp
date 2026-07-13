@@ -1982,12 +1982,31 @@ def build_settings_handlers(
                 ),
                 status_code=400,
             )
-        raw_flags = body.get("flags", {})
+        # Require the nested ``{"flags": {...}}`` shape. A flat body
+        # (e.g. ``{"enable_lite_docstrings": true}``) has no ``flags``
+        # key, so a lenient ``body.get("flags", {})`` default silently
+        # dropped every field and still returned
+        # ``success=True``/``restart_required=True`` — worse than a
+        # visible no-op, because the caller believed the flag changed
+        # and a restart was pending when nothing happened (#1840).
+        raw_flags = body.get("flags")
         if not isinstance(raw_flags, dict):
             return JSONResponse(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "'flags' must be an object mapping field names to values",
+                    "Request body must contain a 'flags' object mapping "
+                    'field names to values, e.g. {"flags": '
+                    '{"enable_lite_docstrings": true}}. A flat body such '
+                    'as {"enable_lite_docstrings": true} is not accepted.',
+                ),
+                status_code=400,
+            )
+        if not raw_flags:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "'flags' object is empty; include at least one "
+                    "feature-flag field to update.",
                 ),
                 status_code=400,
             )
