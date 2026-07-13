@@ -44,6 +44,28 @@ def _tool_error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
     return json.loads(str(exc_info.value))
 
 
+def test_non_stable_target_without_warnings_is_rejected() -> None:
+    with pytest.raises(ValueError, match="must carry at least one warning"):
+        DashboardRenderTarget(
+            dashboard_url_path="x",
+            view_path=None,
+            render_path="x",
+            view_index=None,
+            stable=False,
+        )
+
+
+def test_stable_target_without_warnings_is_allowed() -> None:
+    target = DashboardRenderTarget(
+        dashboard_url_path="x",
+        view_path=None,
+        render_path="x",
+        view_index=None,
+        stable=True,
+    )
+    assert target.warnings == ()
+
+
 @pytest.mark.parametrize(
     ("url_path", "base_path"),
     [

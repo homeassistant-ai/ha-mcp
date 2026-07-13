@@ -41,6 +41,12 @@ class DashboardRenderTarget:
     stable: bool
     warnings: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        if not self.stable and not self.warnings:
+            raise ValueError(
+                "a non-stable DashboardRenderTarget must carry at least one warning"
+            )
+
 
 def dashboard_frontend_path(url_path: str | None) -> str:
     """Map a dashboard URL path to its Lovelace frontend base route."""
