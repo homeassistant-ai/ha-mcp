@@ -115,6 +115,24 @@ class TestSetDashboardMetadataUpdate:
         assert "Permission denied" in error_data["error"]["message"]
 
     @pytest.mark.asyncio
+    async def test_blank_view_path_rejected_before_write_on_return_screenshot(
+        self, set_tool, mock_client
+    ):
+        """A blank view_path with return_screenshot fails before any write."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(
+                url_path="my-dashboard",
+                config={"views": []},
+                return_screenshot=True,
+                view_path="   ",
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        # Validation is pre-mutation: no dashboard write must have been attempted.
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_metadata_update_skipped_when_dashboard_id_none(
         self, set_tool, mock_client
     ):

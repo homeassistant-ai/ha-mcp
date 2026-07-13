@@ -23,7 +23,6 @@ from ..dashboard_screenshot.capture import (
     Orientation,
     ScreenshotFormat,
     ViewportPreset,
-    validate_capture_parameters,
 )
 from ..dashboard_screenshot.content import (
     dashboard_image_content,
@@ -2034,23 +2033,17 @@ class DashboardConfigTools:
         """
         screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
         try:
-            # Validate cross-field screenshot constraints before resolving or
-            # writing the dashboard.  In particular, auto-height captures
-            # cannot use an orientation without a named viewport preset.
-            if return_screenshot:
-                validate_capture_parameters(
-                    width=screenshot_options.width,
-                    height=screenshot_options.height,
-                    viewport_presets=screenshot_options.viewport_presets,
-                    orientation=screenshot_options.orientation,
-                    zoom=screenshot_options.zoom,
-                    wait_ms=screenshot_options.wait_ms,
-                    full_page=screenshot_options.full_page,
-                    theme=screenshot_options.theme,
-                    dark_mode=screenshot_options.dark_mode,
-                    language=screenshot_options.language,
-                    image_format=screenshot_options.image_format,
-                    render_timeout_seconds=(screenshot_options.render_timeout_seconds),
+            # Reject an invalid view_path BEFORE committing the write. On the
+            # return_screenshot path a screenshot failure is demoted to a
+            # warning after the write commits, so without this a blank view_path
+            # would be swallowed as a warning on an already-committed write.
+            if return_screenshot and view_path is not None and not view_path.strip():
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "view_path cannot be empty.",
+                        context={"view_path": view_path},
+                    )
                 )
             (
                 url_path,

@@ -505,6 +505,25 @@ async def test_raw_js_numeric_route_warns_with_canonical_stable_view_path() -> N
     assert "wall-panel/lights" in target.warnings[0]
 
 
+async def test_raw_numeric_path_drops_unverified_trailing_segment() -> None:
+    client = _FakeAsyncClient(
+        _config_response({"views": [{"path": "home"}, {"path": "lights"}]})
+    )
+
+    target = await resolve_dashboard_render_target(
+        client,
+        dashboard_path="wall-panel/1/debug",
+        dashboard_url_path=None,
+        view_path=None,
+    )
+
+    # Only parts[1] ("1") is verified against the config; the stray "/debug"
+    # suffix must be dropped so the engine renders the verified numeric route
+    # instead of an unverified path.
+    assert target.render_path == "wall-panel/1"
+    assert target.view_index == 1
+
+
 async def test_raw_default_numeric_path_uses_stored_stable_alias() -> None:
     client = _FakeAsyncClient(
         _config_response({"views": [{"title": "Home", "path": "home"}]})

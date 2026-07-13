@@ -567,6 +567,10 @@ async def _resolve_legacy_dashboard_target(
                 suggestions=["Use a render path returned by ha_config_get_dashboard"],
             )
         )
+    # Canonicalize to the verified numeric route so a stray trailing segment
+    # (e.g. "wall-panel/1/debug") cannot reach the engine unverified — only
+    # parts[1] was validated against the dashboard config.
+    render_path = _normalize_dashboard_path(f"{dashboard_root}/{raw_view}")
     warnings = await _numeric_view_warning(
         client,
         render_path,
