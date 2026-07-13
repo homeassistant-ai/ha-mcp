@@ -24,7 +24,7 @@ DOMAIN = "ha_mcp_tools"
 # manifest bump that forgets this constant (or vice-versa) fails in CI. The
 # capability negotiation — not this version — gates each WS command (see
 # ``websocket_api.CAPABILITIES``).
-COMPONENT_VERSION = "1.1.1"
+COMPONENT_VERSION = "1.1.2"
 
 # Config-entry discriminator (``entry.data[CONF_ENTRY_TYPE]``). A missing value
 # means "tools" so the pre-existing services entry keeps working across the
@@ -32,6 +32,7 @@ COMPONENT_VERSION = "1.1.1"
 CONF_ENTRY_TYPE = "entry_type"
 ENTRY_TYPE_TOOLS = "tools"
 ENTRY_TYPE_SERVER = "server"
+MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.6.0"
 
 # Allowed directories for file operations (relative to config dir)
 ALLOWED_READ_DIRS = ["www", "themes", "custom_templates", "dashboards"]

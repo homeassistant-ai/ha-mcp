@@ -572,7 +572,8 @@ class TestEnsurePackage:
         assert exc.value.kind == "package"
         assert "installed ha-mcp 6.2.0" in str(exc.value)
         assert f"requires {es.MIN_EMBEDDED_SERVER_VERSION} or newer" in str(exc.value)
-        assert "Home Assistant 2026.6.0 or newer" in str(exc.value)
+        assert "resolver details" in str(exc.value)
+        assert "update Home Assistant" not in str(exc.value)
         assert DATA_LAST_PIP_SPEC not in _entry.data
 
     async def test_installed_but_not_importable_raises_package_error(
@@ -1783,6 +1784,37 @@ class TestPurgeHaMcpModules:
 
 
 class TestRunningVersionStalenessWarning:
+    async def test_start_prefers_configured_dev_distribution(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        mgr, _hass, _entry = _manager(tmp_path, options={OPT_CHANNEL: CHANNEL_DEV})
+        monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+        installed = MagicMock(return_value="7.13.0.dev1")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", installed)
+
+        def _ready_with_current_dev_worker():
+            mgr._running_version = "7.13.0.dev1"
+
+        monkeypatch.setattr(
+            mgr,
+            "_async_wait_until_ready",
+            AsyncMock(side_effect=_ready_with_current_dev_worker),
+        )
+
+        with caplog.at_level("WARNING"):
+            await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        installed.assert_called_once_with(DIST_NAME_DEV)
+        assert "restart Home Assistant" not in caplog.text
+
     async def test_start_warns_when_running_version_stale(
         self, tmp_path, monkeypatch, caplog
     ):
@@ -1796,7 +1828,9 @@ class TestRunningVersionStalenessWarning:
         # live ha_mcp module and poison later tests in this process.
         monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "9.9.9")
+        monkeypatch.setattr(
+            es, "_installed_ha_mcp_version", lambda preferred_dist=None: "9.9.9"
+        )
 
         def _ready_with_stale_worker():
             # Deterministic stand-in for the _serve stash: the worker
@@ -1828,7 +1862,9 @@ class TestRunningVersionStalenessWarning:
         # live ha_mcp module and poison later tests in this process.
         monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "1.1.1")
+        monkeypatch.setattr(
+            es, "_installed_ha_mcp_version", lambda preferred_dist=None: "1.1.1"
+        )
 
         def _ready_with_current_worker():
             mgr._running_version = "1.1.1"
@@ -1938,8 +1974,41 @@ class TestServeRunningVersionCapture:
 
         _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
         sys.modules["ha_mcp"].__version__ = "9.8.7"
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: None)
 
         mgr._thread_main("tok")
 
         assert mgr._running_version == "9.8.7"
+        assert isinstance(mgr._thread_exc, _StopServe)
+
+    def test_serve_prefers_configured_dev_metadata(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={
+                OPT_CHANNEL: CHANNEL_DEV,
+                OPT_SERVER_URL: "http://ha.local:8123",
+            },
+        )
+
+        class _StopServe(Exception):
+            pass
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                raise _StopServe
+
+        _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
+        # ha_mcp.__version__ checks stable metadata first, so a failed
+        # best-effort uninstall can make freshly imported dev code report the
+        # stale stable version.
+        sys.modules["ha_mcp"].__version__ = "6.2.0"
+        versions = {
+            DIST_NAME_STABLE: "6.2.0",
+            DIST_NAME_DEV: "7.13.0.dev1",
+        }
+        monkeypatch.setattr(es, "_installed_dist_version", versions.get)
+
+        mgr._thread_main("tok")
+
+        assert mgr._running_version == "7.13.0.dev1"
         assert isinstance(mgr._thread_exc, _StopServe)

@@ -52,6 +52,10 @@ _core = MagicMock()
 _core.callback = lambda func: func  # identity so async_get_options_flow builds
 sys.modules["homeassistant.core"] = _core
 
+_ha_const = MagicMock()
+_ha_const.__version__ = "2026.6.0"
+sys.modules["homeassistant.const"] = _ha_const
+
 
 # Inert selector stand-ins: the options flow builds SelectSelector dropdowns,
 # but these tests hand user_input straight to the handler, so the selector
@@ -116,6 +120,7 @@ def _make_flow() -> cf.HaMcpToolsConfigFlow:
     flow._abort_if_unique_id_configured = MagicMock(return_value=None)
     flow.async_show_menu = MagicMock(side_effect=lambda **kw: {"type": "menu", **kw})
     flow.async_show_form = MagicMock(side_effect=lambda **kw: {"type": "form", **kw})
+    flow.async_abort = MagicMock(side_effect=lambda **kw: {"type": "abort", **kw})
     flow.async_create_entry = MagicMock(
         side_effect=lambda **kw: {"type": "entry", **kw}
     )
@@ -164,6 +169,14 @@ class TestToolsBranch:
         flow.async_set_unique_id.assert_awaited_once_with(const.DOMAIN)
         flow._abort_if_unique_id_configured.assert_called_once()
 
+    def test_tools_remains_available_on_older_home_assistant(self, monkeypatch):
+        monkeypatch.setattr(cf, "HA_VERSION", "2024.11.0")
+        flow = _make_flow()
+
+        entry = asyncio.run(flow.async_step_tools({}))
+
+        assert entry["type"] == "entry"
+
 
 class TestServerBranch:
     def test_server_step_shows_confirm_form(self):
@@ -187,6 +200,20 @@ class TestServerBranch:
         flow._abort_if_unique_id_configured.assert_called_once()
         # Distinct from the tools entry's unique id so both can coexist.
         assert cf._SERVER_UNIQUE_ID != const.DOMAIN
+
+    def test_server_aborts_on_unsupported_home_assistant(self, monkeypatch):
+        monkeypatch.setattr(cf, "HA_VERSION", "2025.9.4")
+        flow = _make_flow()
+
+        result = asyncio.run(flow.async_step_server(None))
+
+        assert result["type"] == "abort"
+        assert result["reason"] == "unsupported_home_assistant"
+        assert result["description_placeholders"] == {
+            "installed": "2025.9.4",
+            "required": "2026.6.0",
+        }
+        flow.async_set_unique_id.assert_not_awaited()
 
 
 class TestOptionsFlowDispatch:

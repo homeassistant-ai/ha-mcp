@@ -19,7 +19,8 @@
             }
         },
         "abort": {
-            "already_configured": "This entry is already set up."
+            "already_configured": "This entry is already set up.",
+            "unsupported_home_assistant": "The in-process HA-MCP Server requires Home Assistant {required} or newer, but this instance is running {installed}. You can still use this component's HA MCP Tools entry with an external ha-mcp server running as an add-on or Docker container."
         }
     },
     "options": {

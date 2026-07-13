@@ -69,6 +69,7 @@ from .const import (
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
     DOMAIN,
+    MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
     OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
     OPT_CHANNEL,
@@ -116,7 +117,6 @@ _PIP_UNINSTALL_TIMEOUT_SECONDS = 120
 # Older distributions can be left behind by an unsupported Core version's
 # constraints and must never enter the worker thread.
 MIN_EMBEDDED_SERVER_VERSION = "7.10.0"
-MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.6.0"
 
 
 class EmbeddedServerError(Exception):
@@ -185,9 +185,9 @@ class EmbeddedServerManager:
         # wedged in a slow cold import). Tracked so the next start can skip
         # the module purge while it might still be importing.
         self._orphaned_thread: threading.Thread | None = None
-        # ha_mcp.__version__ as imported by the CURRENT worker thread (stashed
-        # by _serve). Compared against the installed distribution after start
-        # to detect a stale-code worker (see _purge_ha_mcp_modules).
+        # Version reported by the CURRENT worker thread (stashed by _serve).
+        # Compared against the installed distribution after start to detect a
+        # stale-code worker (see _purge_ha_mcp_modules).
         self._running_version: str | None = None
 
     @property
@@ -275,15 +275,15 @@ class EmbeddedServerManager:
 
         await self._async_wait_until_ready()
 
-        # Belt-and-braces staleness check: the worker stashed the
-        # ha_mcp.__version__ it actually imported; if that disagrees with the
+        # Belt-and-braces staleness check: the worker stashed the version
+        # reported by the package it imported; if that disagrees with the
         # installed distribution the purge did not fully take (e.g. a stray
-        # import of ha_mcp outside the worker re-cached old modules) and only
-        # an HA core restart applies the update — say so instead of serving
-        # old code silently.
+        # import of ha_mcp outside the worker re-cached old modules) and only an
+        # HA core restart applies the update — say so instead of serving old
+        # code silently.
         if self._running_version:
             installed = await self._hass.async_add_executor_job(
-                _installed_ha_mcp_version
+                _installed_ha_mcp_version, dist_for_channel(self._channel)
             )
             if installed and installed != self._running_version:
                 _LOGGER.warning(
@@ -521,9 +521,9 @@ class EmbeddedServerManager:
             raise EmbeddedServerError(
                 f"The installer left installed ha-mcp {version}, but this "
                 f"in-process component requires {MIN_EMBEDDED_SERVER_VERSION} "
-                f"or newer. The in-process server requires Home Assistant "
-                f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION} or newer; update Home "
-                "Assistant, restart it, and reload this integration.",
+                "or newer. Review resolver details logged under "
+                "homeassistant.util.package, correct the package conflict, and "
+                "reload this integration.",
                 kind="package",
             )
         _LOGGER.info("HA-MCP in-process server package ready (version %s)", version)
@@ -781,10 +781,11 @@ class EmbeddedServerManager:
         # of os.environ is the whole point of the in-process channel.
         import ha_mcp.config as _hamcp_config
 
-        # Record which code generation this worker actually imported — the
-        # post-start staleness check in async_start compares it against the
-        # installed distribution.
-        self._running_version = getattr(sys.modules.get("ha_mcp"), "__version__", None)
+        # Record which code generation this worker imported. Prefer the
+        # configured channel when both distributions have metadata because
+        # ha_mcp.__version__ itself checks stable first and stale stable
+        # metadata can otherwise make a fresh dev worker look outdated.
+        self._running_version = _running_ha_mcp_version(self._channel)
 
         # Drop any settings singleton cached by a PREVIOUS start in this same
         # Python process: an entry reload must re-read the override files
@@ -1057,6 +1058,23 @@ def _installed_dist_version(dist_name: str) -> str | None:
         return importlib.metadata.version(dist_name)
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _running_ha_mcp_version(channel: str) -> str | None:
+    """Return the imported worker version, resolving cross-channel ambiguity."""
+    imported_version = getattr(sys.modules.get("ha_mcp"), "__version__", None)
+    preferred_dist = dist_for_channel(channel)
+    preferred_version = _installed_dist_version(preferred_dist)
+    if preferred_version is None:
+        return imported_version
+
+    conflicting_dist = (
+        DIST_NAME_STABLE if preferred_dist == DIST_NAME_DEV else DIST_NAME_DEV
+    )
+    conflicting_version = _installed_dist_version(conflicting_dist)
+    if imported_version == conflicting_version:
+        return preferred_version
+    return imported_version
 
 
 def _uninstall_distribution(dist_name: str, *, target: str | None = None) -> bool:
