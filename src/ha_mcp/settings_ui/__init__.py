@@ -1998,6 +1998,10 @@ def build_settings_handlers(
                     'field names to values, e.g. {"flags": '
                     '{"enable_lite_docstrings": true}}. A flat body such '
                     'as {"enable_lite_docstrings": true} is not accepted.',
+                    suggestions=[
+                        'Wrap the flags in a "flags" object, e.g. '
+                        '{"flags": {"enable_lite_docstrings": true}}.',
+                    ],
                 ),
                 status_code=400,
             )
@@ -2007,6 +2011,10 @@ def build_settings_handlers(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "'flags' object is empty; include at least one "
                     "feature-flag field to update.",
+                    suggestions=[
+                        'Include at least one field inside "flags", e.g. '
+                        '{"flags": {"enable_lite_docstrings": true}}.',
+                    ],
                 ),
                 status_code=400,
             )

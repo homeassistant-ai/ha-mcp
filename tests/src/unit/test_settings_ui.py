@@ -2193,6 +2193,8 @@ class TestSaveFeatureFlagsStandaloneMode:
         body = json.loads(resp.body)
         assert body["success"] is False
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        # Progressive disclosure: the error guides the caller to the shape.
+        assert body["error"]["suggestion"]
         # A rejected save must not persist anything.
         assert not (tmp_path / "feature_flags.json").exists()
 
@@ -2208,6 +2210,7 @@ class TestSaveFeatureFlagsStandaloneMode:
         body = json.loads(resp.body)
         assert body["success"] is False
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert body["error"]["suggestion"]
         assert not (tmp_path / "feature_flags.json").exists()
 
     @pytest.mark.asyncio
