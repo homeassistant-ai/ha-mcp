@@ -3,7 +3,10 @@ configuration:
   remote_url:
     name: External URL (optional)
     description: |
-      Public base URL for remote access (e.g. https://example.duckdns.org).
+      Public base URL for remote access (e.g. https://example.customurl.com).
+      It must point directly at Home Assistant — opening it in a browser should
+      bring up your HA login page — and must not contain a port such as ":8123"
+      (or any other port), or remote MCP clients won't be able to reach it.
       Leave blank to auto-detect Nabu Casa.
   mcp_server_url:
     name: MCP server URL (optional)

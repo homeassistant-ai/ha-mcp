@@ -63,6 +63,8 @@ This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp
 
 **If it genuinely won't connect** (not just the transient handshake error above): Claude.ai connects from Anthropic's servers, so the MCP URL must be reachable from the public internet — not just your LAN. A URL that works in Claude Code or a local browser can still be unreachable for Claude.ai web. Open the URL on your **phone with Wi-Fi off** (cellular): if it doesn't load there, it isn't publicly reachable (DNS / port-forward / TLS / reverse-proxy) and Claude.ai can't reach it either. Also make sure you clicked **Connect** on the connector (and, with OAuth enabled, **Allow** on the consent page) — adding the connector alone does not complete the connection.
 
+**Check for a port in the URL.** Your connector URL is built on your Home Assistant's own public address, which must **not** contain a port such as `:8123` (or any other port). To check, open just that base address (e.g. `https://ha.example.com`, without the `/api/webhook/...` secret path) in a browser — it should bring up your HA login page. Remote clients cannot reach a URL that carries a port, even though it loads fine in your own browser. Home Assistant can still listen on 8123 internally, as long as a reverse proxy, tunnel, or 443 port-forward serves that hostname — just don't put the port in the URL you paste.
+
 ### "Terminating session: None" in server logs
 
 **This is normal.** ha-mcp runs in stateless HTTP mode, which means each request creates and discards a temporary session. The `Terminating session: None` log message is the MCP SDK reporting this routine cleanup — the connection stays active.
