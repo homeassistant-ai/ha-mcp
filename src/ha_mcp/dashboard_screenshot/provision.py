@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 import httpx
 from fastmcp.exceptions import ToolError
@@ -36,6 +37,11 @@ ENGINE_PORT = 10000
 # The Supervisor slug is ``<repo-hash>_puppet`` for balloob's Puppet add-on.
 # ``str.endswith`` accepts a tuple, kept as one for easy future extension.
 ENGINE_SLUG_SUFFIXES = ("_puppet",)
+_PUPPET_OPTION_NAMES = {
+    "access_token",
+    "home_assistant_url",
+    "keep_browser_open",
+}
 
 _REPO_URL = "https://github.com/balloob/home-assistant-addons"
 
@@ -73,6 +79,73 @@ _STDIO_HELP = (
 )
 
 
+def _select_started_verified_puppet(
+    addon_infos: list[tuple[str, dict[str, Any]]],
+) -> tuple[str, dict[str, Any]]:
+    """Select one started add-on that exactly matches Puppet's safe surface."""
+    verified: list[tuple[str, dict[str, Any]]] = []
+    for slug, info in addon_infos:
+        schema = info.get("schema")
+        schema_names = {
+            str(item.get("name"))
+            for item in schema or []
+            if isinstance(item, dict) and item.get("name") is not None
+        }
+        if info.get("name") == "Puppet" and schema_names >= _PUPPET_OPTION_NAMES:
+            verified.append((slug, info))
+    if not verified:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONFIG_VALIDATION_FAILED,
+                "Installed *_puppet add-ons did not match Puppet's expected schema.",
+                context={"matched_slugs": [slug for slug, _ in addon_infos]},
+                suggestions=[
+                    "Verify the installed screenshot engine is balloob's Puppet add-on"
+                ],
+            )
+        )
+    started = [item for item in verified if item[1].get("state") == "started"]
+    if not started:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "The schema-verified Puppet add-on is not started.",
+                details=_NOT_STARTED_HELP,
+                context={"matched_slugs": [slug for slug, _ in verified]},
+            )
+        )
+    if len(started) > 1:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONFIG_VALIDATION_FAILED,
+                "Multiple started Puppet add-ons matched the expected schema; "
+                "refusing an ambiguous target.",
+                context={"matched_slugs": [slug for slug, _ in started]},
+            )
+        )
+    return started[0]
+
+
+def _supervisor_response_data(payload: Any, endpoint: str) -> dict[str, Any]:
+    """Return a Supervisor response's object-shaped data payload."""
+    if not isinstance(payload, dict):
+        raise ValueError(f"Supervisor {endpoint} returned a non-object payload")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise ValueError(f"Supervisor {endpoint} returned invalid data")
+    return data
+
+
+def _supervisor_addon_listing(payload: Any) -> list[dict[str, Any]]:
+    """Return the validated add-on objects from a Supervisor list response."""
+    addons = _supervisor_response_data(payload, "/addons").get("addons")
+    if not isinstance(addons, list) or not all(
+        isinstance(addon, dict) for addon in addons
+    ):
+        raise ValueError("Supervisor /addons returned an invalid addons list")
+    return addons
+
+
 async def resolve_engine_url() -> str:
     """Return the base URL of the screenshot engine, or raise ToolError.
 
@@ -99,6 +172,9 @@ async def resolve_engine_url() -> str:
             ],
         )
     )
+    # raise_tool_error is typed -> NoReturn, but CodeQL cannot see that, so it
+    # reports py/mixed-returns for the implicit None fall-through past it. Keep
+    # this terminal statement to suppress that false positive (repo convention).
     raise AssertionError("unreachable: raise_tool_error always raises")
 
 
@@ -115,7 +191,7 @@ async def _discover_engine_url_via_supervisor() -> str:
         async with make_supervisor_httpx_client(timeout=15.0, verify=True) as sup:
             listing = await sup.get("/addons")
             listing.raise_for_status()
-            addons = listing.json().get("data", {}).get("addons", [])
+            addons = _supervisor_addon_listing(listing.json())
 
             matches = [
                 a
@@ -132,43 +208,28 @@ async def _discover_engine_url_via_supervisor() -> str:
                 )
 
             # The /addons list is only reliable for slug discovery (the
-            # repo-hash prefix is not known ahead of time). Per-addon ``state``
-            # and ``hostname`` are authoritative on /addons/<slug>/info — the
-            # same source ha_manage_addon trusts. The list can report a
-            # stale/absent ``state`` for a freshly-started add-on, so read state
-            # from /info. With more than one match (e.g. the legacy vendored
-            # engine alongside Puppet), prefer whichever is started.
-            last_slug: str | None = None
-            last_state: str | None = None
+            # repo-hash prefix is not known ahead of time). Per-addon details
+            # are authoritative on /addons/<slug>/info — the same source
+            # ha_manage_addon trusts.
+            addon_infos: list[tuple[str, dict[str, Any]]] = []
             for match in matches:
                 slug = str(match["slug"])
                 info = await sup.get(f"/addons/{slug}/info")
                 info.raise_for_status()
-                data = info.json().get("data", {})
-                last_slug, last_state = slug, data.get("state")
-                if data.get("state") != "started":
-                    continue
-                hostname = data.get("hostname") or data.get("ip_address")
-                if not hostname:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            f"Screenshot engine add-on '{slug}' is started but "
-                            "the Supervisor returned no hostname/ip_address.",
-                            context={"slug": slug},
-                        )
+                data = _supervisor_response_data(info.json(), f"/addons/{slug}/info")
+                addon_infos.append((slug, data))
+            slug, data = _select_started_verified_puppet(addon_infos)
+            hostname = data.get("hostname") or data.get("ip_address")
+            if not hostname:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Screenshot engine add-on '{slug}' is started but "
+                        "the Supervisor returned no hostname/ip_address.",
+                        context={"slug": slug},
                     )
-                return f"http://{hostname}:{ENGINE_PORT}"
-
-            # Matched an installed engine, but none was started.
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "The Puppet screenshot engine add-on is installed but not started.",
-                    details=_NOT_STARTED_HELP,
-                    context={"slug": last_slug, "state": last_state},
                 )
-            )
+            return f"http://{hostname}:{ENGINE_PORT}"
     except ToolError:
         raise
     except (httpx.HTTPError, KeyError, ValueError) as e:

@@ -1,4 +1,4 @@
-name: HA-MCP Screenshot Engine (test mock)
+name: Puppet
 version: "1.0.0"
 # Config slug ``puppet`` -> Supervisor local slug ``local_puppet`` -> matches
 # the ``_puppet`` discovery suffix in src/ha_mcp/dashboard_screenshot/provision.py,

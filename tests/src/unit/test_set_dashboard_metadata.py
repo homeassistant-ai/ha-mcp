@@ -34,6 +34,7 @@ class TestSetDashboardMetadataUpdate:
         mock_client.send_websocket_message.side_effect = [
             self._make_dashboard_list("my-dashboard"),  # lovelace/dashboards/list
             {"success": True},  # lovelace/dashboards/update (metadata)
+            {"result": {"views": []}},  # authoritative post-write config
         ]
 
         result = await set_tool(url_path="my-dashboard", title="New Title")
@@ -56,14 +57,20 @@ class TestSetDashboardMetadataUpdate:
         """metadata_updated=False when no metadata params given for existing dashboard."""
         mock_client.send_websocket_message.side_effect = [
             self._make_dashboard_list("my-dashboard"),  # lovelace/dashboards/list
+            {"result": {"views": []}},  # post-write canonical render paths
         ]
 
         result = await set_tool(url_path="my-dashboard")
 
         assert result["success"] is True
         assert result["metadata_updated"] is False
-        # Only one WS call (list), no metadata update
-        assert mock_client.send_websocket_message.call_count == 1
+        # No metadata update; the second call fetches canonical render paths.
+        assert mock_client.send_websocket_message.call_count == 2
+        assert mock_client.send_websocket_message.call_args_list[1].args[0] == {
+            "type": "lovelace/config",
+            "force": True,
+            "url_path": "my-dashboard",
+        }
 
     @pytest.mark.asyncio
     async def test_metadata_update_multiple_fields(self, set_tool, mock_client):
@@ -71,6 +78,7 @@ class TestSetDashboardMetadataUpdate:
         mock_client.send_websocket_message.side_effect = [
             self._make_dashboard_list("my-dashboard"),
             {"success": True},
+            {"result": {"views": []}},
         ]
 
         result = await set_tool(
@@ -107,6 +115,24 @@ class TestSetDashboardMetadataUpdate:
         assert "Permission denied" in error_data["error"]["message"]
 
     @pytest.mark.asyncio
+    async def test_blank_view_path_rejected_before_write_on_return_screenshot(
+        self, set_tool, mock_client
+    ):
+        """A blank view_path with return_screenshot fails before any write."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(
+                url_path="my-dashboard",
+                config={"views": []},
+                return_screenshot=True,
+                view_path="   ",
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        # Validation is pre-mutation: no dashboard write must have been attempted.
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_metadata_update_skipped_when_dashboard_id_none(
         self, set_tool, mock_client
     ):
@@ -127,6 +153,7 @@ class TestSetDashboardMetadataUpdate:
         mock_client.send_websocket_message.side_effect = [
             self._make_dashboard_list("my-dashboard"),
             {"success": True},
+            {"result": {"views": []}},
         ]
 
         await set_tool(
@@ -138,6 +165,35 @@ class TestSetDashboardMetadataUpdate:
         meta_call = mock_client.send_websocket_message.call_args_list[1][0][0]
         assert meta_call["require_admin"] is False
         assert meta_call["show_in_sidebar"] is False
+
+    @pytest.mark.asyncio
+    async def test_full_config_write_uses_authoritative_render_paths(
+        self, set_tool, mock_client
+    ):
+        submitted = {"views": [{"title": "Home", "path": "submitted"}]}
+        authoritative = {"views": [{"title": "Home", "path": "normalized"}]}
+        mock_client.send_websocket_message.side_effect = [
+            self._make_dashboard_list("my-dashboard"),
+            {"result": {"views": []}},  # pre-write conflict/size read
+            {"success": True},  # lovelace/config/save
+            {"result": authoritative},  # authoritative post-write readback
+        ]
+
+        result = await set_tool(url_path="my-dashboard", config=submitted)
+
+        assert result["success"] is True
+        assert result["render_paths"][0]["view_path"] == "normalized"
+        assert result["render_paths"][0]["render_path"] == ("my-dashboard/normalized")
+        requests = [
+            call.args[0] for call in mock_client.send_websocket_message.call_args_list
+        ]
+        assert requests[2]["type"] == "lovelace/config/save"
+        assert requests[2]["config"] == submitted
+        assert requests[3] == {
+            "type": "lovelace/config",
+            "force": True,
+            "url_path": "my-dashboard",
+        }
 
 
 class TestSetDashboardListCallDedup:
@@ -176,6 +232,7 @@ class TestSetDashboardListCallDedup:
         mock_client.send_websocket_message.side_effect = [
             dashboards_list,  # pre-resolver fetch
             {"success": True},  # metadata update
+            {"result": {"views": []}},  # authoritative post-write config
         ]
 
         result = await set_tool(url_path="my_dash", title="Renamed")
@@ -202,6 +259,7 @@ class TestSetDashboardListCallDedup:
         mock_client.send_websocket_message.side_effect = [
             {"result": [{"url_path": "my-dash", "id": "my_dash"}]},
             {"success": True},
+            {"result": {"views": []}},
         ]
 
         result = await set_tool(url_path="my-dash", title="Renamed")

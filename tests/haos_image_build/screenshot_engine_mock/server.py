@@ -5,11 +5,11 @@ against balloob's Puppet add-on, but WITHOUT Chromium:
 
 * ``GET /<dashboard-path>?viewport=WxH&...`` -> a synthetic, viewport-sized
   ``image/png`` (the only params ha-mcp sends are honoured: ``viewport`` for
-  the dimensions, ``format=png``; the rest of balloob's surface -- device /
-  eink / colors / dithering / bmp / rotate / ... -- is deliberately NOT
-  reimplemented, since the tool never sends it and a copy would only add a
-  maintenance fork that recovers no coverage: real rendering is Chromium,
-  which a mock can't reproduce regardless).
+  the dimensions, including deterministic ``WIDTHxauto``, and ``format=png``.
+  This lane intentionally emits PNG only; format/MIME conversion and the rest
+  of balloob's surface (device, eink, colors, dithering, rotate, and so on) are
+  not reimplemented because a copy would add a maintenance fork without
+  covering real Chromium rendering.
 * a bad ``viewport`` -> ``400`` (the engine's contract).
 * rendering is gated on the configured ``access_token``: the mock validates it
   against Home Assistant (``GET /api/`` with the bearer). A valid token renders;
@@ -38,6 +38,7 @@ PORT = 10000
 _OPTIONS_PATH = "/data/options.json"
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _DEFAULT_HA_URL = "http://homeassistant:8123"
+_AUTO_CONTENT_HEIGHT = 1733
 
 
 def _options() -> dict:
@@ -119,7 +120,13 @@ class _Handler(BaseHTTPRequestHandler):
 
         params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
         try:
-            width, height = (int(x) for x in params.get("viewport", "").split("x"))
+            width_text, height_text = params.get("viewport", "").split("x")
+            width = int(width_text)
+            height = (
+                _AUTO_CONTENT_HEIGHT
+                if height_text.lower() == "auto"
+                else int(height_text)
+            )
         except ValueError:
             self.send_error(400, "bad or missing viewport")
             return

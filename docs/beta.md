@@ -14,7 +14,7 @@ Some ha-mcp tools are gated behind feature flags and disabled by default. They c
 | `ha_install_mcp_tools` | `enable_custom_component_integration` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` env vars | Installs the `ha_mcp_tools` custom component via HACS. |
 | `ha_manage_custom_tool` | `enable_code_mode` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_CODE_MODE=true` env vars | Sandboxed Python "escape hatch" that lets AI assistants write, run, save, and delete custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`), send WebSocket commands (`ws_send`), call registered MCP tools (`call_tool`), or delete a saved tool (`delete_saved_tool`). Saved tools persist to disk via `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the dev add-on). |
 | _(behaviour flag, no new tool)_ | `enable_lite_docstrings` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_LITE_DOCSTRINGS=true` env vars | Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, `ha_call_service`, `ha_config_set_yaml`) with shorter variants that defer schema and example detail to `ha_get_skill_guide` (or its `skill://` resource). Reduces idle catalog token usage; relies on the LLM actually calling the skill tool/resource when it needs detail. See "Known limitations" below. |
-| `ha_get_dashboard_screenshot` (+ `include_screenshot` on `ha_config_get_dashboard`, `return_screenshot` on `ha_config_set_dashboard`) | `enable_dashboard_screenshot` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_DASHBOARD_SCREENSHOT=true` env vars | Render a Lovelace dashboard to a PNG so the AI can see what it reads or creates. Rendering runs in a separate, opt-in engine — balloob's **Puppet** add-on (headless Chromium, Apache-2.0), which you install yourself — nothing heavy is installed unless you enable this AND install the engine. |
+| `ha_get_dashboard_screenshot` (+ `include_screenshot` on `ha_config_get_dashboard`, `return_screenshot` on `ha_config_set_dashboard`) | `enable_dashboard_screenshot` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_DASHBOARD_SCREENSHOT=true` env vars | Render one or more responsive Lovelace images so the AI can see what it reads or creates. Rendering runs in a separate, opt-in engine — balloob's **Puppet** add-on (headless Chromium, Apache-2.0), which you install yourself — nothing heavy is installed unless you enable this AND install the engine. |
 
 ## How to enable
 
@@ -177,6 +177,17 @@ token grants. If the token is missing or invalid, Puppet lands on the login
 page and (by its design) restarts; ha-mcp surfaces this as a clear "set the
 engine's access token" error rather than a silent failure.
 
+Puppet's theme and dark-mode renderer controls dispatch Home Assistant's
+`settheme` event and can persist preferences on the frontend profile used by
+that token; even a fresh Puppet browser's first default render may save the
+default theme/dark selection. Use a dedicated Puppet account so screenshot QA
+does not alter a person's normal frontend preferences. Language selection is
+local to Puppet's browser session.
+
+To change the Puppet engine add-on's own options (such as `keep_browser_open`)
+or to restart it, use `ha_manage_addon`; the screenshot tools only render and
+never modify the engine add-on's configuration.
+
 **Puppet's HTTP listener has no inbound auth, and it publishes host port
 10000.** Anyone who can reach `http://<ha-host>:10000` can pull
 fully-authenticated dashboard renders. Keep it on a trusted network only — do
@@ -187,24 +198,70 @@ security.")
 **Charts are best-effort.** Canvas cards (ApexCharts, mini-graph-card,
 history-graph) paint after the dashboard reports "loaded". The default
 render-settle is generous, but a heavy chart card may still come back blank;
-raise the `wait_ms` parameter on `ha_get_dashboard_screenshot` for those.
+raise `wait_ms` on the standalone `ha_get_dashboard_screenshot` tool for those.
+
+**Prefer stable view addressing.** The standalone tool accepts
+`dashboard_url_path` plus the view's configured `views[].path`; dashboard get
+responses expose `render_paths` for every static view. The legacy raw
+`dashboard_path` remains supported, but a numeric route such as `lovelace/0`
+returns a warning when that view has a stable named path. Strategy dashboards
+generate views at runtime and therefore expose only their dashboard base route.
+
+**Responsive and deterministic requests.** The standalone
+`ha_get_dashboard_screenshot` tool accepts the full width, height, zoom, wait,
+orientation, theme, dark-mode, language, image-format, and render-timeout
+controls; the dashboard get/set workflows expose only `include_screenshot` /
+`return_screenshot` plus `view_path` and render at defaults. `viewport_presets`
+(standalone only) renders an ordered batch using `mobile` (390x844), `tablet`
+(768x1024), and `desktop` (1280x800); every image is returned as a native MCP
+image block. PNG, JPEG,
+WebP, and BMP are supported by Puppet and carry their matching MIME type, but
+client/model support for less-common image formats varies.
+
+Raw image responses are streamed under server safety limits of 20 MiB per
+image and 40 MiB per batch before MCP base64 encoding. Oversize responses use
+the distinct `IMAGE_PAYLOAD_TOO_LARGE` error class. If one viewport in a batch
+fails after another succeeded, the successful native image blocks are retained.
+The standalone tool reports `partial=true`; dashboard get/set workflows report
+`screenshot_partial=true`; both include ordered `screenshot_failures` entries
+identifying the failed preset and failure class. The call errors only when every
+requested viewport fails.
+
+The structured `screenshots` metadata binds each image to its `content_index`,
+render path, viewport, engine request, local capture options, byte length, MIME
+type, and SHA-256 digest. Puppet does not report whether Home Assistant accepted
+or fell back from a requested theme or language, so the frontend context is
+explicitly marked as not confirmed.
 
 **Capturing below the fold.** By default the render is clipped to the viewport.
-Pass `full_page=true` (on `ha_get_dashboard_screenshot`, or alongside
-`include_screenshot` / `return_screenshot`) to capture a dashboard that scrolls
-past the viewport. With stock Puppet this renders a tall viewport, so short
-dashboards may have trailing whitespace and a dashboard taller than ~4096px is
-still clipped — limitations removed once Puppet gains a native full-page mode.
+Pass `height="auto"` or the backwards-compatible `full_page=true` to ask Puppet
+to size the capture to the rendered content. Stock Puppet caps auto-height at
+4000 px. It does not expose scroll position, total page height, or segment
+capture, so dashboards beyond that limit remain clipped; true ordered scroll
+segments require an upstream engine capability. For the backwards-compatible
+`full_page=true` alias only, an HTTP 400 from Puppet versions older than 2.5.0
+triggers the legacy 4096 px fixed-height retry and reports
+`legacy_full_page_fallback=true`; explicit `height="auto"` remains strict.
+
+**Current engine limits.** Puppet does not expose a device-pixel-ratio control,
+confirmed applied-context metadata, or segmented scrolling. ha-mcp also cannot
+observe an MCP client silently dropping an image after successful server-side
+serialization. There is no screenshot file/media fallback: inline native MCP
+images remain the only transport, avoiding unauthenticated persisted artifacts.
 
 **Graceful by design — with one deliberate exception.** If the feature is off,
 both `include_screenshot` and `return_screenshot` return the dashboard config /
 write result with a `warnings` entry. `return_screenshot` (set) also degrades a
 render failure to a warning so it never breaks a write that already committed.
-`include_screenshot` (get) is a pure read where the screenshot *is* the
-requested payload, so a render failure surfaces as an error (matching the
-standalone `ha_get_dashboard_screenshot` tool) rather than a warning a caller
-might miss.
+`include_screenshot` (get) does not commit a dashboard/config write, and the
+screenshot *is* the requested payload, so a total render failure surfaces as
+an error (matching the standalone `ha_get_dashboard_screenshot` tool) rather
+than a warning a caller might miss. Because Puppet can persist theme/dark
+preferences, screenshot operations are blocked in server Read Only Mode;
+ordinary dashboard get/list/search calls remain available.
 
-**The rendered path comes from the caller.** `ha_get_dashboard_screenshot`
-validates `dashboard_path` (rejects URLs, query strings, fragments, `..`, and
-backslashes) so it can only target Lovelace frontend routes.
+**Raw rendered paths remain constrained.** `ha_get_dashboard_screenshot`
+validates legacy `dashboard_path` values (rejects URLs, query strings,
+fragments, `..`, and backslashes) and checks the first route segment against
+Home Assistant's registered Lovelace dashboards. A raw path therefore cannot
+use Puppet's independent credential to render another frontend panel.

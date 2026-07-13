@@ -38,6 +38,7 @@ Tests:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import struct
 import time
@@ -282,23 +283,62 @@ async def screenshot_engine_started(
         "ha_container_with_fresh_config did not expose an HA access token; "
         "the screenshot engine cannot authenticate without one."
     )
-    await _set_options(mcp_client, SCREENSHOT_ADDON_SLUG, {"access_token": token})
-    result = await _addon_action(mcp_client, SCREENSHOT_ADDON_SLUG, "start")
-    assert result.get("success"), (
-        f"Fixture failed to start screenshot engine addon: {result}"
-    )
-    await _wait_for_state(mcp_client, SCREENSHOT_ADDON_SLUG, "started")
-    await _wait_engine_serving(mcp_client)
+    original_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
+    original_options = dict(original_detail.get("options") or {})
+    original_state = str(original_detail.get("state") or "stopped")
     try:
+        await _set_options(
+            mcp_client,
+            SCREENSHOT_ADDON_SLUG,
+            {**original_options, "access_token": token},
+        )
+        action = "restart" if original_state == "started" else "start"
+        result = await _addon_action(mcp_client, SCREENSHOT_ADDON_SLUG, action)
+        assert result.get("success"), (
+            f"Fixture failed to start screenshot engine addon: {result}"
+        )
+        await _wait_for_state(mcp_client, SCREENSHOT_ADDON_SLUG, "started")
+        await _wait_engine_serving(mcp_client)
         yield
     finally:
+        cleanup_errors: list[str] = []
         try:
-            await _addon_action(mcp_client, SCREENSHOT_ADDON_SLUG, "stop")
-            await _wait_for_state(
-                mcp_client, SCREENSHOT_ADDON_SLUG, STOPPED_STATES, timeout=30.0
+            await _set_options(mcp_client, SCREENSHOT_ADDON_SLUG, original_options)
+        except Exception as exc:
+            cleanup_errors.append(f"options restore failed: {exc!r}")
+
+        restore_action = "restart" if original_state == "started" else "stop"
+        try:
+            restore_result = await _addon_action(
+                mcp_client, SCREENSHOT_ADDON_SLUG, restore_action
             )
-        except Exception:  # pragma: no cover - cleanup best-effort
-            LOG.exception("Teardown stop of screenshot engine addon failed")
+            if not restore_result.get("success"):
+                cleanup_errors.append(
+                    f"state restore action failed: {restore_result!r}"
+                )
+        except Exception as exc:
+            cleanup_errors.append(f"state restore action failed: {exc!r}")
+
+        expected_state: str | frozenset[str] = (
+            "started" if original_state == "started" else STOPPED_STATES
+        )
+        try:
+            await _wait_for_state(
+                mcp_client, SCREENSHOT_ADDON_SLUG, expected_state, timeout=30.0
+            )
+        except Exception as exc:
+            cleanup_errors.append(f"state verification failed: {exc!r}")
+
+        try:
+            restored_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
+            if dict(restored_detail.get("options") or {}) != original_options:
+                cleanup_errors.append("options verification failed")
+        except Exception as exc:
+            cleanup_errors.append(f"options verification failed: {exc!r}")
+
+        assert not cleanup_errors, (
+            "Fixture failed to restore screenshot engine: " + "; ".join(cleanup_errors)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +501,8 @@ async def test_token_is_what_authenticates(
         await _set_options(
             mcp_client, slug, {"access_token": "invalid-token-for-e2e-contrast"}
         )
-        await _addon_action(mcp_client, slug, "restart")
+        restart_result = await _addon_action(mcp_client, slug, "restart")
+        assert restart_result.get("success"), "Invalid-token restart failed"
         await _wait_for_state(mcp_client, slug, "started")
 
         outcome = await _engine_outcome_after_restart(mcp_client)
@@ -477,14 +518,15 @@ async def test_token_is_what_authenticates(
             )
     finally:
         await _set_options(mcp_client, slug, {"access_token": good_token})
-        await _addon_action(mcp_client, slug, "restart")
+        restore_result = await _addon_action(mcp_client, slug, "restart")
+        assert restore_result.get("success"), "Valid-token restore restart failed"
         await _wait_for_state(mcp_client, slug, "started")
+        await _wait_engine_serving(mcp_client, context="token restore")
         # Confirm the valid token actually re-committed, so a leaked invalid
         # token can't poison a retry's baseline within the session.
         detail = await _get_addon_detail(mcp_client, slug)
         assert (detail.get("options") or {}).get("access_token", "") == good_token, (
-            "Restore of the valid token did not commit; "
-            f"options.access_token unexpected: {detail.get('options')}"
+            "Restore of the valid token did not commit"
         )
 
 
@@ -492,17 +534,40 @@ async def _engine_outcome_after_restart(mcp_client: Any) -> bytes | None:
     """Return the rendered PNG after a restart, or None if the engine responds
     but cannot render (raises a non-transient ToolError).
 
-    Retries only on transient transport blips / cold-start (AssertionError on a
-    not-yet-PNG body); a ToolError from the engine itself is a terminal
-    "responded but could not render" signal and returns None.
+    Retries transient transport/timeouts and cold-start responses. Only a
+    structured, non-transient engine/render ToolError is terminal evidence
+    that the invalid credential was actually exercised.
     """
     deadline = time.monotonic() + _ENGINE_READY_TIMEOUT
     last_err: Exception | None = None
     while time.monotonic() < deadline:
         try:
             return await _screenshot(mcp_client, DEFAULT_DASHBOARD_PATH)
-        except ToolError:
-            return None
+        except ToolError as exc:
+            try:
+                payload = json.loads(str(exc))
+            except (json.JSONDecodeError, TypeError):
+                payload = None
+            error = payload.get("error") if isinstance(payload, dict) else None
+            code = error.get("code") if isinstance(error, dict) else None
+            if code == "SERVICE_CALL_FAILED" and payload.get("status_code") == 502:
+                return None
+            if (
+                code
+                in {
+                    "CONNECTION_FAILED",
+                    "CONNECTION_TIMEOUT",
+                    "TIMEOUT_API_REQUEST",
+                    "TIMEOUT_OPERATION",
+                }
+                or code is None
+            ):
+                last_err = exc
+            else:
+                raise AssertionError(
+                    "Invalid-token proof received an unexpected screenshot error "
+                    f"class: code={code!r}, status={payload.get('status_code') if isinstance(payload, dict) else None!r}"
+                ) from exc
         except _ENGINE_POLL_RETRY_ERRORS as exc:
             last_err = exc
         await asyncio.sleep(2.0)

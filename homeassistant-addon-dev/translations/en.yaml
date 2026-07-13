@@ -230,8 +230,10 @@ configuration:
     description: >-
       Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot
       tool plus include_screenshot / return_screenshot options on the dashboard
-      get/set tools, so AI assistants can see a rendered PNG of a Lovelace
-      dashboard (e.g. to verify one they just created). Rendering runs in a
+      get/set tools, so AI assistants can inspect one or more responsive
+      Lovelace images (e.g. to verify a dashboard they just created). Supports
+      stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP
+      output. Rendering runs in a
       separate, opt-in engine — balloob's "Puppet" add-on (headless Chromium) —
       which you install once (add balloob's add-on repository, then install
       "Puppet") and give a long-lived access token; on Docker/Container
