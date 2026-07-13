@@ -60,6 +60,8 @@ from ._tools_meta import (
     FEATURE_GATED_TOOLS,
     MANDATORY_TOOLS,
     TRANSFORM_GENERATED_TOOLS,
+    ToolStub,
+    UserToolStateOverrides,
     _get_tool_metadata,
     apply_tool_visibility,
 )
