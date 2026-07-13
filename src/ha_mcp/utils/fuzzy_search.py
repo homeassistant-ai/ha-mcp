@@ -196,18 +196,108 @@ class FuzzyEntitySearcher:
         if not query_tokens:
             return [], 0
 
-        # Build per-entity document: tokens from entity_id + friendly_name
-        # + entity registry aliases (when callers enrich entities with the
-        # ``_aliases`` key — see smart_search.smart_entity_search).
+        docs, meta, alias_hit, hidden_flags = self._build_entity_documents(entities)
+
+        # Fit BM25
+        scorer = BM25Scorer()
+        scorer.fit(docs)
+        raw_scores = scorer.score_all(query_tokens)
+
+        # Normalise against theoretical max (sum of IDFs) to produce absolute
+        # scores in the 0-100 range. Empirical-max normalization would always
+        # inflate the best match to 100 regardless of actual relevance, which
+        # defeats the purpose of a threshold-based quality gate.
+        theoretical_max = scorer.max_possible_score(query_tokens)
+        matches = self._score_bm25_candidates(
+            raw_scores,
+            theoretical_max,
+            query_tokens,
+            query_lower,
+            meta,
+            alias_hit,
+            hidden_flags,
+        )
+
+        # Tier-3 fallback: token-level SequenceMatcher only if BM25 scored
+        # every document at zero. Firing the fallback when BM25 found valid
+        # partial matches (just below threshold) would allow a character-level
+        # match on the same token to inflate the score to 100, re-introducing
+        # exactly the noise floor the new absolute normalization is fixing.
+        bm25_found_any = any(raw > 0 for raw in raw_scores)
+        if not matches and not bm25_found_any:
+            matches = self._typo_fallback(query_tokens, docs, meta, hidden_flags)
+
+        # Tie-break on entity_id so paginated requests return stable
+        # ordering when several entities share a score (common with the
+        # hidden-penalty bands at 100/80 and BM25's coarse score buckets).
+        matches.sort(key=lambda x: (-x["score"], x["entity_id"]))
+        total_matches = len(matches)
+        return matches[offset : offset + limit], total_matches
+
+    # -- private helpers -----------------------------------------------------
+
+    @staticmethod
+    def _collect_alias_tokens(
+        aliases: Any, id_name_tokens: set[str]
+    ) -> tuple[list[str], set[str]]:
+        """Tokenize entity registry aliases for the BM25 document.
+
+        Aliases (entity registry). Each alias contributes both its
+        tokenized form and its separator-stripped concat. We track
+        only the alias tokens that *aren't* already in id+name —
+        otherwise a query like `bed` would mislabel a friendly_name
+        match as `alias_match` whenever the entity also has a
+        `bed`-containing alias.
+
+        Returns:
+            Tuple of (tokens to add to the document, alias-only tokens
+            used to label a hit as ``alias_match``).
+        """
+        extra_tokens: list[str] = []
+        entity_alias_tokens: set[str] = set()
+        for alias in aliases or []:
+            if not isinstance(alias, str):
+                continue
+            a_tokens = tokenize(alias)
+            extra_tokens.extend(a_tokens)
+            for t in a_tokens:
+                if t not in id_name_tokens:
+                    entity_alias_tokens.add(t)
+            a_concat = _strip_separators(alias)
+            if a_concat:
+                extra_tokens.append(a_concat)
+                if a_concat not in id_name_tokens:
+                    entity_alias_tokens.add(a_concat)
+        return extra_tokens, entity_alias_tokens
+
+    def _build_entity_documents(
+        self, entities: list[dict[str, Any]]
+    ) -> tuple[
+        list[list[str]],
+        list[tuple[str, str, str, dict[str, Any], str]],
+        list[set[str]],
+        list[Any],
+    ]:
+        """Build the BM25 corpus and parallel per-entity metadata.
+
+        Build per-entity document: tokens from entity_id + friendly_name
+        + entity registry aliases (when callers enrich entities with the
+        ``_aliases`` key — see smart_search.smart_entity_search).
+
+        Returns:
+            Tuple of (docs, meta, alias_hit, hidden_flags):
+              - docs: tokenized document per entity, for BM25 fitting.
+              - meta: (eid, name, domain, attrs, state) per entity.
+              - alias_hit: per-entity set of tokens that matched only on
+                alias (for `match_type="alias_match"`).
+              - hidden_flags: per-entity ``hidden_by`` value so the
+                score-penalty pass can depress hidden hits without
+                filtering them. Callers enrich via the ``_hidden_by``
+                key — see smart_search.smart_entity_search.
+        """
         docs: list[list[str]] = []
-        meta: list[
-            tuple[str, str, str, dict[str, Any], str]
-        ] = []  # eid, name, domain, attrs, state
-        # Track which entities matched on alias (for `match_type="alias_match"`).
+        meta: list[tuple[str, str, str, dict[str, Any], str]] = []
         alias_hit: list[set[str]] = []
-        # Track ``hidden_by`` per entity so the score-penalty pass can
-        # depress hidden hits without filtering them. Callers enrich via
-        # the ``_hidden_by`` key — see smart_search.smart_entity_search.
         hidden_flags: list[Any] = []
 
         for entity in entities:
@@ -231,100 +321,72 @@ class FuzzyEntitySearcher:
             if name_concat and name_concat != tail_concat:
                 tokens.append(name_concat)
 
-            # Aliases (entity registry). Each alias contributes both its
-            # tokenized form and its separator-stripped concat. We track
-            # only the alias tokens that *aren't* already in id+name —
-            # otherwise a query like `bed` would mislabel a friendly_name
-            # match as `alias_match` whenever the entity also has a
-            # `bed`-containing alias.
             id_name_tokens = set(id_tokens) | set(name_tokens)
             id_name_tokens.add(tail_concat)
             id_name_tokens.add(name_concat)
-            entity_alias_tokens: set[str] = set()
-            for alias in entity.get("_aliases", []) or []:
-                if not isinstance(alias, str):
-                    continue
-                a_tokens = tokenize(alias)
-                tokens.extend(a_tokens)
-                for t in a_tokens:
-                    if t not in id_name_tokens:
-                        entity_alias_tokens.add(t)
-                a_concat = _strip_separators(alias)
-                if a_concat:
-                    tokens.append(a_concat)
-                    if a_concat not in id_name_tokens:
-                        entity_alias_tokens.add(a_concat)
+            alias_tokens, entity_alias_tokens = self._collect_alias_tokens(
+                entity.get("_aliases", []), id_name_tokens
+            )
+            tokens.extend(alias_tokens)
 
             docs.append(tokens)
             meta.append((entity_id, friendly_name, domain, attributes, state))
             alias_hit.append(entity_alias_tokens)
             hidden_flags.append(entity.get("_hidden_by"))
 
-        # Fit BM25
-        scorer = BM25Scorer()
-        scorer.fit(docs)
-        raw_scores = scorer.score_all(query_tokens)
+        return docs, meta, alias_hit, hidden_flags
 
-        # Normalise against theoretical max (sum of IDFs) to produce absolute
-        # scores in the 0-100 range. Empirical-max normalization would always
-        # inflate the best match to 100 regardless of actual relevance, which
-        # defeats the purpose of a threshold-based quality gate.
-        theoretical_max = scorer.max_possible_score(query_tokens)
+    def _score_bm25_candidates(
+        self,
+        raw_scores: list[float],
+        theoretical_max: float,
+        query_tokens: list[str],
+        query_lower: str,
+        meta: list[tuple[str, str, str, dict[str, Any], str]],
+        alias_hit: list[set[str]],
+        hidden_flags: list[Any],
+    ) -> list[dict[str, Any]]:
+        """Convert raw BM25 scores into threshold-gated, penalty-applied match dicts.
+
+        Threshold gates the *raw* match quality: a hidden entity that
+        genuinely matches at threshold shouldn't get penalised below it
+        and silently disappear. Penalty is applied only after the gate,
+        so it affects ranking but not visibility.
+        """
         matches: list[dict[str, Any]] = []
+        if theoretical_max <= 0:
+            return matches
 
-        if theoretical_max > 0:
-            query_token_set = set(query_tokens)
-            for i, raw in enumerate(raw_scores):
-                if raw <= 0:
-                    continue
-                # Threshold gates the *raw* match quality: a hidden
-                # entity that genuinely matches at threshold shouldn't
-                # get penalised below it and silently disappear.
-                # Penalty is applied only after the gate, so it affects
-                # ranking but not visibility.
-                raw_score = min(100, round(raw / theoretical_max * 100))
-                if raw_score < self.threshold:
-                    continue
-                score = apply_hidden_penalty(raw_score, hidden_flags[i])
-                eid, fname, domain, attrs, state = meta[i]
-                # If any query token matched only on the alias haystack,
-                # surface that to the caller via match_type — useful both
-                # for telemetry and for the agent to know the friendly_name
-                # alone wouldn't have led it here.
-                hit_alias_tokens = query_token_set & alias_hit[i]
-                if hit_alias_tokens:
-                    match_type = "alias_match"
-                else:
-                    match_type = self._get_match_type(eid, fname, domain, query_lower)
-                matches.append(
-                    {
-                        "entity_id": eid,
-                        "friendly_name": fname,
-                        "domain": domain,
-                        "state": state,
-                        "attributes": attrs,
-                        "score": score,
-                        "match_type": match_type,
-                    }
-                )
-
-        # Tier-3 fallback: token-level SequenceMatcher only if BM25 scored
-        # every document at zero. Firing the fallback when BM25 found valid
-        # partial matches (just below threshold) would allow a character-level
-        # match on the same token to inflate the score to 100, re-introducing
-        # exactly the noise floor the new absolute normalization is fixing.
-        bm25_found_any = any(raw > 0 for raw in raw_scores)
-        if not matches and not bm25_found_any:
-            matches = self._typo_fallback(query_tokens, docs, meta, hidden_flags)
-
-        # Tie-break on entity_id so paginated requests return stable
-        # ordering when several entities share a score (common with the
-        # hidden-penalty bands at 100/80 and BM25's coarse score buckets).
-        matches.sort(key=lambda x: (-x["score"], x["entity_id"]))
-        total_matches = len(matches)
-        return matches[offset : offset + limit], total_matches
-
-    # -- private helpers -----------------------------------------------------
+        query_token_set = set(query_tokens)
+        for i, raw in enumerate(raw_scores):
+            if raw <= 0:
+                continue
+            raw_score = min(100, round(raw / theoretical_max * 100))
+            if raw_score < self.threshold:
+                continue
+            score = apply_hidden_penalty(raw_score, hidden_flags[i])
+            eid, fname, domain, attrs, state = meta[i]
+            # If any query token matched only on the alias haystack,
+            # surface that to the caller via match_type — useful both
+            # for telemetry and for the agent to know the friendly_name
+            # alone wouldn't have led it here.
+            hit_alias_tokens = query_token_set & alias_hit[i]
+            if hit_alias_tokens:
+                match_type = "alias_match"
+            else:
+                match_type = self._get_match_type(eid, fname, domain, query_lower)
+            matches.append(
+                {
+                    "entity_id": eid,
+                    "friendly_name": fname,
+                    "domain": domain,
+                    "state": state,
+                    "attributes": attrs,
+                    "score": score,
+                    "match_type": match_type,
+                }
+            )
+        return matches
 
     def _typo_fallback(
         self,
