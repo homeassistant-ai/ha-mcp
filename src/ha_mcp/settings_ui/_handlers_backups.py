@@ -436,9 +436,10 @@ async def _save_backup_config(
         return _bad_request(err)
 
     if is_running_in_addon():
-        # ``is_running_in_addon()`` checks SUPERVISOR_TOKEN — the helper below
-        # also catches the missing-token ``RuntimeError`` from
-        # ``make_supervisor_httpx_client`` as defense-in-depth.
+        # ``is_running_in_addon()`` checks SUPERVISOR_TOKEN — the
+        # ``_save_backup_config_addon`` helper called below also catches the
+        # missing-token ``RuntimeError`` from ``make_supervisor_httpx_client``
+        # as defense-in-depth.
         return await _save_backup_config_addon(server, clean)
 
     # Standalone (file) mode — refuse to override env-pinned fields.

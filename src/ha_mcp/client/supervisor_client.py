@@ -9,8 +9,8 @@ Supervisor — different base URL, different token, different role gate):
   — fetches addon and system-service logs
 - :func:`ha_mcp.tools.tools_bug_report._fetch_addon_logs` — bundles ha-mcp's
   own addon logs into a bug-report payload
-- :func:`ha_mcp.settings_ui._restart_addon` — POSTs ``/addons/self/restart``
-  from the settings UI
+- :func:`ha_mcp.settings_ui._handlers_server._restart_addon` — POSTs
+  ``/addons/self/restart`` from the settings UI
 
 All three share the same boilerplate (base URL, ``Authorization: Bearer
 ${SUPERVISOR_TOKEN}`` header), so this module supplies a single factory and
