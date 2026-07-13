@@ -33,6 +33,12 @@ let toolEnvPinned = {};
 // never flipped keep tracking their defaults across releases.
 let toolLlm = {};
 let toolLlmOverrides = {};
+// True only when this settings page is served by the in-process custom
+// component (embedded server). The LLM API exposure surface is registered by
+// the ha_mcp_tools custom component; on the add-on / Docker / standalone
+// server nothing consumes it, so the per-tool "LLM API" toggle is hidden
+// there rather than shown as a no-op. Server sends ``llm_api_available``.
+let llmApiAvailable = false;
 let saveTimer = null;
 let openGroups = new Set();
 
@@ -169,6 +175,7 @@ async function loadTools() {
   toolEnvPinned = data.env_pinned || {};
   toolLlm = data.llm_api || {};
   toolLlmOverrides = data.llm_api_overrides || {};
+  llmApiAvailable = !!data.llm_api_available;
   READ_ONLY_EXEMPT = new Set(data.read_only_exempt || []);
   // Load policy state before the first render so the "security gated"
   // toggle reflects current policy.rules. loadPolicyState() never throws
@@ -760,14 +767,19 @@ function render() {
               `<span class="slider"></span></label>` +
             `<span>security gated</span>` +
           `</div>` +
-          `<div class="toggle-group ${isEnabled ? '' : 'disabled-toggle'}" ` +
-               `title="Offer this tool to Home Assistant conversation agents through the LLM API. Applies on the agent's next message - no restart. A tool disabled above is unavailable to agents regardless.">` +
-            `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:llm" data-tool="${escapeHtml(t.name)}" data-field="llm" ` +
-              `aria-label="${escapeHtml(title)} exposed to the conversation-agent LLM API" ` +
-              `${(toolLlm[t.name] !== false) ? 'checked' : ''} ${isEnabled ? '' : 'disabled'}>` +
-              `<span class="slider"></span></label>` +
-            `<span>LLM API</span>` +
-          `</div>` +
+          // LLM API exposure only exists on the in-process custom-component
+          // (embedded) server; hide the column entirely on other install
+          // methods where the toggle would be a no-op.
+          (llmApiAvailable
+            ? `<div class="toggle-group ${isEnabled ? '' : 'disabled-toggle'}" ` +
+                 `title="Offer this tool to Home Assistant conversation agents through the LLM API. Applies on the agent's next message - no restart. A tool disabled above is unavailable to agents regardless.">` +
+              `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:llm" data-tool="${escapeHtml(t.name)}" data-field="llm" ` +
+                `aria-label="${escapeHtml(title)} exposed to the conversation-agent LLM API" ` +
+                `${(toolLlm[t.name] !== false) ? 'checked' : ''} ${isEnabled ? '' : 'disabled'}>` +
+                `<span class="slider"></span></label>` +
+              `<span>LLM API</span>` +
+            `</div>`
+            : '') +
         `</div>`;
 
       const inputs = div.querySelectorAll('input[type="checkbox"]');

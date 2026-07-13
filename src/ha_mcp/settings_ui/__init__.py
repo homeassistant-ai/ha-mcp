@@ -1446,6 +1446,12 @@ def build_settings_handlers(
                 "read_only_exempt": sorted(READ_ONLY_EXEMPT_TOOLS),
                 "llm_api": llm_effective,
                 "llm_api_overrides": llm_overrides,
+                # LLM API exposure is registered by the ha_mcp_tools custom
+                # component (in-process/embedded server). On the add-on,
+                # Docker, or standalone server nothing consumes it, so the UI
+                # hides the per-tool "LLM API" toggle rather than showing a
+                # no-op control.
+                "llm_api_available": is_embedded(),
             }
         )
 

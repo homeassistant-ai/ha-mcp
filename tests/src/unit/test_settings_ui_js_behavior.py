@@ -4480,7 +4480,42 @@ class TestLlmApiToggle:
             "read_only_exempt": [],
             "llm_api": {"ha_get_state": llm_effective},
             "llm_api_overrides": {},
+            # Embedded (custom-component) server: the LLM API toggle renders.
+            "llm_api_available": True,
         }
+
+    def test_toggle_hidden_when_llm_api_unavailable(self, settings_script: str) -> None:
+        """On a non-embedded server (add-on / Docker / standalone) the tools
+        payload carries no ``llm_api_available`` flag, so the LLM API toggle
+        column must not render — it would be a no-op there. The other toggles
+        still render.
+        """
+        payload = self._tools_json(True)
+        del payload["llm_api_available"]  # non-embedded server omits the flag
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {"status": 200, "json": payload},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            settle_ms=300,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              document.body.setAttribute('data-llm-present',
+                document.querySelector('input[data-field="llm"]') ? 'yes' : 'no');
+              document.body.setAttribute('data-enabled-present',
+                document.querySelector('input[data-field="enabled"]') ? 'yes' : 'no');
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "llm-present") == "no", (
+            "LLM API toggle must be hidden when the server is not embedded"
+        )
+        assert _probe(result, "enabled-present") == "yes", (
+            "other tool toggles must still render"
+        )
 
     def test_toggle_renders_effective_value(self, settings_script: str) -> None:
         fetches = {
