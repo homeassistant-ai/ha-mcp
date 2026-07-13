@@ -11,9 +11,8 @@ capture path (see ``ha_mcp.dashboard_screenshot.capture``).
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Annotated, Any, Literal, NoReturn
+from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -47,68 +46,10 @@ from .util_helpers import JSON_STRING_COERCION
 logger = logging.getLogger(__name__)
 
 
-def _raise_with_puppet_configuration(
-    error: Exception, puppet_configuration: dict[str, Any]
-) -> NoReturn:
-    """Preserve a completed Puppet mutation when a later capture step fails."""
-    try:
-        payload = json.loads(str(error))
-    except (json.JSONDecodeError, TypeError):
-        payload = None
-    if isinstance(payload, dict):
-        payload["puppet_configuration_applied"] = puppet_configuration
-        raise_tool_error(payload)
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.INTERNAL_ERROR,
-            "Puppet configuration completed, but the subsequent screenshot failed.",
-            details=str(error),
-            context={"puppet_configuration_applied": puppet_configuration},
-        )
-    )
-    raise AssertionError("unreachable: raise_tool_error always raises")
-
-
-def _management_only_ignored_options(
-    *,
-    width: int,
-    height: int | Literal["auto"],
-    viewport_presets: list[ViewportPreset] | None,
-    orientation: Orientation | None,
-    zoom: float,
-    wait_ms: int,
-    full_page: bool,
-    theme: str | None,
-    dark_mode: bool,
-    language: str | None,
-    image_format: ScreenshotFormat,
-    render_timeout_seconds: float,
-) -> list[str]:
-    """List render arguments that management-only mode would otherwise drop."""
-    supplied = {
-        "width": width != DEFAULT_WIDTH,
-        "height": height != DEFAULT_HEIGHT,
-        "viewport_presets": viewport_presets is not None,
-        "orientation": orientation is not None,
-        "zoom": zoom != 1.0,
-        "wait_ms": wait_ms != DEFAULT_WAIT_MS,
-        "full_page": full_page,
-        "theme": theme is not None,
-        "dark_mode": dark_mode,
-        "language": language is not None,
-        "image_format": image_format != "png",
-        "render_timeout_seconds": (
-            render_timeout_seconds != DEFAULT_RENDER_TIMEOUT_SECONDS
-        ),
-    }
-    return [name for name, is_supplied in supplied.items() if is_supplied]
-
-
 def _package_screenshot_result(
     *,
     captures: list[Any],
     target: Any,
-    puppet_configuration: dict[str, Any] | None,
     capture_failures: list[dict[str, Any]],
 ) -> ToolResult:
     """Build the standalone native-image result with structured failures."""
@@ -129,15 +70,11 @@ def _package_screenshot_result(
         warnings = [*target.warnings, *dashboard_screenshot_warnings(captures)]
         if warnings:
             structured_content["warnings"] = warnings
-        if puppet_configuration is not None:
-            structured_content["puppet_configuration"] = puppet_configuration
         return ToolResult(
             content=dashboard_image_content(captures),
             structured_content=structured_content,
         )
-    except ToolError as error:
-        if puppet_configuration is not None:
-            _raise_with_puppet_configuration(error, puppet_configuration)
+    except ToolError:
         raise
     except Exception as exc:
         raise_tool_error(
@@ -148,11 +85,9 @@ def _package_screenshot_result(
                 context={
                     "capture_count": len(captures),
                     "render_path": target.render_path,
-                    "puppet_configuration_applied": puppet_configuration,
                 },
             )
         )
-    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 class DashboardScreenshotTools:
@@ -277,23 +212,6 @@ class DashboardScreenshotTools:
                 le=300,
             ),
         ] = DEFAULT_RENDER_TIMEOUT_SECONDS,
-        puppet_keep_browser_open: Annotated[
-            bool | None,
-            Field(
-                description="Optional Puppet-only setting update. True keeps its "
-                "Chromium session open between captures for faster repeat renders; "
-                "False closes it after each capture. No add-on slug is accepted, "
-                "and access_token/home_assistant_url cannot be changed here."
-            ),
-        ] = None,
-        puppet_restart: Annotated[
-            bool,
-            Field(
-                description="Restart only the discovered, schema-verified Puppet "
-                "add-on after applying puppet_keep_browser_open. May also be used "
-                "alone to restart Puppet; never targets another add-on."
-            ),
-        ] = False,
     ) -> ToolResult:
         """Get rendered images of a Home Assistant Lovelace dashboard view.
 
@@ -306,59 +224,9 @@ class DashboardScreenshotTools:
         that the frontend accepted a requested theme or language; structured
         metadata therefore records the values sent to the engine.
 
-        Supplying Puppet management parameters without a dashboard target runs
-        a management-only operation and returns no image. With a target, the
-        schema-verified Puppet setting/restart is applied before capture.
+        To change the Puppet engine add-on itself (keep_browser_open, restart),
+        use ha_manage_addon.
         """
-        management_requested = puppet_keep_browser_open is not None or puppet_restart
-        management_only = (
-            management_requested
-            and dashboard_path is None
-            and dashboard_url_path is None
-            and view_path is None
-        )
-        puppet_configuration: dict[str, Any] | None = None
-        if management_only:
-            ignored = _management_only_ignored_options(
-                width=width,
-                height=height,
-                viewport_presets=viewport_presets,
-                orientation=orientation,
-                zoom=zoom,
-                wait_ms=wait_ms,
-                full_page=full_page,
-                theme=theme,
-                dark_mode=dark_mode,
-                language=language,
-                image_format=image_format,
-                render_timeout_seconds=render_timeout_seconds,
-            )
-            if ignored:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Screenshot render options require a dashboard target.",
-                        context={"ignored_screenshot_options": ignored},
-                    )
-                )
-            from ..dashboard_screenshot.provision import configure_puppet_addon
-
-            puppet_configuration = await configure_puppet_addon(
-                self._client,
-                keep_browser_open=puppet_keep_browser_open,
-                restart=puppet_restart,
-            )
-
-            return ToolResult(
-                content=[],
-                structured_content={
-                    "success": True,
-                    "action": "configure_puppet",
-                    "puppet_configuration": puppet_configuration,
-                    "screenshot_count": 0,
-                },
-            )
-
         target = await resolve_dashboard_render_target(
             self._client,
             dashboard_path=dashboard_path,
@@ -379,14 +247,6 @@ class DashboardScreenshotTools:
             image_format=image_format,
             render_timeout_seconds=render_timeout_seconds,
         )
-        if management_requested:
-            from ..dashboard_screenshot.provision import configure_puppet_addon
-
-            puppet_configuration = await configure_puppet_addon(
-                self._client,
-                keep_browser_open=puppet_keep_browser_open,
-                restart=puppet_restart,
-            )
         try:
             capture_failures: list[dict[str, Any]] = []
             captures = await capture_dashboard_images(
@@ -405,13 +265,9 @@ class DashboardScreenshotTools:
                 render_timeout_seconds=render_timeout_seconds,
                 partial_failures=capture_failures,
             )
-        except ToolError as exc:
-            if puppet_configuration is not None:
-                _raise_with_puppet_configuration(exc, puppet_configuration)
+        except ToolError:
             raise
         except Exception as exc:
-            if puppet_configuration is not None:
-                _raise_with_puppet_configuration(exc, puppet_configuration)
             raise_tool_error(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,
@@ -423,7 +279,6 @@ class DashboardScreenshotTools:
         return _package_screenshot_result(
             captures=captures,
             target=target,
-            puppet_configuration=puppet_configuration,
             capture_failures=capture_failures,
         )
 

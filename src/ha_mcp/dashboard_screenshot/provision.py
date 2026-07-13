@@ -21,12 +21,9 @@ startup, never silently installed):
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import os
-import time
-from typing import Any, NoReturn
+from typing import Any
 
 import httpx
 from fastmcp.exceptions import ToolError
@@ -37,9 +34,6 @@ from ..tools.helpers import raise_tool_error
 logger = logging.getLogger(__name__)
 
 ENGINE_PORT = 10000
-_PUPPET_ENGINE_READY_TIMEOUT_SECONDS = 30.0
-_PUPPET_ENGINE_REQUEST_TIMEOUT_SECONDS = 2.0
-_PUPPET_ENGINE_READY_POLL_INTERVAL_SECONDS = 0.5
 # The Supervisor slug is ``<repo-hash>_puppet`` for balloob's Puppet add-on.
 # ``str.endswith`` accepts a tuple, kept as one for easy future extension.
 ENGINE_SLUG_SUFFIXES = ("_puppet",)
@@ -178,7 +172,6 @@ async def resolve_engine_url() -> str:
             ],
         )
     )
-    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 async def _discover_engine_url_via_supervisor() -> str:
@@ -213,9 +206,7 @@ async def _discover_engine_url_via_supervisor() -> str:
             # The /addons list is only reliable for slug discovery (the
             # repo-hash prefix is not known ahead of time). Per-addon details
             # are authoritative on /addons/<slug>/info — the same source
-            # ha_manage_addon trusts. Use the same name/schema/ambiguity checks
-            # as the configuration path so a combined call cannot mutate one
-            # add-on and render through another.
+            # ha_manage_addon trusts.
             addon_infos: list[tuple[str, dict[str, Any]]] = []
             for match in matches:
                 slug = str(match["slug"])
@@ -251,279 +242,3 @@ async def _discover_engine_url_via_supervisor() -> str:
                 ],
             )
         )
-    raise AssertionError("unreachable: all discovery branches return or raise")
-
-
-def _raise_puppet_restart_failure(
-    error: Exception, *, slug: str, settings_changed: bool
-) -> NoReturn:
-    """Preserve any already-applied setting when restart/verification fails."""
-    try:
-        restart_error = json.loads(str(error))
-    except (json.JSONDecodeError, TypeError):
-        restart_error = None
-    if not isinstance(restart_error, dict):
-        restart_error = create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            (
-                "Puppet settings were applied, but restart verification failed."
-                if settings_changed
-                else "Puppet restart verification failed."
-            ),
-            details=str(error),
-        )
-    restart_error.update(
-        {
-            "slug": slug,
-            "settings_changed": settings_changed,
-            "restart_requested": True,
-        }
-    )
-    raise_tool_error(restart_error)
-    raise AssertionError("unreachable: raise_tool_error always raises")
-
-
-async def _wait_for_puppet_engine_ready(hostname: str) -> None:
-    """Wait until restarted Puppet serves its side-effect-free root page."""
-    deadline = time.monotonic() + _PUPPET_ENGINE_READY_TIMEOUT_SECONDS
-    last_detail: str | None = None
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(_PUPPET_ENGINE_REQUEST_TIMEOUT_SECONDS)
-    ) as http_client:
-        while True:
-            try:
-                response = await http_client.get(f"http://{hostname}:{ENGINE_PORT}/")
-                if 200 <= response.status_code < 300:
-                    return
-                last_detail = f"HTTP {response.status_code}"
-            except httpx.HTTPError as exc:
-                last_detail = str(exc)
-
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            await asyncio.sleep(
-                min(_PUPPET_ENGINE_READY_POLL_INTERVAL_SECONDS, remaining)
-            )
-
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.CONNECTION_FAILED,
-            "Puppet restarted, but its screenshot engine did not become ready in time.",
-            details=last_detail,
-            context={"engine_ready": False, "supervisor_state": "started"},
-            suggestions=["Check the Puppet add-on logs and retry the screenshot"],
-        )
-    )
-    raise AssertionError("unreachable: raise_tool_error always raises")
-
-
-async def _maybe_restart_puppet_addon(
-    client: Any,
-    *,
-    slug: str,
-    hostname: str | None,
-    settings_changed: bool,
-    restart: bool,
-) -> bool | None:
-    """Restart only Puppet and verify its lifecycle state and HTTP readiness."""
-    if not restart:
-        return None
-    from ..tools.tools_addons import _supervisor_api_call
-
-    try:
-        await _supervisor_api_call(
-            client,
-            f"/addons/{slug}/restart",
-            method="POST",
-            timeout=120,
-        )
-        for _ in range(20):
-            restarted_info = await _supervisor_api_call(client, f"/addons/{slug}/info")
-            restarted_data = restarted_info.get("result", {})
-            if (
-                isinstance(restarted_data, dict)
-                and restarted_data.get("state") == "started"
-            ):
-                assert hostname is not None
-                await _wait_for_puppet_engine_ready(hostname)
-                return True
-            await asyncio.sleep(0.5)
-    except Exception as exc:
-        _raise_puppet_restart_failure(exc, slug=slug, settings_changed=settings_changed)
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            "Puppet accepted the restart request but did not return to the "
-            "started state in time.",
-            context={
-                "slug": slug,
-                "settings_changed": settings_changed,
-                "restart_requested": True,
-            },
-        )
-    )
-    raise AssertionError("unreachable: raise_tool_error always raises")
-
-
-async def _select_configurable_puppet_addon(client: Any) -> tuple[str, dict[str, Any]]:
-    """Select the same authoritative started Puppet that capture would prefer."""
-    from ..tools.tools_addons import _supervisor_api_call
-
-    listing = await _supervisor_api_call(client, "/addons")
-    listing_result = listing.get("result")
-    addons = (
-        listing_result.get("addons", []) if isinstance(listing_result, dict) else []
-    )
-    matches = [
-        addon
-        for addon in addons
-        if isinstance(addon, dict)
-        and str(addon.get("slug", "")).endswith(ENGINE_SLUG_SUFFIXES)
-    ]
-    if not matches:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                "The Puppet screenshot engine add-on is not installed.",
-                details=_INSTALL_HELP,
-            )
-        )
-
-    addon_infos: list[tuple[str, dict[str, Any]]] = []
-    for match in matches:
-        slug = str(match["slug"])
-        info_response = await _supervisor_api_call(client, f"/addons/{slug}/info")
-        info = info_response.get("result", {})
-        if not isinstance(info, dict):
-            continue
-        addon_infos.append((slug, info))
-    return _select_started_verified_puppet(addon_infos)
-
-
-async def configure_puppet_addon(
-    client: Any,
-    *,
-    keep_browser_open: bool | None,
-    restart: bool,
-) -> dict[str, Any]:
-    """Update the installed Puppet add-on without exposing a caller slug.
-
-    This intentionally reuses the same Supervisor API transport and
-    read-merge-write contract as ``ha_manage_addon`` while hard-binding every
-    endpoint to a discovered, schema-verified Puppet add-on. Secrets and the
-    Home Assistant target URL are never accepted or returned here.
-    """
-    from ..config import get_global_settings
-    from ..tools.tools_addons import _supervisor_api_call
-
-    explicit_engine = (
-        get_global_settings().dashboard_screenshot_engine_url or ""
-    ).strip()
-    if explicit_engine:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_FAILED,
-                "Puppet add-on settings can be managed only when the screenshot "
-                "engine uses Supervisor auto-discovery.",
-                context={"explicit_engine_configured": True},
-            )
-        )
-    if not os.environ.get("SUPERVISOR_TOKEN"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_FAILED,
-                "Puppet add-on settings require HA OS / Supervised auto-discovery.",
-                context={"supervisor_available": False},
-            )
-        )
-    slug, info = await _select_configurable_puppet_addon(client)
-    options = info.get("options")
-    if not isinstance(options, dict):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.CONFIG_VALIDATION_FAILED,
-                "Supervisor did not return Puppet's complete options object; refusing "
-                "a full-replacement settings write.",
-                context={"slug": slug},
-            )
-        )
-    assert isinstance(options, dict)
-
-    current_options = dict(options)
-    current_keep_open = current_options.get("keep_browser_open")
-    hostname_value = info.get("hostname") or info.get("ip_address")
-    hostname = str(hostname_value) if hostname_value else None
-    if restart and hostname is None:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Puppet is started, but Supervisor returned no engine hostname; "
-                "refusing a settings write that requires restart verification.",
-                context={
-                    "slug": slug,
-                    "engine_ready": False,
-                    "supervisor_state": "started",
-                },
-            )
-        )
-    changed = keep_browser_open is not None and keep_browser_open != current_keep_open
-    if changed:
-        missing_options = sorted(_PUPPET_OPTION_NAMES - current_options.keys())
-        if missing_options:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.CONFIG_VALIDATION_FAILED,
-                    "Supervisor did not return Puppet's complete options object; "
-                    "refusing a full-replacement settings write.",
-                    context={"slug": slug, "missing_options": missing_options},
-                )
-            )
-        invalid_option_types = sorted(
-            name
-            for name, expected_type in {
-                "access_token": str,
-                "home_assistant_url": str,
-                "keep_browser_open": bool,
-            }.items()
-            if not isinstance(current_options[name], expected_type)
-        )
-        if invalid_option_types:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.CONFIG_VALIDATION_FAILED,
-                    "Supervisor returned unexpected Puppet option types; refusing "
-                    "a full-replacement settings write.",
-                    context={
-                        "slug": slug,
-                        "invalid_option_types": invalid_option_types,
-                    },
-                )
-            )
-        merged_options = {**current_options, "keep_browser_open": keep_browser_open}
-        await _supervisor_api_call(
-            client,
-            f"/addons/{slug}/options",
-            method="POST",
-            data={"options": merged_options},
-        )
-    restart_verified = await _maybe_restart_puppet_addon(
-        client,
-        slug=slug,
-        hostname=hostname,
-        settings_changed=changed,
-        restart=restart,
-    )
-
-    return {
-        "slug": slug,
-        "keep_browser_open": (
-            keep_browser_open if keep_browser_open is not None else current_keep_open
-        ),
-        "settings_changed": changed,
-        "restart_requested": restart,
-        "restart_verified": restart_verified,
-        "status": (
-            "restarted" if restart else ("pending_restart" if changed else "unchanged")
-        ),
-    }

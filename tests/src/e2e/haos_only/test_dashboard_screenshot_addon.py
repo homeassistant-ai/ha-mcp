@@ -25,12 +25,10 @@ Tests:
 1. The addon reaches ``started`` and serves screenshots.
 2. ``ha_get_dashboard_screenshot`` returns a valid, correctly-sized PNG of
    the default dashboard (engine render + tool wiring + Image return).
-3. The screenshot tool can merge/restart only Puppet's ``keep_browser_open``
-   setting and the engine returns to service.
-4. ``ha_config_get_dashboard(include_screenshot=True)`` returns config + PNG.
-5. ``ha_config_set_dashboard(return_screenshot=True)`` returns the write
+3. ``ha_config_get_dashboard(include_screenshot=True)`` returns config + PNG.
+4. ``ha_config_set_dashboard(return_screenshot=True)`` returns the write
    result + a PNG (the dashboard create-and-see loop).
-6. AUTH PROOF: replacing the valid token with a deliberately-invalid one means
+5. AUTH PROOF: replacing the valid token with a deliberately-invalid one means
    HA Core rejects it, so the engine cannot render and the tool fails — it does
    NOT reproduce the working render. The contrast proves the configured access
    token is what authenticates (fails closed: if the token were ignored, both
@@ -357,53 +355,6 @@ async def test_addon_started_after_fixture(
         f"Screenshot engine should be ``started`` after fixture; "
         f"got state={detail.get('state')!r}"
     )
-
-
-async def test_screenshot_tool_scopes_setting_and_restart_to_puppet(
-    mcp_client: Any, screenshot_engine_started: Any
-) -> None:
-    """The integrated setting path mutates/restarts only discovered Puppet."""
-    detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
-    prior_keep_open = (detail.get("options") or {}).get("keep_browser_open")
-    assert isinstance(prior_keep_open, bool)
-    changed_keep_open = not prior_keep_open
-    try:
-        raw = await mcp_client.call_tool(
-            "ha_get_dashboard_screenshot",
-            {
-                "dashboard_path": DEFAULT_DASHBOARD_PATH,
-                "puppet_keep_browser_open": changed_keep_open,
-                "puppet_restart": True,
-            },
-        )
-        payload = parse_mcp_result(raw)
-        assert payload.get("success"), payload
-        png = _extract_png_bytes(raw)
-        assert png is not None
-        _png_dimensions(png)
-        assert payload["screenshot_count"] == 1
-        assert payload["puppet_configuration"]["slug"] == SCREENSHOT_ADDON_SLUG
-        assert payload["puppet_configuration"]["restart_verified"] is True
-        detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
-        assert detail.get("options", {}).get("keep_browser_open") is changed_keep_open
-        assert detail.get("state") == "started"
-    finally:
-        restore = parse_mcp_result(
-            await mcp_client.call_tool(
-                "ha_get_dashboard_screenshot",
-                {
-                    "puppet_keep_browser_open": prior_keep_open,
-                    "puppet_restart": True,
-                },
-            )
-        )
-        assert restore.get("success"), restore
-        restored_png = await _screenshot(mcp_client, DEFAULT_DASHBOARD_PATH)
-        _png_dimensions(restored_png)
-        restored_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
-        assert (restored_detail.get("options") or {}).get(
-            "keep_browser_open"
-        ) is prior_keep_open
 
 
 async def test_get_dashboard_screenshot_returns_png(
