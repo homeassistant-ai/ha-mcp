@@ -2577,6 +2577,47 @@ class TestEnvPinnedTools:
         assert body["llm_api"]["ha_get_state"] is False
         # The stub renders hidden-by-default (feature-gated == beta).
         assert body["llm_api"]["ha_config_set_yaml"] is False
+        # Not the in-process custom-component server: the UI hides the LLM API
+        # toggle (nothing consumes the exposure on this install method).
+        assert body["llm_api_available"] is False
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_get_tools_llm_api_available_true_when_embedded(
+        self, monkeypatch, tmp_path
+    ):
+        """On the in-process custom-component (embedded) server the tools
+        payload advertises ``llm_api_available: True`` so the UI renders the
+        per-tool LLM API toggle."""
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        from ha_mcp import settings_ui as sui
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+        monkeypatch.setattr(
+            sui,
+            "load_tool_metadata_cache",
+            lambda: [
+                {
+                    "name": "ha_get_state",
+                    "title": "Get State",
+                    "primary_tag": "Entity",
+                    "tags": ["Entity"],
+                    "description": "x",
+                    "category": "read",
+                },
+            ],
+        )
+        handlers = sui.build_settings_handlers(server=None)
+        resp = await handlers["get_tools"](MagicMock())
+        body = json.loads(resp.body)
+
+        assert body["llm_api_available"] is True
         get_data_dir.cache_clear()
         _reset_global_settings()
 

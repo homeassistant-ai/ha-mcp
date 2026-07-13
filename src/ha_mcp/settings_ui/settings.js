@@ -33,6 +33,12 @@ let toolEnvPinned = {};
 // never flipped keep tracking their defaults across releases.
 let toolLlm = {};
 let toolLlmOverrides = {};
+// True only on the in-process custom-component (embedded) server, which
+// registers the LLM API exposure surface. On the add-on / Docker / standalone
+// server nothing consumes it, so the per-tool "LLM API" toggle is hidden
+// rather than shown as a no-op. Set from data.llm_api_available (see
+// settings_ui/__init__.py).
+let llmApiAvailable = false;
 let saveTimer = null;
 let openGroups = new Set();
 
@@ -169,6 +175,7 @@ async function loadTools() {
   toolEnvPinned = data.env_pinned || {};
   toolLlm = data.llm_api || {};
   toolLlmOverrides = data.llm_api_overrides || {};
+  llmApiAvailable = !!data.llm_api_available;
   READ_ONLY_EXEMPT = new Set(data.read_only_exempt || []);
   // Load policy state before the first render so the "security gated"
   // toggle reflects current policy.rules. loadPolicyState() never throws
@@ -598,6 +605,19 @@ function render() {
       return MANDATORY.includes(t.name) || (!t.disabled_by && s !== 'disabled');
     }).length;
 
+    // Master-switch checked state. Normally it mirrors "any toggleable tool
+    // enabled" — it is a bulk control over the tools the user can actually
+    // flip. But when a group has NO toggleable tools (all mandatory /
+    // env-pinned / feature-gated), the switch is disabled and purely reflects
+    // status: show it ON only when the group is FULLY enabled (every tool on),
+    // matching the "N/N enabled" count. anyEnabled can't be reused here — it is
+    // always false over an empty toggleable set. So an all-mandatory group
+    // (e.g. Search & Discovery) reads as ON, while a partially-enabled locked
+    // group (e.g. a mandatory tool beside an env-pinned-off one) reads as OFF
+    // rather than contradicting its own "1/N enabled" count.
+    const masterChecked =
+      toggleable.length === 0 ? groupEnabled === tools.length : anyEnabled;
+
     const header = document.createElement('div');
     header.className = 'group-header';
     header.innerHTML = `<div class="group-header-left">` +
@@ -606,7 +626,7 @@ function render() {
       `<span class="group-count">${groupEnabled}/${tools.length} enabled</span>` +
       `</div>` +
       `<label class="switch group-master" title="Enable/disable all tools in this group">` +
-        `<input type="checkbox" name="tool-group:${escapeHtml(tag)}" ${anyEnabled ? 'checked' : ''} ${toggleable.length === 0 ? 'disabled' : ''}>` +
+        `<input type="checkbox" name="tool-group:${escapeHtml(tag)}" ${masterChecked ? 'checked' : ''} ${toggleable.length === 0 ? 'disabled' : ''}>` +
         `<span class="slider"></span>` +
       `</label>`;
 
@@ -717,6 +737,19 @@ function render() {
         : (roExemptActive
           ? '<div class="feature-locked-note">Read Only Mode: write operations of this tool are blocked; read operations stay available.</div>'
           : '');
+      // LLM API exposure column — rendered only on the embedded custom-component
+      // server (see llmApiAvailable); dropped elsewhere rather than shown as a
+      // no-op. Built here as a fragment, matching the *Note consts above.
+      const llmToggleHtml = llmApiAvailable
+        ? `<div class="toggle-group ${isEnabled ? '' : 'disabled-toggle'}" ` +
+             `title="Offer this tool to Home Assistant conversation agents through the LLM API. Applies on the agent's next message - no restart. A tool disabled above is unavailable to agents regardless.">` +
+          `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:llm" data-tool="${escapeHtml(t.name)}" data-field="llm" ` +
+            `aria-label="${escapeHtml(title)} exposed to the conversation-agent LLM API" ` +
+            `${(toolLlm[t.name] !== false) ? 'checked' : ''} ${isEnabled ? '' : 'disabled'}>` +
+            `<span class="slider"></span></label>` +
+          `<span>LLM API</span>` +
+        `</div>`
+        : '';
 
       div.innerHTML = `<div class="tool-info">` +
         `<div class="tool-name">${escapeHtml(title)}${badges}</div>` +
@@ -750,14 +783,7 @@ function render() {
               `<span class="slider"></span></label>` +
             `<span>security gated</span>` +
           `</div>` +
-          `<div class="toggle-group ${isEnabled ? '' : 'disabled-toggle'}" ` +
-               `title="Offer this tool to Home Assistant conversation agents through the LLM API. Applies on the agent's next message - no restart. A tool disabled above is unavailable to agents regardless.">` +
-            `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:llm" data-tool="${escapeHtml(t.name)}" data-field="llm" ` +
-              `aria-label="${escapeHtml(title)} exposed to the conversation-agent LLM API" ` +
-              `${(toolLlm[t.name] !== false) ? 'checked' : ''} ${isEnabled ? '' : 'disabled'}>` +
-              `<span class="slider"></span></label>` +
-            `<span>LLM API</span>` +
-          `</div>` +
+          llmToggleHtml +
         `</div>`;
 
       const inputs = div.querySelectorAll('input[type="checkbox"]');

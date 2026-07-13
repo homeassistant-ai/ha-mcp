@@ -1042,6 +1042,232 @@ class TestEnvPinnedToolRows:
         )
 
 
+class TestGroupMasterToggle:
+    """The per-group master switch must reflect the group's real enabled
+    state.
+
+    A group whose tools are all mandatory (always-on, non-toggleable) has an
+    empty ``toggleable`` set, so the pre-fix ``anyEnabled`` computation was
+    always false and the switch rendered unchecked+disabled — reading as "the
+    whole group is off" while the count next to it said "N/N enabled". The
+    Search & Discovery group (ha_search / ha_get_overview / ha_get_state, all
+    mandatory) hit this. The master switch now shows the group's real state.
+    """
+
+    @staticmethod
+    def _tools_fetch(
+        tools: list[dict],
+        states: dict[str, str],
+        env_pinned: dict[str, str] | None = None,
+    ) -> dict:
+        payload = {"tools": tools, "states": states}
+        if env_pinned is not None:
+            payload["env_pinned"] = env_pinned
+        return {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {"status": 200, "json": payload},
+        }
+
+    @staticmethod
+    def _master_input(dom: str, tag: str) -> str:
+        m = re.search(rf'<input[^>]*name="tool-group:{re.escape(tag)}"[^>]*>', dom)
+        assert m is not None, (
+            f"group-master input for {tag!r} not rendered; dom tail: {dom[-2000:]}"
+        )
+        return m.group(0)
+
+    def test_all_mandatory_group_master_is_checked_and_disabled(
+        self, settings_script: str
+    ) -> None:
+        """The reported bug: an all-mandatory group showed the master switch
+        OFF (unchecked) even though every tool is enabled and cannot be
+        disabled. It must render checked (on) AND disabled (unchangeable).
+        """
+        tools = [
+            {
+                "name": name,
+                "title": name,
+                "primary_tag": "Search",
+                "tags": ["Search"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            }
+            # All three are members of MANDATORY_TOOLS.
+            for name in ("ha_search", "ha_get_overview", "ha_get_state")
+        ]
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._tools_fetch(tools, {}),
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        tag_html = self._master_input(result.dom, "Search")
+        assert "checked" in tag_html, (
+            f"all-mandatory group master must be checked (group is fully "
+            f"enabled); got: {tag_html}"
+        )
+        assert " disabled" in tag_html, (
+            f"all-mandatory group master must be disabled (nothing to flip); "
+            f"got: {tag_html}"
+        )
+
+    def test_all_env_pinned_enabled_group_master_is_checked_and_disabled(
+        self, settings_script: str
+    ) -> None:
+        """The fix generalizes past mandatory tools: env-pinned tools are also
+        excluded from ``toggleable`` and still counted as enabled. A group whose
+        only tool is env-pinned to ``pinned`` (locked on) is fully enabled and
+        non-toggleable, so its master must render checked+disabled — the same
+        bug class as the all-mandatory case, via the env-pin branch.
+        """
+        tools = [
+            {
+                "name": "ha_foo",
+                "title": "Foo",
+                "primary_tag": "Utilities",
+                "tags": ["Utilities"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            }
+        ]
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._tools_fetch(tools, {}, {"ha_foo": "pinned"}),
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        tag_html = self._master_input(result.dom, "Utilities")
+        assert "checked" in tag_html, (
+            f"all-env-pinned-on group master must be checked; got: {tag_html}"
+        )
+        assert " disabled" in tag_html, (
+            f"all-env-pinned group master must be disabled; got: {tag_html}"
+        )
+
+    def test_partially_enabled_locked_group_master_is_unchecked(
+        self, settings_script: str
+    ) -> None:
+        """A fully-locked group that is only PARTIALLY enabled must render the
+        master unchecked — checked means "fully enabled" (N/N), so a mixed
+        locked group must not read as ON and contradict its "1/2 enabled" count.
+
+        Group: a mandatory tool (always on) beside an env-pinned-disabled tool
+        (off). Both are excluded from ``toggleable`` (empty set → disabled
+        master), but only one is enabled, so ``groupEnabled`` (1) != tools (2).
+        This is the case where ``groupEnabled > 0`` and ``groupEnabled ===
+        tools.length`` diverge; the former would wrongly render it checked.
+        """
+        tools = [
+            {
+                "name": "ha_search",  # mandatory, always on
+                "title": "Search",
+                "primary_tag": "Mixed",
+                "tags": ["Mixed"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            },
+            {
+                "name": "ha_foo",  # env-pinned OFF
+                "title": "Foo",
+                "primary_tag": "Mixed",
+                "tags": ["Mixed"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            },
+        ]
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._tools_fetch(tools, {}, {"ha_foo": "disabled"}),
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        tag_html = self._master_input(result.dom, "Mixed")
+        assert "checked" not in tag_html, (
+            f"partially-enabled locked group master must be unchecked "
+            f"(1/2 enabled); got: {tag_html}"
+        )
+        assert " disabled" in tag_html, (
+            f"fully-locked group master must be disabled; got: {tag_html}"
+        )
+
+    def test_toggleable_group_all_disabled_master_is_unchecked(
+        self, settings_script: str
+    ) -> None:
+        """Guard the fix's boundary: a group of ordinary (toggleable) tools
+        that are all disabled must still render the master switch unchecked
+        and interactive (not disabled), so the user can bulk-enable them.
+        """
+        tools = [
+            {
+                "name": "ha_foo",
+                "title": "Foo",
+                "primary_tag": "Utilities",
+                "tags": ["Utilities"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            }
+        ]
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._tools_fetch(tools, {"ha_foo": "disabled"}),
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        tag_html = self._master_input(result.dom, "Utilities")
+        assert "checked" not in tag_html, (
+            f"all-disabled toggleable group master must be unchecked; got: {tag_html}"
+        )
+        assert " disabled" not in tag_html, (
+            f"toggleable group master must stay interactive; got: {tag_html}"
+        )
+
+    def test_mixed_group_keeps_bulk_semantics(self, settings_script: str) -> None:
+        """A group mixing a mandatory tool with a disabled toggleable tool
+        keeps the interactive bulk semantics: the switch stays enabled and
+        reflects ``anyEnabled`` (false here — the one toggleable tool is off),
+        so flipping it bulk-enables the toggleable tool. The fix only changes
+        the no-toggleable case.
+        """
+        tools = [
+            {
+                "name": "ha_search",  # mandatory, always on
+                "title": "Search",
+                "primary_tag": "Mixed",
+                "tags": ["Mixed"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            },
+            {
+                "name": "ha_foo",  # toggleable, disabled
+                "title": "Foo",
+                "primary_tag": "Mixed",
+                "tags": ["Mixed"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            },
+        ]
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._tools_fetch(tools, {"ha_foo": "disabled"}),
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        tag_html = self._master_input(result.dom, "Mixed")
+        assert " disabled" not in tag_html, (
+            f"mixed group has a toggleable tool, master must stay interactive; "
+            f"got: {tag_html}"
+        )
+        assert "checked" not in tag_html, (
+            f"mixed group's only toggleable tool is disabled, so the bulk "
+            f"master must be unchecked; got: {tag_html}"
+        )
+
+
 class TestAdvancedSectionRender:
     """JSDOM coverage for the Advanced Settings sections."""
 
@@ -4339,7 +4565,56 @@ class TestLlmApiToggle:
             "read_only_exempt": [],
             "llm_api": {"ha_get_state": llm_effective},
             "llm_api_overrides": {},
+            # Embedded (custom-component) server: the LLM API toggle renders.
+            "llm_api_available": True,
         }
+
+    @pytest.mark.parametrize(
+        "shape",
+        ["explicit_false", "absent"],
+        ids=["explicit_false", "absent_default"],
+    )
+    def test_toggle_hidden_when_llm_api_unavailable(
+        self, settings_script: str, shape: str
+    ) -> None:
+        """On a non-embedded server (add-on / Docker / standalone) the LLM API
+        toggle column must not render — it would be a no-op there. Other toggles
+        still render.
+
+        Covers both the shape the server actually sends —
+        ``llm_api_available: False`` (``is_embedded()`` on a non-embedded
+        server) — and, defensively, an older payload that omits the key
+        entirely (the JS ``!!data.llm_api_available`` default hides it too).
+        """
+        payload = self._tools_json(True)
+        if shape == "explicit_false":
+            payload["llm_api_available"] = False
+        else:
+            del payload["llm_api_available"]
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {"status": 200, "json": payload},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            settle_ms=300,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              document.body.setAttribute('data-llm-present',
+                document.querySelector('input[data-field="llm"]') ? 'yes' : 'no');
+              document.body.setAttribute('data-enabled-present',
+                document.querySelector('input[data-field="enabled"]') ? 'yes' : 'no');
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "llm-present") == "no", (
+            "LLM API toggle must be hidden when the server is not embedded"
+        )
+        assert _probe(result, "enabled-present") == "yes", (
+            "other tool toggles must still render"
+        )
 
     def test_toggle_renders_effective_value(self, settings_script: str) -> None:
         fetches = {
