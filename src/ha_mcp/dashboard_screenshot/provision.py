@@ -172,6 +172,10 @@ async def resolve_engine_url() -> str:
             ],
         )
     )
+    # raise_tool_error is typed -> NoReturn, but CodeQL cannot see that, so it
+    # reports py/mixed-returns for the implicit None fall-through past it. Keep
+    # this terminal statement to suppress that false positive (repo convention).
+    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 async def _discover_engine_url_via_supervisor() -> str:

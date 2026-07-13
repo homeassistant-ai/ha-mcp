@@ -1132,6 +1132,10 @@ async def _capture_dashboard_screenshot_result(
                 context={"capture_count": len(captures), "render_path": render_path},
             )
         )
+    # raise_tool_error is typed -> NoReturn, but CodeQL cannot see that, so it
+    # reports py/mixed-returns for the implicit None fall-through past the
+    # except block. Keep this terminal statement to suppress the false positive.
+    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 async def _maybe_attach_screenshot(
