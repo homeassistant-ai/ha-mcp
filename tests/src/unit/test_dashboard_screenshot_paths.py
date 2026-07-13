@@ -36,6 +36,13 @@ class _FailingAsyncClient:
         raise RuntimeError(f"disconnected while sending {request['type']}")
 
 
+class _NonJsonToolErrorClient:
+    """Raises a ToolError whose str() is a plain message, not the JSON form."""
+
+    async def send_websocket_message(self, request: dict[str, Any]) -> Any:
+        raise ToolError("Connection to Home Assistant lost")
+
+
 def _config_response(config: dict[str, Any]) -> dict[str, Any]:
     return {"success": True, "result": config}
 
@@ -522,6 +529,21 @@ async def test_raw_numeric_path_drops_unverified_trailing_segment() -> None:
     # instead of an unverified path.
     assert target.render_path == "wall-panel/1"
     assert target.view_index == 1
+
+
+async def test_legacy_lovelace_route_surfaces_original_non_json_toolerror() -> None:
+    # A non-JSON ToolError on the legacy 'lovelace' route must propagate as the
+    # original ToolError, not leak the JSONDecodeError from parsing its message
+    # (which the tool layer would remap to INTERNAL_ERROR, masking the cause).
+    client = _NonJsonToolErrorClient()
+    with pytest.raises(ToolError) as exc_info:
+        await resolve_dashboard_render_target(
+            client,
+            dashboard_path="lovelace/0",
+            dashboard_url_path=None,
+            view_path=None,
+        )
+    assert "Connection to Home Assistant lost" in str(exc_info.value)
 
 
 async def test_raw_default_numeric_path_uses_stored_stable_alias() -> None:
