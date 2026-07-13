@@ -95,6 +95,8 @@ http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
 - **Nabu Casa subscribers**: Leave `remote_url` blank — auto-detected from cloud storage
 - **Cloudflare/DuckDNS/nginx**: Set `remote_url` to your external URL (e.g. `https://ha.example.com`)
 
+Your external URL must point directly at Home Assistant — opening it in a browser should land on your HA login page — and it must **not** contain a port such as `:8123` (or any other port). If the connect URL carries a port, remote MCP clients such as Claude will fail to reach it even though it loads fine in your own browser.
+
 ### Authentication
 
 By default the webhook URL is **unauthenticated** — possession of the URL is the only credential, and the URL functions as a shared bearer secret. The MCP server exposed through the proxy includes powerful Home Assistant control tools, so you should **treat the URL like a password**.
