@@ -208,9 +208,7 @@ async def _save_tools(
     # vars stay the single source of truth — preserving them in
     # tool_config.json would let a future env-var unset leave the
     # old env-pinned values mis-applied as user-set state.
-    states = {
-        name: state for name, state in states.items() if name not in env_pinned
-    }
+    states = {name: state for name, state in states.items() if name not in env_pinned}
 
     # Conversation-agent LLM API exposure overrides (#1745): a sparse
     # {tool_name: bool} map, orthogonal to the states enum. Only bools

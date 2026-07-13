@@ -20,11 +20,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Literal, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import httpx
 
+from .._version import is_running_in_addon
 from ..client.supervisor_client import make_supervisor_httpx_client
+
+if TYPE_CHECKING:
+    from ..server import HomeAssistantSmartMCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -259,3 +263,32 @@ def _schedule_supervisor_self_restart(
     task = asyncio.create_task(_do_restart())
     _BACKGROUND_RESTART_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_RESTART_TASKS.discard)
+
+
+async def _live_addon_options(
+    server: HomeAssistantSmartMCPServer | None,
+) -> dict[str, Any]:
+    """Best-effort fetch of the add-on's current ``/data/options.json``.
+
+    Read-consistency with the add-on Configuration tab: the settings GET
+    handlers otherwise display boot-time env values. Returns an empty dict
+    outside add-on mode, without a live server, or on any fetch failure, so
+    callers fall back to the boot-env value and the page never crashes.
+    """
+    if not is_running_in_addon() or server is None:
+        return {}
+    try:
+        options, err = await _supervisor_fetch_current_options(
+            server.settings.verify_ssl
+        )
+    except Exception as exc:  # pragma: no cover - defensive belt-and-braces
+        logger.debug("Live add-on options fetch raised %s — using boot-env values", exc)
+        return {}
+    if err is not None:
+        logger.debug(
+            "Live add-on options fetch failed (%s): %s — using boot-env values",
+            err.kind,
+            err.message,
+        )
+        return {}
+    return options

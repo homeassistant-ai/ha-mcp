@@ -14,7 +14,6 @@ can tell whether the add-on actually restarted, and the
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -186,9 +185,7 @@ async def _restart_sibling_addon(
         # Supervisor socket misconfigured) and means the restart was
         # never initiated. Falls through to the `httpx.HTTPError`
         # handler below, which returns 502 + CONNECTION_FAILED.
-        logger.info(
-            "Restart request connection dropped (expected during self-restart)"
-        )
+        logger.info("Restart request connection dropped (expected during self-restart)")
         return JSONResponse({"success": True, "message": "Restart initiated"})
     except httpx.HTTPError as e:
         logger.exception("Failed to reach Supervisor for restart")
@@ -302,35 +299,6 @@ async def _settings_info(
     )
 
 
-async def _live_addon_options(server: HomeAssistantSmartMCPServer | None) -> dict[str, Any]:
-    """Best-effort fetch of the add-on's current ``/data/options.json``.
-
-    Read-consistency with the add-on Configuration tab: the GET handlers
-    otherwise display boot-time env values. Returns an empty dict outside
-    add-on mode, without a live server, or on any fetch failure, so callers
-    fall back to the boot-env value and the page never crashes.
-    """
-    if not is_running_in_addon() or server is None:
-        return {}
-    try:
-        options, err = await _supervisor._supervisor_fetch_current_options(
-            server.settings.verify_ssl
-        )
-    except Exception as exc:  # pragma: no cover - defensive belt-and-braces
-        logger.debug(
-            "Live add-on options fetch raised %s — using boot-env values", exc
-        )
-        return {}
-    if err is not None:
-        logger.debug(
-            "Live add-on options fetch failed (%s): %s — using boot-env values",
-            err.kind,
-            err.message,
-        )
-        return {}
-    return options
-
-
 # ---- Feature flags ----
 
 
@@ -350,7 +318,7 @@ async def _get_feature_flags(
     # latest SAVED value for any flag present in live_options — not just
     # origin=="addon" rows. Only origin=="env" stays pinned, and
     # live_options is {} outside add-on mode so this is a no-op standalone.
-    live_options = await _live_addon_options(server)
+    live_options = await _supervisor._live_addon_options(server)
     flags: dict[str, Any] = {}
     for field_name, env_name, ftype in FEATURE_FLAG_FIELDS:
         origin = get_feature_flag_origin(env_name)
@@ -605,17 +573,13 @@ async def _write_feature_flag_overrides_file(
             # dict either way and there's no prior toggle state to preserve.
         existing.update(new_overrides)
 
-        # Atomic write: tmp + rename. A crash mid-``write_text`` (O_TRUNC)
-        # leaves a truncated file the next read would refuse, losing prior
-        # toggles.
-        tmp = path.with_suffix(path.suffix + ".tmp")
+        # Atomic write via the shared tmp+rename helper (a crash mid-write
+        # would otherwise leave a truncated file the next read refuses,
+        # losing prior toggles). Same helper the advanced-settings write uses.
         try:
-            tmp.write_text(json.dumps(existing, indent=2))
-            os.replace(tmp, path)
+            _persistence._atomic_write_json(path, existing)
         except OSError as exc:
             logger.warning("Could not write %s", path, exc_info=True)
-            with contextlib.suppress(FileNotFoundError, OSError):
-                tmp.unlink()
             return JSONResponse(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,

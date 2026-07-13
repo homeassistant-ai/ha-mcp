@@ -23,7 +23,7 @@ from starlette.responses import JSONResponse
 from .._version import is_running_in_addon
 from ..config import _reset_global_settings, get_global_settings
 from ..errors import ErrorCode, create_error_response
-from . import _handlers_server, _persistence, _supervisor
+from . import _persistence, _supervisor
 
 if TYPE_CHECKING:
     from ..server import HomeAssistantSmartMCPServer
@@ -149,7 +149,7 @@ async def _get_advanced_settings(
     # (origin "addon") live in /data/options.json, so the boot-env value goes
     # stale after a config edit without a restart. Surface the latest SAVED
     # options value for those.
-    live_options = await _handlers_server._live_addon_options(server)
+    live_options = await _supervisor._live_addon_options(server)
     fields = [
         _advanced_field_row(
             fname,
@@ -271,8 +271,7 @@ def _check_advanced_bounds_choices(fname: str, coerced: Any) -> JSONResponse | N
                 f"{fname!r} must be between {bounds[0]} and "
                 f"{bounds[1]} (got {coerced}).",
                 suggestions=[
-                    f"Provide a value for {fname} between "
-                    f"{bounds[0]} and {bounds[1]}.",
+                    f"Provide a value for {fname} between {bounds[0]} and {bounds[1]}.",
                 ],
             ),
             status_code=400,
