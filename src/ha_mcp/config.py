@@ -1098,7 +1098,7 @@ def _read_feature_flag_override_file() -> dict[str, object]:
 
 def _coerce_feature_flag_value(
     field_name: str, ftype: RegistryFieldType, raw: object
-) -> tuple[bool, bool | int]:
+) -> tuple[bool, Any]:
     """Coerce + bounds-check one override-file value for FEATURE_FLAG_FIELDS.
 
     Returns ``(ok, coerced)``. ``ok=False`` means the value was rejected
@@ -1112,7 +1112,7 @@ def _coerce_feature_flag_value(
                 field_name,
                 type(raw).__name__,
             )
-            return False, False
+            return False, None
         return True, bool(raw)
     elif ftype is int:
         if isinstance(raw, bool) or not isinstance(raw, int):
@@ -1121,7 +1121,7 @@ def _coerce_feature_flag_value(
                 field_name,
                 type(raw).__name__,
             )
-            return False, 0
+            return False, None
         coerced = int(raw)
         bounds = _FEATURE_FLAG_INT_BOUNDS.get(field_name)
         if bounds is not None and not (bounds[0] <= coerced <= bounds[1]):
@@ -1132,9 +1132,9 @@ def _coerce_feature_flag_value(
                 bounds[0],
                 bounds[1],
             )
-            return False, 0
+            return False, None
         return True, coerced
-    return False, False
+    return False, None
 
 
 def _apply_one_feature_flag_override(
