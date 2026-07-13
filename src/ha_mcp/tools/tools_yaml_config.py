@@ -112,6 +112,139 @@ def _disabled_packages_keys(settings: Any) -> list[str]:
     )
 
 
+def _validate_yaml_action_and_content(action: str, content: str | None) -> None:
+    """Raise a ToolError if ``action`` is not a recognized action, or if
+    ``content`` is missing for an action that requires it.
+
+    Split out of ``ha_config_set_yaml`` purely to keep the caller's
+    complexity down; behavior and messages are unchanged.
+    """
+    # Validate action
+    valid_actions = ("add", "replace", "remove")
+    if action not in valid_actions:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid action '{action}'. Must be one of: {', '.join(valid_actions)}",
+                suggestions=[
+                    "Use action='add' to insert content under a key",
+                    "Use action='replace' to overwrite a key's content",
+                    "Use action='remove' to delete a key entirely",
+                ],
+            )
+        )
+
+    # Validate content is provided for add/replace
+    if action in ("add", "replace") and not content:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"'content' is required for action '{action}'.",
+                suggestions=["Provide valid YAML content to insert or replace."],
+            )
+        )
+
+
+def _reject_disabled_packages_key(
+    yaml_path: str, file: str, settings: Any
+) -> tuple[list[str], str, str]:
+    """Raise a ToolError if ``yaml_path`` targets a disabled PACKAGES_ONLY
+    key in a packages/*.yaml file; otherwise return the values the caller
+    needs for the rest of the request (disabled_keys, top_key,
+    normalized_target).
+
+    Split out of ``ha_config_set_yaml`` purely to keep the caller's
+    complexity down; behavior and messages are unchanged.
+    """
+    # Per-key gate: reject before the custom-component round
+    # trip when the yaml_path top-level segment matches a
+    # disabled PACKAGES_ONLY key AND the target file is under
+    # packages/. The keys (automation / script / scene) are
+    # only ACCEPTED in packages/*.yaml in the first place, so
+    # writes to configuration.yaml must fall through here and
+    # let the component-side reject with its own message that
+    # lists the storage-mode tools to use instead.
+    disabled_keys = _disabled_packages_keys(settings)
+    top_key = yaml_path.split(".", 1)[0] if yaml_path else ""
+    # Classify the target exactly like the custom component does
+    # (os.path.normpath + fnmatch against "packages/*.yaml") so the
+    # wrapper's early reject fires for precisely the paths the
+    # component treats as a package — e.g. "./packages/x.yaml" and
+    # "packages/sub/x.yaml" both normalise/match. Any other target
+    # (configuration.yaml, a non-package path) falls through to the
+    # component, which rejects these keys with its own storage-mode-
+    # tools advisory.
+    # os.path.normpath is a pure string transform (no I/O) — same
+    # classification logic the component uses on its identical normpath
+    # check.
+    normalized_target = os.path.normpath(file)
+    is_packages_target = fnmatch.fnmatch(normalized_target, "packages/*.yaml")
+    if is_packages_target and top_key in disabled_keys:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                (
+                    f"yaml_path key {top_key!r} is disabled. Enable "
+                    f"'Allow {top_key} in packages/*.yaml' under "
+                    f"YAML config editing in Server Settings to use "
+                    f"this key, or use the storage-mode tool "
+                    f"(ha_config_set_{top_key})."
+                ),
+                suggestions=[
+                    f"Enable 'Allow {top_key} in packages/*.yaml' under "
+                    "YAML config editing in the ha-mcp Server Settings "
+                    "panel, then retry.",
+                    f"Or use the storage-mode tool ha_config_set_{top_key} "
+                    "instead of editing packages YAML directly.",
+                ],
+                context={
+                    "yaml_path": yaml_path,
+                    "disabled_key": top_key,
+                    "file": file,
+                },
+            )
+        )
+    return disabled_keys, top_key, normalized_target
+
+
+def _append_yaml_result_warnings(
+    result: dict[str, Any], *, action: str, top_key: str, normalized_target: str
+) -> None:
+    """Append any post-write advisory warnings to ``result`` in place.
+
+    Split out of ``ha_config_set_yaml`` purely to keep the caller's
+    complexity down; behavior and messages are unchanged.
+    """
+    if "reload_error" in result:
+        # Theme edits trigger frontend.reload_themes in the
+        # component; the file write succeeded even when that
+        # reload failed, so degrade to a warning instead of
+        # masking the partial failure behind a bare success.
+        result.setdefault("warnings", []).append(
+            "The file was updated, but "
+            f"{result.get('reload_service', 'the reload service')} "
+            f"failed: {result['reload_error']}. Re-run the reload "
+            '(e.g. ha_reload_core(target="themes")) or restart '
+            "Home Assistant to apply the change."
+        )
+    # themes/*.yaml guard: there the top_key is a THEME NAME, so
+    # a theme that happens to be called 'template'/'group'/
+    # 'utility_meter' must not draw the helper-routing warning.
+    if (
+        action in ("add", "replace")
+        and top_key in _HELPER_EQUIVALENT_KEYS
+        and not fnmatch.fnmatch(normalized_target, "themes/*.yaml")
+    ):
+        result.setdefault("warnings", []).append(
+            f"Best practice: '{top_key}' has a storage-mode "
+            f"equivalent — ha_config_set_helper(helper_type="
+            f"'{_HELPER_EQUIVALENT_KEYS[top_key]}') — which avoids "
+            "raw YAML file rewrites entirely. Prefer it unless "
+            "this configuration is deliberately YAML-managed "
+            "(e.g. git-tracked packages)."
+        )
+
+
 async def _check_storage_mode_dashboard_collision(client: Any, yaml_path: str) -> None:
     """Raise a ToolError if a storage-mode dashboard already owns the requested
     url_path; otherwise return without doing anything.
@@ -312,82 +445,12 @@ class YamlConfigTools:
         beyond what ships here, use ha_get_skill_guide.
         """
         try:
-            # Validate action
-            valid_actions = ("add", "replace", "remove")
-            if action not in valid_actions:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid action '{action}'. Must be one of: {', '.join(valid_actions)}",
-                        suggestions=[
-                            "Use action='add' to insert content under a key",
-                            "Use action='replace' to overwrite a key's content",
-                            "Use action='remove' to delete a key entirely",
-                        ],
-                    )
-                )
+            _validate_yaml_action_and_content(action, content)
 
-            # Validate content is provided for add/replace
-            if action in ("add", "replace") and not content:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"'content' is required for action '{action}'.",
-                        suggestions=[
-                            "Provide valid YAML content to insert or replace."
-                        ],
-                    )
-                )
-
-            # Per-key gate: reject before the custom-component round
-            # trip when the yaml_path top-level segment matches a
-            # disabled PACKAGES_ONLY key AND the target file is under
-            # packages/. The keys (automation / script / scene) are
-            # only ACCEPTED in packages/*.yaml in the first place, so
-            # writes to configuration.yaml must fall through here and
-            # let the component-side reject with its own message that
-            # lists the storage-mode tools to use instead.
             settings = get_global_settings()
-            disabled_keys = _disabled_packages_keys(settings)
-            top_key = yaml_path.split(".", 1)[0] if yaml_path else ""
-            # Classify the target exactly like the custom component does
-            # (os.path.normpath + fnmatch against "packages/*.yaml") so the
-            # wrapper's early reject fires for precisely the paths the
-            # component treats as a package — e.g. "./packages/x.yaml" and
-            # "packages/sub/x.yaml" both normalise/match. Any other target
-            # (configuration.yaml, a non-package path) falls through to the
-            # component, which rejects these keys with its own storage-mode-
-            # tools advisory.
-            # os.path.normpath is a pure string transform (no I/O), so the
-            # ASYNC240 blocking-call lint doesn't apply — same suppression the
-            # component uses on its identical normpath classification.
-            normalized_target = os.path.normpath(file)  # noqa: ASYNC240
-            is_packages_target = fnmatch.fnmatch(normalized_target, "packages/*.yaml")
-            if is_packages_target and top_key in disabled_keys:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        (
-                            f"yaml_path key {top_key!r} is disabled. Enable "
-                            f"'Allow {top_key} in packages/*.yaml' under "
-                            f"YAML config editing in Server Settings to use "
-                            f"this key, or use the storage-mode tool "
-                            f"(ha_config_set_{top_key})."
-                        ),
-                        suggestions=[
-                            f"Enable 'Allow {top_key} in packages/*.yaml' under "
-                            "YAML config editing in the ha-mcp Server Settings "
-                            "panel, then retry.",
-                            f"Or use the storage-mode tool ha_config_set_{top_key} "
-                            "instead of editing packages YAML directly.",
-                        ],
-                        context={
-                            "yaml_path": yaml_path,
-                            "disabled_key": top_key,
-                            "file": file,
-                        },
-                    )
-                )
+            disabled_keys, top_key, normalized_target = _reject_disabled_packages_key(
+                yaml_path, file, settings
+            )
 
             # Storage-mode dashboard collision check (only for lovelace.dashboards.*).
             # Skip on `remove` so users can clean up YAML entries that conflict
@@ -422,34 +485,12 @@ class YamlConfigTools:
                 result = unwrap_service_response(result)
                 if not result.get("success", True):
                     raise_tool_error(result)
-                if "reload_error" in result:
-                    # Theme edits trigger frontend.reload_themes in the
-                    # component; the file write succeeded even when that
-                    # reload failed, so degrade to a warning instead of
-                    # masking the partial failure behind a bare success.
-                    result.setdefault("warnings", []).append(
-                        "The file was updated, but "
-                        f"{result.get('reload_service', 'the reload service')} "
-                        f"failed: {result['reload_error']}. Re-run the reload "
-                        '(e.g. ha_reload_core(target="themes")) or restart '
-                        "Home Assistant to apply the change."
-                    )
-                # themes/*.yaml guard: there the top_key is a THEME NAME, so
-                # a theme that happens to be called 'template'/'group'/
-                # 'utility_meter' must not draw the helper-routing warning.
-                if (
-                    action in ("add", "replace")
-                    and top_key in _HELPER_EQUIVALENT_KEYS
-                    and not fnmatch.fnmatch(normalized_target, "themes/*.yaml")
-                ):
-                    result.setdefault("warnings", []).append(
-                        f"Best practice: '{top_key}' has a storage-mode "
-                        f"equivalent — ha_config_set_helper(helper_type="
-                        f"'{_HELPER_EQUIVALENT_KEYS[top_key]}') — which avoids "
-                        "raw YAML file rewrites entirely. Prefer it unless "
-                        "this configuration is deliberately YAML-managed "
-                        "(e.g. git-tracked packages)."
-                    )
+                _append_yaml_result_warnings(
+                    result,
+                    action=action,
+                    top_key=top_key,
+                    normalized_target=normalized_target,
+                )
                 attach_skill_content(
                     result,
                     # The confirm leg (token supplied) skips the bulky skill
