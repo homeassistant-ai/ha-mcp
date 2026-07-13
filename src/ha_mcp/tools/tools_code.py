@@ -355,6 +355,134 @@ _SAVED_TOOLS_SCHEMA_VERSION = 1
 _saved_tools_load_failed = False
 
 
+def _read_saved_tools_raw(path: Path) -> str | None:
+    """Read the saved-tools file's raw text, if it exists and is readable.
+
+    Returns ``None`` for the legitimate "starting empty" cases: the file
+    doesn't exist, or a FileNotFoundError race between ``exists()`` and
+    ``read_text()``.
+
+    A genuine I/O error reading an existing file (OSError that isn't
+    FileNotFoundError) is logged at ERROR and ALSO sets the module-level
+    ``_saved_tools_load_failed`` flag so callers know not to overwrite
+    whatever is on disk while the load condition persists. This prevents
+    a PermissionError at startup from cascading into "next save wipes
+    out the unreadable file" data loss.
+    """
+    global _saved_tools_load_failed
+    if not path.exists():
+        logger.debug("Saved-tools file %s does not exist yet; starting empty", path)
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # Race: file disappeared between exists() and read_text().
+        # Treat as legitimate "not yet" rather than an I/O failure.
+        return None
+    except OSError as exc:
+        # PermissionError / IsADirectoryError / etc. The file exists but
+        # we can't read it. Block subsequent persistence so we don't
+        # overwrite the unreadable original with empty content.
+        logger.error(
+            "Cannot read saved-tools file %s (%s); persistence will be "
+            "suppressed until the load condition clears. Saves and "
+            "deletes will still update the in-memory cache for the "
+            "current session.",
+            path,
+            exc,
+            exc_info=True,
+        )
+        _saved_tools_load_failed = True
+        return None
+
+
+def _parse_saved_tools_payload(raw: str, path: Path) -> dict[str, Any] | None:
+    """Parse the saved-tools JSON payload and return its raw ``saved_tools`` mapping.
+
+    Returns ``None`` (logging at WARNING/ERROR as appropriate) for any
+    malformed shape: invalid JSON, non-dict top level, unexpected schema
+    version, or a non-dict ``saved_tools`` value. Sets the module-level
+    ``_saved_tools_load_failed`` flag on an unexpected schema version, for
+    the same reason as ``_read_saved_tools_raw``'s OSError branch.
+    """
+    global _saved_tools_load_failed
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "Saved-tools file %s is not valid JSON (%s); starting empty. "
+            "The corrupt file will be overwritten on the next persist.",
+            path,
+            exc,
+        )
+        return None
+
+    if not isinstance(data, dict):
+        logger.warning(
+            "Saved-tools file %s top-level is %s, expected dict; ignoring",
+            path,
+            type(data).__name__,
+        )
+        return None
+
+    file_version = data.get("version")
+    if file_version != _SAVED_TOOLS_SCHEMA_VERSION:
+        # Refuse to interpret the file. We don't know whether this is a
+        # newer file produced by a future ha-mcp version (which might
+        # have shape changes we'd silently mangle) or an older file we
+        # don't have a migration for. Setting the failed flag means the
+        # current session won't overwrite it on next save.
+        logger.error(
+            "Saved-tools file %s has schema version %r; this build expects %d. "
+            "Refusing to load. Persistence is suppressed for this session "
+            "to avoid overwriting an unfamiliar file. Move or delete the "
+            "file to recover.",
+            path,
+            file_version,
+            _SAVED_TOOLS_SCHEMA_VERSION,
+        )
+        _saved_tools_load_failed = True
+        return None
+
+    tools_raw = data.get("saved_tools", {})
+    if not isinstance(tools_raw, dict):
+        logger.warning(
+            "Saved-tools file %s 'saved_tools' is %s, expected dict; ignoring",
+            path,
+            type(tools_raw).__name__,
+        )
+        return None
+    return tools_raw
+
+
+def _validate_saved_tool_entry(
+    name: Any, info: Any, path: Path
+) -> dict[str, str] | None:
+    """Validate and normalize a single saved-tool entry from the on-disk file.
+
+    Returns the ``{"code": ..., "justification": ...}`` dict, or ``None``
+    (logging at WARNING) if the entry is malformed.
+    """
+    if not (isinstance(name, str) and _SAVE_NAME_PATTERN.match(name)):
+        logger.warning("Skipping saved tool with invalid name %r in %s", name, path)
+        return None
+    if not isinstance(info, dict):
+        logger.warning("Skipping saved tool %r in %s: entry is not a dict", name, path)
+        return None
+    code = info.get("code")
+    justification = info.get("justification", "")
+    if not isinstance(code, str) or not code:
+        logger.warning(
+            "Skipping saved tool %r in %s: missing or invalid code",
+            name,
+            path,
+        )
+        return None
+    if not isinstance(justification, str):
+        justification = ""
+    return {"code": code, "justification": justification}
+
+
 def _load_saved_tools(path_str: str) -> dict[str, dict[str, str]]:
     """Load saved tools from a JSON file, filtering malformed entries.
 
@@ -375,99 +503,21 @@ def _load_saved_tools(path_str: str) -> dict[str, dict[str, str]]:
     if not path_str:
         return {}
     path = Path(path_str)
-    if not path.exists():
-        logger.debug("Saved-tools file %s does not exist yet; starting empty", path)
-        return {}
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        # Race: file disappeared between exists() and read_text().
-        # Treat as legitimate "not yet" rather than an I/O failure.
-        return {}
-    except OSError as exc:
-        # PermissionError / IsADirectoryError / etc. The file exists but
-        # we can't read it. Block subsequent persistence so we don't
-        # overwrite the unreadable original with empty content.
-        logger.error(
-            "Cannot read saved-tools file %s (%s); persistence will be "
-            "suppressed until the load condition clears. Saves and "
-            "deletes will still update the in-memory cache for the "
-            "current session.",
-            path,
-            exc,
-            exc_info=True,
-        )
-        _saved_tools_load_failed = True
-        return {}
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        logger.warning(
-            "Saved-tools file %s is not valid JSON (%s); starting empty. "
-            "The corrupt file will be overwritten on the next persist.",
-            path,
-            exc,
-        )
+
+    raw = _read_saved_tools_raw(path)
+    if raw is None:
         return {}
 
-    if not isinstance(data, dict):
-        logger.warning(
-            "Saved-tools file %s top-level is %s, expected dict; ignoring",
-            path,
-            type(data).__name__,
-        )
-        return {}
-
-    file_version = data.get("version")
-    if file_version != _SAVED_TOOLS_SCHEMA_VERSION:
-        # Refuse to interpret the file. We don't know whether this is a
-        # newer file produced by a future ha-mcp version (which might
-        # have shape changes we'd silently mangle) or an older file we
-        # don't have a migration for. Setting the failed flag means the
-        # current session won't overwrite it on next save.
-        logger.error(
-            "Saved-tools file %s has schema version %r; this build expects %d. "
-            "Refusing to load. Persistence is suppressed for this session "
-            "to avoid overwriting an unfamiliar file. Move or delete the "
-            "file to recover.",
-            path,
-            file_version,
-            _SAVED_TOOLS_SCHEMA_VERSION,
-        )
-        _saved_tools_load_failed = True
-        return {}
-
-    tools_raw = data.get("saved_tools", {})
-    if not isinstance(tools_raw, dict):
-        logger.warning(
-            "Saved-tools file %s 'saved_tools' is %s, expected dict; ignoring",
-            path,
-            type(tools_raw).__name__,
-        )
+    tools_raw = _parse_saved_tools_payload(raw, path)
+    if tools_raw is None:
         return {}
 
     valid: dict[str, dict[str, str]] = {}
     for name, info in tools_raw.items():
-        if not (isinstance(name, str) and _SAVE_NAME_PATTERN.match(name)):
-            logger.warning("Skipping saved tool with invalid name %r in %s", name, path)
+        entry = _validate_saved_tool_entry(name, info, path)
+        if entry is None:
             continue
-        if not isinstance(info, dict):
-            logger.warning(
-                "Skipping saved tool %r in %s: entry is not a dict", name, path
-            )
-            continue
-        code = info.get("code")
-        justification = info.get("justification", "")
-        if not isinstance(code, str) or not code:
-            logger.warning(
-                "Skipping saved tool %r in %s: missing or invalid code",
-                name,
-                path,
-            )
-            continue
-        if not isinstance(justification, str):
-            justification = ""
-        valid[name] = {"code": code, "justification": justification}
+        valid[name] = entry
         if len(valid) >= _MAX_SAVED_TOOLS:
             logger.warning(
                 "Saved-tools file %s contains more than %d tools; truncating",
@@ -541,6 +591,34 @@ def _save_saved_tools(path_str: str, tools: dict[str, dict[str, str]]) -> bool:
     return True
 
 
+def _collect_content_texts(content: Any) -> list[str]:
+    """Extract text strings from a FastMCP content-block list."""
+    texts = []
+    for item in content:
+        if hasattr(item, "text"):
+            texts.append(item.text)
+        elif isinstance(item, str):
+            texts.append(item)
+    return texts
+
+
+def _decode_tool_result_texts(texts: list[str], is_error: bool) -> Any:
+    """Combine content texts, JSON-decode if possible, and wrap errors.
+
+    The error shape matches the ``api_get``/``api_post``/``ws_send``
+    failure path so sandbox code can do ``result.get("error")`` uniformly.
+    """
+    combined = "\n".join(texts)
+    try:
+        payload: Any = json.loads(combined)
+    except (json.JSONDecodeError, TypeError):
+        payload = combined
+    if is_error:
+        message = payload if isinstance(payload, str) else json.dumps(payload)
+        return {"error": message}
+    return payload
+
+
 def _extract_tool_result(result: Any) -> Any:
     """Convert a FastMCP ToolResult to basic Python types for the sandbox.
 
@@ -582,22 +660,9 @@ def _extract_tool_result(result: Any) -> Any:
     )
 
     if content:
-        texts = []
-        for item in content:
-            if hasattr(item, "text"):
-                texts.append(item.text)
-            elif isinstance(item, str):
-                texts.append(item)
+        texts = _collect_content_texts(content)
         if texts:
-            combined = "\n".join(texts)
-            try:
-                payload: Any = json.loads(combined)
-            except (json.JSONDecodeError, TypeError):
-                payload = combined
-            if is_error:
-                message = payload if isinstance(payload, str) else json.dumps(payload)
-                return {"error": message}
-            return payload
+            return _decode_tool_result_texts(texts, is_error)
 
     # Fallback: opaque object with no recognized content. Log so the
     # str(result) repr doesn't silently masquerade as a successful return.
@@ -612,23 +677,85 @@ def _extract_tool_result(result: Any) -> Any:
     return repr_str
 
 
-async def _run_sandboxed_code(
-    code: str,
-    ctx: Context,
-    client: Any,
-    settings: Any,
-    Monty: Any,
-    ResourceLimits: Any,
-) -> Any:
-    """Execute code in the pydantic-monty sandbox.
+def _sandbox_error(code: ErrorCode, message: str) -> dict[str, Any]:
+    """Build an error dict to return to sandbox code (not a tool-level error).
 
-    External functions available to sandbox code:
-    - api_get(endpoint) — GET request to HA REST API
-    - api_post(endpoint, data) — POST request to HA REST API
-    - ws_send(message) — send a HA WebSocket command and return its result
-    - call_tool(name, args) — call a registered MCP tool (for existing tools)
+    These are returned to the sandbox caller, not to the MCP client,
+    so they intentionally do NOT use raise_tool_error.
+    """
+    err: dict[str, Any] = {"error": {"code": str(code), "message": message}}
+    err["success"] = False
+    return err
 
-    **Error shape contract.** All bridge functions return a dict with an
+
+def _normalize_endpoint(endpoint: Any) -> str:
+    """Normalize a path-only endpoint to be relative to the httpx base URL.
+
+    Strips leading slashes and any accidental ``api/`` prefix so the same
+    path works whether the caller wrote ``"events"``, ``"/events"``, or
+    ``"/api/events"``.
+
+    Rejects:
+
+    * Absolute URL forms — ``://``, leading ``//`` (protocol-relative),
+      or ``@`` before the first ``/`` (userinfo). Without this httpx
+      will dispatch the request to the absolute host *with the HA
+      bearer token still attached*, leaking credentials.
+
+      Note: ``@`` later in the path (``events/foo@bar``) is fine —
+      only userinfo position (before the first ``/``) is the
+      credential-leaking shape that http URL parsers will treat as
+      ``user@host``.
+    * ``..`` path segments — httpx happily resolves
+      ``base_url='http://ha:8123/api'`` + endpoint ``'../auth/providers'``
+      to ``http://ha:8123/auth/providers``, escaping the ``/api/``
+      prefix entirely. HA exposes other bearer-authenticated routes
+      at root (``/auth/...``, ``/profile``, etc.) — every one of
+      those becomes reachable from the sandbox unless we reject
+      ``..`` here. Each segment is also percent-decoded once before
+      the comparison so ``%2e%2e`` (and other percent-encoded
+      variants of ``..``) can't slip past on reverse-proxy setups
+      that decode-then-resolve.
+    """
+    if not isinstance(endpoint, str):
+        raise ValueError("endpoint must be a string path (e.g. '/states')")
+    if "://" in endpoint or endpoint.startswith("//"):
+        raise ValueError(
+            "endpoint must be a HA-relative path; absolute URLs are blocked"
+        )
+    first_slash = endpoint.find("/")
+    userinfo_marker = endpoint.find("@")
+    if userinfo_marker >= 0 and (first_slash < 0 or userinfo_marker < first_slash):
+        raise ValueError("endpoint must not contain userinfo")
+    ep = endpoint.lstrip("/")
+    if ep.startswith("api/"):
+        ep = ep[4:]
+    # ``..`` segments would let the sandbox escape the ``/api/`` prefix
+    # via httpx URL resolution. Check after stripping so the comparison
+    # is against actual path segments, and percent-decode each segment
+    # so encoded forms (``%2e%2e`` and similar) don't slip past on
+    # reverse-proxy setups that decode-then-resolve.
+    for segment in ep.split("/"):
+        if urllib.parse.unquote(segment) == "..":
+            raise ValueError(
+                "endpoint must not contain '..' path segments "
+                "(including percent-encoded forms like %2e%2e); "
+                "the sandbox is restricted to /api/ routes"
+            )
+    return ep
+
+
+class _SandboxBridge:
+    """Bridges sandboxed Monty code to HA REST/WebSocket/MCP-tool calls.
+
+    These were originally closures defined inline inside
+    ``_run_sandboxed_code`` (sharing its ``call_count`` via ``nonlocal``).
+    They're grouped here as methods purely to keep each function's
+    cyclomatic complexity manageable — no behavior change. One instance
+    is created per ``_run_sandboxed_code`` invocation, so ``call_count``
+    still starts fresh for every execution.
+
+    **Error shape contract.** All bridge methods return a dict with an
     ``"error"`` key on failure; the value may be either a plain string
     (``api_get`` / ``api_post`` / ``ws_send`` / ``delete_saved_tool`` —
     transport-level failures, validation rejections) or a structured
@@ -640,81 +767,23 @@ async def _run_sandboxed_code(
     ``result["error"].lower()`` blindly, because the value isn't always a
     string.
     """
-    call_count = 0
 
-    def _sandbox_error(code: ErrorCode, message: str) -> dict[str, Any]:
-        """Build an error dict to return to sandbox code (not a tool-level error).
+    def __init__(self, ctx: Context, client: Any, settings: Any) -> None:
+        self.ctx = ctx
+        self.client = client
+        self.settings = settings
+        self.call_count = 0
 
-        These are returned to the sandbox caller, not to the MCP client,
-        so they intentionally do NOT use raise_tool_error.
-        """
-        err: dict[str, Any] = {"error": {"code": str(code), "message": message}}
-        err["success"] = False
-        return err
+    def _over_invocation_limit(self) -> bool:
+        """Increment the shared call counter; return True once the per-execution cap is exceeded."""
+        self.call_count += 1
+        return bool(self.call_count > self.settings.code_mode_max_invocations)
 
-    def _normalize_endpoint(endpoint: Any) -> str:
-        """Normalize a path-only endpoint to be relative to the httpx base URL.
-
-        Strips leading slashes and any accidental ``api/`` prefix so the same
-        path works whether the caller wrote ``"events"``, ``"/events"``, or
-        ``"/api/events"``.
-
-        Rejects:
-
-        * Absolute URL forms — ``://``, leading ``//`` (protocol-relative),
-          or ``@`` before the first ``/`` (userinfo). Without this httpx
-          will dispatch the request to the absolute host *with the HA
-          bearer token still attached*, leaking credentials.
-
-          Note: ``@`` later in the path (``events/foo@bar``) is fine —
-          only userinfo position (before the first ``/``) is the
-          credential-leaking shape that http URL parsers will treat as
-          ``user@host``.
-        * ``..`` path segments — httpx happily resolves
-          ``base_url='http://ha:8123/api'`` + endpoint ``'../auth/providers'``
-          to ``http://ha:8123/auth/providers``, escaping the ``/api/``
-          prefix entirely. HA exposes other bearer-authenticated routes
-          at root (``/auth/...``, ``/profile``, etc.) — every one of
-          those becomes reachable from the sandbox unless we reject
-          ``..`` here. Each segment is also percent-decoded once before
-          the comparison so ``%2e%2e`` (and other percent-encoded
-          variants of ``..``) can't slip past on reverse-proxy setups
-          that decode-then-resolve.
-        """
-        if not isinstance(endpoint, str):
-            raise ValueError("endpoint must be a string path (e.g. '/states')")
-        if "://" in endpoint or endpoint.startswith("//"):
-            raise ValueError(
-                "endpoint must be a HA-relative path; absolute URLs are blocked"
-            )
-        first_slash = endpoint.find("/")
-        userinfo_marker = endpoint.find("@")
-        if userinfo_marker >= 0 and (first_slash < 0 or userinfo_marker < first_slash):
-            raise ValueError("endpoint must not contain userinfo")
-        ep = endpoint.lstrip("/")
-        if ep.startswith("api/"):
-            ep = ep[4:]
-        # ``..`` segments would let the sandbox escape the ``/api/`` prefix
-        # via httpx URL resolution. Check after stripping so the comparison
-        # is against actual path segments, and percent-decode each segment
-        # so encoded forms (``%2e%2e`` and similar) don't slip past on
-        # reverse-proxy setups that decode-then-resolve.
-        for segment in ep.split("/"):
-            if urllib.parse.unquote(segment) == "..":
-                raise ValueError(
-                    "endpoint must not contain '..' path segments "
-                    "(including percent-encoded forms like %2e%2e); "
-                    "the sandbox is restricted to /api/ routes"
-                )
-        return ep
-
-    async def _api_get(endpoint: str) -> Any:
+    async def api_get(self, endpoint: str) -> Any:
         """GET request to Home Assistant REST API."""
-        nonlocal call_count
-        call_count += 1
-        if call_count > settings.code_mode_max_invocations:
+        if self._over_invocation_limit():
             return {
-                "error": f"API call limit exceeded ({settings.code_mode_max_invocations})"
+                "error": f"API call limit exceeded ({self.settings.code_mode_max_invocations})"
             }
         try:
             normalized = _normalize_endpoint(endpoint)
@@ -722,7 +791,7 @@ async def _run_sandboxed_code(
             logger.warning("api_get rejected endpoint %r: %s", endpoint, exc)
             return {"error": str(exc)}
         try:
-            response = await client.httpx_client.request("GET", normalized)
+            response = await self.client.httpx_client.request("GET", normalized)
             try:
                 return response.json()
             except json.JSONDecodeError:
@@ -731,13 +800,11 @@ async def _run_sandboxed_code(
             logger.warning("api_get(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
 
-    async def _api_post(endpoint: str, data: dict[str, Any] | None = None) -> Any:
+    async def api_post(self, endpoint: str, data: dict[str, Any] | None = None) -> Any:
         """POST request to Home Assistant REST API."""
-        nonlocal call_count
-        call_count += 1
-        if call_count > settings.code_mode_max_invocations:
+        if self._over_invocation_limit():
             return {
-                "error": f"API call limit exceeded ({settings.code_mode_max_invocations})"
+                "error": f"API call limit exceeded ({self.settings.code_mode_max_invocations})"
             }
         try:
             normalized = _normalize_endpoint(endpoint)
@@ -771,7 +838,7 @@ async def _run_sandboxed_code(
             post_kwargs: dict[str, Any] = {}
             if data is not None:
                 post_kwargs["json"] = data
-            response = await client.httpx_client.request(
+            response = await self.client.httpx_client.request(
                 "POST", normalized, **post_kwargs
             )
             try:
@@ -782,7 +849,7 @@ async def _run_sandboxed_code(
             logger.warning("api_post(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
 
-    async def _ws_send(message: Any) -> Any:
+    async def ws_send(self, message: Any) -> Any:
         """Send a Home Assistant WebSocket command and return its result.
 
         ``message`` must be a dict with at least a ``type`` field, e.g.
@@ -800,11 +867,9 @@ async def _run_sandboxed_code(
         ``ha_config_set_dashboard`` performs; registry mutations skip
         their corresponding wrapping tools' invariant checks).
         """
-        nonlocal call_count
-        call_count += 1
-        if call_count > settings.code_mode_max_invocations:
+        if self._over_invocation_limit():
             return {
-                "error": f"WebSocket call limit exceeded ({settings.code_mode_max_invocations})"
+                "error": f"WebSocket call limit exceeded ({self.settings.code_mode_max_invocations})"
             }
         if not isinstance(message, dict):
             return {"error": "ws_send(message) requires a dict with a 'type' field"}
@@ -824,23 +889,20 @@ async def _run_sandboxed_code(
             }
         logger.debug("sandbox.ws_send type=%r", msg_type)
         try:
-            return await client.send_websocket_message(message)
+            return await self.client.send_websocket_message(message)
         except Exception as exc:
             logger.warning("ws_send(type=%r) failed", msg_type, exc_info=True)
             return {"error": str(exc)[:200]}
 
-    async def _call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
         """Bridge: sandbox code → MCP tool execution."""
-        nonlocal call_count
-
         # Counter increments first so blocked-tool calls also count toward
         # the per-execution cap; otherwise a tight loop on a blocked name
         # would never trip the limit.
-        call_count += 1
-        if call_count > settings.code_mode_max_invocations:
+        if self._over_invocation_limit():
             return _sandbox_error(
                 ErrorCode.VALIDATION_FAILED,
-                f"call_tool limit exceeded ({settings.code_mode_max_invocations} "
+                f"call_tool limit exceeded ({self.settings.code_mode_max_invocations} "
                 f"calls per execution)",
             )
 
@@ -851,7 +913,7 @@ async def _run_sandboxed_code(
             )
 
         try:
-            result = await ctx.fastmcp.call_tool(tool_name, arguments)
+            result = await self.ctx.fastmcp.call_tool(tool_name, arguments)
         except ToolError as te:
             try:
                 return json.loads(str(te))
@@ -868,7 +930,7 @@ async def _run_sandboxed_code(
         # Monty can only handle basic Python types, so serialize everything.
         return _extract_tool_result(result)
 
-    def _delete_saved_tool(name: Any) -> dict[str, Any]:
+    def delete_saved_tool(self, name: Any) -> dict[str, Any]:
         """Remove a previously saved custom tool by name.
 
         Sandbox helper. Returns ``{"deleted": True, "name": name}`` on
@@ -895,7 +957,9 @@ async def _run_sandboxed_code(
         # entry the LLM already saw "deleted").
         previous = _saved_tools[name]
         del _saved_tools[name]
-        if not _save_saved_tools(settings.code_mode_saved_tools_path, _saved_tools):
+        if not _save_saved_tools(
+            self.settings.code_mode_saved_tools_path, _saved_tools
+        ):
             _saved_tools[name] = previous
             return {
                 "error": (
@@ -907,14 +971,35 @@ async def _run_sandboxed_code(
         logger.info("Deleted saved custom tool '%s'", name)
         return {"deleted": True, "name": name}
 
+
+async def _run_sandboxed_code(
+    code: str,
+    ctx: Context,
+    client: Any,
+    settings: Any,
+    Monty: Any,
+    ResourceLimits: Any,
+) -> Any:
+    """Execute code in the pydantic-monty sandbox.
+
+    External functions available to sandbox code:
+    - api_get(endpoint) — GET request to HA REST API
+    - api_post(endpoint, data) — POST request to HA REST API
+    - ws_send(message) — send a HA WebSocket command and return its result
+    - call_tool(name, args) — call a registered MCP tool (for existing tools)
+
+    See ``_SandboxBridge`` for the error shape contract these external
+    functions share.
+    """
+    bridge = _SandboxBridge(ctx, client, settings)
     m = Monty(code, script_name="ha_manage_custom_tool.py")
     run_kwargs: dict[str, Any] = {
         "external_functions": {
-            "api_get": _api_get,
-            "api_post": _api_post,
-            "ws_send": _ws_send,
-            "call_tool": _call_tool,
-            "delete_saved_tool": _delete_saved_tool,
+            "api_get": bridge.api_get,
+            "api_post": bridge.api_post,
+            "ws_send": bridge.ws_send,
+            "call_tool": bridge.call_tool,
+            "delete_saved_tool": bridge.delete_saved_tool,
         },
         "limits": ResourceLimits(
             max_duration_secs=settings.code_mode_max_duration,
@@ -945,6 +1030,269 @@ async def _run_sandboxed_code(
         "pydantic-monty async execution is not available on this platform. "
         "ha_manage_custom_tool requires Monty.run_async() or run_monty_async()."
     )
+
+
+def _validate_custom_tool_modes(
+    code: str | None, run_saved: str | None, list_saved: bool
+) -> None:
+    """Raise if more than one of code/run_saved/list_saved was provided.
+
+    ``code`` and ``run_saved`` are mutually exclusive (either run new
+    code or re-run a saved tool, not both). ``list_saved`` is also
+    exclusive — it inspects state and must not coexist with execution.
+    ``save_as`` and ``justification`` are modifiers for the ``code``
+    mode and don't count as a "mode" on their own.
+    """
+    modes_active = sum(
+        1
+        for v in (
+            bool(code and code.strip()),
+            bool(run_saved is not None),
+            bool(list_saved),
+        )
+        if v
+    )
+    if modes_active > 1:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "code, run_saved, and list_saved are mutually exclusive — "
+                "specify exactly one.",
+                suggestions=[
+                    "ha_manage_custom_tool(code='...', justification='...')",
+                    "ha_manage_custom_tool(run_saved='tool_name')",
+                    "ha_manage_custom_tool(list_saved=True)",
+                ],
+            )
+        )
+
+
+def _build_list_saved_tools_response() -> dict[str, Any]:
+    """Build the ``list_saved=True`` response payload.
+
+    The saved-tools dict is nested under a stable ``saved_tools`` key
+    rather than spread directly under ``data`` because the name pattern
+    (``^[a-zA-Z_][a-zA-Z0-9_]{0,63}$``) accepts values like ``result``,
+    ``count``, ``code`` — every one of which is also a key the *other*
+    response shapes use. A consumer reading ``r["data"]["result"]`` after
+    a list_saved call would otherwise get a saved-tool entry instead of a
+    run-result.
+    """
+    return {
+        "success": True,
+        "data": {
+            "saved_tools": {
+                name: {
+                    "code": info["code"],
+                    "justification": info["justification"],
+                }
+                for name, info in _saved_tools.items()
+            },
+            "count": len(_saved_tools),
+        },
+    }
+
+
+async def _run_saved_custom_tool(
+    run_saved: str,
+    ctx: Context,
+    client: Any,
+    settings: Any,
+    Monty: Any,
+    ResourceLimits: Any,
+) -> dict[str, Any]:
+    """Re-run a previously saved custom tool by name.
+
+    Raises ToolError (RESOURCE_NOT_FOUND) if ``run_saved`` isn't in the
+    saved-tools cache, or a classified sandbox error if execution fails.
+    """
+    if run_saved not in _saved_tools:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"No saved tool named '{run_saved}'",
+                suggestions=[
+                    "Use ha_manage_custom_tool(list_saved=True) to see saved tools",
+                    "Use ha_manage_custom_tool(code=...) to create a new tool",
+                ],
+                context={"tool_name": run_saved},
+            )
+        )
+
+    saved = _saved_tools[run_saved]
+    logger.info("Running saved tool '%s'", run_saved)
+
+    try:
+        result = await _run_sandboxed_code(
+            saved["code"], ctx, client, settings, Monty, ResourceLimits
+        )
+    except ToolError:
+        raise
+    except Exception as e:
+        code, message, suggestions = _classify_sandbox_error(e)
+        raise_tool_error(
+            create_error_response(
+                code,
+                message,
+                suggestions=[
+                    "The saved code may no longer work in the "
+                    + "current sandbox or HA configuration.",
+                    "Use ha_manage_custom_tool(code=...) to "
+                    + "create an updated version.",
+                    *suggestions,
+                ],
+                context={
+                    "sandbox_error_type": type(e).__name__,
+                    "saved_tool_name": run_saved,
+                },
+            )
+        )
+
+    return {
+        "success": True,
+        "data": {"result": result, "saved_tool": run_saved},
+    }
+
+
+def _validate_custom_tool_code_inputs(
+    code: str | None, justification: str | None, save_as: str | None
+) -> tuple[str, str]:
+    """Validate the code/justification/save_as inputs for execute-code mode.
+
+    Raises ToolError for missing code, missing justification, or an
+    invalid save_as name. Returns the narrowed ``(code, justification)``
+    pair on success.
+    """
+    if not code or not code.strip():
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Provide code to execute, run_saved to reuse a saved tool, "
+                "or list_saved=True to list saved tools",
+                suggestions=[
+                    "ha_manage_custom_tool(code='...', justification='...')",
+                    "ha_manage_custom_tool(run_saved='tool_name')",
+                    "ha_manage_custom_tool(list_saved=True)",
+                ],
+            )
+        )
+
+    if not justification or not justification.strip():
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "justification is required when providing code",
+                suggestions=["Explain why no existing tool can accomplish this task"],
+            )
+        )
+
+    if save_as is not None and not _SAVE_NAME_PATTERN.match(save_as):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid save_as name: '{save_as}'. "
+                "Use alphanumeric characters and underscores, 1-64 chars.",
+                suggestions=["Example: save_as='movie_mode'"],
+            )
+        )
+
+    return code, justification
+
+
+async def _execute_custom_tool_code(
+    code: str,
+    justification: str,
+    ctx: Context,
+    client: Any,
+    settings: Any,
+    Monty: Any,
+    ResourceLimits: Any,
+) -> Any:
+    """Run freshly-provided sandbox code, classifying failures for the caller."""
+    try:
+        return await _run_sandboxed_code(
+            code, ctx, client, settings, Monty, ResourceLimits
+        )
+    except ToolError:
+        raise
+    except Exception as e:
+        err_code, err_message, err_suggestions = _classify_sandbox_error(e)
+        raise_tool_error(
+            create_error_response(
+                err_code,
+                err_message,
+                suggestions=err_suggestions,
+                context={
+                    "sandbox_error_type": type(e).__name__,
+                    "justification": justification[:200],
+                },
+            )
+        )
+
+
+def _apply_custom_tool_save_as(
+    response: dict[str, Any],
+    save_as: str,
+    code: str,
+    justification: str,
+    settings: Any,
+) -> None:
+    """Save the just-executed code under ``save_as``, updating ``response["data"]``.
+
+    Mutates ``response["data"]`` in place: sets ``saved_as`` on success,
+    or rolls back the in-memory write and sets ``saved_as=None`` plus a
+    ``save_warning`` on persistence failure. Raises ToolError if the
+    saved-tools cache is full.
+    """
+    if save_as not in _saved_tools and len(_saved_tools) >= _MAX_SAVED_TOOLS:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_FAILED,
+                f"Saved-tools cache is full ({_MAX_SAVED_TOOLS} entries). "
+                "Delete a tool with delete_saved_tool(name) before "
+                "saving a new one.",
+                suggestions=[
+                    "Use list_saved=True to see existing saved tools",
+                    "Use code='delete_saved_tool(\"<name>\")' to remove one",
+                ],
+            )
+        )
+    previous = _saved_tools.get(save_as)
+    _saved_tools[save_as] = {
+        "code": code,
+        "justification": justification,
+    }
+    response["data"]["saved_as"] = save_as
+    logger.info("Saved custom tool as '%s'", save_as)
+    persisted = _save_saved_tools(settings.code_mode_saved_tools_path, _saved_tools)
+    if not persisted:
+        # Roll back the in-memory write so the cache matches
+        # what's on disk (or, on next restart, what's loaded).
+        # Surface a warning in the response so the LLM knows
+        # the save_as didn't actually durable, while still
+        # returning success=True for the code execution itself.
+        if previous is None:
+            _saved_tools.pop(save_as, None)
+        else:
+            _saved_tools[save_as] = previous
+        response["data"]["saved_as"] = None
+        response["data"]["save_warning"] = (
+            f"save_as={save_as!r} was attempted but the persistence "
+            "write failed; the entry was rolled back from the "
+            "in-memory cache. Check operator logs for the "
+            "underlying I/O error."
+        )
+    elif not settings.code_mode_saved_tools_path:
+        # Blank path = persistence disabled: the in-memory save
+        # succeeded but is lost on restart. Surface a warning so
+        # the agent doesn't assume the entry is durable — mirrors
+        # the write-failure branch above.
+        response["data"]["save_warning"] = (
+            f"save_as={save_as!r} is kept in memory only — "
+            "code_mode_saved_tools_path is unset, so custom tools "
+            "are not persisted and are lost on restart. Set a path "
+            "on persistent storage to keep them."
+        )
 
 
 def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -1069,143 +1417,22 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             run_saved: Name of a previously saved tool to re-run.
             list_saved: Set True to list all saved tools.
         """
-        # --- Validate that exactly one mode is specified ---
-        # ``code`` and ``run_saved`` are mutually exclusive (either run new
-        # code or re-run a saved tool, not both). ``list_saved`` is also
-        # exclusive — it inspects state and must not coexist with execution.
-        # ``save_as`` and ``justification`` are modifiers for the ``code``
-        # mode and don't count as a "mode" on their own.
-        modes_active = sum(
-            1
-            for v in (
-                bool(code and code.strip()),
-                bool(run_saved is not None),
-                bool(list_saved),
-            )
-            if v
-        )
-        if modes_active > 1:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "code, run_saved, and list_saved are mutually exclusive — "
-                    "specify exactly one.",
-                    suggestions=[
-                        "ha_manage_custom_tool(code='...', justification='...')",
-                        "ha_manage_custom_tool(run_saved='tool_name')",
-                        "ha_manage_custom_tool(list_saved=True)",
-                    ],
-                )
-            )
+        _validate_custom_tool_modes(code, run_saved, list_saved)
 
         # --- Mode: list saved tools ---
         if list_saved:
-            # The saved-tools dict is nested under a stable ``saved_tools``
-            # key rather than spread directly under ``data`` because the
-            # name pattern (``^[a-zA-Z_][a-zA-Z0-9_]{0,63}$``) accepts
-            # values like ``result``, ``count``, ``code`` — every one of
-            # which is also a key the *other* response shapes use. A
-            # consumer reading ``r["data"]["result"]`` after a list_saved
-            # call would otherwise get a saved-tool entry instead of a
-            # run-result.
-            return {
-                "success": True,
-                "data": {
-                    "saved_tools": {
-                        name: {
-                            "code": info["code"],
-                            "justification": info["justification"],
-                        }
-                        for name, info in _saved_tools.items()
-                    },
-                    "count": len(_saved_tools),
-                },
-            }
+            return _build_list_saved_tools_response()
 
         # --- Mode: run saved tool ---
         if run_saved is not None:
-            if run_saved not in _saved_tools:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"No saved tool named '{run_saved}'",
-                        suggestions=[
-                            "Use ha_manage_custom_tool(list_saved=True) to see saved tools",
-                            "Use ha_manage_custom_tool(code=...) to create a new tool",
-                        ],
-                        context={"tool_name": run_saved},
-                    )
-                )
-
-            saved = _saved_tools[run_saved]
-            logger.info("Running saved tool '%s'", run_saved)
-
-            try:
-                result = await _run_sandboxed_code(
-                    saved["code"], ctx, client, settings, Monty, ResourceLimits
-                )
-            except ToolError:
-                raise
-            except Exception as e:
-                code, message, suggestions = _classify_sandbox_error(e)
-                raise_tool_error(
-                    create_error_response(
-                        code,
-                        message,
-                        suggestions=[
-                            "The saved code may no longer work in the "
-                            + "current sandbox or HA configuration.",
-                            "Use ha_manage_custom_tool(code=...) to "
-                            + "create an updated version.",
-                            *suggestions,
-                        ],
-                        context={
-                            "sandbox_error_type": type(e).__name__,
-                            "saved_tool_name": run_saved,
-                        },
-                    )
-                )
-
-            return {
-                "success": True,
-                "data": {"result": result, "saved_tool": run_saved},
-            }
+            return await _run_saved_custom_tool(
+                run_saved, ctx, client, settings, Monty, ResourceLimits
+            )
 
         # --- Mode: execute code ---
-        if not code or not code.strip():
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Provide code to execute, run_saved to reuse a saved tool, "
-                    "or list_saved=True to list saved tools",
-                    suggestions=[
-                        "ha_manage_custom_tool(code='...', justification='...')",
-                        "ha_manage_custom_tool(run_saved='tool_name')",
-                        "ha_manage_custom_tool(list_saved=True)",
-                    ],
-                )
-            )
-
-        if not justification or not justification.strip():
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "justification is required when providing code",
-                    suggestions=[
-                        "Explain why no existing tool can accomplish this task"
-                    ],
-                )
-            )
-
-        if save_as is not None and not _SAVE_NAME_PATTERN.match(save_as):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid save_as name: '{save_as}'. "
-                    "Use alphanumeric characters and underscores, 1-64 chars.",
-                    suggestions=["Example: save_as='movie_mode'"],
-                )
-            )
+        code, justification = _validate_custom_tool_code_inputs(
+            code, justification, save_as
+        )
 
         # ``%r`` (repr) defends against log-line injection by escaping
         # ``\r`` / ``\n`` / ``\t`` as literal ``\r``/``\n``/``\t``
@@ -1224,25 +1451,9 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # inject into.
         logger.debug("ha_manage_custom_tool code:\n%s", code)
 
-        try:
-            result = await _run_sandboxed_code(
-                code, ctx, client, settings, Monty, ResourceLimits
-            )
-        except ToolError:
-            raise
-        except Exception as e:
-            err_code, err_message, err_suggestions = _classify_sandbox_error(e)
-            raise_tool_error(
-                create_error_response(
-                    err_code,
-                    err_message,
-                    suggestions=err_suggestions,
-                    context={
-                        "sandbox_error_type": type(e).__name__,
-                        "justification": justification[:200],
-                    },
-                )
-            )
+        result = await _execute_custom_tool_code(
+            code, justification, ctx, client, settings, Monty, ResourceLimits
+        )
 
         response: dict[str, Any] = {
             "success": True,
@@ -1250,56 +1461,6 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         }
 
         if save_as:
-            if save_as not in _saved_tools and len(_saved_tools) >= _MAX_SAVED_TOOLS:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_FAILED,
-                        f"Saved-tools cache is full ({_MAX_SAVED_TOOLS} entries). "
-                        "Delete a tool with delete_saved_tool(name) before "
-                        "saving a new one.",
-                        suggestions=[
-                            "Use list_saved=True to see existing saved tools",
-                            "Use code='delete_saved_tool(\"<name>\")' to remove one",
-                        ],
-                    )
-                )
-            previous = _saved_tools.get(save_as)
-            _saved_tools[save_as] = {
-                "code": code,
-                "justification": justification,
-            }
-            response["data"]["saved_as"] = save_as
-            logger.info("Saved custom tool as '%s'", save_as)
-            persisted = _save_saved_tools(
-                settings.code_mode_saved_tools_path, _saved_tools
-            )
-            if not persisted:
-                # Roll back the in-memory write so the cache matches
-                # what's on disk (or, on next restart, what's loaded).
-                # Surface a warning in the response so the LLM knows
-                # the save_as didn't actually durable, while still
-                # returning success=True for the code execution itself.
-                if previous is None:
-                    _saved_tools.pop(save_as, None)
-                else:
-                    _saved_tools[save_as] = previous
-                response["data"]["saved_as"] = None
-                response["data"]["save_warning"] = (
-                    f"save_as={save_as!r} was attempted but the persistence "
-                    "write failed; the entry was rolled back from the "
-                    "in-memory cache. Check operator logs for the "
-                    "underlying I/O error."
-                )
-            elif not settings.code_mode_saved_tools_path:
-                # Blank path = persistence disabled: the in-memory save
-                # succeeded but is lost on restart. Surface a warning so
-                # the agent doesn't assume the entry is durable — mirrors
-                # the write-failure branch above.
-                response["data"]["save_warning"] = (
-                    f"save_as={save_as!r} is kept in memory only — "
-                    "code_mode_saved_tools_path is unset, so custom tools "
-                    "are not persisted and are lost on restart. Set a path "
-                    "on persistent storage to keep them."
-                )
+            _apply_custom_tool_save_as(response, save_as, code, justification, settings)
 
         return response
