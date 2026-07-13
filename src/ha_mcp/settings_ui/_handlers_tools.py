@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from .._version import is_embedded
 from ..errors import ErrorCode, create_error_response
 from ..llm_exposure import LLM_API_CONFIG_KEY
 from ..transforms import DEFAULT_PINNED_TOOLS
@@ -136,6 +137,12 @@ async def _get_tools(
             "read_only_exempt": sorted(READ_ONLY_EXEMPT_TOOLS),
             "llm_api": llm_effective,
             "llm_api_overrides": llm_overrides,
+            # LLM API exposure is registered by the ha_mcp_tools custom
+            # component (in-process/embedded server). On the add-on,
+            # Docker, or standalone server nothing consumes it, so the UI
+            # hides the per-tool "LLM API" toggle rather than showing a
+            # no-op control.
+            "llm_api_available": is_embedded(),
         }
     )
 

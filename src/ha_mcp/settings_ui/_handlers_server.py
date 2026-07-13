@@ -590,6 +590,58 @@ async def _write_feature_flag_overrides_file(
     return None
 
 
+def _parse_feature_flags_payload(
+    body: Any,
+) -> tuple[dict[str, Any], JSONResponse | None]:
+    """Validate the save-feature-flags body shape. Returns ``(raw_flags, error)``.
+
+    Requires the nested ``{"flags": {...}}`` shape. A flat body
+    (e.g. ``{"enable_lite_docstrings": true}``) has no ``flags`` key, so a
+    lenient ``body.get("flags", {})`` default silently dropped every field
+    and still returned ``success=True`` / ``restart_required=True`` — worse
+    than a visible no-op, because the caller believed the flag changed and a
+    restart was pending when nothing happened (#1840).
+    """
+    if not isinstance(body, dict):
+        return {}, JSONResponse(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Request body must be a JSON object",
+            ),
+            status_code=400,
+        )
+    raw_flags = body.get("flags")
+    if not isinstance(raw_flags, dict):
+        return {}, JSONResponse(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Request body must contain a 'flags' object mapping "
+                'field names to values, e.g. {"flags": '
+                '{"enable_lite_docstrings": true}}. A flat body such '
+                'as {"enable_lite_docstrings": true} is not accepted.',
+                suggestions=[
+                    'Wrap the flags in a "flags" object, e.g. '
+                    '{"flags": {"enable_lite_docstrings": true}}.',
+                ],
+            ),
+            status_code=400,
+        )
+    if not raw_flags:
+        return {}, JSONResponse(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "'flags' object is empty; include at least one "
+                "feature-flag field to update.",
+                suggestions=[
+                    'Include at least one field inside "flags", e.g. '
+                    '{"flags": {"enable_lite_docstrings": true}}.',
+                ],
+            ),
+            status_code=400,
+        )
+    return raw_flags, None
+
+
 async def _save_feature_flags(
     server: HomeAssistantSmartMCPServer | None, request: Request
 ) -> JSONResponse:
@@ -605,23 +657,9 @@ async def _save_feature_flags(
             ),
             status_code=400,
         )
-    if not isinstance(body, dict):
-        return JSONResponse(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Request body must be a JSON object",
-            ),
-            status_code=400,
-        )
-    raw_flags = body.get("flags", {})
-    if not isinstance(raw_flags, dict):
-        return JSONResponse(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "'flags' must be an object mapping field names to values",
-            ),
-            status_code=400,
-        )
+    raw_flags, payload_err = _parse_feature_flags_payload(body)
+    if payload_err is not None:
+        return payload_err
 
     # Master beta-gate + strict-mandatory-BPS parent/child gates. Applied
     # in BOTH standalone and addon mode. See _reject_child_flags_without_parent.
