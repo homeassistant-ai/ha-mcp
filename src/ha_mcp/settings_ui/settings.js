@@ -598,6 +598,16 @@ function render() {
       return MANDATORY.includes(t.name) || (!t.disabled_by && s !== 'disabled');
     }).length;
 
+    // Master-switch checked state. Normally it mirrors "any toggleable tool
+    // enabled" — it is a bulk control over the tools the user can actually
+    // flip. But when a group has NO toggleable tools (all mandatory /
+    // env-pinned / feature-gated), the switch is disabled and purely reflects
+    // status, so it must show the group's real enabled state (groupEnabled)
+    // instead of anyEnabled — which is always false over an empty toggleable
+    // set. An all-mandatory group (e.g. Search & Discovery) is fully enabled
+    // and must read as ON, matching its "N/N enabled" count.
+    const masterChecked = toggleable.length === 0 ? groupEnabled > 0 : anyEnabled;
+
     const header = document.createElement('div');
     header.className = 'group-header';
     header.innerHTML = `<div class="group-header-left">` +
@@ -606,7 +616,7 @@ function render() {
       `<span class="group-count">${groupEnabled}/${tools.length} enabled</span>` +
       `</div>` +
       `<label class="switch group-master" title="Enable/disable all tools in this group">` +
-        `<input type="checkbox" name="tool-group:${escapeHtml(tag)}" ${anyEnabled ? 'checked' : ''} ${toggleable.length === 0 ? 'disabled' : ''}>` +
+        `<input type="checkbox" name="tool-group:${escapeHtml(tag)}" ${masterChecked ? 'checked' : ''} ${toggleable.length === 0 ? 'disabled' : ''}>` +
         `<span class="slider"></span>` +
       `</label>`;
 

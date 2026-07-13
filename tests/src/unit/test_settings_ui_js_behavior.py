@@ -1042,6 +1042,147 @@ class TestEnvPinnedToolRows:
         )
 
 
+class TestGroupMasterToggle:
+    """The per-group master switch must reflect the group's real enabled
+    state.
+
+    A group whose tools are all mandatory (always-on, non-toggleable) has an
+    empty ``toggleable`` set, so the pre-fix ``anyEnabled`` computation was
+    always false and the switch rendered unchecked+disabled — reading as "the
+    whole group is off" while the count next to it said "N/N enabled". The
+    Search & Discovery group (ha_search / ha_get_overview / ha_get_state, all
+    mandatory) hit this. The master switch now shows the group's real state.
+    """
+
+    @staticmethod
+    def _tools_fetch(tools: list[dict], states: dict[str, str]) -> dict:
+        return {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {"tools": tools, "states": states},
+            },
+        }
+
+    @staticmethod
+    def _master_input(dom: str, tag: str) -> str:
+        m = re.search(rf'<input[^>]*name="tool-group:{re.escape(tag)}"[^>]*>', dom)
+        assert m is not None, (
+            f"group-master input for {tag!r} not rendered; dom tail: {dom[-2000:]}"
+        )
+        return m.group(0)
+
+    def test_all_mandatory_group_master_is_checked_and_disabled(
+        self, settings_script: str
+    ) -> None:
+        """The reported bug: an all-mandatory group showed the master switch
+        OFF (unchecked) even though every tool is enabled and cannot be
+        disabled. It must render checked (on) AND disabled (unchangeable).
+        """
+        tools = [
+            {
+                "name": name,
+                "title": name,
+                "primary_tag": "Search",
+                "tags": ["Search"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            }
+            # All three are members of MANDATORY_TOOLS.
+            for name in ("ha_search", "ha_get_overview", "ha_get_state")
+        ]
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._tools_fetch(tools, {}),
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        tag_html = self._master_input(result.dom, "Search")
+        assert "checked" in tag_html, (
+            f"all-mandatory group master must be checked (group is fully "
+            f"enabled); got: {tag_html}"
+        )
+        assert " disabled" in tag_html, (
+            f"all-mandatory group master must be disabled (nothing to flip); "
+            f"got: {tag_html}"
+        )
+
+    def test_toggleable_group_all_disabled_master_is_unchecked(
+        self, settings_script: str
+    ) -> None:
+        """Guard the fix's boundary: a group of ordinary (toggleable) tools
+        that are all disabled must still render the master switch unchecked
+        and interactive (not disabled), so the user can bulk-enable them.
+        """
+        tools = [
+            {
+                "name": "ha_foo",
+                "title": "Foo",
+                "primary_tag": "Utilities",
+                "tags": ["Utilities"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            }
+        ]
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._tools_fetch(tools, {"ha_foo": "disabled"}),
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        tag_html = self._master_input(result.dom, "Utilities")
+        assert "checked" not in tag_html, (
+            f"all-disabled toggleable group master must be unchecked; got: {tag_html}"
+        )
+        assert " disabled" not in tag_html, (
+            f"toggleable group master must stay interactive; got: {tag_html}"
+        )
+
+    def test_mixed_group_keeps_bulk_semantics(self, settings_script: str) -> None:
+        """A group mixing a mandatory tool with a disabled toggleable tool
+        keeps the interactive bulk semantics: the switch stays enabled and
+        reflects ``anyEnabled`` (false here — the one toggleable tool is off),
+        so flipping it bulk-enables the toggleable tool. The fix only changes
+        the no-toggleable case.
+        """
+        tools = [
+            {
+                "name": "ha_search",  # mandatory, always on
+                "title": "Search",
+                "primary_tag": "Mixed",
+                "tags": ["Mixed"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            },
+            {
+                "name": "ha_foo",  # toggleable, disabled
+                "title": "Foo",
+                "primary_tag": "Mixed",
+                "tags": ["Mixed"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            },
+        ]
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._tools_fetch(tools, {"ha_foo": "disabled"}),
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        tag_html = self._master_input(result.dom, "Mixed")
+        assert " disabled" not in tag_html, (
+            f"mixed group has a toggleable tool, master must stay interactive; "
+            f"got: {tag_html}"
+        )
+        assert "checked" not in tag_html, (
+            f"mixed group's only toggleable tool is disabled, so the bulk "
+            f"master must be unchecked; got: {tag_html}"
+        )
+
+
 class TestAdvancedSectionRender:
     """JSDOM coverage for the Advanced Settings sections."""
 
