@@ -642,18 +642,6 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "heading",
         "include_config",
         "view_path",
-        "width",
-        "height",
-        "viewport_presets",
-        "orientation",
-        "zoom",
-        "wait_ms",
-        "full_page",
-        "theme",
-        "dark_mode",
-        "language",
-        "image_format",
-        "render_timeout_seconds",
     },
     "ha_manage_backup": {
         # Consumed only under the (scope, action) dispatch the predicate

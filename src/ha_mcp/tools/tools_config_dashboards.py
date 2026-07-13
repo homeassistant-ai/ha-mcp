@@ -20,7 +20,6 @@ from ..dashboard_screenshot.capture import (
     DEFAULT_RENDER_TIMEOUT_SECONDS,
     DEFAULT_WAIT_MS,
     DEFAULT_WIDTH,
-    FULL_PAGE_PARAM_DESC,
     Orientation,
     ScreenshotFormat,
     ViewportPreset,
@@ -978,11 +977,6 @@ async def _lazy_resolve_and_retry(
     return url_path, response
 
 
-def _dashboard_frontend_path(url_path: str | None) -> str:
-    """Map a dashboard url_path to its Lovelace frontend path for screenshots."""
-    return dashboard_frontend_path(url_path)
-
-
 def _attach_dashboard_render_paths(
     result: dict[str, Any],
     url_path: str | None,
@@ -1068,7 +1062,7 @@ async def _capture_dashboard_screenshot_result(
     """Render configured captures and attach their ordered MCP metadata."""
     from ..dashboard_screenshot import capture as screenshot_capture
 
-    render_path = _dashboard_frontend_path(url_path)
+    render_path = dashboard_frontend_path(url_path)
     if options.view_path is not None or config is not None:
         if config is None:
             if client is None:
@@ -1138,7 +1132,6 @@ async def _capture_dashboard_screenshot_result(
                 context={"capture_count": len(captures), "render_path": render_path},
             )
         )
-    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 async def _maybe_attach_screenshot(
@@ -1346,72 +1339,6 @@ class DashboardConfigTools:
                 "views[].path to render. Omit to render the dashboard base route."
             ),
         ] = None,
-        width: Annotated[
-            int,
-            Field(description="Screenshot viewport width in px.", ge=64, le=4096),
-        ] = DEFAULT_WIDTH,
-        height: Annotated[
-            int | Literal["auto"],
-            Field(
-                description="Screenshot viewport height in px (64-4096), or "
-                "'auto' for content height."
-            ),
-        ] = DEFAULT_HEIGHT,
-        viewport_presets: Annotated[
-            list[ViewportPreset] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="With include_screenshot: ordered mobile, tablet, "
-                "and/or desktop captures. Overrides width/height.",
-                min_length=1,
-                max_length=3,
-            ),
-        ] = None,
-        orientation: Annotated[
-            Orientation | None,
-            Field(description="Optional portrait or landscape viewport layout."),
-        ] = None,
-        zoom: Annotated[
-            float,
-            Field(description="Screenshot page zoom factor.", ge=0.1, le=5.0),
-        ] = 1.0,
-        wait_ms: Annotated[
-            int,
-            Field(description="Screenshot render-settle delay in ms.", ge=0, le=30000),
-        ] = DEFAULT_WAIT_MS,
-        full_page: Annotated[
-            bool,
-            Field(
-                description=f"With include_screenshot: {FULL_PAGE_PARAM_DESC}; "
-                "uses Puppet auto-height (currently capped at 4000 px)."
-            ),
-        ] = False,
-        theme: Annotated[
-            str | None,
-            Field(
-                description="Screenshot frontend theme name. Puppet persists this "
-                "selection on the frontend profile used by its token."
-            ),
-        ] = None,
-        dark_mode: Annotated[
-            bool,
-            Field(
-                description="Render the screenshot theme in dark mode. Puppet may "
-                "persist the theme/dark preference on the profile used by its token."
-            ),
-        ] = False,
-        language: Annotated[
-            str | None,
-            Field(description="Screenshot frontend language code."),
-        ] = None,
-        image_format: Annotated[
-            ScreenshotFormat,
-            Field(description="Screenshot format: png, jpeg, webp, or bmp."),
-        ] = "png",
-        render_timeout_seconds: Annotated[
-            float,
-            Field(description="Screenshot HTTP timeout in seconds.", ge=1, le=300),
-        ] = DEFAULT_RENDER_TIMEOUT_SECONDS,
     ) -> "dict[str, Any] | ToolResult":
         """
         Get dashboard info - list all dashboards, get config, or search for cards.
@@ -1462,21 +1389,7 @@ class DashboardConfigTools:
 
         Note: YAML-mode dashboards (defined in configuration.yaml) are not included in list.
         """
-        screenshot_options = _DashboardScreenshotOptions(
-            view_path=view_path,
-            width=width,
-            height=height,
-            viewport_presets=viewport_presets,
-            orientation=orientation,
-            zoom=zoom,
-            wait_ms=wait_ms,
-            full_page=full_page,
-            theme=theme,
-            dark_mode=dark_mode,
-            language=language,
-            image_format=image_format,
-            render_timeout_seconds=render_timeout_seconds,
-        )
+        screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
         search_mode = (
             entity_id is not None or card_type is not None or heading is not None
         )
@@ -1993,72 +1906,6 @@ class DashboardConfigTools:
                 "views[].path to render."
             ),
         ] = None,
-        width: Annotated[
-            int,
-            Field(description="Screenshot viewport width in px.", ge=64, le=4096),
-        ] = DEFAULT_WIDTH,
-        height: Annotated[
-            int | Literal["auto"],
-            Field(
-                description="Screenshot viewport height in px (64-4096), or "
-                "'auto' for content height."
-            ),
-        ] = DEFAULT_HEIGHT,
-        viewport_presets: Annotated[
-            list[ViewportPreset] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="With return_screenshot: ordered mobile, tablet, "
-                "and/or desktop captures. Overrides width/height.",
-                min_length=1,
-                max_length=3,
-            ),
-        ] = None,
-        orientation: Annotated[
-            Orientation | None,
-            Field(description="Optional portrait or landscape viewport layout."),
-        ] = None,
-        zoom: Annotated[
-            float,
-            Field(description="Screenshot page zoom factor.", ge=0.1, le=5.0),
-        ] = 1.0,
-        wait_ms: Annotated[
-            int,
-            Field(description="Screenshot render-settle delay in ms.", ge=0, le=30000),
-        ] = DEFAULT_WAIT_MS,
-        full_page: Annotated[
-            bool,
-            Field(
-                description=f"With return_screenshot: {FULL_PAGE_PARAM_DESC}; "
-                "uses Puppet auto-height (currently capped at 4000 px)."
-            ),
-        ] = False,
-        theme: Annotated[
-            str | None,
-            Field(
-                description="Screenshot frontend theme name. Puppet persists this "
-                "selection on the frontend profile used by its token."
-            ),
-        ] = None,
-        dark_mode: Annotated[
-            bool,
-            Field(
-                description="Render the screenshot theme in dark mode. Puppet may "
-                "persist the theme/dark preference on the profile used by its token."
-            ),
-        ] = False,
-        language: Annotated[
-            str | None,
-            Field(description="Screenshot frontend language code."),
-        ] = None,
-        image_format: Annotated[
-            ScreenshotFormat,
-            Field(description="Screenshot format: png, jpeg, webp, or bmp."),
-        ] = "png",
-        render_timeout_seconds: Annotated[
-            float,
-            Field(description="Screenshot HTTP timeout in seconds.", ge=1, le=300),
-        ] = DEFAULT_RENDER_TIMEOUT_SECONDS,
     ) -> "dict[str, Any] | ToolResult":
         """
         Create or update a Home Assistant dashboard. MUST call ha_get_skill_guide first.
@@ -2181,21 +2028,7 @@ class DashboardConfigTools:
         entry in configuration.yaml but does NOT touch the dashboard
         body in the referenced .yaml file.
         """
-        screenshot_options = _DashboardScreenshotOptions(
-            view_path=view_path,
-            width=width,
-            height=height,
-            viewport_presets=viewport_presets,
-            orientation=orientation,
-            zoom=zoom,
-            wait_ms=wait_ms,
-            full_page=full_page,
-            theme=theme,
-            dark_mode=dark_mode,
-            language=language,
-            image_format=image_format,
-            render_timeout_seconds=render_timeout_seconds,
-        )
+        screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
         try:
             # Validate cross-field screenshot constraints before resolving or
             # writing the dashboard.  In particular, auto-height captures
