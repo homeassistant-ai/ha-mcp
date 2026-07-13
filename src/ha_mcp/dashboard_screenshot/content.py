@@ -50,7 +50,7 @@ def dashboard_screenshot_metadata(
     """Describe each image, its engine request, and local capture options."""
     metadata: list[dict[str, Any]] = []
     for content_index, capture in enumerate(captures):
-        requested = capture.requested
+        options = capture.options
         metadata.append(
             {
                 "content_index": content_index,
@@ -60,23 +60,21 @@ def dashboard_screenshot_metadata(
                     "width": capture.width,
                     "height": capture.height,
                     "orientation": capture.orientation,
-                    "zoom": requested["zoom"],
+                    "zoom": options.zoom,
                 },
                 "engine_request": {
                     "viewport": f"{capture.width}x{capture.height}",
-                    "zoom": requested["zoom"],
-                    "wait_ms": requested["wait_ms"],
-                    "theme": requested["theme"],
-                    "dark_mode": requested["dark_mode"],
-                    "language": requested["language"],
+                    "zoom": options.zoom,
+                    "wait_ms": options.wait_ms,
+                    "theme": options.theme,
+                    "dark_mode": options.dark_mode,
+                    "language": options.language,
                     "format": capture.image_format,
                 },
                 "local_capture_options": {
-                    "full_page": requested["full_page"],
-                    "render_timeout_seconds": requested["render_timeout_seconds"],
-                    "legacy_full_page_fallback": requested.get(
-                        "legacy_full_page_fallback", False
-                    ),
+                    "full_page": options.full_page,
+                    "render_timeout_seconds": options.render_timeout_seconds,
+                    "legacy_full_page_fallback": capture.legacy_full_page_fallback,
                 },
                 "frontend_context_confirmed": False,
                 "image": {
@@ -94,9 +92,7 @@ def dashboard_screenshot_warnings(
     captures: list[DashboardImageCapture],
 ) -> list[str]:
     """Return batch-level warnings that must not be hidden in image metadata."""
-    fallback_count = sum(
-        bool(capture.requested.get("legacy_full_page_fallback")) for capture in captures
-    )
+    fallback_count = sum(capture.legacy_full_page_fallback for capture in captures)
     if not fallback_count:
         return []
     return [

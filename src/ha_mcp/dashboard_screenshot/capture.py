@@ -105,7 +105,8 @@ class DashboardImageCapture:
     image_format: ScreenshotFormat
     mime_type: str
     size_bytes: int
-    requested: dict[str, Any]
+    options: _CaptureOptions
+    legacy_full_page_fallback: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -888,17 +889,6 @@ async def capture_dashboard_images(
                 continue
             image_data, capture_height, fallback_used = outcome
 
-            requested = {
-                "zoom": options.zoom,
-                "wait_ms": options.wait_ms,
-                "full_page": options.full_page,
-                "orientation": options.orientation,
-                "theme": options.theme,
-                "dark_mode": options.dark_mode,
-                "language": options.language,
-                "render_timeout_seconds": options.render_timeout_seconds,
-                "legacy_full_page_fallback": fallback_used,
-            }
             captures.append(
                 DashboardImageCapture(
                     data=image_data,
@@ -909,7 +899,8 @@ async def capture_dashboard_images(
                     image_format=options.image_format,
                     mime_type=mime_type,
                     size_bytes=len(image_data),
-                    requested=requested.copy(),
+                    options=options,
+                    legacy_full_page_fallback=fallback_used,
                 )
             )
 

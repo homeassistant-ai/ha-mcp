@@ -764,7 +764,7 @@ class TestCapture:
             "900x4096",
         ]
         assert result[0].height == 4096
-        assert result[0].requested["legacy_full_page_fallback"] is True
+        assert result[0].legacy_full_page_fallback is True
 
     async def test_explicit_auto_does_not_use_legacy_full_page_fallback(
         self, monkeypatch: Any
@@ -1033,7 +1033,7 @@ class TestCapture:
             (1280, 800),
         ]
         assert all(item.mime_type == "image/jpeg" for item in captures)
-        assert all(item.requested["theme"] == "Gerry Dark" for item in captures)
+        assert all(item.options.theme == "Gerry Dark" for item in captures)
         assert [request["params"]["viewport"] for request in _FakeAsyncClient.gets] == [
             "844x390",
             "1280x800",
@@ -1248,7 +1248,10 @@ def _fake_dashboard_capture(
     data: bytes = b"\x89PNG\r\n\x1a\nfake",
     legacy_full_page_fallback: bool = False,
 ) -> Any:
-    from ha_mcp.dashboard_screenshot.capture import DashboardImageCapture
+    from ha_mcp.dashboard_screenshot.capture import (
+        DashboardImageCapture,
+        _CaptureOptions,
+    )
 
     return DashboardImageCapture(
         data=data,
@@ -1259,17 +1262,21 @@ def _fake_dashboard_capture(
         image_format=image_format,
         mime_type=mime_type,
         size_bytes=len(data),
-        requested={
-            "zoom": 1.0,
-            "wait_ms": 2500,
-            "full_page": height == "auto",
-            "orientation": None,
-            "theme": None,
-            "dark_mode": False,
-            "language": None,
-            "render_timeout_seconds": 60.0,
-            "legacy_full_page_fallback": legacy_full_page_fallback,
-        },
+        options=_CaptureOptions(
+            width=width,
+            height=height,
+            viewport_presets=None,
+            orientation=None,
+            zoom=1.0,
+            wait_ms=2500,
+            full_page=height == "auto",
+            theme=None,
+            dark_mode=False,
+            language=None,
+            image_format=image_format,
+            render_timeout_seconds=60.0,
+        ),
+        legacy_full_page_fallback=legacy_full_page_fallback,
     )
 
 
