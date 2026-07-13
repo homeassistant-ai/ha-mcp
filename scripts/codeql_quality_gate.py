@@ -131,6 +131,19 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "return for CodeQL's heuristic to have correctly caught. mypy already "
         "confirms this file is clean under that typing.",
     ),
+    # NOTE: PATH-WIDE for the same reason as the tools_mcp_component.py entry
+    # above (same generic CodeQL message) -- re-audit if the file grows.
+    (
+        "py/mixed-returns",
+        "src/ha_mcp/server.py",
+        "Mixing implicit and explicit returns",
+        "False positive on _skill_guide_degraded_response and "
+        "_read_skill_file_content's success-branch-vs-raise shape: the non-return "
+        "branch in each always goes through raise_tool_error, typed '-> NoReturn' "
+        "(see helpers.py), so there is no implicit None return for CodeQL's "
+        "heuristic to have correctly caught. mypy already confirms this file is "
+        "clean under that typing.",
+    ),
 )
 
 
