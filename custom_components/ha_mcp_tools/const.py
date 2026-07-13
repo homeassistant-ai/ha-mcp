@@ -75,7 +75,9 @@ ALLOWED_VOLUME_ROOTS = ("/share", "/media", "/ssl", "/backup")
 
 # Files allowed for managed YAML editing
 ALLOWED_YAML_CONFIG_FILES = ["configuration.yaml"]
-# Also allows packages/*.yaml via pattern matching
+# Also allows <packages-folder>/*.yaml via pattern matching, where the folder is
+# the one the user binds under ``homeassistant: packages:`` (default "packages",
+# detected at runtime — see _detect_package_dirs), plus themes/*.yaml.
 
 # Top-level YAML keys allowed for editing in any allowed file
 # (configuration.yaml or packages/*.yaml).
@@ -103,6 +105,11 @@ ALLOWED_YAML_KEYS = frozenset(
         "notify",
         "group",
         "utility_meter",
+        # recorder is YAML-only (no UI or storage-mode helper): purge_keep_days,
+        # include/exclude, commit_interval. Its surface is smaller than keys
+        # already here — it only controls what HA records and for how long, with
+        # no code-execution path like command_line/shell_command/rest (#1852).
+        "recorder",
     }
 )
 

@@ -2,6 +2,14 @@
 # Loads default set of integrations. Do not remove.
 default_config:
 
+homeassistant:
+  # Bind YAML packages under a NON-default folder name ("custom_packages",
+  # not "packages") so the e2e suite exercises ha_config_set_yaml's runtime
+  # packages-folder detection (#1854) instead of the hardcoded default. The
+  # tool keeps "packages" as a fallback, so tests writing to packages/*.yaml
+  # still pass.
+  packages: !include_dir_named custom_packages
+
 # Load frontend themes from the themes folder
 frontend:
   themes: !include_dir_merge_named themes

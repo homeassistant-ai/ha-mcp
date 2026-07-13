@@ -748,6 +748,106 @@ class TestYamlConfigSafeguards:
             )
             logger.info(f"post_action={inner.get('post_action')}")
 
+    async def test_recorder_key_is_editable(self, mcp_client_with_yaml_config):
+        """recorder is editable via ha_config_set_yaml (#1852).
+
+        recorder is YAML-only (no UI/storage-mode helper) and has no reload
+        service in HA core, so it defaults to post_action=restart_required.
+        """
+
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            data = await call_set_yaml_confirmed(
+                mcp,
+                {
+                    "yaml_path": "recorder",
+                    "action": "add",
+                    "content": "purge_keep_days: 5",
+                    "file": "packages/_e2e_test_recorder.yaml",
+                },
+            )
+            assert data.get("success") is True, f"recorder add should succeed: {data}"
+            assert data.get("post_action") == "restart_required", (
+                f"recorder should default to post_action=restart_required: {data}"
+            )
+            assert "reload_service" not in data, (
+                f"reload_service should NOT be present for recorder: {data}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Configured (non-default) packages folder — issue #1854
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.filesystem
+class TestYamlConfigCustomPackagesFolder:
+    """#1854: package files under the *configured* packages folder are editable.
+
+    The e2e container binds packages under a non-default folder via
+    ``homeassistant: packages: !include_dir_named custom_packages`` (see
+    tests/initial_test_state/configuration.yaml). The folder ships empty, so
+    these also cover first-package creation under a configured folder: detection
+    reads the directive, not the folder contents. If the folder were still
+    hardcoded to ``packages``, a ``custom_packages/*.yaml`` target would be
+    rejected as "not allowed"; these prove it is detected at runtime.
+    """
+
+    async def test_edit_under_configured_packages_folder(
+        self, mcp_client_with_yaml_config
+    ):
+        """A plain allowed key writes successfully under custom_packages/.
+
+        Reaching a success here means the path itself was accepted: a
+        non-config, non-theme path is only allowed when detected as a package
+        folder, so this exercises the detection, not just the key allowlist.
+        """
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            data = await call_set_yaml_confirmed(
+                mcp,
+                {
+                    "yaml_path": "template",
+                    "action": "add",
+                    "content": (
+                        "- sensor:\n"
+                        "    - name: E2E Alt Folder Sensor\n"
+                        '      state: "{{ 1 }}"\n'
+                    ),
+                    "file": "custom_packages/_e2e_alt_folder.yaml",
+                },
+            )
+            assert data.get("success") is True, (
+                f"editing under the configured packages folder should "
+                f"succeed (#1854): {data}"
+            )
+
+    async def test_packages_only_key_allowed_in_configured_folder(
+        self, mcp_client_with_yaml_config
+    ):
+        """A PACKAGES_ONLY key (automation) is accepted under custom_packages/.
+
+        automation/script/scene are rejected in configuration.yaml but allowed
+        in a package file. Accepting automation here proves the folder is
+        classified as a package folder (is_package), not merely path-allowed.
+        """
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            data = await call_set_yaml_confirmed(
+                mcp,
+                {
+                    "yaml_path": "automation",
+                    "action": "add",
+                    "content": (
+                        "- alias: E2E Alt Folder Automation\n"
+                        "  triggers: []\n"
+                        "  actions: []\n"
+                    ),
+                    "file": "custom_packages/_e2e_alt_automation.yaml",
+                },
+            )
+            assert data.get("success") is True, (
+                f"PACKAGES_ONLY key 'automation' should be accepted under the "
+                f"configured packages folder (#1854): {data}"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Comment and HA tag preservation
