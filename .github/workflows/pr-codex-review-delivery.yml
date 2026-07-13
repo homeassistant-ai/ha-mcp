@@ -30,7 +30,7 @@ jobs:
           fi
 
       - name: Post Codex review request
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GH_TOKEN_CODEX_COMMENT }}
           script: |
