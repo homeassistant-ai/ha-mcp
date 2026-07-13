@@ -273,14 +273,16 @@ class TestChannelResolution:
         monkeypatch.setattr(es, "async_process_requirements", AsyncMock())
         monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
-        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.9.0")
-        monkeypatch.setattr(es, "_dist_installed", lambda name: False)
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.12.1")
+        monkeypatch.setattr(
+            es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
+        )
         monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
 
         await mgr._async_ensure_package()
 
-        assert mgr._pip_spec == f"{DIST_NAME_STABLE}==7.9.0"
+        assert mgr._pip_spec == f"{DIST_NAME_STABLE}==7.12.1"
 
     async def test_ensure_package_channel_switch_auto_off_stays_unpinned(
         self, tmp_path, monkeypatch
@@ -306,7 +308,7 @@ class TestChannelResolution:
             "_installed_dist_version",
             lambda dist: "8.0.0.dev3" if dist == DEV_PIP_SPEC else None,
         )
-        monkeypatch.setattr(es, "_dist_installed", lambda name: False)
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
         monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
 
         await mgr._async_ensure_package()
@@ -354,19 +356,19 @@ class TestEnsurePackage:
         # forced reinstall).
         mgr, _hass, _entry = _manager(
             tmp_path,
-            options={OPT_PIP_SPEC: "ha-mcp==7.9.0"},
-            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "ha-mcp==7.9.0"},
+            options={OPT_PIP_SPEC: "ha-mcp==7.12.1"},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "ha-mcp==7.12.1"},
         )
         proc = AsyncMock()
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "async_process_requirements", proc)
         monkeypatch.setattr(es, "install_package", install_pkg)
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
 
         await mgr._async_ensure_package()
 
         proc.assert_awaited_once()
-        assert proc.await_args.args[2] == ["ha-mcp==7.9.0"]
+        assert proc.await_args.args[2] == ["ha-mcp==7.12.1"]
         install_pkg.assert_not_called()
 
     async def test_auto_update_off_takes_fast_path_when_pinned_unchanged(
@@ -374,22 +376,22 @@ class TestEnsurePackage:
     ):
         # Auto-update off pins to the installed version; an unchanged pin takes
         # the fast path (like an explicit override) — no forced upgrade churn.
-        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.9.0")
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.12.1")
         mgr, _hass, _entry = _manager(
             tmp_path,
             options={OPT_AUTO_UPDATE: False},
-            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "ha-mcp==7.9.0"},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "ha-mcp==7.12.1"},
         )
         proc = AsyncMock()
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "async_process_requirements", proc)
         monkeypatch.setattr(es, "install_package", install_pkg)
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
 
         await mgr._async_ensure_package()
 
         proc.assert_awaited_once()
-        assert proc.await_args.args[2] == ["ha-mcp==7.9.0"]
+        assert proc.await_args.args[2] == ["ha-mcp==7.12.1"]
         install_pkg.assert_not_called()
 
     async def test_stable_non_override_always_forces_install(
@@ -407,7 +409,7 @@ class TestEnsurePackage:
         monkeypatch.setattr(es, "async_process_requirements", proc)
         monkeypatch.setattr(es, "install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
         monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
 
@@ -423,24 +425,24 @@ class TestEnsurePackage:
         # test channel) ⇒ force a real reinstall (upgrade=True), not the fast path.
         mgr, _hass, entry = _manager(
             tmp_path,
-            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "ha-mcp==7.8.0"},
-            options={OPT_PIP_SPEC: "ha-mcp==7.9.0"},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "ha-mcp==7.11.0"},
+            options={OPT_PIP_SPEC: "ha-mcp==7.12.1"},
         )
         proc = AsyncMock()
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "async_process_requirements", proc)
         monkeypatch.setattr(es, "install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
 
         await mgr._async_ensure_package()
 
         proc.assert_not_awaited()
         install_pkg.assert_called_once()
-        assert install_pkg.call_args.args[0] == "ha-mcp==7.9.0"
+        assert install_pkg.call_args.args[0] == "ha-mcp==7.12.1"
         assert install_pkg.call_args.kwargs.get("upgrade") is True
         # The just-installed spec is persisted so the next start takes the fast path.
-        assert entry.data[DATA_LAST_PIP_SPEC] == "ha-mcp==7.9.0"
+        assert entry.data[DATA_LAST_PIP_SPEC] == "ha-mcp==7.12.1"
 
     async def test_force_install_when_not_installed(self, tmp_path, monkeypatch):
         # First run: package absent ⇒ force install, then persist the spec (the
@@ -450,7 +452,7 @@ class TestEnsurePackage:
         monkeypatch.setattr(es, "install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(
-            es, "_installed_ha_mcp_version", MagicMock(side_effect=[None, "7.9.0"])
+            es, "_installed_ha_mcp_version", MagicMock(side_effect=[None, "7.12.1"])
         )
 
         await mgr._async_ensure_package()
@@ -493,6 +495,87 @@ class TestEnsurePackage:
         # never self-heal (review finding).
         assert DATA_LAST_PIP_SPEC not in _entry.data
 
+    async def test_legacy_server_is_removed_before_install(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        install_pkg = MagicMock(return_value=True)
+        uninstall = MagicMock(return_value=True)
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(
+            es,
+            "pip_kwargs",
+            lambda cfg: {"target": "/config/deps", "constraints": "/constraints"},
+        )
+        monkeypatch.setattr(
+            es,
+            "_installed_ha_mcp_version",
+            MagicMock(side_effect=["6.2.0", "7.12.1"]),
+        )
+        monkeypatch.setattr(es, "_installed_dist_version", lambda name: "6.2.0")
+        monkeypatch.setattr(
+            es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
+        )
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        uninstall.assert_called_once_with(DIST_NAME_STABLE, target="/config/deps")
+        install_pkg.assert_called_once()
+
+    async def test_legacy_server_overrides_disabled_auto_update_with_bare_stored_spec(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_AUTO_UPDATE: False},
+            data={
+                DATA_SECRET_PATH: "/p",
+                DATA_LAST_PIP_SPEC: DIST_NAME_STABLE,
+            },
+        )
+        install_pkg = MagicMock(return_value=True)
+        uninstall = MagicMock(return_value=True)
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(
+            es,
+            "_installed_ha_mcp_version",
+            MagicMock(side_effect=["6.2.0", "7.12.1"]),
+        )
+        monkeypatch.setattr(es, "_installed_dist_version", lambda name: "6.2.0")
+        monkeypatch.setattr(
+            es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
+        )
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        assert mgr._pip_spec == DIST_NAME_STABLE
+        uninstall.assert_called_once_with(DIST_NAME_STABLE)
+        assert install_pkg.call_args.args[0] == DIST_NAME_STABLE
+
+    async def test_post_install_legacy_version_is_rejected(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(
+            es,
+            "_installed_ha_mcp_version",
+            MagicMock(side_effect=["6.2.0", "6.2.0"]),
+        )
+        monkeypatch.setattr(es, "_installed_dist_version", lambda name: None)
+        monkeypatch.setattr(es, "_dist_installed", lambda name: False)
+        monkeypatch.setattr(es, "_uninstall_distribution", MagicMock(return_value=True))
+
+        with pytest.raises(es.EmbeddedServerError) as exc:
+            await mgr._async_ensure_package()
+
+        assert exc.value.kind == "package"
+        assert "installed ha-mcp 6.2.0" in str(exc.value)
+        assert f"requires {es.MIN_EMBEDDED_SERVER_VERSION} or newer" in str(exc.value)
+        assert "resolver details" in str(exc.value)
+        assert "update Home Assistant" not in str(exc.value)
+        assert DATA_LAST_PIP_SPEC not in _entry.data
+
     async def test_installed_but_not_importable_raises_package_error(
         self, tmp_path, monkeypatch
     ):
@@ -519,7 +602,9 @@ class TestEnsurePackage:
         monkeypatch.setattr(es, "async_process_requirements", proc)
         monkeypatch.setattr(es, "install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0.dev5")
+        monkeypatch.setattr(
+            es, "_installed_ha_mcp_version", lambda preferred=None: "7.12.1.dev5"
+        )
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
         uninstall = MagicMock()
         monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
@@ -530,6 +615,70 @@ class TestEnsurePackage:
         install_pkg.assert_called_once()
         assert install_pkg.call_args.args[0] == DEV_PIP_SPEC
         uninstall.assert_not_called()  # the other dist was absent
+
+    async def test_dev_install_validates_target_when_stale_stable_metadata_remains(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEFAULT_PIP_SPEC},
+        )
+        install_pkg = MagicMock(return_value=True)
+        uninstall = MagicMock(return_value=False)
+
+        def installed_version(preferred_dist=None):
+            if preferred_dist == DIST_NAME_DEV:
+                return "7.12.1.dev5"
+            return "6.2.0"
+
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
+        monkeypatch.setattr(
+            es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
+        )
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        uninstall.assert_called_once_with(DIST_NAME_STABLE)
+        install_pkg.assert_called_once()
+
+    async def test_dev_cleanup_keeps_compatible_target_with_stale_stable_metadata(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV, OPT_AUTO_UPDATE: False},
+            data={
+                DATA_SECRET_PATH: "/p",
+                DATA_LAST_PIP_SPEC: f"{DIST_NAME_DEV}==7.12.1.dev5",
+            },
+        )
+        install_pkg = MagicMock(return_value=True)
+        uninstall = MagicMock(return_value=True)
+
+        def installed_version(preferred_dist=None):
+            if preferred_dist == DIST_NAME_DEV:
+                return "7.12.1.dev5"
+            return "6.2.0"
+
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
+        monkeypatch.setattr(
+            es,
+            "_installed_dist_version",
+            lambda name: "7.12.1.dev5" if name == DIST_NAME_DEV else "6.2.0",
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        uninstall.assert_called_once_with(DIST_NAME_STABLE)
+        install_pkg.assert_called_once()
 
     async def test_channel_switch_uninstalls_other_dist(self, tmp_path, monkeypatch):
         # Switching to dev while stable's distribution is installed uninstalls
@@ -542,7 +691,9 @@ class TestEnsurePackage:
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(
+            es, "_installed_ha_mcp_version", lambda preferred=None: "7.12.1"
+        )
         monkeypatch.setattr(
             es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
         )
@@ -570,7 +721,7 @@ class TestEnsurePackage:
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
         monkeypatch.setattr(es, "_dist_installed", lambda name: name == DIST_NAME_DEV)
         uninstall = MagicMock()
         monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
@@ -586,12 +737,12 @@ class TestEnsurePackage:
         # uninstalled even when the other channel's package is present.
         mgr, _hass, _entry = _manager(
             tmp_path,
-            options={OPT_CHANNEL: CHANNEL_DEV, OPT_PIP_SPEC: "ha-mcp==7.8.0"},
+            options={OPT_CHANNEL: CHANNEL_DEV, OPT_PIP_SPEC: "ha-mcp==7.11.0"},
             data={DATA_SECRET_PATH: "/p"},
         )
         monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.8.0")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.11.0")
         monkeypatch.setattr(es, "_dist_installed", lambda name: True)
         uninstall = MagicMock()
         monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
@@ -613,20 +764,20 @@ class TestPendingInstallMarker:
         # install, not the unpinned, auto-updating channel spec.
         mgr, _hass, _entry = _manager(
             tmp_path,
-            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.8.0"},
+            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.11.0"},
         )
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.8.0")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.11.0")
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
         monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
 
         await mgr._async_ensure_package()
 
-        assert mgr._pip_spec == f"{DIST_NAME_STABLE}==7.8.0"
+        assert mgr._pip_spec == f"{DIST_NAME_STABLE}==7.11.0"
         install_pkg.assert_called_once()
-        assert install_pkg.call_args.args[0] == f"{DIST_NAME_STABLE}==7.8.0"
+        assert install_pkg.call_args.args[0] == f"{DIST_NAME_STABLE}==7.11.0"
 
     async def test_pinned_to_pending_version_overrides_auto_update_off_repin(
         self, tmp_path, monkeypatch
@@ -638,48 +789,48 @@ class TestPendingInstallMarker:
         mgr, _hass, _entry = _manager(
             tmp_path,
             options={OPT_AUTO_UPDATE: False},
-            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.9.0"},
+            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.12.1"},
         )
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         # Currently-installed version differs from the requested pending one -
         # proves the marker, not the auto-update-off re-pin, decided the spec.
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.8.0")
-        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.8.0")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.11.0")
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.11.0")
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
         monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
 
         await mgr._async_ensure_package()
 
-        assert mgr._pip_spec == f"{DIST_NAME_STABLE}==7.9.0"
+        assert mgr._pip_spec == f"{DIST_NAME_STABLE}==7.12.1"
 
     async def test_explicit_override_wins_over_pending_marker(
         self, tmp_path, monkeypatch
     ):
         mgr, _hass, _entry = _manager(
             tmp_path,
-            options={OPT_PIP_SPEC: "ha-mcp==7.5.0"},
+            options={OPT_PIP_SPEC: "ha-mcp==7.10.0"},
             data={
                 DATA_SECRET_PATH: "/p",
-                DATA_PENDING_INSTALL_VERSION: "7.9.0",
-                DATA_LAST_PIP_SPEC: "ha-mcp==7.5.0",
+                DATA_PENDING_INSTALL_VERSION: "7.12.1",
+                DATA_LAST_PIP_SPEC: "ha-mcp==7.10.0",
             },
         )
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.5.0")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.10.0")
 
         await mgr._async_ensure_package()
 
-        assert mgr._pip_spec == "ha-mcp==7.5.0"
+        assert mgr._pip_spec == "ha-mcp==7.10.0"
 
     async def test_marker_cleared_after_successful_install(self, tmp_path, monkeypatch):
         mgr, _hass, entry = _manager(
             tmp_path,
-            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.9.0"},
+            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.12.1"},
         )
         monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
         monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
 
@@ -695,7 +846,7 @@ class TestPendingInstallMarker:
         # same broken version, looping the failure forever.
         mgr, _hass, entry = _manager(
             tmp_path,
-            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.9.0"},
+            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.12.1"},
         )
         monkeypatch.setattr(es, "install_package", MagicMock(return_value=False))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
@@ -737,6 +888,24 @@ class TestDistHelpers:
         # No shell, and a non-zero exit is tolerated rather than raising.
         assert calls["kwargs"]["check"] is False
 
+    def test_uninstall_targets_same_dependency_directory(self, monkeypatch):
+        calls = {}
+
+        def _run(args, **kwargs):
+            calls["args"] = args
+            return SimpleNamespace(returncode=0, stderr="")
+
+        monkeypatch.setattr(es.subprocess, "run", _run)
+
+        assert (
+            es._uninstall_distribution(DIST_NAME_STABLE, target="/config/deps") is True
+        )
+
+        args = calls["args"]
+        assert "--target" in args
+        assert args[args.index("--target") + 1] == "/config/deps"
+        assert "--python" not in args
+
     def test_uninstall_nonzero_exit_is_swallowed(self, monkeypatch):
         monkeypatch.setattr(
             es.subprocess,
@@ -774,6 +943,14 @@ class TestInstalledVersion:
 
         monkeypatch.setattr(importlib.metadata, "version", _version)
         assert es._installed_ha_mcp_version() == "7.9.0.dev5"
+
+    def test_prefers_requested_dist(self, monkeypatch):
+        monkeypatch.setattr(
+            importlib.metadata,
+            "version",
+            lambda name: "7.9.0.dev5" if name == DIST_NAME_DEV else "6.2.0",
+        )
+        assert es._installed_ha_mcp_version(DIST_NAME_DEV) == "7.9.0.dev5"
 
     def test_returns_none_when_absent(self, monkeypatch):
         def _version(name):
@@ -1403,6 +1580,40 @@ class TestLifecycle:
         with pytest.raises(es.EmbeddedServerError, match="secret path missing"):
             await mgr.async_start()
 
+    async def test_start_rejects_unsupported_home_assistant_before_install(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        ensure = AsyncMock()
+        monkeypatch.setattr(es, "HA_VERSION", "2025.9.4")
+        monkeypatch.setattr(mgr, "_async_ensure_package", ensure)
+
+        with pytest.raises(
+            es.EmbeddedServerError,
+            match=r"requires Home Assistant 2026\.6\.0 or newer",
+        ) as exc:
+            await mgr.async_start()
+
+        assert exc.value.kind == "package"
+        ensure.assert_not_awaited()
+
+    async def test_start_rejects_invalid_home_assistant_version_before_install(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        ensure = AsyncMock()
+        monkeypatch.setattr(es, "HA_VERSION", "custom-build")
+        monkeypatch.setattr(mgr, "_async_ensure_package", ensure)
+
+        with pytest.raises(
+            es.EmbeddedServerError,
+            match="could not determine whether Home Assistant custom-build",
+        ) as exc:
+            await mgr.async_start()
+
+        assert exc.value.kind == "package"
+        ensure.assert_not_awaited()
+
     async def test_start_orders_steps_and_spawns_thread(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path)
         calls = []
@@ -1573,6 +1784,37 @@ class TestPurgeHaMcpModules:
 
 
 class TestRunningVersionStalenessWarning:
+    async def test_start_prefers_configured_dev_distribution(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        mgr, _hass, _entry = _manager(tmp_path, options={OPT_CHANNEL: CHANNEL_DEV})
+        monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+        installed = MagicMock(return_value="7.13.0.dev1")
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", installed)
+
+        def _ready_with_current_dev_worker():
+            mgr._running_version = "7.13.0.dev1"
+
+        monkeypatch.setattr(
+            mgr,
+            "_async_wait_until_ready",
+            AsyncMock(side_effect=_ready_with_current_dev_worker),
+        )
+
+        with caplog.at_level("WARNING"):
+            await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        installed.assert_called_once_with(DIST_NAME_DEV)
+        assert "restart Home Assistant" not in caplog.text
+
     async def test_start_warns_when_running_version_stale(
         self, tmp_path, monkeypatch, caplog
     ):
@@ -1586,7 +1828,9 @@ class TestRunningVersionStalenessWarning:
         # live ha_mcp module and poison later tests in this process.
         monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "9.9.9")
+        monkeypatch.setattr(
+            es, "_installed_ha_mcp_version", lambda preferred_dist=None: "9.9.9"
+        )
 
         def _ready_with_stale_worker():
             # Deterministic stand-in for the _serve stash: the worker
@@ -1618,7 +1862,9 @@ class TestRunningVersionStalenessWarning:
         # live ha_mcp module and poison later tests in this process.
         monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
-        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "1.1.1")
+        monkeypatch.setattr(
+            es, "_installed_ha_mcp_version", lambda preferred_dist=None: "1.1.1"
+        )
 
         def _ready_with_current_worker():
             mgr._running_version = "1.1.1"
@@ -1728,8 +1974,41 @@ class TestServeRunningVersionCapture:
 
         _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
         sys.modules["ha_mcp"].__version__ = "9.8.7"
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: None)
 
         mgr._thread_main("tok")
 
         assert mgr._running_version == "9.8.7"
+        assert isinstance(mgr._thread_exc, _StopServe)
+
+    def test_serve_prefers_configured_dev_metadata(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={
+                OPT_CHANNEL: CHANNEL_DEV,
+                OPT_SERVER_URL: "http://ha.local:8123",
+            },
+        )
+
+        class _StopServe(Exception):
+            pass
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                raise _StopServe
+
+        _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
+        # ha_mcp.__version__ checks stable metadata first, so a failed
+        # best-effort uninstall can make freshly imported dev code report the
+        # stale stable version.
+        sys.modules["ha_mcp"].__version__ = "6.2.0"
+        versions = {
+            DIST_NAME_STABLE: "6.2.0",
+            DIST_NAME_DEV: "7.13.0.dev1",
+        }
+        monkeypatch.setattr(es, "_installed_dist_version", versions.get)
+
+        mgr._thread_main("tok")
+
+        assert mgr._running_version == "7.13.0.dev1"
         assert isinstance(mgr._thread_exc, _StopServe)

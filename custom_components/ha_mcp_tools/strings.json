@@ -19,7 +19,8 @@
             }
         },
         "abort": {
-            "already_configured": "This entry is already set up."
+            "already_configured": "This entry is already set up.",
+            "unsupported_home_assistant": "The in-process HA-MCP Server requires Home Assistant {required} or newer, but this instance is running {installed}. You can still use this component's HA MCP Tools entry with an external ha-mcp server running as an add-on or Docker container."
         }
     },
     "options": {
@@ -76,7 +77,7 @@
         },
         "server_package_install_failed": {
             "title": "The HA-MCP in-process server package could not be installed",
-            "description": "Installing the ha-mcp package for the in-process server failed:\n\n{detail}\n\nCheck the Home Assistant logs and network connectivity, then reload the integration to retry."
+            "description": "Installing the ha-mcp package for the in-process server failed:\n\n{detail}\n\nResolve the compatibility or installation problem described above, then reload the integration to retry."
         },
         "component_outdated": {
             "title": "Update the HA-MCP Custom Component via HACS",

@@ -42,6 +42,14 @@ Once the in-process server config entry exists, it:
 
 The bring-up runs in the background, so it never delays Home Assistant startup.
 
+## Requirements
+
+The in-process server requires **Home Assistant 2026.6.0 or newer**. Older Core
+releases constrain dependencies to versions that cannot run current `ha-mcp`
+servers. On older releases, the component remains available for its HA MCP Tools
+entry with an external add-on or Docker server, but its config flow blocks
+creation of the incompatible in-process server entry.
+
 ## Setup
 
 1. **Install the component.** Install **HA-MCP Custom Component** from HACS

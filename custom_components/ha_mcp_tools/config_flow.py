@@ -28,6 +28,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
+from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     SelectOptionDict,
@@ -36,6 +37,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 from homeassistant.loader import async_get_integration
+from packaging.version import InvalidVersion, Version
 
 from .const import (
     BIND_HOST_ALL,
@@ -62,6 +64,7 @@ from .const import (
     EXPOSURE_FULL,
     EXPOSURE_TOOL_SEARCH,
     LLM_API_DOCS_URL,
+    MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
     OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
     OPT_CHANNEL,
@@ -176,6 +179,21 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
         9584, LAN-reachable like the add-on, secret-URL auth); everything is
         tunable afterward in the integration options.
         """
+        try:
+            supported = Version(HA_VERSION) >= Version(
+                MIN_EMBEDDED_HOME_ASSISTANT_VERSION
+            )
+        except InvalidVersion:
+            supported = False
+        if not supported:
+            return self.async_abort(
+                reason="unsupported_home_assistant",
+                description_placeholders={
+                    "installed": HA_VERSION,
+                    "required": MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
+                },
+            )
+
         await self.async_set_unique_id(_SERVER_UNIQUE_ID)
         self._abort_if_unique_id_configured()
 
