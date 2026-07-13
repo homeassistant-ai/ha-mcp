@@ -515,7 +515,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_get_camera_image` — Retrieve a snapshot image from a Home Assistant camera entity.
 
 ### Dashboard
-- `ha_get_dashboard_screenshot` **(beta — dev channel only)** — Get one or more responsive images of a Home Assistant Lovelace dashboard view; can also update/restart only the schema-verified Puppet add-on's non-secret `keep_browser_open` setting.
+- `ha_get_dashboard_screenshot` **(beta — dev channel only)** — Get rendered images of a Home Assistant Lovelace dashboard view.
 
 ### Dashboards
 - `ha_config_delete_dashboard` — Delete a storage-mode dashboard completely.

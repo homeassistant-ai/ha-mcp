@@ -627,17 +627,34 @@
   {
     "name": "ha_get_dashboard_screenshot",
     "title": "Get Dashboard Screenshot",
-    "description": "Get a rendered PNG image of a Home Assistant Lovelace dashboard view.\n\nUse it to visually verify a dashboard you just created or edited\n(pair with ha_config_set_dashboard, or use its return_screenshot\nparam for a one-call create-and-see). Charts render best-effort —\nraise wait_ms if a chart card is blank. Set full_page=True to capture\ncontent below the fold.",
+    "description": "Get rendered images of a Home Assistant Lovelace dashboard view.\n\nWhen not to use: while reading or writing dashboard configuration, use\nha_config_get_dashboard(include_screenshot=True) or\nha_config_set_dashboard(return_screenshot=True) for a single workflow.\n\nUse it for repeatable visual checks, including ordered mobile, tablet,\nand desktop captures. Puppet reports image bytes but does not confirm\nthat the frontend accepted a requested theme or language; structured\nmetadata therefore records the values sent to the engine.\n\nTo change the Puppet engine add-on itself (keep_browser_open, restart),\nuse ha_manage_addon.",
     "inputSchema": {
       "properties": {
         "dashboard_path": {
-          "type": "Annotated[str, Field(description=\"Lovelace frontend path to render, e.g. 'lovelace/0' (default dashboard, first view), 'lovelace-home/kitchen', or 'my-dashboard'. Leading slash optional.\")]"
+          "type": "Annotated[str | None, Field(description=\"Legacy Lovelace frontend path to render, e.g. 'lovelace/0' (default dashboard, first view), 'lovelace-home/kitchen', or 'my-dashboard'. Leading slash optional. Prefer dashboard_url_path + view_path for a stable named view. Mutually exclusive with dashboard_url_path.\")]",
+          "default": null
+        },
+        "dashboard_url_path": {
+          "type": "Annotated[str | None, Field(description=\"Stable dashboard URL path, e.g. 'lovelace-home' or 'default'. Use with view_path instead of dashboard_path.\")]",
+          "default": null
+        },
+        "view_path": {
+          "type": "Annotated[str | None, Field(description='Stable Lovelace views[].path value to render. Requires dashboard_url_path.')]",
+          "default": null
         },
         "width": {
           "type": "Annotated[int, Field(description='Viewport width in px.', ge=64, le=4096)]"
         },
         "height": {
-          "type": "Annotated[int, Field(description='Viewport height in px. Ignored when full_page=True (the engine renders a tall page instead).', ge=64, le=4096)]"
+          "type": "Annotated[int | Literal['auto'], Field(description=\"Viewport height in px (64-4096), or 'auto' for content height. full_page=True is a compatibility alias for 'auto'.\")]"
+        },
+        "viewport_presets": {
+          "type": "Annotated[list[ViewportPreset] | None, JSON_STRING_COERCION, Field(description='Render one or more named responsive viewports in this order: mobile (390x844), tablet (768x1024), desktop (1280x800). Overrides width/height.', min_length=1, max_length=3)]",
+          "default": null
+        },
+        "orientation": {
+          "type": "Annotated[Orientation | None, Field(description='Optional responsive orientation. Swaps viewport dimensions when needed; this does not rotate final pixels.')]",
+          "default": null
         },
         "zoom": {
           "type": "Annotated[float, Field(description='Page zoom factor (1.0 = 100%).', ge=0.1, le=5.0)]",
@@ -647,17 +664,32 @@
           "type": "Annotated[int, Field(description='Extra render-settle time (ms) after the dashboard reports loaded. Raise it if a chart card (ApexCharts, mini-graph, history-graph) comes back blank.', ge=0, le=30000)]"
         },
         "full_page": {
-          "type": "Annotated[bool, Field(description=f\"{FULL_PAGE_PARAM_DESC[:1].upper()}{FULL_PAGE_PARAM_DESC[1:]}. Overrides 'height' with a tall render; raise 'wait_ms' for long dashboards so lazy cards finish painting.\")]",
+          "type": "Annotated[bool, Field(description=f\"{FULL_PAGE_PARAM_DESC[:1].upper()}{FULL_PAGE_PARAM_DESC[1:]}. Uses Puppet's native auto-height capture (currently capped at 4000 px); raise wait_ms for lazy cards.\")]",
           "default": false
+        },
+        "theme": {
+          "type": "Annotated[str | None, Field(description='Installed Home Assistant frontend theme name. Puppet persists this selection on the frontend profile used by its token.')]",
+          "default": null
+        },
+        "dark_mode": {
+          "type": "Annotated[bool, Field(description='Render the requested theme in dark mode. Puppet may persist the theme/dark preference on the profile used by its token.')]",
+          "default": false
+        },
+        "language": {
+          "type": "Annotated[str | None, Field(description=\"Frontend language code, e.g. 'en' or 'de'.\")]",
+          "default": null
+        },
+        "image_format": {
+          "type": "Annotated[ScreenshotFormat, Field(description='Image format: png, jpeg, webp, or bmp.')]",
+          "default": "png"
+        },
+        "render_timeout_seconds": {
+          "type": "Annotated[float, Field(description='HTTP render timeout in seconds.', ge=1, le=300)]"
         }
-      },
-      "required": [
-        "dashboard_path"
-      ]
+      }
     },
     "annotations": {
-      "readOnlyHint": true,
-      "idempotentHint": true
+      "destructiveHint": false
     },
     "tags": [
       "Dashboard",
@@ -744,18 +776,18 @@
           "default": false
         },
         "include_screenshot": {
-          "type": "Annotated[bool, Field(description=\"Get mode only: also return a rendered PNG of the dashboard for visual verification. Requires the 'dashboard screenshot' beta feature + engine add-on/sidecar. If the feature is disabled the config is returned with a warning; if the engine is configured but the render fails, the call errors (the screenshot is the requested payload). Ignored in list/search mode.\")]",
+          "type": "Annotated[bool, Field(description=\"Get mode only: also return rendered image(s) of the dashboard for visual verification. Requires the 'dashboard screenshot' beta feature + engine add-on/sidecar. If the feature is disabled the config is returned with a warning; if the engine is configured but the render fails, the call errors (the screenshot is the requested payload). Ignored in list/search mode.\")]",
           "default": false
         },
-        "full_page": {
-          "type": "Annotated[bool, Field(description=f'With include_screenshot: {FULL_PAGE_PARAM_DESC}.')]",
-          "default": false
+        "view_path": {
+          "type": "Annotated[str | None, Field(description='With include_screenshot: stable Lovelace views[].path to render. Omit to render the dashboard base route.')]",
+          "default": null
         }
       }
     },
     "annotations": {
-      "idempotentHint": true,
-      "readOnlyHint": true
+      "destructiveHint": false,
+      "idempotentHint": true
     },
     "tags": [
       "Dashboards"
@@ -829,12 +861,12 @@
           "default": null
         },
         "return_screenshot": {
-          "type": "Annotated[bool, Field(description=\"After writing, also return a rendered PNG of the dashboard so you can see what it looks like in a single call (the dashboard creation/iteration loop). Requires the 'dashboard screenshot' beta feature + engine add-on/sidecar; if unavailable, the write result is returned with a warning.\")]",
+          "type": "Annotated[bool, Field(description=\"After writing, also return rendered image(s) of the dashboard so you can see what it looks like in a single call (the dashboard creation/iteration loop). Requires the 'dashboard screenshot' beta feature + engine add-on/sidecar; if unavailable, the write result is returned with a warning.\")]",
           "default": false
         },
-        "full_page": {
-          "type": "Annotated[bool, Field(description=f'With return_screenshot: {FULL_PAGE_PARAM_DESC}.')]",
-          "default": false
+        "view_path": {
+          "type": "Annotated[str | None, Field(description='With return_screenshot: stable Lovelace views[].path to render.')]",
+          "default": null
         }
       },
       "required": [
