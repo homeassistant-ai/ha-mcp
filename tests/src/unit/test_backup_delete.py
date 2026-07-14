@@ -64,12 +64,19 @@ def _ws_client(
     backups: list[dict[str, Any]],
     *,
     delete_agent_errors: dict[str, str] | None = None,
+    info_agent_errors: dict[str, str] | None = None,
 ) -> AsyncMock:
     ws = AsyncMock()
 
     async def _send(command: str, **kwargs: Any) -> Any:
         if command == "backup/info":
-            return {"success": True, "result": {"backups": backups}}
+            return {
+                "success": True,
+                "result": {
+                    "backups": backups,
+                    "agent_errors": info_agent_errors or {},
+                },
+            }
         if command == "backup/delete":
             return {
                 "success": True,
@@ -298,6 +305,86 @@ class TestSnapshotDeleteSuccess:
         with p1, p2, pytest.raises(ToolError) as exc_info:
             await delete_backup(_client(), "target", confirm=True)
         assert ErrorCode.SERVICE_CALL_FAILED.value in str(exc_info.value)
+
+
+class TestSnapshotDeleteAgentErrorsOnInfo:
+    """codex review: if `backup/info` reports `agent_errors` (one or more
+    agents failed to enumerate their backups), the returned `backups` list
+    may be an incomplete view — the newest-snapshot and automatic-backup
+    guards would then be evaluated against partial data. Refuse deletion
+    rather than risk deleting a backup that a currently-unreachable agent
+    would have revealed as protected."""
+
+    @pytest.mark.asyncio
+    async def test_refuses_when_backup_info_reports_agent_errors(self) -> None:
+        old = _iso(_now() - timedelta(days=100))
+        newer = _iso(_now() - timedelta(days=1))
+        ws = _ws_client(
+            [
+                _entry("target", date=old),
+                _entry("other", date=newer),
+            ],
+            info_agent_errors={"cloud_agent": "timeout"},
+        )
+        settings = _settings(enabled=True, min_age_days=7)
+        p1, p2 = _patched(ws, settings)
+        with p1, p2, pytest.raises(ToolError) as exc_info:
+            await delete_backup(_client(), "target", confirm=True)
+        assert ErrorCode.SERVICE_CALL_FAILED.value in str(exc_info.value)
+        assert not any(
+            c.args[0] == "backup/delete" for c in ws.send_command.call_args_list
+        )
+
+
+class TestSnapshotDeleteAgeFloorClockSkew:
+    """codex review: min_age_days=0 must unconditionally disable the age
+    floor, including when the target's HA-stamped date is slightly ahead of
+    the ha-mcp host's own clock (clock skew between the two systems) —
+    `target_date > cutoff` would otherwise still reject it even though the
+    UI/docs promise 0 means "no floor"."""
+
+    @pytest.mark.asyncio
+    async def test_min_age_days_zero_ignores_future_dated_backup(self) -> None:
+        future = _iso(_now() + timedelta(hours=1))
+        newer = _iso(_now() + timedelta(hours=2))
+        ws = _ws_client(
+            [
+                _entry("target", date=future),
+                _entry("other", date=newer),
+            ]
+        )
+        settings = _settings(enabled=True, min_age_days=0)
+        p1, p2 = _patched(ws, settings)
+        with p1, p2:
+            result = await delete_backup(_client(), "target", confirm=True)
+        assert result["success"] is True
+
+
+class TestSnapshotDeleteWaitTimeout:
+    """codex review: `backup/delete` fans out to every configured agent
+    (including cloud/remote ones) and the tool call doesn't return until
+    all finish — the WS client's default 30s wait can be too tight for a
+    slow/rate-limited remote agent, same class of problem this PR already
+    fixes for snapshot creation."""
+
+    @pytest.mark.asyncio
+    async def test_delete_uses_an_elevated_wait_timeout(self) -> None:
+        old = _iso(_now() - timedelta(days=100))
+        newer = _iso(_now() - timedelta(days=1))
+        ws = _ws_client(
+            [
+                _entry("target", date=old),
+                _entry("other", date=newer),
+            ]
+        )
+        settings = _settings(enabled=True, min_age_days=7)
+        p1, p2 = _patched(ws, settings)
+        with p1, p2:
+            await delete_backup(_client(), "target", confirm=True)
+        delete_call = next(
+            c for c in ws.send_command.call_args_list if c.args[0] == "backup/delete"
+        )
+        assert delete_call.kwargs.get("_wait_timeout", 30.0) > 30.0
 
 
 class TestSnapshotDeleteMalformedResult:

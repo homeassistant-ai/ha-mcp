@@ -75,6 +75,13 @@ _BACKUP_DATE_FILTER_TOLERANCE_S = 5
 # progress for 300s"). Independent of poll_interval so a tight poll loop
 # doesn't flood the client with redundant notifications.
 _BACKUP_PROGRESS_INTERVAL_S = 10
+# backup/delete fans out to every configured agent (including cloud/remote
+# ones — S3, Google Drive, WebDAV, etc.) via asyncio.gather server-side, and
+# the WS response doesn't arrive until all of them finish. The client's
+# default 30s wait (HomeAssistantWebSocketClient.send_command's
+# _wait_timeout) can be too tight for a slow or rate-limited remote agent —
+# same class of false-timeout problem this file already fixes for creation.
+_BACKUP_DELETE_WAIT_S = 60.0
 
 
 def _get_backup_hint_text() -> str:
@@ -1045,7 +1052,10 @@ async def delete_backup(
     1. ``confirm=True`` is required.
     2. The backup must exist (verified against ``backup/info``, mirroring
        ``restore_backup`` — HA's own ``backup/delete`` silently no-ops on
-       an unknown ID rather than erroring).
+       an unknown ID rather than erroring). If ``backup/info`` itself
+       reports ``agent_errors`` (an agent failed to enumerate its backups),
+       the returned list may be incomplete — refuse deletion rather than
+       evaluate the guards below against a possibly-partial view.
     3. Scheduled backups (``with_automatic_settings=True``) are never
        deletable.
     4. The single newest remaining snapshot, of any type, is never
@@ -1055,8 +1065,13 @@ async def delete_backup(
        a "too young" message whose suggested remedy (lower the floor)
        would not actually unblock it.
     5. The target must be older than ``snapshot_delete_min_age_days`` (0
-       disables this floor). A missing/unparseable date fails closed
-       (treated as too new to delete).
+       unconditionally disables this floor, even across clock skew between
+       this host and the HA instance that stamped the backup's date). A
+       missing/unparseable date fails closed (treated as too new to delete).
+
+    The actual ``backup/delete`` call uses an elevated WS wait timeout
+    (``_BACKUP_DELETE_WAIT_S``) since it fans out to every configured agent
+    — including slow/rate-limited remote ones — server-side.
 
     Raises ToolError if disabled, unconfirmed, not found, blocked by a
     guard, or if HA reports a per-agent deletion failure.
@@ -1099,7 +1114,20 @@ async def delete_backup(
                     info_result.get("error", "Failed to retrieve backup information"),
                 )
             )
-        backups = (info_result.get("result") or {}).get("backups") or []
+        info_result_block = info_result.get("result") or {}
+        info_agent_errors = info_result_block.get("agent_errors") or {}
+        if info_agent_errors:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Cannot verify the backup inventory is complete: one or "
+                    "more backup agents failed to respond, so the newest-"
+                    "snapshot and scheduled-backup guards can't be trusted "
+                    "against a possibly-partial list.",
+                    context={"backup_id": backup_id, "agent_errors": info_agent_errors},
+                )
+            )
+        backups = info_result_block.get("backups") or []
         matched = next((b for b in backups if b.get("backup_id") == backup_id), None)
         if matched is None:
             raise_tool_error(
@@ -1145,7 +1173,11 @@ async def delete_backup(
                 backup_id=backup_id,
             )
         cutoff = datetime.now(UTC) - timedelta(days=min_age_days)
-        if target_date > cutoff:
+        # min_age_days=0 must unconditionally disable the floor, even if
+        # target_date is slightly ahead of this host's clock (clock skew
+        # vs the HA instance that stamped it) — guard explicitly rather
+        # than relying on the arithmetic reduction, which clock skew breaks.
+        if min_age_days > 0 and target_date > cutoff:
             _refuse_snapshot_delete(
                 f"Refusing to delete a backup younger than "
                 f"snapshot_delete_min_age_days={min_age_days} days — at "
@@ -1156,7 +1188,9 @@ async def delete_backup(
             )
 
         delete_result = await ws_client.send_command(
-            "backup/delete", backup_id=backup_id
+            "backup/delete",
+            backup_id=backup_id,
+            _wait_timeout=_BACKUP_DELETE_WAIT_S,
         )
         if not delete_result.get("success"):
             raise_tool_error(
