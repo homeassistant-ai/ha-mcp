@@ -11,6 +11,7 @@ the fakes are installed before ``mcp_webhook`` binds them).
 
 from __future__ import annotations
 
+import secrets
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -31,7 +32,12 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DOMAIN,
     OAUTH_BASE,
     WEBHOOK_AUTH_HA,
+    WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
+)
+from custom_components.ha_mcp_tools.oauth_legacy import (  # noqa: E402
+    OAUTH_ROUTE_OWNER_KEY,
+    LegacyOAuthProvider,
 )
 
 TARGET_URL = "http://127.0.0.1:9584/private_aaaaaaaaaaaaaaaa"
@@ -57,6 +63,7 @@ def _store_cfg(
     session: FakeSession,
     auth_mode: str = WEBHOOK_AUTH_NONE,
     resource_server: object | None = None,
+    oauth_provider: object | None = None,
 ) -> None:
     hass.data[DOMAIN] = {
         DATA_WEBHOOK: {
@@ -65,6 +72,7 @@ def _store_cfg(
             "session": session,
             "auth_mode": auth_mode,
             "resource_server": resource_server,
+            "oauth_provider": oauth_provider,
         }
     }
 
@@ -347,6 +355,90 @@ class TestHaAuthGate:
         )
 
         request = make_request(headers={"Authorization": "Bearer nope"})
+        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
+        assert resp.status == 401
+        assert session.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Auth gate — legacy OAuth posture (self-issued bearer)
+# ---------------------------------------------------------------------------
+
+
+class TestLegacyAuthGate:
+    def _provider(self) -> LegacyOAuthProvider:
+        # A real provider so the actual HMAC token codec runs inside the gate.
+        return LegacyOAuthProvider(
+            "cid", "secret", secrets.token_bytes(32), lambda: WEBHOOK_AUTH_LEGACY
+        )
+
+    async def test_valid_legacy_bearer_passes_through(self):
+        hass = _make_hass()
+        provider = self._provider()
+        token = provider.issue_access_token()
+        session = FakeSession(upstream=FakeUpstream(status=200))
+        _store_cfg(
+            hass,
+            session=session,
+            auth_mode=WEBHOOK_AUTH_LEGACY,
+            oauth_provider=provider,
+        )
+
+        request = make_request(headers={"Authorization": f"Bearer {token}"})
+        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
+
+        assert len(session.calls) == 1  # forwarded upstream
+        assert resp.status == 200
+        request.read.assert_awaited()
+
+    async def test_missing_legacy_bearer_returns_401_challenge(self):
+        hass = _make_hass()
+        session = FakeSession(upstream=FakeUpstream(status=200))
+        _store_cfg(
+            hass,
+            session=session,
+            auth_mode=WEBHOOK_AUTH_LEGACY,
+            oauth_provider=self._provider(),
+        )
+
+        request = make_request(headers={"Host": "example.nabu.casa"})
+        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
+
+        assert resp.status == 401
+        assert session.calls == []  # never forwarded upstream
+        request.read.assert_not_awaited()  # short-circuited before read
+        assert resp.headers["WWW-Authenticate"].startswith("Bearer realm=")
+
+    async def test_invalid_legacy_bearer_returns_401(self):
+        hass = _make_hass()
+        session = FakeSession(upstream=FakeUpstream(status=200))
+        _store_cfg(
+            hass,
+            session=session,
+            auth_mode=WEBHOOK_AUTH_LEGACY,
+            oauth_provider=self._provider(),
+        )
+
+        request = make_request(headers={"Authorization": "Bearer forged.token"})
+        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
+        assert resp.status == 401
+        assert session.calls == []
+
+    async def test_refresh_token_is_rejected_as_access_bearer(self):
+        # A refresh token must not authorize the webhook (wrong token kind).
+        hass = _make_hass()
+        provider = self._provider()
+        session = FakeSession(upstream=FakeUpstream(status=200))
+        _store_cfg(
+            hass,
+            session=session,
+            auth_mode=WEBHOOK_AUTH_LEGACY,
+            oauth_provider=provider,
+        )
+
+        request = make_request(
+            headers={"Authorization": f"Bearer {provider.issue_refresh_token()}"}
+        )
         resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
         assert resp.status == 401
         assert session.calls == []
@@ -689,6 +781,89 @@ class TestRegisterWebhook:
                 secret_path="/private_x",
                 auth_mode="bogus",
             )
+
+    async def test_legacy_missing_credentials_fails_closed(self, monkeypatch):
+        # Legacy mode without the minted credentials must fail loud and leave no
+        # endpoint or leaked session behind — never an unprotected forward path.
+        hass = _register_hass()
+        fake_session = FakeSession()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: fake_session)
+
+        with pytest.raises(ValueError, match="legacy webhook auth mode requires"):
+            await mw.async_register_webhook(
+                hass,
+                _entry(),
+                port=9584,
+                secret_path="/private_x",
+                auth_mode=WEBHOOK_AUTH_LEGACY,
+                oauth_client_id="cid",
+                oauth_client_secret="",  # missing
+                oauth_signing_key=secrets.token_hex(32),
+            )
+        assert fake_session.closed is True
+        assert DATA_WEBHOOK not in hass.data.get(DOMAIN, {})
+
+    async def test_legacy_registers_provider_and_root_views(self, monkeypatch):
+        hass = _register_hass()
+        hass.is_running = False  # boot: routes bind cleanly, no restart needed
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+
+        restart_needed = await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_LEGACY,
+            oauth_client_id="cid",
+            oauth_client_secret="secret",
+            oauth_signing_key=secrets.token_hex(32),
+        )
+
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        assert isinstance(cfg["oauth_provider"], LegacyOAuthProvider)
+        assert cfg["resource_server"] is None
+        # 7 discovery views + the 2 root /authorize + /token views.
+        assert hass.http.register_view.call_count == 9
+        assert hass.data.get(OAUTH_ROUTE_OWNER_KEY) == DOMAIN
+        assert restart_needed is False
+
+    async def test_legacy_route_conflict_becomes_value_error(self, monkeypatch):
+        # The webhook-proxy add-on already owns the root routes → surfaced as a
+        # ValueError so bring-up files a repair, not a silently-shadowed binding.
+        hass = _register_hass()
+        hass.data[OAUTH_ROUTE_OWNER_KEY] = "webhook_proxy"
+        fake_session = FakeSession()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: fake_session)
+
+        with pytest.raises(ValueError, match="already"):
+            await mw.async_register_webhook(
+                hass,
+                _entry(),
+                port=9584,
+                secret_path="/private_x",
+                auth_mode=WEBHOOK_AUTH_LEGACY,
+                oauth_client_id="cid",
+                oauth_client_secret="secret",
+                oauth_signing_key=secrets.token_hex(32),
+            )
+        assert fake_session.closed is True
+        assert DATA_WEBHOOK not in hass.data.get(DOMAIN, {})
+
+    async def test_switched_away_from_legacy_flags_restart(self, monkeypatch):
+        # Legacy root views are still bound from a prior registration; this
+        # (non-legacy) registration cannot release them without a restart.
+        hass = _register_hass()
+        hass.data[OAUTH_ROUTE_OWNER_KEY] = DOMAIN
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+
+        restart_needed = await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_NONE,
+        )
+        assert restart_needed is True
 
     async def test_registration_failure_closes_session_and_unregisters(
         self, monkeypatch

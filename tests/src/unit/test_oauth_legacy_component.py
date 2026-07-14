@@ -330,6 +330,16 @@ class TestExtractClientCreds:
         cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
         assert (cid, secret) == (None, None)
 
+    def test_percent_encoded_basic_creds_are_decoded(self):
+        # RFC 6749 §2.3.1: client_secret_basic values are percent-encoded before
+        # base64, so a custom credential with reserved characters must decode
+        # back (a no-op for the URL-safe generated credentials).
+        encoded = base64.b64encode(b"c%40id:p%40ss%2Fword").decode()
+        request = MagicMock()
+        request.headers = {"Authorization": f"Basic {encoded}"}
+        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
+        assert (cid, secret) == ("c@id", "p@ss/word")
+
 
 # ---------------------------------------------------------------------------
 # Redirect URI validation
@@ -340,9 +350,17 @@ class TestIsValidRedirectUri:
     def test_https_url_with_host_is_valid(self):
         assert oauth_legacy._is_valid_redirect_uri(REDIRECT_URI) is True
 
-    def test_http_is_rejected(self):
+    def test_non_loopback_http_is_rejected(self):
         url = "http://client.example.com/cb"
         assert oauth_legacy._is_valid_redirect_uri(url) is False
+
+    def test_http_loopback_is_valid(self):
+        # RFC 8252 §7.3: native/CLI clients receive the code on an http loopback
+        # callback. Cover the hostname form and the whole 127.0.0.0/8 + ::1 set.
+        assert oauth_legacy._is_valid_redirect_uri("http://localhost:8765/cb") is True
+        assert oauth_legacy._is_valid_redirect_uri("http://127.0.0.1:8765/cb") is True
+        assert oauth_legacy._is_valid_redirect_uri("http://127.9.9.9/cb") is True
+        assert oauth_legacy._is_valid_redirect_uri("http://[::1]:8765/cb") is True
 
     def test_fragment_is_rejected(self):
         assert oauth_legacy._is_valid_redirect_uri(f"{REDIRECT_URI}#frag") is False
@@ -352,6 +370,20 @@ class TestIsValidRedirectUri:
 
     def test_empty_string_is_rejected(self):
         assert oauth_legacy._is_valid_redirect_uri("") is False
+
+    def test_out_of_range_port_is_rejected_not_raised(self):
+        # urlparse defers port validation to attribute access, so a crafted
+        # ':999999' must be caught in the validator (→ False) rather than escape
+        # later as an uncaught ValueError → 500 in _redirect_with.
+        assert (
+            oauth_legacy._is_valid_redirect_uri("https://x.example.com:999999/cb")
+            is False
+        )
+
+    def test_non_numeric_port_is_rejected_not_raised(self):
+        assert (
+            oauth_legacy._is_valid_redirect_uri("https://x.example.com:abc/cb") is False
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +504,25 @@ class TestAuthorizeViewPost:
         response = await view.post(request)
         assert response.status == 404
 
+    async def test_malformed_port_redirect_returns_400_not_500(self):
+        # A crafted out-of-range port must be rejected cleanly at validation and
+        # never reach yarl in _redirect_with, which would raise → uncaught 500.
+        provider = _make_provider()
+        view = oauth_legacy.AuthorizeView(provider)
+        _, challenge = _pkce_pair()
+        request = MagicMock()
+        request.post = AsyncMock(
+            return_value={
+                "action": "approve",
+                "client_id": CLIENT_ID,
+                "redirect_uri": "https://client.example.com:999999/cb",
+                "state": "xyz",
+                "code_challenge": challenge,
+            }
+        )
+        response = await view.post(request)
+        assert response.status == 400
+
 
 # ---------------------------------------------------------------------------
 # TokenView (POST authorization_code + refresh_token grants)
@@ -525,6 +576,9 @@ class TestTokenViewPost:
         refresh = response.json_body["refresh_token"]
         assert provider.validate_access_token(access) is True
         assert provider.validate_refresh_token(refresh) is True
+        # RFC 6749 §5.1: the token body carries credentials and must not be cached.
+        assert response.headers["Cache-Control"] == "no-store"
+        assert response.headers["Pragma"] == "no-cache"
 
     async def test_authorization_code_grant_rejects_bad_code(self):
         provider = _make_provider()
@@ -563,6 +617,9 @@ class TestTokenViewPost:
         assert response.status == 200
         access = response.json_body["access_token"]
         assert provider.validate_access_token(access) is True
+        # The refresh grant carries credentials too — same no-cache headers.
+        assert response.headers["Cache-Control"] == "no-store"
+        assert response.headers["Pragma"] == "no-cache"
 
     async def test_unsupported_grant_type_returns_400(self):
         provider = _make_provider()
@@ -618,13 +675,19 @@ class TestBindLegacyViews:
         )
         assert restart_needed is True
 
-    def test_second_bind_same_credentials_reuses_provider_no_restart(self):
-        hass = _make_hass(is_running=True)
+    def test_reload_after_boot_bind_reuses_provider_and_stays_live(self):
+        # First bind at boot (is_running False) → live immediately, no restart.
+        # A later reload while running reuses the provider and stays live: the
+        # pending flag is read from hass.data (False), not recomputed from the
+        # now-True hass.is_running.
+        hass = _make_hass(is_running=False)
         key = secrets.token_bytes(32)
-        provider1, _ = oauth_legacy.bind_legacy_views(
+        provider1, first_restart = oauth_legacy.bind_legacy_views(
             hass, CLIENT_ID, CLIENT_SECRET, key
         )
+        assert first_restart is False
         hass.http.register_view.reset_mock()
+        hass.is_running = True  # a later reload happens while HA is running
 
         provider2, restart_needed = oauth_legacy.bind_legacy_views(
             hass, CLIENT_ID, CLIENT_SECRET, key
@@ -632,6 +695,28 @@ class TestBindLegacyViews:
 
         assert provider2 is provider1
         assert restart_needed is False
+        hass.http.register_view.assert_not_called()
+
+    def test_reload_after_mid_session_bind_stays_restart_pending(self):
+        # First bind mid-session (is_running True) → not live until a restart.
+        # An unrelated reload before that restart, with unchanged credentials,
+        # must KEEP reporting restart-needed (the views are still not live) —
+        # otherwise _async_update_legacy_oauth_issue would clear the repair
+        # prematurely.
+        hass = _make_hass(is_running=True)
+        key = secrets.token_bytes(32)
+        provider1, first_restart = oauth_legacy.bind_legacy_views(
+            hass, CLIENT_ID, CLIENT_SECRET, key
+        )
+        assert first_restart is True
+        hass.http.register_view.reset_mock()
+
+        provider2, restart_needed = oauth_legacy.bind_legacy_views(
+            hass, CLIENT_ID, CLIENT_SECRET, key
+        )
+
+        assert provider2 is provider1
+        assert restart_needed is True
         hass.http.register_view.assert_not_called()
 
     def test_second_bind_changed_credentials_keeps_old_provider_but_needs_restart(self):

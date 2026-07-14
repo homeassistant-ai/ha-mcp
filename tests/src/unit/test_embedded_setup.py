@@ -322,6 +322,16 @@ class TestRevokeOnRemove:
         fake_manager.async_revoke_credentials.assert_awaited_once()
         esetup.ir.async_delete_issue.assert_called()
 
+    async def test_clears_legacy_oauth_restart_repair(self, fake_manager):
+        # The legacy-OAuth restart repair is filed only from bring-up, which
+        # never runs again for a removed entry — so removal must clear it too,
+        # or a still-pending restart leaves a dangling warning for a gone server.
+        hass = _make_hass()
+        entry = _make_entry()
+        await esetup.async_revoke_credentials_on_remove(hass, entry)
+        cleared = {c.args[2] for c in esetup.ir.async_delete_issue.call_args_list}
+        assert esetup.ISSUE_LEGACY_OAUTH_RESTART in cleared
+
 
 # ---------------------------------------------------------------------------
 # Connect-URL surfacing (network + cloud lazily imported)

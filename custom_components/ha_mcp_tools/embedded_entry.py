@@ -34,6 +34,7 @@ from .const import (
     DATA_WEBHOOK_ID,
     DOMAIN,
     OPT_ENABLE_SIDEBAR_PANEL,
+    OPT_ENABLE_WEBHOOK,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
     OPT_OAUTH_REGENERATE,
@@ -73,6 +74,9 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     from .ui_panel import async_register_ui_panel
 
     _ensure_secrets(hass, entry)
+    # Bind the legacy OAuth root views synchronously here — before the slow
+    # background bring-up below — so they are live at boot (see the helper).
+    _prebind_legacy_oauth_views(hass, entry)
 
     # Admin-only "Open Web UI" sidebar panel + proxy. Registered while the entry
     # exists (its proxy returns 503 until the server is actually running), so the
@@ -184,6 +188,43 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
     if domain_data.get(DATA_LAST_OPTIONS) == dict(entry.options):
         return
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+def _prebind_legacy_oauth_views(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Register the legacy OAuth root ``/authorize`` + ``/token`` views during
+    entry setup, before the background bring-up's (slow) package install.
+
+    An aiohttp route is only ever live if it is registered before Home Assistant
+    freezes its HTTP app at the end of startup. Binding these views from the
+    background bring-up task races HA reaching RUNNING: on a slow-install boot
+    the routes would register AFTER the freeze — never live until a restart —
+    and ``bind_legacy_views`` would see ``hass.is_running`` True and file a
+    restart repair that the restart cannot clear. Binding here, while the entry
+    is still setting up (``hass.is_running`` is False at boot), mirrors the
+    webhook-proxy add-on, which binds in its own ``async_setup_entry``. The
+    bring-up's ``async_register_webhook`` then reuses this already-bound provider.
+
+    Only relevant when legacy is the configured mode and the webhook endpoint is
+    enabled (legacy OAuth guards that endpoint; with no webhook there is nothing
+    to protect). A route-ownership conflict with the webhook-proxy add-on is
+    swallowed here — the bring-up re-encounters it and files the user-facing
+    start-failed repair.
+    """
+    if str(entry.options.get(OPT_WEBHOOK_AUTH, "")) != WEBHOOK_AUTH_LEGACY:
+        return
+    if not bool(entry.options.get(OPT_ENABLE_WEBHOOK, True)):
+        return
+    client_id = entry.data.get(DATA_OAUTH_CLIENT_ID)
+    client_secret = entry.data.get(DATA_OAUTH_CLIENT_SECRET)
+    signing_key = entry.data.get(DATA_OAUTH_SIGNING_KEY)
+    if not (client_id and client_secret and signing_key):
+        # _ensure_secrets mints these whenever legacy mode is configured; a gap
+        # means a partial config — let the bring-up path surface it.
+        return
+    from .oauth_legacy import LegacyOAuthRouteConflict, bind_legacy_views
+
+    with suppress(LegacyOAuthRouteConflict):
+        bind_legacy_views(hass, client_id, client_secret, signing_key)
 
 
 def _ensure_secrets(hass: HomeAssistant, entry: ConfigEntry) -> None:

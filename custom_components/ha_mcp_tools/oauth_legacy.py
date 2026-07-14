@@ -29,6 +29,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import re
@@ -37,7 +38,7 @@ import time
 from collections.abc import Callable
 from html import escape
 from typing import TYPE_CHECKING, TypedDict
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
@@ -64,6 +65,15 @@ REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60  # 30 days
 AUTH_CODE_TTL = 5 * 60  # 5 minutes
 TOKEN_KIND_ACCESS = "access"
 TOKEN_KIND_REFRESH = "refresh"
+
+# RFC 6749 §5.1: a /token response body carries the access/refresh credentials,
+# so it MUST NOT be cached by any intermediary (reverse proxy, Nabu Casa, etc.).
+_TOKEN_RESPONSE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+# RFC 8252 §7.3: native/CLI OAuth clients (e.g. GitHub Copilot CLI) receive the
+# authorization code on a loopback redirect, for which the spec explicitly
+# permits a plain http scheme. Every non-loopback redirect must still be https.
+_LOOPBACK_HOSTNAMES = frozenset({"localhost"})
 
 # RFC 7636 §4.1: code_verifier is 43-128 chars from the unreserved URL set.
 PKCE_VERIFIER_MIN = 43
@@ -105,6 +115,16 @@ OAUTH_ROUTE_KEY_FINGERPRINT = "webhook_proxy_oauth_route_key_fingerprint"
 # instance bound to the root views for this HA session. A reload reuses it
 # when the credentials match; see bind_legacy_views.
 _LEGACY_PROVIDER_KEY = "ha_mcp_tools_oauth_legacy_provider"
+
+# TOP-LEVEL hass.data flag recording whether the currently-bound root views were
+# registered MID-SESSION (hass already running → the route is not actually live
+# until a full HA restart) rather than at boot (live immediately). It cannot be
+# cleared without a real process restart, which wipes hass.data — so it stays
+# True for the life of a session that late-bound, and is absent/False for a
+# session that bound cleanly at boot. Read on every reuse so an unrelated reload
+# before that restart does not falsely report "no restart needed" and clear the
+# repair (the views are still not live). See bind_legacy_views.
+_LEGACY_PENDING_RESTART_KEY = "ha_mcp_tools_oauth_legacy_pending_restart"
 
 # This component's DOMAIN, duplicated here (rather than imported) to avoid a
 # module-level dependency on const.DOMAIN for the ownership-marker value —
@@ -149,9 +169,12 @@ def bind_legacy_views(
     a view, so a fresh provider object would mint tokens the bound views never
     issued and vice versa). ``restart_needed`` is True when:
 
-    * this is the first bind since HA finished starting (a route registered
-      after ``hass.is_running`` is not actually live until a restart — this
-      mirrors the add-on's ``oauth_restart_needed = hass.is_running``), or
+    * the currently-bound views were registered after HA finished starting (a
+      route registered while ``hass.is_running`` is not actually live until a
+      restart — this mirrors the add-on's ``oauth_restart_needed =
+      hass.is_running``) and that restart has not happened yet — this pending
+      state persists across config-entry reloads until a real HA restart wipes
+      ``hass.data``, or
     * the credentials changed since the currently-bound views were registered
       (the bound views keep serving the OLD identity until a restart rebinds
       them with the new one).
@@ -177,13 +200,19 @@ def bind_legacy_views(
     bound_provider = hass.data.get(_LEGACY_PROVIDER_KEY)
     if owner == _DOMAIN and isinstance(bound_provider, LegacyOAuthProvider):
         bound_fingerprint = hass.data.get(OAUTH_ROUTE_KEY_FINGERPRINT)
-        if bound_fingerprint != fingerprint:
+        creds_changed = bound_fingerprint != fingerprint
+        if creds_changed:
             _LOGGER.warning(
                 "HA-MCP: legacy OAuth credentials changed but the bound root "
                 "views still use the previous ones -- a Home Assistant "
                 "restart is required to activate the new credentials."
             )
-        return bound_provider, bound_fingerprint != fingerprint
+        # Still restart-pending if the views were late-bound this session (flag
+        # persisted below) OR the credentials just changed. Reading the flag
+        # rather than recomputing keeps an unrelated reload from clearing a
+        # still-pending restart repair while the routes remain not-live.
+        pending = bool(hass.data.get(_LEGACY_PENDING_RESTART_KEY))
+        return bound_provider, pending or creds_changed
 
     # First registration this HA session.
     provider = LegacyOAuthProvider(
@@ -199,8 +228,12 @@ def bind_legacy_views(
     hass.data[_LEGACY_PROVIDER_KEY] = provider
     # A first registration happening mid-session isn't live until a full HA
     # restart; flag it. At HA boot (hass.is_running is still False while
-    # integrations are being set up) it binds cleanly.
-    return provider, hass.is_running
+    # integrations are being set up) it binds cleanly. Persist the pending
+    # state so a later reload before that restart reuses it (see the reuse
+    # branch above) rather than recomputing "no restart needed".
+    pending_restart = hass.is_running
+    hass.data[_LEGACY_PENDING_RESTART_KEY] = pending_restart
+    return provider, pending_restart
 
 
 def _live_auth_mode(hass: HomeAssistant) -> str | None:
@@ -229,20 +262,41 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
+def _is_loopback_host(hostname: str) -> bool:
+    """True for the loopback hosts RFC 8252 §7.3/§8.3 allows over plain http."""
+    if hostname in _LOOPBACK_HOSTNAMES:
+        return True
+    try:
+        # Covers all of 127.0.0.0/8 and ::1, not just the literal 127.0.0.1.
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
 def _is_valid_redirect_uri(redirect_uri: str) -> bool:
-    """Spec-floor validation for OAuth redirect_uri: must be an https:// URL
-    with a non-empty host and no fragment. Single-tenant — no per-client
+    """Spec-floor validation for OAuth redirect_uri: an https:// URL — or an
+    http:// loopback URL (RFC 8252 §7.3, for native/CLI clients) — with a
+    non-empty host, a valid port, and no fragment. Single-tenant — no per-client
     allowlist, but reject the obvious bad shapes that would let an attacker
     direct the flow to an empty/malformed URL."""
     if not redirect_uri:
         return False
     try:
         parsed = urlparse(redirect_uri)
+        # Accessing .port validates it: urlparse defers the range/format check
+        # until access, so a crafted ':999999' or ':abc' port raises ValueError
+        # HERE (→ clean 400) instead of later in yarl inside _redirect_with,
+        # where it would escape as an uncaught 500 on an unauthenticated view.
+        _ = parsed.port
     except ValueError:
         return False
-    if parsed.scheme != "https":
-        return False
     if not parsed.hostname:
+        return False
+    if parsed.scheme == "http":
+        # Plain http only for loopback callbacks (native-client flow).
+        if not _is_loopback_host(parsed.hostname):
+            return False
+    elif parsed.scheme != "https":
         return False
     # Fragments are not allowed in OAuth redirect URIs (RFC 6749 §3.1.2).
     return not parsed.fragment
@@ -609,7 +663,11 @@ class AuthorizeView(HomeAssistantView):
         if client_id != self._provider.client_id:
             return _text_error(400, "invalid client_id", restart_hint=True)
         if not _is_valid_redirect_uri(redirect_uri):
-            return _text_error(400, "redirect_uri must be an https:// URL with a host")
+            return _text_error(
+                400,
+                "redirect_uri must be an https:// URL (or an http:// loopback "
+                "URL) with a valid host and port",
+            )
         return None
 
 
@@ -639,7 +697,12 @@ class TokenView(HomeAssistantView):
                 return None, None
             if ":" in decoded:
                 cid, _, sec = decoded.partition(":")
-                return cid, sec
+                # RFC 6749 §2.3.1: client_secret_basic values are percent-encoded
+                # before base64, so decode them back. A no-op for the generated
+                # credentials (URL-safe alphabets, nothing to decode) but required
+                # for custom overrides containing reserved characters — mirrors
+                # the form-body path below, which aiohttp already url-decodes.
+                return unquote(cid), unquote(sec)
             return None, None
         return form.get("client_id"), form.get("client_secret")
 
@@ -677,7 +740,8 @@ class TokenView(HomeAssistantView):
                 "token_type": "Bearer",
                 "expires_in": ACCESS_TOKEN_TTL,
                 "refresh_token": self._provider.issue_refresh_token(),
-            }
+            },
+            headers=_TOKEN_RESPONSE_HEADERS,
         )
 
     async def _handle_refresh(self, form: dict) -> web.Response:
@@ -690,5 +754,6 @@ class TokenView(HomeAssistantView):
                 "token_type": "Bearer",
                 "expires_in": ACCESS_TOKEN_TTL,
                 "refresh_token": self._provider.issue_refresh_token(),
-            }
+            },
+            headers=_TOKEN_RESPONSE_HEADERS,
         )

@@ -207,6 +207,11 @@ async def async_revoke_credentials_on_remove(
     await EmbeddedServerManager(hass, entry).async_revoke_credentials()
     _clear_issues(hass)
     ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)
+    # Clear the legacy-OAuth restart repair too: it is filed only from bring-up,
+    # which never runs again for a removed entry, so a restart that was still
+    # pending at removal would otherwise leave a dangling warning for a server
+    # that no longer exists. (Re-enabling legacy on a fresh entry re-files it.)
+    ir.async_delete_issue(hass, DOMAIN, ISSUE_LEGACY_OAUTH_RESTART)
 
 
 def build_connect_urls(

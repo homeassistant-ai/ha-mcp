@@ -341,10 +341,10 @@ DATA_SECRET_PATH = "secret_path"
 # Legacy OAuth mode credentials, minted by embedded_entry._ensure_secrets and
 # consumed by oauth_legacy.LegacyOAuthProvider. DATA_OAUTH_SIGNING_KEY is a hex
 # string (entry.data must be JSON-serializable, so raw bytes aren't stored
-# directly) — the provider converts it with bytes.fromhex(). Rotating the
-# client_id/secret does not rotate the signing key: the signed token payload
-# already carries the client_id, so a rotation alone revokes every outstanding
-# token (see LegacyOAuthProvider._validate_token).
+# directly) — the provider converts it with bytes.fromhex(). The signed token
+# payload carries the client_id (not the secret), so rotating the client_id
+# revokes every outstanding token (see LegacyOAuthProvider._validate_token);
+# rotating only the client_secret does not. Neither rotates the signing key.
 DATA_OAUTH_CLIENT_ID = "oauth_client_id"
 DATA_OAUTH_CLIENT_SECRET = "oauth_client_secret"
 DATA_OAUTH_SIGNING_KEY = "oauth_signing_key"

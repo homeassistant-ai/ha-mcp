@@ -16,6 +16,7 @@ replaced with fakes so the entry-point wiring is exercised in isolation.
 from __future__ import annotations
 
 import asyncio
+import secrets
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -278,6 +279,60 @@ class TestSetup:
         await _drain_background_tasks(hass, entry)
 
         fake_collaborators.panel.async_register_ui_panel.assert_not_awaited()
+
+
+class TestPrebindLegacyOAuthViews:
+    """`_prebind_legacy_oauth_views` binds the root /authorize + /token views
+    synchronously at setup — before the background bring-up's slow install — so
+    they are live at boot instead of racing HA reaching RUNNING."""
+
+    def _legacy_entry(self) -> MagicMock:
+        entry = _make_entry()
+        entry.options = {
+            const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY,
+            const.OPT_ENABLE_WEBHOOK: True,
+        }
+        entry.data = {
+            **entry.data,
+            const.DATA_OAUTH_CLIENT_ID: "cid",
+            const.DATA_OAUTH_CLIENT_SECRET: "secret",
+            const.DATA_OAUTH_SIGNING_KEY: secrets.token_hex(32),
+        }
+        return entry
+
+    def test_legacy_mode_binds_root_views_at_setup(self):
+        from custom_components.ha_mcp_tools import oauth_legacy
+
+        hass = _make_hass()
+        hass.is_running = False
+        hass.http = MagicMock()
+
+        eentry._prebind_legacy_oauth_views(hass, self._legacy_entry())
+
+        assert hass.http.register_view.call_count == 2  # /authorize + /token
+        assert (
+            hass.data.get(oauth_legacy.OAUTH_ROUTE_OWNER_KEY) == oauth_legacy._DOMAIN
+        )
+
+    def test_non_legacy_mode_binds_nothing(self):
+        hass = _make_hass()
+        hass.http = MagicMock()
+        entry = _make_entry()
+        entry.options = {const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
+
+        eentry._prebind_legacy_oauth_views(hass, entry)
+
+        hass.http.register_view.assert_not_called()
+
+    def test_webhook_disabled_binds_nothing(self):
+        hass = _make_hass()
+        hass.http = MagicMock()
+        entry = self._legacy_entry()
+        entry.options = {**entry.options, const.OPT_ENABLE_WEBHOOK: False}
+
+        eentry._prebind_legacy_oauth_views(hass, entry)
+
+        hass.http.register_view.assert_not_called()
 
 
 class TestUnload:
