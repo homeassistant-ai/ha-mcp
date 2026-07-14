@@ -244,3 +244,24 @@ async def test_list_failure_raises_tool_error():
 
     with pytest.raises(ToolError):
         await fn(yaml_path="alert2", file="packages/*.yaml")
+
+
+async def test_root_level_glob_lists_config_root():
+    """A glob with no directory part asks the lister for the config root.
+
+    The component denies that (the root is not in ALLOWED_READ_DIRS), which is
+    the pre-existing lister boundary — root files stay readable one-by-one via
+    an explicit `file`. This pins the '.' the tool sends, so the request is a
+    deliberate deny rather than a malformed path.
+    """
+    seen: dict = {}
+
+    def list_files(payload):
+        seen["path"] = payload["path"]
+        return {"success": False, "error": "Path not allowed.", "files": []}
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": _read_ok("x\n")})
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="*.yaml")
+    assert seen["path"] == "."
