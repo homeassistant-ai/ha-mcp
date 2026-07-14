@@ -480,6 +480,46 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
     return sr if isinstance(sr, dict) else result
 
 
+# WebSocket commands that mutate persistent state in a way that bypasses a
+# wrapping MCP tool's validation (auto-backup, config-hash optimistic locking,
+# registry invariant checks), or that have no escape-hatch-appropriate use case
+# (`config/core/update` rewrites the installation's location/timezone/currency/
+# lat-long). Shared by the code sandbox's `ws_send` bridge (tools_code.py) and
+# ha_call_service's `ws_command` escape hatch (tools_service.py) so the two raw
+# WebSocket surfaces stay in lockstep. Registry deletion command names differ on
+# HA Core: device deletion is `remove_config_entry` and entity deletion is
+# `remove` (not `delete`) -- ha_remove_device / ha_remove_entity emit those.
+BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
+    {
+        "config/core/update",
+        "lovelace/config/save",
+        "lovelace/dashboards/create",
+        "lovelace/dashboards/delete",
+        "lovelace/dashboards/update",
+        "config/area_registry/delete",
+        "config/area_registry/disable",
+        "config/area_registry/update",
+        "config/device_registry/delete",
+        "config/device_registry/disable",
+        "config/device_registry/update",
+        "config/device_registry/remove_config_entry",
+        "config/entity_registry/delete",
+        "config/entity_registry/disable",
+        "config/entity_registry/update",
+        "config/entity_registry/remove",
+        "config/floor_registry/create",
+        "config/floor_registry/delete",
+        "config/floor_registry/update",
+        "config/label_registry/create",
+        "config/label_registry/delete",
+        "config/label_registry/update",
+        "config/category_registry/create",
+        "config/category_registry/delete",
+        "config/category_registry/update",
+    }
+)
+
+
 # Fields surfaced from each repair issue. Includes `ignored` / `dismissed_version`
 # so callers can distinguish active vs. user-dismissed repairs when both are
 # returned (e.g., `include_dismissed_repairs=True`).

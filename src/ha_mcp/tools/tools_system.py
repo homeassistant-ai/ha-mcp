@@ -541,7 +541,7 @@ class SystemTools:
 
         **Parameters:**
         - include: Optional comma-separated list of additional data to include.
-          - "repairs": Repair items from Settings > System > Repairs (active only by default; pass `include_dismissed_repairs=True` for all)
+          - "repairs": Repair items from Settings > System > Repairs (active only by default; pass `include_dismissed_repairs=True` for all). To dismiss/ignore a repair, call `ha_call_service(ws_command="repairs/ignore_issue", data={"domain": <domain>, "issue_id": <issue_id>, "ignore": true})`.
           - "zha_network": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)
           - "zha_network_full": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer "zha_network" for summary)
           - "zwave_network": Z-Wave JS network status and node summary (status, security, routing)

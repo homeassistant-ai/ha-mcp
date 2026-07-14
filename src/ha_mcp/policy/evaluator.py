@@ -145,4 +145,22 @@ def find_matching_rule(
 def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:
     if find_matching_rule(tool_name, args, policy) is not None:
         return Verdict.REQUIRE_APPROVAL
+    # ha_call_service exposes a raw WebSocket escape hatch (``ws_command``) that
+    # carries no ``domain``/``service`` argument, so a rule keyed on
+    # ``args.domain``/``args.service`` cannot match it and it would otherwise slip
+    # through the fail-open default. If the operator has ANY rule that applies to
+    # ha_call_service -- one scoped to it by name, or a wildcard ``*`` rule, which
+    # ``match_rule`` treats as applying to every tool -- treat an unmatched
+    # ws_command call as require-approval (fail safe) so the escape hatch cannot
+    # sneak past that oversight. Blocking the call (require-approval) rather than
+    # silently allowing it is the safe error direction for a raw WS escape hatch,
+    # especially since the write-command blocklist is a deliberately
+    # non-exhaustive wrapper-bypass list that leans on this gate.
+    # Operators who want finer control can add a rule keyed on ``args.ws_command``.
+    if (
+        tool_name == "ha_call_service"
+        and args.get("ws_command")
+        and any(rule.tool_name in ("ha_call_service", "*") for rule in policy.rules)
+    ):
+        return Verdict.REQUIRE_APPROVAL
     return Verdict.ALLOW

@@ -261,6 +261,30 @@ async def test_case_insensitive_match_gates_regardless_of_caller_casing(
 
 
 @pytest.mark.asyncio
+async def test_ws_command_gated_when_policy_scopes_call_service(policy_enabled_mcp):
+    """ws_command escape hatch fail-safe: a domain-keyed rule can't match a
+    ws_command call (no ``domain``/``service`` args), but scoping ANY rule to
+    ``ha_call_service`` still forces approval on it rather than letting it
+    slip through the fail-open default (see ``evaluate()`` in
+    ``ha_mcp/policy/evaluator.py``)."""
+    client, server, handlers = policy_enabled_mcp
+    await _install_rule(
+        handlers,
+        {
+            "tool_name": "ha_call_service",
+            "when": [{"path": "args.domain", "op": "eq", "value": "light"}],
+            "remember_minutes": 0,
+        },
+    )
+    # No domain/service — the rule's predicate can't match this call — but
+    # the fail-safe clause must still gate it because a ha_call_service rule
+    # exists in the policy.
+    await _expect_blocked(client, {"ws_command": "repairs/ignore_issue"})
+    pending = server.approval_queue.list_pending()
+    assert len(pending) == 1
+
+
+@pytest.mark.asyncio
 async def test_deny_raises_user_denied(policy_enabled_mcp):
     """POST /deny → middleware raises USER_DENIED, never calls the tool."""
     client, server, handlers = policy_enabled_mcp

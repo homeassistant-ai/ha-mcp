@@ -15,6 +15,8 @@ from pydantic import Field
 
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import (
+    ErrorCode,
+    create_error_response,
     create_validation_error,
 )
 from .helpers import (
@@ -24,6 +26,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .util_helpers import (
+    BLOCKED_WS_WRITE_COMMANDS,
     JSON_STRING_COERCION,
     compact_service_result,
     parse_json_param,
@@ -126,6 +129,50 @@ _SERVICE_TO_STATE: dict[str, str] = {
 }
 
 
+# WebSocket commands that stream events or reply in two phases (an initial ack
+# then the real payload as a follow-up event) rather than resolving to a single
+# terminal result. ha_call_service's ws_command escape hatch only supports
+# one-shot request/response commands, so these are rejected: the "subscribe"
+# substring catches subscription commands, and the set names known two-phase /
+# streaming commands whose names don't contain "subscribe". The set is a floor,
+# not an exhaustive list -- HA's WS command naming isn't consistent enough for a
+# name check alone to be fully reliable.
+_WS_COMMAND_EVENT_BLOCKLIST = frozenset(
+    {
+        "render_template",  # event-based; use ha_eval_template instead
+        "system_health/info",  # two-phase (see tools_system._fetch_health_info)
+        "assist_pipeline/run",  # streams pipeline events
+    }
+)
+
+# Substrings that mark a WS command as streaming / subscription-based even when
+# its name isn't in the blocklist above. Such commands ack once and then push
+# follow-up events on the same id; the one-shot send_command path returns the
+# ack and leaks the subscription. "subscribe" covers subscribe_* and */subscribe;
+# "stream" covers history/stream, logbook/event_stream, camera/stream, ...;
+# "start_preview" covers template/start_preview and the config-flow preview family.
+_WS_STREAMING_SUBSTRINGS = ("subscribe", "stream", "start_preview")
+
+# One-shot WS commands that re-enter Home Assistant's service invocation. Routing
+# them through the escape hatch would bypass the service-mode guards (notably the
+# reserved ha_mcp_tools domain block), so they are rejected -- use the
+# domain/service parameters for service calls instead.
+_WS_COMMAND_SERVICE_INVOKERS = frozenset({"call_service", "execute_script"})
+
+# Reserved WebSocket envelope keys the transport owns. Allowing them inside data
+# would let a caller override the validated command type (defeating every check
+# below) or collide with the transport's message id, so they are rejected.
+_WS_RESERVED_ENVELOPE_KEYS = frozenset({"type", "id"})
+
+
+def _is_streaming_ws_command(command_type: str) -> bool:
+    """Return True for subscription / streaming / two-phase WS commands."""
+    lowered = command_type.lower()
+    if lowered in _WS_COMMAND_EVENT_BLOCKLIST:
+        return True
+    return any(sub in lowered for sub in _WS_STREAMING_SUBSTRINGS)
+
+
 def _build_service_suggestions(
     domain: str, service: str, entity_id: str | None
 ) -> list[str]:
@@ -161,6 +208,80 @@ class ServiceTools:
         if entity_id:
             service_data["entity_id"] = entity_id
         return service_data
+
+    @staticmethod
+    def _validate_service_call_params(
+        domain: str | None, service: str | None
+    ) -> tuple[str, str]:
+        """Validate service-mode params and return the (domain, service) pair.
+
+        Raises a structured ToolError when domain/service are missing (the caller
+        likely wants the ws_command escape hatch) or when the domain targets the
+        reserved ha_mcp_tools namespace.
+        """
+        if not domain or not service:
+            raise_tool_error(
+                create_validation_error(
+                    "domain and service are required for a service call. To send "
+                    "a raw WebSocket command instead, pass ws_command.",
+                    parameter="domain" if not domain else "service",
+                )
+            )
+        # ha_mcp_tools.* services are restricted to the ha-mcp server's dedicated
+        # wrappers (which inject the required caller token). Block ha_call_service
+        # from forwarding to that domain — it would otherwise be a bypass path
+        # around the dedicated tools. HA core's service registry lowercases the
+        # domain on fallback lookup (homeassistant/core.py
+        # ServiceRegistry.async_call), so normalise here to make sure a mixed-case
+        # `HA_MCP_TOOLS` can't slip past this exact-string check and still resolve
+        # downstream.
+        if domain.strip().lower() == "ha_mcp_tools":
+            raise_tool_error(
+                create_validation_error(
+                    (
+                        "ha_call_service cannot invoke services in the "
+                        "'ha_mcp_tools' domain. Use the dedicated MCP tool "
+                        "instead: ha_list_files, ha_read_file, ha_write_file, "
+                        "ha_delete_file, or ha_config_set_yaml."
+                    ),
+                    parameter="domain",
+                )
+            )
+        return domain, service
+
+    @staticmethod
+    def _reject_incompatible_ws_params(
+        entity_id: str | None,
+        return_response: bool,
+        verbose: bool,
+        result_fields: str | list[str] | None,
+        result_attribute_keys: str | list[str] | None,
+    ) -> None:
+        """Reject service-mode-only params when the ws_command escape hatch is used.
+
+        These shape a registered-service call and have no meaning for a raw
+        WebSocket command; silently ignoring them would be a confusing no-op, so
+        (mirroring the domain/service "not both" guard) they must be omitted.
+        """
+        offenders = [
+            name
+            for name, is_set in (
+                ("entity_id", entity_id is not None),
+                ("return_response", return_response),
+                ("verbose", verbose),
+                ("result_fields", result_fields is not None),
+                ("result_attribute_keys", result_attribute_keys is not None),
+            )
+            if is_set
+        ]
+        if offenders:
+            raise_tool_error(
+                create_validation_error(
+                    "These parameters apply only to service calls and must be "
+                    f"omitted when ws_command is set: {', '.join(offenders)}.",
+                    parameter="ws_command",
+                )
+            )
 
     @staticmethod
     def _parse_result_projection_params(
@@ -372,6 +493,125 @@ class ServiceTools:
             suggestions=suggestions,
         )
 
+    async def _call_ws_command(
+        self,
+        ws_command: str,
+        data: str | dict[str, Any] | None,
+        *,
+        domain: str | None,
+        service: str | None,
+    ) -> dict[str, Any]:
+        """Send a one-shot WebSocket command via ha_call_service's escape hatch.
+
+        Reaches Home Assistant WebSocket commands that are not registered
+        services (e.g. ``repairs/ignore_issue``). Only one-shot
+        request/response commands are supported — streaming / subscription
+        commands are rejected up front.
+        """
+        command_type = ws_command.strip()
+        if domain is not None or service is not None:
+            raise_tool_error(
+                create_validation_error(
+                    "Provide either domain + service (a registered service call) "
+                    "OR ws_command (a raw WebSocket command), not both.",
+                    parameter="ws_command",
+                )
+            )
+        if not command_type:
+            raise_tool_error(
+                create_validation_error(
+                    "ws_command must be a non-empty WebSocket command type, "
+                    "e.g. 'repairs/ignore_issue'.",
+                    parameter="ws_command",
+                )
+            )
+        if _is_streaming_ws_command(command_type):
+            raise_tool_error(
+                create_validation_error(
+                    f"ws_command '{command_type}' is a streaming or two-phase "
+                    "command; ha_call_service only sends one-shot "
+                    "request/response commands. For template rendering use "
+                    "ha_eval_template.",
+                    parameter="ws_command",
+                )
+            )
+        if command_type.lower() in _WS_COMMAND_SERVICE_INVOKERS:
+            raise_tool_error(
+                create_validation_error(
+                    f"ws_command '{command_type}' invokes Home Assistant services "
+                    "and would bypass ha_call_service's safeguards. Use the "
+                    "domain/service parameters for service calls instead.",
+                    parameter="ws_command",
+                )
+            )
+        if command_type.lower().startswith("ha_mcp_tools/"):
+            raise_tool_error(
+                create_validation_error(
+                    "ha_call_service cannot invoke 'ha_mcp_tools/*' WebSocket "
+                    "commands. Use the dedicated ha-mcp tools instead.",
+                    parameter="ws_command",
+                )
+            )
+        if command_type.lower() in BLOCKED_WS_WRITE_COMMANDS:
+            raise_tool_error(
+                create_validation_error(
+                    f"ws_command '{command_type}' mutates persistent state that a "
+                    "dedicated tool guards with backups and conflict checks. Use "
+                    "the corresponding ha-mcp tool (e.g. ha_config_set_dashboard, "
+                    "ha_set_area_or_floor, ha_remove_entity) instead.",
+                    parameter="ws_command",
+                )
+            )
+        command_params = (
+            _parse_json_dict_param(
+                data, type_error_message="ws_command data must be a JSON object"
+            )
+            or {}
+        )
+        reserved = _WS_RESERVED_ENVELOPE_KEYS & command_params.keys()
+        if reserved:
+            raise_tool_error(
+                create_validation_error(
+                    "data must not contain the reserved WebSocket envelope key(s) "
+                    f"{', '.join(sorted(reserved))}; the command type is set by "
+                    "ws_command, and the message id is managed by the transport.",
+                    parameter="data",
+                )
+            )
+        # send_websocket_message catches its own transport errors and always
+        # returns a {"success": ...} dict (never raises), so the failure is
+        # handled by the result-shape check below -- matching the other
+        # send_websocket_message call sites in the codebase.
+        result = await self._client.send_websocket_message(
+            {"type": command_type, **command_params}
+        )
+
+        if not isinstance(result, dict) or not result.get("success", False):
+            error_msg = (
+                result.get("error") if isinstance(result, dict) else None
+            ) or "WebSocket command failed"
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(error_msg),
+                    context={"ws_command": command_type},
+                    suggestions=[
+                        "Verify the command type and its parameters (e.g. "
+                        + "repairs/ignore_issue needs domain, issue_id, ignore)",
+                        "Confirm the target still exists (a repair must be "
+                        + "present to ignore it)",
+                    ],
+                )
+            )
+
+        return {
+            "success": True,
+            "ws_command": command_type,
+            "parameters": command_params or None,
+            "result": result.get("result"),
+            "message": f"Successfully executed WebSocket command '{command_type}'",
+        }
+
     @tool(
         name="ha_call_service",
         tags={"Service & Device Control"},
@@ -380,8 +620,8 @@ class ServiceTools:
     @log_tool_usage
     async def ha_call_service(
         self,
-        domain: str,
-        service: str,
+        domain: str | None = None,
+        service: str | None = None,
         entity_id: str | None = None,
         data: Annotated[dict[str, Any] | None, JSON_STRING_COERCION] = None,
         return_response: bool = False,
@@ -425,6 +665,21 @@ class ServiceTools:
                 ),
             ),
         ] = None,
+        ws_command: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Advanced escape hatch: send a raw one-shot Home Assistant "
+                    "WebSocket command that is NOT a registered service (e.g. "
+                    "'repairs/ignore_issue' to dismiss a Repairs issue). When set, "
+                    "omit domain/service and the other service params; put the "
+                    "command's parameters in data. Streaming/two-phase and "
+                    "service-invoking commands (call_service, execute_script) are "
+                    "rejected."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Execute Home Assistant services to control entities and trigger automations.
@@ -462,27 +717,40 @@ class ServiceTools:
 
         Common patterns: Use ha_get_state() to check current values before making changes.
         Use ha_search() to find correct entity IDs.
+
+        **WebSocket command escape hatch (advanced):**
+        A few Home Assistant operations are WebSocket-only commands, not
+        registered services — most notably dismissing a Repairs issue. Pass
+        ``ws_command`` (instead of domain/service) to send one, with its
+        parameters in ``data``:
+        ```python
+        # Dismiss a repair (get domain/issue_id from ha_get_overview repairs
+        # or ha_get_system_health include="repairs")
+        ha_call_service(ws_command="repairs/ignore_issue",
+                        data={"domain": "sun", "issue_id": "abc", "ignore": True})
+        ```
+        Only one-shot request/response commands are supported; streaming/two-phase
+        and service-invoking commands are rejected, and the other service
+        parameters (entity_id, return_response, etc.) don't apply.
         """
-        # ha_mcp_tools.* services are restricted to the ha-mcp server's
-        # dedicated wrappers (which inject the required caller token). Block
-        # ha_call_service from forwarding to that domain — it would otherwise
-        # be a bypass path around the dedicated tools.
-        # HA core's service registry lowercases the domain on fallback lookup
-        # (homeassistant/core.py ServiceRegistry.async_call), so normalise
-        # here to make sure a mixed-case `HA_MCP_TOOLS` can't slip past this
-        # exact-string check and still resolve downstream.
-        if isinstance(domain, str) and domain.strip().lower() == "ha_mcp_tools":
-            raise_tool_error(
-                create_validation_error(
-                    (
-                        "ha_call_service cannot invoke services in the "
-                        "'ha_mcp_tools' domain. Use the dedicated MCP tool "
-                        "instead: ha_list_files, ha_read_file, ha_write_file, "
-                        "ha_delete_file, or ha_config_set_yaml."
-                    ),
-                    parameter="domain",
-                )
+        # WebSocket-command escape hatch (issue #1839): reach one-shot WS
+        # commands that aren't registered services (e.g. repairs/ignore_issue).
+        if ws_command is not None:
+            self._reject_incompatible_ws_params(
+                entity_id,
+                return_response,
+                verbose,
+                result_fields,
+                result_attribute_keys,
             )
+            return await self._call_ws_command(
+                ws_command, data, domain=domain, service=service
+            )
+
+        # Service mode requires domain + service (optional at the signature level
+        # only to make room for the ws_command escape hatch) and rejects the
+        # reserved ha_mcp_tools domain.
+        domain, service = self._validate_service_call_params(domain, service)
         try:
             service_data = self._parse_service_data(data, entity_id)
 
