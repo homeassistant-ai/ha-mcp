@@ -14,8 +14,11 @@ NOTE on full-cycle coverage: a "create a repair issue -> ignore it via
 ws_command -> verify it's dismissed" test is intentionally NOT included here.
 Repairs are created server-side by integrations calling
 ``homeassistant.helpers.issue_registry.async_create_issue`` — there is no
-WebSocket command or MCP tool that creates one, and the e2e test container
-config (``tests/initial_test_state/configuration.yaml``) does not load any
+simple, on-demand way to create one without coupling to unrelated internal
+state (the ha_mcp_tools component itself calls ``async_create_issue``
+internally under specific conditions, but that's not a general-purpose
+lever), and the e2e test container config
+(``tests/initial_test_state/configuration.yaml``) does not load any
 integration that files a repair by default (confirmed against
 ``test_get_system_health_with_repairs`` in
 ``workflows/system/test_system_tools.py``, which only asserts the repairs
@@ -25,7 +28,7 @@ purely for this test (e.g. importing ``issue_registry`` and calling
 a hand-rolled fixture, not the feature — and ``repairs/ignore_issue`` shares
 the exact ``send_websocket_message`` dispatch path already exercised by the
 ``repairs/list_issues`` round-trip below and covered param-wise (mutual
-exclusion, empty command, streaming/subscription refusal, ha_mcp_tools
+exclusion, empty command, streaming/two-phase refusal, ha_mcp_tools
 refusal, backend-failure propagation) by
 ``tests/src/unit/test_call_service_ws_command.py``.
 """
@@ -91,8 +94,8 @@ class TestWsCommandRefusals:
         )
 
         error_msg = extract_error_message(result)
-        assert "streaming/subscription" in error_msg, (
-            f"Expected streaming/subscription refusal; got: {error_msg!r}"
+        assert "streaming or two-phase" in error_msg, (
+            f"Expected streaming/two-phase refusal; got: {error_msg!r}"
         )
 
     async def test_ha_mcp_tools_prefix_refused(self, mcp_client):
@@ -125,4 +128,44 @@ class TestWsCommandRefusals:
         error_msg = extract_error_message(result)
         assert "not both" in error_msg, (
             f"Expected mutual-exclusion refusal; got: {error_msg!r}"
+        )
+
+    async def test_call_service_invoker_refused(self, mcp_client):
+        """ws_command='call_service' is refused rather than forwarded —
+        proves the service-invocation bypass (which would skip the
+        ha_mcp_tools domain guard) is closed against a real server, not
+        just in the unit-level mock."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_call_service",
+            {
+                "ws_command": "call_service",
+                "data": {"domain": "ha_mcp_tools", "service": "get_caller_token"},
+            },
+        )
+
+        error_msg = extract_error_message(result)
+        assert "invokes Home Assistant services" in error_msg, (
+            f"Expected a services/safeguards refusal; got: {error_msg!r}"
+        )
+        assert "safeguards" in error_msg, (
+            f"Expected the refusal to mention safeguards; got: {error_msg!r}"
+        )
+
+    async def test_reserved_envelope_key_in_data_refused(self, mcp_client):
+        """data={"type": ...} is refused rather than silently overriding the
+        validated ws_command — proves the type-override bypass is closed
+        against a real server, not just in the unit-level mock."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_call_service",
+            {
+                "ws_command": "repairs/list_issues",
+                "data": {"type": "subscribe_events"},
+            },
+        )
+
+        error_msg = extract_error_message(result)
+        assert "reserved" in error_msg, (
+            f"Expected a reserved-envelope-key refusal; got: {error_msg!r}"
         )

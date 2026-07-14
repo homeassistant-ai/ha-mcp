@@ -128,16 +128,37 @@ _SERVICE_TO_STATE: dict[str, str] = {
 }
 
 
-# WebSocket commands that stream events (or otherwise never resolve to a single
-# terminal result) rather than replying once. ha_call_service's ws_command escape
-# hatch only supports one-shot request/response commands, so these are rejected.
-# Subscription commands are matched by the "subscribe" substring; render_template
-# is event-based (use ha_eval_template instead).
-_WS_COMMAND_EVENT_BLOCKLIST = frozenset({"render_template"})
+# WebSocket commands that stream events or reply in two phases (an initial ack
+# then the real payload as a follow-up event) rather than resolving to a single
+# terminal result. ha_call_service's ws_command escape hatch only supports
+# one-shot request/response commands, so these are rejected: the "subscribe"
+# substring catches subscription commands, and the set names known two-phase /
+# streaming commands whose names don't contain "subscribe". The set is a floor,
+# not an exhaustive list -- HA's WS command naming isn't consistent enough for a
+# name check alone to be fully reliable.
+_WS_COMMAND_EVENT_BLOCKLIST = frozenset(
+    {
+        "render_template",  # event-based; use ha_eval_template instead
+        "system_health/info",  # two-phase (see tools_system._fetch_health_info)
+        "logbook/event_stream",  # streams logbook events indefinitely
+        "assist_pipeline/run",  # streams pipeline events
+    }
+)
+
+# One-shot WS commands that re-enter Home Assistant's service invocation. Routing
+# them through the escape hatch would bypass the service-mode guards (notably the
+# reserved ha_mcp_tools domain block), so they are rejected -- use the
+# domain/service parameters for service calls instead.
+_WS_COMMAND_SERVICE_INVOKERS = frozenset({"call_service", "execute_script"})
+
+# Reserved WebSocket envelope keys the transport owns. Allowing them inside data
+# would let a caller override the validated command type (defeating every check
+# below) or collide with the transport's message id, so they are rejected.
+_WS_RESERVED_ENVELOPE_KEYS = frozenset({"type", "id"})
 
 
 def _is_streaming_ws_command(command_type: str) -> bool:
-    """Return True for subscription / event-streaming WS commands not supported here."""
+    """Return True for subscription / two-phase WS commands not supported here."""
     lowered = command_type.lower()
     return "subscribe" in lowered or lowered in _WS_COMMAND_EVENT_BLOCKLIST
 
@@ -217,6 +238,40 @@ class ServiceTools:
                 )
             )
         return domain, service
+
+    @staticmethod
+    def _reject_incompatible_ws_params(
+        entity_id: str | None,
+        return_response: bool,
+        verbose: bool,
+        result_fields: str | list[str] | None,
+        result_attribute_keys: str | list[str] | None,
+    ) -> None:
+        """Reject service-mode-only params when the ws_command escape hatch is used.
+
+        These shape a registered-service call and have no meaning for a raw
+        WebSocket command; silently ignoring them would be a confusing no-op, so
+        (mirroring the domain/service "not both" guard) they must be omitted.
+        """
+        offenders = [
+            name
+            for name, is_set in (
+                ("entity_id", entity_id is not None),
+                ("return_response", return_response),
+                ("verbose", verbose),
+                ("result_fields", result_fields is not None),
+                ("result_attribute_keys", result_attribute_keys is not None),
+            )
+            if is_set
+        ]
+        if offenders:
+            raise_tool_error(
+                create_validation_error(
+                    "These parameters apply only to service calls and must be "
+                    f"omitted when ws_command is set: {', '.join(offenders)}.",
+                    parameter="ws_command",
+                )
+            )
 
     @staticmethod
     def _parse_result_projection_params(
@@ -463,10 +518,19 @@ class ServiceTools:
         if _is_streaming_ws_command(command_type):
             raise_tool_error(
                 create_validation_error(
-                    f"ws_command '{command_type}' is a streaming/subscription "
+                    f"ws_command '{command_type}' is a streaming or two-phase "
                     "command; ha_call_service only sends one-shot "
                     "request/response commands. For template rendering use "
                     "ha_eval_template.",
+                    parameter="ws_command",
+                )
+            )
+        if command_type.lower() in _WS_COMMAND_SERVICE_INVOKERS:
+            raise_tool_error(
+                create_validation_error(
+                    f"ws_command '{command_type}' invokes Home Assistant services "
+                    "and would bypass ha_call_service's safeguards. Use the "
+                    "domain/service parameters for service calls instead.",
                     parameter="ws_command",
                 )
             )
@@ -484,22 +548,23 @@ class ServiceTools:
             )
             or {}
         )
-        try:
-            result = await self._client.send_websocket_message(
-                {"type": command_type, **command_params}
+        reserved = _WS_RESERVED_ENVELOPE_KEYS & command_params.keys()
+        if reserved:
+            raise_tool_error(
+                create_validation_error(
+                    "data must not contain the reserved WebSocket envelope key(s) "
+                    f"{', '.join(sorted(reserved))}; the command type is set by "
+                    "ws_command, and the message id is managed by the transport.",
+                    parameter="data",
+                )
             )
-        except ToolError:
-            raise
-        except Exception as error:
-            exception_to_structured_error(
-                error,
-                context={"ws_command": command_type},
-                suggestions=[
-                    "Verify the WebSocket command type and its parameters",
-                    "Check Home Assistant connectivity",
-                ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+        # send_websocket_message catches its own transport errors and always
+        # returns a {"success": ...} dict (never raises), so the failure is
+        # handled by the result-shape check below -- matching the other
+        # send_websocket_message call sites in the codebase.
+        result = await self._client.send_websocket_message(
+            {"type": command_type, **command_params}
+        )
 
         if not isinstance(result, dict) or not result.get("success", False):
             error_msg = (
@@ -588,8 +653,10 @@ class ServiceTools:
                     "Advanced escape hatch: send a raw one-shot Home Assistant "
                     "WebSocket command that is NOT a registered service (e.g. "
                     "'repairs/ignore_issue' to dismiss a Repairs issue). When set, "
-                    "omit domain/service and put the command's parameters in data. "
-                    "Streaming/subscription commands are not supported."
+                    "omit domain/service and the other service params; put the "
+                    "command's parameters in data. Streaming/two-phase and "
+                    "service-invoking commands (call_service, execute_script) are "
+                    "rejected."
                 ),
             ),
         ] = None,
@@ -642,12 +709,20 @@ class ServiceTools:
         ha_call_service(ws_command="repairs/ignore_issue",
                         data={"domain": "sun", "issue_id": "abc", "ignore": True})
         ```
-        Only one-shot request/response commands are supported;
-        streaming/subscription commands are rejected.
+        Only one-shot request/response commands are supported; streaming/two-phase
+        and service-invoking commands are rejected, and the other service
+        parameters (entity_id, return_response, etc.) don't apply.
         """
         # WebSocket-command escape hatch (issue #1839): reach one-shot WS
         # commands that aren't registered services (e.g. repairs/ignore_issue).
         if ws_command is not None:
+            self._reject_incompatible_ws_params(
+                entity_id,
+                return_response,
+                verbose,
+                result_fields,
+                result_attribute_keys,
+            )
             return await self._call_ws_command(
                 ws_command, data, domain=domain, service=service
             )
