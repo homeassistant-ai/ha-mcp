@@ -26,6 +26,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .util_helpers import (
+    BLOCKED_WS_WRITE_COMMANDS,
     JSON_STRING_COERCION,
     compact_service_result,
     parse_json_param,
@@ -140,10 +141,17 @@ _WS_COMMAND_EVENT_BLOCKLIST = frozenset(
     {
         "render_template",  # event-based; use ha_eval_template instead
         "system_health/info",  # two-phase (see tools_system._fetch_health_info)
-        "logbook/event_stream",  # streams logbook events indefinitely
         "assist_pipeline/run",  # streams pipeline events
     }
 )
+
+# Substrings that mark a WS command as streaming / subscription-based even when
+# its name isn't in the blocklist above. Such commands ack once and then push
+# follow-up events on the same id; the one-shot send_command path returns the
+# ack and leaks the subscription. "subscribe" covers subscribe_* and */subscribe;
+# "stream" covers history/stream, logbook/event_stream, camera/stream, ...;
+# "start_preview" covers template/start_preview and the config-flow preview family.
+_WS_STREAMING_SUBSTRINGS = ("subscribe", "stream", "start_preview")
 
 # One-shot WS commands that re-enter Home Assistant's service invocation. Routing
 # them through the escape hatch would bypass the service-mode guards (notably the
@@ -158,9 +166,11 @@ _WS_RESERVED_ENVELOPE_KEYS = frozenset({"type", "id"})
 
 
 def _is_streaming_ws_command(command_type: str) -> bool:
-    """Return True for subscription / two-phase WS commands not supported here."""
+    """Return True for subscription / streaming / two-phase WS commands."""
     lowered = command_type.lower()
-    return "subscribe" in lowered or lowered in _WS_COMMAND_EVENT_BLOCKLIST
+    if lowered in _WS_COMMAND_EVENT_BLOCKLIST:
+        return True
+    return any(sub in lowered for sub in _WS_STREAMING_SUBSTRINGS)
 
 
 def _build_service_suggestions(
@@ -539,6 +549,16 @@ class ServiceTools:
                 create_validation_error(
                     "ha_call_service cannot invoke 'ha_mcp_tools/*' WebSocket "
                     "commands. Use the dedicated ha-mcp tools instead.",
+                    parameter="ws_command",
+                )
+            )
+        if command_type.lower() in BLOCKED_WS_WRITE_COMMANDS:
+            raise_tool_error(
+                create_validation_error(
+                    f"ws_command '{command_type}' mutates persistent state that a "
+                    "dedicated tool guards with backups and conflict checks. Use "
+                    "the corresponding ha-mcp tool (e.g. ha_config_set_dashboard, "
+                    "ha_set_area_or_floor, ha_remove_entity) instead.",
                     parameter="ws_command",
                 )
             )

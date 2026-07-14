@@ -152,6 +152,24 @@ class TestWsCommandRefusals:
             f"Expected the refusal to mention safeguards; got: {error_msg!r}"
         )
 
+    async def test_blocked_write_command_refused(self, mcp_client):
+        """Config-write WS commands (e.g. lovelace/config/save) are refused —
+        they bypass a dedicated tool's backups and conflict checks, so
+        ha_call_service rejects them before dispatch against a real server."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_call_service",
+            {
+                "ws_command": "lovelace/config/save",
+                "data": {"config": {"views": []}},
+            },
+        )
+
+        error_msg = extract_error_message(result)
+        assert "dedicated tool guards with backups and conflict checks" in error_msg, (
+            f"Expected a blocked-write refusal; got: {error_msg!r}"
+        )
+
     async def test_reserved_envelope_key_in_data_refused(self, mcp_client):
         """data={"type": ...} is refused rather than silently overriding the
         validated ws_command — proves the type-override bypass is closed

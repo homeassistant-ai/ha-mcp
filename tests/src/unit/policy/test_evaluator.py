@@ -251,3 +251,117 @@ class TestWildcardPredicate:
             == Verdict.REQUIRE_APPROVAL
         )
         assert evaluate("ha_call_service", {"domain": "light"}, pol) == Verdict.ALLOW
+
+
+# --- ws_command escape hatch fail-safe ---
+class TestWsCommandEscapeHatch:
+    """``ha_call_service`` exposes a raw WebSocket ``ws_command`` escape hatch
+    with no ``domain``/``service`` args, so domain/service-keyed rules can't
+    match it. ``evaluate`` closes that gap: if the policy scopes ANY rule to
+    ``ha_call_service`` but none matched normally, an unmatched ws_command
+    call still requires approval (fail-safe) rather than sneaking through
+    the fail-open default."""
+
+    def test_bypass_closed_by_non_matching_domain_rule(self):
+        p = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_call_service",
+                    when=[Predicate(path="args.domain", op="eq", value="light")],
+                )
+            ],
+        )
+        assert (
+            evaluate("ha_call_service", {"ws_command": "repairs/ignore_issue"}, p)
+            == Verdict.REQUIRE_APPROVAL
+        )
+
+    def test_fail_open_preserved_with_no_rules(self):
+        p = Policy()
+        assert (
+            evaluate("ha_call_service", {"ws_command": "repairs/ignore_issue"}, p)
+            == Verdict.ALLOW
+        )
+
+    def test_only_other_tool_rule_does_not_force_gate(self):
+        p = Policy(
+            rules=[Rule(tool_name="ha_config_set_dashboard")],
+        )
+        assert (
+            evaluate("ha_call_service", {"ws_command": "repairs/ignore_issue"}, p)
+            == Verdict.ALLOW
+        )
+
+    def test_empty_when_ha_call_service_rule_gates_ws_command(self):
+        p = Policy(
+            rules=[Rule(tool_name="ha_call_service", when=[])],
+        )
+        assert (
+            evaluate("ha_call_service", {"ws_command": "repairs/ignore_issue"}, p)
+            == Verdict.REQUIRE_APPROVAL
+        )
+
+    def test_explicit_ws_command_rule_matches_normally(self):
+        p = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_call_service",
+                    when=[Predicate(path="args.ws_command", op="exists")],
+                )
+            ],
+        )
+        assert (
+            evaluate("ha_call_service", {"ws_command": "repairs/ignore_issue"}, p)
+            == Verdict.REQUIRE_APPROVAL
+        )
+
+    def test_normal_service_call_unaffected_non_matching(self):
+        p = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_call_service",
+                    when=[Predicate(path="args.domain", op="eq", value="light")],
+                )
+            ],
+        )
+        assert (
+            evaluate(
+                "ha_call_service",
+                {"domain": "cover", "service": "open_cover", "entity_id": "cover.x"},
+                p,
+            )
+            == Verdict.ALLOW
+        )
+
+    def test_normal_service_call_unaffected_matching(self):
+        p = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_call_service",
+                    when=[Predicate(path="args.domain", op="eq", value="light")],
+                )
+            ],
+        )
+        assert (
+            evaluate("ha_call_service", {"domain": "light", "service": "turn_on"}, p)
+            == Verdict.REQUIRE_APPROVAL
+        )
+
+    def test_wildcard_tool_rule_does_not_force_gate_ws_command(self):
+        # The fail-safe clause keys on tool_name == "ha_call_service"
+        # specifically — a "*" rule scoped to an unrelated predicate must
+        # not count as "policy has an ha_call_service rule".
+        p = Policy(
+            rules=[
+                Rule(
+                    tool_name="*",
+                    when=[
+                        Predicate(path="args.entity_id", op="eq", value="lock.front")
+                    ],
+                )
+            ],
+        )
+        assert (
+            evaluate("ha_call_service", {"ws_command": "repairs/ignore_issue"}, p)
+            == Verdict.ALLOW
+        )

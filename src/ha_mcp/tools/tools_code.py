@@ -36,6 +36,7 @@ from fastmcp.server.context import Context
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage, raise_tool_error
+from .util_helpers import BLOCKED_WS_WRITE_COMMANDS
 
 logger = logging.getLogger(__name__)
 
@@ -153,53 +154,6 @@ _BLOCKED_HA_INTERNAL_EVENTS: frozenset[str] = frozenset(
         "component_loaded",
         "recorder_5min_statistics_generated",
         "recorder_hourly_statistics_generated",
-    }
-)
-
-# WebSocket commands the sandbox must not send. Each one either changes
-# persistent state in a way that bypasses a wrapping tool's validation
-# (lovelace, registry mutations) or has no sandbox-appropriate use case
-# at all (``config/core/update`` rewrites the HA installation's location/
-# timezone/currency/lat-long).
-_BLOCKED_WS_COMMANDS: frozenset[str] = frozenset(
-    {
-        "config/core/update",
-        "lovelace/config/save",
-        "lovelace/dashboards/create",
-        "lovelace/dashboards/delete",
-        "lovelace/dashboards/update",
-        "config/area_registry/delete",
-        "config/area_registry/disable",
-        "config/area_registry/update",
-        "config/device_registry/delete",
-        "config/device_registry/disable",
-        "config/device_registry/update",
-        # Device registry deletion is registered as ``remove_config_entry`` on
-        # HA Core, not ``delete`` — see ``tools_registry.py:753`` for the
-        # actually-emitted command. ``ha_remove_device`` wraps it; raw
-        # ``ws_send`` would skip those checks.
-        "config/device_registry/remove_config_entry",
-        "config/entity_registry/delete",
-        "config/entity_registry/disable",
-        "config/entity_registry/update",
-        # Entity registry deletion is registered as ``remove`` on HA Core,
-        # not ``delete`` — see ``tools_entities.py:1130`` for the
-        # actually-emitted command. ``ha_remove_entity`` wraps it.
-        "config/entity_registry/remove",
-        # Floor / label / category registries follow the same rationale as
-        # area / device / entity above: each has a wrapping MCP tool
-        # (``ha_set_area_or_floor``, ``ha_config_set_label``,
-        # ``ha_config_set_category``) that performs invariant checks the
-        # raw WS command skips.
-        "config/floor_registry/create",
-        "config/floor_registry/delete",
-        "config/floor_registry/update",
-        "config/label_registry/create",
-        "config/label_registry/delete",
-        "config/label_registry/update",
-        "config/category_registry/create",
-        "config/category_registry/delete",
-        "config/category_registry/update",
     }
 )
 
@@ -859,7 +813,7 @@ class _SandboxBridge:
         code is dynamic and may pass non-dict values; the runtime guard
         below converts that into an error dict.
 
-        Commands listed in ``_BLOCKED_WS_COMMANDS`` are rejected with an
+        Commands listed in ``BLOCKED_WS_WRITE_COMMANDS`` are rejected with an
         explanatory error: those either rewrite persistent state in ways
         that have no sandbox-appropriate use case (``config/core/update``)
         or bypass the validation in their wrapping MCP tool
@@ -876,7 +830,7 @@ class _SandboxBridge:
         msg_type = message.get("type")
         if not isinstance(msg_type, str):
             return {"error": "ws_send(message) requires a 'type' field"}
-        if msg_type in _BLOCKED_WS_COMMANDS:
+        if msg_type in BLOCKED_WS_WRITE_COMMANDS:
             logger.info("sandbox.ws_send.blocked type=%r", msg_type)
             return {
                 "error": (

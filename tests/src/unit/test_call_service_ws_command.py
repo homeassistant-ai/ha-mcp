@@ -159,7 +159,10 @@ class TestWsCommandExpandedStreamingBlocklist:
     are two-phase or indefinitely-streaming WS commands that don't contain the
     "subscribe" substring, so they're rejected via the explicit
     ``_WS_COMMAND_EVENT_BLOCKLIST`` set rather than the substring check. Also
-    covers a case-variant of the substring-matched ``subscribe_events``.
+    covers a case-variant of the substring-matched ``subscribe_events``, plus
+    the "stream" / "start_preview" substrings (``history/stream``,
+    ``template/start_preview``, ``camera/stream``) added to
+    ``_WS_STREAMING_SUBSTRINGS``.
     """
 
     @pytest.mark.parametrize(
@@ -169,12 +172,18 @@ class TestWsCommandExpandedStreamingBlocklist:
             "logbook/event_stream",
             "assist_pipeline/run",
             "SUBSCRIBE_EVENTS",
+            "history/stream",
+            "template/start_preview",
+            "camera/stream",
         ],
         ids=[
             "system_health_info",
             "logbook_event_stream",
             "assist_pipeline_run",
             "case_variant",
+            "history_stream",
+            "template_start_preview",
+            "camera_stream",
         ],
     )
     async def test_expanded_blocklist_command_raises_streaming_error(self, command):
@@ -209,6 +218,44 @@ class TestWsCommandServiceInvokerReject:
 
         message = str(excinfo.value)
         assert "invokes Home Assistant services" in message
+        tools._client.send_websocket_message.assert_not_awaited()
+
+
+class TestWsCommandBlockedWriteCommands:
+    """WS commands in BLOCKED_WS_WRITE_COMMANDS are rejected outright.
+
+    These mutate persistent state (dashboards, area/device/entity/floor/label/
+    category registries, core config) in ways a dedicated ha-mcp tool guards
+    with backups and conflict checks; routing them through the raw ws_command
+    escape hatch would bypass those guards, so they're rejected before
+    dispatch regardless of case.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "lovelace/config/save",
+            "lovelace/dashboards/delete",
+            "config/entity_registry/remove",
+            "config/core/update",
+            "LOVELACE/CONFIG/SAVE",
+        ],
+        ids=[
+            "lovelace_config_save",
+            "lovelace_dashboards_delete",
+            "config_entity_registry_remove",
+            "config_core_update",
+            "case_variant",
+        ],
+    )
+    async def test_blocked_write_command_rejected(self, command):
+        tools = _make_tools({"success": True, "result": None})
+
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_call_service(ws_command=command)
+
+        message = str(excinfo.value)
+        assert "dedicated tool guards with backups and conflict checks" in message
         tools._client.send_websocket_message.assert_not_awaited()
 
 
