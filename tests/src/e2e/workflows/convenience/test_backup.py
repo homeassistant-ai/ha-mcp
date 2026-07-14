@@ -332,7 +332,25 @@ class TestSnapshotDelete:
     disk, since most guards run before or independent of state; the success
     path lowers ``snapshot_delete_min_age_days`` to 0 for the duration of
     the test so a just-created backup clears the age floor.
+
+    Skipped entirely on the HAOS inaddon tier: that tier runs the real dev
+    add-on against its own Supervisor-managed ``options.json`` (i.e.
+    ``config.yaml``'s shipped ``enable_snapshot_delete=false`` default),
+    which this suite has no per-run override mechanism for — unlike the
+    container-embedded / HAOS-embedded tiers, which get the setting via a
+    seeded ``backup_settings.json`` override file (there is no in-process
+    server to seed a file for; overriding would mean POSTing to the real
+    Supervisor options API).
     """
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_haos_inaddon(self):
+        if os.environ.get("HAOS_TEST_MODE", "external") == "inaddon":
+            pytest.skip(
+                "HAOS inaddon tier has no mechanism to override the real "
+                "add-on's Supervisor-managed enable_snapshot_delete option "
+                "(shipped default is false)"
+            )
 
     async def test_delete_requires_confirm(self, mcp_client):
         logger.info("🗑️ Testing snapshot delete without confirm...")
