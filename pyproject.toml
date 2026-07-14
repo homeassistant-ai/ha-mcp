@@ -174,7 +174,6 @@ ignore = [
 "homeassistant-addon-webhook-proxy/start.py" = ["C901"]
 "scripts/extract_tools.py" = ["C901"]
 "src/ha_mcp/backup_manager.py" = ["C901"]
-"src/ha_mcp/settings_ui/__init__.py" = ["C901"]
 "src/ha_mcp/tools/auto_backup.py" = ["C901"]
 "src/ha_mcp/tools/backup.py" = ["C901"]
 "src/ha_mcp/tools/radio/matter.py" = ["C901"]

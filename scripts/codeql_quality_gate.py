@@ -95,6 +95,15 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "cross-invocation read, so the assignment looks dead.",
     ),
     (
+        "py/unused-global-variable",
+        "src/ha_mcp/settings_ui/_tools_meta.py",
+        "_VALID_STATES",
+        "Cross-module use: _tools_meta.py is a leaf module in the settings_ui "
+        "split, so this frozenset is imported and read by _handlers_tools.py's "
+        "_coerce_tool_states. CodeQL's single-file analysis misses the "
+        "cross-module import, so the declaration looks dead.",
+    ),
+    (
         "py/unused-import",
         "packaging/binary/pyinstaller_hooks/runtime_hook.py",
         "idna",

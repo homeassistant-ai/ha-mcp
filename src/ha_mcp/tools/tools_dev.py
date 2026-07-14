@@ -66,13 +66,13 @@ _PRESERVED_OPTION_KEYS = (
 # Delay before a self-affecting action (embedded entry reload / options
 # submit) fires, so this tool's JSON response flushes to the MCP client
 # before the serving thread is torn down. Mirrors
-# settings_ui._SUPERVISOR_SELF_RESTART_FLUSH_DELAY_S, with more headroom
+# settings_ui._supervisor._SUPERVISOR_SELF_RESTART_FLUSH_DELAY_S, with more headroom
 # because the embedded response may traverse the HA ingress/webhook hop.
 _SELF_ACTION_FLUSH_DELAY_S = 1.0
 
 # Strong references to in-flight fire-and-forget tasks so the event
 # loop's weakref-only task table can't garbage-collect them mid-run.
-# Same pattern as settings_ui._BACKGROUND_RESTART_TASKS.
+# Same pattern as settings_ui._supervisor._BACKGROUND_RESTART_TASKS.
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 # Sentinel marking a key for removal in _merge_file_override (reset action).
@@ -374,7 +374,10 @@ class DevTools:
         import json
 
         from ..config import _FEATURE_FLAG_OVERRIDE_FILENAME
-        from ..settings_ui import _atomic_write_json, _get_override_file_lock
+        from ..settings_ui._persistence import (
+            _atomic_write_json,
+            _get_override_file_lock,
+        )
         from ..utils.data_paths import get_data_dir
 
         path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
@@ -654,7 +657,7 @@ class DevTools:
                 )
 
             if origin == "addon":
-                from ..settings_ui import _supervisor_merge_and_post_options
+                from ..settings_ui._supervisor import _supervisor_merge_and_post_options
 
                 ok, err = await _supervisor_merge_and_post_options(
                     get_global_settings().verify_ssl, {setting: coerced}
@@ -958,7 +961,7 @@ class DevTools:
             }
         if is_running_in_addon():
             from ..config import get_global_settings
-            from ..settings_ui import _schedule_supervisor_self_restart
+            from ..settings_ui._supervisor import _schedule_supervisor_self_restart
 
             _schedule_supervisor_self_restart(get_global_settings().verify_ssl)
             return {
