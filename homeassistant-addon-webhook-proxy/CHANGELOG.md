@@ -3,6 +3,20 @@
 <!-- version list -->
 
 
+## v2.0.2 (2026-07-13)
+
+### Changed
+
+- External URL help text now spells out that the URL must point directly at
+  Home Assistant (its base address should reach your HA login page) and must
+  not contain a port such as `:8123` — remote MCP clients can't reach a URL
+  that carries a port. Clarifies the most common remote-connection failure
+  (issue #1864).
+- DOCS now note that users of the HA-MCP custom component (in-process server)
+  don't need this add-on — the component ships its own webhook for remote
+  access.
+
+
 ## v2.0.1 (2026-07-04)
 
 ### Added
