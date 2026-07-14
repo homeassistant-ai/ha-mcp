@@ -2342,6 +2342,20 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
     } else if (state.client.configFormat === 'ui') {
       // UI-based clients get formatted instruction blocks instead of a code box
       let uiSteps = '';
+      // Legacy OAuth (Gemini Spark, Copilot CLI HTTP) is served only by the
+      // HA-MCP Server component's built-in webhook — its /authorize + /token
+      // live on the Home Assistant host. The direct-port deployments (Docker,
+      // uvx, add-on) and the component's cloudflared/custom tunnels target the
+      // MCP port instead, so they cannot complete the flow. state.remotePath is
+      // guaranteed set here (a remote client can't reach this step without one).
+      const legacyOauthReady = isComponent && state.remotePath === 'builtin-webhook';
+      const legacyMethodNotice = (clientName) => `<div class="instruction-block">
+          <h3 class="instruction-title">${clientName} Configuration</h3>
+          <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3">
+            <p class="text-amber-300 text-sm font-medium">Pick the HA-MCP Server component with its built-in webhook first</p>
+            <p class="text-amber-200/80 text-xs mt-1">${clientName} is OAuth-only and works only through the HA-MCP Server <strong>custom component</strong> in <code class="bg-slate-800 px-1 rounded">legacy</code> mode: its <code class="bg-slate-800 px-1 rounded">/authorize</code> and <code class="bg-slate-800 px-1 rounded">/token</code> endpoints are served on your Home Assistant host via the <strong>built-in webhook</strong>. The Docker, uvx, add-on, and cloudflared/custom deployments target the MCP port directly and don't expose that OAuth surface, so ${clientName} can't complete its flow with them. Go back to <strong>Choose your setup</strong>, select <strong>HA-MCP Server (custom component)</strong>, then the <strong>Built-in webhook</strong> remote path — the ${clientName} steps will appear here.</p>
+          </div>
+        </div>`;
       if (state.client.id === 'chatgpt') {
         uiSteps = `<div class="instruction-block">
           <h3 class="instruction-title">ChatGPT Configuration</h3>
@@ -2385,7 +2399,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
           </ol>
         </div>`;
       } else if (state.client.id === 'gemini-spark') {
-        uiSteps = `<div class="instruction-block">
+        uiSteps = legacyOauthReady ? `<div class="instruction-block">
           <h3 class="instruction-title">Gemini Spark Configuration</h3>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
             <li>Set up the <strong>HA-MCP Server</strong> custom component (in-process server + built-in webhook) — see the Quick Setup box above.</li>
@@ -2400,7 +2414,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
             <p class="text-purple-300 text-sm font-medium">Why legacy OAuth mode</p>
             <p class="text-purple-200/80 text-xs mt-1"><strong>legacy</strong> is currently the only OAuth mode that works with Spark. Spark's custom connected apps use a cross-origin redirect URI (a Client ID Metadata Document), and Home Assistant core's native OAuth doesn't fetch those yet — see <a href="https://github.com/home-assistant/core/issues/176282" class="text-purple-300 hover:underline" target="_blank" rel="noopener noreferrer">home-assistant/core#176282</a> (fix pending in <a href="https://github.com/home-assistant/core/pull/176286" class="text-purple-300 hover:underline" target="_blank" rel="noopener noreferrer">#176286</a>). This page will switch to recommending the native mode for Spark once that lands. See the <a href="${base}/faq#google-spark-oauth" class="text-purple-300 hover:underline">FAQ</a> for details.</p>
           </div>
-        </div>`;
+        </div>` : legacyMethodNotice('Gemini Spark');
       } else if (state.client.id === 'raycast') {
         uiSteps = `<div class="instruction-block">
           <h3 class="instruction-title">Raycast Configuration</h3>
@@ -2496,7 +2510,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
             </div>
           </div>`;
         } else {
-          uiSteps = `<div class="instruction-block">
+          uiSteps = legacyOauthReady ? `<div class="instruction-block">
             <h3 class="instruction-title">Copilot CLI Configuration (HTTP)</h3>
             <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
               <li>Start Copilot CLI: <code class="bg-slate-800 px-1 rounded">copilot</code></li>
@@ -2526,7 +2540,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
               <p class="text-purple-200/80 text-xs mt-1">Copilot CLI's remote MCP setup requires a Client ID and performs dynamic client registration — but Home Assistant's default <code class="bg-slate-800 px-1 rounded">ha_auth</code> mode doesn't advertise a registration endpoint, so that registration fails and <code class="bg-slate-800 px-1 rounded">ha_auth</code> does not work with Copilot CLI.</p>
               <p class="text-purple-200/80 text-xs mt-2">In the HA-MCP Server integration's <strong>Options</strong>, set <strong>Authentication mode</strong> to <code class="bg-slate-800 px-1 rounded">legacy</code> and restart Home Assistant when the repair prompts you. Then copy the generated <strong>Client ID</strong> and <strong>Client Secret</strong> from the Options page (also printed in the Home Assistant log) into Copilot CLI's Client ID and secret fields. Use your <strong>built-in webhook URL</strong> (<code class="bg-slate-800 px-1 rounded">https://&lt;your-ha-domain&gt;/api/webhook/&lt;webhook-id&gt;</code>) as the server URL — legacy OAuth is served on your Home Assistant host, so a direct-port or tunnel URL won't complete the OAuth flow. See the <a href="${base}/faq#copilot-cli-oauth-legacy" class="text-purple-300 hover:underline">FAQ</a> for details.</p>
             </div>
-          </div>`;
+          </div>` : legacyMethodNotice('Copilot CLI');
         }
       }
       instructions.push(uiSteps);

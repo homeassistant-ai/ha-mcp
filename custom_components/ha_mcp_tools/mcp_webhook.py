@@ -672,14 +672,14 @@ async def async_register_webhook(
                 await session.close()
             raise
 
-    # A PRIOR registration this HA session may still own the legacy root
-    # views even though THIS registration is not legacy (aiohttp can never
-    # release a bound view without a restart, regardless of register_endpoint)
-    # — surface the restart that actually releases route ownership.
-    if (
-        auth_mode != WEBHOOK_AUTH_LEGACY
-        and hass.data.get(OAUTH_ROUTE_OWNER_KEY) == DOMAIN
-    ):
+    # A PRIOR registration this HA session may still own the legacy root views
+    # even though THIS call bound no legacy provider — either the mode is no
+    # longer legacy, OR legacy is still selected but the webhook endpoint is now
+    # off (register_endpoint=False skips the bind block above). aiohttp can never
+    # release a bound view without a restart, so gate on "no provider bound this
+    # call" (not the mode string) to surface the restart that releases route
+    # ownership in both cases.
+    if cfg["oauth_provider"] is None and hass.data.get(OAUTH_ROUTE_OWNER_KEY) == DOMAIN:
         oauth_restart_needed = True
 
     hass.data.setdefault(DOMAIN, {})[DATA_WEBHOOK] = cfg

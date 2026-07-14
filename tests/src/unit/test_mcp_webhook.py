@@ -865,6 +865,31 @@ class TestRegisterWebhook:
         )
         assert restart_needed is True
 
+    async def test_legacy_webhook_off_flags_restart_when_routes_owned(
+        self, monkeypatch
+    ):
+        # register_endpoint=False while the mode is still legacy: no provider is
+        # bound this call, but a prior legacy registration still owns the root
+        # routes → a restart is still needed to release them, so the repair must
+        # not be cleared.
+        hass = _register_hass()
+        hass.data[OAUTH_ROUTE_OWNER_KEY] = DOMAIN
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+
+        restart_needed = await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_LEGACY,
+            register_endpoint=False,
+            oauth_client_id="cid",
+            oauth_client_secret="secret",
+            oauth_signing_key=secrets.token_hex(32),
+        )
+        assert restart_needed is True
+        assert hass.data[DOMAIN][DATA_WEBHOOK]["oauth_provider"] is None
+
     async def test_registration_failure_closes_session_and_unregisters(
         self, monkeypatch
     ):

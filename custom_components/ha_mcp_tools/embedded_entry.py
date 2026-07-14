@@ -221,9 +221,16 @@ def _prebind_legacy_oauth_views(hass: HomeAssistant, entry: ConfigEntry) -> None
         # _ensure_secrets mints these whenever legacy mode is configured; a gap
         # means a partial config — let the bring-up path surface it.
         return
+    from .mcp_webhook import _register_metadata_views
     from .oauth_legacy import LegacyOAuthRouteConflict, bind_legacy_views
 
     with suppress(LegacyOAuthRouteConflict):
+        # Register the RFC 8414/9728 discovery views alongside the root
+        # /authorize + /token views, both at setup time, so the discovery
+        # doc's resource_metadata URL resolves at boot for RFC-compliant
+        # clients — not just the root views. Both are idempotent, so the
+        # bring-up's async_register_webhook reuses them.
+        _register_metadata_views(hass)
         bind_legacy_views(hass, client_id, client_secret, signing_key)
 
 
