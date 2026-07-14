@@ -16,6 +16,7 @@ These tools are critical for configuration safety and disaster recovery.
 
 import asyncio
 import logging
+import os
 import time
 
 import pytest
@@ -28,6 +29,18 @@ logger = logging.getLogger(__name__)
 def _error_message(data: dict) -> str:
     error = data.get("error", {})
     return error.get("message", str(error)) if isinstance(error, dict) else str(error)
+
+
+def _server_is_out_of_process() -> bool:
+    """True when the MCP server under test runs in a separate process from
+    pytest: the container-embedded backend (E2E_BACKEND=embedded) or the
+    HAOS embedded/inaddon tiers all run ha-mcp inside the HA instance
+    itself. `monkeypatch.setenv` + `_reset_global_settings()` only affect
+    the pytest process's own Settings singleton, so they cannot reach a
+    server running in one of these modes."""
+    if os.environ.get("E2E_BACKEND", "").strip().lower() == "embedded":
+        return True
+    return os.environ.get("HAOS_TEST_MODE", "external") in ("embedded", "inaddon")
 
 
 @pytest.mark.convenience
@@ -417,6 +430,13 @@ class TestSnapshotDelete:
     ):
         """Full happy path: with the age floor disabled, an old-enough
         (non-newest) ad-hoc backup can actually be deleted end-to-end."""
+        if _server_is_out_of_process():
+            pytest.skip(
+                "monkeypatch.setenv cannot reach an out-of-process server "
+                "(container-embedded / HAOS embedded / HAOS inaddon); the "
+                "guard-rejection tests above already exercise the real "
+                "delete path end-to-end under those backends"
+            )
         logger.info("🗑️ Testing snapshot delete success path...")
 
         from ha_mcp.config import _reset_global_settings

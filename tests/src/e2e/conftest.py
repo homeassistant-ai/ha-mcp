@@ -151,6 +151,16 @@ _EMBEDDED_FEATURE_FLAGS: dict[str, bool] = {
     # keyless writes aren't hard-blocked.
     "enable_strict_mandatory_bps": False,
 }
+# BACKUP_OVERRIDE_FIELDS (not FEATURE_FLAG_FIELDS) values for the embedded
+# server — a separate override file (backup_settings.json) from
+# _EMBEDDED_FEATURE_FLAGS's feature_flags.json, since ha_mcp.config reads the
+# two registries from different files. Mirrors the ENABLE_SNAPSHOT_DELETE env
+# var the container backend sets directly (#1861); the embedded server can't
+# read that env, so it goes through this file instead, same rationale as
+# _EMBEDDED_FEATURE_FLAGS above.
+_EMBEDDED_BACKUP_OVERRIDES: dict[str, bool] = {
+    "enable_snapshot_delete": True,
+}
 # Boot budgets for the embedded path. The wheel + its dependency tree is
 # preinstalled in the container entrypoint BEFORE HA's /init (so bring-up is
 # fast + deterministic), which delays /api/ liveness by the pip window — hence a
@@ -807,9 +817,9 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
     The ha_mcp_tools component itself is already copied by
     ``_install_custom_component`` (which also seeds the "tools" services entry);
     the in-process server is a SECOND config entry of that same component,
-    discriminated by ``data.entry_type == "server"``. Two pieces here, laid down
-    before the container boots (so a post-boot host write to the bind mount
-    doesn't have to propagate, matching the other pre-boot seeders):
+    discriminated by ``data.entry_type == "server"``. Three pieces here, laid
+    down before the container boots (so a post-boot host write to the bind
+    mount doesn't have to propagate, matching the other pre-boot seeders):
 
     1. Seed the server config entry with the stable webhook id/secret (so the
        mcp_client fixture knows the connect URL) and a ``file://`` ``pip_spec``
@@ -824,6 +834,10 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
        ``ha_mcp.config`` reads in a standalone deployment (the embedded server is
        standalone: ``is_running_in_addon()`` is False in embedded mode, so the
        file is honored rather than short-circuited by Supervisor).
+    3. Write the backup-settings override file (``backup_settings.json``,
+       ``_EMBEDDED_BACKUP_OVERRIDES``) the same way, for ``BACKUP_OVERRIDE_FIELDS``
+       values (e.g. ``enable_snapshot_delete``) — a separate registry from
+       ``FEATURE_FLAG_FIELDS``, read from a separate override file.
     """
     storage_file = config_path / ".storage" / "core.config_entries"
     data = json.loads(storage_file.read_text())
@@ -871,8 +885,12 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
     (server_data_dir / "feature_flags.json").write_text(
         json.dumps(_EMBEDDED_FEATURE_FLAGS, indent=2)
     )
+    (server_data_dir / "backup_settings.json").write_text(
+        json.dumps(_EMBEDDED_BACKUP_OVERRIDES, indent=2)
+    )
     logger.info(
-        "Seeded ha_mcp_tools in-process server config entry + feature-flag overrides"
+        "Seeded ha_mcp_tools in-process server config entry + feature-flag "
+        "+ backup-setting overrides"
     )
 
 
@@ -1542,16 +1560,25 @@ def ha_container_with_fresh_config(request):
         # Must run before boot (offline qcow2 edit), like the refreshers above.
         stage_embedded_server_wheel_in_qcow2(image_path)
         # haos_embedded lane only: the WHOLE suite runs through the in-process
-        # server, so deliver the same feature-flag overrides the container
-        # ``embedded`` backend injects (yaml editing, filesystem tools, custom
-        # component integration, …) into <config>/.ha_mcp/feature_flags.json.
+        # server, so deliver the same settings overrides the container
+        # ``embedded`` backend injects — feature flags (yaml editing, filesystem
+        # tools, custom component integration, …) into
+        # <config>/.ha_mcp/feature_flags.json, and separately the
+        # BACKUP_OVERRIDE_FIELDS values (enable_snapshot_delete, #1861) into
+        # <config>/.ha_mcp/backup_settings.json — two different override files
+        # since ha_mcp.config reads the two registries separately.
         # Gated to this lane so the external / inaddon lanes (green) are untouched —
-        # their only embedded consumer is the smoke test, which needs no flags.
+        # their only embedded consumer is the smoke test, which needs no overrides.
         # Hard-raises on failure (unlike the best-effort wheel staging): the suite
-        # depends on these flags, so a delivery failure should fail setup loudly.
+        # depends on these overrides, so a delivery failure should fail setup loudly.
         if haos_embedded:
             stage_embedded_server_feature_flags_in_qcow2(
                 image_path, _EMBEDDED_FEATURE_FLAGS
+            )
+            stage_embedded_server_feature_flags_in_qcow2(
+                image_path,
+                _EMBEDDED_BACKUP_OVERRIDES,
+                filename="backup_settings.json",
             )
         # Inaddon mode: overwrite the baked addon source with PR's current
         # source + bump config.yaml version so Supervisor detects an
