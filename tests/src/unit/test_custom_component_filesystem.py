@@ -34,6 +34,7 @@ sys.modules["homeassistant.loader"] = MagicMock()
 
 # Now we can import the functions
 from custom_components.ha_mcp_tools import (  # noqa: E402
+    _PACKAGE_DIR_CACHE,
     _decode_legacy_backup_name,
     _delete_file_sync,
     _detect_package_dirs,
@@ -49,6 +50,7 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
     _mask_secrets_content,
     _migrate_legacy_backup_dir,
     _normalize_extra_dir,
+    _package_dir_markers_cached,
     _package_folder_relative_to_config,
     _parse_and_validate_yaml_path,
     _path_in_package_dir,
@@ -1782,6 +1784,77 @@ class TestPathInPackageDir:
 
     def test_default_packages_when_none(self):
         assert _path_in_package_dir("packages/foo.yaml", None)
+
+
+class TestPackageDirMarkersCached:
+    """#1788: folder detection runs on every file op, and a glob fires one per
+    matched file, so the parse is cached behind an mtime signature covering
+    every file the loader read.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        _PACKAGE_DIR_CACHE.clear()
+        yield
+        _PACKAGE_DIR_CACHE.clear()
+
+    def test_second_call_does_not_reparse(self, tmp_path, monkeypatch):
+        p = _write_config(
+            tmp_path, "homeassistant:\n  packages: !include_dir_named pkgs\n"
+        )
+        assert _package_dir_markers_cached(p) == {"pkgs"}
+
+        def _boom(*_a, **_k):
+            raise AssertionError("cache miss: re-parsed an unchanged config")
+
+        monkeypatch.setattr(
+            "custom_components.ha_mcp_tools._load_package_dir_markers_tracked", _boom
+        )
+        assert _package_dir_markers_cached(p) == {"pkgs"}
+
+    def test_edit_invalidates(self, tmp_path):
+        p = _write_config(
+            tmp_path, "homeassistant:\n  packages: !include_dir_named pkgs\n"
+        )
+        assert _package_dir_markers_cached(p) == {"pkgs"}
+        _write_config(
+            tmp_path, "homeassistant:\n  packages: !include_dir_named other\n"
+        )
+        os.utime(p, ns=(0, 0))  # force a distinct mtime, not clock granularity
+        assert _package_dir_markers_cached(p) == {"other"}
+
+    def test_edit_to_included_file_invalidates(self, tmp_path):
+        """The reason the signature spans every file read, not just the root.
+
+        With the homeassistant: section split into an !include, keying on
+        configuration.yaml alone would serve a stale allowlist forever.
+        """
+        _write_config(tmp_path, "packages: !include_dir_named pkgs\n", name="ha.yaml")
+        p = _write_config(tmp_path, "homeassistant: !include ha.yaml\n")
+        assert _package_dir_markers_cached(p) == {"pkgs"}
+
+        (tmp_path / "ha.yaml").write_text(
+            "packages: !include_dir_named moved\n", encoding="utf-8"
+        )
+        os.utime(tmp_path / "ha.yaml", ns=(0, 0))
+        assert _package_dir_markers_cached(p) == {"moved"}
+
+    def test_creating_a_missing_include_invalidates(self, tmp_path):
+        """A missing include is stamped -1, so creating it later invalidates."""
+        p = _write_config(tmp_path, "homeassistant: !include later.yaml\n")
+        assert _package_dir_markers_cached(p) == set()
+
+        (tmp_path / "later.yaml").write_text(
+            "packages: !include_dir_named pkgs\n", encoding="utf-8"
+        )
+        assert _package_dir_markers_cached(p) == {"pkgs"}
+
+    def test_cached_set_is_not_mutable_through_caller(self, tmp_path):
+        p = _write_config(
+            tmp_path, "homeassistant:\n  packages: !include_dir_named pkgs\n"
+        )
+        _package_dir_markers_cached(p).add("injected")
+        assert _package_dir_markers_cached(p) == {"pkgs"}
 
 
 class TestDetectPackageDirs:

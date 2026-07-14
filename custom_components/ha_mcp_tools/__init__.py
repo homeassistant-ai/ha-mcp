@@ -699,10 +699,19 @@ def _follow_include(loader: yaml.Loader, node: yaml.nodes.Node) -> Any:
     if depth >= 8 or not isinstance(name, str) or not name or name.startswith("<"):
         return None
     path = os.path.join(os.path.dirname(name), str(node.value))
+    # Recorded BEFORE the open, and even when it fails: the caching layer keys
+    # on these files' mtimes, so an include target that does not exist yet must
+    # still be tracked (with a -1 stamp) or creating it later would not
+    # invalidate.
+    opened = getattr(loader, "_pkg_opened", None)
+    if opened is not None:
+        opened.append(path)
     try:
         with open(path, encoding="utf-8") as handle:
             sub = _PackagesDirLoader(handle)
             sub._pkg_include_depth = depth + 1
+            # Same list object, so a nested include lands in one signature.
+            sub._pkg_opened = opened
             try:
                 return sub.get_single_data()
             finally:
@@ -752,6 +761,27 @@ def _extract_package_dir_markers(data: object) -> set[str]:
     return {str(m) for m in markers}
 
 
+def _load_package_dir_markers_tracked(config_path: str) -> tuple[set[str], list[str]]:
+    """``_load_package_dir_markers`` that also reports every file it read.
+
+    The file list (configuration.yaml plus any ``!include`` followed from it) is
+    what ``_package_dir_markers_cached`` keys its mtime signature on, so the
+    cache invalidates no matter which of them the packages directive lives in.
+    """
+    opened: list[str] = [config_path]
+    try:
+        with open(config_path, encoding="utf-8") as handle:
+            loader = _PackagesDirLoader(handle)
+            loader._pkg_opened = opened
+            try:
+                data = loader.get_single_data()
+            finally:
+                loader.dispose()
+    except (OSError, yaml.YAMLError):
+        return set(), opened
+    return _extract_package_dir_markers(data), opened
+
+
 def _load_package_dir_markers(config_path: str) -> set[str]:
     """Parse configuration.yaml (following ``!include``) and return the raw
     folder argument(s) of every packages ``!include_dir_*named`` directive.
@@ -759,16 +789,52 @@ def _load_package_dir_markers(config_path: str) -> set[str]:
     Blocking (opens files) — call via an executor. Returns raw strings, possibly
     absolute; the caller relativizes and filters them against the config dir.
     """
-    try:
-        with open(config_path, encoding="utf-8") as handle:
-            loader = _PackagesDirLoader(handle)
-            try:
-                data = loader.get_single_data()
-            finally:
-                loader.dispose()
-    except (OSError, yaml.YAMLError):
-        return set()
-    return _extract_package_dir_markers(data)
+    markers, _opened = _load_package_dir_markers_tracked(config_path)
+    return markers
+
+
+def _mtime_sig(paths: list[str]) -> tuple[tuple[str, int], ...]:
+    """Stamp each path with its mtime, or -1 when it does not exist.
+
+    The -1 is load-bearing: an ``!include`` target that is missing today and
+    created tomorrow changes the signature, so the cache invalidates instead of
+    serving folder-detection that predates the file.
+    """
+    sig: list[tuple[str, int]] = []
+    for path in paths:
+        try:
+            sig.append((path, os.stat(path).st_mtime_ns))
+        except OSError:
+            sig.append((path, -1))
+    return tuple(sig)
+
+
+# config_path -> (signature of the files last read, markers found in them).
+# Module-level: the folder binding is per config dir, and HA runs one per
+# process. Concurrent first-callers may each miss and parse once before the
+# entry lands — bounded, self-healing, and cheaper than holding a lock across
+# executor threads.
+_PACKAGE_DIR_CACHE: dict[str, tuple[tuple[tuple[str, int], ...], set[str]]] = {}
+
+
+def _package_dir_markers_cached(config_path: str) -> set[str]:
+    """``_load_package_dir_markers``, skipping the parse when nothing changed.
+
+    Blocking (stats files) — call via an executor. Every file operation resolves
+    the packages folder, and a ``ha_config_get_yaml`` glob fires one detection
+    per matched file, so this would otherwise re-parse configuration.yaml (and
+    whatever it includes) N times per search. Stat-per-file is cheap; the YAML
+    parse is not.
+    """
+    cached = _PACKAGE_DIR_CACHE.get(config_path)
+    if cached is not None:
+        signature, markers = cached
+        if _mtime_sig([path for path, _ in signature]) == signature:
+            return set(markers)
+    markers, opened = _load_package_dir_markers_tracked(config_path)
+    # Copy in and out: the cached set must not be mutable through a caller.
+    _PACKAGE_DIR_CACHE[config_path] = (_mtime_sig(opened), set(markers))
+    return markers
 
 
 def _package_folder_relative_to_config(raw: str, config_dir: str) -> str | None:
@@ -810,7 +876,9 @@ async def _detect_package_dirs(hass: HomeAssistant) -> set[str]:
     config_path = hass.config.path(ALLOWED_YAML_CONFIG_FILES[0])
     # normpath is a pure string transform (no I/O), so ASYNC240 doesn't apply.
     config_dir = os.path.normpath(hass.config.config_dir)  # noqa: ASYNC240
-    markers = await hass.async_add_executor_job(_load_package_dir_markers, config_path)
+    markers = await hass.async_add_executor_job(
+        _package_dir_markers_cached, config_path
+    )
     for raw in markers:
         folder = _package_folder_relative_to_config(raw, config_dir)
         if folder:
