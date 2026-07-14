@@ -11,6 +11,7 @@ reading a config fragment is not an edit, and an agent needs to inspect config
 whether or not YAML editing is turned on.
 """
 
+import asyncio
 import logging
 from typing import Annotated, Any
 
@@ -54,7 +55,7 @@ def _call_failed(service: str, context: dict[str, Any]) -> None:
     )
 
 
-async def _unwrap_or_raise(result: Any, service: str, context: dict[str, Any]) -> Any:
+def _unwrap_or_raise(result: Any, service: str, context: dict[str, Any]) -> Any:
     """Unwrap a component service response, raising on a failure payload."""
     if not isinstance(result, dict):
         _call_failed(service, context)
@@ -76,7 +77,7 @@ async def _resolve_target_files(client: Any, file: str) -> list[str]:
         return [file]
 
     directory, _, pattern = file.rpartition("/")
-    unwrapped = await _unwrap_or_raise(
+    unwrapped = _unwrap_or_raise(
         await call_mcp_tools_service(
             client,
             "list_files",
@@ -177,21 +178,25 @@ class YamlReadTools:
 
             targets = await _resolve_target_files(self._client, file)
 
-            matches: list[dict[str, Any]] = []
-            for target in targets:
-                service_data: dict[str, Any] = {
-                    "path": target,
-                    "yaml_path": yaml_path,
-                }
-                if include_parsed:
-                    service_data["include_parsed"] = True
+            extra: dict[str, Any] = {"include_parsed": True} if include_parsed else {}
+            # The reads are independent, so fan them out rather than paying N
+            # sequential round-trips to HA — a packages glob is routinely 10+
+            # files. gather preserves order, so matches stay sorted by file.
+            responses = await asyncio.gather(
+                *(
+                    call_mcp_tools_service(
+                        self._client,
+                        "read_file",
+                        {"path": target, "yaml_path": yaml_path, **extra},
+                    )
+                    for target in targets
+                )
+            )
 
-                unwrapped = await _unwrap_or_raise(
-                    await call_mcp_tools_service(
-                        self._client, "read_file", service_data
-                    ),
-                    "read_file",
-                    {"file": target, "yaml_path": yaml_path},
+            matches: list[dict[str, Any]] = []
+            for target, response in zip(targets, responses, strict=True):
+                unwrapped = _unwrap_or_raise(
+                    response, "read_file", {"file": target, "yaml_path": yaml_path}
                 )
 
                 # None = the file parsed but has no such key: not an error, just
