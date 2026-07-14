@@ -224,6 +224,11 @@ class YamlReadTools:
         except ToolError:
             raise
         except Exception as e:
+            # Typed NoReturn (raise_error defaults True), so this is the last
+            # statement: the sibling tools' trailing `return None` guards a
+            # shape whose try block ends in a raise_tool_error() call CodeQL
+            # cannot see through. This try ends in a real return, so the same
+            # trailer would be provably unreachable (py/unreachable-statement).
             exception_to_structured_error(
                 e,
                 context={
@@ -232,8 +237,6 @@ class YamlReadTools:
                     "yaml_path": yaml_path,
                 },
             )
-            return None  # raise_tool_error always raises; explicit for CodeQL
-        return None  # py/mixed-returns: explicit terminal; handlers above always raise
 
 
 def register_yaml_read_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
