@@ -2605,7 +2605,7 @@ class SearchTools:
         name="ha_get_overview",
         tags={"Search & Discovery"},
         annotations={
-            "openWorldHint": False,
+            "openWorldHint": True,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get System Overview",

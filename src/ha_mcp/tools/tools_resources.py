@@ -146,7 +146,7 @@ class ResourceTools:
         name="ha_config_list_dashboard_resources",
         tags={"Dashboards"},
         annotations={
-            "openWorldHint": False,
+            "openWorldHint": True,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "List Dashboard Resources",

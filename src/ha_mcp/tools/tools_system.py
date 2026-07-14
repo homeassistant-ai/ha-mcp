@@ -512,7 +512,7 @@ class SystemTools:
         name="ha_get_system_health",
         tags={"System", "Zigbee", "Z-Wave", "Thread", "Matter", "Integrations"},
         annotations={
-            "openWorldHint": False,
+            "openWorldHint": True,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",

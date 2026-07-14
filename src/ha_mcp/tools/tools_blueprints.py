@@ -76,7 +76,7 @@ class BlueprintTools:
         name="ha_get_blueprint",
         tags={"Blueprints"},
         annotations={
-            "openWorldHint": False,
+            "openWorldHint": True,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Blueprint",

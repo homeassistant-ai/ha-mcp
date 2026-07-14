@@ -9,6 +9,7 @@ Every tool MUST declare its safety behavior with one of:
 Additionally, every tool SHOULD have a title for UI display.
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -35,7 +36,8 @@ def _parse_decorator_args(decorator_args: str, func_name: str, file_name: str) -
     has_title = "title" in decorator_args
     has_tags = "tags=" in decorator_args or "tags =" in decorator_args
     has_open_world = (
-        re.search(r'"openWorldHint"\s*:\s*(True|False)', decorator_args) is not None
+        re.search(r'["\']openWorldHint["\']\s*:\s*(True|False)', decorator_args)
+        is not None
     )
 
     return {
@@ -187,6 +189,57 @@ class TestToolAnnotations:
             + "\n\nAdd openWorldHint (true if the tool reaches external systems, "
             "false if it only touches local Home Assistant state) to each "
             "@tool() decorator; the MCP default is true."
+        )
+
+    def test_server_registered_tools_have_open_world_hint(self):
+        """Tools registered directly on the server must also set openWorldHint.
+
+        get_all_tools() only scans src/ha_mcp/tools, so ha_get_skill_guide --
+        registered in server.py via self.mcp.tool(...) -- would otherwise keep
+        the implicit open-world default. Parse server.py's AST and assert every
+        self.mcp.tool(...) registration carries openWorldHint.
+        """
+        server_py = get_tools_dir().parent / "server.py"
+        tree = ast.parse(server_py.read_text(encoding="utf-8"), filename=str(server_py))
+
+        registrations = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "tool"
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "mcp"
+        ]
+        assert registrations, (
+            "no self.mcp.tool(...) registrations found in server.py -- "
+            "the scanner's shape assumption drifted"
+        )
+
+        missing = []
+        for call in registrations:
+            name = next(
+                (
+                    kw.value.value
+                    for kw in call.keywords
+                    if kw.arg == "name" and isinstance(kw.value, ast.Constant)
+                ),
+                "<unknown>",
+            )
+            annotations = next(
+                (kw.value for kw in call.keywords if kw.arg == "annotations"), None
+            )
+            keys = (
+                {k.value for k in annotations.keys if isinstance(k, ast.Constant)}
+                if isinstance(annotations, ast.Dict)
+                else set()
+            )
+            if "openWorldHint" not in keys:
+                missing.append(name)
+
+        assert not missing, (
+            f"server-registered tools missing openWorldHint: {missing}. Add it to "
+            "the annotations dict in the self.mcp.tool(...) call in server.py."
         )
 
     def test_all_tools_have_tags(self):
