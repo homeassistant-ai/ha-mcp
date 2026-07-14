@@ -278,6 +278,7 @@ _BACKUP_INT_BOUNDS: dict[str, tuple[int, int]] = {
     "auto_backup_throttle_minutes": (0, 1440),
     "auto_backup_retain_per_entity": (1, 10_000),
     "auto_backup_calendar_lookahead_days": (1, 365),
+    "snapshot_delete_min_age_days": (0, 365),
 }
 
 

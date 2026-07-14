@@ -56,6 +56,12 @@ options:
   enable_auto_backup: true
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
+  # Off by default (#1861) — an agent deleting a full HA snapshot is
+  # categorically riskier than the lightweight edits-scope auto-backups
+  # above (a snapshot may be the last recovery point after the agent
+  # itself broke something). A human opts in here, not the agent.
+  enable_snapshot_delete: false
+  snapshot_delete_min_age_days: 7
   verify_ssl: true
 schema:
   backup_hint: list(strong|normal|weak|auto)
@@ -71,6 +77,8 @@ schema:
   enable_auto_backup: bool?
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?
+  enable_snapshot_delete: bool?
+  snapshot_delete_min_age_days: int(0,365)?
   verify_ssl: bool?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:

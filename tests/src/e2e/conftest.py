@@ -1581,6 +1581,10 @@ def ha_container_with_fresh_config(request):
             # pin it OFF so the suite's keyless writes aren't hard-blocked. The
             # strict-gate e2e test builds its own server with the flag enabled.
             os.environ["ENABLE_STRICT_MANDATORY_BPS"] = "false"
+            # Snapshot deletion (#1861) defaults OFF in production; enabled
+            # here so the e2e suite can cover the (snapshot, delete) guard
+            # chain against a disposable test HAOS instance.
+            os.environ["ENABLE_SNAPSHOT_DELETE"] = "true"
             _reset_ha_in_process_caches()
             # Mirrors the sun.sun + entity wait loop in the testcontainer
             # branch of ha_container_with_fresh_config: the first tests reach
@@ -2108,6 +2112,10 @@ def ha_container_with_fresh_config(request):
         # OFF so the suite's keyless writes aren't hard-blocked. The strict-gate
         # e2e test builds its own server with the flag enabled.
         os.environ["ENABLE_STRICT_MANDATORY_BPS"] = "false"
+        # Snapshot deletion (#1861) defaults OFF in production; enabled here so
+        # the e2e suite can cover the (snapshot, delete) guard chain against a
+        # disposable test container.
+        os.environ["ENABLE_SNAPSHOT_DELETE"] = "true"
 
         # Reset cached settings + WebSocket pool so subsequent client
         # lookups pick up the new container's URL.

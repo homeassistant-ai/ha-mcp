@@ -182,6 +182,30 @@ class TestRestoreAwaitsSafetyBackup:
         assert "backup/restore" not in call_log
 
 
+class TestRestoreForwardsCtx:
+    @pytest.mark.asyncio
+    async def test_ctx_forwarded_to_safety_backup_poll(self) -> None:
+        """#1861: `restore_backup`'s pre-restore safety backup is a *full*
+        backup (up to 1800s) — a `ctx` passed in must reach that poll too,
+        not just the fast create_backup path."""
+        call_log: list[str] = []
+        ws = _scripted_ws(_restore_responses(), call_log)
+        client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
+        fake_ctx = MagicMock()
+        poll_mock = AsyncMock(return_value={"success": True})
+
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            patch("ha_mcp.tools.backup._poll_backup_completion", new=poll_mock),
+        ):
+            await restore_backup(client, "target-slug", ctx=fake_ctx)
+
+        assert poll_mock.await_args.kwargs["ctx"] is fake_ctx
+
+
 class TestRestoreForwardsPassword:
     @pytest.mark.asyncio
     async def test_password_forwarded_for_protected_target(self) -> None:

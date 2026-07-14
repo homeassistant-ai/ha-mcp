@@ -605,6 +605,43 @@ async def test_ha_get_automation_traces_empty_diagnostics_emits_progress() -> No
 
 
 # ---------------------------------------------------------------------------
+# tools_backup.ha_manage_backup (#1861) — the tool is a nested-function
+# @mcp.tool closure inside register_backup_tools, not a class method like
+# every other tool above. Its unit tests (test_backup_delete.py,
+# test_backup_poll_timeout.py) call the module-level create_backup /
+# restore_backup / delete_backup functions directly with an explicit
+# ctx= kwarg, which proves the plumbing but NOT that FastMCP actually
+# injects a live Context into ha_manage_backup's own signature when a
+# real client calls it. If injection silently failed, ctx would stay
+# None at the dispatcher and every progress heartbeat would be a no-op
+# while every other test still passed. FastMCP's signal that it claimed
+# a parameter for injection is excluding it from the tool's exposed
+# JSON schema — assert that here instead.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ha_manage_backup_ctx_is_injected_not_exposed() -> None:
+    from fastmcp import FastMCP
+
+    from ha_mcp.tools.backup import register_backup_tools
+
+    mcp = FastMCP("test")
+    register_backup_tools(mcp, _mock_ha_client())
+    tool = await mcp.get_tool("ha_manage_backup")
+    props = tool.parameters.get("properties", {})
+
+    assert "ctx" not in props, (
+        "ctx leaked into the exposed schema — FastMCP is not claiming it for "
+        "injection, so ha_manage_backup's progress heartbeats would silently "
+        "never fire for a real client"
+    )
+    # Sanity: real dispatch params ARE exposed, so the absence of "ctx" above
+    # isn't just an empty-schema false positive.
+    assert {"scope", "action", "confirm", "backup_id"} <= props.keys()
+
+
+# ---------------------------------------------------------------------------
 # safe_progress / safe_info: transport errors must not mask successful tool results
 # ---------------------------------------------------------------------------
 

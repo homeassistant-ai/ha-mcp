@@ -386,6 +386,11 @@ def main() -> int:
     )
     auto_backup_throttle_minutes = 0  # default — every write
     auto_backup_retain_per_entity = 100  # default
+    # Off by default (#1861 — a snapshot may be the last recovery point
+    # after the agent itself broke something; a human opts in, not the
+    # agent).
+    enable_snapshot_delete = False  # default
+    snapshot_delete_min_age_days = 7  # default
     tool_search_max_results = 5  # default
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
@@ -529,6 +534,14 @@ def main() -> int:
             raw_retain = config.get("auto_backup_retain_per_entity", 100)
             auto_backup_retain_per_entity = (
                 raw_retain if isinstance(raw_retain, int) else 100
+            )
+            raw_snapshot_delete = config.get("enable_snapshot_delete", False)
+            enable_snapshot_delete = (
+                raw_snapshot_delete if isinstance(raw_snapshot_delete, bool) else False
+            )
+            raw_min_age = config.get("snapshot_delete_min_age_days", 7)
+            snapshot_delete_min_age_days = (
+                raw_min_age if isinstance(raw_min_age, int) else 7
             )
             raw_max_results = config.get("tool_search_max_results", 5)
             tool_search_max_results = (
@@ -696,6 +709,8 @@ def main() -> int:
     os.environ["ENABLE_AUTO_BACKUP"] = str(enable_auto_backup).lower()
     os.environ["AUTO_BACKUP_THROTTLE_MINUTES"] = str(auto_backup_throttle_minutes)
     os.environ["AUTO_BACKUP_RETAIN_PER_ENTITY"] = str(auto_backup_retain_per_entity)
+    os.environ["ENABLE_SNAPSHOT_DELETE"] = str(enable_snapshot_delete).lower()
+    os.environ["SNAPSHOT_DELETE_MIN_AGE_DAYS"] = str(snapshot_delete_min_age_days)
     # Persist saved custom tools across addon restarts. /data is the
     # per-addon writable directory mapped by Supervisor and survives
     # add-on updates (but not uninstall/reinstall — users should copy
