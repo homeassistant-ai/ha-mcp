@@ -194,13 +194,23 @@ class YamlReadTools:
             )
 
             matches: list[dict[str, Any]] = []
+            warnings: list[str] = []
             for target, response in zip(targets, responses, strict=True):
                 unwrapped = _unwrap_or_raise(
                     response, "read_file", {"file": target, "yaml_path": yaml_path}
                 )
 
-                # None = the file parsed but has no such key: not an error, just
-                # a non-match, which is the whole point of a glob search.
+                # A file that could not be parsed is NOT a non-match: reporting
+                # it as one would tell the caller the key is absent when the
+                # file was never inspected. One broken package in a glob must
+                # not read as a clean "not defined anywhere".
+                parse_error = unwrapped.get("parse_error")
+                if parse_error:
+                    warnings.append(f"{target} was not searched: {parse_error}.")
+                    continue
+
+                # None here means the file parsed but has no such key: a real
+                # non-match, which is the whole point of a glob search.
                 if unwrapped.get("subtree") is None:
                     continue
 
@@ -211,7 +221,7 @@ class YamlReadTools:
                     match["parsed"] = unwrapped.get("parsed")
                 matches.append(match)
 
-            return {
+            result: dict[str, Any] = {
                 "success": True,
                 "yaml_path": yaml_path,
                 "matches": matches,
@@ -220,6 +230,9 @@ class YamlReadTools:
                 # the key" — same empty matches[], different fix.
                 "files_searched": len(targets),
             }
+            if warnings:
+                result["warnings"] = warnings
+            return result
 
         except ToolError:
             raise

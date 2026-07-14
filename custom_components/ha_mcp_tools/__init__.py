@@ -1877,9 +1877,11 @@ def _extract_yaml_views(
     so neither view can surface a secret's plaintext.
 
     ``subtree`` is None when the root is not a mapping or the key is absent
-    (new-key write — nothing to snapshot); malformed YAML also yields None (the
-    edit itself would then fail and report the error). ``parsed`` is present
-    only when ``include_parsed`` and the key resolved.
+    (new-key write — nothing to snapshot). Malformed YAML also yields None, but
+    additionally sets ``parse_error``, so a caller can tell "this file does not
+    define the key" apart from "this file could not be read at all" — without
+    it, one broken package silently reads as a key that is simply absent.
+    ``parsed`` is present only when ``include_parsed`` and the key resolved.
     """
     views: dict[str, Any] = {"subtree": None}
     try:
@@ -1896,8 +1898,18 @@ def _extract_yaml_views(
         views["subtree"] = yaml_dumps(ry, node)
         if include_parsed:
             views["parsed"] = yaml_jsonify(node)
-    except YAMLError:
-        return {"subtree": None}
+    except YAMLError as err:
+        # Position only, never the error text: ruamel embeds the offending
+        # source line in its message, which would put file content — possibly
+        # an inline credential — into a response this path otherwise keeps
+        # free of resolved values.
+        mark = getattr(err, "problem_mark", None)
+        where = (
+            f" at line {mark.line + 1}, column {mark.column + 1}"
+            if mark is not None
+            else ""
+        )
+        return {"subtree": None, "parse_error": f"not valid YAML{where}"}
     return views
 
 
@@ -2386,6 +2398,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             }
 
         # Apply tail for other files if requested
+        full_content = content
         if tail_lines:
             lines = content.split("\n")
             if len(lines) > tail_lines:
@@ -2399,9 +2412,12 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             "modified": modified_dt.isoformat(),
         }
         if yaml_path:
+            # Extract from the UNTAILED text: tailing is a display concern, and
+            # the retained tail is both likely to exclude the key and likely to
+            # be invalid YAML on its own, which would report the key as absent.
             response.update(
                 await hass.async_add_executor_job(
-                    _extract_yaml_views, content, yaml_path, include_parsed
+                    _extract_yaml_views, full_content, yaml_path, include_parsed
                 )
             )
         return response

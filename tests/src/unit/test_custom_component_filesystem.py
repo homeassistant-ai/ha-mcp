@@ -1625,6 +1625,32 @@ class TestExtractYamlViews:
         assert views["subtree"] is None
         assert "parsed" not in views
 
+    def test_malformed_yaml_reports_parse_error(self):
+        """A broken file must be distinguishable from one lacking the key.
+
+        Without this, one syntactically broken package in a glob reads as a
+        clean "the key is not defined anywhere".
+        """
+        views = _extract_yaml_views("key: [1, 2\n", "key")
+        assert views["subtree"] is None
+        assert "not valid YAML" in views["parse_error"]
+
+    def test_absent_key_reports_no_parse_error(self):
+        views = _extract_yaml_views("a: 1\n", "nope")
+        assert views["subtree"] is None
+        assert "parse_error" not in views
+
+    def test_parse_error_carries_position_but_no_file_content(self):
+        """ruamel embeds the offending source line in its message; that line
+        can hold an inline credential, so only the position is reported."""
+        secret = "hunter2-should-never-surface"
+        views = _extract_yaml_views(
+            f"rest:\n  api_key: {secret}\n  bad: [1, 2\n", "rest"
+        )
+        assert views["subtree"] is None
+        assert secret not in views["parse_error"]
+        assert "line" in views["parse_error"]
+
 
 class TestRecorderYamlKey:
     """#1852: recorder is editable via edit_yaml_config / ha_config_set_yaml.

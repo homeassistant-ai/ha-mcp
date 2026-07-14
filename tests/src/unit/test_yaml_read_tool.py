@@ -246,6 +246,55 @@ async def test_list_failure_raises_tool_error():
         await fn(yaml_path="alert2", file="packages/*.yaml")
 
 
+async def test_parse_error_warns_instead_of_reading_as_a_non_match():
+    """A file that could not be parsed must not read as "key not defined".
+
+    The glob case is the dangerous one: one broken package would otherwise make
+    the whole search report a clean absence.
+    """
+
+    def read(payload):
+        if payload["path"] == "packages/broken.yaml":
+            return {
+                "success": True,
+                "path": payload["path"],
+                "content": "...",
+                "subtree": None,
+                "parse_error": "not valid YAML at line 3, column 5",
+            }
+        return _read_ok("- name: ok\n")
+
+    fn, _ = await _make_tool(
+        {
+            "list_files": {
+                "success": True,
+                "files": [
+                    {"path": "packages/broken.yaml", "is_dir": False},
+                    {"path": "packages/good.yaml", "is_dir": False},
+                ],
+            },
+            "read_file": read,
+        }
+    )
+
+    out = await fn(yaml_path="alert2", file="packages/*.yaml")
+
+    assert out["count"] == 1
+    assert out["matches"][0]["file"] == "packages/good.yaml"
+    assert out["warnings"] == [
+        "packages/broken.yaml was not searched: not valid YAML at line 3, column 5."
+    ]
+
+
+async def test_no_warnings_key_when_nothing_degraded():
+    """`warnings` is omitted when empty, per the tool return contract."""
+    fn, _ = await _make_tool({"read_file": _read_ok("method: GET\n")})
+
+    out = await fn(yaml_path="rest", file="configuration.yaml")
+
+    assert "warnings" not in out
+
+
 async def test_root_level_glob_lists_config_root():
     """A glob with no directory part asks the lister for the config root.
 

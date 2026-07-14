@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 TOOL_NAME = "ha_config_get_yaml"
 SET_TOOL = "ha_config_set_yaml"
+READ_TOOL = "ha_read_file"
 FEATURE_FLAG = "ENABLE_YAML_CONFIG_EDITING"
 
 # initial_test_state/configuration.yaml binds packages under this NON-default
@@ -166,6 +167,40 @@ class TestYamlReadTagPreservation:
         match = data["matches"][0]
         assert "!include automations.yaml" in match["content"]
         assert match["parsed"] == "!include automations.yaml"
+
+
+@pytest.mark.filesystem
+class TestReadFileYamlPath:
+    """`ha_read_file` forwards yaml_path for the single-file case."""
+
+    async def test_yaml_path_returns_subtree(self, mcp_client):
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                READ_TOOL, {"path": "configuration.yaml", "yaml_path": "http"}
+            )
+
+        assert "use_x_forwarded_for" in data["subtree"]
+
+    async def test_yaml_path_extracts_from_the_untailed_file(self, mcp_client):
+        """tail_lines must not truncate the text the key is extracted from.
+
+        `http:` sits near the top of configuration.yaml, so a tail of a few
+        lines excludes it entirely, and the retained tail is not valid YAML on
+        its own. Extracting from the tailed text would report the key as
+        absent; the subtree must still come back, while `content` stays tailed.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                READ_TOOL,
+                {"path": "configuration.yaml", "tail_lines": 3, "yaml_path": "http"},
+            )
+
+        assert data["subtree"] is not None, (
+            "yaml_path must extract from the full file, not the tailed text"
+        )
+        assert "use_x_forwarded_for" in data["subtree"]
+        # content stays truncated: tailing is a display concern only.
+        assert len(data["content"].split("\n")) <= 3
 
 
 @pytest.mark.filesystem
