@@ -1099,7 +1099,7 @@ async def delete_backup(
                     info_result.get("error", "Failed to retrieve backup information"),
                 )
             )
-        backups = info_result.get("result", {}).get("backups", [])
+        backups = (info_result.get("result") or {}).get("backups") or []
         matched = next((b for b in backups if b.get("backup_id") == backup_id), None)
         if matched is None:
             raise_tool_error(
@@ -1166,7 +1166,7 @@ async def delete_backup(
                     context={"backup_id": backup_id},
                 )
             )
-        agent_errors = delete_result.get("result", {}).get("agent_errors") or {}
+        agent_errors = (delete_result.get("result") or {}).get("agent_errors") or {}
         if agent_errors:
             raise_tool_error(
                 create_error_response(

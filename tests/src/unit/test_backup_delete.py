@@ -298,3 +298,45 @@ class TestSnapshotDeleteSuccess:
         with p1, p2, pytest.raises(ToolError) as exc_info:
             await delete_backup(_client(), "target", confirm=True)
         assert ErrorCode.SERVICE_CALL_FAILED.value in str(exc_info.value)
+
+
+class TestSnapshotDeleteMalformedResult:
+    """A `success: true` response with a null `result` key (present but
+    None, not absent) must not crash with AttributeError — `.get(key, {})`
+    only substitutes the default when the key is ABSENT, not when its
+    value is None."""
+
+    @pytest.mark.asyncio
+    async def test_backup_info_null_result_raises_not_found_not_attributeerror(
+        self,
+    ) -> None:
+        ws = AsyncMock()
+        ws.send_command.side_effect = [{"success": True, "result": None}]
+        settings = _settings(enabled=True)
+        p1, p2 = _patched(ws, settings)
+        with p1, p2, pytest.raises(ToolError) as exc_info:
+            await delete_backup(_client(), "target", confirm=True)
+        assert ErrorCode.RESOURCE_NOT_FOUND.value in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_delete_result_null_result_treated_as_no_agent_errors(self) -> None:
+        old = _iso(_now() - timedelta(days=100))
+        newer = _iso(_now() - timedelta(days=1))
+        ws = AsyncMock()
+        ws.send_command.side_effect = [
+            {
+                "success": True,
+                "result": {
+                    "backups": [
+                        _entry("target", date=old),
+                        _entry("other", date=newer),
+                    ]
+                },
+            },
+            {"success": True, "result": None},
+        ]
+        settings = _settings(enabled=True, min_age_days=7)
+        p1, p2 = _patched(ws, settings)
+        with p1, p2:
+            result = await delete_backup(_client(), "target", confirm=True)
+        assert result["success"] is True
