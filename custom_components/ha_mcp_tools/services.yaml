@@ -96,6 +96,26 @@ read_file:
           min: 1
           max: 10000
           mode: box
+    yaml_path:
+      name: YAML Path
+      description: >-
+        Dotted key path. When set, the response also carries the round-trip
+        text of that YAML subtree under "subtree". Comments and HA tags
+        (!secret, !include) are preserved as written.
+      required: false
+      example: "alert2"
+      selector:
+        text:
+    include_parsed:
+      name: Include Parsed
+      description: >-
+        With yaml_path, also return the subtree as structured data under
+        "parsed". HA tags are rendered to their source form (!secret api_key)
+        and never resolved, so no secret value is exposed.
+      required: false
+      default: false
+      selector:
+        boolean:
 
 write_file:
   name: Write File

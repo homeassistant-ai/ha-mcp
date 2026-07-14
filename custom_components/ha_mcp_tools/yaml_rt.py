@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import threading
 from collections.abc import Callable
+from datetime import date, datetime
 from io import StringIO
 from typing import Any
 
@@ -171,3 +172,37 @@ def yaml_dumps(ry: YAML, data: Any) -> str:
     buf = StringIO()
     ry.dump(data, buf)
     return buf.getvalue()
+
+
+def yaml_jsonify(node: Any) -> Any:
+    """Convert a round-trip node into JSON-serializable plain Python.
+
+    An HA tag is rendered back to its SOURCE form (``!secret api_key``), never
+    resolved: the value behind a ``!secret`` lives in secrets.yaml and is not
+    looked up here, so a parsed view carries no plaintext-secret surface — the
+    same property the round-trip text view has. Lives here because this module
+    owns ``_TaggedScalar`` and the tag registry.
+
+    ruamel's scalar types subclass the builtins (``ScalarInt``/``ScalarFloat``/
+    ``ScalarString``), so they are narrowed to the plain type; timestamps
+    (``!!timestamp``) come back as ``date``/``datetime``, which json cannot
+    encode, and become ISO strings.
+    """
+    if isinstance(node, _TaggedScalar):
+        return f"{node.tag} {node.value}".strip()
+    if isinstance(node, dict):
+        return {str(key): yaml_jsonify(value) for key, value in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [yaml_jsonify(item) for item in node]
+    # bool before int: bool subclasses int.
+    if node is None or isinstance(node, bool):
+        return node
+    if isinstance(node, int):
+        return int(node)
+    if isinstance(node, float):
+        return float(node)
+    if isinstance(node, str):
+        return str(node)
+    if isinstance(node, (datetime, date)):
+        return node.isoformat()
+    return str(node)
