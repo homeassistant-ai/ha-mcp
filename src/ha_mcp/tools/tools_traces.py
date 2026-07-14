@@ -39,6 +39,7 @@ class TraceTools:
         name="ha_get_automation_traces",
         tags={"History & Statistics"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Automation Traces",

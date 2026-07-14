@@ -616,6 +616,7 @@ class RegistryTools:
         name="ha_get_device",
         tags={"Device Registry", "Zigbee", "Z-Wave", "Matter"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Device (incl. Zigbee/ZHA/Z2M, Z-Wave and Matter)",
@@ -755,7 +756,11 @@ class RegistryTools:
     @tool(
         name="ha_set_device",
         tags={"Device Registry"},
-        annotations={"destructiveHint": True, "title": "Set Device"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Set Device",
+        },
     )
     @with_auto_backup(domain="device", id_param="device_id")
     @log_tool_usage
@@ -852,6 +857,7 @@ class RegistryTools:
         name="ha_remove_device",
         tags={"Device Registry"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Device",

@@ -43,6 +43,7 @@ class CalendarTools:
         name="ha_config_get_calendar_events",
         tags={"Calendar"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Calendar Events",
@@ -282,6 +283,7 @@ class CalendarTools:
         name="ha_config_set_calendar_event",
         tags={"Calendar"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Calendar Event",
         },
@@ -426,6 +428,7 @@ class CalendarTools:
         name="ha_config_remove_calendar_event",
         tags={"Calendar"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Calendar Event",

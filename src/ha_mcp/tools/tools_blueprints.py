@@ -76,6 +76,7 @@ class BlueprintTools:
         name="ha_get_blueprint",
         tags={"Blueprints"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Blueprint",
@@ -224,7 +225,11 @@ class BlueprintTools:
     @tool(
         name="ha_import_blueprint",
         tags={"Blueprints"},
-        annotations={"destructiveHint": True, "title": "Import Blueprint"},
+        annotations={
+            "openWorldHint": True,
+            "destructiveHint": True,
+            "title": "Import Blueprint",
+        },
     )
     @log_tool_usage
     async def ha_import_blueprint(

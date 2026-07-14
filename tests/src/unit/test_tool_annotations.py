@@ -34,6 +34,9 @@ def _parse_decorator_args(decorator_args: str, func_name: str, file_name: str) -
     )
     has_title = "title" in decorator_args
     has_tags = "tags=" in decorator_args or "tags =" in decorator_args
+    has_open_world = (
+        re.search(r'"openWorldHint"\s*:\s*(True|False)', decorator_args) is not None
+    )
 
     return {
         "file": file_name,
@@ -43,6 +46,7 @@ def _parse_decorator_args(decorator_args: str, func_name: str, file_name: str) -
         "has_explicit_non_destructive_hint": has_explicit_non_destructive,
         "has_title": has_title,
         "has_tags": has_tags,
+        "has_open_world_hint": has_open_world,
         "decorator_args": decorator_args.strip(),
     }
 
@@ -91,6 +95,7 @@ def extract_tool_decorators(file_path: Path) -> list[dict]:
                 "has_destructive_hint": False,
                 "has_explicit_non_destructive_hint": False,
                 "has_title": False,
+                "has_open_world_hint": False,
                 "decorator_args": "",
             }
         )
@@ -159,6 +164,29 @@ class TestToolAnnotations:
         assert not missing_titles, (
             f"Tools missing title annotation ({len(missing_titles)}):\n  "
             + "\n  ".join(missing_titles)
+        )
+
+    def test_all_tools_have_open_world_hint(self):
+        """Every tool must set openWorldHint explicitly (true or false).
+
+        The MCP default is true, so an omitted value silently marks a local
+        tool as open-world. This guards the explicit value; the true/false
+        choice itself is a behaviour judgement left to review.
+        """
+        tools = get_all_tools()
+
+        missing_open_world = [
+            f"{tool['file']}:{tool['function']}"
+            for tool in tools
+            if not tool["has_open_world_hint"]
+        ]
+
+        assert not missing_open_world, (
+            f"Tools missing openWorldHint annotation ({len(missing_open_world)}):\n  "
+            + "\n  ".join(missing_open_world)
+            + "\n\nAdd openWorldHint (true if the tool reaches external systems, "
+            "false if it only touches local Home Assistant state) to each "
+            "@tool() decorator; the MCP default is true."
         )
 
     def test_all_tools_have_tags(self):

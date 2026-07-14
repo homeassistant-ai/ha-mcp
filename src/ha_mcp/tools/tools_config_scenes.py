@@ -204,6 +204,7 @@ class ConfigSceneTools:
         name="ha_config_get_scene",
         tags={"Scenes"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Scene Config",
@@ -453,6 +454,7 @@ class ConfigSceneTools:
         name="ha_config_set_scene",
         tags={"Scenes"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Scene",
         },
@@ -976,6 +978,7 @@ class ConfigSceneTools:
         name="ha_config_remove_scene",
         tags={"Scenes"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Scene",

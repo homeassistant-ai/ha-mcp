@@ -553,6 +553,7 @@ Every tool needs `tags={"Category Name"}` (native FastMCP parameter). Drives the
 | `readOnlyHint: True` | `False` | Tool does not modify its environment |
 | `destructiveHint: True` | `True` | Tool may perform destructive updates (only meaningful when `readOnlyHint` is false). Set to `False` for non-destructive writes (e.g., creating a record) |
 | `idempotentHint: True` | `False` | Repeated calls with same args have no additional effect (only meaningful when `readOnlyHint` is false) |
+| `openWorldHint: True` | `True` | Tool reaches an external, third-party-authored world (HACS store, add-on repositories, GitHub release feeds, arbitrary import URLs). Set to `False` when the tool's domain is the local Home Assistant instance. Required on every tool — the default is `true`, so an omitted value silently marks a local tool as open-world |
 
 ### Error Handling
 

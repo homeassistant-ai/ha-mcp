@@ -253,7 +253,11 @@ class McpComponentTools:
     @tool(
         name="ha_install_mcp_tools",
         tags={"Utilities", "beta"},
-        annotations={"destructiveHint": True, "title": "Install MCP Tools Component"},
+        annotations={
+            "openWorldHint": True,
+            "destructiveHint": True,
+            "title": "Install MCP Tools Component",
+        },
     )
     @log_tool_usage
     async def ha_install_mcp_tools(

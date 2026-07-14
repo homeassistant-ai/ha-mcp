@@ -456,7 +456,11 @@ class DevTools:
     @tool(
         name="ha_dev_manage_settings",
         tags={"Developer"},
-        annotations={"title": "Manage Server Settings (dev)", "destructiveHint": True},
+        annotations={
+            "openWorldHint": False,
+            "title": "Manage Server Settings (dev)",
+            "destructiveHint": True,
+        },
     )
     @log_tool_usage
     async def ha_dev_manage_settings(
@@ -698,7 +702,11 @@ class DevTools:
     @tool(
         name="ha_dev_manage_server",
         tags={"Developer"},
-        annotations={"title": "Manage MCP Server (dev)", "destructiveHint": True},
+        annotations={
+            "openWorldHint": True,
+            "title": "Manage MCP Server (dev)",
+            "destructiveHint": True,
+        },
     )
     @log_tool_usage
     async def ha_dev_manage_server(

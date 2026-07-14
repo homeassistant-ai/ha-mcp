@@ -70,6 +70,7 @@ Verify that safety annotations match actual tool behavior:
 - Tool with `readOnlyHint: True` must NOT modify state (no writes, no service calls)
 - Tool with `destructiveHint: True` must actually delete data
 - State-changing operations should have `idempotentHint: True` only if safe to retry
+- Tool with `openWorldHint: True` must reach an external, third-party-authored world (HACS store, add-on repositories, GitHub release feeds, arbitrary import URLs); a tool whose domain is the local Home Assistant instance should use `False`. It is open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf
 
 Flag HIGH severity if annotation contradicts actual behavior in the implementation.
 

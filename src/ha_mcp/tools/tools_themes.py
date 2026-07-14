@@ -55,6 +55,7 @@ class ThemesTools:
         name="ha_manage_theme",
         tags={"System"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "readOnlyHint": False,

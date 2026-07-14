@@ -371,6 +371,7 @@ class FilesystemTools:
         name="ha_list_files",
         tags={"Files", "beta"},
         annotations={
+            "openWorldHint": False,
             "readOnlyHint": True,
             "title": "List Files",
         },
@@ -478,6 +479,7 @@ class FilesystemTools:
         name="ha_read_file",
         tags={"Files", "beta"},
         annotations={
+            "openWorldHint": False,
             "readOnlyHint": True,
             "title": "Read File",
         },
@@ -593,6 +595,7 @@ class FilesystemTools:
         name="ha_write_file",
         tags={"Files", "beta"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "title": "Write File",
         },
@@ -735,6 +738,7 @@ class FilesystemTools:
         name="ha_delete_file",
         tags={"Files", "beta"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "title": "Delete File",
         },

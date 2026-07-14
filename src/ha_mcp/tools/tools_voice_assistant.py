@@ -368,6 +368,7 @@ class VoiceAssistantTools:
         name="ha_manage_pipeline",
         tags={"Assist"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": False,
             "readOnlyHint": False,
@@ -638,6 +639,7 @@ class VoiceAssistantTools:
         name="ha_get_entity_exposure",
         tags={"Entity Registry"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Entity Exposure",

@@ -1335,6 +1335,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(
         tags={"System", "beta"},
         annotations={
+            "openWorldHint": False,
             "title": "Custom Tool",
             "destructiveHint": True,
             "idempotentHint": False,

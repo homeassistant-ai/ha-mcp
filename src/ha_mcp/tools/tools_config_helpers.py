@@ -3608,6 +3608,7 @@ class HelperConfigTools:
         name="ha_config_list_helpers",
         tags={"Helper Entities"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "List Helpers",
@@ -4021,7 +4022,11 @@ class HelperConfigTools:
     @tool(
         name="ha_config_set_helper",
         tags={"Helper Entities"},
-        annotations={"destructiveHint": True, "title": "Create or Update Helper"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Create or Update Helper",
+        },
     )
     @with_auto_backup(
         domain_fn=lambda kw: f"helper_{kw.get('helper_type', 'unknown')}",

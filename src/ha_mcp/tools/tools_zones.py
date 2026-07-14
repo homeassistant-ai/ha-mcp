@@ -127,7 +127,12 @@ class ZoneTools:
     @tool(
         name="ha_get_zone",
         tags={"Zones"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Zone"},
+        annotations={
+            "openWorldHint": False,
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Zone",
+        },
     )
     @log_tool_usage
     async def ha_get_zone(
@@ -312,7 +317,11 @@ class ZoneTools:
     @tool(
         name="ha_set_zone",
         tags={"Zones"},
-        annotations={"destructiveHint": True, "title": "Set Zone"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Set Zone",
+        },
     )
     @with_auto_backup(
         domain="zone",
@@ -512,6 +521,7 @@ class ZoneTools:
         name="ha_remove_zone",
         tags={"Zones"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Zone",

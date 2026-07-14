@@ -1054,7 +1054,11 @@ def register_backup_tools(
     @mcp.tool(
         description=manage_backup_description,
         tags={"System"},
-        annotations={"destructiveHint": True, "title": "Manage Backups"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Manage Backups",
+        },
     )
     @log_tool_usage
     async def ha_manage_backup(
