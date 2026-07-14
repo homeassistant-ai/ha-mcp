@@ -110,7 +110,7 @@ def fake_manager(monkeypatch):
 def _spy(monkeypatch):
     """Patch webhook register/unregister, issue-registry, and connect-URL
     surfacing to spies (the connect-URL tests restore the real surfacing)."""
-    monkeypatch.setattr(esetup, "async_register_webhook", AsyncMock())
+    monkeypatch.setattr(esetup, "async_register_webhook", AsyncMock(return_value=False))
     monkeypatch.setattr(esetup, "async_unregister_webhook", AsyncMock())
     monkeypatch.setattr(esetup, "async_register_llm_api", AsyncMock())
     monkeypatch.setattr(esetup, "async_unregister_llm_api", MagicMock())
@@ -154,6 +154,10 @@ class TestBringUp:
             esetup.ISSUE_PACKAGE_FAILED,
             esetup.ISSUE_START_FAILED,
             esetup.ISSUE_UPDATE_HELD,
+            # A non-legacy bring-up (async_register_webhook returned
+            # restart_needed=False) also clears any stale legacy-OAuth restart
+            # repair from a prior legacy configuration.
+            esetup.ISSUE_LEGACY_OAUTH_RESTART,
         }
 
     async def test_local_only_skips_endpoint_but_keeps_forwarding(

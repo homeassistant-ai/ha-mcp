@@ -307,11 +307,13 @@ class TestServerOptionsFlow:
         assert "not installed yet" in versions
         assert versions.startswith("Component unknown")
 
-    def test_channel_is_first_option_field(self):
+    def test_webhook_auth_is_first_option_field(self):
+        # #1875: Authentication mode sits at the top of the options form,
+        # directly under the connect URLs, so users find it without scrolling.
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         form = asyncio.run(flow.async_step_init(None))
         markers = list(form["data_schema"].schema)
-        assert markers[0].schema == const.OPT_CHANNEL
+        assert markers[0].schema == const.OPT_WEBHOOK_AUTH
 
     def test_channel_defaults_to_stable(self):
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
@@ -353,6 +355,8 @@ class TestServerOptionsFlow:
             const.OPT_EXTERNAL_URL: "https://ha.example.com",
             const.OPT_WEBHOOK_ID_OVERRIDE: "my_custom_hook",
             const.OPT_SECRET_PATH_OVERRIDE: "/custom_path",
+            const.OPT_OAUTH_CLIENT_ID: "hamcp-deadbeef",
+            const.OPT_OAUTH_CLIENT_SECRET: "super-secret-value",
         }
         flow = _make_options_flow(
             data={const.DATA_WEBHOOK_ID: "mcp_abc"}, options=saved
@@ -368,6 +372,8 @@ class TestServerOptionsFlow:
             const.OPT_EXTERNAL_URL,
             const.OPT_WEBHOOK_ID_OVERRIDE,
             const.OPT_SECRET_PATH_OVERRIDE,
+            const.OPT_OAUTH_CLIENT_ID,
+            const.OPT_OAUTH_CLIENT_SECRET,
         )
         for key in text_fields:
             assert markers[key].description["suggested_value"] == saved[key]
@@ -381,6 +387,8 @@ class TestServerOptionsFlow:
         # `python -O` would strip) before comparing the remainder.
         regenerate_default = defaults.pop(const.OPT_REGENERATE_SECRETS)
         assert regenerate_default is False
+        oauth_regenerate_default = defaults.pop(const.OPT_OAUTH_REGENERATE)
+        assert oauth_regenerate_default is False
         webhook_default = defaults.pop(const.OPT_ENABLE_WEBHOOK)
         assert webhook_default is True
         notification_default = defaults.pop(const.OPT_ENABLE_STARTUP_NOTIFICATION)
@@ -410,6 +418,8 @@ class TestServerOptionsFlow:
             const.OPT_EXTERNAL_URL: "",
             const.OPT_WEBHOOK_ID_OVERRIDE: "",
             const.OPT_SECRET_PATH_OVERRIDE: "",
+            const.OPT_OAUTH_CLIENT_ID: "",
+            const.OPT_OAUTH_CLIENT_SECRET: "",
         }
 
     def test_default_pip_spec_normalized_to_empty(self):

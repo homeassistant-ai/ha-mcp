@@ -45,6 +45,8 @@ from .const import (
     CHANNEL_DEV,
     CHANNEL_STABLE,
     CONF_ENTRY_TYPE,
+    DATA_OAUTH_CLIENT_ID,
+    DATA_OAUTH_CLIENT_SECRET,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
     DEFAULT_AUTO_UPDATE,
@@ -74,6 +76,9 @@ from .const import (
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_LLM_API_EXPOSURE,
+    OPT_OAUTH_CLIENT_ID,
+    OPT_OAUTH_CLIENT_SECRET,
+    OPT_OAUTH_REGENERATE,
     OPT_PIP_SPEC,
     OPT_REGENERATE_SECRETS,
     OPT_SECRET_PATH_OVERRIDE,
@@ -82,6 +87,7 @@ from .const import (
     OPT_WEBHOOK_AUTH,
     OPT_WEBHOOK_ID_OVERRIDE,
     WEBHOOK_AUTH_HA,
+    WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
 )
 
@@ -229,6 +235,24 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         opts = self.config_entry.options
         schema = vol.Schema(
             {
+                # Authentication mode first, directly under the connect URLs
+                # shown in the step description (#1875): it is the setting users
+                # most need to find, and legacy mode is what unblocks OAuth-only
+                # clients such as Google Gemini Spark and Copilot CLI.
+                vol.Required(
+                    OPT_WEBHOOK_AUTH,
+                    default=opts.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            WEBHOOK_AUTH_NONE,
+                            WEBHOOK_AUTH_HA,
+                            WEBHOOK_AUTH_LEGACY,
+                        ],
+                        translation_key="server_webhook_auth",
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
                 vol.Required(
                     OPT_CHANNEL,
                     default=opts.get(OPT_CHANNEL, DEFAULT_CHANNEL),
@@ -265,16 +289,6 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                                 label="This machine only (loopback)",
                             ),
                         ],
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
-                ),
-                vol.Required(
-                    OPT_WEBHOOK_AUTH,
-                    default=opts.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE),
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA],
-                        translation_key="server_webhook_auth",
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
@@ -352,6 +366,23 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     OPT_REGENERATE_SECRETS,
                     default=False,
                 ): bool,
+                # Legacy OAuth mode (Google Gemini Spark) credential overrides —
+                # same shape as the webhook id/secret-path overrides above.
+                # Empty = auto-generate/keep the current value.
+                vol.Optional(
+                    OPT_OAUTH_CLIENT_ID,
+                    description={"suggested_value": opts.get(OPT_OAUTH_CLIENT_ID, "")},
+                ): str,
+                vol.Optional(
+                    OPT_OAUTH_CLIENT_SECRET,
+                    description={
+                        "suggested_value": opts.get(OPT_OAUTH_CLIENT_SECRET, "")
+                    },
+                ): str,
+                vol.Optional(
+                    OPT_OAUTH_REGENERATE,
+                    default=False,
+                ): bool,
             }
         )
         # The sidebar-panel sentence in the description is only truthful while
@@ -371,6 +402,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             description_placeholders={
                 "versions": await self._versions_hint(),
                 "connect_url": self._connect_url_hint(),
+                "oauth_creds": self._oauth_creds_hint(),
                 "llm_api_docs_url": LLM_API_DOCS_URL,
                 "panel_hint": panel_hint,
             },
@@ -396,6 +428,8 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             OPT_EXTERNAL_URL,
             OPT_WEBHOOK_ID_OVERRIDE,
             OPT_SECRET_PATH_OVERRIDE,
+            OPT_OAUTH_CLIENT_ID,
+            OPT_OAUTH_CLIENT_SECRET,
         ):
             cleaned[key] = str(cleaned.get(key, "") or "").strip()
         cleaned[OPT_EXTERNAL_URL] = cleaned[OPT_EXTERNAL_URL].rstrip("/")
@@ -507,3 +541,29 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 f"http://<home-assistant-ip>:{port}{secret_path}"
             )
         return hint
+
+    def _oauth_creds_hint(self) -> str:
+        """Return the resolved legacy OAuth Client ID + Secret for the options
+        form, or a note pointing at the mode selector when legacy mode isn't
+        the CONFIGURED mode. Admin-only screen (like ``_connect_url_hint``),
+        so showing the secret in cleartext here is acceptable — mirrors the
+        Home Assistant log line ``embedded_setup._surface_connect_urls``
+        writes on bring-up.
+        """
+        configured_mode = str(self.config_entry.options.get(OPT_WEBHOOK_AUTH) or "")
+        if configured_mode != WEBHOOK_AUTH_LEGACY:
+            return (
+                "Set Authentication mode to legacy OAuth above and save to "
+                "generate a Client ID and Client Secret."
+            )
+        client_id = self.config_entry.data.get(DATA_OAUTH_CLIENT_ID)
+        client_secret = self.config_entry.data.get(DATA_OAUTH_CLIENT_SECRET)
+        if not client_id or not client_secret:
+            # Not minted yet — the entry hasn't finished a bring-up cycle
+            # since legacy mode was selected (e.g. this save just turned it
+            # on). They appear after the next reload.
+            return (
+                "The Client ID and Client Secret appear here once the server "
+                "has started."
+            )
+        return f"Client ID: {client_id}\nClient Secret: {client_secret}"

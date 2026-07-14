@@ -5,7 +5,7 @@ Ported from the proven webhook-proxy add-on (``mcp_proxy``): an HA webhook
 the response back, so the server is reachable through Nabu Casa remote UI (or any
 reverse proxy) with the webhook id as the shared secret.
 
-Two auth postures, chosen in the options flow:
+Three auth postures, chosen in the options flow:
 
 * ``none`` — the secret webhook URL *is* the credential (matches the add-on's
   default). No bearer is required.
@@ -14,12 +14,19 @@ Two auth postures, chosen in the options flow:
   ChatGPT can sign in with the user's HA account) and validates inbound bearer
   tokens via ``hass.auth``. There is no bespoke authorization-server code here —
   every protocol step is HA core's own ``/auth/*``.
+* ``legacy`` — this module (via :mod:`oauth_legacy`) is its own OAuth 2.1
+  authorization server with a static client_id/secret, for MCP clients (Google
+  Gemini Spark) that need a credential to paste rather than an HA sign-in.
 
 The forwarding handler mirrors ``mcp_proxy._handle_webhook`` exactly (hop-by-hop
 header stripping, the SSE streaming branch with anti-buffering headers, the
 content-type whitelist, ``Mcp-Session-Id`` propagation, and the 502/500 error
 mapping); the ``ha_auth`` bearer check + discovery documents mirror the add-on's
-``auth_native.py`` + the ``ha_auth`` subset of ``oauth.py``.
+``auth_native.py`` + the ``ha_auth`` subset of ``oauth.py``; the ``legacy``
+provider + its root ``/authorize`` + ``/token`` views live in
+:mod:`oauth_legacy`, ported from the ``legacy`` subset of the add-on's
+``oauth.py``. The seven RFC 8414 / RFC 9728 discovery views below are shared by
+``ha_auth`` and ``legacy`` — see :func:`active_auth_mode`.
 """
 
 from __future__ import annotations
@@ -41,7 +48,16 @@ from .const import (
     DOMAIN,
     OAUTH_BASE,
     WEBHOOK_AUTH_HA,
+    WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
+)
+from .oauth_legacy import (
+    AUTHORIZE_PATH,
+    OAUTH_ROUTE_OWNER_KEY,
+    TOKEN_PATH,
+    LegacyOAuthProvider,
+    LegacyOAuthRouteConflict,
+    bind_legacy_views,
 )
 
 if TYPE_CHECKING:
@@ -145,14 +161,6 @@ class ResourceServer:
         """This install's private webhook id."""
         return self._webhook_id
 
-    def resource_url(self, base_url: str) -> str:
-        """Absolute URL of the protected webhook resource under ``base_url``."""
-        return f"{base_url}/api/webhook/{self._webhook_id}"
-
-    def authorization_server_url(self, base_url: str) -> str:
-        """Issuer / authorization-server URL under ``base_url``."""
-        return f"{base_url}{OAUTH_BASE}"
-
     async def validate_request(self, request: web.Request) -> bool:
         """Return True iff the request carries a Bearer token HA core accepts.
 
@@ -195,29 +203,60 @@ class ResourceServer:
 
 
 # ---------------------------------------------------------------------------
-# RFC 8414 / RFC 9728 discovery views (ha_auth mode only)
+# RFC 8414 / RFC 9728 discovery views (ha_auth + legacy modes)
 # ---------------------------------------------------------------------------
 
 
-def _active_resource_server(hass: HomeAssistant) -> ResourceServer | None:
-    """Return the CURRENT entry's ha_auth resource server, or None.
-
-    The discovery views resolve this per request instead of binding a provider
-    at registration time: aiohttp can't drop a bound view until HA restarts, so
-    a remove + re-add of the config entry (which mints a NEW webhook id in the
-    same HA session) would otherwise leave the views advertising the old id.
-    Returns None when no entry is live, the webhook auth mode is not ha_auth,
-    or the public endpoint is disabled (local-only mode constructs no resource
-    server even under ha_auth) — the views then 404 like an unregistered route.
-    """
+def _active_webhook_cfg(hass: HomeAssistant) -> dict[str, Any] | None:
+    """Return the live webhook forwarding cfg dict, or None if not set up."""
     domain_data = hass.data.get(DOMAIN)
     if not isinstance(domain_data, dict):
         return None
     cfg = domain_data.get(DATA_WEBHOOK)
-    if not isinstance(cfg, dict) or cfg.get("auth_mode") != WEBHOOK_AUTH_HA:
+    return cfg if isinstance(cfg, dict) else None
+
+
+def active_auth_mode(hass: HomeAssistant) -> str | None:
+    """Return the OAuth-relevant auth mode of the live webhook registration.
+
+    ``WEBHOOK_AUTH_HA`` or ``WEBHOOK_AUTH_LEGACY``, or None when no OAuth
+    surface is live. Checked via PROVIDER PRESENCE, not the raw configured
+    ``auth_mode`` string, so local-only mode (remote webhook disabled by
+    option — ``register_endpoint=False`` in ``async_register_webhook``)
+    correctly reports None even when ``webhook_auth`` is set to
+    ``ha_auth``/``legacy``: no provider is constructed for a webhook that was
+    never registered, so there is nothing to advertise or authenticate
+    against. Read live from hass.data (not captured at view/provider
+    construction time) so the SAME registered/bound instances serve whichever
+    mode is active now — mirrors the add-on's ``_active_oauth_mode``. Used by
+    the discovery views below AND by ``LegacyOAuthProvider.is_active`` (via
+    the getter passed into :func:`oauth_legacy.bind_legacy_views`) so the
+    root ``/authorize``/``/token`` views, which aiohttp can never unbind, 404
+    once the operator switches away from legacy (or to local-only mode)
+    without a restart. The webhook forwarder's own bearer gate
+    (``_async_handle_webhook``) reads ``cfg["resource_server"]`` /
+    ``cfg["oauth_provider"]`` directly instead of through this function — it
+    already has ``cfg`` in hand and needs the provider OBJECT, not just the
+    mode name.
+    """
+    cfg = _active_webhook_cfg(hass)
+    if cfg is None:
         return None
-    provider = cfg.get("resource_server")
-    return provider if isinstance(provider, ResourceServer) else None
+    if cfg.get("resource_server") is not None:
+        return WEBHOOK_AUTH_HA
+    if cfg.get("oauth_provider") is not None:
+        return WEBHOOK_AUTH_LEGACY
+    return None
+
+
+def _active_webhook_id(hass: HomeAssistant) -> str | None:
+    """Webhook id of the live registration, gated the same as the AS document
+    (None whenever :func:`active_auth_mode` is None) so the protected-resource
+    document 404s in exactly the same cases."""
+    if active_auth_mode(hass) is None:
+        return None
+    cfg = _active_webhook_cfg(hass)
+    return cfg.get("webhook_id") if cfg is not None else None
 
 
 def _json_not_found() -> web.Response:
@@ -225,13 +264,34 @@ def _json_not_found() -> web.Response:
     return web.json_response({"error": "not_found"}, status=404)
 
 
-def _protected_resource_document(provider: ResourceServer, base: str) -> dict[str, Any]:
-    """RFC 9728 protected-resource document for ``provider`` under ``base``."""
+def _protected_resource_document(webhook_id: str, base: str) -> dict[str, Any]:
+    """RFC 9728 protected-resource document for ``webhook_id`` under ``base``.
+
+    Identical shape in both OAuth modes — only the authorization-server
+    document (below) differs by mode.
+    """
     return {
-        "resource": provider.resource_url(base),
-        "authorization_servers": [provider.authorization_server_url(base)],
+        "resource": f"{base}/api/webhook/{webhook_id}",
+        "authorization_servers": [f"{base}{OAUTH_BASE}"],
         "bearer_methods_supported": ["header"],
         "resource_documentation": "https://github.com/homeassistant-ai/ha-mcp",
+    }
+
+
+def _legacy_authorization_server_document(base: str) -> dict[str, Any]:
+    """RFC 8414 authorization-server metadata for legacy mode's own root
+    ``/authorize`` + ``/token`` views (see :mod:`oauth_legacy`)."""
+    return {
+        "issuer": f"{base}{OAUTH_BASE}",
+        "authorization_endpoint": f"{base}{AUTHORIZE_PATH}",
+        "token_endpoint": f"{base}{TOKEN_PATH}",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": [
+            "client_secret_basic",
+            "client_secret_post",
+        ],
     }
 
 
@@ -244,21 +304,25 @@ class _ProtectedResourceMetadataView(HomeAssistantView):
     name = "ha_mcp_tools:oauth:protected-resource"
 
     def __init__(self, hass: HomeAssistant) -> None:
-        """Bind the view to the HA instance; the provider is resolved per request."""
+        """Bind the view to the HA instance; liveness is resolved per request."""
         self._hass = hass
 
     async def get(self, request: web.Request) -> web.Response:
-        """Serve the protected-resource document (or 404 when ha_auth is off)."""
-        provider = _active_resource_server(self._hass)
-        if provider is None:
+        """Serve the protected-resource document (or 404 when no OAuth mode is live)."""
+        webhook_id = _active_webhook_id(self._hass)
+        if webhook_id is None:
             return _json_not_found()
         return web.json_response(
-            _protected_resource_document(provider, _build_base_url(request))
+            _protected_resource_document(webhook_id, _build_base_url(request))
         )
 
 
 class _AuthorizationServerMetadataView(HomeAssistantView):
-    """RFC 8414 Authorization Server Metadata (points at HA core's OAuth)."""
+    """RFC 8414 Authorization Server Metadata.
+
+    Mode-aware: ha_auth points at HA core's own ``/auth/*``; legacy points at
+    this module's root ``/authorize``/``/token`` views.
+    """
 
     requires_auth = False
     cors_allowed = True
@@ -270,10 +334,13 @@ class _AuthorizationServerMetadataView(HomeAssistantView):
         self._hass = hass
 
     async def get(self, request: web.Request) -> web.Response:
-        """Serve the authorization-server document (or 404 when ha_auth is off)."""
-        if _active_resource_server(self._hass) is None:
+        """Serve the AS document (or 404 when no OAuth mode is live)."""
+        mode = active_auth_mode(self._hass)
+        if mode is None:
             return _json_not_found()
         base = _build_base_url(request)
+        if mode == WEBHOOK_AUTH_LEGACY:
+            return web.json_response(_legacy_authorization_server_document(base))
         return web.json_response(_authorization_server_document(base))
 
 
@@ -296,16 +363,16 @@ class _WellKnownProtectedResourceView(HomeAssistantView):
     url = "/.well-known/oauth-protected-resource/api/webhook/{webhook_id}"
 
     def __init__(self, hass: HomeAssistant) -> None:
-        """Bind the view to the HA instance; the provider is resolved per request."""
+        """Bind the view to the HA instance; liveness is resolved per request."""
         self._hass = hass
 
     async def get(self, request: web.Request, webhook_id: str) -> web.Response:
         """Serve the document only for the CURRENT entry's webhook id."""
-        provider = _active_resource_server(self._hass)
-        if provider is None or webhook_id != provider.webhook_id:
+        active_id = _active_webhook_id(self._hass)
+        if active_id is None or webhook_id != active_id:
             return _json_not_found()
         return web.json_response(
-            _protected_resource_document(provider, _build_base_url(request))
+            _protected_resource_document(active_id, _build_base_url(request))
         )
 
 
@@ -324,7 +391,8 @@ class _WellKnownAuthorizationServerMetadataView(_AuthorizationServerMetadataView
 
 
 def _metadata_views(hass: HomeAssistant) -> list[HomeAssistantView]:
-    """Build the seven ha_auth discovery-document views (provider-agnostic)."""
+    """Build the seven discovery-document views, shared by ha_auth and legacy
+    (mode-agnostic — each view resolves the active mode per request)."""
     views: list[HomeAssistantView] = [
         _ProtectedResourceMetadataView(hass),
         _AuthorizationServerMetadataView(hass),
@@ -355,13 +423,14 @@ def _metadata_views(hass: HomeAssistant) -> list[HomeAssistantView]:
 
 
 def _register_metadata_views(hass: HomeAssistant) -> None:
-    """Register the ha_auth discovery views at most once per HA session.
+    """Register the seven discovery views at most once per HA session.
 
-    aiohttp cannot unregister a bound view, so a reload / re-enable / re-add must
-    reuse the already-bound views — they resolve the ACTIVE provider from
-    hass.data per request, so a later entry (even with a new webhook id) is
-    served correctly. The guard flag lives at a top-level hass.data key that
-    survives config-entry teardown.
+    aiohttp cannot unregister a bound view, so a reload / re-enable / re-add /
+    ha_auth<->legacy mode switch must all reuse the already-bound views — they
+    resolve the ACTIVE mode + provider from hass.data per request (see
+    ``active_auth_mode``), so a later entry (even with a new webhook id, or a
+    different auth mode) is served correctly. The guard flag lives at a
+    top-level hass.data key that survives config-entry teardown.
     """
     if hass.data.get(_OAUTH_VIEWS_REGISTERED_KEY):
         return
@@ -370,9 +439,7 @@ def _register_metadata_views(hass: HomeAssistant) -> None:
     hass.data[_OAUTH_VIEWS_REGISTERED_KEY] = True
 
 
-def _build_unauthorized_response(
-    request: web.Request, provider: ResourceServer
-) -> web.Response:
+def _build_unauthorized_response(request: web.Request) -> web.Response:
     """Build the 401 + ``WWW-Authenticate`` challenge MCP clients use to discover.
 
     Per RFC 9728 §5.1 / MCP spec, the ``resource_metadata`` parameter points to
@@ -407,15 +474,21 @@ async def _async_handle_webhook(
         return web.Response(status=503, text="MCP server is not available")
 
     # Auth gate. ``none`` = the secret webhook URL is the credential; ``ha_auth``
-    # = validate the bearer via HA core, and on failure emit the 401 discovery
+    # validates the bearer via HA core; ``legacy`` validates it against this
+    # module's own opaque tokens. Either failure emits the same 401 discovery
     # challenge so the client can start the OAuth flow. Gate on the PROVIDER
-    # (constructed only for ha_auth) rather than a string compare, so the
-    # coupling "provider present <=> ha_auth" has a single owner and an
-    # inconsistent cfg cannot fail open.
-    provider = cfg.get("resource_server")
-    if provider is not None:
-        if not await provider.validate_request(request):
-            return _build_unauthorized_response(request, provider)
+    # (constructed only for the matching mode) rather than a string compare,
+    # so the coupling "provider present <=> mode" has a single owner and an
+    # inconsistent cfg cannot fail open. auth_mode makes the two mutually
+    # exclusive, so at most one of these is ever set.
+    resource_server: ResourceServer | None = cfg.get("resource_server")
+    if resource_server is not None and not await resource_server.validate_request(
+        request
+    ):
+        return _build_unauthorized_response(request)
+    oauth_provider: LegacyOAuthProvider | None = cfg.get("oauth_provider")
+    if oauth_provider is not None and not oauth_provider.validate_bearer(request):
+        return _build_unauthorized_response(request)
 
     target_url: str = cfg["target_url"]
     session: aiohttp.ClientSession = cfg["session"]
@@ -504,22 +577,34 @@ async def async_register_webhook(
     secret_path: str,
     auth_mode: str,
     register_endpoint: bool = True,
-) -> None:
-    """Register the ingress webhook (and, for ha_auth, the discovery views).
+    oauth_client_id: str | None = None,
+    oauth_client_secret: str | None = None,
+    oauth_signing_key: str | None = None,
+) -> bool:
+    """Register the ingress webhook (and, for ha_auth/legacy, the OAuth surface).
 
     Stores the forwarding config in ``hass.data[DOMAIN][DATA_WEBHOOK]`` and opens
     a long-lived aiohttp session for streaming. Raises on failure with the webhook
     already unregistered, so the caller never leaves a half-configured endpoint
     live. ``webhook`` is a manifest dependency, so HA guarantees it is set up
-    before this runs.
+    before this runs. ``oauth_client_id``/``oauth_client_secret``/
+    ``oauth_signing_key`` are required when ``auth_mode == WEBHOOK_AUTH_LEGACY``
+    (ignored otherwise); ``oauth_signing_key`` is the hex string persisted in
+    ``entry.data`` — see ``oauth_legacy._normalize_signing_key``.
 
     With ``register_endpoint=False`` (remote webhook access disabled by option)
-    no public endpoint or ha_auth surface is created — and any leftover endpoint
-    from a crashed unload is cleared, so off means off; only the forwarding
-    config is stored, which same-host consumers — the sidebar settings panel
-    proxy — need to reach the loopback server (#1803).
+    no public endpoint or ha_auth/legacy surface is created — and any leftover
+    endpoint from a crashed unload is cleared, so off means off; only the
+    forwarding config is stored, which same-host consumers — the sidebar
+    settings panel proxy — need to reach the loopback server (#1803).
+
+    Returns True when the caller should surface ``ISSUE_LEGACY_OAUTH_RESTART``:
+    the root ``/authorize``/``/token`` views just bound for the first time this
+    HA session (or with changed credentials), or they are still bound from a
+    prior legacy registration that this call has moved away from — either way
+    aiohttp cannot bind or release a view without a full HA restart.
     """
-    if auth_mode not in (WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA):
+    if auth_mode not in (WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY):
         # Fail CLOSED on an unknown mode (corrupt/migrated options): refusing
         # bring-up files a repair issue, instead of an unrecognized string
         # silently taking the unauthenticated forward path.
@@ -540,8 +625,10 @@ async def async_register_webhook(
         "session": session,
         "auth_mode": auth_mode,
         "resource_server": None,
+        "oauth_provider": None,
     }
 
+    oauth_restart_needed = False
     if register_endpoint:
         try:
             async_register(
@@ -556,6 +643,25 @@ async def async_register_webhook(
                 provider = ResourceServer(hass, webhook_id)
                 _register_metadata_views(hass)
                 cfg["resource_server"] = provider
+            elif auth_mode == WEBHOOK_AUTH_LEGACY:
+                if not (oauth_client_id and oauth_client_secret and oauth_signing_key):
+                    raise ValueError(
+                        "legacy webhook auth mode requires oauth_client_id, "
+                        "oauth_client_secret, and oauth_signing_key"
+                    )
+                _register_metadata_views(hass)
+                try:
+                    oauth_provider, oauth_restart_needed = bind_legacy_views(
+                        hass, oauth_client_id, oauth_client_secret, oauth_signing_key
+                    )
+                except LegacyOAuthRouteConflict as err:
+                    raise ValueError(
+                        "The Webhook Proxy add-on (or its dev flavor) already "
+                        f"owns the root /authorize and /token routes ({err}). "
+                        "Stop that add-on and restart Home Assistant, then "
+                        "enable legacy mode again."
+                    ) from err
+                cfg["oauth_provider"] = oauth_provider
         except Exception:
             # Never leave a live endpoint (or a leaked session) behind a failed
             # auth-setup path. suppress: the ORIGINAL error must be what
@@ -566,14 +672,27 @@ async def async_register_webhook(
                 await session.close()
             raise
 
+    # A PRIOR registration this HA session may still own the legacy root
+    # views even though THIS registration is not legacy (aiohttp can never
+    # release a bound view without a restart, regardless of register_endpoint)
+    # — surface the restart that actually releases route ownership.
+    if (
+        auth_mode != WEBHOOK_AUTH_LEGACY
+        and hass.data.get(OAUTH_ROUTE_OWNER_KEY) == DOMAIN
+    ):
+        oauth_restart_needed = True
+
     hass.data.setdefault(DOMAIN, {})[DATA_WEBHOOK] = cfg
+    return oauth_restart_needed
 
 
 async def async_unregister_webhook(hass: HomeAssistant) -> None:
     """Unregister the ingress webhook and close its aiohttp session.
 
-    Idempotent. The ha_auth discovery views are intentionally left bound (aiohttp
-    can't unregister them until HA restarts); they 404 while ha_auth is not live.
+    Idempotent. The discovery views and the legacy root ``/authorize``/``/token``
+    views are intentionally left bound (aiohttp can't unregister them until HA
+    restarts); they 404 while their mode is not live (see ``active_auth_mode``
+    / ``LegacyOAuthProvider.is_active``).
     """
     domain_data = hass.data.get(DOMAIN)
     if not isinstance(domain_data, dict):

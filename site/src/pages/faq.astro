@@ -37,6 +37,8 @@ const withBase = (path: string) => {
         <li class="ml-4"><a href="#openai-tunnel" class="text-blue-400 hover:underline">ChatGPT Behind a Firewall (OpenAI Tunnel)</a></li>
         <li class="ml-4"><a href="#antigravity-troubleshooting" class="text-blue-400 hover:underline">Antigravity Client Troubleshooting</a></li>
         <li class="ml-4"><a href="#claude-ai-connection" class="text-blue-400 hover:underline">Claude.ai Connection Issues</a></li>
+        <li class="ml-4"><a href="#google-spark-oauth" class="text-blue-400 hover:underline">Google Gemini Spark OAuth</a></li>
+        <li class="ml-4"><a href="#copilot-cli-oauth-legacy" class="text-blue-400 hover:underline">Copilot CLI: Remote OAuth Requires Legacy Mode</a></li>
         <li class="ml-4"><a href="#quick-test" class="text-blue-400 hover:underline">Test ha-mcp Without Configuring a Client</a></li>
         <li class="ml-4"><a href="#uvx-background" class="text-blue-400 hover:underline">Keep ha-mcp-web Running in the Background</a></li>
         <li class="ml-4"><a href="#docker-port" class="text-blue-400 hover:underline">Docker: Changing the Port</a></li>
@@ -427,6 +429,20 @@ source ~/.zshrc
           </ol>
           <p class="text-slate-400 text-sm mt-3"><a href="https://homeassistant-ai.github.io/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">Screenshot of the setting</a> — see <a href="https://github.com/homeassistant-ai/ha-mcp/issues/783" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">#783</a> for more details.</p>
           <p class="text-slate-300 mt-3"><strong>Also check geo / country blocking.</strong> This applies to Cloudflare (WAF custom rules) and to any other reverse proxy (NGINX, Traefik, Zoraxy, etc.). Most AI/LLM services connect from US-based cloud infrastructure, so if you block US IP addresses (or only allow your own country), your client cannot connect even with AI-bot blocking disabled. Allow your AI provider's IP ranges — Claude.ai connects from Anthropic's network, <code class="bg-slate-800 px-1 rounded">160.79.104.0/21</code> (see <a href="https://platform.claude.com/docs/en/api/ip-addresses" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">Anthropic's IP ranges</a>). Your proxy's access logs will show the blocked attempts.</p>
+        </div>
+
+        <div class="faq-item" id="google-spark-oauth">
+          <h3 class="text-lg font-medium text-white mb-2">Google Gemini Spark: only "legacy" OAuth mode works (for now)</h3>
+          <p class="text-slate-300 mb-3">Gemini Spark's custom connected apps are OAuth-only, and they authenticate using a cross-origin redirect URI (a Client ID Metadata Document). Home Assistant core's native OAuth provider doesn't fetch these yet, so it rejects Spark's authorization request with <strong>"Invalid redirect URI"</strong> — see <a href="https://github.com/home-assistant/core/issues/176282" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">home-assistant/core#176282</a> (fix pending in <a href="https://github.com/home-assistant/core/pull/176286" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#176286</a>).</p>
+          <p class="text-slate-300 mb-3">Until that's fixed upstream, <strong>legacy</strong> is the only OAuth mode that works with Spark. It's a self-hosted authorization server built into the HA-MCP Server component, with a static Client ID and Client Secret you paste into Spark's Advanced settings instead of relying on Home Assistant's native OAuth flow. See the <a href={withBase('/setup')} class="text-blue-400 hover:underline">Setup Wizard</a> and pick <strong>Gemini Spark</strong> for the full walkthrough.</p>
+          <p class="text-slate-400 text-sm">Once the core fix lands, this page will be updated to recommend Home Assistant's native OAuth mode for Spark instead.</p>
+        </div>
+
+        <div class="faq-item" id="copilot-cli-oauth-legacy">
+          <h3 class="text-lg font-medium text-white mb-2">Copilot CLI: remote OAuth requires legacy mode</h3>
+          <p class="text-slate-300 mb-3">Copilot CLI's remote MCP setup requires an OAuth <strong>Client ID</strong> — its <code class="bg-slate-800 px-1 rounded">/mcp add</code> form won't accept a blank field — and it tries to get one via dynamic client registration. Home Assistant's default <code class="bg-slate-800 px-1 rounded">ha_auth</code> mode doesn't advertise a registration endpoint, so that registration fails (<code class="bg-slate-800 px-1 rounded">MCPOAuthError: Failed to register OAuth client</code>). <code class="bg-slate-800 px-1 rounded">ha_auth</code> does not work with Copilot CLI.</p>
+          <p class="text-slate-300 mb-3">The fix: in the HA-MCP Server integration's <strong>Options</strong>, set <strong>Authentication mode</strong> to <code class="bg-slate-800 px-1 rounded">legacy</code> and restart Home Assistant when the repair prompts you. Copy the generated <strong>Client ID</strong> and <strong>Client Secret</strong> from the Options page (also printed in the Home Assistant log) into Copilot CLI's required Client ID field and its secret field.</p>
+          <p class="text-slate-400 text-sm">This is the same self-hosted authorization path used for <a href="#google-spark-oauth" class="text-blue-400 hover:underline">Google Gemini Spark</a>, which currently requires it too.</p>
         </div>
 
         <div class="faq-item" id="quick-test">

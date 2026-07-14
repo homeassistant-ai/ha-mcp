@@ -454,8 +454,15 @@ def _live_hass(
     # ACTIVE provider from here per request (stale-binding fix).
     hass.data[DOMAIN] = {
         DATA_WEBHOOK: {
+            "webhook_id": webhook_id,
             "auth_mode": auth_mode,
-            "resource_server": mw.ResourceServer(hass, webhook_id),
+            # Mirror production: a resource_server exists only in ha_auth mode
+            # (active_auth_mode keys off its presence, not the auth_mode string).
+            "resource_server": (
+                mw.ResourceServer(hass, webhook_id)
+                if auth_mode == WEBHOOK_AUTH_HA
+                else None
+            ),
         }
     }
     return hass
@@ -543,6 +550,7 @@ class TestDiscoveryViews:
         hass = _live_hass()
         view = mw._ProtectedResourceMetadataView(hass)
         hass.data[DOMAIN][DATA_WEBHOOK] = {
+            "webhook_id": "mcp_second_entry_id",
             "auth_mode": WEBHOOK_AUTH_HA,
             "resource_server": mw.ResourceServer(hass, "mcp_second_entry_id"),
         }
@@ -776,4 +784,4 @@ class TestRegisterWebhook:
         assert cfg["resource_server"] is None
         mw.async_register.assert_not_called()
         hass.http.register_view.assert_not_called()
-        assert mw._active_resource_server(hass) is None
+        assert mw.active_auth_mode(hass) is None

@@ -105,11 +105,12 @@ const clientsData = [
     "name": "Copilot CLI",
     "company": "GitHub",
     "logo": "/logos/copilot-cli.svg",
-    "transports": ["stdio", "sse", "streamable-http"],
+    "transports": ["stdio", "streamable-http"],
     "configFormat": "ui",
     "configLocation": "~/.copilot/mcp-config.json",
     "accuracy": 5,
     "order": 8,
+    "httpNote": "Remote setup requires the HA-MCP Server integration's legacy OAuth mode — ha_auth doesn't support the Client ID Copilot CLI requires. See the FAQ.",
   },
   {"id": "chatgpt", "name": "ChatGPT", "company": "OpenAI", "logo": "/logos/openai.svg", "transports": ["sse", "streamable-http"], "configFormat": "ui", "accuracy": 4, "order": 9, "beta": true},
   {
@@ -231,6 +232,19 @@ const clientsData = [
     "accuracy": 3,
     "order": 19,
   },
+  {
+    "id": "gemini-spark",
+    "name": "Gemini Spark",
+    "company": "Google",
+    "logo": "/logos/gemini.svg",
+    "transports": ["sse", "streamable-http"],
+    "configFormat": "ui",
+    "accuracy": 3,
+    "order": 20,
+    "beta": true,
+    "httpNote": "Requires HTTPS - Remote deployment required",
+    "clientNote": "Custom connected apps are OAuth-only. Only the HA-MCP Server component's legacy OAuth mode currently works with Spark — see the steps below.",
+  },
 ].map(c => ({ ...c, logo: withBase(c.logo) }));
 
 const platformsData: { id: string; name: string; icon: IconName; order: number }[] = [
@@ -252,7 +266,7 @@ const scopeData: { id: string; name: string; description: string; icon: IconName
 // stdio-only: clients that need mcp-proxy for HTTP connections
 const stdioOnlyClients = ['claude-desktop', 'jetbrains', 'zed'];
 // remote-only: clients that require HTTPS (can't use local HTTP)
-const remoteOnlyClients = ['chatgpt', 'claude-ai'];
+const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
 ---
 
 <Layout title="Home Assistant MCP Setup Wizard">
@@ -1537,7 +1551,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
               ? `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
             <p class="text-slate-300 text-sm font-medium">Your connect URL (built-in webhook)</p>
             <p class="text-slate-400 text-xs mt-1">Use the webhook URL from the entry's Configure screen: <code class="bg-slate-800 px-1 rounded">https://&lt;your-ha-domain&gt;/api/webhook/&lt;webhook-id&gt;</code>. It works through Nabu Casa or any reverse proxy already pointed at Home Assistant — no separate tunnel or port forwarding. To use your own domain, set <strong>External URL</strong> in the integration options.</p>
-            <p class="text-slate-400 text-xs mt-2"><strong class="text-slate-300">Optional auth:</strong> set <strong>Webhook authentication</strong> to <code class="bg-slate-800 px-1 rounded">ha_auth</code> to require signing in with your Home Assistant account instead of relying on the secret URL.</p>
+            <p class="text-slate-400 text-xs mt-2"><strong class="text-slate-300">Optional auth:</strong> set <strong>Authentication mode</strong> — at the top of the integration's Options screen, directly under the connect URLs — to <code class="bg-slate-800 px-1 rounded">ha_auth</code> to require signing in with your Home Assistant account instead of relying on the secret URL. A third mode, <code class="bg-slate-800 px-1 rounded">legacy</code>, is available for clients whose OAuth needs <code class="bg-slate-800 px-1 rounded">ha_auth</code> doesn't cover — see the <a href="${base}/faq#copilot-cli-oauth-legacy" class="text-blue-400 hover:underline">FAQ</a>.</p>
           </div>`
               : `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
             <p class="text-slate-300 text-sm font-medium">Your connect URL (via tunnel / reverse proxy)</p>
@@ -2370,6 +2384,23 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
             <li>You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection to confirm</li>
           </ol>
         </div>`;
+      } else if (state.client.id === 'gemini-spark') {
+        uiSteps = `<div class="instruction-block">
+          <h3 class="instruction-title">Gemini Spark Configuration</h3>
+          <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Set up the <strong>HA-MCP Server</strong> custom component (in-process server + built-in webhook) — see the Quick Setup box above.</li>
+            <li>In the integration's <strong>Options</strong>, set <strong>Authentication mode</strong> to <code class="bg-slate-800 px-1 rounded">legacy</code>.</li>
+            <li>When Home Assistant shows a repair prompt, <strong>restart Home Assistant</strong> — legacy mode needs a restart to take effect.</li>
+            <li>Back on the integration's Options page, copy the <strong>Client ID</strong> and <strong>Client Secret</strong> (also printed in the Home Assistant log).</li>
+            <li>In Gemini, choose <strong>Set up a custom connected app</strong> and paste <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code> as the server URL.</li>
+            <li>Expand <strong>Advanced settings</strong> and paste in the Client ID and Client Secret.</li>
+            <li>Click <strong>Next</strong> and complete Google's account-linking flow.</li>
+          </ol>
+          <div class="bg-purple-900/20 border border-purple-700/50 rounded-lg p-3 mt-3">
+            <p class="text-purple-300 text-sm font-medium">Why legacy OAuth mode</p>
+            <p class="text-purple-200/80 text-xs mt-1"><strong>legacy</strong> is currently the only OAuth mode that works with Spark. Spark's custom connected apps use a cross-origin redirect URI (a Client ID Metadata Document), and Home Assistant core's native OAuth doesn't fetch those yet — see <a href="https://github.com/home-assistant/core/issues/176282" class="text-purple-300 hover:underline" target="_blank" rel="noopener noreferrer">home-assistant/core#176282</a> (fix pending in <a href="https://github.com/home-assistant/core/pull/176286" class="text-purple-300 hover:underline" target="_blank" rel="noopener noreferrer">#176286</a>). This page will switch to recommending the native mode for Spark once that lands. See the <a href="${base}/faq#google-spark-oauth" class="text-purple-300 hover:underline">FAQ</a> for details.</p>
+          </div>
+        </div>`;
       } else if (state.client.id === 'raycast') {
         uiSteps = `<div class="instruction-block">
           <h3 class="instruction-title">Raycast Configuration</h3>
@@ -2473,9 +2504,10 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
               <li>Fill in the form (use <strong>Tab</strong> to navigate, <strong>Ctrl+S</strong> to save):
                 <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
                   <li>Server Name: <code class="bg-slate-800 px-1 rounded">home-assistant</code></li>
-                  <li>Server Type: Press <strong>3</strong> for HTTP (or <strong>4</strong> for SSE)</li>
+                  <li>Server Type: Press <strong>3</strong> for HTTP</li>
                   <li>URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
                   <li>Tools: <code class="bg-slate-800 px-1 rounded">*</code></li>
+                  <li>Client ID: required field (Copilot CLI won't accept it blank) — see the callout below for where to get one that works</li>
                 </ul>
               </li>
             </ol>
@@ -2488,6 +2520,11 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
                 <li>Inside an interactive <code class="bg-slate-800 px-1 rounded">copilot</code> session: <code class="bg-slate-800 px-1 rounded">/mcp</code> shows server status</li>
                 <li>The GitHub MCP server is included by default — you don't need to configure it</li>
               </ul>
+            </div>
+            <div class="bg-purple-900/20 border border-purple-700/50 rounded-lg p-3 mt-3">
+              <p class="text-purple-300 text-sm font-medium">Client ID required: use legacy OAuth mode</p>
+              <p class="text-purple-200/80 text-xs mt-1">Copilot CLI's remote MCP setup requires a Client ID and performs dynamic client registration — but Home Assistant's default <code class="bg-slate-800 px-1 rounded">ha_auth</code> mode doesn't advertise a registration endpoint, so that registration fails and <code class="bg-slate-800 px-1 rounded">ha_auth</code> does not work with Copilot CLI.</p>
+              <p class="text-purple-200/80 text-xs mt-2">In the HA-MCP Server integration's <strong>Options</strong>, set <strong>Authentication mode</strong> to <code class="bg-slate-800 px-1 rounded">legacy</code> and restart Home Assistant when the repair prompts you. Then copy the generated <strong>Client ID</strong> and <strong>Client Secret</strong> from the Options page (also printed in the Home Assistant log) into Copilot CLI's Client ID and secret fields. See the <a href="${base}/faq#copilot-cli-oauth-legacy" class="text-purple-300 hover:underline">FAQ</a> for details.</p>
             </div>
           </div>`;
         }

@@ -26,14 +26,22 @@ from homeassistant.core import HomeAssistant, callback
 from .const import (
     DATA_BRINGUP_TASK,
     DATA_LAST_OPTIONS,
+    DATA_OAUTH_CLIENT_ID,
+    DATA_OAUTH_CLIENT_SECRET,
+    DATA_OAUTH_SIGNING_KEY,
     DATA_SECRET_PATH,
     DATA_UPDATE_COORDINATOR,
     DATA_WEBHOOK_ID,
     DOMAIN,
     OPT_ENABLE_SIDEBAR_PANEL,
+    OPT_OAUTH_CLIENT_ID,
+    OPT_OAUTH_CLIENT_SECRET,
+    OPT_OAUTH_REGENERATE,
     OPT_REGENERATE_SECRETS,
     OPT_SECRET_PATH_OVERRIDE,
+    OPT_WEBHOOK_AUTH,
     OPT_WEBHOOK_ID_OVERRIDE,
+    WEBHOOK_AUTH_LEGACY,
 )
 
 # NOTE: embedded_setup / coordinator (and their embedded_server / mcp_webhook
@@ -192,6 +200,13 @@ def _ensure_secrets(hass: HomeAssistant, entry: ConfigEntry) -> None:
        ``secret_path_override`` replaces the stored value (normalized: the
        secret path gets a leading ``/``).
     3. First setup: mint random values for whatever is still missing.
+
+    When the configured webhook auth mode is legacy, the same three-path
+    lifecycle additionally applies to the legacy OAuth client_id/client_secret
+    (see :func:`_ensure_legacy_oauth_secrets`) — folded into this same
+    read-mutate-write cycle so a single ``async_update_entry`` call covers
+    every field that changed this load, including when BOTH a webhook secret
+    regenerate and an OAuth credential regenerate are requested together.
     """
     data = dict(entry.data)
     options = dict(entry.options)
@@ -206,20 +221,19 @@ def _ensure_secrets(hass: HomeAssistant, entry: ConfigEntry) -> None:
         options[OPT_REGENERATE_SECRETS] = False
         options[OPT_WEBHOOK_ID_OVERRIDE] = ""
         options[OPT_SECRET_PATH_OVERRIDE] = ""
-        hass.config_entries.async_update_entry(entry, data=data, options=options)
-        return
-
-    webhook_override = str(options.get(OPT_WEBHOOK_ID_OVERRIDE) or "").strip()
-    if webhook_override and data.get(DATA_WEBHOOK_ID) != webhook_override:
-        data[DATA_WEBHOOK_ID] = webhook_override
         changed = True
-    path_override = str(options.get(OPT_SECRET_PATH_OVERRIDE) or "").strip()
-    if path_override:
-        if not path_override.startswith("/"):
-            path_override = f"/{path_override}"
-        if data.get(DATA_SECRET_PATH) != path_override:
-            data[DATA_SECRET_PATH] = path_override
+    else:
+        webhook_override = str(options.get(OPT_WEBHOOK_ID_OVERRIDE) or "").strip()
+        if webhook_override and data.get(DATA_WEBHOOK_ID) != webhook_override:
+            data[DATA_WEBHOOK_ID] = webhook_override
             changed = True
+        path_override = str(options.get(OPT_SECRET_PATH_OVERRIDE) or "").strip()
+        if path_override:
+            if not path_override.startswith("/"):
+                path_override = f"/{path_override}"
+            if data.get(DATA_SECRET_PATH) != path_override:
+                data[DATA_SECRET_PATH] = path_override
+                changed = True
 
     if not data.get(DATA_WEBHOOK_ID):
         data[DATA_WEBHOOK_ID] = f"mcp_{secrets.token_hex(16)}"
@@ -227,5 +241,59 @@ def _ensure_secrets(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if not data.get(DATA_SECRET_PATH):
         data[DATA_SECRET_PATH] = f"/private_{secrets.token_urlsafe(16)}"
         changed = True
+
+    if options.get(OPT_WEBHOOK_AUTH) == WEBHOOK_AUTH_LEGACY:
+        changed = _ensure_legacy_oauth_secrets(data, options) or changed
+
     if changed:
-        hass.config_entries.async_update_entry(entry, data=data)
+        hass.config_entries.async_update_entry(entry, data=data, options=options)
+
+
+def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
+    """Mint/persist/rotate the legacy OAuth mode's credentials into ``data``
+    (mutated in place, along with ``options`` for the one-shot regenerate
+    flag). Only called while the configured webhook auth mode is legacy —
+    switching away leaves whatever was last minted in place, so switching
+    back reuses it rather than silently rotating.
+
+    Mirrors the ``OPT_REGENERATE_SECRETS`` shape above: ``OPT_OAUTH_REGENERATE``
+    is one-shot, minting a fresh client_id/client_secret and clearing itself
+    plus the two override fields. ``signing_key`` is NEVER rotated here —
+    rotating the client_id already revokes every outstanding token, because
+    the signed token payload carries ``cid`` (see
+    ``oauth_legacy.LegacyOAuthProvider._validate_token``); the only way to
+    invalidate the signing key itself is to remove and re-add the entry.
+
+    Returns True if ``data``/``options`` were mutated.
+    """
+    changed = False
+    if options.get(OPT_OAUTH_REGENERATE):
+        data[DATA_OAUTH_CLIENT_ID] = f"hamcp-{secrets.token_hex(16)}"
+        data[DATA_OAUTH_CLIENT_SECRET] = secrets.token_urlsafe(32)
+        options[OPT_OAUTH_REGENERATE] = False
+        options[OPT_OAUTH_CLIENT_ID] = ""
+        options[OPT_OAUTH_CLIENT_SECRET] = ""
+        changed = True
+    else:
+        client_id_override = str(options.get(OPT_OAUTH_CLIENT_ID) or "").strip()
+        if client_id_override and data.get(DATA_OAUTH_CLIENT_ID) != client_id_override:
+            data[DATA_OAUTH_CLIENT_ID] = client_id_override
+            changed = True
+        client_secret_override = str(options.get(OPT_OAUTH_CLIENT_SECRET) or "").strip()
+        if (
+            client_secret_override
+            and data.get(DATA_OAUTH_CLIENT_SECRET) != client_secret_override
+        ):
+            data[DATA_OAUTH_CLIENT_SECRET] = client_secret_override
+            changed = True
+
+    if not data.get(DATA_OAUTH_CLIENT_ID):
+        data[DATA_OAUTH_CLIENT_ID] = f"hamcp-{secrets.token_hex(16)}"
+        changed = True
+    if not data.get(DATA_OAUTH_CLIENT_SECRET):
+        data[DATA_OAUTH_CLIENT_SECRET] = secrets.token_urlsafe(32)
+        changed = True
+    if not data.get(DATA_OAUTH_SIGNING_KEY):
+        data[DATA_OAUTH_SIGNING_KEY] = secrets.token_hex(32)
+        changed = True
+    return changed
