@@ -74,7 +74,14 @@ CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 # ENABLE_YAML_EDIT_CONFIRM, default on); a <0.11.0 component's strict
 # (PREVENT_EXTRA) schema rejects the unknown arg with a raw voluptuous
 # error — the gate surfaces an actionable "update" prompt instead.
-MIN_COMPONENT_VERSION = "0.11.0"
+# 1.1.0: the YAML fragment read (#1788) needs two component behaviours that a
+# <1.1.0 component reports no differently from a missing key. ``list_files``
+# only now honours the configured packages folder, so ha_config_get_yaml's
+# glob/discovery would otherwise come back "Path not allowed" instead of
+# enumerating packages; and ``include_parsed`` on ``read_file`` is a new arg
+# that an older strict (PREVENT_EXTRA) schema rejects with a raw voluptuous
+# error. The gate turns both into the actionable "update" prompt.
+MIN_COMPONENT_VERSION = "1.1.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -509,6 +516,19 @@ class FilesystemTools:
                 ),
             ),
         ] = None,
+        yaml_path: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Dotted YAML key path (e.g. 'alert2', 'mqtt.sensor'). When "
+                    "set, the response also carries 'subtree': the round-trip "
+                    "text of just that key's value. To look a key up across "
+                    "packages/*.yaml, or to get it as structured data, use "
+                    "ha_config_get_yaml instead."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Read a file from the Home Assistant config directory.
 
@@ -539,6 +559,9 @@ class FilesystemTools:
         - size: File size in bytes
         - modified: Last modification timestamp
         - path: The file path that was read
+        - subtree: Round-trip text of the `yaml_path` key, when that arg is set
+          (null when the key is absent). Comments and HA tags (`!secret`,
+          `!include`) survive as written — a `!secret` is never resolved.
 
         **Example:**
         ```python
@@ -547,6 +570,9 @@ class FilesystemTools:
 
         # Read last 100 lines of log
         result = ha_read_file(path="home-assistant.log", tail_lines=100)
+
+        # Read just the alert2 block out of a package file
+        result = ha_read_file(path="packages/alert2.yaml", yaml_path="alert2")
         ```
         """
         try:
@@ -557,6 +583,8 @@ class FilesystemTools:
             service_data: dict[str, Any] = {"path": path}
             if tail_lines is not None:
                 service_data["tail_lines"] = tail_lines
+            if yaml_path is not None:
+                service_data["yaml_path"] = yaml_path
 
             # Call the custom component service
             result = await call_mcp_tools_service(
