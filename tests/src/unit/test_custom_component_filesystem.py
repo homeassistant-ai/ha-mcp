@@ -4,6 +4,7 @@ These tests focus on the pure Python utility functions that don't require
 Home Assistant dependencies.
 """
 
+import json
 import os
 import shutil
 import sys
@@ -36,7 +37,9 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
     _decode_legacy_backup_name,
     _delete_file_sync,
     _detect_package_dirs,
+    _dir_in_package_dir,
     _extract_yaml_subtree,
+    _extract_yaml_views,
     _is_path_allowed_for_dir,
     _is_path_allowed_for_read,
     _is_within_config_dir,
@@ -1558,6 +1561,69 @@ class TestExtractYamlSubtree:
         assert _extract_yaml_subtree("key: [1, 2\n", "key") is None
 
 
+class TestExtractYamlViews:
+    """#1788: ``_extract_yaml_views`` backs read_file's yaml_path/include_parsed.
+    ``_extract_yaml_subtree`` is now a thin wrapper over it, so the text-view
+    contract above still pins that half.
+    """
+
+    def test_parsed_omitted_unless_requested(self):
+        views = _extract_yaml_views("rest:\n  method: GET\n", "rest")
+        assert views["subtree"] is not None
+        assert "parsed" not in views
+
+    def test_parsed_returns_structured_data(self):
+        views = _extract_yaml_views(
+            "rest:\n  method: GET\n  timeout: 5\n", "rest", True
+        )
+        assert views["parsed"] == {"method": "GET", "timeout": 5}
+
+    def test_parsed_keeps_secret_unresolved(self):
+        """The security property: a parsed view renders !secret in SOURCE form.
+
+        Resolving would require reading secrets.yaml, which this path never
+        does — so no plaintext secret can reach the response.
+        """
+        views = _extract_yaml_views(
+            "rest:\n  api_key: !secret alert2_api_key\n", "rest", True
+        )
+        assert views["parsed"] == {"api_key": "!secret alert2_api_key"}
+        # And the text view keeps the tag too.
+        assert "!secret alert2_api_key" in views["subtree"]
+
+    def test_parsed_keeps_include_unresolved(self):
+        views = _extract_yaml_views("group: !include groups.yaml\n", "group", True)
+        assert views["parsed"] == "!include groups.yaml"
+
+    def test_parsed_is_json_serializable(self):
+        # ruamel hands back CommentedMap/ScalarInt subclasses; the response is
+        # JSON-encoded on the way out, so plain types are the contract.
+        views = _extract_yaml_views(
+            "a:\n  n: 1\n  f: 1.5\n  b: true\n  s: x\n  z:\n  l: [1, 2]\n",
+            "a",
+            True,
+        )
+        assert json.dumps(views["parsed"])
+        assert views["parsed"] == {
+            "n": 1,
+            "f": 1.5,
+            "b": True,
+            "s": "x",
+            "z": None,
+            "l": [1, 2],
+        }
+
+    def test_missing_key_yields_no_parsed(self):
+        views = _extract_yaml_views("a: 1\n", "nope", True)
+        assert views["subtree"] is None
+        assert views.get("parsed") is None
+
+    def test_malformed_yaml_yields_no_parsed(self):
+        views = _extract_yaml_views("key: [1, 2\n", "key", True)
+        assert views["subtree"] is None
+        assert "parsed" not in views
+
+
 class TestRecorderYamlKey:
     """#1852: recorder is editable via edit_yaml_config / ha_config_set_yaml.
 
@@ -1768,3 +1834,73 @@ class TestReadAllowlistPackageFolder:
 
     def test_default_packages_folder_still_allowed(self, tmp_path):
         assert _is_path_allowed_for_read(tmp_path, "packages/foo.yaml")
+
+
+class TestDirInPackageDir:
+    """#1788: folder-level twin of _path_in_package_dir, used by the lister."""
+
+    def test_matches_folder_itself_and_nested(self):
+        dirs = {"packages", "custom_packages"}
+        assert _dir_in_package_dir("packages", dirs)
+        assert _dir_in_package_dir("custom_packages/sub", dirs)
+
+    def test_sibling_prefix_not_matched(self):
+        assert not _dir_in_package_dir("packagesX", {"packages"})
+
+    def test_glob_metachar_folder_literal(self):
+        # Mirrors _path_in_package_dir: a folder named 'pkg[1]' matches itself,
+        # not the fnmatch expansion 'pkg1'.
+        assert _dir_in_package_dir("pkg[1]", {"pkg[1]"})
+        assert not _dir_in_package_dir("pkg1", {"pkg[1]"})
+
+    def test_no_default_packages_when_none(self):
+        # Deliberately UNLIKE _path_in_package_dir, which defaults to
+        # {"packages"}: this helper backs a check shared with write/delete, so
+        # omitting package_dirs must grant nothing.
+        assert not _dir_in_package_dir("packages", None)
+        assert not _dir_in_package_dir("packages", set())
+
+
+class TestListAllowlistPackageFolder:
+    """#1788: the lister honours the configured packages folder the way the
+    read allowlist already does (#1854) — a packages folder that can be read
+    file-by-file must also be enumerable, which is what cross-file key
+    discovery needs.
+    """
+
+    def test_packages_folder_listable_when_passed(self, tmp_path):
+        assert _is_path_allowed_for_dir(
+            tmp_path, "packages", ALLOWED_READ_DIRS, None, {"packages"}
+        )
+
+    def test_custom_folder_listable_when_detected(self, tmp_path):
+        assert _is_path_allowed_for_dir(
+            tmp_path,
+            "integrations",
+            ALLOWED_READ_DIRS,
+            None,
+            {"packages", "integrations"},
+        )
+
+    def test_packages_not_listable_without_package_dirs(self, tmp_path):
+        # Back-compat: callers that don't resolve the packages folder keep the
+        # historical (deny) behaviour.
+        assert not _is_path_allowed_for_dir(tmp_path, "packages", ALLOWED_READ_DIRS)
+
+    def test_write_dirs_never_gain_package_access(self, tmp_path):
+        """Security invariant: _is_path_allowed_for_dir is shared with
+        write_file and delete_file, which pass no package_dirs. A packages
+        folder must stay unwritable there — edit_yaml_config is the only write
+        path that may reach config YAML.
+        """
+        assert not _is_path_allowed_for_dir(tmp_path, "packages", ALLOWED_WRITE_DIRS)
+        assert not _is_path_allowed_for_dir(
+            tmp_path, "packages/lights.yaml", ALLOWED_WRITE_DIRS
+        )
+
+    def test_deny_floor_still_applies_to_package_dirs(self, tmp_path):
+        # The widened allow decision must not outrank the deny floor: a
+        # maliciously configured '.storage' packages folder stays blocked.
+        assert not _is_path_allowed_for_dir(
+            tmp_path, ".storage", ALLOWED_READ_DIRS, None, {".storage"}
+        )

@@ -57,7 +57,13 @@ from .const import (
     YAML_KEY_POST_ACTIONS,
 )
 from .websocket_api import async_register_commands
-from .yaml_rt import apply_seq_indent, detect_seq_indent, make_yaml, yaml_dumps
+from .yaml_rt import (
+    apply_seq_indent,
+    detect_seq_indent,
+    make_yaml,
+    yaml_dumps,
+    yaml_jsonify,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -145,6 +151,10 @@ SERVICE_READ_FILE_SCHEMA = vol.Schema(
         # dotted path under ``subtree`` (used by ha-mcp's per-edit auto-backup
         # to snapshot the prior value before ha_config_set_yaml edits it, #1579).
         vol.Optional("yaml_path"): cv.string,
+        # With ``yaml_path``, also return that subtree as JSON-safe parsed data
+        # under ``parsed`` (ha_config_get_yaml's include_parsed, #1788). HA tags
+        # are rendered to source form, never resolved.
+        vol.Optional("include_parsed", default=False): cv.boolean,
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
@@ -823,11 +833,34 @@ def _path_in_package_dir(normalized: str, package_dirs: set[str] | None) -> bool
     )
 
 
+def _dir_in_package_dir(normalized: str, package_dirs: set[str] | None) -> bool:
+    """True if ``normalized`` IS a configured package folder, or a folder under one.
+
+    The file-level twin is ``_path_in_package_dir``; this one matches the
+    FOLDER itself (and nested folders) so ``list_files`` can enumerate a
+    packages directory the way ``read_file`` can already read the ``*.yaml``
+    inside it (issue #1854).
+
+    Unlike ``_path_in_package_dir``, this does NOT default to ``{"packages"}``
+    when ``package_dirs`` is None: ``_is_path_allowed_for_dir`` is shared with
+    write_file and delete_file, which must never gain package access
+    (``edit_yaml_config`` is the only write path to config YAML). Only the
+    read-side lister passes ``package_dirs``.
+    """
+    if not package_dirs:
+        return False
+    return any(
+        normalized == folder or normalized.startswith(folder + "/")
+        for folder in package_dirs
+    )
+
+
 def _is_path_allowed_for_dir(
     config_dir: Path,
     rel_path: str,
     allowed_dirs: list[str],
     extra_dirs: list[str] | None = None,
+    package_dirs: set[str] | None = None,
 ) -> bool:
     """Check if a path is within allowed directories.
 
@@ -835,6 +868,11 @@ def _is_path_allowed_for_dir(
     granted in addition to ``allowed_dirs``. The non-overridable deny floor is
     checked first, so a custom directory can never grant access to ``.storage``
     or other floored paths.
+
+    ``package_dirs`` (issue #1854) widens ONLY the allow decision — every
+    containment, deny-floor and symlink check below still runs — and is passed
+    by the read-side lister alone; write and delete leave it None so a
+    packages folder stays non-writable through this helper.
     """
     # Absolute HAOS sibling-volume path (issue #1586) — enforced against its
     # volume root rather than the config dir. Detected by a POSIX-absolute
@@ -856,10 +894,16 @@ def _is_path_allowed_for_dir(
         return False
 
     # Built-in allowlist matches on the first segment; user-configured extra
-    # dirs match on a path-boundary prefix (so nested entries work).
+    # dirs match on a path-boundary prefix (so nested entries work). A
+    # configured packages folder matches literally (it may itself be nested,
+    # e.g. "conf/packages", so a first-segment test would miss it).
     parts = normalized.split(os.sep)
     builtin_ok = bool(parts) and parts[0] in allowed_dirs
-    if not builtin_ok and not _matches_extra_dir(normalized, extra_dirs):
+    if (
+        not builtin_ok
+        and not _dir_in_package_dir(normalized, package_dirs)
+        and not _matches_extra_dir(normalized, extra_dirs)
+    ):
         return False
 
     # Symlink-safe containment on the REAL path the handler will open (issue
@@ -1752,32 +1796,52 @@ def _build_edit_yaml_config_handler(
     return handle_edit_yaml_config
 
 
-def _extract_yaml_subtree(content: str, yaml_path: str) -> str | None:
-    """Return the YAML subtree at the dotted ``yaml_path`` as round-trip text.
+def _extract_yaml_views(
+    content: str, yaml_path: str, include_parsed: bool = False
+) -> dict[str, Any]:
+    """Return the subtree at ``yaml_path`` as round-trip text and, optionally,
+    as JSON-safe parsed data — from a SINGLE parse of ``content``.
 
-    Used by ``read_file``'s optional ``yaml_path`` to let ha-mcp's per-edit
-    auto-backup snapshot the prior value of a key before ``edit_yaml_config``
-    changes it (#1579). Runs here, in the component, because the round-trip
-    parse needs ``ruamel`` (a component requirement) which the MCP server's
-    runtime does not carry. Comments and HA tags (``!secret`` / ``!include``)
-    are preserved. Returns ``None`` when the root is not a mapping or the key
-    is absent (new-key write — nothing to snapshot); malformed YAML also
-    yields ``None`` (the edit itself would then fail and report the error).
+    Runs here, in the component, because the round-trip parse needs ``ruamel``
+    (a component requirement) which the MCP server's runtime does not carry.
+    Comments and HA tags (``!secret`` / ``!include``) are preserved in the text
+    view and rendered to their source form in the parsed view — never resolved,
+    so neither view can surface a secret's plaintext.
+
+    ``subtree`` is None when the root is not a mapping or the key is absent
+    (new-key write — nothing to snapshot); malformed YAML also yields None (the
+    edit itself would then fail and report the error). ``parsed`` is present
+    only when ``include_parsed`` and the key resolved.
     """
+    views: dict[str, Any] = {"subtree": None}
     try:
         ry = make_yaml()
         # The per-thread cached instance may carry a sequence style applied
         # by a prior edit's dump on this executor thread — reset it so the
         # snapshot never inherits another file's indentation.
         apply_seq_indent(ry, None)
-        node = ry.load(StringIO(content))
+        node: Any = ry.load(StringIO(content))
         for seg in yaml_path.split("."):
             if not isinstance(node, dict) or seg not in node:
-                return None
+                return views
             node = node[seg]
-        return yaml_dumps(ry, node)
+        views["subtree"] = yaml_dumps(ry, node)
+        if include_parsed:
+            views["parsed"] = yaml_jsonify(node)
     except YAMLError:
-        return None
+        return {"subtree": None}
+    return views
+
+
+def _extract_yaml_subtree(content: str, yaml_path: str) -> str | None:
+    """Return the YAML subtree at the dotted ``yaml_path`` as round-trip text.
+
+    Used by ``read_file``'s optional ``yaml_path`` to let ha-mcp's per-edit
+    auto-backup snapshot the prior value of a key before ``edit_yaml_config``
+    changes it (#1579).
+    """
+    subtree: str | None = _extract_yaml_views(content, yaml_path)["subtree"]
+    return subtree
 
 
 def _parse_and_validate_yaml_path(
@@ -2093,15 +2157,21 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         rel_path = call.data["path"]
         pattern = call.data.get("pattern")
 
-        # Security check
+        # Security check. Package files may live under a non-default folder
+        # (issue #1854); read_file already resolves and honours the configured
+        # folder(s), so the lister does too — otherwise a packages folder is
+        # readable file-by-file but cannot be enumerated, which is what
+        # ha_config_get_yaml's cross-file key discovery needs (issue #1788).
         extra_dirs = _current_extra_dirs()
+        package_dirs = await _detect_package_dirs(hass)
         if not _is_path_allowed_for_dir(
-            config_dir, rel_path, ALLOWED_READ_DIRS, extra_dirs
+            config_dir, rel_path, ALLOWED_READ_DIRS, extra_dirs, package_dirs
         ):
             _LOGGER.warning("Attempted to list files in disallowed path: %s", rel_path)
+            allowed_display = ALLOWED_READ_DIRS + sorted(package_dirs) + extra_dirs
             return {
                 "success": False,
-                "error": f"Path not allowed. Must be in: {', '.join(ALLOWED_READ_DIRS + extra_dirs)}",
+                "error": f"Path not allowed. Must be in: {', '.join(allowed_display)}",
                 "files": [],
             }
 
@@ -2156,6 +2226,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         rel_path = call.data["path"]
         tail_lines = call.data.get("tail_lines")
         yaml_path = call.data.get("yaml_path")
+        include_parsed = bool(call.data.get("include_parsed", False))
 
         # Security check. Package files may live under a non-default folder
         # (issue #1854), so resolve the configured folder(s) — the same way the
@@ -2260,8 +2331,10 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             "modified": modified_dt.isoformat(),
         }
         if yaml_path:
-            response["subtree"] = await hass.async_add_executor_job(
-                _extract_yaml_subtree, content, yaml_path
+            response.update(
+                await hass.async_add_executor_job(
+                    _extract_yaml_views, content, yaml_path, include_parsed
+                )
             )
         return response
 
