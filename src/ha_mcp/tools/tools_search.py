@@ -2689,7 +2689,10 @@ class SearchTools:
                 default=False,
                 description=(
                     "Include user-dismissed/ignored repairs (default: False). "
-                    "Matches the HA Repairs UI which hides dismissed items by default."
+                    "Matches the HA Repairs UI which hides dismissed items by default. "
+                    "To dismiss/ignore a repair, call ha_call_service with "
+                    'ws_command="repairs/ignore_issue" and data={"domain": ..., '
+                    '"issue_id": ..., "ignore": true}.'
                 ),
             ),
         ] = False,
