@@ -466,28 +466,28 @@ class CategorizedSearchTransform(BM25SearchTransform):
         search_tool = search_tool.model_copy(
             update={
                 "description": self._search_tool_description or search_tool.description,
-                "annotations": ToolAnnotations(readOnlyHint=True),
+                "annotations": ToolAnnotations(openWorldHint=False, readOnlyHint=True),
             }
         )
 
         call_read = self._make_categorized_proxy(
             proxy_name=self._call_read_name,
             category="read",
-            annotations=ToolAnnotations(readOnlyHint=True),
+            annotations=ToolAnnotations(openWorldHint=True, readOnlyHint=True),
             description=self._proxy_descs["read"],
         )
 
         call_write = self._make_categorized_proxy(
             proxy_name=self._call_write_name,
             category="write",
-            annotations=ToolAnnotations(destructiveHint=True),
+            annotations=ToolAnnotations(openWorldHint=True, destructiveHint=True),
             description=self._proxy_descs["write"],
         )
 
         call_delete = self._make_categorized_proxy(
             proxy_name=self._call_delete_name,
             category="delete",
-            annotations=ToolAnnotations(destructiveHint=True),
+            annotations=ToolAnnotations(openWorldHint=False, destructiveHint=True),
             description=self._proxy_descs["delete"],
         )
 
@@ -506,21 +506,21 @@ class CategorizedSearchTransform(BM25SearchTransform):
             return self._make_categorized_proxy(
                 self._call_read_name,
                 "read",
-                ToolAnnotations(readOnlyHint=True),
+                ToolAnnotations(openWorldHint=True, readOnlyHint=True),
                 self._proxy_descs["read"],
             )
         if name == self._call_write_name:
             return self._make_categorized_proxy(
                 self._call_write_name,
                 "write",
-                ToolAnnotations(destructiveHint=True),
+                ToolAnnotations(openWorldHint=True, destructiveHint=True),
                 self._proxy_descs["write"],
             )
         if name == self._call_delete_name:
             return self._make_categorized_proxy(
                 self._call_delete_name,
                 "delete",
-                ToolAnnotations(destructiveHint=True),
+                ToolAnnotations(openWorldHint=False, destructiveHint=True),
                 self._proxy_descs["delete"],
             )
         return await super().get_tool(name, call_next, version=version)

@@ -242,6 +242,42 @@ class TestToolAnnotations:
             "the annotations dict in the self.mcp.tool(...) call in server.py."
         )
 
+    def test_search_proxy_tools_have_open_world_hint(self):
+        """Runtime tool-search proxies must also set openWorldHint.
+
+        When ENABLE_TOOL_SEARCH=true, CategorizedSearchTransform builds
+        ha_search_tools and the ha_call_* proxies at runtime via
+        ToolAnnotations(...), which the src/ha_mcp/tools scan never sees. Assert
+        every ToolAnnotations construction in categorized_search.py sets
+        openWorldHint so those proxies don't inherit the implicit default.
+        """
+        transform_py = get_tools_dir().parent / "transforms" / "categorized_search.py"
+        tree = ast.parse(
+            transform_py.read_text(encoding="utf-8"), filename=str(transform_py)
+        )
+        constructions = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "ToolAnnotations"
+        ]
+        assert constructions, (
+            "no ToolAnnotations(...) constructions found in categorized_search.py "
+            "-- the scanner's shape assumption drifted"
+        )
+
+        missing = sum(
+            1
+            for c in constructions
+            if not any(kw.arg == "openWorldHint" for kw in c.keywords)
+        )
+        assert missing == 0, (
+            f"{missing} of {len(constructions)} ToolAnnotations(...) in "
+            "categorized_search.py omit openWorldHint; the runtime search proxies "
+            "would inherit the MCP default. Set it explicitly on each proxy."
+        )
+
     def test_all_tools_have_tags(self):
         """Every tool must have a tags= parameter for categorization."""
         tools = get_all_tools()
