@@ -310,9 +310,7 @@ class TestPrebindLegacyOAuthViews:
         eentry._prebind_legacy_oauth_views(hass, self._legacy_entry())
 
         assert hass.http.register_view.call_count == 2  # /authorize + /token
-        assert (
-            hass.data.get(oauth_legacy.OAUTH_ROUTE_OWNER_KEY) == oauth_legacy._DOMAIN
-        )
+        assert hass.data.get(oauth_legacy.OAUTH_ROUTE_OWNER_KEY) == oauth_legacy._DOMAIN
 
     def test_non_legacy_mode_binds_nothing(self):
         hass = _make_hass()
