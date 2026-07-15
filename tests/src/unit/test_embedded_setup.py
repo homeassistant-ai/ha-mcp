@@ -572,6 +572,34 @@ class TestSurfaceConnectUrls:
         assert "sec-xyz789" in caplog.text
         assert "cid-abc123" not in self._message()
         assert "sec-xyz789" not in self._message()
+        # Live views (no pending restart): no not-live caveat.
+        assert "not live until the restart" not in caplog.text
+
+    def test_legacy_first_enable_logs_creds_with_not_live_caveat(self, caplog):
+        # Review finding on #1880: first-enable mid-session late-binds the
+        # views, so the credentials ARE the bound identity (logged in full)
+        # but /authorize is not live until the restart the repair asks for --
+        # the log must say so, matching the options hint and regenerate text.
+        import logging
+
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(
+                hass,
+                entry,
+                esetup.WEBHOOK_AUTH_LEGACY,
+                oauth_client_id="cid-abc123",
+                oauth_client_secret="sec-xyz789",
+                oauth_creds_active=True,
+                oauth_restart_pending=True,
+            )
+        # Credentials still shown (they are the ones that will be served)...
+        assert "cid-abc123" in caplog.text
+        assert "sec-xyz789" in caplog.text
+        # ...with the not-live-until-restart caveat.
+        assert "not live until the restart" in caplog.text
 
     def test_legacy_pending_rotation_withholds_creds_from_log(self, caplog):
         # Review finding on #1880: while a rotation is pending the restart,

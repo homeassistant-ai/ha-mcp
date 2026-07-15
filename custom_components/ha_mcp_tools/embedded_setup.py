@@ -159,6 +159,7 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
             oauth_client_id=oauth_client_id,
             oauth_client_secret=oauth_client_secret,
             oauth_creds_active=oauth_creds_active,
+            oauth_restart_pending=oauth_restart_needed,
         )
         # Conversation-agent LLM API (#1745), gated on its option (default on).
         # Advisory: registration failures are contained inside (logged, feature
@@ -306,6 +307,7 @@ def _surface_connect_urls(
     oauth_client_id: str | None = None,
     oauth_client_secret: str | None = None,
     oauth_creds_active: bool = True,
+    oauth_restart_pending: bool = False,
 ) -> None:
     """Log the connect URLs and (re)create a persistent notification."""
     urls = build_connect_urls(hass, entry, webhook_enabled=webhook_enabled)
@@ -343,6 +345,21 @@ def _surface_connect_urls(
             log_message += (
                 f"\n  OAuth Client ID:     {oauth_client_id}"
                 f"\n  OAuth Client Secret: {oauth_client_secret}"
+            )
+            if oauth_restart_pending:
+                # First-enable mid-session late-binds the root views, so
+                # /authorize is not live until the restart the repair asks
+                # for. The credentials ARE the ones that will be served
+                # (oauth_creds_active is True), but pasting them now gets a
+                # connection that fails until the restart — same caveat the
+                # rotation branch, the options hint, and the oauth_regenerate
+                # help text carry.
+                log_message += (
+                    "\n  Legacy OAuth is not live until the restart Home "
+                    "Assistant is asking for; these credentials work once "
+                    "you restart."
+                )
+            log_message += (
                 "\n  Paste both into your MCP client's OAuth connector setup "
                 "(e.g. Google Gemini Spark: Advanced settings)."
             )

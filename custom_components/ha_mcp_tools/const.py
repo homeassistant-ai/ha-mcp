@@ -346,7 +346,8 @@ DATA_SECRET_PATH = "secret_path"
 # string (entry.data must be JSON-serializable, so raw bytes aren't stored
 # directly) — the provider converts it with bytes.fromhex(). The signed token
 # payload carries the client_id (not the secret), so rotating the client_id
-# revokes every outstanding token (see LegacyOAuthProvider._validate_token).
+# revokes every outstanding token at the restart that rebinds the views (see
+# LegacyOAuthProvider._validate_token).
 # Because validation never involves the client_secret, a secret-only override
 # change instead rotates the signing key, evicting outstanding tokens at the
 # restart that activates the new credentials (see

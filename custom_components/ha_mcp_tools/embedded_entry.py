@@ -307,8 +307,9 @@ def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
     Mirrors the ``OPT_REGENERATE_SECRETS`` shape above: ``OPT_OAUTH_REGENERATE``
     is one-shot, minting a fresh client_id/client_secret and clearing itself
     plus the two override fields. The regenerate path and a client_id override
-    leave ``signing_key`` alone — the new client_id already revokes every
-    outstanding token, because the signed token payload carries ``cid`` (see
+    leave ``signing_key`` alone — the new client_id revokes every outstanding
+    token at the restart that rebinds the views, because the signed token
+    payload carries ``cid`` (see
     ``oauth_legacy.LegacyOAuthProvider._validate_token``). A client_secret
     override change is the one path that DOES rotate the signing key: token
     validation never involves the secret, so without the rotation a
@@ -346,6 +347,24 @@ def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
             # docstring for why a secret-only rotation must not leave them
             # valid for the rest of their TTL.
             data[DATA_OAUTH_SIGNING_KEY] = secrets.token_hex(32)
+            changed = True
+        # Consume the override fields once applied — a DELIBERATE divergence
+        # from the webhook_id / secret_path overrides above, which persist.
+        # entry.options is readable through the server's own tools
+        # (ha_get_integration(include_options=True) rebuilds it from the
+        # options-form suggested_values), so a rotated client_secret left here
+        # in cleartext would let a pre-restart old-identity token holder read
+        # the NEW secret that way — the exact party the rotation evicts, and
+        # the same leak the startup log withholds. The resolved values live in
+        # entry.data and on the admin-only Configure screen
+        # (config_flow._oauth_creds_hint), so nothing is lost. Cleared even
+        # when the override matched the current value: the cleartext must not
+        # linger regardless of whether it changed data.
+        if options.get(OPT_OAUTH_CLIENT_ID):
+            options[OPT_OAUTH_CLIENT_ID] = ""
+            changed = True
+        if options.get(OPT_OAUTH_CLIENT_SECRET):
+            options[OPT_OAUTH_CLIENT_SECRET] = ""
             changed = True
 
     if not data.get(DATA_OAUTH_CLIENT_ID):

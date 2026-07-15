@@ -1068,6 +1068,9 @@ class TestEnsureLegacyOAuthSecrets:
         # A client_id change revokes outstanding tokens via the cid claim at
         # the restart that rebinds the views -- no signing-key rotation needed.
         assert data[DATA_OAUTH_SIGNING_KEY] == "cc" * 32
+        # The override is consumed out of options (cleartext must not linger
+        # where ha_get_integration(include_options=True) can read it).
+        assert options[OPT_OAUTH_CLIENT_ID] == ""
 
     def test_override_adopts_user_supplied_client_secret(self):
         data = {
@@ -1087,8 +1090,14 @@ class TestEnsureLegacyOAuthSecrets:
         # read the new secret from the admin log through the server itself).
         assert data[DATA_OAUTH_SIGNING_KEY] != "dd" * 32
         bytes.fromhex(data[DATA_OAUTH_SIGNING_KEY])
+        # Consumed out of options — the cleartext new secret must not stay
+        # readable via ha_get_integration(include_options=True).
+        assert options[OPT_OAUTH_CLIENT_SECRET] == ""
 
-    def test_matching_override_is_not_reported_as_a_change(self):
+    def test_matching_override_is_still_consumed_from_options(self):
+        # Even when the override equals the current value (no data change),
+        # the cleartext copy must be cleared out of options -- so this now
+        # reports a change (it did before the security fix land).
         data = {
             DATA_OAUTH_CLIENT_ID: "already-set",
             DATA_OAUTH_CLIENT_SECRET: "s",
@@ -1098,4 +1107,7 @@ class TestEnsureLegacyOAuthSecrets:
 
         changed = eentry._ensure_legacy_oauth_secrets(data, options)
 
-        assert changed is False
+        assert changed is True
+        assert data[DATA_OAUTH_CLIENT_ID] == "already-set"
+        assert data[DATA_OAUTH_SIGNING_KEY] == "ee" * 32  # unchanged
+        assert options[OPT_OAUTH_CLIENT_ID] == ""
