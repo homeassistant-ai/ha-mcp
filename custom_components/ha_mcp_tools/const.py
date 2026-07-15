@@ -343,8 +343,10 @@ DATA_SECRET_PATH = "secret_path"
 # string (entry.data must be JSON-serializable, so raw bytes aren't stored
 # directly) — the provider converts it with bytes.fromhex(). The signed token
 # payload carries the client_id (not the secret), so rotating the client_id
-# revokes every outstanding token (see LegacyOAuthProvider._validate_token);
-# rotating only the client_secret does not. Neither rotates the signing key.
+# revokes every outstanding token (see LegacyOAuthProvider._validate_token).
+# Because validation never involves the client_secret, a secret-only override
+# change instead rotates the signing key to get the same eviction (see
+# embedded_entry._ensure_legacy_oauth_secrets).
 DATA_OAUTH_CLIENT_ID = "oauth_client_id"
 DATA_OAUTH_CLIENT_SECRET = "oauth_client_secret"
 DATA_OAUTH_SIGNING_KEY = "oauth_signing_key"

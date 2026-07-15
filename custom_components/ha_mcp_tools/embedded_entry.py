@@ -306,11 +306,18 @@ def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
 
     Mirrors the ``OPT_REGENERATE_SECRETS`` shape above: ``OPT_OAUTH_REGENERATE``
     is one-shot, minting a fresh client_id/client_secret and clearing itself
-    plus the two override fields. ``signing_key`` is NEVER rotated here —
-    rotating the client_id already revokes every outstanding token, because
-    the signed token payload carries ``cid`` (see
-    ``oauth_legacy.LegacyOAuthProvider._validate_token``); the only way to
-    invalidate the signing key itself is to remove and re-add the entry.
+    plus the two override fields. The regenerate path and a client_id override
+    leave ``signing_key`` alone — the new client_id already revokes every
+    outstanding token, because the signed token payload carries ``cid`` (see
+    ``oauth_legacy.LegacyOAuthProvider._validate_token``). A client_secret
+    override change is the one path that DOES rotate the signing key: token
+    validation never involves the secret, so without the rotation a
+    secret-only change would leave outstanding tokens valid for their full
+    TTL — long enough for the evicted holder to read the NEW secret from the
+    admin startup log through the server's own log tools and re-mint
+    (review finding on #1880). Rotating the signing key evicts every
+    outstanding token at the restart the credential-change repair already
+    requires.
 
     Returns True if ``data``/``options`` were mutated.
     """
@@ -333,6 +340,10 @@ def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
             and data.get(DATA_OAUTH_CLIENT_SECRET) != client_secret_override
         ):
             data[DATA_OAUTH_CLIENT_SECRET] = client_secret_override
+            # Evict outstanding tokens along with the old secret — see the
+            # docstring for why a secret-only rotation must not leave them
+            # valid for the rest of their TTL.
+            data[DATA_OAUTH_SIGNING_KEY] = secrets.token_hex(32)
             changed = True
 
     if not data.get(DATA_OAUTH_CLIENT_ID):
