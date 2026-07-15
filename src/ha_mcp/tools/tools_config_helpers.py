@@ -1357,21 +1357,36 @@ def _flatten_helper_list_result(result: Any) -> list[Any]:
     """Flatten a {type}/list WS response into a flat list of helper dicts.
 
     Handles the person/list shape ({"storage": [...], "config": [...]}) and
-    the standard list shape ([...]).
+    the standard list shape ([...]). An unrecognised shape yields an empty
+    list, which downstream is indistinguishable from a helper type that has no
+    entries, so it is logged rather than dropped in silence.
     """
     if isinstance(result, dict):
         inner = result.get("result", [])
         if isinstance(inner, dict):
             items: list[Any] = []
+            matched = False
             for key in ("storage", "config"):
                 sub = inner.get(key)
                 if isinstance(sub, list):
+                    matched = True
                     items.extend(sub)
+            if not matched:
+                logger.warning(
+                    "Helper listing has neither a 'storage' nor a 'config' list "
+                    "(keys: %s); treating it as empty",
+                    sorted(inner),
+                )
             return items
         if isinstance(inner, list):
             return inner
     if isinstance(result, list):
         return result
+    logger.warning(
+        "Cannot flatten a helper listing: expected a list or a storage/config "
+        "split, got %s; treating it as empty",
+        type(result).__name__,
+    )
     return []
 
 
@@ -4081,11 +4096,23 @@ class HelperConfigTools:
             )
         for helper_type in sorted(SIMPLE_HELPER_TYPES - covered_set):
             legacy = await self._legacy_helper_list(helper_type)
+            skipped = 0
             for item in legacy.get("helpers", []):
                 if isinstance(item, dict):
                     row = dict(item)
                     row.setdefault("helper_type", helper_type)
                     helpers.append(row)
+                else:
+                    skipped += 1
+            if skipped:
+                # This is how the unflattened person/list dict used to vanish:
+                # iterating it yielded its keys, and each failed the check here.
+                logger.warning(
+                    "Dropped %d unrecognised item(s) from the %s listing while "
+                    "merging all types; the merged listing is incomplete",
+                    skipped,
+                    helper_type,
+                )
 
         return {
             "success": True,

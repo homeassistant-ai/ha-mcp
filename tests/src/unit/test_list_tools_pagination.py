@@ -252,6 +252,53 @@ def _component_flow_result(count: int) -> dict[str, Any]:
     }
 
 
+class TestFlattenHelperListResult:
+    """An unrecognised {type}/list shape must not pass as an empty collection.
+
+    The flattened list feeds ``count`` and the record lists, so a shape that
+    yields nothing reaches the caller as a legitimate-looking "0 helpers".
+    """
+
+    def test_unrecognised_result_type_is_logged(self, caplog):
+        with caplog.at_level("WARNING"):
+            items = tools_config_helpers._flatten_helper_list_result("not a shape")
+
+        assert items == []
+        assert any("Cannot flatten" in rec.message for rec in caplog.records)
+
+    def test_split_shape_without_the_expected_lists_is_logged(self, caplog):
+        with caplog.at_level("WARNING"):
+            items = tools_config_helpers._flatten_helper_list_result(
+                {"result": {"unexpected": [{"id": "p1"}]}}
+            )
+
+        assert items == []
+        assert any("neither a 'storage'" in rec.message for rec in caplog.records)
+
+    def test_empty_person_split_is_not_flagged(self, caplog):
+        """A person type with no entries is legitimately empty, not malformed."""
+        with caplog.at_level("WARNING"):
+            items = tools_config_helpers._flatten_helper_list_result(
+                {"result": {"storage": [], "config": []}}
+            )
+
+        assert items == []
+        assert not caplog.records, f"empty is not a defect: {caplog.records}"
+
+    def test_known_shapes_are_not_flagged(self, caplog):
+        with caplog.at_level("WARNING"):
+            flat = tools_config_helpers._flatten_helper_list_result(
+                {"result": [{"id": "h1"}]}
+            )
+            split = tools_config_helpers._flatten_helper_list_result(
+                {"result": {"storage": [{"id": "p1"}], "config": [{"id": "p2"}]}}
+            )
+
+        assert flat == [{"id": "h1"}]
+        assert [h["id"] for h in split] == ["p1", "p2"]
+        assert not caplog.records
+
+
 class TestPaginateHelpersGuard:
     """The guard for a builder handing the slice something other than a list.
 
@@ -439,6 +486,55 @@ class TestListHelpersPagination:
         assert len(result["helpers"]) == 100
         assert result["has_more"] is True
         assert result["next_offset"] == 100
+
+    async def test_all_types_merge_reports_records_it_cannot_use(self, caplog):
+        """A legacy record the merge cannot use must not vanish quietly.
+
+        The merge keeps only dict records. That check is what silently ate the
+        person listing while its split shape went unflattened, so if it ever
+        drops something again it has to say so.
+        """
+        caps = {
+            "schema_version": 1,
+            "component_version": "1.1.0",
+            "capabilities": ["helpers_list"],
+            "limits": {},
+        }
+        component_result = {
+            "helpers": [],
+            "count": 0,
+            "covered_types": sorted(
+                tools_config_helpers.SIMPLE_HELPER_TYPES - {"tag"}
+                | tools_config_helpers.FLOW_HELPER_TYPES
+            ),
+        }
+
+        class _MalformedTagClient:
+            base_url = "http://ha.local:8123"
+            token = "tok"
+
+            async def send_websocket_message(
+                self, msg: dict[str, Any]
+            ) -> dict[str, Any]:
+                if msg.get("type") == "tag/list":
+                    # A record the merge cannot use, next to a usable one.
+                    return {
+                        "success": True,
+                        "result": ["not-a-record", {"id": "tag-42"}],
+                    }
+                return {"success": True, "result": []}
+
+        ws = make_ws(
+            "ha_mcp_tools/helpers_list", info_result=caps, cmd_result=component_result
+        )
+        with patch_ws(ws, tools_config_helpers), caplog.at_level("WARNING"):
+            list_helpers = _build_list_helpers(_MalformedTagClient())
+            result = await list_helpers("all")
+
+        assert [h["id"] for h in result["helpers"]] == ["tag-42"]
+        assert any(
+            "Dropped 1 unrecognised item" in rec.message for rec in caplog.records
+        ), f"the dropped record must be reported: {[r.message for r in caplog.records]}"
 
     async def test_all_types_mode_last_page_holds_the_merged_tag_record(self):
         """The legacy-merged record is reachable via offset, not stranded."""
