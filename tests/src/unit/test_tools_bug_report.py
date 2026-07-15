@@ -939,6 +939,15 @@ class TestSanitizeLogText:
             assert secret not in result, f"{secret!r} leaked in {result!r}"
             assert "[REDACTED]" in result
 
+    def test_redacts_legacy_oauth_client_secret_log_line(self):
+        # The in-process component logs the legacy OAuth Client Secret at INFO,
+        # so it reaches home-assistant.log (readable by a trusted MCP client via
+        # ha_get_logs — by design). A shared bug report must still scrub it; the
+        # generic "secret:" key=value rule covers the logged line.
+        result = _sanitize_log_text("  OAuth Client Secret: s3cr3tV4lue_Zz-99aa")
+        assert "s3cr3tV4lue" not in result
+        assert "[REDACTED]" in result
+
     def test_bearer_preserves_casing(self):
         # All casings get redacted via re.IGNORECASE; the lambda echoes
         # m.group(1) so the original casing is preserved in the output.

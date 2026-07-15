@@ -176,6 +176,33 @@ class TestTokenCodec:
         new_provider = _make_provider(client_id="new-client", signing_key=key)
         assert new_provider.validate_access_token(token) is False
 
+    def test_non_ascii_pre_signature_segment_rejected(self):
+        # A bearer whose body segment carries a non-ASCII char makes
+        # body.encode("ascii") raise UnicodeEncodeError inside _validate_token;
+        # that must be caught (return False), not escape the webhook gate.
+        provider = _make_provider()
+        assert provider.validate_access_token("é.c2ln") is False
+
+
+class TestProviderConstruction:
+    def test_rejects_empty_client_id(self):
+        with pytest.raises(ValueError, match="client_id"):
+            oauth_legacy.LegacyOAuthProvider(
+                "", CLIENT_SECRET, secrets.token_bytes(32), lambda: WEBHOOK_AUTH_LEGACY
+            )
+
+    def test_rejects_empty_client_secret(self):
+        with pytest.raises(ValueError, match="client_secret"):
+            oauth_legacy.LegacyOAuthProvider(
+                CLIENT_ID, "", secrets.token_bytes(32), lambda: WEBHOOK_AUTH_LEGACY
+            )
+
+    def test_rejects_short_signing_key(self):
+        with pytest.raises(ValueError, match="at least 32 bytes"):
+            oauth_legacy.LegacyOAuthProvider(
+                CLIENT_ID, CLIENT_SECRET, b"too-short", lambda: WEBHOOK_AUTH_LEGACY
+            )
+
 
 class TestValidateBearer:
     def test_accepts_valid_bearer_access_token(self):
@@ -260,6 +287,13 @@ class TestPKCECodes:
         provider = _make_provider()
         bad_verifier = "a" * 42 + "!"  # right length, disallowed char
         assert provider.consume_code("any-code", REDIRECT_URI, bad_verifier) is False
+
+    def test_verifier_over_max_length_rejected(self):
+        # RFC 7636 §4.1 caps the verifier at 128 chars; one over must be
+        # rejected on length before any code lookup or hashing.
+        provider = _make_provider()
+        too_long = "a" * (oauth_legacy.PKCE_VERIFIER_MAX + 1)
+        assert provider.consume_code("any-code", REDIRECT_URI, too_long) is False
 
     def test_issue_code_refuses_new_codes_at_capacity(self):
         # Abuse guard: once the pending-code store is full, issue_code returns
