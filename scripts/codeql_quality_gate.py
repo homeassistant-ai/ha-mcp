@@ -126,22 +126,9 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "above. Matches how the codebase suppresses other deliberate catches.",
     ),
     # NOTE: CodeQL emits the same generic message for every py/mixed-returns
-    # finding, so this entry is PATH-WIDE for tools_mcp_component.py (a future
-    # genuinely mixed-returns function in this file would be suppressed too).
-    # Accepted: the file is small and the rationale below names the exact
-    # function - re-audit if the file grows.
-    (
-        "py/mixed-returns",
-        "src/ha_mcp/tools/tools_mcp_component.py",
-        "Mixing implicit and explicit returns",
-        "False positive on _download_component_with_retry's retry-loop-then-raise "
-        "shape: every exit past the loop goes through raise_tool_error, which is "
-        "typed '-> NoReturn' (see helpers.py), so there is no implicit None "
-        "return for CodeQL's heuristic to have correctly caught. mypy already "
-        "confirms this file is clean under that typing.",
-    ),
-    # NOTE: PATH-WIDE for the same reason as the tools_mcp_component.py entry
-    # above (same generic CodeQL message) -- re-audit if the file grows.
+    # finding, so this entry is PATH-WIDE for server.py (a future genuinely
+    # mixed-returns function in this file would be suppressed too). Accepted:
+    # the rationale below names the exact functions - re-audit if the file grows.
     (
         "py/mixed-returns",
         "src/ha_mcp/server.py",

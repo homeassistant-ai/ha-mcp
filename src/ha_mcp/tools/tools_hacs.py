@@ -687,7 +687,7 @@ HACS_REPOSITORY_SIGNAL = "hacs_dispatch_repository"
 # because the constraint is "HACS finishes registration": adding a
 # fresh repo makes HACS clone/index it over the network, which on a
 # slow link (or a loaded HAOS E2E runner) can exceed 30 s — the prior
-# value, which flaked ``test_install_mcp_tools_*`` with "Could not
+# value, which flaked the HACS add-repository e2e path with "Could not
 # find repository ID after adding". The subscription nudges us the
 # instant registration lands, so the happy path returns in seconds and
 # this larger cap only ever costs wall-clock on a genuinely slow add.

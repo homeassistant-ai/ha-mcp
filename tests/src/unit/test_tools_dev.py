@@ -295,6 +295,26 @@ class TestManageServer:
         }
         client.abort_options_flow.assert_awaited_with("flow-1")
 
+    async def test_info_quietly_aborts_the_tools_entry_info_form(self):
+        # The tools entry's options flow is an OPEN informational form since
+        # #1853 (it used to abort server-side); the probe must close it after
+        # rejecting it, or every info/update/restart probe leaks a flow.
+        client = _mock_client(
+            entries=[{"entry_id": "tools-e"}, {"entry_id": "server-e"}],
+            flows=[
+                {
+                    "type": "form",
+                    "flow_id": "tools-flow",
+                    "step_id": "tools_info",
+                    "data_schema": [],
+                },
+                dict(_SERVER_FLOW),
+            ],
+        )
+        result = await DevTools(client).ha_dev_manage_server(action="info")
+        assert result["data"]["component_server_entry"]["entry_id"] == "server-e"
+        client.abort_options_flow.assert_any_await("tools-flow")
+
     async def test_update_source_requires_params(self):
         with pytest.raises(ToolError, match="channel"):
             await DevTools(_mock_client()).ha_dev_manage_server(action="update_source")

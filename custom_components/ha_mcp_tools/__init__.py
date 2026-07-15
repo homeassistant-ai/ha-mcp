@@ -2003,7 +2003,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up the HA MCP Tools services from a config entry."""
+    """Set up the File & YAML services (tools entry) from a config entry."""
     config_dir = Path(hass.config.config_dir)
 
     # Bootstrap the caller-auth token. Generated on first setup, persisted
@@ -2688,9 +2688,9 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     async_register_commands(hass)
 
     # Entry-level finalization: pick up the #1853 rename on existing installs and
-    # give the tools entry a device. Both are independent of the services above
-    # and cosmetic to the integration's core value, so a read failure degrades
-    # rather than blocking setup.
+    # give the tools entry a device. Both are cosmetic to the integration's core
+    # value; the one fallible step (the manifest version read below) degrades to
+    # the compiled-in fallback rather than blocking setup.
     # Retitle an entry still carrying the pre-rename default; a user-customized
     # title is left untouched (only the exact old default migrates). The tools
     # entry registers no update listener, so this async_update_entry cannot
@@ -2724,12 +2724,12 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         configuration_url="https://github.com/homeassistant-ai/ha-mcp",
     )
 
-    _LOGGER.info("HA MCP Tools initialized with file management services")
+    _LOGGER.info("HA-MCP File & YAML Tools initialized with file management services")
     return True
 
 
 async def _async_unload_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload the HA MCP Tools services config entry."""
+    """Unload the File & YAML services (tools entry) config entry."""
     # Remove all services
     hass.services.async_remove(DOMAIN, SERVICE_EDIT_YAML_CONFIG)
     hass.services.async_remove(DOMAIN, SERVICE_LIST_FILES)
