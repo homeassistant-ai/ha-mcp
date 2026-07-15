@@ -11,10 +11,11 @@ records below the default limit stay exactly what they were, and the aggregate
 summaries that describe the whole collection (``inline_count`` / ``by_type``)
 must NOT shrink to the page.
 
-The helper suite covers both routes that can serve a listing — the legacy
-``{type}/list`` body and the component's merged all-types mode — because each
-builds its own envelope and the slice is applied at one shared normalization
-point rather than in each builder.
+The helper suite covers each envelope builder that can serve a listing — the
+legacy ``{type}/list`` body, the component's single-type route (storage and
+flow, via ``_shape_component_helpers_response``) and its merged all-types mode
+— because each builds its own envelope and the slice is applied at one shared
+normalization point rather than in each builder.
 """
 
 from __future__ import annotations
