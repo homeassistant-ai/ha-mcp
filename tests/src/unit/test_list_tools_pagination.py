@@ -252,6 +252,49 @@ def _component_flow_result(count: int) -> dict[str, Any]:
     }
 
 
+class TestPaginateHelpersGuard:
+    """The guard for a builder handing the slice something other than a list.
+
+    Unreachable through the tool once every builder flattens, so it is driven
+    directly. It must not stay quiet: the caller is an agent that never sees
+    server logs, and an envelope without pagination metadata reads as "the
+    collection fits on one page".
+    """
+
+    def test_non_list_is_returned_unpaginated_but_warns(self):
+        envelope = {
+            "success": True,
+            "helper_type": "person",
+            "count": 2,
+            "helpers": {"storage": [], "config": []},
+        }
+
+        result = tools_config_helpers._paginate_helpers_response(envelope, 0, 100)
+
+        assert result["helpers"] == envelope["helpers"]
+        assert set(result) & _PAGINATION_KEYS == {"count"}, (
+            f"an unpaginated envelope must not claim pagination metadata: {result}"
+        )
+        assert any("could not be paginated" in w for w in result["warnings"])
+        assert "dict" in result["warnings"][0]
+
+    def test_existing_warnings_are_kept_and_not_mutated(self):
+        envelope = {
+            "success": True,
+            "helper_type": "person",
+            "helpers": {},
+            "warnings": ["served via legacy path"],
+        }
+
+        result = tools_config_helpers._paginate_helpers_response(envelope, 0, 100)
+
+        assert result["warnings"][0] == "served via legacy path"
+        assert len(result["warnings"]) == 2
+        assert envelope["warnings"] == ["served via legacy path"], (
+            "the caller's warnings list must not be mutated"
+        )
+
+
 class TestListHelpersPagination:
     async def test_legacy_path_paginates(self):
         client = _LegacyHelperClient(_legacy_helper_items(250))

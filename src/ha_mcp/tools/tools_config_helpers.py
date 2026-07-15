@@ -3525,16 +3525,28 @@ def _paginate_helpers_response(
     if not isinstance(helpers, list):
         # Every builder owes this function a flat list; anything else is a bug in
         # the caller (a {type}/list shape that escaped _flatten_helper_list_result).
-        # Return the envelope unpaginated rather than raising — the records are
-        # still usable — but never silently: the missing metadata would otherwise
-        # read as "collection fits on one page".
+        # The records are still usable, so return them unpaginated rather than
+        # raising -- but say so in warnings[], not just the log: the caller is an
+        # agent that never sees server logs, and absent metadata otherwise reads
+        # as "the collection fits on one page".
+        shape = type(helpers).__name__
         logger.warning(
-            "Cannot paginate %r listing: expected a list of helpers, got %s — "
+            "Cannot paginate %r listing: expected a list of helpers, got %s; "
             "returning the envelope unpaginated",
             response.get("helper_type"),
-            type(helpers).__name__,
+            shape,
         )
-        return response
+        warning = (
+            f"Listing could not be paginated (expected a list of helpers, got "
+            f"{shape}); returned in full, without pagination metadata."
+        )
+        existing = response.get("warnings")
+        return {
+            **response,
+            "warnings": [*existing, warning]
+            if isinstance(existing, list)
+            else [warning],
+        }
     total_count = len(helpers)
     page = helpers[offset : offset + limit]
     return {
