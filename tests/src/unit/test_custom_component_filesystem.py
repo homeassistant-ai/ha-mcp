@@ -4,6 +4,7 @@ These tests focus on the pure Python utility functions that don't require
 Home Assistant dependencies.
 """
 
+import json
 import os
 import shutil
 import sys
@@ -33,10 +34,13 @@ sys.modules["homeassistant.loader"] = MagicMock()
 
 # Now we can import the functions
 from custom_components.ha_mcp_tools import (  # noqa: E402
+    _PACKAGE_DIR_CACHE,
     _decode_legacy_backup_name,
     _delete_file_sync,
     _detect_package_dirs,
+    _dir_in_package_dir,
     _extract_yaml_subtree,
+    _extract_yaml_views,
     _is_path_allowed_for_dir,
     _is_path_allowed_for_read,
     _is_within_config_dir,
@@ -46,6 +50,7 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
     _mask_secrets_content,
     _migrate_legacy_backup_dir,
     _normalize_extra_dir,
+    _package_dir_markers_cached,
     _package_folder_relative_to_config,
     _parse_and_validate_yaml_path,
     _path_in_package_dir,
@@ -292,8 +297,21 @@ password: 'mypassword'
         assert "mypassword" not in result
         assert "[MASKED]" in result
 
+    def test_mask_marker_reparses_as_a_scalar(self):
+        """The masked text is itself re-parsed by read_file's yaml_path views,
+        so the marker must be quoted: an unquoted ``[MASKED]`` is flow-sequence
+        syntax and would come back as the list ``["MASKED"]``."""
+        import io
+
+        from custom_components.ha_mcp_tools.yaml_rt import make_yaml, yaml_jsonify
+
+        result = _mask_secrets_content("api_key: secret123\n")
+
+        reparsed = make_yaml().load(io.StringIO(result))
+        assert yaml_jsonify(reparsed) == {"api_key": "[MASKED]"}
+
     def test_drops_comments_and_blank_lines(self):
-        """The structural mask emits only ``key: [MASKED]`` lines. Comments and
+        """The structural mask emits only ``key: "[MASKED]"`` lines. Comments and
         blank lines are intentionally not reproduced — they are not needed to
         show which keys exist, and dropping them avoids leaking a secret that a
         user pasted into a comment."""
@@ -304,7 +322,7 @@ password: 'mypassword'
 
         assert "secret123" not in result
         assert "pass456" not in result
-        assert result == "api_key: [MASKED]\npassword: [MASKED]"
+        assert result == 'api_key: "[MASKED]"\npassword: "[MASKED]"'
 
     def test_preserves_key_names(self):
         """Should preserve key names but mask values."""
@@ -328,7 +346,7 @@ token: tok789
         result = _mask_secrets_content("outer:\n  inner_secret: value\n")
 
         assert "value" not in result
-        assert result == "outer: [MASKED]"
+        assert result == 'outer: "[MASKED]"'
 
     def test_block_scalar_leaves_no_secret_bytes(self):
         """Core advisory PoC (GHSA-mc92-ww4q-6fg4): a block scalar's continuation
@@ -345,7 +363,7 @@ token: tok789
         assert "BEGIN OPENSSH" not in result
         assert "b3BlbnNzaC1rZXktdjEAAAAA" not in result
         assert "hunter2" not in result
-        assert result == "backup_ssh_key: [MASKED]\napi_password: [MASKED]"
+        assert result == 'backup_ssh_key: "[MASKED]"\napi_password: "[MASKED]"'
 
     def test_empty_or_non_mapping_withheld(self):
         """Empty file (None) or a top-level list/scalar: nothing to mask
@@ -362,7 +380,7 @@ token: tok789
     def test_custom_tag_does_not_crash(self):
         """The round-trip loader resolves HA-style custom tags instead of
         raising, so masking still produces a redacted key line."""
-        assert _mask_secrets_content("foo: !secret bar\n") == "foo: [MASKED]"
+        assert _mask_secrets_content("foo: !secret bar\n") == 'foo: "[MASKED]"'
 
     def test_yaml_anchors_do_not_leak_dereferenced_secrets(self):
         """A secret defined once via an anchor and reused via aliases is
@@ -371,7 +389,7 @@ token: tok789
         content = "base_token: &tok 'secret123'\nprod: *tok\ndev: *tok\n"
         result = _mask_secrets_content(content)
         assert "secret123" not in result
-        assert result == "base_token: [MASKED]\nprod: [MASKED]\ndev: [MASKED]"
+        assert result == 'base_token: "[MASKED]"\nprod: "[MASKED]"\ndev: "[MASKED]"'
 
 
 class TestFileOperationsIntegration:
@@ -882,6 +900,47 @@ class TestLegacyBackupServiceWiring:
         unload_src = inspect.getsource(_async_unload_tools_entry)
         assert "SERVICE_LIST_LEGACY_BACKUPS" in unload_src
         assert "SERVICE_READ_LEGACY_BACKUP" in unload_src
+
+
+class TestReadFileSecretsMaskingOrder:
+    """secrets.yaml masking must survive the yaml_path/include_parsed views.
+
+    The masking holds only because ``handle_read_file`` captures
+    ``full_content`` AFTER ``_mask_secrets_content`` and extracts the views
+    from that. Nothing else pins the ordering, so a future reorder that
+    captured ``full_content`` from the raw text would leak plaintext secrets
+    through ``subtree``/``parsed`` — the two views that did not exist when the
+    masking was written. Source-level guard, per the file's existing wiring
+    guards: the handler is a closure inside the setup entry, so it cannot be
+    called directly from a unit test. The behavioural half runs e2e
+    (test_yaml_read.py::TestSecretsMasking).
+    """
+
+    def _handler_source(self) -> str:
+        import inspect
+
+        from custom_components.ha_mcp_tools import _async_setup_tools_entry
+
+        src = inspect.getsource(_async_setup_tools_entry)
+        start = src.index("async def handle_read_file")
+        return src[start : src.index("async def handle_", start + 1)]
+
+    def test_full_content_is_captured_after_masking(self):
+        src = self._handler_source()
+        mask = src.index("_mask_secrets_content(content)")
+        capture = src.index("full_content = content")
+        assert mask < capture, (
+            "full_content must be captured AFTER _mask_secrets_content, or "
+            "yaml_path/include_parsed would extract from unmasked text"
+        )
+
+    def test_views_are_extracted_from_full_content(self):
+        """And the extraction must read that captured text, not raw content.
+
+        Handed to the executor as bare args, so the anchor carries no "(".
+        """
+        src = self._handler_source()
+        assert "_extract_yaml_views, full_content, yaml_path" in src
 
 
 class TestEditYamlConfigBackCompat:
@@ -1558,6 +1617,129 @@ class TestExtractYamlSubtree:
         assert _extract_yaml_subtree("key: [1, 2\n", "key") is None
 
 
+class TestExtractYamlViews:
+    """#1788: ``_extract_yaml_views`` backs read_file's yaml_path/include_parsed.
+    ``_extract_yaml_subtree`` is now a thin wrapper over it, so the text-view
+    contract above still pins that half.
+    """
+
+    def test_parsed_omitted_unless_requested(self):
+        views = _extract_yaml_views("rest:\n  method: GET\n", "rest")
+        assert views["subtree"] is not None
+        assert "parsed" not in views
+
+    def test_parsed_returns_structured_data(self):
+        views = _extract_yaml_views(
+            "rest:\n  method: GET\n  timeout: 5\n", "rest", True
+        )
+        assert views["parsed"] == {"method": "GET", "timeout": 5}
+
+    def test_parsed_keeps_secret_unresolved(self):
+        """The security property: a parsed view renders !secret in SOURCE form.
+
+        Resolving would require reading secrets.yaml, which this path never
+        does — so no plaintext secret can reach the response.
+        """
+        views = _extract_yaml_views(
+            "rest:\n  api_key: !secret alert2_api_key\n", "rest", True
+        )
+        assert views["parsed"] == {"api_key": "!secret alert2_api_key"}
+        # And the text view keeps the tag too.
+        assert "!secret alert2_api_key" in views["subtree"]
+
+    def test_parsed_keeps_include_unresolved(self):
+        views = _extract_yaml_views("group: !include groups.yaml\n", "group", True)
+        assert views["parsed"] == "!include groups.yaml"
+
+    def test_parsed_is_json_serializable(self):
+        # ruamel hands back CommentedMap/ScalarInt subclasses; the response is
+        # JSON-encoded on the way out, so plain types are the contract.
+        views = _extract_yaml_views(
+            "a:\n  n: 1\n  f: 1.5\n  b: true\n  s: x\n  z:\n  l: [1, 2]\n",
+            "a",
+            True,
+        )
+        assert json.dumps(views["parsed"])
+        assert views["parsed"] == {
+            "n": 1,
+            "f": 1.5,
+            "b": True,
+            "s": "x",
+            "z": None,
+            "l": [1, 2],
+        }
+
+    def test_parsed_anchored_bool_stays_a_bool(self):
+        """A bool carrying an anchor loads as ruamel's ScalarBoolean, which
+        subclasses int but NOT bool — so an isinstance(x, bool) check alone
+        lets it fall through to the int branch and serialize as 1/0."""
+        views = _extract_yaml_views("a:\n  on: &flag true\n  off: *flag\n", "a", True)
+        assert views["parsed"] == {"on": True, "off": True}
+
+    def test_parsed_non_finite_floats_render_to_source_form(self):
+        """.inf/.nan are valid YAML but have no JSON encoding, so they come
+        back as their source form rather than breaking the response."""
+        views = _extract_yaml_views(
+            "a:\n  hi: .inf\n  lo: -.inf\n  n: .nan\n", "a", True
+        )
+        assert views["parsed"] == {"hi": ".inf", "lo": "-.inf", "n": ".nan"}
+        assert json.dumps(views["parsed"], allow_nan=False)
+
+    def test_parsed_timestamps_render_as_iso_strings(self):
+        """!!timestamp comes back as date/datetime, which json cannot encode."""
+        views = _extract_yaml_views(
+            "a:\n  d: 2024-01-02\n  dt: 2024-01-02 03:04:05\n", "a", True
+        )
+        assert views["parsed"] == {"d": "2024-01-02", "dt": "2024-01-02T03:04:05"}
+        assert json.dumps(views["parsed"])
+
+    def test_present_but_null_key_is_a_match_not_an_absence(self):
+        """`default_config:` is a real key with no value — the text view must
+        come back so it does not read as "not defined"."""
+        views = _extract_yaml_views(
+            "default_config:\nhttp:\n  x: 1\n", "default_config", True
+        )
+        assert views["subtree"] is not None
+        assert views["parsed"] is None
+        assert "parse_error" not in views
+
+    def test_missing_key_yields_no_parsed(self):
+        views = _extract_yaml_views("a: 1\n", "nope", True)
+        assert views["subtree"] is None
+        assert views.get("parsed") is None
+
+    def test_malformed_yaml_yields_no_parsed(self):
+        views = _extract_yaml_views("key: [1, 2\n", "key", True)
+        assert views["subtree"] is None
+        assert "parsed" not in views
+
+    def test_malformed_yaml_reports_parse_error(self):
+        """A broken file must be distinguishable from one lacking the key.
+
+        Without this, one syntactically broken package in a glob reads as a
+        clean "the key is not defined anywhere".
+        """
+        views = _extract_yaml_views("key: [1, 2\n", "key")
+        assert views["subtree"] is None
+        assert "not valid YAML" in views["parse_error"]
+
+    def test_absent_key_reports_no_parse_error(self):
+        views = _extract_yaml_views("a: 1\n", "nope")
+        assert views["subtree"] is None
+        assert "parse_error" not in views
+
+    def test_parse_error_carries_position_but_no_file_content(self):
+        """ruamel embeds the offending source line in its message; that line
+        can hold an inline credential, so only the position is reported."""
+        secret = "hunter2-should-never-surface"
+        views = _extract_yaml_views(
+            f"rest:\n  api_key: {secret}\n  bad: [1, 2\n", "rest"
+        )
+        assert views["subtree"] is None
+        assert secret not in views["parse_error"]
+        assert "line" in views["parse_error"]
+
+
 class TestRecorderYamlKey:
     """#1852: recorder is editable via edit_yaml_config / ha_config_set_yaml.
 
@@ -1718,6 +1900,77 @@ class TestPathInPackageDir:
         assert _path_in_package_dir("packages/foo.yaml", None)
 
 
+class TestPackageDirMarkersCached:
+    """#1788: folder detection runs on every file op, and a glob fires one per
+    matched file, so the parse is cached behind an mtime signature covering
+    every file the loader read.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        _PACKAGE_DIR_CACHE.clear()
+        yield
+        _PACKAGE_DIR_CACHE.clear()
+
+    def test_second_call_does_not_reparse(self, tmp_path, monkeypatch):
+        p = _write_config(
+            tmp_path, "homeassistant:\n  packages: !include_dir_named pkgs\n"
+        )
+        assert _package_dir_markers_cached(p) == {"pkgs"}
+
+        def _boom(*_a, **_k):
+            raise AssertionError("cache miss: re-parsed an unchanged config")
+
+        monkeypatch.setattr(
+            "custom_components.ha_mcp_tools._load_package_dir_markers_tracked", _boom
+        )
+        assert _package_dir_markers_cached(p) == {"pkgs"}
+
+    def test_edit_invalidates(self, tmp_path):
+        p = _write_config(
+            tmp_path, "homeassistant:\n  packages: !include_dir_named pkgs\n"
+        )
+        assert _package_dir_markers_cached(p) == {"pkgs"}
+        _write_config(
+            tmp_path, "homeassistant:\n  packages: !include_dir_named other\n"
+        )
+        os.utime(p, ns=(0, 0))  # force a distinct mtime, not clock granularity
+        assert _package_dir_markers_cached(p) == {"other"}
+
+    def test_edit_to_included_file_invalidates(self, tmp_path):
+        """The reason the signature spans every file read, not just the root.
+
+        With the homeassistant: section split into an !include, keying on
+        configuration.yaml alone would serve a stale allowlist forever.
+        """
+        _write_config(tmp_path, "packages: !include_dir_named pkgs\n", name="ha.yaml")
+        p = _write_config(tmp_path, "homeassistant: !include ha.yaml\n")
+        assert _package_dir_markers_cached(p) == {"pkgs"}
+
+        (tmp_path / "ha.yaml").write_text(
+            "packages: !include_dir_named moved\n", encoding="utf-8"
+        )
+        os.utime(tmp_path / "ha.yaml", ns=(0, 0))
+        assert _package_dir_markers_cached(p) == {"moved"}
+
+    def test_creating_a_missing_include_invalidates(self, tmp_path):
+        """A missing include is stamped -1, so creating it later invalidates."""
+        p = _write_config(tmp_path, "homeassistant: !include later.yaml\n")
+        assert _package_dir_markers_cached(p) == set()
+
+        (tmp_path / "later.yaml").write_text(
+            "packages: !include_dir_named pkgs\n", encoding="utf-8"
+        )
+        assert _package_dir_markers_cached(p) == {"pkgs"}
+
+    def test_cached_set_is_not_mutable_through_caller(self, tmp_path):
+        p = _write_config(
+            tmp_path, "homeassistant:\n  packages: !include_dir_named pkgs\n"
+        )
+        _package_dir_markers_cached(p).add("injected")
+        assert _package_dir_markers_cached(p) == {"pkgs"}
+
+
 class TestDetectPackageDirs:
     """#1854: detection reads configuration.yaml and adds the packages fallback."""
 
@@ -1768,3 +2021,73 @@ class TestReadAllowlistPackageFolder:
 
     def test_default_packages_folder_still_allowed(self, tmp_path):
         assert _is_path_allowed_for_read(tmp_path, "packages/foo.yaml")
+
+
+class TestDirInPackageDir:
+    """#1788: folder-level twin of _path_in_package_dir, used by the lister."""
+
+    def test_matches_folder_itself_and_nested(self):
+        dirs = {"packages", "custom_packages"}
+        assert _dir_in_package_dir("packages", dirs)
+        assert _dir_in_package_dir("custom_packages/sub", dirs)
+
+    def test_sibling_prefix_not_matched(self):
+        assert not _dir_in_package_dir("packagesX", {"packages"})
+
+    def test_glob_metachar_folder_literal(self):
+        # Mirrors _path_in_package_dir: a folder named 'pkg[1]' matches itself,
+        # not the fnmatch expansion 'pkg1'.
+        assert _dir_in_package_dir("pkg[1]", {"pkg[1]"})
+        assert not _dir_in_package_dir("pkg1", {"pkg[1]"})
+
+    def test_no_default_packages_when_none(self):
+        # Deliberately UNLIKE _path_in_package_dir, which defaults to
+        # {"packages"}: this helper backs a check shared with write/delete, so
+        # omitting package_dirs must grant nothing.
+        assert not _dir_in_package_dir("packages", None)
+        assert not _dir_in_package_dir("packages", set())
+
+
+class TestListAllowlistPackageFolder:
+    """#1788: the lister honours the configured packages folder the way the
+    read allowlist already does (#1854) — a packages folder that can be read
+    file-by-file must also be enumerable, which is what cross-file key
+    discovery needs.
+    """
+
+    def test_packages_folder_listable_when_passed(self, tmp_path):
+        assert _is_path_allowed_for_dir(
+            tmp_path, "packages", ALLOWED_READ_DIRS, None, {"packages"}
+        )
+
+    def test_custom_folder_listable_when_detected(self, tmp_path):
+        assert _is_path_allowed_for_dir(
+            tmp_path,
+            "integrations",
+            ALLOWED_READ_DIRS,
+            None,
+            {"packages", "integrations"},
+        )
+
+    def test_packages_not_listable_without_package_dirs(self, tmp_path):
+        # Back-compat: callers that don't resolve the packages folder keep the
+        # historical (deny) behaviour.
+        assert not _is_path_allowed_for_dir(tmp_path, "packages", ALLOWED_READ_DIRS)
+
+    def test_write_dirs_never_gain_package_access(self, tmp_path):
+        """Security invariant: _is_path_allowed_for_dir is shared with
+        write_file and delete_file, which pass no package_dirs. A packages
+        folder must stay unwritable there — edit_yaml_config is the only write
+        path that may reach config YAML.
+        """
+        assert not _is_path_allowed_for_dir(tmp_path, "packages", ALLOWED_WRITE_DIRS)
+        assert not _is_path_allowed_for_dir(
+            tmp_path, "packages/lights.yaml", ALLOWED_WRITE_DIRS
+        )
+
+    def test_deny_floor_still_applies_to_package_dirs(self, tmp_path):
+        # The widened allow decision must not outrank the deny floor: a
+        # maliciously configured '.storage' packages folder stays blocked.
+        assert not _is_path_allowed_for_dir(
+            tmp_path, ".storage", ALLOWED_READ_DIRS, None, {".storage"}
+        )

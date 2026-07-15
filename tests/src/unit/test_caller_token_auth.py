@@ -571,13 +571,17 @@ class TestCallMcpToolsServiceInjectsToken:
                 "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
             }
         ]
-        # Hardcoded "0.99.0" so a future MIN bump still sorts BELOW it.
+        # DERIVED from the current minimum (major + 1) rather than hardcoded:
+        # the previous literal "0.99.0" was picked so "a future MIN bump still
+        # sorts BELOW it", but the 0.11.0 → 1.1.0 bump (#1788) overtook it and
+        # broke the test. Deriving keeps that intent true for every bump.
+        above_minimum = f"{_version_tuple(MIN_COMPONENT_VERSION)[0] + 1}.0.0"
         client.call_service = AsyncMock(
             return_value={
                 "service_response": {
                     "success": True,
                     "token": "tok-future",
-                    "version": "0.99.0",
+                    "version": above_minimum,
                 }
             }
         )

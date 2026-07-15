@@ -57,7 +57,13 @@ from .const import (
     YAML_KEY_POST_ACTIONS,
 )
 from .websocket_api import async_register_commands
-from .yaml_rt import apply_seq_indent, detect_seq_indent, make_yaml, yaml_dumps
+from .yaml_rt import (
+    apply_seq_indent,
+    detect_seq_indent,
+    make_yaml,
+    yaml_dumps,
+    yaml_jsonify,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -145,6 +151,10 @@ SERVICE_READ_FILE_SCHEMA = vol.Schema(
         # dotted path under ``subtree`` (used by ha-mcp's per-edit auto-backup
         # to snapshot the prior value before ha_config_set_yaml edits it, #1579).
         vol.Optional("yaml_path"): cv.string,
+        # With ``yaml_path``, also return that subtree as JSON-safe parsed data
+        # under ``parsed`` (ha_config_get_yaml's include_parsed, #1788). HA tags
+        # are rendered to source form, never resolved.
+        vol.Optional("include_parsed", default=False): cv.boolean,
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
@@ -689,10 +699,19 @@ def _follow_include(loader: yaml.Loader, node: yaml.nodes.Node) -> Any:
     if depth >= 8 or not isinstance(name, str) or not name or name.startswith("<"):
         return None
     path = os.path.join(os.path.dirname(name), str(node.value))
+    # Recorded BEFORE the open, and even when it fails: the caching layer keys
+    # on these files' mtimes, so an include target that does not exist yet must
+    # still be tracked (with a -1 stamp) or creating it later would not
+    # invalidate.
+    opened = getattr(loader, "_pkg_opened", None)
+    if opened is not None:
+        opened.append(path)
     try:
         with open(path, encoding="utf-8") as handle:
             sub = _PackagesDirLoader(handle)
             sub._pkg_include_depth = depth + 1
+            # Same list object, so a nested include lands in one signature.
+            sub._pkg_opened = opened
             try:
                 return sub.get_single_data()
             finally:
@@ -742,6 +761,27 @@ def _extract_package_dir_markers(data: object) -> set[str]:
     return {str(m) for m in markers}
 
 
+def _load_package_dir_markers_tracked(config_path: str) -> tuple[set[str], list[str]]:
+    """``_load_package_dir_markers`` that also reports every file it read.
+
+    The file list (configuration.yaml plus any ``!include`` followed from it) is
+    what ``_package_dir_markers_cached`` keys its mtime signature on, so the
+    cache invalidates no matter which of them the packages directive lives in.
+    """
+    opened: list[str] = [config_path]
+    try:
+        with open(config_path, encoding="utf-8") as handle:
+            loader = _PackagesDirLoader(handle)
+            loader._pkg_opened = opened
+            try:
+                data = loader.get_single_data()
+            finally:
+                loader.dispose()
+    except (OSError, yaml.YAMLError):
+        return set(), opened
+    return _extract_package_dir_markers(data), opened
+
+
 def _load_package_dir_markers(config_path: str) -> set[str]:
     """Parse configuration.yaml (following ``!include``) and return the raw
     folder argument(s) of every packages ``!include_dir_*named`` directive.
@@ -749,16 +789,52 @@ def _load_package_dir_markers(config_path: str) -> set[str]:
     Blocking (opens files) — call via an executor. Returns raw strings, possibly
     absolute; the caller relativizes and filters them against the config dir.
     """
-    try:
-        with open(config_path, encoding="utf-8") as handle:
-            loader = _PackagesDirLoader(handle)
-            try:
-                data = loader.get_single_data()
-            finally:
-                loader.dispose()
-    except (OSError, yaml.YAMLError):
-        return set()
-    return _extract_package_dir_markers(data)
+    markers, _opened = _load_package_dir_markers_tracked(config_path)
+    return markers
+
+
+def _mtime_sig(paths: list[str]) -> tuple[tuple[str, int], ...]:
+    """Stamp each path with its mtime, or -1 when it does not exist.
+
+    The -1 is load-bearing: an ``!include`` target that is missing today and
+    created tomorrow changes the signature, so the cache invalidates instead of
+    serving folder-detection that predates the file.
+    """
+    sig: list[tuple[str, int]] = []
+    for path in paths:
+        try:
+            sig.append((path, os.stat(path).st_mtime_ns))
+        except OSError:
+            sig.append((path, -1))
+    return tuple(sig)
+
+
+# config_path -> (signature of the files last read, markers found in them).
+# Module-level: the folder binding is per config dir, and HA runs one per
+# process. Concurrent first-callers may each miss and parse once before the
+# entry lands — bounded, self-healing, and cheaper than holding a lock across
+# executor threads.
+_PACKAGE_DIR_CACHE: dict[str, tuple[tuple[tuple[str, int], ...], set[str]]] = {}
+
+
+def _package_dir_markers_cached(config_path: str) -> set[str]:
+    """``_load_package_dir_markers``, skipping the parse when nothing changed.
+
+    Blocking (stats files) — call via an executor. Every file operation resolves
+    the packages folder, and a ``ha_config_get_yaml`` glob fires one detection
+    per matched file, so this would otherwise re-parse configuration.yaml (and
+    whatever it includes) N times per search. Stat-per-file is cheap; the YAML
+    parse is not.
+    """
+    cached = _PACKAGE_DIR_CACHE.get(config_path)
+    if cached is not None:
+        signature, markers = cached
+        if _mtime_sig([path for path, _ in signature]) == signature:
+            return set(markers)
+    markers, opened = _load_package_dir_markers_tracked(config_path)
+    # Copy in and out: the cached set must not be mutable through a caller.
+    _PACKAGE_DIR_CACHE[config_path] = (_mtime_sig(opened), set(markers))
+    return markers
 
 
 def _package_folder_relative_to_config(raw: str, config_dir: str) -> str | None:
@@ -800,7 +876,9 @@ async def _detect_package_dirs(hass: HomeAssistant) -> set[str]:
     config_path = hass.config.path(ALLOWED_YAML_CONFIG_FILES[0])
     # normpath is a pure string transform (no I/O), so ASYNC240 doesn't apply.
     config_dir = os.path.normpath(hass.config.config_dir)  # noqa: ASYNC240
-    markers = await hass.async_add_executor_job(_load_package_dir_markers, config_path)
+    markers = await hass.async_add_executor_job(
+        _package_dir_markers_cached, config_path
+    )
     for raw in markers:
         folder = _package_folder_relative_to_config(raw, config_dir)
         if folder:
@@ -823,11 +901,34 @@ def _path_in_package_dir(normalized: str, package_dirs: set[str] | None) -> bool
     )
 
 
+def _dir_in_package_dir(normalized: str, package_dirs: set[str] | None) -> bool:
+    """True if ``normalized`` IS a configured package folder, or a folder under one.
+
+    The file-level twin is ``_path_in_package_dir``; this one matches the
+    FOLDER itself (and nested folders) so ``list_files`` can enumerate a
+    packages directory the way ``read_file`` can already read the ``*.yaml``
+    inside it (issue #1854).
+
+    Unlike ``_path_in_package_dir``, this does NOT default to ``{"packages"}``
+    when ``package_dirs`` is None: ``_is_path_allowed_for_dir`` is shared with
+    write_file and delete_file, which must never gain package access
+    (``edit_yaml_config`` is the only write path to config YAML). Only the
+    read-side lister passes ``package_dirs``.
+    """
+    if not package_dirs:
+        return False
+    return any(
+        normalized == folder or normalized.startswith(folder + "/")
+        for folder in package_dirs
+    )
+
+
 def _is_path_allowed_for_dir(
     config_dir: Path,
     rel_path: str,
     allowed_dirs: list[str],
     extra_dirs: list[str] | None = None,
+    package_dirs: set[str] | None = None,
 ) -> bool:
     """Check if a path is within allowed directories.
 
@@ -835,6 +936,11 @@ def _is_path_allowed_for_dir(
     granted in addition to ``allowed_dirs``. The non-overridable deny floor is
     checked first, so a custom directory can never grant access to ``.storage``
     or other floored paths.
+
+    ``package_dirs`` (issue #1854) widens ONLY the allow decision — every
+    containment, deny-floor and symlink check below still runs — and is passed
+    by the read-side lister alone; write and delete leave it None so a
+    packages folder stays non-writable through this helper.
     """
     # Absolute HAOS sibling-volume path (issue #1586) — enforced against its
     # volume root rather than the config dir. Detected by a POSIX-absolute
@@ -856,10 +962,16 @@ def _is_path_allowed_for_dir(
         return False
 
     # Built-in allowlist matches on the first segment; user-configured extra
-    # dirs match on a path-boundary prefix (so nested entries work).
+    # dirs match on a path-boundary prefix (so nested entries work). A
+    # configured packages folder matches literally (it may itself be nested,
+    # e.g. "conf/packages", so a first-segment test would miss it).
     parts = normalized.split(os.sep)
     builtin_ok = bool(parts) and parts[0] in allowed_dirs
-    if not builtin_ok and not _matches_extra_dir(normalized, extra_dirs):
+    if (
+        not builtin_ok
+        and not _dir_in_package_dir(normalized, package_dirs)
+        and not _matches_extra_dir(normalized, extra_dirs)
+    ):
         return False
 
     # Symlink-safe containment on the REAL path the handler will open (issue
@@ -952,11 +1064,16 @@ def _mask_secrets_content(content: str) -> str:
     """Return secrets.yaml content with every secret value masked.
 
     Parses the document structurally (ruamel — the same YAML stack used
-    elsewhere in this component) and emits ``key: [MASKED]`` for each top-level
-    key. This closes the gap in the previous line-by-line regex, which masked
-    only single-line ``key: value`` pairs and leaked multi-line block scalars
-    (``|``, ``>``) whose continuation lines have no colon — SSH keys, TLS
-    material, and service-account JSON are commonly stored that way.
+    elsewhere in this component) and emits ``key: "[MASKED]"`` for each
+    top-level key. This closes the gap in the previous line-by-line regex, which
+    masked only single-line ``key: value`` pairs and leaked multi-line block
+    scalars (``|``, ``>``) whose continuation lines have no colon — SSH keys,
+    TLS material, and service-account JSON are commonly stored that way.
+
+    The marker is quoted because the masked text is itself valid YAML that gets
+    re-parsed: read_file's ``yaml_path``/``include_parsed`` views load it, and
+    an unquoted ``[MASKED]`` is flow-sequence syntax, so the parsed view would
+    render the mask as the list ``["MASKED"]`` instead of a scalar.
 
     Fails closed: any content that cannot be parsed and masked as a key-value
     mapping is withheld rather than returned raw, so a failure on this path never
@@ -973,7 +1090,7 @@ def _mask_secrets_content(content: str) -> str:
             return (
                 "# secrets.yaml is empty or not a key-value mapping — content withheld"
             )
-        return "\n".join(f"{key}: [MASKED]" for key in parsed)
+        return "\n".join(f'{key}: "[MASKED]"' for key in parsed)
     except YAMLError:
         return "# secrets.yaml could not be parsed — content withheld to avoid leaking secrets"
     except Exception:
@@ -1752,32 +1869,64 @@ def _build_edit_yaml_config_handler(
     return handle_edit_yaml_config
 
 
-def _extract_yaml_subtree(content: str, yaml_path: str) -> str | None:
-    """Return the YAML subtree at the dotted ``yaml_path`` as round-trip text.
+def _extract_yaml_views(
+    content: str, yaml_path: str, include_parsed: bool = False
+) -> dict[str, Any]:
+    """Return the subtree at ``yaml_path`` as round-trip text and, optionally,
+    as JSON-safe parsed data — from a SINGLE parse of ``content``.
 
-    Used by ``read_file``'s optional ``yaml_path`` to let ha-mcp's per-edit
-    auto-backup snapshot the prior value of a key before ``edit_yaml_config``
-    changes it (#1579). Runs here, in the component, because the round-trip
-    parse needs ``ruamel`` (a component requirement) which the MCP server's
-    runtime does not carry. Comments and HA tags (``!secret`` / ``!include``)
-    are preserved. Returns ``None`` when the root is not a mapping or the key
-    is absent (new-key write — nothing to snapshot); malformed YAML also
-    yields ``None`` (the edit itself would then fail and report the error).
+    Runs here, in the component, because the round-trip parse needs ``ruamel``
+    (a component requirement) which the MCP server's runtime does not carry.
+    Comments and HA tags (``!secret`` / ``!include``) are preserved in the text
+    view and rendered to their source form in the parsed view — never resolved,
+    so neither view can surface a secret's plaintext.
+
+    ``subtree`` is None when the root is not a mapping or the key is absent
+    (new-key write — nothing to snapshot). Malformed YAML also yields None, but
+    additionally sets ``parse_error``, so a caller can tell "this file does not
+    define the key" apart from "this file could not be read at all" — without
+    it, one broken package silently reads as a key that is simply absent.
+    ``parsed`` is present only when ``include_parsed`` and the key resolved.
     """
+    views: dict[str, Any] = {"subtree": None}
     try:
         ry = make_yaml()
         # The per-thread cached instance may carry a sequence style applied
         # by a prior edit's dump on this executor thread — reset it so the
         # snapshot never inherits another file's indentation.
         apply_seq_indent(ry, None)
-        node = ry.load(StringIO(content))
+        node: Any = ry.load(StringIO(content))
         for seg in yaml_path.split("."):
             if not isinstance(node, dict) or seg not in node:
-                return None
+                return views
             node = node[seg]
-        return yaml_dumps(ry, node)
-    except YAMLError:
-        return None
+        views["subtree"] = yaml_dumps(ry, node)
+        if include_parsed:
+            views["parsed"] = yaml_jsonify(node)
+    except YAMLError as err:
+        # Position only, never the error text: ruamel embeds the offending
+        # source line in its message, which would put file content — possibly
+        # an inline credential — into a response this path otherwise keeps
+        # free of resolved values.
+        mark = getattr(err, "problem_mark", None)
+        where = (
+            f" at line {mark.line + 1}, column {mark.column + 1}"
+            if mark is not None
+            else ""
+        )
+        return {"subtree": None, "parse_error": f"not valid YAML{where}"}
+    return views
+
+
+def _extract_yaml_subtree(content: str, yaml_path: str) -> str | None:
+    """Return the YAML subtree at the dotted ``yaml_path`` as round-trip text.
+
+    Used by ``read_file``'s optional ``yaml_path`` to let ha-mcp's per-edit
+    auto-backup snapshot the prior value of a key before ``edit_yaml_config``
+    changes it (#1579).
+    """
+    subtree: str | None = _extract_yaml_views(content, yaml_path)["subtree"]
+    return subtree
 
 
 def _parse_and_validate_yaml_path(
@@ -2093,15 +2242,21 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         rel_path = call.data["path"]
         pattern = call.data.get("pattern")
 
-        # Security check
+        # Security check. Package files may live under a non-default folder
+        # (issue #1854); read_file already resolves and honours the configured
+        # folder(s), so the lister does too — otherwise a packages folder is
+        # readable file-by-file but cannot be enumerated, which is what
+        # ha_config_get_yaml's cross-file key discovery needs (issue #1788).
         extra_dirs = _current_extra_dirs()
+        package_dirs = await _detect_package_dirs(hass)
         if not _is_path_allowed_for_dir(
-            config_dir, rel_path, ALLOWED_READ_DIRS, extra_dirs
+            config_dir, rel_path, ALLOWED_READ_DIRS, extra_dirs, package_dirs
         ):
             _LOGGER.warning("Attempted to list files in disallowed path: %s", rel_path)
+            allowed_display = ALLOWED_READ_DIRS + sorted(package_dirs) + extra_dirs
             return {
                 "success": False,
-                "error": f"Path not allowed. Must be in: {', '.join(ALLOWED_READ_DIRS + extra_dirs)}",
+                "error": f"Path not allowed. Must be in: {', '.join(allowed_display)}",
                 "files": [],
             }
 
@@ -2156,6 +2311,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         rel_path = call.data["path"]
         tail_lines = call.data.get("tail_lines")
         yaml_path = call.data.get("yaml_path")
+        include_parsed = bool(call.data.get("include_parsed", False))
 
         # Security check. Package files may live under a non-default folder
         # (issue #1854), so resolve the configured folder(s) — the same way the
@@ -2247,6 +2403,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             }
 
         # Apply tail for other files if requested
+        full_content = content
         if tail_lines:
             lines = content.split("\n")
             if len(lines) > tail_lines:
@@ -2260,8 +2417,13 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             "modified": modified_dt.isoformat(),
         }
         if yaml_path:
-            response["subtree"] = await hass.async_add_executor_job(
-                _extract_yaml_subtree, content, yaml_path
+            # Extract from the UNTAILED text: tailing is a display concern, and
+            # the retained tail is both likely to exclude the key and likely to
+            # be invalid YAML on its own, which would report the key as absent.
+            response.update(
+                await hass.async_add_executor_job(
+                    _extract_yaml_views, full_content, yaml_path, include_parsed
+                )
             )
         return response
 

@@ -395,6 +395,9 @@ class TestFeatureGatedTools:
             "ha_read_file",
             "ha_write_file",
             "ha_delete_file",
+            # Returns config-file contents through the same component
+            # services, so it rides the same flag (#1788).
+            "ha_config_get_yaml",
         ):
             assert FEATURE_GATED_TOOLS[name]["disabled_by"] == "enable_filesystem_tools"
 
