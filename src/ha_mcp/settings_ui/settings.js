@@ -1616,10 +1616,6 @@ const FEATURE_META = {
     label: "Enable filesystem tools (beta)",
     help: "Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write access to your Home Assistant filesystem. WARNING: This gives the MCP server sensitive direct file access to your system. Only enable if you trust the AI assistant with file operations. Requires restart to take effect.",
   },
-  enable_custom_component_integration: {
-    label: "Enable custom component integration (beta)",
-    help: "Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Enables the ha_install_mcp_tools installer tool, which can help install the ha_mcp_tools custom component. This setting does not control whether the MCP server loads or interacts with the custom component, and it is not required for filesystem tools to function. Only enable if you want to allow the AI assistant to use the installer tool. Requires restart to take effect.",
-  },
   enable_code_mode: {
     label: "Enable code-mode sandbox (beta)",
     help: "Beta feature, disabled by default. Enables ha_manage_custom_tool, a sandboxed Python interpreter (pydantic-monty) that lets AI assistants write/run/save/delete custom tools when no built-in tool covers the request. Sandbox cannot touch the filesystem or arbitrary network, but CAN call any registered MCP tool, hit the HA REST API, or send HA WebSocket commands, effectively 'do whatever existing tools allow you to do, in any combination'. Saved tools persist and are visible to any client that can connect to ha-mcp. See docs/beta.md for known limitations. Requires restart to take effect.",

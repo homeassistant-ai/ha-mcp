@@ -72,7 +72,7 @@ class TestWaitForRepoRegistration:
             subscribe_result=(7, queue),
         )
 
-        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO)
+        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
 
         assert repo is not None
         assert str(repo.get("id")) == "42"
@@ -106,7 +106,7 @@ class TestWaitForRepoRegistration:
             subscribe_result=(7, queue),
         )
 
-        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO)
+        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
 
         assert repo is not None
         assert str(repo.get("id")) == "99"
@@ -171,7 +171,7 @@ class TestWaitForRepoRegistration:
             subscribe_result=HomeAssistantCommandError("unknown_command"),
         )
 
-        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO)
+        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
 
         assert repo is not None
         assert str(repo.get("id")) == "42"
@@ -271,7 +271,7 @@ class TestWaitForRepoRegistration:
             subscribe_result=(7, queue),
         )
 
-        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO)
+        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
 
         assert repo is not None
         assert str(repo.get("id")) == "42"
@@ -301,7 +301,7 @@ class TestWaitForRepoRegistration:
 
         # Must not propagate the connection error — callers see a
         # wait timeout (None), not a noisy stack trace.
-        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO)
+        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
         assert repo is None
         ws_client.unsubscribe_command.assert_awaited_once_with(7)
 
@@ -321,7 +321,7 @@ class TestWaitForRepoRegistration:
         ws_client.unsubscribe_command = AsyncMock()
 
         with pytest.raises(AttributeError):
-            await wait_for_repo_registration(ws_client, WATCHED_REPO)
+            await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
         ws_client.unsubscribe_command.assert_not_called()
 
     @pytest.mark.asyncio

@@ -685,21 +685,10 @@ def _filter_and_score_repos(
 # load-bearing contract is this signal name, not where it's defined.
 HACS_REPOSITORY_SIGNAL = "hacs_dispatch_repository"
 
-# Wall-clock budget for ``wait_for_repo_registration``. Generous
-# because the constraint is "HACS finishes registration": adding a
-# fresh repo makes HACS clone/index it over the network, which on a
-# slow link (or a loaded HAOS E2E runner) can exceed 30 s — the prior
-# value, which flaked the HACS add-repository e2e path with "Could not
-# find repository ID after adding". The subscription nudges us the
-# instant registration lands, so the happy path returns in seconds and
-# this larger cap only ever costs wall-clock on a genuinely slow add.
-HACS_REPO_REGISTRATION_TIMEOUT = 60.0
-
-# Budget for the initial ``hacs/subscribe`` ack. Smaller than the
-# overall registration timeout so a slow subscribe doesn't consume
-# the whole budget before any ``queue.get()`` runs — subscribe acks
-# return in milliseconds in practice, so 10 s is generous and still
-# leaves 20 s of headroom for the queue wait.
+# Budget for the initial ``hacs/subscribe`` ack, separate from the
+# caller-supplied registration budget so a slow subscribe surfaces as
+# its own failure instead of silently consuming the wait — subscribe
+# acks return in milliseconds in practice, so 10 s is generous.
 HACS_SUBSCRIBE_TIMEOUT = 10.0
 
 # Backstop poll cadence inside ``wait_for_repo_registration`` —
@@ -723,8 +712,8 @@ HACS_ADD_REGISTRATION_TIMEOUT = 10.0
 # ``ha_manage_hacs(action="download")``). A plain info/download lookup targets a
 # repo that should ALREADY be in HACS's index: default repos always are, and
 # ``ha_manage_hacs(action="add_repository")`` blocks until registration is
-# confirmed before returning (waiting the full ``HACS_REPO_REGISTRATION_TIMEOUT``
-# for the fresh registration to land).
+# confirmed before returning (within its own ``HACS_ADD_REGISTRATION_TIMEOUT``
+# budget).
 # So the post-subscribe sample resolves an existing repo instantly, and the
 # dispatch-signal wait only ever burns wall-clock when the repo is genuinely
 # absent. The old 30 s budget made every not-found lookup a 30 s stall (the
@@ -878,7 +867,7 @@ async def wait_for_repo_registration(
     ws_client: Any,
     full_name: str,
     *,
-    timeout: float = HACS_REPO_REGISTRATION_TIMEOUT,
+    timeout: float,
     backstop_poll_interval: float = HACS_REPO_BACKSTOP_POLL_INTERVAL,
 ) -> dict[str, Any] | None:
     """Wait for a HACS repo to register, using HACS' dispatch signal.
