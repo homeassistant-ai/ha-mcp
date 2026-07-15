@@ -1926,7 +1926,6 @@ class TestAddonModeLockedBannerCopy:
                     "beta_sub_flags": [
                         "enable_yaml_config_editing",
                         "enable_filesystem_tools",
-                        "enable_custom_component_integration",
                         "enable_code_mode",
                         "enable_lite_docstrings",
                     ],
@@ -2281,7 +2280,6 @@ class TestBetaBlockRendersAtBottom:
             "beta_sub_flags": [
                 "enable_yaml_config_editing",
                 "enable_filesystem_tools",
-                "enable_custom_component_integration",
                 "enable_code_mode",
                 "enable_lite_docstrings",
             ],

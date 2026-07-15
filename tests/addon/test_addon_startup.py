@@ -687,7 +687,6 @@ class TestBetaMasterAutoEnableInDevAddon:
         "enable_yaml_packages_script",
         "enable_yaml_packages_scene",
         "enable_filesystem_tools",
-        "enable_custom_component_integration",
         "enable_code_mode",
         "enable_lite_docstrings",
     )

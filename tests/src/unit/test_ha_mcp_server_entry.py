@@ -316,3 +316,35 @@ class TestDomainDispatch:
         entry = _make_entry(data={})
         await component.async_remove_entry(_make_hass(), entry)
         pkg.async_remove_server_entry.assert_not_awaited()
+
+
+class TestToolsEntrySetupFinalization:
+    """Source-level guards for the #1853 finalization in the tools setup.
+
+    ``_async_setup_tools_entry`` cannot run in this unit harness (it drives the
+    caller-token Store, the legacy-backup migration, ~10 service registrations,
+    and the WebSocket registry), so — like the existing security-regression guard
+    on the same function — these assert the wiring at the source level: the
+    rename migration and the tools-entry device registration must stay present.
+    A behavioral retitle/preserve test needs the full setup scaffolding no unit
+    harness provides.
+    """
+
+    def test_setup_migrates_the_pre_rename_default_title(self):
+        import inspect
+
+        src = inspect.getsource(component._async_setup_tools_entry)
+        # Retitle only the exact old default, via async_update_entry, to the new
+        # title constant — never a hardcoded literal that could drift from it.
+        assert "entry.title == TOOLS_ENTRY_LEGACY_TITLE" in src
+        assert "TOOLS_ENTRY_TITLE" in src
+        assert "async_update_entry" in src
+
+    def test_setup_registers_a_device_for_the_tools_entry(self):
+        import inspect
+
+        src = inspect.getsource(component._async_setup_tools_entry)
+        assert "async_get_or_create" in src
+        assert "config_entry_id=entry.entry_id" in src
+        assert "File & YAML editing services" in src
+        assert "homeassistant-ai" in src

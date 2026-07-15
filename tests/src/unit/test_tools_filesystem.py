@@ -370,8 +370,16 @@ class TestHaListFilesTool:
                 if hasattr(registered_func, "__wrapped__")
                 else registered_func
             )
-            with pytest.raises(ToolError):
+            with pytest.raises(ToolError) as exc_info:
                 await inner_func(path="www/")
+            # The error is the #1853 install recipe: generic HACS tools plus
+            # the File & YAML entry, never the removed installer tool.
+            error_data = json.loads(str(exc_info.value))
+            assert error_data["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+            suggestions = " ".join(error_data["error"]["suggestions"])
+            assert "homeassistant-ai/ha-mcp-integration" in suggestions
+            assert "HA-MCP File & YAML Tools" in suggestions
+            assert "ha_install_mcp_tools" not in suggestions
 
     @pytest.mark.asyncio
     async def test_calls_service_when_mcp_tools_installed(self):

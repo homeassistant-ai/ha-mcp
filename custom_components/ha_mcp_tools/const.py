@@ -32,6 +32,12 @@ COMPONENT_VERSION = "1.1.0"
 CONF_ENTRY_TYPE = "entry_type"
 ENTRY_TYPE_TOOLS = "tools"
 ENTRY_TYPE_SERVER = "server"
+
+# Titles shown for each entry in the integration tile's entry list. Public so
+# __init__'s setup migration can retitle pre-#1853 tools entries still
+# carrying the legacy default (a user-customized title is left alone).
+TOOLS_ENTRY_TITLE = "HA-MCP File & YAML Tools"
+TOOLS_ENTRY_LEGACY_TITLE = "HA MCP Tools"
 MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.6.0"
 
 # Allowed directories for file operations (relative to config dir)

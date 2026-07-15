@@ -7,8 +7,8 @@ One config flow serves two entry types under the shared domain:
 * ``server`` is a single confirm step that creates the in-process server entry
   (``entry_type="server"``);
 * ``async_get_options_flow`` dispatches on ``entry_type`` — the server entry gets
-  the port/auth/pip options flow, the tools entry gets a flow that aborts with
-  ``no_options``.
+  the port/auth/pip options flow, the tools entry gets a light informational
+  options flow (an empty-schema ``tools_info`` step, nothing to configure yet).
 
 The HA framework methods (async_show_menu / async_show_form / async_create_entry
 / ...) are stubbed on the flow instance so each routing decision is asserted
@@ -160,7 +160,7 @@ class TestToolsBranch:
 
         entry = asyncio.run(flow.async_step_tools({}))
         assert entry["type"] == "entry"
-        assert entry["title"] == cf._TOOLS_ENTRY_TITLE
+        assert entry["title"] == const.TOOLS_ENTRY_TITLE
         assert entry["data"] == {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS}
 
     def test_tools_uses_domain_unique_id(self):
@@ -176,6 +176,15 @@ class TestToolsBranch:
         entry = asyncio.run(flow.async_step_tools({}))
 
         assert entry["type"] == "entry"
+
+    def test_tools_entry_title_reflects_rename(self):
+        # #1853: the title names what the entry actually is — the privileged
+        # file & YAML editing services — not "HA MCP Tools", which read as if the
+        # component were required for MCP tools in general.
+        assert const.TOOLS_ENTRY_TITLE == "HA-MCP File & YAML Tools"
+        # The pre-rename default the setup migration retitles existing installs
+        # away from (see _async_setup_tools_entry).
+        assert const.TOOLS_ENTRY_LEGACY_TITLE == "HA MCP Tools"
 
 
 class TestServerBranch:
@@ -222,26 +231,47 @@ class TestOptionsFlowDispatch:
         result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
         assert isinstance(result, cf.HaMcpServerOptionsFlow)
 
-    def test_tools_entry_gets_no_options_flow(self):
+    def test_tools_entry_gets_info_options_flow(self):
         entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS})
         result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf._NoOptionsFlow)
+        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
 
-    def test_missing_entry_type_defaults_to_no_options(self):
+    def test_missing_entry_type_defaults_to_info_options(self):
         # A pre-existing (pre-fold) tools entry carries no entry_type key; it must
-        # be treated as "tools", so it gets the no-options flow, never the server
-        # options flow.
+        # be treated as "tools", so it gets the informational tools flow, never
+        # the server options flow.
         entry = SimpleNamespace(data={})
         result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf._NoOptionsFlow)
+        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
         assert not isinstance(result, cf.HaMcpServerOptionsFlow)
 
-    def test_no_options_flow_aborts(self):
-        flow = cf._NoOptionsFlow()
-        flow.async_abort = MagicMock(side_effect=lambda **kw: {"type": "abort", **kw})
-        result = asyncio.run(flow.async_step_init(None))
-        assert result["type"] == "abort"
-        assert result["reason"] == "no_options"
+
+class TestToolsInfoOptionsFlow:
+    def test_init_shows_info_form_under_tools_info_step(self):
+        # The tools entry's options flow shows an informational form on a step id
+        # distinct from the server flow's ``init`` (a shared id would collide in
+        # strings.json). The schema is empty — there is nothing to configure yet.
+        flow = cf.HaMcpToolsInfoOptionsFlow()
+        flow.async_show_form = MagicMock(
+            side_effect=lambda **kw: {"type": "form", **kw}
+        )
+        form = asyncio.run(flow.async_step_init(None))
+        assert form["type"] == "form"
+        assert form["step_id"] == "tools_info"
+        # Empty schema: nothing to configure yet.
+        assert list(form["data_schema"].schema) == []
+
+    def test_submitting_info_form_creates_empty_options_entry(self):
+        # HA routes the info form's submit to async_step_tools_info, which
+        # persists an empty options payload (title "").
+        flow = cf.HaMcpToolsInfoOptionsFlow()
+        flow.async_create_entry = MagicMock(
+            side_effect=lambda **kw: {"type": "entry", **kw}
+        )
+        result = asyncio.run(flow.async_step_tools_info({}))
+        assert result["type"] == "entry"
+        assert result["title"] == ""
+        assert result["data"] == {}
 
 
 class TestServerOptionsFlow:

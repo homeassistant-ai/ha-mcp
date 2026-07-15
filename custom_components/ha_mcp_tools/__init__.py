@@ -34,6 +34,7 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
 from homeassistant.loader import async_get_integration
 from ruamel.yaml import YAMLError
@@ -44,6 +45,7 @@ from .const import (
     ALLOWED_WRITE_DIRS,
     ALLOWED_YAML_CONFIG_FILES,
     ALLOWED_YAML_KEYS,
+    COMPONENT_VERSION,
     CONF_ENTRY_TYPE,
     DASHBOARD_URL_PATH_PATTERN,
     DENY_PATH_SEGMENTS,
@@ -53,6 +55,8 @@ from .const import (
     ENTRY_TYPE_TOOLS,
     PACKAGES_ONLY_YAML_KEYS,
     RESERVED_DASHBOARD_URL_PATHS,
+    TOOLS_ENTRY_LEGACY_TITLE,
+    TOOLS_ENTRY_TITLE,
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
 )
@@ -2149,7 +2153,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up the HA MCP Tools services from a config entry."""
+    """Set up the File & YAML services (tools entry) from a config entry."""
     config_dir = Path(hass.config.config_dir)
 
     # Bootstrap the caller-auth token. Generated on first setup, persisted
@@ -2846,12 +2850,47 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # @require_admin gates each command (see websocket_api.py).
     async_register_commands(hass)
 
-    _LOGGER.info("HA MCP Tools initialized with file management services")
+    # Entry-level finalization: pick up the #1853 rename on existing installs and
+    # give the tools entry a device. Both are cosmetic to the integration's core
+    # value; the one fallible step (the manifest version read below) degrades to
+    # the compiled-in fallback rather than blocking setup.
+    # Retitle an entry still carrying the pre-rename default; a user-customized
+    # title is left untouched (only the exact old default migrates). The tools
+    # entry registers no update listener, so this async_update_entry cannot
+    # trigger a reload loop — and the guard is idempotent regardless (the title
+    # no longer matches on the next setup).
+    if entry.title == TOOLS_ENTRY_LEGACY_TITLE:
+        hass.config_entries.async_update_entry(entry, title=TOOLS_ENTRY_TITLE)
+
+    # Register a device (parity with the server entry, which gets one via
+    # update.py's DeviceInfo). Tied to the config entry, so HA removes it with
+    # the entry — no unload cleanup needed. The component version comes from the
+    # manifest like the options-form version hint, degrading to the compiled-in
+    # COMPONENT_VERSION if that read fails so a manifest hiccup never breaks setup.
+    component_version = COMPONENT_VERSION
+    try:
+        integration = await async_get_integration(hass, DOMAIN)
+        component_version = str(integration.version)
+    except Exception as err:
+        _LOGGER.debug(
+            "Could not read the component version for the tools device: %s", err
+        )
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        name=TOOLS_ENTRY_TITLE,
+        manufacturer="homeassistant-ai",
+        model="File & YAML editing services",
+        sw_version=component_version,
+        configuration_url="https://github.com/homeassistant-ai/ha-mcp",
+    )
+
+    _LOGGER.info("HA-MCP File & YAML Tools initialized with file management services")
     return True
 
 
 async def _async_unload_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload the HA MCP Tools services config entry."""
+    """Unload the File & YAML services (tools entry) config entry."""
     # Remove all services
     hass.services.async_remove(DOMAIN, SERVICE_EDIT_YAML_CONFIG)
     hass.services.async_remove(DOMAIN, SERVICE_LIST_FILES)

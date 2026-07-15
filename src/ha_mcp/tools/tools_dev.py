@@ -126,7 +126,8 @@ async def find_server_config_entry(
 
     Probes each ``ha_mcp_tools`` entry's options flow: the server entry's
     flow is a form whose schema carries the ``pip_spec`` field; the tools
-    (services) entry's flow aborts immediately. Returns
+    (services) entry's flow is an informational form with no ``pip_spec``
+    field, so it never matches. Returns
     ``(entry_id, open_flow, current_options)`` with the options flow left
     OPEN (callers must submit or abort it), or ``None`` when no server
     entry exists. ``current_options`` maps schema field names to their current

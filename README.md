@@ -50,12 +50,13 @@ The recommended way to run ha-mcp is the **HA-MCP Custom Component**. It install
 
 **Connect URL.** The Configure screen gives you a Home Assistant webhook URL for remote clients — `https://<your-ha-domain>/api/webhook/<webhook-id>` through Nabu Casa or any reverse proxy already pointed at Home Assistant (locally, `http://<ha-host>:8123/api/webhook/<webhook-id>`). For clients on the same network, the server is also reachable directly at `http://<ha-ip>:9584/private_<random>`.
 
+- **Replaces other install methods:** the in-process server is a complete, standalone ha-mcp install — it takes the place of the add-on, Docker, and uvx/PyPI (stdio) methods. Run only one; do not run the in-process server alongside another install.
 - **Local only?** Turn off **Remote access via webhook** in the entry options — no webhook is registered at all, while the direct port and sidebar panel keep working.
 - **Settings panel:** while the server runs, an admin-only **HA-MCP** panel appears in the Home Assistant sidebar for managing tools, feature flags, backups, and themes.
 - **Optional authentication:** set **Webhook authentication** to `ha_auth` to require a Home Assistant account sign-in instead of using the secret URL as the credential.
 - **Manual install (no HACS):** copy `custom_components/ha_mcp_tools/` from this repository into your Home Assistant `config/custom_components/` directory, then restart and add the integration as above.
 
-The component's second entry type, **HA MCP Tools**, is only needed if you enable ha-mcp's opt-in file and YAML editing tools (feature flags, off by default) — skip it otherwise; you can add it later at any time.
+The component's second entry type, the **File & YAML services entry** (**HA-MCP File & YAML Tools**), is only needed if you enable ha-mcp's opt-in file and YAML editing tools (feature flags, off by default) — skip it otherwise; you can add it later at any time. It works with any server type (in-process, add-on, Docker, or stdio).
 
 [Full in-process server documentation →](docs/in-process-server.md) · [Setup Wizard for client-specific config →](https://homeassistant-ai.github.io/ha-mcp/setup/)
 
@@ -274,7 +275,7 @@ ha-mcp is a standalone server built for **configuring, building, and debugging**
 
 ## 🔌 Custom Component (ha_mcp_tools) — File & YAML Services
 
-The **HA-MCP Custom Component** also powers a set of privileged tools that standard Home Assistant APIs can't provide: file system access and YAML config editing. (The same component runs the full server in-process — that's the recommended install in the **Get Started** section at the top.) Its **HA MCP Tools** services entry enables the tools below.
+The **HA-MCP Custom Component** also powers a set of privileged tools that standard Home Assistant APIs can't provide: file system access and YAML config editing. (The same component runs the full server in-process — that's the recommended install in the **Get Started** section at the top.) Its **File & YAML services entry** (**HA-MCP File & YAML Tools**) enables the tools below.
 
 **Tools that require the component:**
 
@@ -292,13 +293,13 @@ These tools also require beta feature flags. See **[Beta Features](docs/beta.md)
 
 ### Install
 
-Install the **HA MCP Tools** services entry from the same **HA-MCP Custom Component**:
+Install the **HA-MCP File & YAML Tools** entry from the same **HA-MCP Custom Component**:
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration)
 
 To add manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp-integration` (category: Integration) > **Download**. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
 
-After installing, restart Home Assistant, then open **Settings** > **Devices & Services** > **Add Integration**, search for **HA-MCP Custom Component**, and add the **HA MCP Tools** services entry.
+After installing, restart Home Assistant, then open **Settings** > **Devices & Services** > **Add Integration**, search for **HA-MCP Custom Component**, and add the **HA-MCP File & YAML Tools** entry.
 
 To run the full ha-mcp server in-process through this same component, see the **Get Started** section at the top and the [full in-process server documentation →](docs/in-process-server.md).
 
@@ -444,7 +445,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@TomasDJo](https://github.com/TomasDJo)** — Category support for automations, scripts, and scenes.
 - **[@bzelch](https://github.com/bzelch)** — `python_transform` support for automations and scripts.
 - **[@gcormier](https://github.com/gcormier)** — Windows installer improvements: removed unused variable and fixed terminal closing after install.
-- **[@ekobres](https://github.com/ekobres)** — Feature flags for `HAMCP_ENABLE_FILESYSTEM_TOOLS` and `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION` in the add-on config, with beta tagging in source and docs.
+- **[@ekobres](https://github.com/ekobres)** — Feature flags for `HAMCP_ENABLE_FILESYSTEM_TOOLS` and the (since removed) `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION` in the add-on config, with beta tagging in source and docs.
 - **[@w3z315](https://github.com/w3z315)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
 - **[@griffinmartin](https://github.com/griffinmartin)** — Added OpenCode (by Anomaly) as a selectable AI client in the setup wizard, with both stdio and streamable HTTP support.
 - **[@hhopke](https://github.com/hhopke)** — Fixed addon API calls to route through HA Core ingress proxy instead of direct container connections, fixing `ha_manage_addon` proxy mode on addon installs.

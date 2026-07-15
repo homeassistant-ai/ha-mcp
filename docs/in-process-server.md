@@ -3,13 +3,16 @@
 The **HA-MCP Custom Component** (`ha_mcp_tools`) can run the **full ha-mcp server
 in-process**, inside the Home Assistant application, and expose it remotely
 through a Home Assistant webhook. This is one of the ways to run ha-mcp — and the
-recommended one.
+recommended one. It is a complete, standalone ha-mcp install — a replacement for
+the add-on, Docker, and uvx/PyPI (stdio) server, not an addition to them. Run
+only one ha-mcp server; never run the in-process server alongside another
+install.
 
 The in-process server is one of **two config-entry types** the component offers.
-The other is the **HA MCP Tools** services entry (the privileged file / YAML
-services). They are complementary and independent — you can add either, or both,
-under the one integration — see [Relationship to the tools services
-entry](#relationship-to-the-tools-services-entry) below.
+The other is the **File & YAML services entry** (**HA-MCP File & YAML Tools**),
+the privileged file / YAML services. They are complementary and independent — you
+can add either, or both, under the one integration — see [Relationship to the
+File & YAML services entry](#relationship-to-the-file--yaml-services-entry) below.
 
 ## Who it's for
 
@@ -46,8 +49,8 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
 
 The in-process server requires **Home Assistant 2026.6.0 or newer**. Older Core
 releases constrain dependencies to versions that cannot run current `ha-mcp`
-servers. On older releases, the component remains available for its HA MCP Tools
-entry with an external add-on or Docker server, but its config flow blocks
+servers. On older releases, the component remains available for its File & YAML
+services entry with an external add-on or Docker server, but its config flow blocks
 creation of the incompatible in-process server entry.
 
 ## Setup
@@ -62,7 +65,7 @@ creation of the incompatible in-process server entry.
    Add Integration**, search for **HA-MCP Custom Component**, and — on the menu
    that appears — choose **HA-MCP Server**, then submit the confirmation.
    Creating the entry starts the server with the defaults. (If you already have
-   the **HA MCP Tools** services entry, use the same **Add Integration** flow;
+   the **HA-MCP File & YAML Tools** entry, use the same **Add Integration** flow;
    the two entries appear together under the one integration tile.)
 3. **Copy your connect URL.** As soon as the server starts, a notification titled
    **HA-MCP Server** confirms it is running and points you to the URL. The
@@ -177,7 +180,7 @@ uses **9583**, so an existing add-on install does not conflict.
 ## Options
 
 Open **Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure** to change these. Saving the options reloads the server so
-the changes take effect. (The **HA MCP Tools** services entry has no options — a
+the changes take effect. (The **HA-MCP File & YAML Tools** entry has no options — a
 Configure there just reports that.)
 
 | Option | Default | What it does |
@@ -302,17 +305,17 @@ permissions define what the server can do.
 
 See [SECURITY.md](../SECURITY.md) for the full threat model.
 
-## Relationship to the tools services entry
+## Relationship to the File & YAML services entry
 
-The in-process server entry and the **HA MCP Tools** services entry are two
+The in-process server entry and the **HA-MCP File & YAML Tools** entry are two
 config-entry types of the same **HA-MCP Custom Component** (`ha_mcp_tools`). They
 are independent: the server works on its own, and most installs never need the
-tools entry. Add it only if you enable ha-mcp's opt-in file and YAML editing
+File & YAML entry. Add it only if you enable ha-mcp's opt-in file and YAML editing
 tools (feature flags, off by default) — those tools call the privileged services
-the tools entry registers, and that applies to every server type, including the
-in-process server. Add or remove it at any time from the same **Add Integration**
-menu (choose **HA MCP Tools**); it changes nothing about how the in-process
-server runs.
+that entry registers, and that applies to every server type, including an
+external add-on, Docker, or stdio server as well as the in-process server. Add or
+remove it at any time from the same **Add Integration** menu (choose **HA-MCP
+File & YAML Tools**); it changes nothing about how the in-process server runs.
 
 ## First start takes a little longer
 

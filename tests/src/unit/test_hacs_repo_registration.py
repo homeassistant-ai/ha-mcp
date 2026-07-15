@@ -1,77 +1,29 @@
-"""Unit tests for tools_mcp_component module.
+"""Unit tests for the HACS repo-registration wait helper in tools_hacs.
 
-Tests the ha_install_mcp_tools error handling path to verify that
-exceptions are properly converted to ToolError with structured error
-information and HACS-specific suggestions.
+``wait_for_repo_registration`` backs ``ha_manage_hacs``'s add_repository
+and download flows. These tests drive the real function against a mocked
+WS client: post-subscribe sample, event-driven detection, the no-relist
+guard for unrelated/malformed dispatches (HACS list payloads can be 2 MB+),
+subscribe-failure fallback, backstop polling, queue-shutdown last-chance
+lookup, and the transport-error-swallow vs programming-error-propagate
+split.
 """
 
 import asyncio
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_mcp_component import MCP_TOOLS_REPO, McpComponentTools
-
-
-class TestHaInstallMcpToolsErrorHandling:
-    """Tests for the exception handler in ha_install_mcp_tools."""
-
-    @pytest.fixture
-    def tools(self):
-        """Create McpComponentTools instance with a mock client."""
-        return McpComponentTools(AsyncMock())
-
-    @pytest.mark.asyncio
-    async def test_exception_raises_tool_error(self, tools):
-        """Exceptions in ha_install_mcp_tools should raise ToolError, not return a dict."""
-        mock_check = AsyncMock(side_effect=RuntimeError("Unexpected HACS failure"))
-        with (
-            patch("ha_mcp.tools.tools_hacs._assert_hacs_available", mock_check),
-            pytest.raises(ToolError) as exc_info,
-        ):
-            await tools.ha_install_mcp_tools(restart=False)
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_exception_includes_hacs_suggestions(self, tools):
-        """ToolError from ha_install_mcp_tools should include HACS-specific suggestions."""
-        mock_check = AsyncMock(side_effect=ConnectionError("Cannot reach HACS"))
-        with (
-            patch("ha_mcp.tools.tools_hacs._assert_hacs_available", mock_check),
-            pytest.raises(ToolError) as exc_info,
-        ):
-            await tools.ha_install_mcp_tools(restart=False)
-
-        error_data = json.loads(str(exc_info.value))
-        suggestions = error_data["error"]["suggestions"]
-        assert any("HACS" in s for s in suggestions)
-        assert any("hacs.xyz" in s for s in suggestions)
-        assert any("GitHub" in s for s in suggestions)
-
-    @pytest.mark.asyncio
-    async def test_exception_preserves_tool_context(self, tools):
-        """ToolError should include the tool name and restart parameter in context."""
-        mock_check = AsyncMock(side_effect=RuntimeError("Something went wrong"))
-        with (
-            patch("ha_mcp.tools.tools_hacs._assert_hacs_available", mock_check),
-            pytest.raises(ToolError) as exc_info,
-        ):
-            await tools.ha_install_mcp_tools(restart=True)
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data.get("tool") == "ha_install_mcp_tools"
-        assert error_data.get("restart") is True
+# Arbitrary repo slug for the waiter to watch; the value itself is not
+# meaningful to the helper (any owner/repo string works).
+WATCHED_REPO = "homeassistant-ai/ha-mcp-integration"
 
 
 def _list_response_with_repo(repo_id: int = 42) -> dict:
     return {
         "success": True,
         "result": [
-            {"full_name": MCP_TOOLS_REPO, "id": repo_id, "installed": False},
+            {"full_name": WATCHED_REPO, "id": repo_id, "installed": False},
         ],
     }
 
@@ -104,9 +56,9 @@ def _build_ws_client(
 class TestWaitForRepoRegistration:
     """Subscription-driven helper that replaces the old 10x1s blind poll.
 
-    Lives in ``tools_hacs`` so both the installer flow
-    (``ha_install_mcp_tools``) and the download flow
-    (``ha_manage_hacs`` via ``_resolve_hacs_repo_id``) can share it.
+    Lives in ``tools_hacs`` behind ``ha_manage_hacs``: ``add_repository``
+    waits on it directly and the download flow reaches it via
+    ``_resolve_hacs_repo_id``.
     """
 
     @pytest.mark.asyncio
@@ -120,7 +72,7 @@ class TestWaitForRepoRegistration:
             subscribe_result=(7, queue),
         )
 
-        repo = await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
+        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
 
         assert repo is not None
         assert str(repo.get("id")) == "42"
@@ -139,7 +91,7 @@ class TestWaitForRepoRegistration:
                 "type": "event",
                 "event": {
                     "action": "registration",
-                    "repository": MCP_TOOLS_REPO,
+                    "repository": WATCHED_REPO,
                     "repository_id": 99,
                 },
             }
@@ -154,7 +106,7 @@ class TestWaitForRepoRegistration:
             subscribe_result=(7, queue),
         )
 
-        repo = await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
+        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
 
         assert repo is not None
         assert str(repo.get("id")) == "99"
@@ -199,7 +151,7 @@ class TestWaitForRepoRegistration:
         # post-subscribe sample (1). Per-event re-listing on the
         # unrelated event would push this to 2.
         repo = await wait_for_repo_registration(
-            ws_client, MCP_TOOLS_REPO, timeout=0.05, backstop_poll_interval=10.0
+            ws_client, WATCHED_REPO, timeout=0.05, backstop_poll_interval=10.0
         )
 
         assert repo is None
@@ -219,7 +171,7 @@ class TestWaitForRepoRegistration:
             subscribe_result=HomeAssistantCommandError("unknown_command"),
         )
 
-        repo = await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
+        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
 
         assert repo is not None
         assert str(repo.get("id")) == "42"
@@ -237,7 +189,7 @@ class TestWaitForRepoRegistration:
         ws_client.unsubscribe_command = AsyncMock()
 
         repo = await wait_for_repo_registration(
-            ws_client, MCP_TOOLS_REPO, timeout=0.05, backstop_poll_interval=0.02
+            ws_client, WATCHED_REPO, timeout=0.05, backstop_poll_interval=0.02
         )
 
         assert repo is None
@@ -267,7 +219,7 @@ class TestWaitForRepoRegistration:
         ws_client.unsubscribe_command = AsyncMock()
 
         repo = await wait_for_repo_registration(
-            ws_client, MCP_TOOLS_REPO, timeout=0.07, backstop_poll_interval=0.02
+            ws_client, WATCHED_REPO, timeout=0.07, backstop_poll_interval=0.02
         )
 
         assert repo is None
@@ -319,7 +271,7 @@ class TestWaitForRepoRegistration:
             subscribe_result=(7, queue),
         )
 
-        repo = await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
+        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
 
         assert repo is not None
         assert str(repo.get("id")) == "42"
@@ -349,7 +301,7 @@ class TestWaitForRepoRegistration:
 
         # Must not propagate the connection error — callers see a
         # wait timeout (None), not a noisy stack trace.
-        repo = await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
+        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
         assert repo is None
         ws_client.unsubscribe_command.assert_awaited_once_with(7)
 
@@ -369,7 +321,7 @@ class TestWaitForRepoRegistration:
         ws_client.unsubscribe_command = AsyncMock()
 
         with pytest.raises(AttributeError):
-            await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
+            await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
         ws_client.unsubscribe_command.assert_not_called()
 
     @pytest.mark.asyncio
@@ -391,7 +343,7 @@ class TestWaitForRepoRegistration:
         # post-subscribe sample (1 call). Per-event re-listing on
         # the malformed payloads would push this to 4.
         repo = await wait_for_repo_registration(
-            ws_client, MCP_TOOLS_REPO, timeout=0.05, backstop_poll_interval=10.0
+            ws_client, WATCHED_REPO, timeout=0.05, backstop_poll_interval=10.0
         )
 
         assert repo is None
@@ -421,7 +373,7 @@ class TestWaitForRepoRegistration:
         # backstop_poll_interval well within the timeout so the
         # backstop tick fires before the wall-clock budget exhausts.
         repo = await wait_for_repo_registration(
-            ws_client, MCP_TOOLS_REPO, timeout=1.0, backstop_poll_interval=0.05
+            ws_client, WATCHED_REPO, timeout=1.0, backstop_poll_interval=0.05
         )
 
         assert repo is not None
@@ -447,7 +399,7 @@ class TestWaitForRepoRegistration:
                 "type": "event",
                 "event": {
                     "action": "registration",
-                    "repository": MCP_TOOLS_REPO,
+                    "repository": WATCHED_REPO,
                     "repository_id": 42,
                 },
             }
@@ -463,7 +415,7 @@ class TestWaitForRepoRegistration:
         ws_client.unsubscribe_command = AsyncMock()
 
         repo = await wait_for_repo_registration(
-            ws_client, MCP_TOOLS_REPO, timeout=0.05, backstop_poll_interval=0.02
+            ws_client, WATCHED_REPO, timeout=0.05, backstop_poll_interval=0.02
         )
 
         # Returns None on timeout (not on the single failed lookup)
@@ -473,9 +425,9 @@ class TestWaitForRepoRegistration:
 
 
 class TestResolveHacsRepoIdUsesWait:
-    """``_resolve_hacs_repo_id`` for GitHub paths now routes through the
-    subscribe-based waiter so the post-add race is handled the same way
-    as in the installer flow."""
+    """``_resolve_hacs_repo_id`` for GitHub paths routes through the
+    subscribe-based waiter so a just-added repo's registration race is
+    handled event-driven rather than by blind polling."""
 
     @pytest.mark.asyncio
     async def test_numeric_id_short_circuits(self):
@@ -521,280 +473,3 @@ class TestResolveHacsRepoIdUsesWait:
         assert display_name == "Mushroom"
         ws_client.subscribe_command.assert_awaited_once()
         ws_client.unsubscribe_command.assert_awaited_once_with(7)
-
-
-class TestHacsDownloadRetry:
-    """``hacs/repository/download`` is wrapped in a 3-attempt retry with
-    exponential backoff because HACS returns a generic ``Command failed:
-    Unknown error`` on transient GitHub-side hiccups (rate-limits, tarball
-    stream interruption). The retry catches that flake class so a single
-    transient doesn't surface as an installation failure."""
-
-    @pytest.mark.asyncio
-    async def test_retries_until_success(self, monkeypatch):
-        """Two transient errors then success → caller sees success, no error."""
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
-        from ha_mcp.tools import tools_mcp_component as mod
-
-        # Skip the real sleep so the test runs in milliseconds, not seconds.
-        sleeps: list[float] = []
-
-        async def _no_sleep(seconds: float) -> None:
-            sleeps.append(seconds)
-
-        monkeypatch.setattr(mod.asyncio, "sleep", _no_sleep)
-
-        ws_client = MagicMock()
-        # Existing repo path so we skip _add_repo_to_hacs and go straight
-        # to /download.
-        ws_client.send_command = AsyncMock(
-            side_effect=[
-                # _ensure_hacs_ready: hacs/info ok
-                {"success": True, "result": {}},
-                # hacs/repositories/list returns the repo (not installed)
-                {
-                    "success": True,
-                    "result": [
-                        {
-                            "full_name": MCP_TOOLS_REPO,
-                            "id": 99,
-                            "installed": False,
-                        }
-                    ],
-                },
-                # download attempt 1: fail
-                HomeAssistantCommandError("Command failed: Unknown error"),
-                # download attempt 2: fail
-                HomeAssistantCommandError("Command failed: Unknown error"),
-                # download attempt 3: succeed
-                {"success": True, "result": {}},
-            ]
-        )
-
-        # _assert_hacs_available short-circuits without touching the WS;
-        # patch it to a no-op so the install path proceeds.
-        async def _ok():
-            return None
-
-        monkeypatch.setattr("ha_mcp.tools.tools_hacs._assert_hacs_available", _ok)
-        # ``get_websocket_client`` is late-imported inside the tool, so
-        # patch where it lives, not on the tool module.
-        monkeypatch.setattr(
-            "ha_mcp.client.websocket_client.get_websocket_client",
-            AsyncMock(return_value=ws_client),
-        )
-
-        # Explicit AsyncMock for ``get_config`` — ``AsyncMock()`` child
-        # attributes default to MagicMock, so ``await client.get_config()``
-        # in ``add_timezone_metadata`` would leak an unawaited coroutine
-        # that pytest's strict warning mode turns into a failure.
-        client_mock = AsyncMock()
-        client_mock.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        tools = McpComponentTools(client_mock)
-        result = await tools.ha_install_mcp_tools(restart=False)
-
-        # ``add_timezone_metadata`` wraps the success response in
-        # ``{"data": ..., "metadata": ...}`` so dig into ``data``.
-        data = result.get("data", result)
-        assert data.get("success") is True
-        assert data.get("installed") is True
-        # Two backoff sleeps fired between the three attempts (2s, 4s).
-        assert sleeps == [2.0, 4.0]
-
-    @pytest.mark.asyncio
-    async def test_exhausts_attempts_surfaces_after_n_message(self, monkeypatch):
-        """All N attempts fail → ToolError mentioning the attempt count
-        and the underlying HACS error so an operator can see what HACS
-        was returning each time."""
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
-        from ha_mcp.tools import tools_mcp_component as mod
-
-        async def _no_sleep(seconds: float) -> None:
-            return None
-
-        monkeypatch.setattr(mod.asyncio, "sleep", _no_sleep)
-
-        ws_client = MagicMock()
-        ws_client.send_command = AsyncMock(
-            side_effect=[
-                # _ensure_hacs_ready
-                {"success": True, "result": {}},
-                # repositories/list — repo present
-                {
-                    "success": True,
-                    "result": [
-                        {
-                            "full_name": MCP_TOOLS_REPO,
-                            "id": 99,
-                            "installed": False,
-                        }
-                    ],
-                },
-                # download attempts 1, 2, 3: all fail
-                HomeAssistantCommandError("Command failed: Unknown error"),
-                HomeAssistantCommandError("Command failed: Unknown error"),
-                HomeAssistantCommandError("Command failed: Unknown error"),
-            ]
-        )
-
-        async def _ok():
-            return None
-
-        monkeypatch.setattr("ha_mcp.tools.tools_hacs._assert_hacs_available", _ok)
-        # ``get_websocket_client`` is late-imported inside the tool, so
-        # patch where it lives, not on the tool module.
-        monkeypatch.setattr(
-            "ha_mcp.client.websocket_client.get_websocket_client",
-            AsyncMock(return_value=ws_client),
-        )
-
-        # Explicit AsyncMock for ``get_config`` — ``AsyncMock()`` child
-        # attributes default to MagicMock, so ``await client.get_config()``
-        # in ``add_timezone_metadata`` would leak an unawaited coroutine
-        # that pytest's strict warning mode turns into a failure.
-        client_mock = AsyncMock()
-        client_mock.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        tools = McpComponentTools(client_mock)
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_install_mcp_tools(restart=False)
-
-        error_data = json.loads(str(exc_info.value))
-        msg = error_data["error"]["message"]
-        assert "after 3 attempts" in msg
-        assert "Unknown error" in msg
-
-    @pytest.mark.asyncio
-    async def test_non_hacs_error_propagates_without_retry(self, monkeypatch):
-        """A non-``HomeAssistantCommandError`` (e.g. transport drop,
-        programming bug) from ``send_command`` must propagate
-        immediately — the retry catches only the HACS "Unknown error"
-        class so real defects surface on the first occurrence
-        instead of being papered over with backoff sleeps."""
-        from ha_mcp.tools import tools_mcp_component as mod
-
-        sleeps: list[float] = []
-
-        async def _no_sleep(seconds: float) -> None:
-            sleeps.append(seconds)
-
-        monkeypatch.setattr(mod.asyncio, "sleep", _no_sleep)
-
-        ws_client = MagicMock()
-        ws_client.send_command = AsyncMock(
-            side_effect=[
-                # _ensure_hacs_ready
-                {"success": True, "result": {}},
-                # repositories/list — repo present
-                {
-                    "success": True,
-                    "result": [
-                        {
-                            "full_name": MCP_TOOLS_REPO,
-                            "id": 99,
-                            "installed": False,
-                        }
-                    ],
-                },
-                # download attempt 1: a non-HACS error (e.g. transport
-                # loss, schema bug). Must propagate without consuming
-                # the second/third side_effect slot.
-                ConnectionError("WS transport dropped"),
-            ]
-        )
-
-        async def _ok():
-            return None
-
-        monkeypatch.setattr("ha_mcp.tools.tools_hacs._assert_hacs_available", _ok)
-        monkeypatch.setattr(
-            "ha_mcp.client.websocket_client.get_websocket_client",
-            AsyncMock(return_value=ws_client),
-        )
-
-        client_mock = AsyncMock()
-        client_mock.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        tools = McpComponentTools(client_mock)
-
-        with pytest.raises(ToolError):
-            await tools.ha_install_mcp_tools(restart=False)
-
-        # No backoff sleeps fired — the non-HACS exception bypassed
-        # the retry loop entirely.
-        assert sleeps == []
-        # The retry consumed exactly one download attempt before
-        # propagating, leaving the other two side_effect slots
-        # untouched.
-        assert ws_client.send_command.await_count == 3
-
-
-class TestAlreadyInstalledVersion:
-    """The 'already installed' path reports the running component version from
-    the shared caps probe when available, else HACS's installed_version
-    (issue #1813 P5 item 1b)."""
-
-    @staticmethod
-    def _ws_client_installed():
-        ws_client = MagicMock()
-        ws_client.send_command = AsyncMock(
-            side_effect=[
-                # _ensure_hacs_ready: hacs/info ok
-                {"success": True, "result": {}},
-                # repositories/list — repo present AND installed
-                {
-                    "success": True,
-                    "result": [
-                        {
-                            "full_name": MCP_TOOLS_REPO,
-                            "id": 99,
-                            "installed": True,
-                            "installed_version": "1.0.0",
-                        }
-                    ],
-                },
-            ]
-        )
-        return ws_client
-
-    async def _run(self, monkeypatch, ws_client, caps):
-        async def _ok():
-            return None
-
-        monkeypatch.setattr("ha_mcp.tools.tools_hacs._assert_hacs_available", _ok)
-        monkeypatch.setattr(
-            "ha_mcp.client.websocket_client.get_websocket_client",
-            AsyncMock(return_value=ws_client),
-        )
-        monkeypatch.setattr(
-            "ha_mcp.tools.tools_mcp_component.get_component_caps",
-            AsyncMock(return_value=caps),
-        )
-        client_mock = AsyncMock()
-        client_mock.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        tools = McpComponentTools(client_mock)
-        return await tools.ha_install_mcp_tools(restart=False)
-
-    @pytest.mark.asyncio
-    async def test_reports_caps_version_when_loaded(self, monkeypatch):
-        from ha_mcp.tools.component_api import ComponentCaps
-
-        caps = ComponentCaps(
-            schema_version=1,
-            component_version="1.2.0",
-            capabilities=frozenset({"search"}),
-            limits={},
-        )
-        result = await self._run(monkeypatch, self._ws_client_installed(), caps)
-
-        data = result.get("data", result)
-        assert data["already_installed"] is True
-        assert data["version"] == "1.2.0"
-        assert "1.2.0" in data["message"]
-
-    @pytest.mark.asyncio
-    async def test_falls_back_to_installed_version_when_caps_none(self, monkeypatch):
-        result = await self._run(monkeypatch, self._ws_client_installed(), None)
-
-        data = result.get("data", result)
-        assert data["already_installed"] is True
-        assert data["version"] == "1.0.0"
-        assert "1.0.0" in data["message"]

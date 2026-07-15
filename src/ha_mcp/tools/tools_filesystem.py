@@ -7,8 +7,10 @@ configuration directory, enabling AI assistants to:
 - List files in allowed directories
 - Write/delete files in restricted directories (www/, themes/, custom_templates/)
 
-**Dependency:** Requires the ha_mcp_tools custom component to be installed.
-The tools will gracefully fail with installation instructions if the component is not available.
+**Dependency:** Requires the ha_mcp_tools custom component, added in HA via its
+"HA-MCP File & YAML Tools" config entry (NOT the "HA-MCP Server" entry, which
+starts a redundant in-process server). The tools will gracefully fail with
+installation instructions if the component is not available.
 
 Feature Flag: Set HAMCP_ENABLE_FILESYSTEM_TOOLS=true to enable these tools.
 """
@@ -141,7 +143,7 @@ def _raise_component_too_old(detail: str) -> NoReturn:
             f"This ha-mcp release requires >= {MIN_COMPONENT_VERSION}. "
             "Update via HACS and restart Home Assistant.",
             suggestions=[
-                "HACS → Integrations → HA MCP Tools → Update",
+                "HACS → Integrations → HA-MCP Custom Component → Update",
                 "Restart Home Assistant after update completes",
                 "Then retry the operation",
             ],
@@ -362,8 +364,17 @@ async def _assert_mcp_tools_available(client: Any) -> None:
         raise_tool_error(
             create_error_response(
                 ErrorCode.COMPONENT_NOT_INSTALLED,
-                f"The {MCP_TOOLS_DOMAIN} custom component is not installed. "
-                "Use ha_install_mcp_tools() to install it via HACS, then restart Home Assistant.",
+                f"The {MCP_TOOLS_DOMAIN} custom component is not installed.",
+                suggestions=[
+                    'Add the repository to HACS: ha_manage_hacs(action="add_repository",'
+                    + ' repository="homeassistant-ai/ha-mcp-integration", category="integration")',
+                    'Download the component: ha_manage_hacs(action="download",'
+                    + ' repository_id="homeassistant-ai/ha-mcp-integration")',
+                    "Restart Home Assistant (ha_restart) so the integration loads",
+                    'In HA, add the "HA-MCP Custom Component" integration and choose the'
+                    + ' "HA-MCP File & YAML Tools" entry — NOT "HA-MCP Server", which starts'
+                    + " a second in-process server this ha-mcp server does not need",
+                ],
             )
         )
 

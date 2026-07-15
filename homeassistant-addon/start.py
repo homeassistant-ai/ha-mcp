@@ -255,7 +255,6 @@ _DEV_ADDON_BETA_KEYS = (
     # install.
     "enable_yaml_edit_confirm",
     "enable_filesystem_tools",
-    "enable_custom_component_integration",
     "enable_code_mode",
     "enable_lite_docstrings",
     "enable_dashboard_screenshot",
@@ -363,8 +362,6 @@ def main() -> int:
     yaml_edit_confirm_in_config = False  # presence flag
     enable_filesystem_tools = False  # default
     filesystem_tools_in_config = False  # presence flag
-    enable_custom_component_integration = False  # default
-    custom_component_in_config = False  # presence flag
     enable_code_mode = False  # default
     code_mode_in_config = False  # presence flag
     enable_dashboard_screenshot = False  # default
@@ -465,15 +462,6 @@ def main() -> int:
             enable_dashboard_screenshot = (
                 raw_dashboard_screenshot
                 if isinstance(raw_dashboard_screenshot, bool)
-                else False
-            )
-            custom_component_in_config = "enable_custom_component_integration" in config
-            raw_custom_component = config.get(
-                "enable_custom_component_integration", False
-            )
-            enable_custom_component_integration = (
-                raw_custom_component
-                if isinstance(raw_custom_component, bool)
                 else False
             )
             code_mode_in_config = "enable_code_mode" in config
@@ -620,10 +608,6 @@ def main() -> int:
         os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(
             enable_filesystem_tools
         ).lower()
-    if custom_component_in_config:
-        os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(
-            enable_custom_component_integration
-        ).lower()
     if dashboard_screenshot_in_config:
         os.environ["HAMCP_ENABLE_DASHBOARD_SCREENSHOT"] = str(
             enable_dashboard_screenshot
@@ -651,11 +635,6 @@ def main() -> int:
                     "enable_filesystem_tools",
                     filesystem_tools_in_config,
                     enable_filesystem_tools,
-                ),
-                (
-                    "enable_custom_component_integration",
-                    custom_component_in_config,
-                    enable_custom_component_integration,
                 ),
                 (
                     "enable_dashboard_screenshot",

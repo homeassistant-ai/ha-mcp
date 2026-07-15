@@ -90,8 +90,7 @@ TRANSFORM_GENERATED_TOOLS: dict[str, ToolStub] = {}
 # into the settings UI so users discover the tool exists and how to enable
 # it. Keep this dict in sync with the ``"beta"`` tag added to each tool's
 # source file (tools_yaml_config.py, tools_yaml_read.py, tools_filesystem.py,
-# tools_mcp_component.py, tools_code.py) — a future rename or removal needs to
-# land in both places.
+# tools_code.py) — a future rename or removal needs to land in both places.
 FEATURE_GATED_TOOLS: dict[str, ToolStub] = {
     "ha_config_set_yaml": {
         "title": "Set YAML Config",
@@ -140,13 +139,6 @@ FEATURE_GATED_TOOLS: dict[str, ToolStub] = {
         "primary_tag": "Files",
         "description": "Delete a file from allowed directories.",
         "disabled_by": "enable_filesystem_tools",
-        "destructiveHint": True,
-    },
-    "ha_install_mcp_tools": {
-        "title": "Install MCP Tools Component",
-        "primary_tag": "Utilities",
-        "description": "Install the ha_mcp_tools custom component via HACS.",
-        "disabled_by": "enable_custom_component_integration",
         "destructiveHint": True,
     },
 }

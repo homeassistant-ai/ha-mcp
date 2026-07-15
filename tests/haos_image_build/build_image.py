@@ -1389,7 +1389,6 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
                 "enable_code_mode": True,
                 "enable_lite_docstrings": False,
                 "enable_filesystem_tools": True,
-                "enable_custom_component_integration": True,
                 # Register ha_get_dashboard_screenshot + the dashboard get/set
                 # screenshot params so the screenshot-engine E2E (haos_only)
                 # can exercise them. The engine add-on is discovered lazily at
@@ -1732,7 +1731,11 @@ def bake_test_state(qcow2: Path) -> None:
         cc_dir = staging / "custom_components"
         cc_dir.mkdir(exist_ok=True)
         for src_rel, domain, title in (
-            ("custom_components/ha_mcp_tools", "ha_mcp_tools", "HA MCP Tools"),
+            (
+                "custom_components/ha_mcp_tools",
+                "ha_mcp_tools",
+                "HA-MCP File & YAML Tools",
+            ),
             (
                 "homeassistant-addon-webhook-proxy/mcp_proxy",
                 "mcp_proxy",

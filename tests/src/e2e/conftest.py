@@ -144,7 +144,6 @@ _EMBEDDED_FEATURE_FLAGS: dict[str, bool] = {
     "enable_yaml_packages_script": True,
     "enable_yaml_packages_scene": True,
     "enable_filesystem_tools": True,
-    "enable_custom_component_integration": True,
     # Strict best-practices gate (#1779) defaults ON with its parent
     # (enable_mandatory_bps); pin it OFF here the same way the testcontainer
     # backend pins ENABLE_STRICT_MANDATORY_BPS=false, so the embedded server's
@@ -1598,7 +1597,6 @@ def ha_container_with_fresh_config(request):
             os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
             os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
             os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
-            os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
             # Strict best-practices gate (#1779) defaults ON with its parent;
             # pin it OFF so the suite's keyless writes aren't hard-blocked. The
             # strict-gate e2e test builds its own server with the flag enabled.
@@ -1938,7 +1936,7 @@ def ha_container_with_fresh_config(request):
         config_path,
         repo_root / "custom_components" / "ha_mcp_tools",
         "ha_mcp_tools",
-        "HA MCP Tools",
+        "HA-MCP File & YAML Tools",
     )
 
     # Embedded backend: build the checkout's wheel into /config, install the
@@ -2129,7 +2127,6 @@ def ha_container_with_fresh_config(request):
         os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
         os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
         os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
-        os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
         # Strict best-practices gate (#1779) defaults ON with its parent; pin it
         # OFF so the suite's keyless writes aren't hard-blocked. The strict-gate
         # e2e test builds its own server with the flag enabled.

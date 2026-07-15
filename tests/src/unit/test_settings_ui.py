@@ -377,15 +377,6 @@ class TestTransformGeneratedTools:
 class TestFeatureGatedTools:
     """Test the FEATURE_GATED_TOOLS dict aligns with the beta tag system."""
 
-    def test_install_mcp_tools_is_gated(self):
-        # Patch76 G7: ha_install_mcp_tools must appear as a stub when its
-        # feature flag is off; otherwise users have no way to discover the
-        # tool exists.
-        assert "ha_install_mcp_tools" in FEATURE_GATED_TOOLS
-        assert FEATURE_GATED_TOOLS["ha_install_mcp_tools"]["disabled_by"] == (
-            "enable_custom_component_integration"
-        )
-
     def test_filesystem_tools_use_addon_option_name(self):
         # disabled_by should reference the dev addon option name (matches
         # how the JS renders "set <code>{disabled_by}</code> in the dev
