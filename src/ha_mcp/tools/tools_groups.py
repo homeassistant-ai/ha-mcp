@@ -27,6 +27,7 @@ from .helpers import (
 )
 from .util_helpers import (
     JSON_STRING_COERCION,
+    build_pagination_metadata,
     wait_for_entity_registered,
     wait_for_entity_removed,
 )
@@ -143,12 +144,32 @@ class GroupTools:
         },
     )
     @log_tool_usage
-    async def ha_config_list_groups(self) -> dict[str, Any]:
+    async def ha_config_list_groups(
+        self,
+        limit: Annotated[
+            int,
+            Field(
+                default=100,
+                ge=1,
+                le=500,
+                description="Max groups to return per page (default: 100)",
+            ),
+        ] = 100,
+        offset: Annotated[
+            int,
+            Field(
+                default=0,
+                ge=0,
+                description="Number of groups to skip for pagination (default: 0)",
+            ),
+        ] = 0,
+    ) -> dict[str, Any]:
         """
-        List all Home Assistant entity groups with their member entities.
+        List Home Assistant entity groups with their member entities.
 
-        Returns all groups created via group.set service or YAML configuration,
-        including:
+        Returns one page of groups created via group.set service or YAML
+        configuration; `total_count` and `has_more` report the full set. Each
+        group includes:
         - Entity ID (group.xxx)
         - Friendly name
         - State (on/off based on member states)
@@ -157,7 +178,8 @@ class GroupTools:
         - All mode (if all entities must be on)
 
         EXAMPLES:
-        - List all groups: ha_config_list_groups()
+        - First page of groups: ha_config_list_groups()
+        - Next page: ha_config_list_groups(offset=100)
 
         **NOTE:** This returns old-style groups (created via group.set or YAML).
         Platform-specific groups (light groups, cover groups) are separate entities.
@@ -184,16 +206,26 @@ class GroupTools:
                         }
                     )
 
-            # Sort by friendly name or entity_id
+            # Sort by friendly name, then entity_id: the unique tiebreaker keeps
+            # groups with the same name in a stable order, so a page boundary
+            # cannot duplicate or skip one when get_states() order shifts.
             groups.sort(
-                key=lambda g: (g.get("friendly_name") or g.get("entity_id", "")).lower()
+                key=lambda g: (
+                    (g.get("friendly_name") or g.get("entity_id", "")).lower(),
+                    g.get("entity_id", ""),
+                )
             )
+
+            total_count = len(groups)
+            paginated_groups = groups[offset : offset + limit]
 
             return {
                 "success": True,
-                "count": len(groups),
-                "groups": groups,
-                "message": f"Found {len(groups)} group(s)",
+                "groups": paginated_groups,
+                **build_pagination_metadata(
+                    total_count, offset, limit, len(paginated_groups)
+                ),
+                "message": f"Found {total_count} group(s)",
             }
 
         except Exception as e:

@@ -42,8 +42,10 @@ class TestDashboardResourceLifecycle:
         )
         assert initial_list["success"] is True
         assert "resources" in initial_list
-        assert "count" in initial_list
-        initial_count = initial_list["count"]
+        assert "total_count" in initial_list
+        # total_count, not count: count is the page size, so it stops tracking
+        # the collection once it holds more than the default limit.
+        initial_count = initial_list["total_count"]
         logger.info(f"Initial resource count: {initial_count}")
 
         # 2. Add a new resource (module type) using set (upsert without resource_id = create)
@@ -71,7 +73,7 @@ class TestDashboardResourceLifecycle:
             "ha_config_list_dashboard_resources", {}
         )
         assert list_data["success"] is True
-        assert list_data["count"] == initial_count + 1
+        assert list_data["total_count"] == initial_count + 1
         assert any(
             r.get("url") == "/local/test-e2e-card.js"
             for r in list_data.get("resources", [])
@@ -120,7 +122,7 @@ class TestDashboardResourceLifecycle:
         list_after_delete = await mcp.call_tool_success(
             "ha_config_list_dashboard_resources", {}
         )
-        assert list_after_delete["count"] == initial_count
+        assert list_after_delete["total_count"] == initial_count
         assert not any(
             r.get("id") == resource_id for r in list_after_delete.get("resources", [])
         )
@@ -301,6 +303,65 @@ class TestDashboardResourceList:
         assert all(isinstance(v, int) for v in by_type.values())
 
         logger.info("List resources structure test completed successfully")
+
+    async def test_list_resources_pagination(self, mcp_client):
+        """Test that limit/offset paginate the resource listing (issue #1869).
+
+        Also pins the aggregate contract: `by_type` and `inline_count`
+        summarise the whole collection, so they must not shrink to the page.
+        That is asserted within a single response — three module resources are
+        created, and the aggregate has to see all three even though the page
+        holds two — so a resource created concurrently cannot skew it.
+        """
+        logger.info("Starting resource pagination test")
+        mcp = MCPAssertions(mcp_client)
+
+        created: list[str] = []
+        try:
+            for i in range(3):
+                add_data = await mcp.call_tool_success(
+                    "ha_config_set_dashboard_resource",
+                    {
+                        "url": f"/local/test-e2e-page-{i}.js",
+                        "resource_type": "module",
+                    },
+                )
+                resource_id = add_data.get("resource_id")
+                assert resource_id is not None, f"No resource_id: {add_data}"
+                created.append(resource_id)
+
+            first = await mcp.call_tool_success(
+                "ha_config_list_dashboard_resources", {"limit": 2, "offset": 0}
+            )
+            assert len(first["resources"]) == 2, f"limit=2 should cut the page: {first}"
+            assert first["count"] == 2, f"count is the page size: {first}"
+            assert first["total_count"] >= 3
+            assert first["has_more"] is True
+            assert first["next_offset"] == 2
+            # The page holds 2 records, but the summary still counts all three.
+            assert first["by_type"]["module"] >= 3, (
+                f"by_type must summarise the collection, not the page: {first}"
+            )
+
+            second = await mcp.call_tool_success(
+                "ha_config_list_dashboard_resources", {"limit": 2, "offset": 2}
+            )
+            assert second["offset"] == 2
+            # Records without an id are dropped rather than collected as None,
+            # which would collide across the pages and fail a correct listing.
+            first_ids = {r["id"] for r in first["resources"] if r.get("id")}
+            second_ids = {r["id"] for r in second["resources"] if r.get("id")}
+            assert not (first_ids & second_ids), (
+                f"pages must not overlap: {first_ids & second_ids}"
+            )
+
+            logger.info(f"Pagination verified across {first['total_count']} resources")
+        finally:
+            for resource_id in created:
+                await mcp.call_tool_success(
+                    "ha_config_delete_dashboard_resource",
+                    {"resource_id": resource_id},
+                )
 
     async def test_list_resources_returns_resource_ids(self, mcp_client):
         """Test that listed resources have IDs for CRUD operations."""
