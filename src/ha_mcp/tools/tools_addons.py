@@ -2572,6 +2572,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
     @mcp.tool(
         tags={"Add-ons"},
         annotations={
+            "openWorldHint": True,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Add-ons",
@@ -2660,6 +2661,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
     @mcp.tool(
         tags={"Add-ons"},
         annotations={
+            "openWorldHint": True,
             "destructiveHint": True,
             "idempotentHint": False,
             "readOnlyHint": False,

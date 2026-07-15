@@ -62,6 +62,7 @@ class CameraTools:
         name="ha_get_camera_image",
         tags={"Camera"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Camera Image",

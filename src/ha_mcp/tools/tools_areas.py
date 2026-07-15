@@ -139,6 +139,7 @@ class AreaTools:
         name="ha_list_floors_areas",
         tags={"Areas & Floors"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "List Floors and Areas",
@@ -390,6 +391,7 @@ class AreaTools:
         name="ha_set_area_or_floor",
         tags={"Areas & Floors"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Area or Floor",
         },
@@ -640,6 +642,7 @@ class AreaTools:
         name="ha_remove_area_or_floor",
         tags={"Areas & Floors"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Area or Floor",

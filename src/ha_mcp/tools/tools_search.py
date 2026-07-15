@@ -1370,6 +1370,7 @@ class SearchTools:
         name="ha_search",
         tags={"Search & Discovery"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Search",
@@ -2604,6 +2605,7 @@ class SearchTools:
         name="ha_get_overview",
         tags={"Search & Discovery"},
         annotations={
+            "openWorldHint": True,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get System Overview",
@@ -3298,6 +3300,7 @@ class SearchTools:
         name="ha_get_state",
         tags={"Search & Discovery"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Entity State",

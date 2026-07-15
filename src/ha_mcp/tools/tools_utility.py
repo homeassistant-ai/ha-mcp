@@ -1166,6 +1166,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(
         tags={"History & Statistics"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Logs",
@@ -1245,6 +1246,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(
         tags={"Utilities"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Evaluate Template",

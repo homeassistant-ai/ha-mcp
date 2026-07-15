@@ -35,6 +35,7 @@ class LabelTools:
         name="ha_config_get_label",
         tags={"Labels & Categories"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Label",
@@ -151,7 +152,11 @@ class LabelTools:
     @tool(
         name="ha_config_set_label",
         tags={"Labels & Categories"},
-        annotations={"destructiveHint": True, "title": "Create or Update Label"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Create or Update Label",
+        },
     )
     @with_auto_backup(domain="label", id_param="label_id")
     @log_tool_usage
@@ -289,6 +294,7 @@ class LabelTools:
         name="ha_config_remove_label",
         tags={"Labels & Categories"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Label",

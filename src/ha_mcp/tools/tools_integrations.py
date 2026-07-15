@@ -292,6 +292,7 @@ class IntegrationTools:
         name="ha_get_integration",
         tags={"Integrations"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Integration",
@@ -1188,7 +1189,11 @@ class IntegrationTools:
     @tool(
         name="ha_set_integration",
         tags={"Integrations"},
-        annotations={"destructiveHint": True, "title": "Set Integration"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Set Integration",
+        },
     )
     @with_auto_backup(domain="integration", id_param="entry_id")
     @log_tool_usage
@@ -1412,6 +1417,7 @@ class IntegrationTools:
         name="ha_remove_helpers_integrations",
         tags={"Helper Entities", "Integrations"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Helper or Integration",

@@ -209,6 +209,7 @@ ENV_ONLY: dict[str, str] = {
     "MCP_HTTP_PORT": "HTTP listener port (alt name) — bind config",
     "MCP_BASE_URL": "Externally advertised base URL — bind/deployment config",
     "MCP_SECRET_PATH": "Secret URL path component for the MCP endpoint (secret)",
+    "MCP_HEALTHZ": "Opt-in /healthz liveness route — bind/deployment config",
     "FASTMCP_PORT": "FastMCP transport bind port",
     "FASTMCP_TRANSPORT": "FastMCP transport selection — bootstrap",
 }

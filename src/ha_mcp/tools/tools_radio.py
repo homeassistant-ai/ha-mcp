@@ -90,6 +90,7 @@ class RadioTools:
         name="ha_manage_radio",
         tags={"Radio Management", "Z-Wave", "Zigbee", "Matter", "Thread"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": False,
             "title": "Manage Radios (Z-Wave / Zigbee / Matter / Thread)",

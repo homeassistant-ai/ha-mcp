@@ -146,6 +146,7 @@ class ResourceTools:
         name="ha_config_list_dashboard_resources",
         tags={"Dashboards"},
         annotations={
+            "openWorldHint": True,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "List Dashboard Resources",
@@ -246,6 +247,7 @@ class ResourceTools:
         name="ha_config_set_dashboard_resource",
         tags={"Dashboards"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "title": "Set Dashboard Resource",
         },
@@ -651,6 +653,7 @@ class ResourceTools:
         name="ha_config_delete_dashboard_resource",
         tags={"Dashboards"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "title": "Delete Dashboard Resource",
         },

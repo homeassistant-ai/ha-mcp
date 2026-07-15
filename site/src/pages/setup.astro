@@ -1443,6 +1443,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         const useSecretPath = isRemote && state.remotePath !== 'webhook-proxy';
         const serverPath = useSecretPath ? '/private_{{RANDOM_STRING}}' : '/mcp';
         const portNote = `<p class="text-xs text-slate-500 mt-2">Optional: Set <code>MCP_PORT</code> to change the default port (8086).</p>`;
+        const healthzNote = `<p class="text-xs text-slate-500 mt-2">Optional: Set <code>MCP_HEALTHZ=true</code> to enable an unauthenticated <code>GET /healthz</code> liveness endpoint for uptime monitors and load balancers (off by default; the response never includes the MCP path).</p>`;
         if (platformId === 'windows') {
           const secretPathEnv = useSecretPath ? `$env:MCP_SECRET_PATH="/private_{{RANDOM_STRING}}"  # Keep this secret!\n` : '';
           deployInstr = `<div class="instruction-block">
@@ -1450,7 +1451,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <pre class="code-block"><code>$env:HOMEASSISTANT_URL="{{HOMEASSISTANT_URL}}"
 $env:HOMEASSISTANT_TOKEN="{{HOMEASSISTANT_TOKEN}}"
 ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
-          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${secretPathNote}${lanHardeningNote}
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${healthzNote}${secretPathNote}${lanHardeningNote}
         </div>`;
         } else {
           const secretPathEnv = useSecretPath ? `export MCP_SECRET_PATH=/private_{{RANDOM_STRING}}  # Keep this secret!\n` : '';
@@ -1459,7 +1460,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
           <pre class="code-block"><code>export HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}
 export HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}
 ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
-          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${secretPathNote}${lanHardeningNote}
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${healthzNote}${secretPathNote}${lanHardeningNote}
         </div>`;
         }
       } else if (derivedDeployment === 'docker') {
@@ -1467,13 +1468,14 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
         const secretPathEnv = useSecretPath ? `-e MCP_SECRET_PATH=/private_{{RANDOM_STRING}}` : '';
         const serverPath = useSecretPath ? '/private_{{RANDOM_STRING}}' : '/mcp';
         const dockerPortNote = `<p class="text-xs text-slate-500 mt-2">Optional: Change <code>-p 8086:8086</code> to use a different port (e.g., <code>-p 9000:8086</code>).</p>`;
+        const healthzNote = `<p class="text-xs text-slate-500 mt-2">Optional: Add <code>-e MCP_HEALTHZ=true</code> to enable an unauthenticated <code>GET /healthz</code> liveness endpoint for uptime monitors and load balancers (off by default; the response never includes the MCP path).</p>`;
         const composeSecretPathLine = useSecretPath
           ? `\n      - MCP_SECRET_PATH=/private_{{RANDOM_STRING}}`
           : '';
         deployInstr = `<div class="instruction-block">
           <h3 class="instruction-title">Start Docker Container</h3>
           <pre class="code-block"><code>docker run -d --name ha-mcp -p 8086:8086 -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}${secretPathEnv ? ' ' + secretPathEnv : ''} ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web</code></pre>
-          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${dockerPortNote}${secretPathNote}${lanHardeningNote}
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${dockerPortNote}${healthzNote}${secretPathNote}${lanHardeningNote}
           <details class="mt-3">
             <summary class="cursor-pointer text-sm text-slate-300 font-medium hover:text-slate-100">Production hardening (docker compose)</summary>
             <p class="text-slate-300 text-sm mt-3 mb-2">A minimum-viable compose paired with an <code>.env</code> file:</p>

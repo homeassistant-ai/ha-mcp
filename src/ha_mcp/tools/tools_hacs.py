@@ -111,6 +111,7 @@ class HacsTools:
         name="ha_get_hacs_info",
         tags={"HACS"},
         annotations={
+            "openWorldHint": True,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get HACS Info",
@@ -214,6 +215,7 @@ class HacsTools:
         name="ha_manage_hacs",
         tags={"HACS"},
         annotations={
+            "openWorldHint": True,
             "destructiveHint": True,
             "title": "Manage HACS",
         },

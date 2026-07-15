@@ -1349,6 +1349,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             name=SKILL_TOOL_NAME,
             description=tool_description,
             annotations={
+                "openWorldHint": False,
                 "readOnlyHint": True,
                 "idempotentHint": True,
                 "title": "Get Home Assistant Best Practices Skill Guide",

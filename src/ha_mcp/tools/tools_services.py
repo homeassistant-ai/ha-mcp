@@ -40,6 +40,7 @@ class ServiceDiscoveryTools:
         name="ha_list_services",
         tags={"Service & Device Control"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "List Available Services",

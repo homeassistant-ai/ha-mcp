@@ -1388,6 +1388,7 @@ class EntityTools:
         name="ha_set_entity",
         tags={"Entity Registry"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Set Entity",
@@ -1723,6 +1724,7 @@ class EntityTools:
         name="ha_get_entity",
         tags={"Entity Registry"},
         annotations={
+            "openWorldHint": False,
             "readOnlyHint": True,
             "idempotentHint": True,
             "title": "Get Entity",
@@ -2014,6 +2016,7 @@ class EntityTools:
         name="ha_remove_entity",
         tags={"Entity Registry"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Entity",

@@ -1259,6 +1259,7 @@ class DashboardConfigTools:
         name="ha_config_get_dashboard",
         tags={"Dashboards"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": False,
             "idempotentHint": True,
             "title": "Get Dashboard",
@@ -1815,7 +1816,11 @@ class DashboardConfigTools:
     @tool(
         name="ha_config_set_dashboard",
         tags={"Dashboards"},
-        annotations={"destructiveHint": True, "title": "Create or Update Dashboard"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Create or Update Dashboard",
+        },
     )
     @with_auto_backup(domain="dashboard", id_param="url_path")
     @log_tool_usage
@@ -2743,7 +2748,11 @@ class DashboardConfigTools:
     @tool(
         name="ha_config_delete_dashboard",
         tags={"Dashboards"},
-        annotations={"destructiveHint": True, "title": "Delete Dashboard"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Delete Dashboard",
+        },
     )
     @with_auto_backup(domain="dashboard", id_param="url_path")
     @log_tool_usage

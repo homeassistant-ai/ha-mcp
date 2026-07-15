@@ -9,6 +9,7 @@ Every tool MUST declare its safety behavior with one of:
 Additionally, every tool SHOULD have a title for UI display.
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -34,6 +35,10 @@ def _parse_decorator_args(decorator_args: str, func_name: str, file_name: str) -
     )
     has_title = "title" in decorator_args
     has_tags = "tags=" in decorator_args or "tags =" in decorator_args
+    has_open_world = (
+        re.search(r'["\']openWorldHint["\']\s*:\s*(True|False)', decorator_args)
+        is not None
+    )
 
     return {
         "file": file_name,
@@ -43,6 +48,7 @@ def _parse_decorator_args(decorator_args: str, func_name: str, file_name: str) -
         "has_explicit_non_destructive_hint": has_explicit_non_destructive,
         "has_title": has_title,
         "has_tags": has_tags,
+        "has_open_world_hint": has_open_world,
         "decorator_args": decorator_args.strip(),
     }
 
@@ -56,11 +62,12 @@ def extract_tool_decorators(file_path: Path) -> list[dict]:
     # such as ``@with_auto_backup(domain="entity", id_param="entity_id",
     # client=client)`` between ``@mcp.tool`` and ``async def``; the old
     # bare-only ``(?:@\w+\s*)*`` dropped those backed-up tools from the count.
-    # ``\([^()]*\)`` does NOT span nested parens, so a decorator whose args
-    # contain them (e.g. ``ha_set_entity``'s ``id_fn=lambda``) stays unmatched
-    # — pre-existing, not introduced here. Requiring decorators-then-
-    # ``async def`` (not arbitrary text) keeps docstring ``@mcp.tool(...)``
-    # mentions from matching.
+    # ``\([^()]*\)`` does NOT span nested parens, so a closure-form tool whose
+    # decorator args contain them would stay unmatched; no tool does today
+    # (``ha_set_entity``'s ``id_fn=lambda`` is class-form, so Pattern 2 takes
+    # it), and test_tool_scan_finds_every_annotated_tool fails loudly if one
+    # ever falls out. Requiring decorators-then-``async def`` (not arbitrary
+    # text) keeps docstring ``@mcp.tool(...)`` mentions from matching.
     pattern = r"@mcp\.tool\(([^)]*)\)\s*(?:@\w+(?:\([^()]*\))?\s*)*async def (\w+)"
     tools = [
         _parse_decorator_args(m.group(1), m.group(2), file_path.name)
@@ -91,6 +98,7 @@ def extract_tool_decorators(file_path: Path) -> list[dict]:
                 "has_destructive_hint": False,
                 "has_explicit_non_destructive_hint": False,
                 "has_title": False,
+                "has_open_world_hint": False,
                 "decorator_args": "",
             }
         )
@@ -161,6 +169,156 @@ class TestToolAnnotations:
             + "\n  ".join(missing_titles)
         )
 
+    def test_all_tools_have_open_world_hint(self):
+        """Every tool must set openWorldHint explicitly (true or false).
+
+        The MCP default is true, so an omitted value silently marks a local
+        tool as open-world. This guards the explicit value; the true/false
+        choice itself is a behaviour judgement left to review.
+        """
+        tools = get_all_tools()
+
+        missing_open_world = [
+            f"{tool['file']}:{tool['function']}"
+            for tool in tools
+            if not tool["has_open_world_hint"]
+        ]
+
+        assert not missing_open_world, (
+            f"Tools missing openWorldHint annotation ({len(missing_open_world)}):\n  "
+            + "\n  ".join(missing_open_world)
+            + "\n\nAdd openWorldHint (true if the tool reaches external systems, "
+            "false if it only touches local Home Assistant state) to each "
+            "@tool() decorator; the MCP default is true."
+        )
+
+    def test_tool_scan_finds_every_annotated_tool(self):
+        """The scan must not silently drop a tool from the checks above.
+
+        The closure-form pattern ``@mcp.tool\\(([^)]*)\\)`` cannot span a ``)``,
+        so a future decorator whose args contain one (e.g. a title like
+        "Get Logs (verbose)") would fall out of get_all_tools() and escape every
+        annotation assertion -- inheriting the MCP default openWorldHint=true
+        unnoticed. Every tool sets openWorldHint exactly once, so the scanned
+        count must equal the occurrences across the tool files; a drop breaks
+        parity and fails here instead of passing silently.
+        """
+        tools = get_all_tools()
+        occurrences = sum(
+            py_file.read_text(encoding="utf-8").count("openWorldHint")
+            for py_file in sorted(get_tools_dir().glob("*.py"))
+            if not py_file.name.startswith("_")
+        )
+
+        assert len(tools) == occurrences, (
+            f"Tool scan found {len(tools)} tools but {occurrences} openWorldHint "
+            f"occurrences across the tool files. A tool the regex cannot parse is "
+            f"dropped from get_all_tools() and skips every annotation check. Fix "
+            f"the pattern in extract_tool_decorators() (a ')' inside the decorator "
+            f"args is the usual cause) rather than adjusting this count."
+        )
+
+    def test_server_registered_tools_have_open_world_hint(self):
+        """Tools registered directly on the server must also set openWorldHint.
+
+        get_all_tools() only scans src/ha_mcp/tools, so ha_get_skill_guide --
+        registered in server.py via self.mcp.tool(...) -- would otherwise keep
+        the implicit open-world default. Parse server.py's AST and assert every
+        self.mcp.tool(...) registration carries openWorldHint.
+        """
+        server_py = get_tools_dir().parent / "server.py"
+        tree = ast.parse(server_py.read_text(encoding="utf-8"), filename=str(server_py))
+
+        registrations = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "tool"
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "mcp"
+        ]
+        assert registrations, (
+            "no self.mcp.tool(...) registrations found in server.py -- "
+            "the scanner's shape assumption drifted"
+        )
+
+        # ha_get_skill_guide registers as name=SKILL_TOOL_NAME, not a literal, so
+        # resolve module-level string constants to keep failures naming the tool
+        # rather than "<unknown>".
+        constants = {
+            target.id: node.value.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+
+        def tool_name(call: ast.Call) -> str:
+            value = next((kw.value for kw in call.keywords if kw.arg == "name"), None)
+            if isinstance(value, ast.Constant):
+                return str(value.value)
+            if isinstance(value, ast.Name):
+                return constants.get(value.id, value.id)
+            return "<unknown>" if value is None else ast.unparse(value)
+
+        missing = []
+        for call in registrations:
+            name = tool_name(call)
+            annotations = next(
+                (kw.value for kw in call.keywords if kw.arg == "annotations"), None
+            )
+            keys = (
+                {k.value for k in annotations.keys if isinstance(k, ast.Constant)}
+                if isinstance(annotations, ast.Dict)
+                else set()
+            )
+            if "openWorldHint" not in keys:
+                missing.append(name)
+
+        assert not missing, (
+            f"server-registered tools missing openWorldHint: {missing}. Add it to "
+            "the annotations dict in the self.mcp.tool(...) call in server.py."
+        )
+
+    def test_search_proxy_tools_have_open_world_hint(self):
+        """Runtime tool-search proxies must also set openWorldHint.
+
+        When ENABLE_TOOL_SEARCH=true, CategorizedSearchTransform builds
+        ha_search_tools and the ha_call_* proxies at runtime via
+        ToolAnnotations(...), which the src/ha_mcp/tools scan never sees. Assert
+        every ToolAnnotations construction in categorized_search.py sets
+        openWorldHint so those proxies don't inherit the implicit default.
+        """
+        transform_py = get_tools_dir().parent / "transforms" / "categorized_search.py"
+        tree = ast.parse(
+            transform_py.read_text(encoding="utf-8"), filename=str(transform_py)
+        )
+        constructions = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "ToolAnnotations"
+        ]
+        assert constructions, (
+            "no ToolAnnotations(...) constructions found in categorized_search.py "
+            "-- the scanner's shape assumption drifted"
+        )
+
+        missing = sum(
+            1
+            for c in constructions
+            if not any(kw.arg == "openWorldHint" for kw in c.keywords)
+        )
+        assert missing == 0, (
+            f"{missing} of {len(constructions)} ToolAnnotations(...) in "
+            "categorized_search.py omit openWorldHint; the runtime search proxies "
+            "would inherit the MCP default. Set it explicitly on each proxy."
+        )
+
     def test_all_tools_have_tags(self):
         """Every tool must have a tags= parameter for categorization."""
         tools = get_all_tools()
@@ -180,9 +338,7 @@ class TestToolAnnotations:
     def test_ha_check_config_removed_and_folded(self):
         """ha_check_config was removed and folded into ha_get_system_health
         (include='config_check'). Lock the removal at the source registration so
-        a bad merge that re-adds the @tool block fails CI. (Checks the source
-        string directly rather than get_all_tools(), whose regex can't parse
-        ha_get_system_health's paren-containing title.)"""
+        a bad merge that re-adds the @tool block fails CI."""
         system_src = (get_tools_dir() / "tools_system.py").read_text(encoding="utf-8")
         assert 'name="ha_check_config"' not in system_src, (
             "ha_check_config was removed in favor of "

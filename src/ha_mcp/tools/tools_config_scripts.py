@@ -99,6 +99,7 @@ class ConfigScriptTools:
         name="ha_config_get_script",
         tags={"Scripts"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Script Config",
@@ -409,6 +410,7 @@ class ConfigScriptTools:
         name="ha_config_set_script",
         tags={"Scripts"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Script",
         },
@@ -860,6 +862,7 @@ class ConfigScriptTools:
         name="ha_config_remove_script",
         tags={"Scripts"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Script",
