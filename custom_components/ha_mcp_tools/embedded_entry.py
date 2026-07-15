@@ -348,9 +348,8 @@ def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
             # valid for the rest of their TTL.
             data[DATA_OAUTH_SIGNING_KEY] = secrets.token_hex(32)
             changed = True
-        # Consume the override fields once applied — a DELIBERATE divergence
-        # from the webhook_id / secret_path overrides above, which persist.
-        # entry.options is readable through the server's own tools
+        # Consume the OAuth override fields once applied. entry.options is
+        # readable through the server's own tools
         # (ha_get_integration(include_options=True) rebuilds it from the
         # options-form suggested_values), so a rotated client_secret left here
         # in cleartext would let a pre-restart old-identity token holder read
@@ -360,6 +359,23 @@ def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
         # (config_flow._oauth_creds_hint), so nothing is lost. Cleared even
         # when the override matched the current value: the cleartext must not
         # linger regardless of whether it changed data.
+        #
+        # DELIBERATE divergence from the webhook_id / secret_path overrides
+        # above, which persist. Three reasons the OAuth secret is different:
+        # (1) A client_secret override IS the OAuth rotation path and gates a
+        #     per-connection revocable bearer, so a lingering copy defeats the
+        #     very revocation the rotation performs. secret_path's own rotation
+        #     (OPT_REGENERATE_SECRETS) already clears its override, so that
+        #     path is not self-defeating; a standalone secret_path override is
+        #     configuration, not rotation.
+        # (2) A connected legacy client learns the OAuth secret only via this
+        #     options leak (entry.data is not tool-exposed; the webhook is
+        #     OAuth-gated). secret_path gates the direct LAN port, and per
+        #     SECURITY.md the local network is the trusted zone and the client
+        #     is a trusted principal — LAN-peer access to standard-mode
+        #     endpoints is explicitly out of scope.
+        # (3) Persisting the webhook_id/secret_path override is deliberate UX
+        #     (the admin sees their configured value in the form).
         if options.get(OPT_OAUTH_CLIENT_ID):
             options[OPT_OAUTH_CLIENT_ID] = ""
             changed = True
