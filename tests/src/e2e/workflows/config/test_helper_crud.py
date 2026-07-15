@@ -27,6 +27,15 @@ from ...utilities.wait_helpers import (
 logger = logging.getLogger(__name__)
 
 
+def _helper_key(helper: dict) -> str | None:
+    """Identify a helper record across pages.
+
+    Component-served records carry entity_id; legacy ones carry the storage id.
+    Neither is guaranteed on every record, so callers must handle None.
+    """
+    return helper.get("entity_id") or helper.get("id")
+
+
 def get_entity_id_from_response(data: dict, helper_type: str) -> str | None:
     """Extract entity_id from helper create response.
 
@@ -111,8 +120,10 @@ class TestInputBooleanCRUD:
         assert second["offset"] == 2
 
         # Offset advanced the window, so no record repeats across the pages.
-        first_ids = {h.get("entity_id") or h.get("id") for h in first["helpers"]}
-        second_ids = {h.get("entity_id") or h.get("id") for h in second["helpers"]}
+        # Records without either key are dropped rather than collected as None,
+        # which would collide across the pages and fail a correct listing.
+        first_ids = {k for h in first["helpers"] if (k := _helper_key(h))}
+        second_ids = {k for h in second["helpers"] if (k := _helper_key(h))}
         assert not (first_ids & second_ids), (
             f"pages must not overlap: {first_ids & second_ids}"
         )

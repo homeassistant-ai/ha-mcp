@@ -347,8 +347,10 @@ class TestDashboardResourceList:
                 "ha_config_list_dashboard_resources", {"limit": 2, "offset": 2}
             )
             assert second["offset"] == 2
-            first_ids = {r.get("id") for r in first["resources"]}
-            second_ids = {r.get("id") for r in second["resources"]}
+            # Records without an id are dropped rather than collected as None,
+            # which would collide across the pages and fail a correct listing.
+            first_ids = {r["id"] for r in first["resources"] if r.get("id")}
+            second_ids = {r["id"] for r in second["resources"] if r.get("id")}
             assert not (first_ids & second_ids), (
                 f"pages must not overlap: {first_ids & second_ids}"
             )
