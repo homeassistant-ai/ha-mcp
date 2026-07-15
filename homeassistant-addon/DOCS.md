@@ -521,7 +521,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_config_delete_dashboard` — Delete a storage-mode dashboard completely.
 - `ha_config_delete_dashboard_resource` — Delete a dashboard resource.
 - `ha_config_get_dashboard` — Get dashboard info - list all dashboards, get config, or search for cards.
-- `ha_config_list_dashboard_resources` — List all Lovelace dashboard resources (custom cards, themes, CSS/JS).
+- `ha_config_list_dashboard_resources` — List Lovelace dashboard resources (custom cards, themes, CSS/JS).
 - `ha_config_set_dashboard` — Create or update a Home Assistant dashboard. MUST call ha_get_skill_guide first.
 - `ha_config_set_dashboard_resource` — Create or update a dashboard resource (inline code or external URL).
 
@@ -550,7 +550,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_write_file` **(beta — dev channel only)** — Write a file to allowed directories in the Home Assistant config.
 
 ### Groups
-- `ha_config_list_groups` — List all Home Assistant entity groups with their member entities.
+- `ha_config_list_groups` — List Home Assistant entity groups with their member entities.
 - `ha_config_remove_group` — Remove a service-based Home Assistant entity group via the group.remove service.
 - `ha_config_set_group` — Create or update a service-based Home Assistant entity group via the group.set service.
 
@@ -559,7 +559,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_manage_hacs` — Manage HACS (Home Assistant Community Store) — install/update or add custom repositories.
 
 ### Helper Entities
-- `ha_config_list_helpers` — List all Home Assistant helpers of a specific type with their configurations.
+- `ha_config_list_helpers` — List Home Assistant helpers of a specific type with their configurations.
 - `ha_config_set_helper` — Create or update Home Assistant helper entities and config subentries
 - `ha_remove_helpers_integrations` — Remove a Home Assistant helper or integration config entry.
 

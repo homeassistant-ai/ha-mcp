@@ -816,12 +816,20 @@
   {
     "name": "ha_config_list_dashboard_resources",
     "title": "List Dashboard Resources",
-    "description": "List all Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns all registered resources. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the content\ninstead of the full encoded URL to save tokens.\n\nArgs:\n    include_content: If True, includes full decoded content for inline\n        resources in \"_content\" field. Default False (150-char preview only).\n\nResource types:\n- module: ES6 JavaScript modules (modern custom cards)\n- js: Legacy JavaScript files\n- css: CSS stylesheets\n\nEach resource has a unique ID for update/delete operations.\n\nEXAMPLES:\n- List all resources: ha_config_list_dashboard_resources()\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n\nNote: Home Assistant 2026.6+ exposes resource management in the UI by\ndefault, and API access works regardless of UI availability.",
+    "description": "List Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns one page of registered resources; `total_count` and `has_more`\nreport the full set. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the content\ninstead of the full encoded URL to save tokens.\n\n`inline_count` and `by_type` summarise every resource, not just this page.\n\nArgs:\n    include_content: If True, includes full decoded content for inline\n        resources in \"_content\" field. Default False (150-char preview only).\n\nResource types:\n- module: ES6 JavaScript modules (modern custom cards)\n- js: Legacy JavaScript files\n- css: CSS stylesheets\n\nEach resource has a unique ID for update/delete operations.\n\nEXAMPLES:\n- First page of resources: ha_config_list_dashboard_resources()\n- Next page: ha_config_list_dashboard_resources(offset=100)\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n\nNote: Home Assistant 2026.6+ exposes resource management in the UI by\ndefault, and API access works regardless of UI availability.",
     "inputSchema": {
       "properties": {
         "include_content": {
           "type": "Annotated[bool, Field(description='Include full decoded content for inline resources. Default False to save tokens (shows 150-char preview instead).')]",
           "default": false
+        },
+        "limit": {
+          "type": "Annotated[int, Field(default=100, ge=1, le=500, description='Max resources to return per page (default: 100)')]",
+          "default": 100
+        },
+        "offset": {
+          "type": "Annotated[int, Field(default=0, ge=0, description='Number of resources to skip for pagination (default: 0)')]",
+          "default": 0
         }
       }
     },
@@ -1460,8 +1468,19 @@
   {
     "name": "ha_config_list_groups",
     "title": "List Groups",
-    "description": "List all Home Assistant entity groups with their member entities.\n\nReturns all groups created via group.set service or YAML configuration,\nincluding:\n- Entity ID (group.xxx)\n- Friendly name\n- State (on/off based on member states)\n- Member entities\n- Icon (if set)\n- All mode (if all entities must be on)\n\nEXAMPLES:\n- List all groups: ha_config_list_groups()\n\n**NOTE:** This returns old-style groups (created via group.set or YAML).\nPlatform-specific groups (light groups, cover groups) are separate entities.",
-    "inputSchema": {},
+    "description": "List Home Assistant entity groups with their member entities.\n\nReturns one page of groups created via group.set service or YAML\nconfiguration; `total_count` and `has_more` report the full set. Each\ngroup includes:\n- Entity ID (group.xxx)\n- Friendly name\n- State (on/off based on member states)\n- Member entities\n- Icon (if set)\n- All mode (if all entities must be on)\n\nEXAMPLES:\n- First page of groups: ha_config_list_groups()\n- Next page: ha_config_list_groups(offset=100)\n\n**NOTE:** This returns old-style groups (created via group.set or YAML).\nPlatform-specific groups (light groups, cover groups) are separate entities.",
+    "inputSchema": {
+      "properties": {
+        "limit": {
+          "type": "Annotated[int, Field(default=100, ge=1, le=500, description='Max groups to return per page (default: 100)')]",
+          "default": 100
+        },
+        "offset": {
+          "type": "Annotated[int, Field(default=0, ge=0, description='Number of groups to skip for pagination (default: 0)')]",
+          "default": 0
+        }
+      }
+    },
     "annotations": {
       "openWorldHint": false,
       "idempotentHint": true,
@@ -1641,11 +1660,19 @@
   {
     "name": "ha_config_list_helpers",
     "title": "List Helpers",
-    "description": "List all Home Assistant helpers of a specific type with their configurations.\n\nReturns complete configuration for all helpers of the specified type including:\n- id (immutable storage key), entity_id (current — address the helper by\n  this, where available), name (current display name), original_name\n  (creation-time name), icon\n- Type-specific settings (min/max for input_number, options for input_select, etc.)\n- Area and label assignments\n\nFor a helper renamed in the UI, id/original_name keep the storage values while\nentity_id/name reflect the current entity registry (entity_id is the identifier\nha_config_set_helper resolves against, so prefer it over id for a renamed helper).\nentity_id/original_name are present only for storage-collection helpers matched in\nthe entity registry — types with no backing entity (e.g. tag), and every record when\nthe registry read degrades, carry only id/name (a warning flags the degraded case).\n\nSUPPORTED HELPER TYPES:\n- input_button: Virtual buttons for triggering automations\n- input_boolean: Toggle switches/checkboxes\n- input_select: Dropdown selection lists\n- input_number: Numeric sliders/input boxes\n- input_text: Text input fields\n- input_datetime: Date/time pickers\n- counter: Counters with increment/decrement/reset\n- timer: Countdown timers with start/pause/cancel\n- schedule: Weekly schedules with time ranges (on/off per day)\n- zone: Geographical zones for presence detection\n- person: Person entities linked to device trackers\n- tag: NFC/QR tags for automation triggers\n\nEXAMPLES:\n- List all number helpers: ha_config_list_helpers(\"input_number\")\n- List all counters: ha_config_list_helpers(\"counter\")\n- List all zones: ha_config_list_helpers(\"zone\")\n- List all persons: ha_config_list_helpers(\"person\")\n- List all tags: ha_config_list_helpers(\"tag\")\n- List every helper type at once: ha_config_list_helpers(\"all\")\n\n**NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.\n\nFlow-based types (template / group / utility_meter / derivative / etc.)\nrequire the ha_mcp_tools custom component (>= 1.1.0) and are served only\nthrough it; storage types are listed on all installs. Requesting a flow\ntype without the component returns a COMPONENT_NOT_INSTALLED error.\n\nPass helper_type=\"all\" to enumerate every helper type in a single call.\nEach record carries its own ``helper_type``. This mode is component-only\n(there is no single built-in command that lists all types): without the\nha_mcp_tools component it returns a COMPONENT_NOT_INSTALLED error rather\nthan a partial or empty list.\n\nFor detailed helper documentation, use ha_get_skill_guide.",
+    "description": "List Home Assistant helpers of a specific type with their configurations.\n\nReturns one page of helpers; `total_count` and `has_more` report the full\nset. Each record carries the complete configuration for its helper,\nincluding:\n- id (immutable storage key), entity_id (current — address the helper by\n  this, where available), name (current display name), original_name\n  (creation-time name), icon\n- Type-specific settings (min/max for input_number, options for input_select, etc.)\n- Area and label assignments\n\nFor a helper renamed in the UI, id/original_name keep the storage values while\nentity_id/name reflect the current entity registry (entity_id is the identifier\nha_config_set_helper resolves against, so prefer it over id for a renamed helper).\nentity_id/original_name are present only for storage-collection helpers matched in\nthe entity registry — types with no backing entity (e.g. tag), and every record when\nthe registry read degrades, carry only id/name (a warning flags the degraded case).\n\nSUPPORTED HELPER TYPES:\n- input_button: Virtual buttons for triggering automations\n- input_boolean: Toggle switches/checkboxes\n- input_select: Dropdown selection lists\n- input_number: Numeric sliders/input boxes\n- input_text: Text input fields\n- input_datetime: Date/time pickers\n- counter: Counters with increment/decrement/reset\n- timer: Countdown timers with start/pause/cancel\n- schedule: Weekly schedules with time ranges (on/off per day)\n- zone: Geographical zones for presence detection\n- person: Person entities linked to device trackers\n- tag: NFC/QR tags for automation triggers\n\nEXAMPLES:\n- List all number helpers: ha_config_list_helpers(\"input_number\")\n- List all counters: ha_config_list_helpers(\"counter\")\n- List all zones: ha_config_list_helpers(\"zone\")\n- List all persons: ha_config_list_helpers(\"person\")\n- List all tags: ha_config_list_helpers(\"tag\")\n- List every helper type at once: ha_config_list_helpers(\"all\")\n- Next page: ha_config_list_helpers(\"input_boolean\", offset=100)\n\n**NOTE:** Storage types list what HA's ``{type}/list`` command returns:\nthe storage-backed helpers (created via UI/API), not the YAML-defined\nones. ``person`` is the exception — HA lists its YAML-configured persons\nalongside the storage ones, so both appear here.\n\nFlow-based types (template / group / utility_meter / derivative / etc.)\nrequire the ha_mcp_tools custom component (>= 1.1.0) and are served only\nthrough it; storage types are listed on all installs. Requesting a flow\ntype without the component returns a COMPONENT_NOT_INSTALLED error.\n\nPass helper_type=\"all\" to enumerate every helper type in a single call.\nEach record carries its own ``helper_type``. This mode is component-only\n(there is no single built-in command that lists all types): without the\nha_mcp_tools component it returns a COMPONENT_NOT_INSTALLED error rather\nthan a partial or empty list.\n\nFor detailed helper documentation, use ha_get_skill_guide.",
     "inputSchema": {
       "properties": {
         "helper_type": {
           "type": "Annotated[Literal['input_button', 'input_boolean', 'input_select', 'input_number', 'input_text', 'input_datetime', 'counter', 'timer', 'schedule', 'zone', 'person', 'tag', 'all'] | SUPPORTED_HELPERS, Field(description=\"Helper type to list. Storage types are listed on all installs; flow-based types require the ha_mcp_tools custom component. Pass 'all' to list every helper type in one call (also requires the ha_mcp_tools component).\")]"
+        },
+        "limit": {
+          "type": "Annotated[int, Field(default=100, ge=1, le=500, description='Max helpers to return per page (default: 100)')]",
+          "default": 100
+        },
+        "offset": {
+          "type": "Annotated[int, Field(default=0, ge=0, description='Number of helpers to skip for pagination (default: 0)')]",
+          "default": 0
         }
       },
       "required": [
