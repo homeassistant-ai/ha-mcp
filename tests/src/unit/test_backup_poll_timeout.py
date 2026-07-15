@@ -582,6 +582,32 @@ class TestPollBackupCompletionProgress:
             assert call.kwargs["total"] == 60
 
     @pytest.mark.asyncio
+    async def test_heartbeat_is_throttled_not_emitted_every_poll(self):
+        """kingpanther13 review: `test_emits_periodic_heartbeat_during_long_wait`
+        sets `poll_interval == _BACKUP_PROGRESS_INTERVAL_S`, so every tick
+        clears the `next_progress_at` throttle and the test can't tell a
+        working throttle from no throttle at all. With `poll_interval=2`
+        over a 30s wait (15 ticks), only the ~10s-spaced throttle should
+        fire: initial + ticks at 10/20/30 = 4, not 15."""
+        ctx = self._make_ctx()
+        ws = _ws_client(
+            *[_backup_info("create_backup", "in_progress", []) for _ in range(14)],
+            _backup_info("idle", "completed", [_backup_entry("Slow")]),
+        )
+        with patch("ha_mcp.tools.backup.asyncio.sleep", new=AsyncMock()):
+            result = await _poll_backup_completion(
+                ws,
+                name="Slow",
+                backup_job_id="job-1",
+                max_wait_seconds=30,
+                poll_interval=2,
+                agent_id="backup.local",
+                ctx=ctx,
+            )
+        assert result["success"] is True
+        assert ctx.report_progress.await_count == 4
+
+    @pytest.mark.asyncio
     async def test_no_ctx_does_not_raise(self):
         """Legacy callers passing no ctx must keep working unchanged."""
         ws = _ws_client(_backup_info("idle", "completed", [_backup_entry("Fast")]))

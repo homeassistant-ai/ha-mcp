@@ -52,13 +52,20 @@ logger = logging.getLogger(__name__)
 # waits however long the job takes. Our poll-based design still needs a
 # finite bound per tool call, so this mirrors _SAFETY_BACKUP_MAX_WAIT_S (the
 # codebase's existing "generous but bounded" ceiling) rather than inventing a
-# third number. The prior 300s was tighter than the reported case (#1861: a
-# client that received no MCP progress notifications for 300s concluded the
-# connection was dead and aborted, even though the snapshot can legitimately
-# take >5 minutes and continues running server-side after the client gives
-# up). 120s before that underfit slow HA instances too (#1433: poll loop
-# exited while HA was still in state="create_backup", the wrapper treated
-# that as failure, retried, and produced duplicate backups).
+# third number.
+#
+# Two distinct problems, both fixed in the same PR, by different mechanisms:
+# the client-side abort reported in #1861 (an MCP client that received no
+# progress notifications for 300s concluded the connection was dead) is
+# fixed by the ctx.report_progress heartbeats in _poll_backup_completion,
+# not by this constant. Raising it from 300 to 1800 instead fixes *our own*
+# poll loop giving up on a legitimately >5-minute backup — the job keeps
+# running server-side after our loop times out, so a too-tight ceiling here
+# means _poll_backup_completion raises TIMEOUT_OPERATION on a backup that
+# would otherwise have succeeded. 120s before that underfit slow HA
+# instances too (#1433: poll loop exited while HA was still in
+# state="create_backup", the wrapper treated that as failure, retried, and
+# produced duplicate backups).
 _BACKUP_MAX_WAIT_S = 1800
 _BACKUP_POLL_INTERVAL_S = 2
 # The pre-restore safety backup is a *full* backup (include_database=True, plus
@@ -1023,8 +1030,9 @@ def _newest_backup_id(backups: list[dict[str, Any]]) -> str | None:
 
     Entries with a missing/malformed date are excluded from consideration —
     they can never be "the newest" — but that does not make them safe to
-    delete; ``delete_backup`` fails closed on an unparseable *target* date
-    separately, before this function is ever consulted for the target.
+    delete; ``delete_backup`` fails closed on an unparseable target date
+    separately, so an undated target can never be deleted regardless of
+    this function's result.
     """
     dated = [
         (b.get("backup_id"), parsed)
@@ -1050,14 +1058,18 @@ async def delete_backup(
     beyond the gate, applied in order:
 
     1. ``confirm=True`` is required.
-    2. The backup must exist (verified against ``backup/info``, mirroring
-       ``restore_backup`` — HA's own ``backup/delete`` silently no-ops on
-       an unknown ID rather than erroring). If ``backup/info`` itself
-       reports ``agent_errors`` (an agent failed to enumerate its backups),
-       the returned list may be incomplete — refuse deletion rather than
-       evaluate the guards below against a possibly-partial view.
+    2. ``backup/info`` must not report ``agent_errors`` — evaluated before
+       the "does it exist" check right below, since an agent that failed
+       to enumerate its backups could make that list (and every guard
+       below) incomplete. The backup must then exist (verified against
+       ``backup/info``, mirroring ``restore_backup`` — HA's own
+       ``backup/delete`` silently no-ops on an unknown ID rather than
+       erroring).
     3. Scheduled backups (``with_automatic_settings=True``) are never
-       deletable.
+       deletable. Fails closed the same way when HA can't confirm the
+       backup is manual (``with_automatic_settings=None`` — not created
+       by this HA instance, or predates this metadata field): only an
+       explicit ``False`` is treated as deletable.
     4. The single newest remaining snapshot, of any type, is never
        deletable — guarantees at least one recovery point always survives.
        Checked before the age floor below so a backup that is both the
@@ -1071,7 +1083,9 @@ async def delete_backup(
 
     The actual ``backup/delete`` call uses an elevated WS wait timeout
     (``_BACKUP_DELETE_WAIT_S``) since it fans out to every configured agent
-    — including slow/rate-limited remote ones — server-side.
+    — including slow/rate-limited remote ones — server-side. ``ctx``, when
+    supplied, receives one ``report_progress`` heartbeat immediately before
+    that call.
 
     Raises ToolError if disabled, unconfirmed, not found, blocked by a
     guard, or if HA reports a per-agent deletion failure.
@@ -1141,11 +1155,13 @@ async def delete_backup(
                 )
             )
 
-        if matched.get("with_automatic_settings"):
+        if matched.get("with_automatic_settings") is not False:
             _refuse_snapshot_delete(
-                "Refusing to delete a scheduled (automatic) backup — those "
-                "are managed by Home Assistant's own retention settings, "
-                "not this tool.",
+                "Refusing to delete a scheduled (automatic) backup, or one "
+                "whose automatic/manual origin Home Assistant cannot "
+                "confirm (with_automatic_settings=None — not created by "
+                "this HA instance, or predates this metadata) — treated "
+                "as not provably manual, and therefore not deletable.",
                 backup_id=backup_id,
             )
 
@@ -1187,6 +1203,12 @@ async def delete_backup(
                 backup_id=backup_id,
             )
 
+        await safe_progress(
+            ctx,
+            progress=0,
+            total=_BACKUP_DELETE_WAIT_S,
+            message="deleting backup",
+        )
         delete_result = await ws_client.send_command(
             "backup/delete",
             backup_id=backup_id,

@@ -20,6 +20,10 @@ L2. An age floor (`snapshot_delete_min_age_days`, default 7) — count-based
 L3. The single newest remaining snapshot is never deletable, regardless of
     type — guarantees at least one recovery point always survives.
 Plus a `confirm=True` requirement as a cheap backstop.
+
+The L-numbers above are a taxonomy label, not the runtime evaluation
+sequence: `delete_backup` checks L3 (newest) before L2 (age floor) — see
+its docstring for why.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -49,7 +53,7 @@ def _entry(
     backup_id: str,
     *,
     date: str,
-    with_automatic_settings: bool = False,
+    with_automatic_settings: bool | None = False,
     name: str = "Some_Backup",
 ) -> dict[str, Any]:
     return {
@@ -167,6 +171,29 @@ class TestSnapshotDeleteGuards:
         )
 
     @pytest.mark.asyncio
+    async def test_refuses_automatic_settings_backup_when_flag_is_none(self) -> None:
+        """L1 fails closed on `with_automatic_settings=None` (HA reports this
+        when a backup wasn't created by this instance, or predates the
+        metadata field) — an unknown origin must not be treated as
+        "confirmed manual"."""
+        old = _iso(_now() - timedelta(days=100))
+        newer = _iso(_now() - timedelta(days=1))
+        ws = _ws_client(
+            [
+                _entry("target", date=old, with_automatic_settings=None),
+                _entry("other", date=newer),
+            ]
+        )
+        settings = _settings(enabled=True)
+        p1, p2 = _patched(ws, settings)
+        with p1, p2, pytest.raises(ToolError) as exc_info:
+            await delete_backup(_client(), "target", confirm=True)
+        assert ErrorCode.VALIDATION_INVALID_PARAMETER.value in str(exc_info.value)
+        assert not any(
+            c.args[0] == "backup/delete" for c in ws.send_command.call_args_list
+        )
+
+    @pytest.mark.asyncio
     async def test_refuses_too_young_backup(self) -> None:
         """L2: a backup newer than the age floor cannot be deleted, even
         when it is not the single newest one."""
@@ -206,6 +233,31 @@ class TestSnapshotDeleteGuards:
         assert not any(
             c.args[0] == "backup/delete" for c in ws.send_command.call_args_list
         )
+
+    @pytest.mark.asyncio
+    async def test_newest_beats_age_floor_message_when_target_is_also_too_young(
+        self,
+    ) -> None:
+        """Pins the newest-before-age-floor evaluation order: a target that
+        is BOTH the newest snapshot AND younger than the age floor must
+        report "newest" (with its own remedy), not "too young" — swapping
+        the two guards in `delete_backup` would still pass every other
+        existing test but would flip this message."""
+        older = _iso(_now() - timedelta(days=200))
+        target_date = _iso(_now())
+        ws = _ws_client(
+            [
+                _entry("other", date=older),
+                _entry("target", date=target_date),
+            ]
+        )
+        settings = _settings(enabled=True, min_age_days=7)
+        p1, p2 = _patched(ws, settings)
+        with p1, p2, pytest.raises(ToolError) as exc_info:
+            await delete_backup(_client(), "target", confirm=True)
+        message = str(exc_info.value).lower()
+        assert "newest" in message
+        assert "days" not in message
 
     @pytest.mark.asyncio
     async def test_malformed_date_fails_closed(self) -> None:
@@ -385,6 +437,47 @@ class TestSnapshotDeleteWaitTimeout:
             c for c in ws.send_command.call_args_list if c.args[0] == "backup/delete"
         )
         assert delete_call.kwargs.get("_wait_timeout", 30.0) > 30.0
+
+
+class TestSnapshotDeleteProgress:
+    """kingpanther13 review: `delete_backup` accepted `ctx` but never used
+    it, unlike `create_backup`/`restore_backup`. The 60s delete wait should
+    still emit one heartbeat, consistent with those other paths."""
+
+    @pytest.mark.asyncio
+    async def test_emits_one_heartbeat_before_the_delete_call(self) -> None:
+        old = _iso(_now() - timedelta(days=100))
+        newer = _iso(_now() - timedelta(days=1))
+        ws = _ws_client(
+            [
+                _entry("target", date=old),
+                _entry("other", date=newer),
+            ]
+        )
+        settings = _settings(enabled=True, min_age_days=7)
+        p1, p2 = _patched(ws, settings)
+        ctx = MagicMock()
+        ctx.report_progress = AsyncMock()
+        with p1, p2:
+            await delete_backup(_client(), "target", confirm=True, ctx=ctx)
+        ctx.report_progress.assert_awaited_once()
+        assert "delet" in ctx.report_progress.await_args.kwargs["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_no_ctx_does_not_raise(self) -> None:
+        old = _iso(_now() - timedelta(days=100))
+        newer = _iso(_now() - timedelta(days=1))
+        ws = _ws_client(
+            [
+                _entry("target", date=old),
+                _entry("other", date=newer),
+            ]
+        )
+        settings = _settings(enabled=True, min_age_days=7)
+        p1, p2 = _patched(ws, settings)
+        with p1, p2:
+            result = await delete_backup(_client(), "target", confirm=True)
+        assert result["success"] is True
 
 
 class TestSnapshotDeleteMalformedResult:
