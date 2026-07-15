@@ -555,6 +555,17 @@ def _live_hass(
                 if auth_mode == WEBHOOK_AUTH_HA
                 else None
             ),
+            # ...and an oauth_provider only in legacy mode, same presence rule.
+            "oauth_provider": (
+                LegacyOAuthProvider(
+                    "cid",
+                    "secret",
+                    secrets.token_bytes(32),
+                    lambda: WEBHOOK_AUTH_LEGACY,
+                )
+                if auth_mode == WEBHOOK_AUTH_LEGACY
+                else None
+            ),
         }
     }
     return hass
@@ -618,6 +629,35 @@ class TestDiscoveryViews:
         view = mw._AuthorizationServerMetadataView(hass)
         resp = await view.get(make_request(headers={"Host": "x"}))
         assert resp.status == 404
+
+    async def test_authorization_server_view_serves_legacy_document(self):
+        # Review gap: the legacy RFC 8414 document had no shape assertions
+        # anywhere -- reverting the mode dispatch to always serve the ha_auth
+        # document would not have failed any test.
+        hass = _live_hass(auth_mode=WEBHOOK_AUTH_LEGACY)
+        view = mw._AuthorizationServerMetadataView(hass)
+        resp = await view.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
+        assert resp.status == 200
+        doc = resp.json_body
+        assert doc["authorization_endpoint"] == (
+            f"https://abc.ui.nabu.casa{mw.AUTHORIZE_PATH}"
+        )
+        assert doc["token_endpoint"] == f"https://abc.ui.nabu.casa{mw.TOKEN_PATH}"
+        assert doc["code_challenge_methods_supported"] == ["S256"]
+        assert set(doc["token_endpoint_auth_methods_supported"]) == {
+            "client_secret_basic",
+            "client_secret_post",
+        }
+        assert doc["grant_types_supported"] == [
+            "authorization_code",
+            "refresh_token",
+        ]
+
+    async def test_protected_resource_views_live_in_legacy_mode(self):
+        hass = _live_hass(auth_mode=WEBHOOK_AUTH_LEGACY)
+        plain = mw._ProtectedResourceMetadataView(hass)
+        resp = await plain.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
+        assert resp.status == 200
 
     def test_wellknown_protected_resource_url_is_parameterized(self):
         # Stale-binding fix: the webhook id is a route PARAMETER, so the one

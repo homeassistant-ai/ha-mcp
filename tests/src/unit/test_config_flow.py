@@ -216,6 +216,38 @@ class TestServerBranch:
         flow.async_set_unique_id.assert_not_awaited()
 
 
+class TestOAuthCredsHint:
+    """All three branches of the admin-only credentials hint on the options
+    form (review gap: zero coverage on any of them)."""
+
+    def test_non_legacy_mode_points_at_the_mode_selector(self):
+        flow = _make_options_flow(
+            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
+        )
+        hint = flow._oauth_creds_hint()
+        assert "Set Authentication mode" in hint
+        assert "Client ID" in hint
+
+    def test_legacy_mode_before_minting_says_appear_after_start(self):
+        flow = _make_options_flow(
+            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY}
+        )
+        hint = flow._oauth_creds_hint()
+        assert "once the server" in hint
+
+    def test_legacy_mode_with_minted_creds_shows_both_values(self):
+        flow = _make_options_flow(
+            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
+            data={
+                const.DATA_OAUTH_CLIENT_ID: "hamcp-abc",
+                const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
+            },
+        )
+        hint = flow._oauth_creds_hint()
+        assert "Client ID: hamcp-abc" in hint
+        assert "Client Secret: s3cr3t" in hint
+
+
 class TestOptionsFlowDispatch:
     def test_server_entry_gets_server_options_flow(self):
         entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER})

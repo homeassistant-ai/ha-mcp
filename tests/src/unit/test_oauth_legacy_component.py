@@ -321,6 +321,18 @@ class TestPKCECodes:
             assert provider.issue_code(REDIRECT_URI, challenge) is not None
         assert provider.issue_code(REDIRECT_URI, challenge) is None
 
+    def test_expired_codes_are_pruned_making_room_at_capacity(self):
+        # The prune inside issue_code must free expired entries -- without it
+        # a full store of dead codes would refuse issuance forever (the cap
+        # test above passes with or without the prune line).
+        provider = _make_provider()
+        _, challenge = _pkce_pair()
+        with patch.object(oauth_legacy.time, "time", return_value=1_000_000.0):
+            for _ in range(oauth_legacy.MAX_PENDING_CODES):
+                assert provider.issue_code(REDIRECT_URI, challenge) is not None
+        # Real time is far past those codes' expiry: issuance must succeed.
+        assert provider.issue_code(REDIRECT_URI, challenge) is not None
+
 
 # ---------------------------------------------------------------------------
 # Client authentication
@@ -492,6 +504,22 @@ class TestAuthorizeViewGet:
         response = await view.get(request)
         assert response.status == 400
 
+    async def test_rejects_non_code_response_type(self):
+        provider = _make_provider()
+        view = oauth_legacy.AuthorizeView(provider)
+        request = _make_get_request(_authorize_query(response_type="token"))
+        response = await view.get(request)
+        assert response.status == 400
+        assert "unsupported_response_type" in response.text
+
+    async def test_rejects_malformed_code_challenge(self):
+        provider = _make_provider()
+        view = oauth_legacy.AuthorizeView(provider)
+        request = _make_get_request(_authorize_query(code_challenge="short"))
+        response = await view.get(request)
+        assert response.status == 400
+        assert "code_challenge" in response.text
+
     async def test_consent_page_shows_redirect_domain_and_escapes_it(self):
         provider = _make_provider()
         view = oauth_legacy.AuthorizeView(provider)
@@ -572,6 +600,47 @@ class TestAuthorizeViewPost:
         )
         response = await view.post(request)
         assert response.status == 400
+
+    async def test_unknown_action_returns_400(self):
+        provider = _make_provider()
+        view = oauth_legacy.AuthorizeView(provider)
+        _, challenge = _pkce_pair()
+        request = MagicMock()
+        request.post = AsyncMock(
+            return_value={
+                "action": "bogus",
+                "client_id": CLIENT_ID,
+                "redirect_uri": REDIRECT_URI,
+                "state": "xyz",
+                "code_challenge": challenge,
+            }
+        )
+        response = await view.post(request)
+        assert response.status == 400
+
+    async def test_code_store_at_capacity_redirects_temporarily_unavailable(self):
+        # RFC 6749 §4.1.2.1: issue_code returning None (store at cap) must
+        # surface as an error redirect, not a silent failure or a 500.
+        provider = _make_provider()
+        _, challenge = _pkce_pair()
+        for _ in range(oauth_legacy.MAX_PENDING_CODES):
+            provider.issue_code(REDIRECT_URI, challenge)
+        view = oauth_legacy.AuthorizeView(provider)
+        request = MagicMock()
+        request.post = AsyncMock(
+            return_value={
+                "action": "approve",
+                "client_id": CLIENT_ID,
+                "redirect_uri": REDIRECT_URI,
+                "state": "xyz",
+                "code_challenge": challenge,
+            }
+        )
+        response = await view.post(request)
+        assert response.status == 302
+        location = response.headers["Location"]
+        assert _extract_query_param(location, "error") == "temporarily_unavailable"
+        assert _extract_query_param(location, "state") == "xyz"
 
 
 # ---------------------------------------------------------------------------
@@ -687,6 +756,66 @@ class TestTokenViewPost:
         assert response.status == 400
         assert response.json_body["error"] == "unsupported_grant_type"
 
+    async def test_authorization_code_grant_missing_param_returns_invalid_request(
+        self,
+    ):
+        # A real code exists, but the request omits code_verifier -- the
+        # missing-param guard must answer invalid_request, not invalid_grant.
+        provider = _make_provider()
+        _, challenge = _pkce_pair()
+        code = provider.issue_code(REDIRECT_URI, challenge)
+        view = oauth_legacy.TokenView(provider)
+        request = MagicMock()
+        request.headers = {}
+        request.post = AsyncMock(
+            return_value={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": REDIRECT_URI,
+            }
+        )
+        response = await view.post(request)
+        assert response.status == 400
+        assert response.json_body["error"] == "invalid_request"
+
+    async def test_refresh_grant_empty_token_returns_invalid_grant(self):
+        provider = _make_provider()
+        view = oauth_legacy.TokenView(provider)
+        request = MagicMock()
+        request.headers = {}
+        request.post = AsyncMock(
+            return_value={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "grant_type": "refresh_token",
+                "refresh_token": "",
+            }
+        )
+        response = await view.post(request)
+        assert response.status == 400
+        assert response.json_body["error"] == "invalid_grant"
+
+    async def test_refresh_grant_expired_token_rejected(self):
+        provider = _make_provider()
+        with patch.object(oauth_legacy.time, "time", return_value=1_000_000.0):
+            refresh = provider.issue_refresh_token()
+        view = oauth_legacy.TokenView(provider)
+        request = MagicMock()
+        request.headers = {}
+        request.post = AsyncMock(
+            return_value={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh,
+            }
+        )
+        response = await view.post(request)
+        assert response.status == 400
+        assert response.json_body["error"] == "invalid_grant"
+
 
 # ---------------------------------------------------------------------------
 # bind_legacy_views (route ownership + rebind semantics)
@@ -722,6 +851,18 @@ class TestBindLegacyViews:
         hass = _make_hass(is_running=True)
         _, restart_needed = oauth_legacy.bind_legacy_views(
             hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
+        )
+        assert restart_needed is True
+
+    def test_credential_change_alone_flags_restart(self):
+        # Isolates the creds_changed disjunct of the reuse branch: after a
+        # boot bind the stored pending flag is False, so a True here can only
+        # come from the fingerprint mismatch.
+        hass = _make_hass(is_running=False)
+        key = secrets.token_bytes(32)
+        oauth_legacy.bind_legacy_views(hass, CLIENT_ID, CLIENT_SECRET, key)
+        _, restart_needed = oauth_legacy.bind_legacy_views(
+            hass, CLIENT_ID, "rotated-secret", key
         )
         assert restart_needed is True
 

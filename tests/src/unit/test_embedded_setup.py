@@ -141,6 +141,27 @@ class TestBringUp:
             esetup._surface_connect_urls.call_args.kwargs["oauth_creds_active"] is False
         )
 
+    async def test_legacy_restart_needed_files_repair(self, fake_manager, monkeypatch):
+        # Review gap: every bring-up test mocked async_register_webhook with
+        # restart_needed=False, so the create-issue branch of
+        # _async_update_legacy_oauth_issue was never exercised.
+        monkeypatch.setattr(
+            esetup, "async_register_webhook", AsyncMock(return_value=True)
+        )
+        hass = _make_hass()
+        entry = _make_entry(
+            options={esetup.OPT_WEBHOOK_AUTH: esetup.WEBHOOK_AUTH_LEGACY}
+        )
+
+        await esetup.async_bring_up_server(hass, entry)
+
+        created = [
+            c
+            for c in esetup.ir.async_create_issue.call_args_list
+            if esetup.ISSUE_LEGACY_OAUTH_RESTART in c.args
+        ]
+        assert created, "legacy-OAuth restart repair was not filed"
+
     async def test_success_starts_registers_and_surfaces(self, fake_manager):
         hass = _make_hass()
         entry = _make_entry()
