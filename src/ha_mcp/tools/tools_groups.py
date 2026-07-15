@@ -205,9 +205,14 @@ class GroupTools:
                         }
                     )
 
-            # Sort by friendly name or entity_id
+            # Sort by friendly name, then entity_id: the unique tiebreaker keeps
+            # groups with the same name in a stable order, so a page boundary
+            # cannot duplicate or skip one when get_states() order shifts.
             groups.sort(
-                key=lambda g: (g.get("friendly_name") or g.get("entity_id", "")).lower()
+                key=lambda g: (
+                    (g.get("friendly_name") or g.get("entity_id", "")).lower(),
+                    g.get("entity_id", ""),
+                )
             )
 
             total_count = len(groups)
