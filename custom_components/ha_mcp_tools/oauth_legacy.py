@@ -20,7 +20,10 @@ core serve its own ``/auth/authorize`` + ``/auth/token``).
 Tokens are opaque, HMAC-SHA256 signed (``body.sig``), and carry enough state
 (``{kind, iat, exp, jti, cid}``) to validate without a server-side store, so
 the integration survives HA restarts. ``cid`` (the client_id at issuance time)
-means rotating the client_id revokes every outstanding token.
+means rotating the client_id revokes every outstanding token at the restart
+that rebinds the root views with the new identity — until then the bound
+provider keeps the old client_id and old tokens keep validating (see
+:func:`bind_legacy_views`).
 """
 
 from __future__ import annotations
@@ -462,8 +465,11 @@ class LegacyOAuthProvider:
         if payload.get("kind") != expected_kind:
             return False
         if payload.get("cid") != self._client_id:
-            # Token was issued for a previous client_id config — reject so
-            # rotating client_id revokes outstanding tokens.
+            # Token was issued for a previous client_id config — reject so a
+            # client_id rotation revokes outstanding tokens once the restart
+            # binds a provider carrying the new identity. Pre-restart the
+            # bound provider still holds the OLD client_id, so old tokens
+            # keep validating until then (see bind_legacy_views).
             return False
         # Valid up to but not including `exp` (RFC 7519 §4.1.4 convention).
         return bool(payload.get("exp", 0) > int(time.time()))

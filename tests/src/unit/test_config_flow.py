@@ -130,6 +130,10 @@ def _make_flow() -> cf.HaMcpToolsConfigFlow:
 def _make_options_flow(*, options=None, data=None) -> cf.HaMcpServerOptionsFlow:
     flow = cf.HaMcpServerOptionsFlow()
     flow.config_entry = SimpleNamespace(options=options or {}, data=data or {})
+    # Bare hass with empty data: legacy_credentials_active() resolves False
+    # (nothing bound) unless a test monkeypatches it.
+    flow.hass = MagicMock(name="hass")
+    flow.hass.data = {}
     flow.async_show_form = MagicMock(side_effect=lambda **kw: {"type": "form", **kw})
     flow.async_create_entry = MagicMock(
         side_effect=lambda **kw: {"type": "entry", **kw}
@@ -235,7 +239,10 @@ class TestOAuthCredsHint:
         hint = flow._oauth_creds_hint()
         assert "once the server" in hint
 
-    def test_legacy_mode_with_minted_creds_shows_both_values(self):
+    def test_legacy_mode_with_active_creds_shows_values_without_caveat(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: True)
         flow = _make_options_flow(
             options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
             data={
@@ -246,6 +253,25 @@ class TestOAuthCredsHint:
         hint = flow._oauth_creds_hint()
         assert "Client ID: hamcp-abc" in hint
         assert "Client Secret: s3cr3t" in hint
+        assert "remain active" not in hint
+
+    def test_legacy_mode_pending_rotation_carries_restart_caveat(self, monkeypatch):
+        # Review finding on #1880: after a rotation, entry.data updates
+        # immediately but the bound views keep the previous identity until
+        # restart -- the hint must say the shown values do not work yet.
+        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: False)
+        flow = _make_options_flow(
+            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
+            data={
+                const.DATA_OAUTH_CLIENT_ID: "hamcp-new",
+                const.DATA_OAUTH_CLIENT_SECRET: "new-secret",
+            },
+        )
+        hint = flow._oauth_creds_hint()
+        assert "Client ID: hamcp-new" in hint
+        assert "Client Secret: new-secret" in hint
+        assert "remain active" in hint
+        assert "restart" in hint
 
 
 class TestOptionsFlowDispatch:

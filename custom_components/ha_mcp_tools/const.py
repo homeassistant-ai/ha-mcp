@@ -294,8 +294,11 @@ OPT_WEBHOOK_AUTH = "webhook_auth"
 # for Google Gemini Spark) credential management — mirrors the
 # OPT_WEBHOOK_ID_OVERRIDE / OPT_REGENERATE_SECRETS shape below. Empty override
 # fields mean "keep the current value"; OPT_OAUTH_REGENERATE is one-shot.
-OPT_OAUTH_CLIENT_ID = "oauth_client_id"
-OPT_OAUTH_CLIENT_SECRET = "oauth_client_secret"
+# _override suffix distinguishes these OPTIONS keys from the DATA_OAUTH_*
+# entry.data keys (which store the resolved values under the un-suffixed
+# names) — mirrors OPT_WEBHOOK_ID_OVERRIDE vs DATA_WEBHOOK_ID.
+OPT_OAUTH_CLIENT_ID = "oauth_client_id_override"
+OPT_OAUTH_CLIENT_SECRET = "oauth_client_secret_override"
 OPT_OAUTH_REGENERATE = "oauth_regenerate"
 OPT_PIP_SPEC = "pip_spec"
 OPT_SERVER_URL = "server_url"

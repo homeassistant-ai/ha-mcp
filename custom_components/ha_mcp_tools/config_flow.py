@@ -47,6 +47,7 @@ from .const import (
     CONF_ENTRY_TYPE,
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
+    DATA_OAUTH_SIGNING_KEY,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
     DEFAULT_AUTO_UPDATE,
@@ -101,6 +102,21 @@ _SERVER_UNIQUE_ID = f"{DOMAIN}-server"
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _legacy_credentials_active(
+    hass, client_id: str, client_secret: str, signing_key: str
+) -> bool:
+    """Deferred-import seam for :func:`oauth_legacy.legacy_credentials_active`.
+
+    oauth_legacy pulls in the aiohttp/HTTP view layer at import time; the
+    config-flow module must stay importable without it (Home Assistant imports
+    config flows early, and the flow unit tests stub only the config-entries
+    surface) — same pattern as ``oauth_legacy._live_auth_mode``.
+    """
+    from .oauth_legacy import legacy_credentials_active
+
+    return legacy_credentials_active(hass, client_id, client_secret, signing_key)
 
 
 def _installed_server_version() -> str | None:
@@ -546,9 +562,12 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         """Return the resolved legacy OAuth Client ID + Secret for the options
         form, or a note pointing at the mode selector when legacy mode isn't
         the CONFIGURED mode. Admin-only screen (like ``_connect_url_hint``),
-        so showing the secret in cleartext here is acceptable — mirrors the
-        Home Assistant log line ``embedded_setup._surface_connect_urls``
-        writes on bring-up.
+        so showing the secret in cleartext here is acceptable — and this is
+        the surface the startup log points at while a rotation is pending
+        (``_surface_connect_urls`` withholds pending credentials from the
+        log, where a still-valid old-identity token could read them; an HA
+        admin here is trusted). A pending rotation gets a caveat so the admin
+        doesn't paste values that only start working after the restart.
         """
         configured_mode = str(self.config_entry.options.get(OPT_WEBHOOK_AUTH) or "")
         if configured_mode != WEBHOOK_AUTH_LEGACY:
@@ -566,4 +585,19 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 "The Client ID and Client Secret appear here once the server "
                 "has started."
             )
-        return f"Client ID: {client_id}\nClient Secret: {client_secret}"
+        creds = f"Client ID: {client_id}\nClient Secret: {client_secret}"
+        signing_key = str(self.config_entry.data.get(DATA_OAUTH_SIGNING_KEY) or "")
+        if not _legacy_credentials_active(
+            self.hass, str(client_id), str(client_secret), signing_key
+        ):
+            # Same restart-gating as the startup log: the bound root views
+            # keep serving the previous identity until the restart, so
+            # freshly rotated values do not work yet (matches the
+            # oauth_regenerate help text on this form).
+            return (
+                f"{creds}\n"
+                "These take effect after the restart Home Assistant is "
+                "asking for; until then the previous Client ID and Client "
+                "Secret remain active."
+            )
+        return creds

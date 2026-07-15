@@ -1065,8 +1065,8 @@ class TestEnsureLegacyOAuthSecrets:
 
         assert changed is True
         assert data[DATA_OAUTH_CLIENT_ID] == "my-custom-client-id"
-        # A client_id change already revokes outstanding tokens via the cid
-        # claim -- no signing-key rotation needed.
+        # A client_id change revokes outstanding tokens via the cid claim at
+        # the restart that rebinds the views -- no signing-key rotation needed.
         assert data[DATA_OAUTH_SIGNING_KEY] == "cc" * 32
 
     def test_override_adopts_user_supplied_client_secret(self):
