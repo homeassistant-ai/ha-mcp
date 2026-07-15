@@ -53,6 +53,7 @@ from .util_helpers import (
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
+    build_pagination_metadata,
     parse_json_param,
     parse_string_list_param,
     wait_for_entity_registered,
@@ -3508,6 +3509,30 @@ def _shape_flow_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _paginate_helpers_response(
+    response: dict[str, Any], offset: int, limit: int
+) -> dict[str, Any]:
+    """Slice a helper listing envelope down to one page.
+
+    The single normalization point for every ``ha_config_list_helpers`` route
+    (all-types, component, legacy): each builds the same
+    ``success``/``helper_type``/``count``/``helpers``/``message`` envelope, so
+    the slice is applied once here instead of in each builder. ``count`` becomes
+    the page size and ``total_count`` carries the full size, matching
+    ``ha_list_services``.
+    """
+    helpers = response.get("helpers")
+    if not isinstance(helpers, list):
+        return response
+    total_count = len(helpers)
+    page = helpers[offset : offset + limit]
+    return {
+        **response,
+        "helpers": page,
+        **build_pagination_metadata(total_count, offset, limit, len(page)),
+    }
+
+
 def _shape_component_helpers_response(
     helper_type: str, result: dict[str, Any]
 ) -> dict[str, Any]:
@@ -3642,11 +3667,30 @@ class HelperConfigTools:
                 )
             ),
         ],
+        limit: Annotated[
+            int,
+            Field(
+                default=100,
+                ge=1,
+                le=500,
+                description="Max helpers to return per page (default: 100)",
+            ),
+        ] = 100,
+        offset: Annotated[
+            int,
+            Field(
+                default=0,
+                ge=0,
+                description="Number of helpers to skip for pagination (default: 0)",
+            ),
+        ] = 0,
     ) -> dict[str, Any]:
         """
-        List all Home Assistant helpers of a specific type with their configurations.
+        List Home Assistant helpers of a specific type with their configurations.
 
-        Returns complete configuration for all helpers of the specified type including:
+        Returns one page of helpers; `total_count` and `has_more` report the full
+        set. Each record carries the complete configuration for its helper,
+        including:
         - id (immutable storage key), entity_id (current — address the helper by
           this, where available), name (current display name), original_name
           (creation-time name), icon
@@ -3681,6 +3725,7 @@ class HelperConfigTools:
         - List all persons: ha_config_list_helpers("person")
         - List all tags: ha_config_list_helpers("tag")
         - List every helper type at once: ha_config_list_helpers("all")
+        - Next page: ha_config_list_helpers("input_boolean", offset=100)
 
         **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
 
@@ -3701,7 +3746,9 @@ class HelperConfigTools:
         # No legacy equivalent exists (no single WS command enumerates all
         # types), so it is component-only — see ``_list_all_helpers``.
         if helper_type == "all":
-            return await self._list_all_helpers()
+            return _paginate_helpers_response(
+                await self._list_all_helpers(), offset, limit
+            )
 
         # Flow-based helper types have no ``{type}/list`` command, so only the
         # component's ``helpers_list`` can enumerate them: they are served
@@ -3722,7 +3769,7 @@ class HelperConfigTools:
                 helper_type, is_flow=is_flow
             )
             if component_response is not None:
-                return component_response
+                return _paginate_helpers_response(component_response, offset, limit)
         if is_flow:
             # No usable component path and the legacy body cannot serve flow
             # helpers: hard error rather than an empty or misleading list.
@@ -3750,7 +3797,7 @@ class HelperConfigTools:
                 }
                 if warnings:
                     response["warnings"] = warnings
-                return response
+                return _paginate_helpers_response(response, offset, limit)
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,

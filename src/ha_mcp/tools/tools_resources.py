@@ -25,6 +25,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .util_helpers import build_pagination_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -161,13 +162,33 @@ class ResourceTools:
                 "Default False to save tokens (shows 150-char preview instead)."
             ),
         ] = False,
+        limit: Annotated[
+            int,
+            Field(
+                default=100,
+                ge=1,
+                le=500,
+                description="Max resources to return per page (default: 100)",
+            ),
+        ] = 100,
+        offset: Annotated[
+            int,
+            Field(
+                default=0,
+                ge=0,
+                description="Number of resources to skip for pagination (default: 0)",
+            ),
+        ] = 0,
     ) -> dict[str, Any]:
         """
-        List all Lovelace dashboard resources (custom cards, themes, CSS/JS).
+        List Lovelace dashboard resources (custom cards, themes, CSS/JS).
 
-        Returns all registered resources. For inline resources (created with
+        Returns one page of registered resources; `total_count` and `has_more`
+        report the full set. For inline resources (created with
         ha_config_set_dashboard_resource(content=...)), shows a preview of the content
         instead of the full encoded URL to save tokens.
+
+        `inline_count` and `by_type` summarise every resource, not just this page.
 
         Args:
             include_content: If True, includes full decoded content for inline
@@ -181,7 +202,8 @@ class ResourceTools:
         Each resource has a unique ID for update/delete operations.
 
         EXAMPLES:
-        - List all resources: ha_config_list_dashboard_resources()
+        - First page of resources: ha_config_list_dashboard_resources()
+        - Next page: ha_config_list_dashboard_resources(offset=100)
         - List with full content: ha_config_list_dashboard_resources(include_content=True)
 
         Note: Home Assistant 2026.6+ exposes resource management in the UI by
@@ -213,11 +235,14 @@ class ResourceTools:
                 if res.get("_inline"):
                     inline_count += 1
 
+            total_count = len(processed)
+            paginated = processed[offset : offset + limit]
+
             return {
                 "success": True,
                 "action": "list",
-                "resources": processed,
-                "count": len(processed),
+                "resources": paginated,
+                **build_pagination_metadata(total_count, offset, limit, len(paginated)),
                 "inline_count": inline_count,
                 "by_type": {
                     "module": len(categorized["module"]),
