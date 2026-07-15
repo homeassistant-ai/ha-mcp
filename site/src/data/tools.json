@@ -1392,7 +1392,7 @@
   {
     "name": "ha_read_file",
     "title": "Read File",
-    "description": "Read a file from the Home Assistant config directory.\n\nReads files from allowed paths within the config directory. Some files\nhave special handling:\n- `secrets.yaml`: Values are masked for security\n- `home-assistant.log`: Limited to tail (last N lines) by default\n\n**Allowed Read Paths:**\n- `configuration.yaml`, `automations.yaml`, `scripts.yaml`, `scenes.yaml`\n- `secrets.yaml` (values masked)\n- `packages/*.yaml`\n- `home-assistant.log` (tail only)\n- `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`\n- `custom_components/**/*.py` (read-only)\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\n  (pass the absolute path for volumes)\n\n**Security:**\n- Path traversal (../) is blocked\n- Only allowed paths can be read\n- Sensitive data in secrets.yaml is masked\n\n**Returns:**\n- success: Whether the operation succeeded\n- content: The file content (may be truncated for logs)\n- size: File size in bytes\n- modified: Last modification timestamp\n- path: The file path that was read\n\n**Example:**\n```python\n# Read configuration\nresult = ha_read_file(path=\"configuration.yaml\")\n\n# Read last 100 lines of log\nresult = ha_read_file(path=\"home-assistant.log\", tail_lines=100)\n```",
+    "description": "Read a file from the Home Assistant config directory.\n\nReads files from allowed paths within the config directory. Some files\nhave special handling:\n- `secrets.yaml`: Values are masked for security\n- `home-assistant.log`: Limited to tail (last N lines) by default\n\n**Allowed Read Paths:**\n- `configuration.yaml`, `automations.yaml`, `scripts.yaml`, `scenes.yaml`\n- `secrets.yaml` (values masked)\n- `packages/*.yaml`\n- `home-assistant.log` (tail only)\n- `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`\n- `custom_components/**/*.py` (read-only)\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\n  (pass the absolute path for volumes)\n\n**Security:**\n- Path traversal (../) is blocked\n- Only allowed paths can be read\n- Sensitive data in secrets.yaml is masked\n\n**Returns:**\n- success: Whether the operation succeeded\n- content: The file content (may be truncated for logs)\n- size: File size in bytes\n- modified: Last modification timestamp\n- path: The file path that was read\n- subtree: Round-trip text of the `yaml_path` key, when that arg is set\n  (null when the key is absent). Comments and HA tags (`!secret`,\n  `!include`) survive as written — a `!secret` is never resolved.\n\n**Example:**\n```python\n# Read configuration\nresult = ha_read_file(path=\"configuration.yaml\")\n\n# Read last 100 lines of log\nresult = ha_read_file(path=\"home-assistant.log\", tail_lines=100)\n\n# Read just the alert2 block out of a package file\nresult = ha_read_file(path=\"packages/alert2.yaml\", yaml_path=\"alert2\")\n```",
     "inputSchema": {
       "properties": {
         "path": {
@@ -1400,6 +1400,10 @@
         },
         "tail_lines": {
           "type": "Annotated[int | None, Field(default=None, ge=1, le=10000, description='For log files, return only the last N lines. Recommended for home-assistant.log to avoid large responses. Default: None (return full file, or last 1000 lines for logs)')]",
+          "default": null
+        },
+        "yaml_path": {
+          "type": "Annotated[str | None, Field(default=None, description=\"Dotted YAML key path (e.g. 'alert2', 'mqtt.sensor'). When set, the response also carries 'subtree': the round-trip text of just that key's value. To look a key up across packages/*.yaml, or to get it as structured data, use ha_config_get_yaml instead.\")]",
           "default": null
         }
       },
@@ -3048,6 +3052,42 @@
       "Service & Device Control"
     ],
     "source_file": "tools_services.py"
+  },
+  {
+    "name": "ha_config_get_yaml",
+    "title": "Read YAML Config Fragment",
+    "description": "Get the current YAML fragment under a key, from one config file or across a glob.\n\nUse before ha_config_set_yaml to inspect what a key currently holds, and\nto find which file defines it — the returned ``file`` + ``yaml_path`` are\nexactly the arguments that address the same fragment for an edit.\n\nNot for storage-mode items: automations, scripts and scenes created\nthrough the UI live outside YAML — read those with ha_config_get_automation,\nha_config_get_script and ha_config_get_scene. This tool sees only what is\nwritten in the config files themselves.\n\nReads the file, so it reflects what is on disk rather than what Home\nAssistant currently has loaded; a fragment edited but not yet reloaded\ndiffers from the running config. Comments and HA tags survive as written\nand a ``!secret`` is never resolved to its value, so ``content`` can be\nhanded back to ha_config_set_yaml unchanged. Files outside the read\nallowlist stay unreadable, and secrets.yaml reads back with its values\nmasked.",
+    "inputSchema": {
+      "properties": {
+        "yaml_path": {
+          "type": "Annotated[str, Field(description=\"Dotted YAML key path to look up, e.g. 'alert2', 'mqtt', 'template'. Any key is readable — unlike ha_config_set_yaml, which only writes an allowlisted set.\")]"
+        },
+        "file": {
+          "type": "Annotated[str, Field(default='configuration.yaml', description=\"Config-relative file to read. Accepts an fnmatch glob to search several files at once — 'packages/*.yaml' matches one directory level, not a nested tree. Use the glob to find which file defines a key.\")]",
+          "default": "configuration.yaml"
+        },
+        "include_content": {
+          "type": "Annotated[bool, Field(default=True, description='Return the round-trip YAML text of each match. Set False to discover only which files define the key.')]",
+          "default": true
+        },
+        "include_parsed": {
+          "type": "Annotated[bool, Field(default=False, description=\"Additionally return each match as structured data. HA tags stay in source form ('!secret api_key'), never resolved.\")]",
+          "default": false
+        }
+      },
+      "required": [
+        "yaml_path"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "tags": [
+      "System",
+      "beta"
+    ],
+    "source_file": "tools_yaml_read.py"
   },
   {
     "name": "ha_config_set_yaml",
