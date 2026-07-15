@@ -54,6 +54,8 @@ from .const import (
     ENTRY_TYPE_TOOLS,
     PACKAGES_ONLY_YAML_KEYS,
     RESERVED_DASHBOARD_URL_PATHS,
+    TOOLS_ENTRY_LEGACY_TITLE,
+    TOOLS_ENTRY_TITLE,
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
 )
@@ -2689,15 +2691,13 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # give the tools entry a device. Both are independent of the services above
     # and cosmetic to the integration's core value, so a read failure degrades
     # rather than blocking setup.
-    from .config_flow import _TOOLS_ENTRY_LEGACY_TITLE, _TOOLS_ENTRY_TITLE
-
     # Retitle an entry still carrying the pre-rename default; a user-customized
     # title is left untouched (only the exact old default migrates). The tools
     # entry registers no update listener, so this async_update_entry cannot
     # trigger a reload loop — and the guard is idempotent regardless (the title
     # no longer matches on the next setup).
-    if entry.title == _TOOLS_ENTRY_LEGACY_TITLE:
-        hass.config_entries.async_update_entry(entry, title=_TOOLS_ENTRY_TITLE)
+    if entry.title == TOOLS_ENTRY_LEGACY_TITLE:
+        hass.config_entries.async_update_entry(entry, title=TOOLS_ENTRY_TITLE)
 
     # Register a device (parity with the server entry, which gets one via
     # update.py's DeviceInfo). Tied to the config entry, so HA removes it with
@@ -2717,7 +2717,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, entry.entry_id)},
-        name=_TOOLS_ENTRY_TITLE,
+        name=TOOLS_ENTRY_TITLE,
         manufacturer="homeassistant-ai",
         model="File & YAML editing services",
         sw_version=component_version,

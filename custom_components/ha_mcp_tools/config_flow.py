@@ -82,19 +82,14 @@ from .const import (
     OPT_SERVER_URL,
     OPT_WEBHOOK_AUTH,
     OPT_WEBHOOK_ID_OVERRIDE,
+    TOOLS_ENTRY_TITLE,
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_NONE,
 )
 
-# Titles shown for each entry in the integration tile's entry list.
-_TOOLS_ENTRY_TITLE = "HA-MCP File & YAML Tools"
+# Title shown for the server entry in the integration tile's entry list; the
+# tools entry's title lives in const.py (setup migration in __init__ needs it).
 _SERVER_ENTRY_TITLE = "HA-MCP Server"
-
-# The pre-#1853 default title for the tools entry. Existing installs carrying
-# this exact title are migrated to ``_TOOLS_ENTRY_TITLE`` on setup; a
-# user-customized title is left alone. Kept here next to the new title so the
-# migration target and the old default never drift apart.
-_TOOLS_ENTRY_LEGACY_TITLE = "HA MCP Tools"
 
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
@@ -172,7 +167,7 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     def _create_tools_entry(self) -> ConfigFlowResult:
         """Create the services (tools) config entry."""
         return self.async_create_entry(
-            title=_TOOLS_ENTRY_TITLE,
+            title=TOOLS_ENTRY_TITLE,
             data={CONF_ENTRY_TYPE: ENTRY_TYPE_TOOLS},
         )
 

@@ -160,7 +160,7 @@ class TestToolsBranch:
 
         entry = asyncio.run(flow.async_step_tools({}))
         assert entry["type"] == "entry"
-        assert entry["title"] == cf._TOOLS_ENTRY_TITLE
+        assert entry["title"] == const.TOOLS_ENTRY_TITLE
         assert entry["data"] == {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS}
 
     def test_tools_uses_domain_unique_id(self):
@@ -181,10 +181,10 @@ class TestToolsBranch:
         # #1853: the title names what the entry actually is — the privileged
         # file & YAML editing services — not "HA MCP Tools", which read as if the
         # component were required for MCP tools in general.
-        assert cf._TOOLS_ENTRY_TITLE == "HA-MCP File & YAML Tools"
+        assert const.TOOLS_ENTRY_TITLE == "HA-MCP File & YAML Tools"
         # The pre-rename default the setup migration retitles existing installs
         # away from (see _async_setup_tools_entry).
-        assert cf._TOOLS_ENTRY_LEGACY_TITLE == "HA MCP Tools"
+        assert const.TOOLS_ENTRY_LEGACY_TITLE == "HA MCP Tools"
 
 
 class TestServerBranch:

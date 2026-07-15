@@ -336,8 +336,8 @@ class TestToolsEntrySetupFinalization:
         src = inspect.getsource(component._async_setup_tools_entry)
         # Retitle only the exact old default, via async_update_entry, to the new
         # title constant — never a hardcoded literal that could drift from it.
-        assert "_TOOLS_ENTRY_LEGACY_TITLE" in src
-        assert "_TOOLS_ENTRY_TITLE" in src
+        assert "TOOLS_ENTRY_LEGACY_TITLE" in src
+        assert "TOOLS_ENTRY_TITLE" in src
         assert "async_update_entry" in src
 
     def test_setup_registers_a_device_for_the_tools_entry(self):
