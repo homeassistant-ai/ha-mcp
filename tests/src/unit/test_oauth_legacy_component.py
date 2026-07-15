@@ -801,6 +801,65 @@ class TestBindLegacyViews:
         assert isinstance(provider, oauth_legacy.LegacyOAuthProvider)
 
 
+class TestLegacyCredentialsActive:
+    """The bound-identity check embedded_setup uses to withhold rotated
+    credentials from the startup log while the rotation is pending a restart
+    (review finding on #1880)."""
+
+    def test_false_when_never_bound(self):
+        hass = _make_hass()
+        assert (
+            oauth_legacy.legacy_credentials_active(
+                hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
+            )
+            is False
+        )
+
+    def test_false_when_another_integration_owns_routes(self):
+        hass = _make_hass()
+        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "webhook_proxy_addon"
+        hass.data[oauth_legacy.OAUTH_ROUTE_KEY_FINGERPRINT] = "anything"
+        assert (
+            oauth_legacy.legacy_credentials_active(
+                hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
+            )
+            is False
+        )
+
+    def test_true_for_the_bound_credentials(self):
+        hass = _make_hass()
+        key = secrets.token_bytes(32)
+        oauth_legacy.bind_legacy_views(hass, CLIENT_ID, CLIENT_SECRET, key)
+        assert (
+            oauth_legacy.legacy_credentials_active(hass, CLIENT_ID, CLIENT_SECRET, key)
+            is True
+        )
+
+    def test_false_after_credential_change_until_rebind(self):
+        # The reuse branch keeps the OLD provider bound after a credential
+        # change, so the NEW credentials must not report as active.
+        hass = _make_hass()
+        key = secrets.token_bytes(32)
+        oauth_legacy.bind_legacy_views(hass, CLIENT_ID, CLIENT_SECRET, key)
+        assert (
+            oauth_legacy.legacy_credentials_active(
+                hass, CLIENT_ID, "rotated-secret", key
+            )
+            is False
+        )
+
+    def test_accepts_hex_string_signing_key(self):
+        hass = _make_hass()
+        key = secrets.token_bytes(32)
+        oauth_legacy.bind_legacy_views(hass, CLIENT_ID, CLIENT_SECRET, key)
+        assert (
+            oauth_legacy.legacy_credentials_active(
+                hass, CLIENT_ID, CLIENT_SECRET, key.hex()
+            )
+            is True
+        )
+
+
 # ---------------------------------------------------------------------------
 # embedded_entry._ensure_legacy_oauth_secrets (credential provisioning)
 # ---------------------------------------------------------------------------

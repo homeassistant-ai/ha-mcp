@@ -69,6 +69,7 @@ from .const import (
 from .embedded_server import EmbeddedServerError, EmbeddedServerManager
 from .llm_api import async_register_llm_api, async_unregister_llm_api
 from .mcp_webhook import async_register_webhook, async_unregister_webhook
+from .oauth_legacy import legacy_credentials_active
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -138,6 +139,18 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
                 "Webhook access disabled by option - the server is local-only "
                 "(direct port + sidebar panel)"
             )
+        # Only surface cleartext credentials once the bound provider actually
+        # serves them: while a rotation is pending restart, an old-identity
+        # token still validates and can read this log (see
+        # legacy_credentials_active).
+        oauth_creds_active = True
+        if webhook_enabled and auth_mode == WEBHOOK_AUTH_LEGACY:
+            oauth_creds_active = legacy_credentials_active(
+                hass,
+                str(oauth_client_id or ""),
+                str(oauth_client_secret or ""),
+                str(entry.data.get(DATA_OAUTH_SIGNING_KEY) or ""),
+            )
         _surface_connect_urls(
             hass,
             entry,
@@ -145,6 +158,7 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
             webhook_enabled=webhook_enabled,
             oauth_client_id=oauth_client_id,
             oauth_client_secret=oauth_client_secret,
+            oauth_creds_active=oauth_creds_active,
         )
         # Conversation-agent LLM API (#1745), gated on its option (default on).
         # Advisory: registration failures are contained inside (logged, feature
@@ -291,6 +305,7 @@ def _surface_connect_urls(
     webhook_enabled: bool = True,
     oauth_client_id: str | None = None,
     oauth_client_secret: str | None = None,
+    oauth_creds_active: bool = True,
 ) -> None:
     """Log the connect URLs and (re)create a persistent notification."""
     urls = build_connect_urls(hass, entry, webhook_enabled=webhook_enabled)
@@ -301,10 +316,15 @@ def _surface_connect_urls(
     elif auth_mode == WEBHOOK_AUTH_LEGACY:
         # Kept secret-free (unlike the log line below) — see the SECURITY note
         # on the persistent notification further down, which reuses this text.
+        creds_where = (
+            "the Home Assistant log or the entry's Configure screen"
+            if oauth_creds_active
+            else "the entry's Configure screen"
+        )
         auth_note = (
-            "OAuth (Beta) is ENABLED for this URL (legacy mode) - see the Home "
-            "Assistant log or the entry's Configure screen for the Client ID "
-            "and Client Secret to paste into your MCP client."
+            "OAuth (Beta) is ENABLED for this URL (legacy mode) - see "
+            f"{creds_where} for the Client ID and Client Secret to paste "
+            "into your MCP client."
         )
     else:
         auth_note = "Clients authenticate with your Home Assistant account (ha_auth)."
@@ -315,15 +335,31 @@ def _surface_connect_urls(
         f"Connect URL(s):\n{url_lines}\n{auth_note}"
     )
     if webhook_enabled and auth_mode == WEBHOOK_AUTH_LEGACY:
-        # Admin-only log (mirrors the webhook-proxy add-on's own startup log,
-        # start.py). Cleartext credentials — deliberately NOT in the
-        # persistent notification below, which every signed-in user can see.
-        log_message += (
-            f"\n  OAuth Client ID:     {oauth_client_id}"
-            f"\n  OAuth Client Secret: {oauth_client_secret}"
-            "\n  Paste both into your MCP client's OAuth connector setup "
-            "(e.g. Google Gemini Spark: Advanced settings)."
-        )
+        if oauth_creds_active:
+            # Admin-only log (mirrors the webhook-proxy add-on's own startup
+            # log, start.py). Cleartext credentials — deliberately NOT in the
+            # persistent notification below, which every signed-in user can
+            # see.
+            log_message += (
+                f"\n  OAuth Client ID:     {oauth_client_id}"
+                f"\n  OAuth Client Secret: {oauth_client_secret}"
+                "\n  Paste both into your MCP client's OAuth connector setup "
+                "(e.g. Google Gemini Spark: Advanced settings)."
+            )
+        else:
+            # SECURITY (review finding on #1880): while a credential rotation
+            # is pending the restart, the bound root views still serve the OLD
+            # identity, so a token issued under it stays valid — and could
+            # read this log through the server's own log tools. Logging the
+            # NEW credentials here would hand them to exactly the party the
+            # rotation is meant to evict, so they are withheld until the
+            # restart makes them active (which also kills every old token).
+            log_message += (
+                "\n  The OAuth credentials were rotated and take effect after "
+                "the restart Home Assistant is asking for; until then the "
+                "previous credentials remain active. The new Client ID and "
+                "Client Secret are on the entry's Configure screen."
+            )
     _LOGGER.info(log_message)
     if not bool(entry.options.get(OPT_ENABLE_STARTUP_NOTIFICATION, True)):
         # Notification suppressed by option: clear any notification created

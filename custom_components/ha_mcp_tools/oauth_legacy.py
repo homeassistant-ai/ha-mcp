@@ -236,6 +236,33 @@ def bind_legacy_views(
     return provider, pending_restart
 
 
+def legacy_credentials_active(
+    hass: HomeAssistant,
+    client_id: str,
+    client_secret: str,
+    signing_key: bytes | str,
+) -> bool:
+    """Whether the bound root views currently serve exactly these credentials.
+
+    False while a credential rotation is pending a restart (the bound provider
+    keeps the previous identity until then — see :func:`bind_legacy_views`),
+    when another integration owns the routes, or when legacy OAuth was never
+    bound this session. Callers use this to withhold rotated credentials from
+    surfaces a still-valid old-identity token can read — the admin startup log
+    in particular, which is reachable through the server's own log tools
+    (review finding on #1880).
+    """
+    if hass.data.get(OAUTH_ROUTE_OWNER_KEY) != _DOMAIN:
+        return False
+    bound = hass.data.get(OAUTH_ROUTE_KEY_FINGERPRINT)
+    if not isinstance(bound, str):
+        return False
+    current = _oauth_route_fingerprint(
+        client_id, client_secret, _normalize_signing_key(signing_key)
+    )
+    return hmac.compare_digest(bound, current)
+
+
 def _live_auth_mode(hass: HomeAssistant) -> str | None:
     """Read the CURRENTLY configured webhook auth mode from hass.data.
 

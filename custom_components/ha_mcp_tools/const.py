@@ -345,8 +345,11 @@ DATA_SECRET_PATH = "secret_path"
 # payload carries the client_id (not the secret), so rotating the client_id
 # revokes every outstanding token (see LegacyOAuthProvider._validate_token).
 # Because validation never involves the client_secret, a secret-only override
-# change instead rotates the signing key to get the same eviction (see
-# embedded_entry._ensure_legacy_oauth_secrets).
+# change instead rotates the signing key, evicting outstanding tokens at the
+# restart that activates the new credentials (see
+# embedded_entry._ensure_legacy_oauth_secrets). Until that restart the bound
+# views keep serving the OLD identity, so the startup log withholds rotated
+# credentials (embedded_setup._surface_connect_urls).
 DATA_OAUTH_CLIENT_ID = "oauth_client_id"
 DATA_OAUTH_CLIENT_SECRET = "oauth_client_secret"
 DATA_OAUTH_SIGNING_KEY = "oauth_signing_key"

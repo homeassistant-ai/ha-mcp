@@ -312,12 +312,14 @@ def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
     ``oauth_legacy.LegacyOAuthProvider._validate_token``). A client_secret
     override change is the one path that DOES rotate the signing key: token
     validation never involves the secret, so without the rotation a
-    secret-only change would leave outstanding tokens valid for their full
-    TTL — long enough for the evicted holder to read the NEW secret from the
-    admin startup log through the server's own log tools and re-mint
-    (review finding on #1880). Rotating the signing key evicts every
-    outstanding token at the restart the credential-change repair already
-    requires.
+    secret-only change would leave outstanding tokens valid for the rest of
+    their access TTL even after the restart that activates the new
+    credentials. Rotating the key evicts them at that restart. It does NOT
+    shorten the pre-restart window — the bound views keep serving the old
+    identity until then (see ``oauth_legacy.bind_legacy_views``) — which is
+    why the startup log also withholds rotated credentials until they are
+    active (``embedded_setup._surface_connect_urls`` via
+    ``oauth_legacy.legacy_credentials_active``; review finding on #1880).
 
     Returns True if ``data``/``options`` were mutated.
     """
