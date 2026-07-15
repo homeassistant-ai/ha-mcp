@@ -179,6 +179,7 @@ class YamlReadTools:
         tags={"System", "beta"},
         annotations={
             "readOnlyHint": True,
+            "openWorldHint": False,
             "title": "Read YAML Config Fragment",
         },
     )
