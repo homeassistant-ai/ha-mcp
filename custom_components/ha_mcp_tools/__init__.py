@@ -1064,11 +1064,16 @@ def _mask_secrets_content(content: str) -> str:
     """Return secrets.yaml content with every secret value masked.
 
     Parses the document structurally (ruamel — the same YAML stack used
-    elsewhere in this component) and emits ``key: [MASKED]`` for each top-level
-    key. This closes the gap in the previous line-by-line regex, which masked
-    only single-line ``key: value`` pairs and leaked multi-line block scalars
-    (``|``, ``>``) whose continuation lines have no colon — SSH keys, TLS
-    material, and service-account JSON are commonly stored that way.
+    elsewhere in this component) and emits ``key: "[MASKED]"`` for each
+    top-level key. This closes the gap in the previous line-by-line regex, which
+    masked only single-line ``key: value`` pairs and leaked multi-line block
+    scalars (``|``, ``>``) whose continuation lines have no colon — SSH keys,
+    TLS material, and service-account JSON are commonly stored that way.
+
+    The marker is quoted because the masked text is itself valid YAML that gets
+    re-parsed: read_file's ``yaml_path``/``include_parsed`` views load it, and
+    an unquoted ``[MASKED]`` is flow-sequence syntax, so the parsed view would
+    render the mask as the list ``["MASKED"]`` instead of a scalar.
 
     Fails closed: any content that cannot be parsed and masked as a key-value
     mapping is withheld rather than returned raw, so a failure on this path never
@@ -1085,7 +1090,7 @@ def _mask_secrets_content(content: str) -> str:
             return (
                 "# secrets.yaml is empty or not a key-value mapping — content withheld"
             )
-        return "\n".join(f"{key}: [MASKED]" for key in parsed)
+        return "\n".join(f'{key}: "[MASKED]"' for key in parsed)
     except YAMLError:
         return "# secrets.yaml could not be parsed — content withheld to avoid leaking secrets"
     except Exception:

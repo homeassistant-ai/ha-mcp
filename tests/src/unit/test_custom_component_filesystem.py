@@ -297,8 +297,21 @@ password: 'mypassword'
         assert "mypassword" not in result
         assert "[MASKED]" in result
 
+    def test_mask_marker_reparses_as_a_scalar(self):
+        """The masked text is itself re-parsed by read_file's yaml_path views,
+        so the marker must be quoted: an unquoted ``[MASKED]`` is flow-sequence
+        syntax and would come back as the list ``["MASKED"]``."""
+        import io
+
+        from custom_components.ha_mcp_tools.yaml_rt import make_yaml, yaml_jsonify
+
+        result = _mask_secrets_content("api_key: secret123\n")
+
+        reparsed = make_yaml().load(io.StringIO(result))
+        assert yaml_jsonify(reparsed) == {"api_key": "[MASKED]"}
+
     def test_drops_comments_and_blank_lines(self):
-        """The structural mask emits only ``key: [MASKED]`` lines. Comments and
+        """The structural mask emits only ``key: "[MASKED]"`` lines. Comments and
         blank lines are intentionally not reproduced — they are not needed to
         show which keys exist, and dropping them avoids leaking a secret that a
         user pasted into a comment."""
@@ -309,7 +322,7 @@ password: 'mypassword'
 
         assert "secret123" not in result
         assert "pass456" not in result
-        assert result == "api_key: [MASKED]\npassword: [MASKED]"
+        assert result == 'api_key: "[MASKED]"\npassword: "[MASKED]"'
 
     def test_preserves_key_names(self):
         """Should preserve key names but mask values."""
@@ -333,7 +346,7 @@ token: tok789
         result = _mask_secrets_content("outer:\n  inner_secret: value\n")
 
         assert "value" not in result
-        assert result == "outer: [MASKED]"
+        assert result == 'outer: "[MASKED]"'
 
     def test_block_scalar_leaves_no_secret_bytes(self):
         """Core advisory PoC (GHSA-mc92-ww4q-6fg4): a block scalar's continuation
@@ -350,7 +363,7 @@ token: tok789
         assert "BEGIN OPENSSH" not in result
         assert "b3BlbnNzaC1rZXktdjEAAAAA" not in result
         assert "hunter2" not in result
-        assert result == "backup_ssh_key: [MASKED]\napi_password: [MASKED]"
+        assert result == 'backup_ssh_key: "[MASKED]"\napi_password: "[MASKED]"'
 
     def test_empty_or_non_mapping_withheld(self):
         """Empty file (None) or a top-level list/scalar: nothing to mask
@@ -367,7 +380,7 @@ token: tok789
     def test_custom_tag_does_not_crash(self):
         """The round-trip loader resolves HA-style custom tags instead of
         raising, so masking still produces a redacted key line."""
-        assert _mask_secrets_content("foo: !secret bar\n") == "foo: [MASKED]"
+        assert _mask_secrets_content("foo: !secret bar\n") == 'foo: "[MASKED]"'
 
     def test_yaml_anchors_do_not_leak_dereferenced_secrets(self):
         """A secret defined once via an anchor and reused via aliases is
@@ -376,7 +389,7 @@ token: tok789
         content = "base_token: &tok 'secret123'\nprod: *tok\ndev: *tok\n"
         result = _mask_secrets_content(content)
         assert "secret123" not in result
-        assert result == "base_token: [MASKED]\nprod: [MASKED]\ndev: [MASKED]"
+        assert result == 'base_token: "[MASKED]"\nprod: "[MASKED]"\ndev: "[MASKED]"'
 
 
 class TestFileOperationsIntegration:
