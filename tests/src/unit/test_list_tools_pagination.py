@@ -203,6 +203,54 @@ class TestListDashboardResourcesPagination:
         assert result["inline_count"] == 0
 
 
+class _ComponentClient:
+    """Credentialed HA client: caps probe succeeds ⇒ the component path runs."""
+
+    base_url = "http://ha.local:8123"
+    token = "tok"
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        if msg.get("type") == "config/entity_registry/list":
+            return {"success": True, "result": []}
+        raise AssertionError(f"legacy fetch must not run: {msg!r}")
+
+
+def _component_collection_result(count: int) -> dict[str, Any]:
+    return {
+        "helpers": [
+            {
+                "helper_type": "input_boolean",
+                "object_id": f"b{i:03d}",
+                "entity_id": f"input_boolean.b{i:03d}",
+                "name": f"Bool {i:03d}",
+                "kind": "collection",
+                "config": {"id": f"b{i:03d}", "name": f"Bool {i:03d}"},
+            }
+            for i in range(count)
+        ],
+        "count": count,
+        "covered_types": ["input_boolean"],
+    }
+
+
+def _component_flow_result(count: int) -> dict[str, Any]:
+    return {
+        "helpers": [
+            {
+                "helper_type": "template",
+                "entry_id": f"cfg{i:03d}",
+                "entity_id": f"sensor.templated_{i:03d}",
+                "name": f"Templated {i:03d}",
+                "kind": "flow",
+                "options": {"state": "{{ 1 + 1 }}"},
+            }
+            for i in range(count)
+        ],
+        "count": count,
+        "covered_types": ["template"],
+    }
+
+
 class TestListHelpersPagination:
     async def test_legacy_path_paginates(self):
         client = _LegacyHelperClient(_legacy_helper_items(250))
@@ -228,6 +276,63 @@ class TestListHelpersPagination:
         assert result["total_count"] == 2
         assert result["has_more"] is False
         assert set(result) >= _PAGINATION_KEYS
+
+    async def test_component_storage_path_paginates(self):
+        """The component route is preferred for storage types when installed.
+
+        Its envelope comes from ``_shape_component_helpers_response`` — a
+        different builder than the legacy body — so the shared slice has to
+        cover it too. The client raises on any legacy fetch, pinning that this
+        really went through the component.
+        """
+        caps = {
+            "schema_version": 1,
+            "component_version": "1.1.0",
+            "capabilities": ["helpers_list"],
+            "limits": {},
+        }
+        ws = make_ws(
+            "ha_mcp_tools/helpers_list",
+            info_result=caps,
+            cmd_result=_component_collection_result(250),
+        )
+        with patch_ws(ws, tools_config_helpers):
+            list_helpers = _build_list_helpers(_ComponentClient())
+            result = await list_helpers("input_boolean", limit=100, offset=100)
+
+        assert len(result["helpers"]) == 100
+        assert result["helpers"][0]["entity_id"] == "input_boolean.b100"
+        assert result["count"] == 100
+        assert result["total_count"] == 250
+        assert result["has_more"] is True
+        assert result["next_offset"] == 200
+
+    async def test_component_flow_path_paginates(self):
+        """Flow types are served ONLY through the component — no legacy route.
+
+        If the slice missed this envelope, a large template-helper set would
+        stay unbounded with no fallback path to fix it.
+        """
+        caps = {
+            "schema_version": 1,
+            "component_version": "1.1.0",
+            "capabilities": ["helpers_list"],
+            "limits": {},
+        }
+        ws = make_ws(
+            "ha_mcp_tools/helpers_list",
+            info_result=caps,
+            cmd_result=_component_flow_result(250),
+        )
+        with patch_ws(ws, tools_config_helpers):
+            list_helpers = _build_list_helpers(_ComponentClient())
+            result = await list_helpers("template", limit=50, offset=200)
+
+        assert len(result["helpers"]) == 50
+        assert result["count"] == 50
+        assert result["total_count"] == 250
+        assert result["has_more"] is False
+        assert result["next_offset"] is None
 
     async def test_all_types_mode_paginates_the_merged_listing(self):
         """All-types is component-served and merges legacy ``tag`` records in.
