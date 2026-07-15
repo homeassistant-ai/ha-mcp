@@ -34,6 +34,7 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
 from homeassistant.loader import async_get_integration
 from ruamel.yaml import YAMLError
@@ -2866,8 +2867,6 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # the entry — no unload cleanup needed. The component version comes from the
     # manifest like the options-form version hint, degrading to the compiled-in
     # COMPONENT_VERSION if that read fails so a manifest hiccup never breaks setup.
-    from homeassistant.helpers import device_registry as dr
-
     component_version = COMPONENT_VERSION
     try:
         integration = await async_get_integration(hass, DOMAIN)
