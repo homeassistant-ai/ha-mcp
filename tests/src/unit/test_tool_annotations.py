@@ -62,11 +62,12 @@ def extract_tool_decorators(file_path: Path) -> list[dict]:
     # such as ``@with_auto_backup(domain="entity", id_param="entity_id",
     # client=client)`` between ``@mcp.tool`` and ``async def``; the old
     # bare-only ``(?:@\w+\s*)*`` dropped those backed-up tools from the count.
-    # ``\([^()]*\)`` does NOT span nested parens, so a decorator whose args
-    # contain them (e.g. ``ha_set_entity``'s ``id_fn=lambda``) stays unmatched
-    # — pre-existing, not introduced here. Requiring decorators-then-
-    # ``async def`` (not arbitrary text) keeps docstring ``@mcp.tool(...)``
-    # mentions from matching.
+    # ``\([^()]*\)`` does NOT span nested parens, so a closure-form tool whose
+    # decorator args contain them would stay unmatched; no tool does today
+    # (``ha_set_entity``'s ``id_fn=lambda`` is class-form, so Pattern 2 takes
+    # it), and test_tool_scan_finds_every_annotated_tool fails loudly if one
+    # ever falls out. Requiring decorators-then-``async def`` (not arbitrary
+    # text) keeps docstring ``@mcp.tool(...)`` mentions from matching.
     pattern = r"@mcp\.tool\(([^)]*)\)\s*(?:@\w+(?:\([^()]*\))?\s*)*async def (\w+)"
     tools = [
         _parse_decorator_args(m.group(1), m.group(2), file_path.name)
@@ -191,6 +192,32 @@ class TestToolAnnotations:
             "@tool() decorator; the MCP default is true."
         )
 
+    def test_tool_scan_finds_every_annotated_tool(self):
+        """The scan must not silently drop a tool from the checks above.
+
+        The closure-form pattern ``@mcp.tool\\(([^)]*)\\)`` cannot span a ``)``,
+        so a future decorator whose args contain one (e.g. a title like
+        "Get Logs (verbose)") would fall out of get_all_tools() and escape every
+        annotation assertion -- inheriting the MCP default openWorldHint=true
+        unnoticed. Every tool sets openWorldHint exactly once, so the scanned
+        count must equal the occurrences across the tool files; a drop breaks
+        parity and fails here instead of passing silently.
+        """
+        tools = get_all_tools()
+        occurrences = sum(
+            py_file.read_text(encoding="utf-8").count("openWorldHint")
+            for py_file in sorted(get_tools_dir().glob("*.py"))
+            if not py_file.name.startswith("_")
+        )
+
+        assert len(tools) == occurrences, (
+            f"Tool scan found {len(tools)} tools but {occurrences} openWorldHint "
+            f"occurrences across the tool files. A tool the regex cannot parse is "
+            f"dropped from get_all_tools() and skips every annotation check. Fix "
+            f"the pattern in extract_tool_decorators() (a ')' inside the decorator "
+            f"args is the usual cause) rather than adjusting this count."
+        )
+
     def test_server_registered_tools_have_open_world_hint(self):
         """Tools registered directly on the server must also set openWorldHint.
 
@@ -216,16 +243,30 @@ class TestToolAnnotations:
             "the scanner's shape assumption drifted"
         )
 
+        # ha_get_skill_guide registers as name=SKILL_TOOL_NAME, not a literal, so
+        # resolve module-level string constants to keep failures naming the tool
+        # rather than "<unknown>".
+        constants = {
+            target.id: node.value.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+
+        def tool_name(call: ast.Call) -> str:
+            value = next((kw.value for kw in call.keywords if kw.arg == "name"), None)
+            if isinstance(value, ast.Constant):
+                return str(value.value)
+            if isinstance(value, ast.Name):
+                return constants.get(value.id, value.id)
+            return "<unknown>" if value is None else ast.unparse(value)
+
         missing = []
         for call in registrations:
-            name = next(
-                (
-                    kw.value.value
-                    for kw in call.keywords
-                    if kw.arg == "name" and isinstance(kw.value, ast.Constant)
-                ),
-                "<unknown>",
-            )
+            name = tool_name(call)
             annotations = next(
                 (kw.value for kw in call.keywords if kw.arg == "annotations"), None
             )
@@ -297,9 +338,7 @@ class TestToolAnnotations:
     def test_ha_check_config_removed_and_folded(self):
         """ha_check_config was removed and folded into ha_get_system_health
         (include='config_check'). Lock the removal at the source registration so
-        a bad merge that re-adds the @tool block fails CI. (Checks the source
-        string directly rather than get_all_tools(), whose regex can't parse
-        ha_get_system_health's paren-containing title.)"""
+        a bad merge that re-adds the @tool block fails CI."""
         system_src = (get_tools_dir() / "tools_system.py").read_text(encoding="utf-8")
         assert 'name="ha_check_config"' not in system_src, (
             "ha_check_config was removed in favor of "
