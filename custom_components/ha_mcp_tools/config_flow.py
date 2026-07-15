@@ -12,8 +12,9 @@ menu on the first step:
   channel / port / bind host / webhook auth / pip spec / server URL.
 
 The two entry types are discriminated by ``entry.data[CONF_ENTRY_TYPE]``; the
-options-flow dispatcher branches on it so only the server entry gets a
-configurable options flow (the tools entry aborts with ``no_options``).
+options-flow dispatcher branches on it — the server entry gets the configurable
+options flow, and the tools entry gets a light informational options flow
+(nothing to configure yet).
 """
 
 from __future__ import annotations
@@ -86,8 +87,14 @@ from .const import (
 )
 
 # Titles shown for each entry in the integration tile's entry list.
-_TOOLS_ENTRY_TITLE = "HA MCP Tools"
+_TOOLS_ENTRY_TITLE = "HA-MCP File & YAML Tools"
 _SERVER_ENTRY_TITLE = "HA-MCP Server"
+
+# The pre-#1853 default title for the tools entry. Existing installs carrying
+# this exact title are migrated to ``_TOOLS_ENTRY_TITLE`` on setup; a
+# user-customized title is left alone. Kept here next to the new title so the
+# migration target and the old default never drift apart.
+_TOOLS_ENTRY_LEGACY_TITLE = "HA MCP Tools"
 
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
@@ -124,13 +131,14 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         """Return the options flow for this entry type.
 
-        Only the in-process server entry has options (channel / port / bind /
-        auth / pip spec / URL). The tools services entry has none, so it returns
-        a flow that aborts with an explanatory message.
+        The in-process server entry gets the configurable options flow (channel /
+        port / bind / auth / pip spec / URL). The tools services entry has
+        nothing to configure yet, so it gets a light informational options flow
+        instead of aborting.
         """
         if config_entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_SERVER:
             return HaMcpServerOptionsFlow()
-        return _NoOptionsFlow()
+        return HaMcpToolsInfoOptionsFlow()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -206,14 +214,31 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
         return self.async_show_form(step_id="server")
 
 
-class _NoOptionsFlow(OptionsFlow):
-    """Options flow for the tools entry: it has no configurable options."""
+class HaMcpToolsInfoOptionsFlow(OptionsFlow):
+    """Options flow for the tools entry: a light informational form.
+
+    The tools services entry has nothing to configure yet, but aborting the
+    Configure dialog reads as an error. Show an empty-schema form that explains
+    what the entry provides instead; submitting persists an empty options
+    payload.
+
+    The form uses the ``tools_info`` step id, NOT ``init``: the server options
+    flow already owns ``options.step.init`` in strings.json, so a shared step id
+    would collide. ``async_step_init`` is the required entry point (it renders
+    the form); HA routes the form's submit to ``async_step_tools_info``.
+    """
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Abort immediately — the services entry exposes no options."""
-        return self.async_abort(reason="no_options")
+        """Render the informational form under the ``tools_info`` step id."""
+        return self.async_show_form(step_id="tools_info", data_schema=vol.Schema({}))
+
+    async def async_step_tools_info(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Persist an empty options payload once the info form is submitted."""
+        return self.async_create_entry(title="", data={})
 
 
 class HaMcpServerOptionsFlow(OptionsFlow):

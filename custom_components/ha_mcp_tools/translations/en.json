@@ -3,31 +3,32 @@
         "step": {
             "user": {
                 "title": "HA-MCP Custom Component",
-                "description": "Choose what to add. **HA-MCP Server** runs the full ha-mcp server inside Home Assistant and exposes it through a Home Assistant webhook - this is the install most people want. **HA MCP Tools** adds the privileged file and YAML editing services, which are only needed if you turn on ha-mcp's opt-in file/YAML tools; you can add it later at any time.",
+                "description": "Choose what to add. **HA-MCP Server** runs the full ha-mcp server inside Home Assistant and exposes it through a Home Assistant webhook - this is the install most people want. It is a standalone server and a complete replacement for every other install method (add-on, Docker, uvx/PyPI, stdio); if you run it, do not also run one of those. **HA-MCP File & YAML Tools** adds the privileged file and YAML editing services, needed only if you turn on ha-mcp's opt-in file/YAML tools. If your ha-mcp server already runs elsewhere (add-on, Docker, uvx), you do not need the server entry - add only this File & YAML entry, and only if you use those tools. It works with every server type and can be added later at any time.",
                 "menu_options": {
                     "server": "HA-MCP Server (recommended)",
-                    "tools": "HA MCP Tools (optional file & YAML services)"
+                    "tools": "HA-MCP File & YAML Tools (optional)"
                 }
             },
             "tools": {
-                "title": "HA MCP Tools",
+                "title": "HA-MCP File & YAML Tools",
                 "description": "Sets up the privileged file and YAML configuration services. Only needed if you enable ha-mcp's opt-in file/YAML editing tools (feature flags, off by default) - this applies to every server type, including the in-process HA-MCP Server. You can add or remove this entry at any time."
             },
             "server": {
                 "title": "HA-MCP Server",
-                "description": "This runs the full ha-mcp server inside Home Assistant and exposes it remotely through a Home Assistant webhook (reachable via Nabu Casa or any reverse proxy). Select **Submit** to start it; you can change the port, binding, and authentication afterward in the integration options."
+                "description": "This runs the full ha-mcp server inside Home Assistant and exposes it remotely through a Home Assistant webhook (reachable via Nabu Casa or any reverse proxy). It is a standalone server and a complete replacement for the add-on, Docker, uvx/PyPI, and stdio install methods - do not run it alongside another ha-mcp server. Select **Submit** to start it; you can change the port, binding, and authentication afterward in the integration options."
             }
         },
         "abort": {
             "already_configured": "This entry is already set up.",
-            "unsupported_home_assistant": "The in-process HA-MCP Server requires Home Assistant {required} or newer, but this instance is running {installed}. You can still use this component's HA MCP Tools entry with an external ha-mcp server running as an add-on or Docker container."
+            "unsupported_home_assistant": "The in-process HA-MCP Server requires Home Assistant {required} or newer, but this instance is running {installed}. You can still use this component's HA-MCP File & YAML Tools entry with an external ha-mcp server running as an add-on or Docker container."
         }
     },
     "options": {
-        "abort": {
-            "no_options": "The HA MCP Tools services entry has no options to configure."
-        },
         "step": {
+            "tools_info": {
+                "title": "HA-MCP File & YAML Tools",
+                "description": "This entry provides the privileged file and YAML editing services used by ha-mcp's opt-in file/YAML tools. There is nothing to configure here yet. Which directories the file tools may access is managed from the ha-mcp server's own settings (its Settings UI / allowed-paths), not here. Per-entry options may appear on this screen in a future release."
+            },
             "init": {
                 "title": "HA-MCP Server",
                 "description": "Configure the HA-MCP server. {panel_hint}Changes here are applied on save.\n\n{versions}\n\n{connect_url}",

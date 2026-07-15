@@ -281,7 +281,10 @@ class TestManageServer:
     async def test_info_detects_server_entry(self):
         client = _mock_client(
             entries=[{"entry_id": "tools-e"}, {"entry_id": "server-e"}],
-            flows=[{"type": "abort", "reason": "no_options"}, dict(_SERVER_FLOW)],
+            flows=[
+                {"type": "form", "step_id": "tools_info", "data_schema": []},
+                dict(_SERVER_FLOW),
+            ],
         )
         result = await DevTools(client).ha_dev_manage_server(action="info")
         entry = result["data"]["component_server_entry"]

@@ -1214,7 +1214,6 @@ class TestGetConfigToggles:
             tool_search_max_results=5,
             enable_yaml_config_editing=False,
             enable_filesystem_tools=True,
-            enable_custom_component_integration=False,
             enable_code_mode=False,
             enabled_tool_modules="all",
             disabled_tools="ha_foo,ha_bar",
@@ -1228,7 +1227,6 @@ class TestGetConfigToggles:
         # reports (issue #1804) are surfaced so triage doesn't have to ask.
         assert toggles["enable_beta_features"] is True
         assert toggles["enable_filesystem_tools"] is True
-        assert toggles["enable_custom_component_integration"] is False
         # Lists are summarized, not dumped — count of comma-separated entries.
         assert toggles["disabled_tools_count"] == 2
         assert toggles["pinned_tools_count"] == 0
@@ -1562,7 +1560,6 @@ class TestBugReportNewIdentityFields:
             # False here on purpose: exercises the end-to-end path for a toggle
             # that is present-but-False, which must still render (not be dropped).
             enable_filesystem_tools=False,
-            enable_custom_component_integration=False,
             enable_code_mode=False,
             enabled_tool_modules="all",
             disabled_tools="",

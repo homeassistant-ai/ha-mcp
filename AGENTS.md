@@ -476,7 +476,6 @@ src/ha_mcp/
 - `ha_restart`, `ha_reload_core`, `ha_eval_template`
 - `ha_report_issue`, `ha_import_blueprint`
 - `ha_read_file`, `ha_write_file`, `ha_bulk_control`
-- `ha_install_mcp_tools`
 
 **Adding new verbs**: When no existing verb fits a new tool's purpose, add the verb to the approved-verbs list above rather than forcing a poor fit. `.gemini/styleguide.md` points back to this section as the single source of truth, so updates here propagate automatically.
 

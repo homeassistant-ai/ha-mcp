@@ -211,10 +211,9 @@ def _detect_platform() -> dict[str, str]:
 # ``enable_beta_features`` leads the list because it is the master gate: when
 # off it force-disables every beta sub-flag (filesystem tools, code mode, YAML
 # editing, ...) regardless of the sub-flag's own value, so a "missing tool"
-# report is meaningless without it. ``enable_filesystem_tools`` and
-# ``enable_custom_component_integration`` are the exact beta-gated tool families
-# from issue #1804 — surfacing them lets triage see at a glance whether the tool
-# the user couldn't find was even enabled server-side.
+# report is meaningless without it. ``enable_filesystem_tools`` is a beta-gated
+# tool family from issue #1804 — surfacing it lets triage see at a glance whether
+# the tool the user couldn't find was even enabled server-side.
 _CONFIG_TOGGLE_FIELDS: tuple[str, ...] = (
     "enable_beta_features",
     "enable_websocket",
@@ -223,7 +222,6 @@ _CONFIG_TOGGLE_FIELDS: tuple[str, ...] = (
     "tool_search_max_results",
     "enable_yaml_config_editing",
     "enable_filesystem_tools",
-    "enable_custom_component_integration",
     "enable_code_mode",
     "enabled_tool_modules",
 )

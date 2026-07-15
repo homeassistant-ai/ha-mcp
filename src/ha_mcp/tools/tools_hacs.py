@@ -718,11 +718,11 @@ HACS_ADD_REGISTRATION_TIMEOUT = 10.0
 
 # Wall-clock budget for ``_resolve_hacs_repo_id`` (the ``owner/repo`` lookup
 # behind read-only ``ha_get_hacs_info(action="info")`` and
-# ``ha_manage_hacs(action="download")``). Unlike ``ha_install_mcp_tools`` —
-# which adds a repo and then waits the full ``HACS_REPO_REGISTRATION_TIMEOUT``
-# for that fresh registration to land — a plain info/download lookup targets a
+# ``ha_manage_hacs(action="download")``). A plain info/download lookup targets a
 # repo that should ALREADY be in HACS's index: default repos always are, and
-# ``add_repository`` blocks until registration is confirmed before returning.
+# ``ha_manage_hacs(action="add_repository")`` blocks until registration is
+# confirmed before returning (waiting the full ``HACS_REPO_REGISTRATION_TIMEOUT``
+# for the fresh registration to land).
 # So the post-subscribe sample resolves an existing repo instantly, and the
 # dispatch-signal wait only ever burns wall-clock when the repo is genuinely
 # absent. The old 30 s budget made every not-found lookup a 30 s stall (the
@@ -973,8 +973,7 @@ async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str
     For GitHub-path identifiers, this uses the HACS dispatch-signal
     waiter so that a caller running immediately after
     ``ha_manage_hacs(action="add_repository")`` doesn't race against
-    HACS' internal registration — the same flake class that affected
-    ``ha_install_mcp_tools``.
+    HACS' internal registration.
     """
     if "/" not in repository_id:
         return repository_id, repository_id

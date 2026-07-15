@@ -44,6 +44,7 @@ from .const import (
     ALLOWED_WRITE_DIRS,
     ALLOWED_YAML_CONFIG_FILES,
     ALLOWED_YAML_KEYS,
+    COMPONENT_VERSION,
     CONF_ENTRY_TYPE,
     DASHBOARD_URL_PATH_PATTERN,
     DENY_PATH_SEGMENTS,
@@ -2683,6 +2684,45 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # the caller-token gate above — HA core authenticates the WS connection and
     # @require_admin gates each command (see websocket_api.py).
     async_register_commands(hass)
+
+    # Entry-level finalization: pick up the #1853 rename on existing installs and
+    # give the tools entry a device. Both are independent of the services above
+    # and cosmetic to the integration's core value, so a read failure degrades
+    # rather than blocking setup.
+    from .config_flow import _TOOLS_ENTRY_LEGACY_TITLE, _TOOLS_ENTRY_TITLE
+
+    # Retitle an entry still carrying the pre-rename default; a user-customized
+    # title is left untouched (only the exact old default migrates). The tools
+    # entry registers no update listener, so this async_update_entry cannot
+    # trigger a reload loop — and the guard is idempotent regardless (the title
+    # no longer matches on the next setup).
+    if entry.title == _TOOLS_ENTRY_LEGACY_TITLE:
+        hass.config_entries.async_update_entry(entry, title=_TOOLS_ENTRY_TITLE)
+
+    # Register a device (parity with the server entry, which gets one via
+    # update.py's DeviceInfo). Tied to the config entry, so HA removes it with
+    # the entry — no unload cleanup needed. The component version comes from the
+    # manifest like the options-form version hint, degrading to the compiled-in
+    # COMPONENT_VERSION if that read fails so a manifest hiccup never breaks setup.
+    from homeassistant.helpers import device_registry as dr
+
+    component_version = COMPONENT_VERSION
+    try:
+        integration = await async_get_integration(hass, DOMAIN)
+        component_version = str(integration.version)
+    except Exception as err:
+        _LOGGER.debug(
+            "Could not read the component version for the tools device: %s", err
+        )
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        name=_TOOLS_ENTRY_TITLE,
+        manufacturer="homeassistant-ai",
+        model="File & YAML editing services",
+        sw_version=component_version,
+        configuration_url="https://github.com/homeassistant-ai/ha-mcp",
+    )
 
     _LOGGER.info("HA MCP Tools initialized with file management services")
     return True

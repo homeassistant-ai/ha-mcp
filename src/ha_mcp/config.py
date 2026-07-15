@@ -257,14 +257,6 @@ class Settings(BaseSettings):
     # other gated capability.
     enable_filesystem_tools: bool = Field(False, alias="HAMCP_ENABLE_FILESYSTEM_TOOLS")
 
-    # Custom-component installer (``ha_install_mcp_tools``) — pulls the
-    # ``ha_mcp_tools`` integration into HACS. Same env-var-direct
-    # background as ``enable_filesystem_tools``; promoted for the same
-    # reason.
-    enable_custom_component_integration: bool = Field(
-        False, alias="HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"
-    )
-
     # Dashboard screenshot mode — the ``ha_get_dashboard_screenshot`` tool
     # plus the ``include_screenshot`` / ``return_screenshot`` params on the
     # dashboard get/set tools. Renders responsive Lovelace images via a
@@ -356,15 +348,15 @@ class Settings(BaseSettings):
     )
 
     # Mirror the legacy ``os.getenv("FLAG", "").lower() in ("true", ...)``
-    # semantics for the two ex-direct-getenv flags: an empty env var
-    # value MUST be treated as False rather than raising
+    # semantics for the ex-direct-getenv ``enable_filesystem_tools`` flag (and
+    # its sibling toggles listed above): an empty env var value MUST be treated
+    # as False rather than raising
     # ``ValidationError``. Pydantic v2's bool parser raises on ``""``
     # which broke ``test_tools_filesystem.py::TestFeatureFlag::
     # test_disabled_with_empty_string`` after the migration; this
     # validator restores the contract callers rely on.
     @field_validator(
         "enable_filesystem_tools",
-        "enable_custom_component_integration",
         "enable_dashboard_screenshot",
         mode="before",
     )
@@ -693,11 +685,6 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
     FeatureFlagField("enable_yaml_packages_scene", "ENABLE_YAML_PACKAGES_SCENE", bool),
     FeatureFlagField("enable_lite_docstrings", "ENABLE_LITE_DOCSTRINGS", bool),
     FeatureFlagField("enable_filesystem_tools", "HAMCP_ENABLE_FILESYSTEM_TOOLS", bool),
-    FeatureFlagField(
-        "enable_custom_component_integration",
-        "HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION",
-        bool,
-    ),
     # ``enable_code_mode`` lives in this tuple so the override file (and
     # the web UI Server Settings tab) can write the flag. Without this
     # entry, the UI save logic would have nowhere to land the value.
@@ -744,7 +731,6 @@ BETA_FEATURE_FIELDS: tuple[str, ...] = (
     "enable_yaml_packages_script",
     "enable_yaml_packages_scene",
     "enable_filesystem_tools",
-    "enable_custom_component_integration",
     "enable_code_mode",
     "enable_lite_docstrings",
     "enable_dashboard_screenshot",
