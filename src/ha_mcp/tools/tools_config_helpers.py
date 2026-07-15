@@ -3523,6 +3523,17 @@ def _paginate_helpers_response(
     """
     helpers = response.get("helpers")
     if not isinstance(helpers, list):
+        # Every builder owes this function a flat list; anything else is a bug in
+        # the caller (a {type}/list shape that escaped _flatten_helper_list_result).
+        # Return the envelope unpaginated rather than raising — the records are
+        # still usable — but never silently: the missing metadata would otherwise
+        # read as "collection fits on one page".
+        logger.warning(
+            "Cannot paginate %r listing: expected a list of helpers, got %s — "
+            "returning the envelope unpaginated",
+            response.get("helper_type"),
+            type(helpers).__name__,
+        )
         return response
     total_count = len(helpers)
     page = helpers[offset : offset + limit]
@@ -3727,7 +3738,10 @@ class HelperConfigTools:
         - List every helper type at once: ha_config_list_helpers("all")
         - Next page: ha_config_list_helpers("input_boolean", offset=100)
 
-        **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
+        **NOTE:** Storage types list what HA's ``{type}/list`` command returns:
+        the storage-backed helpers (created via UI/API), not the YAML-defined
+        ones. ``person`` is the exception — HA lists its YAML-configured persons
+        alongside the storage ones, so both appear here.
 
         Flow-based types (template / group / utility_meter / derivative / etc.)
         require the ha_mcp_tools custom component (>= 1.1.0) and are served only
@@ -3926,7 +3940,11 @@ class HelperConfigTools:
                     context={"helper_type": helper_type},
                 )
             )
-        items = result.get("result", [])
+        # Flatten like the inline body: person/list returns {"storage": [...],
+        # "config": [...]} rather than a flat list, so a raw result["result"]
+        # would be a dict here — breaking count, the pagination slice and the
+        # all-types merge, which all expect a list of records.
+        items = _flatten_helper_list_result(result)
         return {
             "success": True,
             "helper_type": helper_type,

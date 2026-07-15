@@ -52,6 +52,16 @@ from ha_mcp.tools.tools_config_helpers import (
 
 from ._component_routing_helpers import make_ws, patch_ws
 
+# person is the one storage type whose {type}/list does not return a flat list:
+# HA's PersonStorageCollectionWebsocket overrides the base ws_list_item to send
+# {"storage": [...], "config": [...]} — the UI-created persons and the
+# YAML-configured ones. Every consumer here goes through
+# _flatten_helper_list_result, which merges the two into one record list.
+_PERSON_SPLIT_RESULT: dict[str, Any] = {
+    "storage": [{"id": "p1", "name": "Alice"}],
+    "config": [{"id": "p2", "name": "Bob"}],
+}
+
 # One collection helper renamed after creation: storage name "Old Name",
 # current registry display name "New Name", entity_id input_boolean.foo — the
 # exact #1794 shape (legacy list would emit only the storage id + stale name).
@@ -134,6 +144,8 @@ class RoutingClient:
             return {"success": True, "result": [dict(i) for i in _LEGACY_ITEMS]}
         if msg_type == "tag/list":
             return {"success": True, "result": [{"id": "tag-42", "name": "Front Door"}]}
+        if msg_type == "person/list":
+            return {"success": True, "result": dict(_PERSON_SPLIT_RESULT)}
         return {"success": False, "error": "unexpected list type"}
 
 
@@ -304,6 +316,40 @@ async def test_raised_command_falls_back_with_warning() -> None:
     assert resp["success"] is True
     assert client.list_calls == 1
     assert any("served via legacy path" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_raised_command_fallback_flattens_the_person_split_shape() -> None:
+    """The component-error fallback flattens person/list like the inline body.
+
+    person is the only storage type whose {type}/list returns a dict rather than
+    a list. Unflattened it reaches the caller as the raw {"storage", "config"}
+    dict: ``count`` becomes 2 (the key count, not the record count), the
+    pagination slice cannot page a dict so the envelope loses its metadata, and
+    the all-types merge iterates the two keys as strings and drops every person
+    record. The other fallback tests all drive flat-shape types, so this shape
+    only breaks here.
+    """
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
+    )
+    client = RoutingClient()
+    list_helpers = _build_list_helpers(client)
+
+    with patch_ws(ws, tools_config_helpers):
+        resp = await list_helpers(helper_type="person")
+
+    assert client.list_calls == 1
+    assert any("served via legacy path" in w for w in resp["warnings"])
+    # Both halves of the split shape, merged into one flat record list.
+    assert [h["id"] for h in resp["helpers"]] == ["p1", "p2"]
+    assert resp["count"] == 2
+    # The slice ran: a dict would have been returned unpaginated, without these.
+    assert resp["total_count"] == 2
+    assert resp["has_more"] is False
+    assert resp["next_offset"] is None
 
 
 @pytest.mark.asyncio
