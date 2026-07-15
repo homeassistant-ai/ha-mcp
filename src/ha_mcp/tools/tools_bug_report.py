@@ -646,6 +646,7 @@ class BugReportTools:
         name="ha_report_issue",
         tags={"Utilities"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Report Issue or Feedback",

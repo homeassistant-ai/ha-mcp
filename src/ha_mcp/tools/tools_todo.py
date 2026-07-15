@@ -37,7 +37,12 @@ class TodoTools:
     @tool(
         name="ha_get_todo",
         tags={"Todo Lists"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Todo"},
+        annotations={
+            "openWorldHint": False,
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Todo",
+        },
     )
     @log_tool_usage
     async def ha_get_todo(
@@ -209,7 +214,11 @@ class TodoTools:
     @tool(
         name="ha_set_todo_item",
         tags={"Todo Lists"},
-        annotations={"destructiveHint": True, "title": "Set Todo Item"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Set Todo Item",
+        },
     )
     @with_auto_backup(
         domain="todo_item",
@@ -526,6 +535,7 @@ class TodoTools:
         name="ha_remove_todo_item",
         tags={"Todo Lists"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Todo Item",

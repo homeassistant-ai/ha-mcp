@@ -297,6 +297,7 @@ class YamlConfigTools:
         name="ha_config_set_yaml",
         tags={"System", "beta"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": False,
             "title": "Raw YAML Config Edit",

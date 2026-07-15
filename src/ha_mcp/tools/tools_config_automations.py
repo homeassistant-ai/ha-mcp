@@ -340,6 +340,7 @@ class AutomationConfigTools:
         name="ha_config_get_automation",
         tags={"Automations"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Automation Config",
@@ -450,6 +451,7 @@ class AutomationConfigTools:
         name="ha_config_set_automation",
         tags={"Automations"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Automation",
         },
@@ -1291,6 +1293,7 @@ class AutomationConfigTools:
         name="ha_config_remove_automation",
         tags={"Automations"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Automation",

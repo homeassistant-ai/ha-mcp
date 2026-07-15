@@ -370,6 +370,7 @@ class EnergyTools:
         name="ha_manage_energy_prefs",
         tags={"Energy"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": False,
             "title": "Manage Energy Dashboard Preferences",

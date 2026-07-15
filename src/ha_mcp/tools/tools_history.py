@@ -127,6 +127,7 @@ class HistoryTools:
         name="ha_get_history",
         tags={"History & Statistics"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Entity History or Statistics",

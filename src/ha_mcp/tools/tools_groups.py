@@ -136,6 +136,7 @@ class GroupTools:
         name="ha_config_list_groups",
         tags={"Groups"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "List Groups",
@@ -210,7 +211,11 @@ class GroupTools:
     @tool(
         name="ha_config_set_group",
         tags={"Groups"},
-        annotations={"destructiveHint": True, "title": "Create or Update Group"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Create or Update Group",
+        },
     )
     @with_auto_backup(domain="group", id_param="object_id")
     @log_tool_usage
@@ -390,6 +395,7 @@ class GroupTools:
         name="ha_config_remove_group",
         tags={"Groups"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Group",

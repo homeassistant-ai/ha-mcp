@@ -103,7 +103,11 @@ class SystemTools:
     @tool(
         name="ha_restart",
         tags={"System"},
-        annotations={"destructiveHint": True, "title": "Restart Home Assistant"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Restart Home Assistant",
+        },
     )
     @log_tool_usage
     async def ha_restart(
@@ -224,7 +228,11 @@ class SystemTools:
     @tool(
         name="ha_reload_core",
         tags={"System"},
-        annotations={"destructiveHint": True, "title": "Reload Core Components"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Reload Core Components",
+        },
     )
     @log_tool_usage
     async def ha_reload_core(
@@ -504,6 +512,7 @@ class SystemTools:
         name="ha_get_system_health",
         tags={"System", "Zigbee", "Z-Wave", "Thread", "Matter", "Integrations"},
         annotations={
+            "openWorldHint": True,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",

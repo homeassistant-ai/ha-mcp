@@ -38,6 +38,7 @@ class CategoryTools:
         name="ha_config_get_category",
         tags={"Labels & Categories"},
         annotations={
+            "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Category",
@@ -170,7 +171,11 @@ class CategoryTools:
     @tool(
         name="ha_config_set_category",
         tags={"Labels & Categories"},
-        annotations={"destructiveHint": True, "title": "Create or Update Category"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Create or Update Category",
+        },
     )
     @with_auto_backup(
         domain="category",
@@ -313,6 +318,7 @@ class CategoryTools:
         name="ha_config_remove_category",
         tags={"Labels & Categories"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Category",

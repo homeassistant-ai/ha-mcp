@@ -100,6 +100,7 @@ class DashboardScreenshotTools:
         name="ha_get_dashboard_screenshot",
         tags={"Dashboard", "beta"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": False,
             "title": "Get Dashboard Screenshot",
         },

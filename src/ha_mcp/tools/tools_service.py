@@ -615,7 +615,11 @@ class ServiceTools:
     @tool(
         name="ha_call_service",
         tags={"Service & Device Control"},
-        annotations={"destructiveHint": True, "title": "Call Service"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Call Service",
+        },
     )
     @log_tool_usage
     async def ha_call_service(
@@ -837,7 +841,11 @@ class ServiceTools:
     @tool(
         name="ha_get_operation_status",
         tags={"Service & Device Control"},
-        annotations={"readOnlyHint": True, "title": "Get Operation Status"},
+        annotations={
+            "openWorldHint": False,
+            "readOnlyHint": True,
+            "title": "Get Operation Status",
+        },
     )
     @log_tool_usage
     async def ha_get_operation_status(
@@ -895,7 +903,11 @@ class ServiceTools:
     @tool(
         name="ha_bulk_control",
         tags={"Service & Device Control"},
-        annotations={"destructiveHint": True, "title": "Bulk Control"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Bulk Control",
+        },
     )
     @log_tool_usage
     async def ha_bulk_control(
@@ -939,6 +951,7 @@ class ServiceTools:
         name="ha_call_event",
         tags={"Service & Device Control"},
         annotations={
+            "openWorldHint": False,
             "destructiveHint": True,
             "idempotentHint": False,
             "title": "Call Event",
