@@ -85,9 +85,15 @@ def _make_provider(
 def _pkce_pair() -> tuple[str, str]:
     """A valid (code_verifier, code_challenge) pair per RFC 7636 S256."""
     verifier = secrets.token_urlsafe(64)
+    return verifier, _challenge_for(verifier)
+
+
+def _challenge_for(verifier: str) -> str:
+    """The S256 challenge for ``verifier`` — including shape-invalid ones,
+    so the verifier-shape tests can pin the shape guard as the only thing
+    standing between a malformed verifier and a successful consume."""
     digest = hashlib.sha256(verifier.encode()).digest()
-    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-    return verifier, challenge
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
 def _authorize_query(**overrides: str) -> dict[str, str]:
@@ -279,21 +285,31 @@ class TestPKCECodes:
         verifier, _ = _pkce_pair()
         assert provider.consume_code("never-issued", REDIRECT_URI, verifier) is False
 
+    # The three verifier-shape tests issue a REAL code whose challenge is
+    # derived from the malformed verifier itself. With a never-issued code the
+    # unknown-code lookup rejects regardless of the verifier, and the test
+    # cannot discriminate the shape guard (review finding on #1880): here the
+    # S256 check would pass, so only the shape guard can produce False.
+
     def test_verifier_too_short_rejected(self):
         provider = _make_provider()
-        assert provider.consume_code("any-code", REDIRECT_URI, "short") is False
+        verifier = "short"
+        code = provider.issue_code(REDIRECT_URI, _challenge_for(verifier))
+        assert provider.consume_code(code, REDIRECT_URI, verifier) is False
 
     def test_verifier_with_invalid_characters_rejected(self):
         provider = _make_provider()
-        bad_verifier = "a" * 42 + "!"  # right length, disallowed char
-        assert provider.consume_code("any-code", REDIRECT_URI, bad_verifier) is False
+        verifier = "a" * 42 + "!"  # right length, disallowed char
+        code = provider.issue_code(REDIRECT_URI, _challenge_for(verifier))
+        assert provider.consume_code(code, REDIRECT_URI, verifier) is False
 
     def test_verifier_over_max_length_rejected(self):
         # RFC 7636 §4.1 caps the verifier at 128 chars; one over must be
-        # rejected on length before any code lookup or hashing.
+        # rejected on length before any hashing.
         provider = _make_provider()
-        too_long = "a" * (oauth_legacy.PKCE_VERIFIER_MAX + 1)
-        assert provider.consume_code("any-code", REDIRECT_URI, too_long) is False
+        verifier = "a" * (oauth_legacy.PKCE_VERIFIER_MAX + 1)
+        code = provider.issue_code(REDIRECT_URI, _challenge_for(verifier))
+        assert provider.consume_code(code, REDIRECT_URI, verifier) is False
 
     def test_issue_code_refuses_new_codes_at_capacity(self):
         # Abuse guard: once the pending-code store is full, issue_code returns
@@ -849,6 +865,9 @@ class TestEnsureLegacyOAuthSecrets:
 
         assert changed is True
         assert data[DATA_OAUTH_CLIENT_ID] == "my-custom-client-id"
+        # A client_id change already revokes outstanding tokens via the cid
+        # claim -- no signing-key rotation needed.
+        assert data[DATA_OAUTH_SIGNING_KEY] == "cc" * 32
 
     def test_override_adopts_user_supplied_client_secret(self):
         data = {
@@ -862,6 +881,12 @@ class TestEnsureLegacyOAuthSecrets:
 
         assert changed is True
         assert data[DATA_OAUTH_CLIENT_SECRET] == "my-custom-secret"
+        # Token validation never involves the secret, so a secret-only
+        # rotation must rotate the signing key to evict outstanding tokens
+        # (otherwise an evicted holder keeps its access-token TTL -- and can
+        # read the new secret from the admin log through the server itself).
+        assert data[DATA_OAUTH_SIGNING_KEY] != "dd" * 32
+        bytes.fromhex(data[DATA_OAUTH_SIGNING_KEY])
 
     def test_matching_override_is_not_reported_as_a_change(self):
         data = {
