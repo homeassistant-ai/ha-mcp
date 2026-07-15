@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 88+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 87+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -286,7 +286,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Replaces the full tool catalog (~88 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~87 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 > ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Those models run their own built-in tool search / deferred tools, which conflicts with ha-mcp's — running both at once does not work. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off.
 
@@ -479,7 +479,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 88+ MCP tools for controlling Home Assistant:
+The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 > **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
@@ -623,7 +623,6 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 
 ### Utilities
 - `ha_eval_template` — Evaluate Jinja2 templates using Home Assistant's template engine.
-- `ha_install_mcp_tools` **(beta — dev channel only)** — Install the ha_mcp_tools custom component via HACS.
 - `ha_report_issue` — Collect diagnostic information for filing issue reports or feedback.
 
 ### Zones
