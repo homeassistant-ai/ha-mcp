@@ -29,7 +29,7 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.const import __version__ as HA_VERSION
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.selector import (
     SelectOptionDict,
     SelectSelector,
@@ -105,7 +105,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _legacy_credentials_active(
-    hass, client_id: str, client_secret: str, signing_key: str
+    hass: HomeAssistant, client_id: str, client_secret: str, signing_key: str
 ) -> bool:
     """Deferred-import seam for :func:`oauth_legacy.legacy_credentials_active`.
 
