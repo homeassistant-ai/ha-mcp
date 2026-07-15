@@ -63,6 +63,73 @@ class TestInputBooleanCRUD:
 
         logger.info(f"Found {data['count']} input_boolean helpers")
 
+    async def test_list_input_booleans_pagination(self, mcp_client, cleanup_tracker):
+        """Test that limit/offset paginate the helper listing (issue #1869).
+
+        ha_config_list_helpers builds its envelope in one of four places and
+        slices at a single shared normalization point. Driven end-to-end because
+        the unit suite calls the tool function directly and so never exercises
+        the MCP parameter schema.
+
+        Every assertion holds against the response it came from rather than a
+        baseline captured earlier: many other e2e modules create input_boolean
+        helpers, so the collection can grow between calls.
+        """
+        logger.info("Testing ha_config_list_helpers pagination")
+
+        # Three helpers guarantee at least two pages at limit=2.
+        for i in range(3):
+            create_result = await mcp_client.call_tool(
+                "ha_config_set_helper",
+                {"helper_type": "input_boolean", "name": f"E2E Page Boolean {i}"},
+            )
+            create_data = assert_mcp_success(create_result, "Create input_boolean")
+            entity_id = get_entity_id_from_response(create_data, "input_boolean")
+            assert entity_id, f"Missing entity_id in create response: {create_data}"
+            cleanup_tracker.track("input_boolean", entity_id)
+            assert await wait_for_entity_registration(mcp_client, entity_id), (
+                f"Entity {entity_id} not registered within timeout"
+            )
+
+        first_result = await mcp_client.call_tool(
+            "ha_config_list_helpers",
+            {"helper_type": "input_boolean", "limit": 2, "offset": 0},
+        )
+        first = assert_mcp_success(first_result, "First page of input_booleans")
+
+        assert len(first["helpers"]) == 2, f"limit=2 should cut the page: {first}"
+        assert first["count"] == 2, f"count is the page size, not the total: {first}"
+        assert first["total_count"] >= 3, f"the three created helpers: {first}"
+        assert first["has_more"] is True
+        assert first["next_offset"] == 2
+
+        second_result = await mcp_client.call_tool(
+            "ha_config_list_helpers",
+            {"helper_type": "input_boolean", "limit": 2, "offset": 2},
+        )
+        second = assert_mcp_success(second_result, "Second page of input_booleans")
+        assert second["offset"] == 2
+
+        # Offset advanced the window, so no record repeats across the pages.
+        first_ids = {h.get("entity_id") or h.get("id") for h in first["helpers"]}
+        second_ids = {h.get("entity_id") or h.get("id") for h in second["helpers"]}
+        assert not (first_ids & second_ids), (
+            f"pages must not overlap: {first_ids & second_ids}"
+        )
+
+        # A limit above the collection returns it whole, in one page.
+        full_result = await mcp_client.call_tool(
+            "ha_config_list_helpers",
+            {"helper_type": "input_boolean", "limit": 500},
+        )
+        full = assert_mcp_success(full_result, "Full input_boolean listing")
+        assert len(full["helpers"]) == full["total_count"]
+        assert full["count"] == full["total_count"]
+        assert full["has_more"] is False
+        assert full["next_offset"] is None
+
+        logger.info(f"Pagination verified across {full['total_count']} helpers")
+
     async def test_input_boolean_full_lifecycle(self, mcp_client, cleanup_tracker):
         """Test complete input_boolean lifecycle: create, list, update, delete."""
         logger.info("Testing input_boolean full lifecycle")
