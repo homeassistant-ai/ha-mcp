@@ -212,6 +212,10 @@ ENV_ONLY: dict[str, str] = {
     "MCP_HEALTHZ": "Opt-in /healthz liveness route — bind/deployment config",
     "FASTMCP_PORT": "FastMCP transport bind port",
     "FASTMCP_TRANSPORT": "FastMCP transport selection — bootstrap",
+    "OIDC_CONFIG_URL": "OIDC provider discovery URL — OIDC auth mode bootstrap (pre-Settings)",
+    "OIDC_CLIENT_ID": "OIDC OAuth client ID — OIDC auth mode bootstrap (pre-Settings)",
+    "OIDC_CLIENT_SECRET": "OIDC OAuth client secret — OIDC auth mode bootstrap (pre-Settings)",
+    "OIDC_JWT_SIGNING_KEY": "Optional JWT signing key for persistent OIDC sessions — OIDC mode only",
 }
 
 
