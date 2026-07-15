@@ -950,6 +950,28 @@ def _seed_legacy_yaml_backups(config_path: Path) -> None:
     )
 
 
+def _seed_non_yaml_package_file(config_path: Path) -> None:
+    """Stage a non-YAML file inside the bound packages folder pre-boot (#1788).
+
+    ``ha_config_get_yaml``'s glob is not restricted to ``*.yaml``, so
+    ``custom_packages/*`` legitimately turns up a file the component refuses to
+    read (its package-dir read rule requires ``.yaml``). The warn-and-continue
+    path that keeps one such file from sinking the whole search needs the real
+    component to produce that refusal, and no tool can create the file:
+    ``write_file`` is never granted package access, so it is staged here, like
+    the legacy backups above (a post-boot host write doesn't propagate in CI).
+
+    Inert at boot: HA loads a ``!include_dir_named`` folder through
+    ``_find_files(loc, "*.yaml")`` (annotatedyaml), so a ``.md`` is ignored.
+    The folder name matches the one initial_test_state/configuration.yaml binds.
+    """
+    packages_dir = config_path / "custom_packages"
+    packages_dir.mkdir(parents=True, exist_ok=True)
+    (packages_dir / "_e2e_not_yaml.md").write_text(
+        "Not YAML. Staged so a packages glob has a file the component skips.\n"
+    )
+
+
 def _collect_manifest_requirements(config_path: Path) -> list[str]:
     """Aggregate ``requirements`` from every installed custom-component manifest.
 
@@ -1933,6 +1955,10 @@ def ha_container_with_fresh_config(request):
     # the bind-mounted .ha_mcp_tools_backups/ is populated when the component
     # reads it (a post-boot host write doesn't propagate in CI).
     _seed_legacy_yaml_backups(config_path)
+
+    # A non-YAML file in the bound packages folder for the glob warn-and-continue
+    # e2e (#1788): same pre-boot reason, and no tool can write it there.
+    _seed_non_yaml_package_file(config_path)
 
     # Shift the pre-baked recorder timestamps forward so the seeded rows
     # look "recent" to history queries with a 24h window. The recorder DB in

@@ -7,6 +7,8 @@ This test suite validates:
 - Cross-file key discovery through a glob, against the NON-default packages
   folder the e2e config binds (``custom_packages``, see initial_test_state/
   configuration.yaml) — which is exactly the runtime-detection path
+- A glob that matches several defining files, and one that matches a file the
+  component refuses to read (warned about, search continues)
 - HA tags surviving unresolved into both the text and the parsed view
 - secrets.yaml reading back masked through those views
 - The get → set round-trip that is the point of the feature
@@ -39,6 +41,26 @@ FEATURE_FLAG = "ENABLE_YAML_CONFIG_EDITING"
 # folder on purpose (#1854), so a glob over it only resolves if the component
 # detects the configured folder at runtime rather than assuming "packages".
 PACKAGES_DIR = "custom_packages"
+
+# Staged pre-boot by conftest._seed_non_yaml_package_file — the file a
+# `custom_packages/*` glob must skip rather than fail on.
+NON_YAML_FILE = f"{PACKAGES_DIR}/_e2e_not_yaml.md"
+
+
+def _require_seeded_backend(container_info: dict) -> None:
+    """Skip unless the non-YAML package file was staged into the config_path.
+
+    ``_seed_non_yaml_package_file`` runs on the shared testcontainer setup path,
+    used by the ``container`` and ``embedded`` backends; the HAOS backends boot a
+    pre-baked qcow2 that carries no such seed. Nothing else can create the file —
+    package folders are readable but never writable through the file tools — so
+    the test skips rather than seeding at runtime.
+    """
+    if container_info.get("backend") not in ("container", "embedded"):
+        pytest.skip(
+            "the non-YAML package file is staged pre-boot into the container "
+            "config_path (testcontainer / embedded backends only)"
+        )
 
 
 @pytest.fixture(scope="module")
@@ -334,3 +356,83 @@ class TestYamlReadGlobDiscovery:
         assert "e2e_read_probe" in match["content"]
         # file + yaml_path address the same fragment for ha_config_set_yaml.
         assert match["yaml_path"] == "command_line"
+
+    async def test_glob_returns_every_defining_file(
+        self, mcp_client, yaml_editing_enabled
+    ):
+        """Two files defining the same key both come back — #1788's core shape.
+
+        "Which file defines this key?" has more than one answer whenever a key is
+        split across packages, and the caller needs each ``file`` to address the
+        right fragment for an edit.
+        """
+        first = f"{PACKAGES_DIR}/_e2e_multi_a.yaml"
+        second = f"{PACKAGES_DIR}/_e2e_multi_b.yaml"
+        async with MCPAssertions(mcp_client) as mcp:
+            for target, marker in ((first, "a"), (second, "b")):
+                await _set_yaml_confirmed(
+                    mcp,
+                    {
+                        "yaml_path": "notify",
+                        "action": "add",
+                        "file": target,
+                        "content": (
+                            f"- name: e2e_multi_{marker}\n"
+                            "  platform: command_line\n"
+                            f"  command: echo {marker}\n"
+                        ),
+                    },
+                )
+
+            data = await mcp.call_tool_success(
+                TOOL_NAME, {"yaml_path": "notify", "file": f"{PACKAGES_DIR}/*.yaml"}
+            )
+
+        assert data["count"] == 2
+        # Sorted by file, so each match's content pairs with its own file.
+        assert [m["file"] for m in data["matches"]] == [first, second]
+        assert "e2e_multi_a" in data["matches"][0]["content"]
+        assert "e2e_multi_b" in data["matches"][1]["content"]
+
+    async def test_unreadable_file_warns_without_sinking_the_search(
+        self, mcp_client, ha_container_with_fresh_config, yaml_editing_enabled
+    ):
+        """``custom_packages/*`` matches a non-YAML file; the search survives it.
+
+        The behavioural half of the warn-and-continue path the unit suite pins
+        against mocks: the refusal has to come from the real component, whose
+        package-dir read rule requires ``.yaml``. The skipped file is named in
+        ``warnings`` rather than silently dropped — a skip reported as "key not
+        here" would be a wrong answer to "which file defines it?".
+        """
+        _require_seeded_backend(ha_container_with_fresh_config)
+        hit = f"{PACKAGES_DIR}/_e2e_read_warn.yaml"
+        async with MCPAssertions(mcp_client) as mcp:
+            await _set_yaml_confirmed(
+                mcp,
+                {
+                    "yaml_path": "group",
+                    "action": "add",
+                    "file": hit,
+                    "content": "e2e_warn_probe:\n  entities:\n    - sun.sun\n",
+                },
+            )
+
+            data = await mcp.call_tool_success(
+                TOOL_NAME, {"yaml_path": "group", "file": f"{PACKAGES_DIR}/*"}
+            )
+
+        # The sibling match survives the unreadable file.
+        assert data["count"] == 1
+        assert data["matches"][0]["file"] == hit
+        assert "e2e_warn_probe" in data["matches"][0]["content"]
+
+        # Named once, as a skip carrying the component's refusal — not as a
+        # stray mention inside some other warning.
+        skipped = [w for w in data.get("warnings", []) if NON_YAML_FILE in w]
+        assert len(skipped) == 1, data.get("warnings")
+        assert skipped[0].startswith(
+            f"{NON_YAML_FILE} was not searched: Path not allowed."
+        ), skipped
+        # Both the skipped file and the match were targets of the search.
+        assert data["files_searched"] >= 2
