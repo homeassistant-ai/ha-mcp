@@ -870,19 +870,27 @@ _HAOS_EMBEDDED_SERVER_DATA_DIR = f"{_HAOS_CONFIG_DIR}/.ha_mcp"
 
 
 def stage_embedded_server_feature_flags_in_qcow2(
-    image_path: Path, feature_flags: dict[str, bool]
+    image_path: Path,
+    feature_flags: dict[str, bool],
+    *,
+    filename: str = "feature_flags.json",
 ) -> None:
-    """Write the in-process server's feature-flag override into the qcow2 (#1527).
+    """Write an in-process server settings-override file into the qcow2 (#1527).
 
     Only the ``haos_embedded`` lane calls this. On that lane the WHOLE E2E suite
-    runs through the in-process MCP server, so it needs the same feature flags
-    the container ``embedded`` backend injects (yaml-config editing, filesystem
-    tools, custom-component integration, …). The container backend delivers those
-    as pytest-process env vars for its in-process server; the HAOS embedded server
-    runs inside the core container and can't read that env, so the equivalent
-    values go to ``<config>/.ha_mcp/feature_flags.json`` — the override
-    layer ``ha_mcp.config`` reads in a standalone deployment. The server is
-    standalone here (``is_running_in_addon()`` is False in embedded mode despite
+    runs through the in-process MCP server, so it needs the same settings
+    overrides the container ``embedded`` backend injects — feature flags
+    (yaml-config editing, filesystem tools, custom-component integration, …) via
+    ``feature_flags.json``, and separately ``BACKUP_OVERRIDE_FIELDS`` values
+    (e.g. ``enable_snapshot_delete``, #1861) via ``backup_settings.json`` —
+    ``ha_mcp.config`` reads the two registries from two different override
+    files, so ``filename`` picks which one this call seeds. The container
+    backend delivers those as pytest-process env vars for its in-process
+    server; the HAOS embedded server runs inside the core container and can't
+    read that env, so the equivalent values go to
+    ``<config>/.ha_mcp/<filename>`` — the override layer ``ha_mcp.config``
+    reads in a standalone deployment. The server is standalone here
+    (``is_running_in_addon()`` is False in embedded mode despite
     ``SUPERVISOR_TOKEN`` in the core env), so the file is honored rather than
     short-circuited by Supervisor.
 
@@ -894,19 +902,19 @@ def stage_embedded_server_feature_flags_in_qcow2(
     ``ha_mcp_tools`` write_file service after boot. The integration's
     ``_prepare_config_dir`` does ``os.makedirs(..., exist_ok=True)``, so a
     pre-created dir + file is picked up rather than clobbered (proven on the
-    container embedded lane, which pre-seeds the identical file).
+    container embedded lane, which pre-seeds the identical files).
 
     Unlike the best-effort wheel staging, a failure here RAISES: the whole
-    haos_embedded suite depends on these flags, so failing session setup loudly
-    with a clear message beats letting dozens of feature-gated tests fail
-    confusingly downstream.
+    haos_embedded suite depends on these overrides, so failing session setup
+    loudly with a clear message beats letting dozens of feature-gated tests
+    fail confusingly downstream.
     """
     import shutil as _shutil
     import tempfile
 
     workdir = Path(tempfile.mkdtemp(prefix="haos-embedded-flags-"))
     try:
-        local = workdir / "feature_flags.json"
+        local = workdir / filename
         local.write_text(json.dumps(feature_flags, indent=2), encoding="utf-8")
         try:
             subprocess.run(
@@ -936,14 +944,15 @@ def stage_embedded_server_feature_flags_in_qcow2(
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             stderr = (getattr(exc, "stderr", "") or "").strip()
             raise RuntimeError(
-                f"Failed to stage the embedded-server feature_flags.json into "
+                f"Failed to stage the embedded-server {filename} into "
                 f"{image_path} ({type(exc).__name__}"
                 + (f": {stderr[-300:]}" if stderr else "")
-                + "). The haos_embedded suite needs these flags; aborting session "
-                "setup rather than running the whole suite with default flags."
+                + f"). The haos_embedded suite needs {filename}; aborting session "
+                "setup rather than running the whole suite with default overrides."
             ) from exc
         LOG.info(
-            "Staged embedded-server feature_flags.json (%d flags) into %s in %s",
+            "Staged embedded-server %s (%d entries) into %s in %s",
+            filename,
             len(feature_flags),
             _HAOS_EMBEDDED_SERVER_DATA_DIR,
             image_path,

@@ -516,6 +516,113 @@ class TestPollBackupCompletionPostTimeout:
         assert result["backup_id"] == "FRESH"
 
 
+class TestPollBackupCompletionProgress:
+    """Coverage for #1861: a client with no notifications for the whole poll
+    window aborts the connection ("sent no response or progress for 300s").
+    ``_poll_backup_completion`` must emit ``ctx.report_progress`` heartbeats
+    while it waits, not just at the very end."""
+
+    def _make_ctx(self) -> MagicMock:
+        ctx = MagicMock()
+        ctx.report_progress = AsyncMock()
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_emits_initial_progress_before_first_poll(self):
+        ctx = self._make_ctx()
+        ws = _ws_client(_backup_info("idle", "completed", [_backup_entry("Fast")]))
+        with patch("ha_mcp.tools.backup.asyncio.sleep", new=AsyncMock()):
+            await _poll_backup_completion(
+                ws,
+                name="Fast",
+                backup_job_id="job-1",
+                max_wait_seconds=10,
+                poll_interval=2,
+                agent_id="backup.local",
+                ctx=ctx,
+            )
+        first_call = ctx.report_progress.await_args_list[0]
+        assert first_call.kwargs["progress"] == 0
+        assert first_call.kwargs["total"] == 10
+        assert "waiting for backup" in first_call.kwargs["message"]
+
+    @pytest.mark.asyncio
+    async def test_emits_periodic_heartbeat_during_long_wait(self):
+        """A backup that takes several poll ticks to complete must produce
+        more than one progress event (the initial one), each with a growing
+        `progress` value, proving the client is being kept alive throughout
+        the wait rather than only notified once."""
+        ctx = self._make_ctx()
+        # 5 ticks of "still creating" before the 6th observes completion.
+        ws = _ws_client(
+            _backup_info("create_backup", "in_progress", []),
+            _backup_info("create_backup", "in_progress", []),
+            _backup_info("create_backup", "in_progress", []),
+            _backup_info("create_backup", "in_progress", []),
+            _backup_info("create_backup", "in_progress", []),
+            _backup_info("idle", "completed", [_backup_entry("Slow")]),
+        )
+        with patch("ha_mcp.tools.backup.asyncio.sleep", new=AsyncMock()):
+            result = await _poll_backup_completion(
+                ws,
+                name="Slow",
+                backup_job_id="job-1",
+                max_wait_seconds=60,
+                poll_interval=10,
+                agent_id="backup.local",
+                ctx=ctx,
+            )
+        assert result["success"] is True
+        # Initial (progress=0) + at least one in-loop heartbeat.
+        assert ctx.report_progress.await_count >= 2
+        progresses = [c.kwargs["progress"] for c in ctx.report_progress.await_args_list]
+        assert progresses == sorted(progresses)
+        assert progresses[-1] > progresses[0]
+        for call in ctx.report_progress.await_args_list:
+            assert call.kwargs["total"] == 60
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_is_throttled_not_emitted_every_poll(self):
+        """kingpanther13 review: `test_emits_periodic_heartbeat_during_long_wait`
+        sets `poll_interval == _BACKUP_PROGRESS_INTERVAL_S`, so every tick
+        clears the `next_progress_at` throttle and the test can't tell a
+        working throttle from no throttle at all. With `poll_interval=2`
+        over a 30s wait (15 ticks), only the ~10s-spaced throttle should
+        fire: initial + ticks at 10/20/30 = 4, not 15."""
+        ctx = self._make_ctx()
+        ws = _ws_client(
+            *[_backup_info("create_backup", "in_progress", []) for _ in range(14)],
+            _backup_info("idle", "completed", [_backup_entry("Slow")]),
+        )
+        with patch("ha_mcp.tools.backup.asyncio.sleep", new=AsyncMock()):
+            result = await _poll_backup_completion(
+                ws,
+                name="Slow",
+                backup_job_id="job-1",
+                max_wait_seconds=30,
+                poll_interval=2,
+                agent_id="backup.local",
+                ctx=ctx,
+            )
+        assert result["success"] is True
+        assert ctx.report_progress.await_count == 4
+
+    @pytest.mark.asyncio
+    async def test_no_ctx_does_not_raise(self):
+        """Legacy callers passing no ctx must keep working unchanged."""
+        ws = _ws_client(_backup_info("idle", "completed", [_backup_entry("Fast")]))
+        with patch("ha_mcp.tools.backup.asyncio.sleep", new=AsyncMock()):
+            result = await _poll_backup_completion(
+                ws,
+                name="Fast",
+                backup_job_id="job-1",
+                max_wait_seconds=10,
+                poll_interval=2,
+                agent_id="backup.local",
+            )
+        assert result["success"] is True
+
+
 class TestPollBackupCompletionInLoop:
     @pytest.mark.asyncio
     async def test_in_loop_success_path_still_works_after_refactor(self):
@@ -587,6 +694,44 @@ class TestCreateBackupWrapperSeam:
     post-timeout `warnings`-bearing dict survives through the wrapper's
     outer try/except Exception — that's the surface the fix actually
     protects against the duplicate-retry pattern in #1433."""
+
+    @pytest.mark.asyncio
+    async def test_create_backup_forwards_ctx_to_poll(self):
+        """#1861: a `ctx` passed to `create_backup` must reach
+        `_poll_backup_completion` so the poll loop can emit progress
+        heartbeats — otherwise a caller supplying `ctx` still gets no
+        notifications during the wait."""
+        from ha_mcp.tools import backup as backup_module
+
+        ws_mock = AsyncMock()
+        ws_mock.send_command.side_effect = [
+            {
+                "success": True,
+                "result": {"config": {"create_backup": {"password": "pw"}}},
+            },
+            {
+                "success": True,
+                "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]},
+            },
+            {"success": True, "result": {"backup_job_id": "j-1"}},
+        ]
+        ws_mock.disconnect = AsyncMock()
+        client_mock = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
+        fake_ctx = MagicMock()
+        poll_mock = AsyncMock(return_value={"success": True})
+
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws_mock, None)),
+            ),
+            patch("ha_mcp.tools.backup._poll_backup_completion", new=poll_mock),
+        ):
+            await backup_module.create_backup(
+                client_mock, name="Ctx_Test", ctx=fake_ctx
+            )
+
+        assert poll_mock.await_args.kwargs["ctx"] is fake_ctx
 
     @pytest.mark.asyncio
     async def test_create_backup_returns_warnings_dict_unchanged(self):

@@ -124,6 +124,11 @@ class TestExemptionRules:
             ({"scope": "snapshot", "action": "create"}, False),
             ({"scope": "snapshot", "action": "list"}, True),
             ({"scope": "snapshot", "action": "restore"}, False),
+            # #1861: snapshot deletion must stay blocked in read-only mode
+            # even with confirm=True — confirm has no bearing on the
+            # scope/action gate.
+            ({"scope": "snapshot", "action": "delete"}, False),
+            ({"scope": "snapshot", "action": "delete", "confirm": True}, False),
             ({}, False),
         ],
     )
@@ -649,6 +654,11 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "name",
         "backup_id",
         "restore_database",
+        # snapshot delete confirmation flag — the (scope, action) dispatch
+        # already blocks (snapshot, delete) outright; confirm has no
+        # mutation capability of its own, it only gates whether that
+        # already-blocked action proceeds.
+        "confirm",
         # ...edits create payload / list filters (list is an allowed read),
         "domain",
         "entity_id",

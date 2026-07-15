@@ -14,7 +14,9 @@ Tests for backup MCP tools that provide safety mechanisms:
 These tools are critical for configuration safety and disaster recovery.
 """
 
+import asyncio
 import logging
+import os
 import time
 
 import pytest
@@ -22,6 +24,23 @@ import pytest
 from ...utilities.assertions import safe_call_tool
 
 logger = logging.getLogger(__name__)
+
+
+def _error_message(data: dict) -> str:
+    error = data.get("error", {})
+    return error.get("message", str(error)) if isinstance(error, dict) else str(error)
+
+
+def _server_is_out_of_process() -> bool:
+    """True when the MCP server under test runs in a separate process from
+    pytest: the container-embedded backend (E2E_BACKEND=embedded) or the
+    HAOS embedded/inaddon tiers all run ha-mcp inside the HA instance
+    itself. `monkeypatch.setenv` + `_reset_global_settings()` only affect
+    the pytest process's own Settings singleton, so they cannot reach a
+    server running in one of these modes."""
+    if os.environ.get("E2E_BACKEND", "").strip().lower() == "embedded":
+        return True
+    return os.environ.get("HAOS_TEST_MODE", "external") in ("embedded", "inaddon")
 
 
 @pytest.mark.convenience
@@ -301,3 +320,206 @@ class TestBackupTools:
         except Exception as e:
             logger.error(f"❌ Password retrieval test failed: {e}")
             raise
+
+
+@pytest.mark.convenience
+class TestSnapshotDelete:
+    """E2E coverage for scope='snapshot', action='delete' (#1861).
+
+    ``ENABLE_SNAPSHOT_DELETE=true`` is set for the whole e2e suite (see
+    conftest.py) so these guard paths are reachable; production defaults
+    the feature off. Guard-rejection tests don't need an actual backup on
+    disk, since most guards run before or independent of state; the success
+    path lowers ``snapshot_delete_min_age_days`` to 0 for the duration of
+    the test so a just-created backup clears the age floor.
+
+    Skipped entirely on the HAOS inaddon tier: that tier runs the real dev
+    add-on against its own Supervisor-managed ``options.json`` (i.e.
+    ``config.yaml``'s shipped ``enable_snapshot_delete=false`` default),
+    which this suite has no per-run override mechanism for — unlike the
+    container-embedded / HAOS-embedded tiers, which get the setting via a
+    seeded ``backup_settings.json`` override file (there is no in-process
+    server to seed a file for; overriding would mean POSTing to the real
+    Supervisor options API).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_haos_inaddon(self):
+        if os.environ.get("HAOS_TEST_MODE", "external") == "inaddon":
+            pytest.skip(
+                "HAOS inaddon tier has no mechanism to override the real "
+                "add-on's Supervisor-managed enable_snapshot_delete option "
+                "(shipped default is false)"
+            )
+
+    async def test_delete_requires_confirm(self, mcp_client):
+        logger.info("🗑️ Testing snapshot delete without confirm...")
+
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "snapshot", "action": "delete", "backup_id": "does-not-matter"},
+        )
+
+        assert data.get("success") is False, "Expected delete without confirm to fail"
+        assert "confirm" in _error_message(data).lower()
+
+    async def test_delete_nonexistent_backup_id(self, mcp_client):
+        logger.info("🗑️ Testing snapshot delete of a nonexistent backup id...")
+
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "snapshot",
+                "action": "delete",
+                "backup_id": "nonexistent_backup_id_12345",
+                "confirm": True,
+            },
+        )
+
+        assert data.get("success") is False, (
+            "Expected delete to fail for a nonexistent backup"
+        )
+        assert "not found" in _error_message(data).lower()
+
+    async def test_delete_refuses_freshly_created_backup(self, mcp_client):
+        """The default 7-day age floor blocks deleting a backup created
+        moments ago — proves the guard is live end-to-end, not just at the
+        unit level.
+
+        A second, newer backup is created after the target so the target
+        is NOT also the single newest snapshot — otherwise the newest-
+        snapshot guard (checked first; see backup.py) would fire instead
+        of the age-floor guard this test is meant to isolate, since a
+        freshly created backup with nothing after it is trivially "newest"
+        in a shared test container.
+        """
+        logger.info("🗑️ Testing snapshot delete refuses a too-young backup...")
+
+        created = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "snapshot",
+                "action": "create",
+                "name": f"E2E_Delete_TooYoung_{int(time.time())}",
+            },
+        )
+        if not created.get("success"):
+            if "password" in _error_message(created).lower():
+                pytest.skip("Test environment missing default backup password")
+            raise AssertionError(f"Backup creation failed: {_error_message(created)}")
+        backup_id = created["backup_id"]
+
+        await asyncio.sleep(1.1)
+
+        newer = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "snapshot",
+                "action": "create",
+                "name": f"E2E_Delete_TooYoung_Newer_{int(time.time())}",
+            },
+        )
+        assert newer.get("success") is True, (
+            f"Second backup creation failed: {_error_message(newer)}"
+        )
+
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "snapshot",
+                "action": "delete",
+                "backup_id": backup_id,
+                "confirm": True,
+            },
+        )
+
+        assert data.get("success") is False, (
+            "Expected delete to be refused for a freshly created backup"
+        )
+        assert "days" in _error_message(data).lower()
+
+    async def test_delete_succeeds_with_age_floor_disabled(
+        self, mcp_client, monkeypatch
+    ):
+        """Full happy path: with the age floor disabled, an old-enough
+        (non-newest) ad-hoc backup can actually be deleted end-to-end."""
+        if _server_is_out_of_process():
+            pytest.skip(
+                "monkeypatch.setenv cannot reach an out-of-process server "
+                "(container-embedded / HAOS embedded / HAOS inaddon); the "
+                "guard-rejection tests above already exercise the real "
+                "delete path end-to-end under those backends"
+            )
+        logger.info("🗑️ Testing snapshot delete success path...")
+
+        from ha_mcp.config import _reset_global_settings
+
+        monkeypatch.setenv("SNAPSHOT_DELETE_MIN_AGE_DAYS", "0")
+        _reset_global_settings()
+
+        # Two backups so the target is never the single newest snapshot.
+        target = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "snapshot",
+                "action": "create",
+                "name": f"E2E_Delete_Target_{int(time.time())}",
+            },
+        )
+        if not target.get("success"):
+            if "password" in _error_message(target).lower():
+                pytest.skip("Test environment missing default backup password")
+            raise AssertionError(f"Backup creation failed: {_error_message(target)}")
+
+        # Guarantee a distinct, strictly-later `date` for the second backup —
+        # `_newest_backup_id` picks the newest by date, and two creates close
+        # enough together could otherwise tie under coarse timestamp
+        # precision, making `target` spuriously look like the newest.
+        await asyncio.sleep(1.1)
+
+        newer = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "snapshot",
+                "action": "create",
+                "name": f"E2E_Delete_Newer_{int(time.time())}",
+            },
+        )
+        assert newer.get("success") is True, (
+            f"Second backup creation failed: {_error_message(newer)}"
+        )
+
+        backup_id = target["backup_id"]
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "snapshot",
+                "action": "delete",
+                "backup_id": backup_id,
+                "confirm": True,
+            },
+        )
+
+        assert data.get("success") is True, f"Snapshot delete failed: {data}"
+        assert data["backup_id"] == backup_id
+
+        # Verify it's actually gone via the list action.
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "snapshot", "action": "list"},
+        )
+        remaining_ids = {b["backup_id"] for b in listing["backups"]}
+        assert backup_id not in remaining_ids, (
+            "Deleted backup_id still present in snapshot list"
+        )
+
+        logger.info("✅ Snapshot delete success path completed")

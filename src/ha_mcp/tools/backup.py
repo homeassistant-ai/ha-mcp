@@ -19,8 +19,9 @@ HA restore path. Each call must explicitly pick its scope.
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn, cast
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
@@ -38,6 +39,7 @@ from .helpers import (
     get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
+    safe_progress,
 )
 
 if TYPE_CHECKING:
@@ -45,12 +47,26 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default poll window for full HA backups. The 120s prior default underfit
-# slow HA instances (#1433: poll loop exited while HA was still in
+# Poll window for full HA backups. HA's own frontend imposes no timeout at
+# all on backup creation — it subscribes to `backup/subscribe_events` and
+# waits however long the job takes. Our poll-based design still needs a
+# finite bound per tool call, so this mirrors _SAFETY_BACKUP_MAX_WAIT_S (the
+# codebase's existing "generous but bounded" ceiling) rather than inventing a
+# third number.
+#
+# Two distinct problems, both fixed in the same PR, by different mechanisms:
+# the client-side abort reported in #1861 (an MCP client that received no
+# progress notifications for 300s concluded the connection was dead) is
+# fixed by the ctx.report_progress heartbeats in _poll_backup_completion,
+# not by this constant. Raising it from 300 to 1800 instead fixes *our own*
+# poll loop giving up on a legitimately >5-minute backup — the job keeps
+# running server-side after our loop times out, so a too-tight ceiling here
+# means _poll_backup_completion raises TIMEOUT_OPERATION on a backup that
+# would otherwise have succeeded. 120s before that underfit slow HA
+# instances too (#1433: poll loop exited while HA was still in
 # state="create_backup", the wrapper treated that as failure, retried, and
-# produced duplicate backups). 300s covers the long tail without making the
-# happy-path wait noticeable.
-_BACKUP_MAX_WAIT_S = 300
+# produced duplicate backups).
+_BACKUP_MAX_WAIT_S = 1800
 _BACKUP_POLL_INTERVAL_S = 2
 # The pre-restore safety backup is a *full* backup (include_database=True, plus
 # all add-ons on Supervised), unlike the fast create_backup path. A multi-GB
@@ -60,6 +76,19 @@ _BACKUP_POLL_INTERVAL_S = 2
 _SAFETY_BACKUP_MAX_WAIT_S = 1800
 # Clock-skew tolerance when filtering backup entries by date vs job-start.
 _BACKUP_DATE_FILTER_TOLERANCE_S = 5
+# Minimum spacing between in-loop MCP progress heartbeats during a backup
+# poll (#1861: with no progress notifications at all, a client can decide
+# the connection is dead and abort mid-backup — "sent no response or
+# progress for 300s"). Independent of poll_interval so a tight poll loop
+# doesn't flood the client with redundant notifications.
+_BACKUP_PROGRESS_INTERVAL_S = 10
+# backup/delete fans out to every configured agent (including cloud/remote
+# ones — S3, Google Drive, WebDAV, etc.) via asyncio.gather server-side, and
+# the WS response doesn't arrive until all of them finish. The client's
+# default 30s wait (HomeAssistantWebSocketClient.send_command's
+# _wait_timeout) can be too tight for a slow or rate-limited remote agent —
+# same class of false-timeout problem this file already fixes for creation.
+_BACKUP_DELETE_WAIT_S = 60.0
 
 
 def _get_backup_hint_text() -> str:
@@ -288,6 +317,7 @@ async def _poll_backup_completion(
     max_wait_seconds: int,
     poll_interval: int,
     agent_id: str,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Poll backup/info until the named backup completes, fails, or times out.
 
@@ -304,14 +334,34 @@ async def _poll_backup_completion(
     creation in progress, surfaces ``likely_in_progress=true`` in the error
     context so callers can back off retries instead of compounding duplicates.
 
+    ``ctx``, when supplied, receives a ``report_progress`` heartbeat before
+    the first poll and at least every ``_BACKUP_PROGRESS_INTERVAL_S`` while
+    waiting, so an MCP client watching for "no response or progress" doesn't
+    abort the connection mid-backup (#1861).
+
     Raises ToolError on backup failure or final timeout with no completion.
     """
     job_start_ts = datetime.now(UTC)
     waited = 0
+    next_progress_at = _BACKUP_PROGRESS_INTERVAL_S
+    await safe_progress(
+        ctx,
+        progress=0,
+        total=max_wait_seconds,
+        message="waiting for backup to complete",
+    )
 
     while waited < max_wait_seconds:
         await asyncio.sleep(poll_interval)
         waited += poll_interval
+        if waited >= next_progress_at:
+            await safe_progress(
+                ctx,
+                progress=waited,
+                total=max_wait_seconds,
+                message=f"waiting for backup to complete ({waited}s elapsed)",
+            )
+            next_progress_at = waited + _BACKUP_PROGRESS_INTERVAL_S
 
         info_result = await ws_client.send_command("backup/info")
         if not info_result.get("success"):
@@ -448,7 +498,9 @@ async def _poll_backup_completion(
 
 
 async def create_backup(
-    client: HomeAssistantClient, name: str | None = None
+    client: HomeAssistantClient,
+    name: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
     Create a fast Home Assistant backup (local only, excludes database).
@@ -456,6 +508,7 @@ async def create_backup(
     Args:
         client: Home Assistant REST client
         name: Optional backup name (auto-generated if not provided)
+        ctx: Optional FastMCP context for progress heartbeats during the wait
 
     Returns:
         Dictionary with backup result including backup_id, status, duration, etc.
@@ -528,6 +581,7 @@ async def create_backup(
             max_wait_seconds=_BACKUP_MAX_WAIT_S,
             poll_interval=_BACKUP_POLL_INTERVAL_S,
             agent_id=local_agent,
+            ctx=ctx,
         )
 
     except ToolError:
@@ -558,6 +612,7 @@ async def _create_safety_backup(
     ws_client: HomeAssistantWebSocketClient,
     password: str | None,
     agent_id: str,
+    ctx: Context | None = None,
 ) -> tuple[str | None, list[str]]:
     """Create a pre-restore safety backup and wait for it to complete.
 
@@ -620,6 +675,7 @@ async def _create_safety_backup(
         max_wait_seconds=_SAFETY_BACKUP_MAX_WAIT_S,
         poll_interval=_BACKUP_POLL_INTERVAL_S,
         agent_id=agent_id,
+        ctx=ctx,
     )
     logger.info(f"Safety backup completed: {safety_backup_id}")
     return cast(str, safety_backup_id), poll_result.get("warnings", [])
@@ -645,7 +701,10 @@ def _backup_protected(entry: dict[str, Any]) -> bool | None:
 
 
 async def restore_backup(
-    client: HomeAssistantClient, backup_id: str, restore_database: bool = False
+    client: HomeAssistantClient,
+    backup_id: str,
+    restore_database: bool = False,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
     Restore Home Assistant from a backup (DESTRUCTIVE - use with caution).
@@ -661,6 +720,8 @@ async def restore_backup(
             match when restoring Home Assistant; a warning is returned if the
             value is overridden. On Core installs the caller's value is honoured
             as-is (Core enforces no such match).
+        ctx: Optional FastMCP context for progress heartbeats during the
+            pre-restore safety-backup wait
 
     Returns:
         Dictionary with restore result including safety_backup_id, status, etc.
@@ -722,7 +783,7 @@ async def restore_backup(
             password = None
 
         safety_backup_id, safety_warnings = await _create_safety_backup(
-            ws_client, password, local_agent
+            ws_client, password, local_agent, ctx=ctx
         )
 
         # `backup/info` returns ManagerBackup entries: `database_included` is a
@@ -950,12 +1011,263 @@ async def list_backups(client: HomeAssistantClient, limit: int = 200) -> dict[st
         return None  # unreachable: exception_to_structured_error always raises
 
 
+def _refuse_snapshot_delete(message: str, **context: Any) -> NoReturn:
+    """Raise the shared VALIDATION_INVALID_PARAMETER shape for every
+    snapshot-delete guard rejection (gate, confirm, automatic-settings, age
+    floor, newest-snapshot protection)."""
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            message,
+            context=context,
+        )
+    )
+
+
+def _newest_backup_id(backups: list[dict[str, Any]]) -> str | None:
+    """Return the ``backup_id`` of the single most-recent entry by date, or
+    None if no entry has a parseable date.
+
+    Entries with a missing/malformed date are excluded from consideration —
+    they can never be "the newest" — but that does not make them safe to
+    delete; ``delete_backup`` fails closed on an unparseable target date
+    separately, so an undated target can never be deleted regardless of
+    this function's result.
+    """
+    dated = [
+        (b.get("backup_id"), parsed)
+        for b in backups
+        if (parsed := _parse_backup_date(b.get("date"))) is not None
+    ]
+    if not dated:
+        return None
+    return max(dated, key=lambda pair: pair[1])[0]
+
+
+async def delete_backup(
+    client: HomeAssistantClient,
+    backup_id: str,
+    confirm: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Delete one full HA snapshot tarball (#1861).
+
+    Off by default (``enable_snapshot_delete``) — a human must opt in via
+    env var, the web settings UI override file, or (in the add-on) the
+    Supervisor options; an agent cannot enable this itself. Layered guards
+    beyond the gate, applied in order:
+
+    1. ``confirm=True`` is required.
+    2. ``backup/info`` must not report ``agent_errors`` — evaluated before
+       the "does it exist" check right below, since an agent that failed
+       to enumerate its backups could make that list (and every guard
+       below) incomplete. The backup must then exist (verified against
+       ``backup/info``, mirroring ``restore_backup`` — HA's own
+       ``backup/delete`` silently no-ops on an unknown ID rather than
+       erroring).
+    3. Scheduled backups (``with_automatic_settings=True``) are never
+       deletable. Fails closed the same way when HA can't confirm the
+       backup is manual (``with_automatic_settings=None`` — not created
+       by this HA instance, or predates this metadata field): only an
+       explicit ``False`` is treated as deletable.
+    4. The single newest remaining snapshot, of any type, is never
+       deletable — guarantees at least one recovery point always survives.
+       Checked before the age floor below so a backup that is both the
+       newest AND too young reports "newest" (with its own remedy), not
+       a "too young" message whose suggested remedy (lower the floor)
+       would not actually unblock it.
+    5. The target must be older than ``snapshot_delete_min_age_days`` (0
+       unconditionally disables this floor, even across clock skew between
+       this host and the HA instance that stamped the backup's date). A
+       missing/unparseable date fails closed (treated as too new to delete).
+
+    The actual ``backup/delete`` call uses an elevated WS wait timeout
+    (``_BACKUP_DELETE_WAIT_S``) since it fans out to every configured agent
+    — including slow/rate-limited remote ones — server-side. ``ctx``, when
+    supplied, receives one ``report_progress`` heartbeat immediately before
+    that call.
+
+    Raises ToolError if disabled, unconfirmed, not found, blocked by a
+    guard, or if HA reports a per-agent deletion failure.
+    """
+    settings = get_global_settings()
+    if not settings.enable_snapshot_delete:
+        _refuse_snapshot_delete(
+            "Snapshot deletion is disabled on this server "
+            "(enable_snapshot_delete=false). A human must enable it via the "
+            "ENABLE_SNAPSHOT_DELETE env var, the web settings UI, or (in "
+            "the add-on) the Supervisor options — this cannot be turned on "
+            "from a tool call.",
+        )
+    if not confirm:
+        _refuse_snapshot_delete(
+            "Deletion not confirmed. Set confirm=True to delete a snapshot.",
+            backup_id=backup_id,
+        )
+
+    ws_client = None
+    try:
+        ws_client, error = await get_connected_ws_client(
+            client.base_url, client.token, verify_ssl=client.verify_ssl
+        )
+        if error:
+            raise_tool_error(
+                error
+                or create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Failed to connect to Home Assistant WebSocket for backup deletion",
+                )
+            )
+        ws_client = cast(HomeAssistantWebSocketClient, ws_client)
+
+        info_result = await ws_client.send_command("backup/info")
+        if not info_result.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    info_result.get("error", "Failed to retrieve backup information"),
+                )
+            )
+        info_result_block = info_result.get("result") or {}
+        info_agent_errors = info_result_block.get("agent_errors") or {}
+        if info_agent_errors:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Cannot verify the backup inventory is complete: one or "
+                    "more backup agents failed to respond, so the newest-"
+                    "snapshot and scheduled-backup guards can't be trusted "
+                    "against a possibly-partial list.",
+                    context={"backup_id": backup_id, "agent_errors": info_agent_errors},
+                )
+            )
+        backups = info_result_block.get("backups") or []
+        matched = next((b for b in backups if b.get("backup_id") == backup_id), None)
+        if matched is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"Backup '{backup_id}' not found",
+                    suggestions=[
+                        "Use ha_manage_backup(scope='snapshot', action='list') "
+                        "to see available backup IDs",
+                    ],
+                )
+            )
+
+        if matched.get("with_automatic_settings") is not False:
+            _refuse_snapshot_delete(
+                "Refusing to delete a scheduled (automatic) backup, or one "
+                "whose automatic/manual origin Home Assistant cannot "
+                "confirm (with_automatic_settings=None — not created by "
+                "this HA instance, or predates this metadata) — treated "
+                "as not provably manual, and therefore not deletable.",
+                backup_id=backup_id,
+            )
+
+        # Checked before the age floor below: a backup that is BOTH the
+        # newest AND too young must report "newest" (create a new one
+        # first), not "too young" — the age-floor message's remedy
+        # ("lower snapshot_delete_min_age_days") would be actively
+        # misleading advice for the newest snapshot, which stays
+        # protected at any age floor including 0.
+        newest_id = _newest_backup_id(backups)
+        if newest_id == backup_id:
+            _refuse_snapshot_delete(
+                "Refusing to delete the newest snapshot — at least one "
+                "recovery point must remain. Create a new snapshot first "
+                "if you specifically need to free this one's space.",
+                backup_id=backup_id,
+            )
+
+        min_age_days = settings.snapshot_delete_min_age_days
+        target_date = _parse_backup_date(matched.get("date"))
+        if target_date is None:
+            _refuse_snapshot_delete(
+                "Refusing to delete a backup with a missing or unparseable "
+                "date — cannot verify it clears the minimum-age floor.",
+                backup_id=backup_id,
+            )
+        cutoff = datetime.now(UTC) - timedelta(days=min_age_days)
+        # min_age_days=0 must unconditionally disable the floor, even if
+        # target_date is slightly ahead of this host's clock (clock skew
+        # vs the HA instance that stamped it) — guard explicitly rather
+        # than relying on the arithmetic reduction, which clock skew breaks.
+        if min_age_days > 0 and target_date > cutoff:
+            _refuse_snapshot_delete(
+                f"Refusing to delete a backup younger than "
+                f"snapshot_delete_min_age_days={min_age_days} days — at "
+                "least one recent recovery point must remain. Delete an "
+                "older backup, or lower snapshot_delete_min_age_days if "
+                "this recurs.",
+                backup_id=backup_id,
+            )
+
+        await safe_progress(
+            ctx,
+            progress=0,
+            total=_BACKUP_DELETE_WAIT_S,
+            message="deleting backup",
+        )
+        delete_result = await ws_client.send_command(
+            "backup/delete",
+            backup_id=backup_id,
+            _wait_timeout=_BACKUP_DELETE_WAIT_S,
+        )
+        if not delete_result.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    delete_result.get("error", "Backup deletion failed"),
+                    context={"backup_id": backup_id},
+                )
+            )
+        agent_errors = (delete_result.get("result") or {}).get("agent_errors") or {}
+        if agent_errors:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Backup deletion failed on one or more agents",
+                    context={"backup_id": backup_id, "agent_errors": agent_errors},
+                )
+            )
+
+        return {
+            "success": True,
+            "backup_id": backup_id,
+            "name": matched.get("name"),
+            "status": "Backup deleted successfully",
+        }
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting backup: {e}")
+        exception_to_structured_error(
+            e,
+            context={"tool": "delete_backup", "backup_id": backup_id},
+            suggestions=["Check Home Assistant connection and backup availability"],
+        )
+        return None  # unreachable: exception_to_structured_error always raises
+    finally:
+        if ws_client:
+            try:
+                await ws_client.disconnect()
+            except (TimeoutError, OSError, ConnectionError) as err:
+                logger.debug(
+                    "ws disconnect (cleanup) transport error: %s: %s",
+                    type(err).__name__,
+                    err,
+                )
+
+
 # Valid (scope, action) combinations. Anything outside this set is
 # rejected with a structured VALIDATION_INVALID_PARAMETER error.
 _VALID_COMBOS: set[tuple[str, str]] = {
     ("snapshot", "create"),
     ("snapshot", "list"),
     ("snapshot", "restore"),
+    ("snapshot", "delete"),
     ("edits", "create"),
     ("edits", "list"),
     ("edits", "view"),
@@ -1019,9 +1331,10 @@ def register_backup_tools(
 
 | scope | action | What it does |
 |---|---|---|
-| `snapshot` | `create` | Create a full HA tarball (config + addons, no DB by default). Heavy, seconds-long. |
+| `snapshot` | `create` | Create a full HA tarball (config + addons, no DB by default). Can take a while on a large instance; progress heartbeats are sent while waiting. |
 | `snapshot` | `list` | List full HA tarball snapshots (id, name, date, size). Read-only — use to discover a `backup_id` or confirm a backup landed. |
 | `snapshot` | `restore` | Restore a full HA tarball. **Restarts HA.** Last-resort recovery. |
+| `snapshot` | `delete` | Delete one full HA tarball by `backup_id` (`confirm=True` required). **Disabled by default** (`enable_snapshot_delete` setting) and layered with guards even when enabled — see below. |
 | `edits` | `create` | On-demand snapshot of one entity (`domain` + `entity_id` required). Use before the user manually edits in the HA UI. Same handler path the decorator takes on writes; bypasses the `enable_auto_backup` toggle. |
 | `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
 | `edits` | `view` | Read one auto-backup file by name; returns YAML and parsed `config`. |
@@ -1036,12 +1349,21 @@ def register_backup_tools(
 **`scope="snapshot"` backup-hint:**
 {backup_hint_text}
 
+**`(snapshot, delete)` is off by default and layered even when enabled:** a human must
+set `enable_snapshot_delete=true` (env var, web settings UI, or add-on Supervisor
+options) — an agent cannot turn this on itself. When enabled, a delete call is still
+refused if: the target is a scheduled/automatic backup; it's younger than
+`snapshot_delete_min_age_days` (default 7, 0 disables the floor); or it's the single
+newest snapshot remaining. These guarantee at least one recovery point always
+survives an agent's own mistakes.
+
 **`enable_auto_backup` and `scope="edits"`:** the automatic-on-write capture (every wrapped tool call) is gated by `enable_auto_backup=true` — if the listing is empty, check the toggle (web settings UI or `ENABLE_AUTO_BACKUP=true` env var). The explicit `(edits, create)` action bypasses the toggle since the request is explicit; `list` / `view` / `restore` / `delete` operate on whatever's already on disk regardless of the toggle's current state.
 
 **Examples:**
 - Snapshot before risky op: `ha_manage_backup(scope="snapshot", action="create", name="Before_Big_Change")`
 - List snapshots (to discover a backup_id or confirm one landed): `ha_manage_backup(scope="snapshot", action="list")`
 - Restore full snapshot: `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed")`
+- Delete an old snapshot (requires `enable_snapshot_delete=true`): `ha_manage_backup(scope="snapshot", action="delete", backup_id="dd7550ed", confirm=True)`
 - On-demand entity snapshot before a manual UI edit: `ha_manage_backup(scope="edits", action="create", domain="helper_input_boolean", entity_id="kitchen_lights_active")`
 - List recent auto-backups for one automation: `ha_manage_backup(scope="edits", action="list", domain="automation", entity_id="kitchen_lights")`
 - View an auto-backup: `ha_manage_backup(scope="edits", action="view", backup_name="automation.kitchen_lights.20260521_153000.yaml")`
@@ -1086,7 +1408,7 @@ def register_backup_tools(
             str | None,
             Field(
                 default=None,
-                description="(snapshot.restore) Tarball ID to restore (e.g. 'dd7550ed').",
+                description="(snapshot.restore / snapshot.delete) Tarball ID (e.g. 'dd7550ed').",
             ),
         ] = None,
         restore_database: Annotated[
@@ -1094,6 +1416,16 @@ def register_backup_tools(
             Field(
                 default=False,
                 description="(snapshot.restore) Include database in the restore. Default false (config-only).",
+            ),
+        ] = False,
+        confirm: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "(snapshot.delete) Must be True to confirm deletion — a "
+                    "safety measure against accidental calls."
+                ),
             ),
         ] = False,
         # edits scope params
@@ -1138,18 +1470,22 @@ def register_backup_tools(
                 description="(edits.list / snapshot.list) Maximum number of entries to return.",
             ),
         ] = 200,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Polymorphic backup tool. See the tool description for the routing matrix."""
         _gate_combo(scope, action)
 
         if scope == "snapshot":
             if action == "create":
-                return await create_backup(client, name)
+                return await create_backup(client, name, ctx=ctx)
             if action == "list":
                 return await list_backups(client, limit)
+            if action == "delete":
+                bid = _require("backup_id", backup_id, scope, action)
+                return await delete_backup(client, bid, confirm, ctx=ctx)
             # action == "restore"
             bid = _require("backup_id", backup_id, scope, action)
-            return await restore_backup(client, bid, restore_database)
+            return await restore_backup(client, bid, restore_database, ctx=ctx)
 
         # scope == "edits"
         settings = get_global_settings()

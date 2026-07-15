@@ -727,3 +727,104 @@ def test_backup_override_lookahead_accepts_in_range(
 
     _reset_global_settings()
     assert get_global_settings().auto_backup_calendar_lookahead_days == 30
+
+
+# snapshot-delete gating (#1861) — default-off, env/override-file/bounds coverage.
+
+
+def test_enable_snapshot_delete_default_false() -> None:
+    from ha_mcp.config import Settings
+
+    assert Settings().enable_snapshot_delete is False
+
+
+def test_snapshot_delete_min_age_days_default_seven() -> None:
+    from ha_mcp.config import Settings
+
+    assert Settings().snapshot_delete_min_age_days == 7
+
+
+def test_enable_snapshot_delete_env_var_true() -> None:
+    from ha_mcp.config import Settings
+
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        ENABLE_SNAPSHOT_DELETE="true",
+    )
+    assert settings.enable_snapshot_delete is True
+
+
+def test_snapshot_delete_min_age_days_env_var() -> None:
+    from ha_mcp.config import Settings
+
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        SNAPSHOT_DELETE_MIN_AGE_DAYS="14",
+    )
+    assert settings.snapshot_delete_min_age_days == 14
+
+
+def test_snapshot_delete_min_age_days_zero_disables_floor() -> None:
+    """0 is a valid, in-range value (the age floor is opt-out per #1861
+    design: min_age_days=0 disables the age guard)."""
+    from ha_mcp.config import Settings
+
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        SNAPSHOT_DELETE_MIN_AGE_DAYS="0",
+    )
+    assert settings.snapshot_delete_min_age_days == 0
+
+
+def test_snapshot_delete_min_age_days_rejects_out_of_range() -> None:
+    import pydantic
+
+    from ha_mcp.config import Settings
+
+    with pytest.raises(pydantic.ValidationError):
+        Settings(
+            _env_file=None,  # type: ignore[call-arg]
+            SNAPSHOT_DELETE_MIN_AGE_DAYS="9999",
+        )
+
+
+def test_backup_override_enable_snapshot_delete_accepts_bool(
+    isolated_data_dir, monkeypatch
+) -> None:
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.delenv("ENABLE_SNAPSHOT_DELETE", raising=False)
+    (isolated_data_dir / "backup_settings.json").write_text(
+        json.dumps({"enable_snapshot_delete": True})
+    )
+    from ha_mcp.config import _reset_global_settings, get_global_settings
+
+    _reset_global_settings()
+    assert get_global_settings().enable_snapshot_delete is True
+
+
+def test_backup_override_min_age_days_rejects_out_of_range(
+    isolated_data_dir, monkeypatch
+) -> None:
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.delenv("SNAPSHOT_DELETE_MIN_AGE_DAYS", raising=False)
+    (isolated_data_dir / "backup_settings.json").write_text(
+        json.dumps({"snapshot_delete_min_age_days": 9999})
+    )
+    from ha_mcp.config import _reset_global_settings, get_global_settings
+
+    _reset_global_settings()
+    assert get_global_settings().snapshot_delete_min_age_days == 7  # field default
+
+
+def test_backup_override_min_age_days_accepts_in_range(
+    isolated_data_dir, monkeypatch
+) -> None:
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.delenv("SNAPSHOT_DELETE_MIN_AGE_DAYS", raising=False)
+    (isolated_data_dir / "backup_settings.json").write_text(
+        json.dumps({"snapshot_delete_min_age_days": 30})
+    )
+    from ha_mcp.config import _reset_global_settings, get_global_settings
+
+    _reset_global_settings()
+    assert get_global_settings().snapshot_delete_min_age_days == 30

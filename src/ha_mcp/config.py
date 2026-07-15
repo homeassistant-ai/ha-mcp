@@ -347,6 +347,26 @@ class Settings(BaseSettings):
         7, ge=1, le=365, alias="HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS"
     )
 
+    # Snapshot-tarball deletion gate (#1861). Off by default: an agent
+    # deleting a full HA snapshot is categorically riskier than the
+    # lightweight `edits`-scope auto-backups (which already delete freely),
+    # since a snapshot may be the last recovery point after the agent
+    # itself broke something. A human must opt in via env var, the web
+    # settings UI override file, or (in the add-on) the Supervisor options
+    # — never something the agent can flip on itself.
+    enable_snapshot_delete: bool = Field(False, alias="ENABLE_SNAPSHOT_DELETE")
+
+    # Minimum age (days) a snapshot must have before it's deletable. This is
+    # the load-bearing guard, not `enable_snapshot_delete`: a count-based
+    # "keep the last N" rule is defeatable by an agent flooding new
+    # snapshots before deleting old ones, but it cannot forge a backup's
+    # HA-stamped creation date. 0 disables the age floor (still gated by
+    # enable_snapshot_delete + the newest-snapshot / automatic-backup
+    # guards enforced in tools/backup.py).
+    snapshot_delete_min_age_days: int = Field(
+        7, ge=0, le=365, alias="SNAPSHOT_DELETE_MIN_AGE_DAYS"
+    )
+
     # Mirror the legacy ``os.getenv("FLAG", "").lower() in ("true", ...)``
     # semantics for the ex-direct-getenv ``enable_filesystem_tools`` flag (and
     # its sibling toggles listed above): an empty env var value MUST be treated
@@ -1486,6 +1506,10 @@ BACKUP_OVERRIDE_FIELDS: tuple[BackupOverrideField, ...] = (
         "HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS",
         int,
     ),
+    BackupOverrideField("enable_snapshot_delete", "ENABLE_SNAPSHOT_DELETE", bool),
+    BackupOverrideField(
+        "snapshot_delete_min_age_days", "SNAPSHOT_DELETE_MIN_AGE_DAYS", int
+    ),
 )
 
 # Override-file location is the same data dir that holds tool_config.json
@@ -1637,6 +1661,13 @@ def _coerce_backup_int_value(field_name: str, raw: object) -> tuple[bool, Any]:
         logger.warning(
             "backup_settings.json: auto_backup_calendar_lookahead_days=%d out of "
             "range 1..365; ignoring",
+            coerced,
+        )
+        return False, None
+    if field_name == "snapshot_delete_min_age_days" and not 0 <= coerced <= 365:
+        logger.warning(
+            "backup_settings.json: snapshot_delete_min_age_days=%d out of "
+            "range 0..365; ignoring",
             coerced,
         )
         return False, None

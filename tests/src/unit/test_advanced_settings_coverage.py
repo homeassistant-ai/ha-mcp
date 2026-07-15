@@ -389,6 +389,29 @@ def test_every_advanced_field_has_a_settings_js_label() -> None:
     )
 
 
+def test_every_backup_override_field_has_a_settings_js_label() -> None:
+    """The Backups-tab GET handler is data-driven over BACKUP_OVERRIDE_FIELDS,
+    but settings.js looks up each row's label/help in ``BACKUP_FIELD_LABELS``
+    (falling back to the raw snake_case field name). A row added to config.py
+    without a matching JS entry silently degrades the UI — same drift class
+    as ADVANCED_FIELD_META (issue #1538); caught here for #1861's
+    enable_snapshot_delete / snapshot_delete_min_age_days after they
+    initially shipped without entries."""
+    import re
+
+    js = (_package_dir() / "settings_ui" / "settings.js").read_text(encoding="utf-8")
+    m = re.search(r"const BACKUP_FIELD_LABELS = \{(.*?)\n\};", js, re.S)
+    assert m, "BACKUP_FIELD_LABELS object not found in settings.js"
+    label_keys = set(
+        re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{", m.group(1), re.M)
+    )
+    missing = sorted({f.field for f in BACKUP_OVERRIDE_FIELDS} - label_keys)
+    assert not missing, (
+        "BACKUP_OVERRIDE_FIELDS rows missing a BACKUP_FIELD_LABELS entry in "
+        f"settings.js (they would render with a raw field-name label): {missing}."
+    )
+
+
 def test_screenshot_engine_url_is_surfaced_as_editable_advanced_field() -> None:
     """#1538: the screenshot engine URL is env-settable (docker/.env) but was
     invisible to add-on users. It must now be an editable Advanced row, no

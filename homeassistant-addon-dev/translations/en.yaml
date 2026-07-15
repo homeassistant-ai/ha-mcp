@@ -156,6 +156,21 @@ configuration:
       Maximum number of snapshots kept per entity. Older snapshots beyond
       this cap are rotated out on each successful capture. Default 100,
       range 1–10000.
+  enable_snapshot_delete:
+    name: Allow snapshot deletion
+    description: >-
+      Lets ha_manage_backup delete full HA snapshot tarballs
+      (scope='snapshot', action='delete'). Off by default — a snapshot may
+      be the last recovery point after a mistaken change, so a human must
+      opt in here. Even when on, scheduled backups, the newest remaining
+      snapshot, and anything younger than the age floor below stay
+      protected.
+  snapshot_delete_min_age_days:
+    name: Minimum snapshot age to delete (days)
+    description: >-
+      A snapshot must be at least this old before it can be deleted. Range
+      0–365; 0 disables the floor (the newest-snapshot and
+      scheduled-backup protections still apply). Default 7.
   enable_lite_docstrings:
     name: Enable lite tool docstrings (beta)
     description: >-
