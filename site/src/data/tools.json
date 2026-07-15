@@ -3182,11 +3182,15 @@
           "default": null
         },
         "backup_id": {
-          "type": "Annotated[str | None, Field(default=None, description=\"(snapshot.restore) Tarball ID to restore (e.g. 'dd7550ed').\")]",
+          "type": "Annotated[str | None, Field(default=None, description=\"(snapshot.restore / snapshot.delete) Tarball ID (e.g. 'dd7550ed').\")]",
           "default": null
         },
         "restore_database": {
           "type": "Annotated[bool, Field(default=False, description='(snapshot.restore) Include database in the restore. Default false (config-only).')]",
+          "default": false
+        },
+        "confirm": {
+          "type": "Annotated[bool, Field(default=False, description='(snapshot.delete) Must be True to confirm deletion — a safety measure against accidental calls.')]",
           "default": false
         },
         "domain": {
