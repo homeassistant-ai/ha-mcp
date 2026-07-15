@@ -89,8 +89,9 @@ TRANSFORM_GENERATED_TOOLS: dict[str, ToolStub] = {}
 # won't appear in local_provider._list_tools(), so we inject stub entries
 # into the settings UI so users discover the tool exists and how to enable
 # it. Keep this dict in sync with the ``"beta"`` tag added to each tool's
-# source file (tools_yaml_config.py, tools_filesystem.py, tools_mcp_component.py,
-# tools_code.py) — a future rename or removal needs to land in both places.
+# source file (tools_yaml_config.py, tools_yaml_read.py, tools_filesystem.py,
+# tools_mcp_component.py, tools_code.py) — a future rename or removal needs to
+# land in both places.
 FEATURE_GATED_TOOLS: dict[str, ToolStub] = {
     "ha_config_set_yaml": {
         "title": "Set YAML Config",
@@ -98,6 +99,13 @@ FEATURE_GATED_TOOLS: dict[str, ToolStub] = {
         "description": "Add, replace, or remove top-level keys in configuration.yaml or package files.",
         "disabled_by": "enable_yaml_config_editing",
         "destructiveHint": True,
+    },
+    "ha_config_get_yaml": {
+        "title": "Read YAML Config Fragment",
+        "primary_tag": "System",
+        "description": "Read the YAML fragment under a key in a config file, or find which file defines it.",
+        "disabled_by": "enable_filesystem_tools",
+        "readOnlyHint": True,
     },
     "ha_manage_custom_tool": {
         "title": "Custom Tool",

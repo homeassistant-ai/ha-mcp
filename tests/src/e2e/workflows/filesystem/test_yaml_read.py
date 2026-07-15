@@ -2,16 +2,19 @@
 End-to-End tests for the read-only YAML fragment lookup (ha_config_get_yaml).
 
 This test suite validates:
-- Registration without the YAML-editing feature flag (the tool is ungated)
+- Registration without the YAML-*editing* feature flag (reading is not editing)
 - Single-file fragment reads addressed by file + yaml_path
 - Cross-file key discovery through a glob, against the NON-default packages
   folder the e2e config binds (``custom_packages``, see initial_test_state/
   configuration.yaml) — which is exactly the runtime-detection path
 - HA tags surviving unresolved into both the text and the parsed view
+- secrets.yaml reading back masked through those views
+- The get → set round-trip that is the point of the feature
 
 These tests require the ha_mcp_tools custom component to be installed in Home
-Assistant. Unlike ha_config_set_yaml, ha_config_get_yaml needs no feature flag;
-the flag is only enabled here to SEED a package file to then discover.
+Assistant. ha_config_get_yaml hangs on ``enable_filesystem_tools`` (it returns
+config-file contents) but NOT on ENABLE_YAML_CONFIG_EDITING; that flag is
+enabled here only to SEED a package file to then discover.
 
 Tests are designed for the Docker Home Assistant test environment.
 """
@@ -62,13 +65,15 @@ async def _set_yaml_confirmed(mcp: Any, args: dict[str, Any]) -> dict[str, Any]:
 
 @pytest.mark.filesystem
 class TestYamlReadAvailability:
-    """ha_config_get_yaml is registered regardless of the editing flag."""
+    """ha_config_get_yaml is registered regardless of the *editing* flag."""
 
     async def test_registered_without_editing_flag(self, mcp_client):
         """The read tool must be present even with YAML editing off.
 
         That independence is the reason it lives in its own module — reading a
-        fragment is not an edit.
+        fragment is not an edit. (It does hang on enable_filesystem_tools; the
+        unit suite pins that gate, which env changes here cannot exercise
+        against an already-running server.)
         """
         original = os.environ.pop(FEATURE_FLAG, None)
         try:
@@ -201,6 +206,88 @@ class TestReadFileYamlPath:
         assert "use_x_forwarded_for" in data["subtree"]
         # content stays truncated: tailing is a display concern only.
         assert len(data["content"].split("\n")) <= 3
+
+
+@pytest.mark.filesystem
+class TestSecretsMasking:
+    """secrets.yaml reads back masked through the yaml_path views too.
+
+    The unit half (test_custom_component_filesystem.py::
+    TestReadFileSecretsMaskingOrder) pins the ordering that makes this hold;
+    this is the behavioural half against the real component.
+    """
+
+    async def test_subtree_and_parsed_are_masked(self, mcp_client):
+        """initial_test_state/secrets.yaml holds ``some_password: welcome``."""
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                TOOL_NAME,
+                {
+                    "yaml_path": "some_password",
+                    "file": "secrets.yaml",
+                    "include_parsed": True,
+                },
+            )
+
+        match = data["matches"][0]
+        assert "welcome" not in match["content"]
+        assert "[MASKED]" in match["content"]
+        assert match["parsed"] == "[MASKED]"
+
+
+@pytest.mark.filesystem
+class TestYamlReadRoundTrip:
+    """#1788's core promise: a match feeds straight back into set_yaml."""
+
+    async def test_read_content_is_accepted_by_set_yaml(
+        self, mcp_client, yaml_editing_enabled
+    ):
+        """Seed a tag-bearing key, read it, hand the content back to set_yaml.
+
+        The read `content` carries an unresolved ``!secret``. If set_yaml
+        rejected or mangled tag-bearing subtree text, the feature would be
+        broken end-to-end with nothing else failing — the two tools would
+        simply not compose.
+        """
+        target = f"{PACKAGES_DIR}/_e2e_roundtrip.yaml"
+        async with MCPAssertions(mcp_client) as mcp:
+            await _set_yaml_confirmed(
+                mcp,
+                {
+                    "yaml_path": "shell_command",
+                    "action": "add",
+                    "file": target,
+                    "content": "e2e_roundtrip_probe: !secret some_password\n",
+                },
+            )
+
+            read = await mcp.call_tool_success(
+                TOOL_NAME, {"yaml_path": "shell_command", "file": target}
+            )
+            match = read["matches"][0]
+            assert "!secret some_password" in match["content"], (
+                "the tag must survive the read for the round-trip to mean anything"
+            )
+
+            # The whole point: file + yaml_path + content address the same
+            # fragment for the editor, unchanged.
+            await _set_yaml_confirmed(
+                mcp,
+                {
+                    "yaml_path": match["yaml_path"],
+                    "action": "replace",
+                    "file": match["file"],
+                    "content": match["content"],
+                },
+            )
+
+            after = await mcp.call_tool_success(
+                TOOL_NAME, {"yaml_path": "shell_command", "file": target}
+            )
+
+        # Round-tripped through the editor without mangling the tag.
+        assert after["matches"][0]["content"] == match["content"]
+        assert "!secret some_password" in after["matches"][0]["content"]
 
 
 @pytest.mark.filesystem

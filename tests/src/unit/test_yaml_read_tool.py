@@ -17,11 +17,43 @@ def _reset_caller_token_cache():
     _reset_caller_token_cache()
 
 
+@pytest.fixture(autouse=True)
+def _filesystem_tools_enabled(monkeypatch):
+    """The tool registers only with filesystem tools on — it returns
+    config-file contents, so it sits behind the same flag as ha_read_file.
+
+    Autouse because every test below needs a registered tool; the gate itself
+    is asserted by TestGating.
+    """
+    from ha_mcp import config as ha_mcp_config
+
+    # enable_filesystem_tools is a beta sub-flag, so the master toggle has to
+    # be on too or the master gate forces it back off (BETA_FEATURE_FIELDS).
+    monkeypatch.setenv("ENABLE_BETA_FEATURES", "true")
+    monkeypatch.setenv("HAMCP_ENABLE_FILESYSTEM_TOOLS", "true")
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
+    yield
+    ha_mcp_config._settings = None
+
+
+class _Raw:
+    """Marks a value that call_service returns verbatim.
+
+    Everything else is wrapped in HA's ``{"service_response": ...}`` envelope,
+    which is always a dict — so this is the only way to exercise a caller's
+    handling of a non-dict service result.
+    """
+
+    def __init__(self, value):
+        self.value = value
+
+
 def _service_mock(responses: dict):
     """call_service mock answering the bootstrap plus per-service responses.
 
     ``responses`` maps a service name to either a single response dict or a
-    callable taking the payload (so read_file can answer per-file).
+    callable taking the payload (so read_file can answer per-file). Wrap a
+    value in ``_Raw`` to skip the service_response envelope.
     """
 
     async def fake_call_service(domain, service, payload, **kwargs):
@@ -37,6 +69,8 @@ def _service_mock(responses: dict):
             }
         handler = responses[service]
         result = handler(payload) if callable(handler) else handler
+        if isinstance(result, _Raw):
+            return result.value
         return {"service_response": result}
 
     return AsyncMock(side_effect=fake_call_service)
@@ -69,7 +103,8 @@ async def _make_tool(responses: dict):
 
     mcp = FakeMCP()
     register_yaml_read_tools(mcp, client)
-    return captured["fns"][0], client
+    # None when the feature gate refused to register (see TestGating).
+    return (captured["fns"][0] if captured.get("fns") else None), client
 
 
 def _read_ok(subtree, parsed=None):
@@ -79,22 +114,42 @@ def _read_ok(subtree, parsed=None):
     return body
 
 
-async def test_registers_without_yaml_editing_flag(monkeypatch):
-    """The read tool is ungated: it must register even with YAML editing off.
+class TestGating:
+    """Which flag the tool hangs on — reading is not editing, but it IS a
+    config-file read."""
 
-    This is the whole reason it is a separate module from tools_yaml_config —
-    that module's register function returns early when the flag is off.
-    """
-    from ha_mcp import config as ha_mcp_config
+    async def test_registers_without_yaml_editing_flag(self, monkeypatch):
+        """Registers with YAML *editing* off.
 
-    monkeypatch.setenv("ENABLE_YAML_CONFIG_EDITING", "false")
-    monkeypatch.setenv("ENABLE_BETA_FEATURES", "false")
-    monkeypatch.setattr(ha_mcp_config, "_settings", None)
-    try:
+        This is the whole reason it is a separate module from
+        tools_yaml_config — that module's register function returns early when
+        the editing flag is off, and reading a fragment is not an edit.
+        """
+        from ha_mcp import config as ha_mcp_config
+
+        monkeypatch.setenv("ENABLE_YAML_CONFIG_EDITING", "false")
+        monkeypatch.setattr(ha_mcp_config, "_settings", None)
+
         fn, _ = await _make_tool({"read_file": _read_ok("rest:\n")})
+
         assert fn is not None
-    finally:
-        ha_mcp_config._settings = None
+
+    async def test_not_registered_without_filesystem_tools_flag(self, monkeypatch):
+        """Does NOT register with filesystem tools off.
+
+        It returns config-file contents through the same read_file/list_files
+        component services as ha_read_file/ha_list_files. An install that
+        turned those off must not get a config-read surface back through this
+        tool.
+        """
+        from ha_mcp import config as ha_mcp_config
+
+        monkeypatch.setenv("HAMCP_ENABLE_FILESYSTEM_TOOLS", "false")
+        monkeypatch.setattr(ha_mcp_config, "_settings", None)
+
+        fn, _ = await _make_tool({"read_file": _read_ok("rest:\n")})
+
+        assert fn is None
 
 
 async def test_single_file_returns_match():
@@ -226,12 +281,141 @@ async def test_include_parsed_not_sent_by_default():
 
 
 async def test_read_failure_raises_tool_error():
+    """A single explicit target has no siblings to salvage, so it still raises."""
     fn, _ = await _make_tool(
         {"read_file": {"success": False, "error": "File does not exist: nope.yaml"}}
     )
 
     with pytest.raises(ToolError):
         await fn(yaml_path="rest", file="nope.yaml")
+
+
+async def test_glob_read_failure_warns_instead_of_aborting():
+    """One unreadable file must not discard the matches already found.
+
+    Reachable without contrivance: the glob is not restricted to *.yaml, so
+    `packages/*` turns up a README the component refuses to read.
+    """
+
+    def read(payload):
+        if payload["path"] == "packages/README.md":
+            return {"success": False, "error": "Path not allowed: packages/README.md"}
+        return _read_ok("- name: my_alert\n")
+
+    fn, _ = await _make_tool(
+        {
+            "list_files": {
+                "success": True,
+                "files": [
+                    {"path": "packages/README.md", "is_dir": False},
+                    {"path": "packages/alert2.yaml", "is_dir": False},
+                ],
+            },
+            "read_file": read,
+        }
+    )
+
+    out = await fn(yaml_path="alert2", file="packages/*")
+
+    assert out["count"] == 1
+    assert out["matches"][0]["file"] == "packages/alert2.yaml"
+    assert out["files_searched"] == 2
+    assert out["warnings"] == [
+        "packages/README.md was not searched: Path not allowed: packages/README.md."
+    ]
+
+
+async def test_glob_read_exception_warns_instead_of_aborting():
+    """A read that blows up is the same failure class as one that says no."""
+
+    def read(payload):
+        if payload["path"] == "packages/broken.yaml":
+            raise RuntimeError("connection reset")
+        return _read_ok("- name: my_alert\n")
+
+    fn, _ = await _make_tool(
+        {
+            "list_files": {
+                "success": True,
+                "files": [
+                    {"path": "packages/broken.yaml", "is_dir": False},
+                    {"path": "packages/alert2.yaml", "is_dir": False},
+                ],
+            },
+            "read_file": read,
+        }
+    )
+
+    out = await fn(yaml_path="alert2", file="packages/*.yaml")
+
+    assert out["count"] == 1
+    assert out["matches"][0]["file"] == "packages/alert2.yaml"
+    assert out["warnings"] == [
+        "packages/broken.yaml was not searched: connection reset."
+    ]
+
+
+async def test_glob_malformed_response_warns_instead_of_aborting():
+    """A response that is not a dict at all is the same failure class.
+
+    Every way "this one file could not be searched" can present must degrade
+    the same way under a glob, or the inconsistency just moves.
+    """
+
+    def read(payload):
+        if payload["path"] == "packages/weird.yaml":
+            return _Raw("not a dict at all")
+        return _read_ok("- name: my_alert\n")
+
+    fn, _ = await _make_tool(
+        {
+            "list_files": {
+                "success": True,
+                "files": [
+                    {"path": "packages/weird.yaml", "is_dir": False},
+                    {"path": "packages/alert2.yaml", "is_dir": False},
+                ],
+            },
+            "read_file": read,
+        }
+    )
+
+    out = await fn(yaml_path="alert2", file="packages/*.yaml")
+
+    assert out["count"] == 1
+    assert out["matches"][0]["file"] == "packages/alert2.yaml"
+    assert out["warnings"] == [
+        "packages/weird.yaml was not searched: unexpected read_file response."
+    ]
+
+
+async def test_single_file_malformed_response_still_raises():
+    """With one target there is nothing to salvage, so it stays an error."""
+    fn, _ = await _make_tool({"read_file": _Raw("not a dict at all")})
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="configuration.yaml")
+
+
+async def test_empty_glob_matches_nothing_without_raising():
+    """A glob matching no files is an empty result, not an error.
+
+    files_searched=0 is what separates it from "no file defines the key".
+    """
+    fn, _ = await _make_tool(
+        {
+            "list_files": {"success": True, "files": []},
+            "read_file": _read_ok("x\n"),
+        }
+    )
+
+    out = await fn(yaml_path="alert2", file="packages/*.yaml")
+
+    assert out["success"] is True
+    assert out["matches"] == []
+    assert out["count"] == 0
+    assert out["files_searched"] == 0
+    assert "warnings" not in out
 
 
 async def test_list_failure_raises_tool_error():
