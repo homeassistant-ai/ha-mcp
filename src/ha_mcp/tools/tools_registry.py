@@ -279,9 +279,11 @@ async def _single_device_and_entities(
         # error carries available_device_ids — or a component that served
         # device_get without the entities half. Both take the legacy device AND
         # entity registries.
+    # Device registry first, then entity registry — the legacy wire order,
+    # which the #1297 error-contract test pins with an ordered mock.
+    all_devices = await _legacy_device_rows(client)
     all_entities = await _fetch_entity_rows(client)
     _, device_to_entities = _build_entity_maps(all_entities, need_full=True)
-    all_devices = await _legacy_device_rows(client)
     return all_devices, device_to_entities
 
 

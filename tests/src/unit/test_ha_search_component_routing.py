@@ -692,3 +692,52 @@ class TestVisibilityFilterBypassesComponent:
             c.args[0] == "ha_mcp_tools/search" for c in ws.send_command.call_args_list
         ), "no active hide dimension → component should still serve"
         assert client.get_states_calls == 0
+
+
+class TestAreaModeEnrichmentConsolidation:
+    """Area+query mode reuses the haystack ``get_entries`` for enrichment.
+
+    The alias haystack fetch (all area entities) and the opt-in
+    ``result_fields`` enrichment previously issued two
+    ``config/entity_registry/get_entries`` calls for overlapping ids; the
+    haystack's entries map is now threaded into the enrichment join so the
+    whole flow costs exactly one.
+    """
+
+    @pytest.mark.asyncio
+    async def test_area_query_enrichment_reuses_haystack_entries(self) -> None:
+        client = EnrichmentClient()
+        tools = tools_search.SearchTools(client, MagicMock())
+        area_result = {
+            "areas": {
+                "ar1": {
+                    "entities": {
+                        "light": [
+                            {
+                                "entity_id": "light.kitchen",
+                                "friendly_name": "Kitchen Light",
+                                "state": "on",
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+        resp = await tools._search_area_with_query(
+            query="kitchen",
+            area_filter="Kitchen",
+            area_result=area_result,
+            domain_filter=None,
+            state_filter=None,
+            limit=10,
+            offset=0,
+            group_by_domain_bool=False,
+            per_domain_limit_int=None,
+            parsed_result_fields=["entity_id", "area", "aliases"],
+        )
+
+        rec = resp["results"][0]
+        assert rec["area"] == "Kitchen"
+        assert rec["aliases"] == ["lamp"]
+        assert client.ws_types["config/entity_registry/get_entries"] == 1

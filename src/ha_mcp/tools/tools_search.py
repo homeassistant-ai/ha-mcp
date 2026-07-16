@@ -2272,33 +2272,40 @@ class SearchTools:
             return None  # unreachable: error helpers above always raise
 
     async def _fetch_entity_enrichment(
-        self, entity_ids: list[str], requested: tuple[str, ...]
+        self,
+        entity_ids: list[str],
+        requested: tuple[str, ...],
+        prefetched_entries: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Join area/floor/label NAMES + aliases for entity_ids (legacy enrichment).
 
-        Generalises the area-mode alias join (:meth:`_fetch_area_entity_aliases`):
+        Generalises the area-mode alias join (:meth:`_fetch_area_entity_entries`):
         one ``config/entity_registry/get_entries`` gives each id's aliases + area_id
         + label ids + device_id, and the area/floor/label registry lists resolve
         those ids to NAMES (the device registry supplies device-inherited
         area/labels, matching the component's ``_registry_enrichment``). Only the
         registries a requested field actually needs are fetched — an aliases-only
-        request skips the four ``*_registry/list`` reads. Each fetch is
-        fault-tolerant (``return_exceptions=True`` + the ``_ws_*`` guards degrade a
-        failed list to an empty index), so a registry hiccup drops that field to
-        empty rather than failing the search. Returns
+        request skips the four ``*_registry/list`` reads, and a caller that already
+        holds the registry entries (the area-mode haystack fetch) passes them as
+        ``prefetched_entries`` so no second ``get_entries`` round-trip is made.
+        Each fetch is fault-tolerant (``return_exceptions=True`` + the ``_ws_*``
+        guards degrade a failed list to an empty index), so a registry hiccup drops
+        that field to empty rather than failing the search. Returns
         ``{entity_id: {requested field: value}}``.
         """
         if not entity_ids or not requested:
             return {}
         need_names = bool(set(requested) & {"area", "floor", "labels"})
-        coros: list[Any] = [
-            self._client.send_websocket_message(
-                {
-                    "type": "config/entity_registry/get_entries",
-                    "entity_ids": entity_ids,
-                }
+        coros: list[Any] = []
+        if prefetched_entries is None:
+            coros.append(
+                self._client.send_websocket_message(
+                    {
+                        "type": "config/entity_registry/get_entries",
+                        "entity_ids": entity_ids,
+                    }
+                )
             )
-        ]
         if need_names:
             coros.extend(
                 self._client.send_websocket_message({"type": command})
@@ -2310,11 +2317,16 @@ class SearchTools:
                 )
             )
         fetched = await asyncio.gather(*coros, return_exceptions=True)
-        entries = _ws_result_map(fetched[0])
-        areas = _ws_registry_index(fetched[1], "area_id") if need_names else {}
-        floors = _ws_registry_index(fetched[2], "floor_id") if need_names else {}
-        labels = _ws_registry_index(fetched[3], "label_id") if need_names else {}
-        devices = _ws_registry_index(fetched[4], "id") if need_names else {}
+        if prefetched_entries is None:
+            entries = _ws_result_map(fetched[0])
+            names = fetched[1:]
+        else:
+            entries = prefetched_entries
+            names = fetched
+        areas = _ws_registry_index(names[0], "area_id") if need_names else {}
+        floors = _ws_registry_index(names[1], "floor_id") if need_names else {}
+        labels = _ws_registry_index(names[2], "label_id") if need_names else {}
+        devices = _ws_registry_index(names[3], "id") if need_names else {}
         return {
             eid: _entity_enrichment_fields(
                 entries.get(eid) or {}, areas, floors, labels, devices, requested
@@ -2326,6 +2338,7 @@ class SearchTools:
         self,
         records: list[dict[str, Any]],
         parsed_result_fields: list[str] | None,
+        prefetched_entries: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """Add requested area/floor/labels/aliases to entity records in place (opt-in).
 
@@ -2334,7 +2347,9 @@ class SearchTools:
         built from the same dicts before projection is enriched too. Applied before
         the ``result_fields`` projection so the requested enrichment keys survive
         it. Never withholds results: a failed enrichment fetch just leaves the
-        fields absent.
+        fields absent. ``prefetched_entries`` lets a caller that already fetched
+        the registry entries (area mode's haystack fetch) avoid a duplicate
+        ``get_entries`` round-trip.
         """
         requested = _requested_enrichment(parsed_result_fields)
         if not requested or not records:
@@ -2342,7 +2357,9 @@ class SearchTools:
         entity_ids: list[str] = [
             r["entity_id"] for r in records if isinstance(r.get("entity_id"), str)
         ]
-        enrichment = await self._fetch_entity_enrichment(entity_ids, requested)
+        enrichment = await self._fetch_entity_enrichment(
+            entity_ids, requested, prefetched_entries
+        )
         for record in records:
             eid = record.get("entity_id")
             if isinstance(eid, str):
@@ -2350,14 +2367,19 @@ class SearchTools:
                 if fields:
                     record.update(fields)
 
-    async def _fetch_area_entity_aliases(
+    async def _fetch_area_entity_entries(
         self,
         area_entity_ids: list[str],
-    ) -> dict[str, list[str]]:
-        """Fetch entity registry aliases for a list of entity IDs in one WS call."""
-        aliases_map: dict[str, list[str]] = {}
+    ) -> dict[str, dict[str, Any]]:
+        """Fetch entity registry entries for a list of entity IDs in one WS call.
+
+        Returns the full ``get_entries`` result map so the caller can derive the
+        alias haystack AND reuse the same entries for opt-in enrichment without a
+        second round-trip.
+        """
+        entries_map: dict[str, dict[str, Any]] = {}
         if not area_entity_ids:
-            return aliases_map
+            return entries_map
         try:
             entries_resp = await self._client.send_websocket_message(
                 {
@@ -2366,9 +2388,11 @@ class SearchTools:
                 }
             )
             if isinstance(entries_resp, dict) and entries_resp.get("success"):
-                for eid, entry in (entries_resp.get("result", {}) or {}).items():
-                    if isinstance(entry, dict):
-                        aliases_map[eid] = entry.get("aliases", []) or []
+                entries_map = {
+                    eid: entry
+                    for eid, entry in (entries_resp.get("result", {}) or {}).items()
+                    if isinstance(entry, dict)
+                }
             else:
                 logger.warning(
                     "alias_enrichment_failed: get_entries returned non-success "
@@ -2382,7 +2406,7 @@ class SearchTools:
                 len(area_entity_ids),
                 alias_err,
             )
-        return aliases_map
+        return entries_map
 
     async def _search_area_with_query(
         self,
@@ -2416,7 +2440,10 @@ class SearchTools:
         area_entity_ids = sorted(
             e.get("entity_id", "") for e in all_area_entities if e.get("entity_id")
         )
-        aliases_map = await self._fetch_area_entity_aliases(area_entity_ids)
+        entries_map = await self._fetch_area_entity_entries(area_entity_ids)
+        aliases_map = {
+            eid: (entry.get("aliases") or []) for eid, entry in entries_map.items()
+        }
 
         from ..utils.fuzzy_search import create_fuzzy_searcher
 
@@ -2476,7 +2503,9 @@ class SearchTools:
                 "fuzzy-search dataset and may yield empty pages"
             )
 
-        await self._maybe_enrich_entity_records(results, parsed_result_fields)
+        await self._maybe_enrich_entity_records(
+            results, parsed_result_fields, prefetched_entries=entries_map
+        )
         _apply_by_domain_grouping(
             search_data,
             results,
