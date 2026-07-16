@@ -2559,10 +2559,10 @@ def _all_exposable_entity_ids(hass: HomeAssistant, view: _RegistryView) -> list[
             seen.add(eid)
             ordered.append(eid)
     for entry in _all_entity_entries(view):
-        eid = getattr(entry, "entity_id", None)
-        if eid and eid not in seen:
-            seen.add(eid)
-            ordered.append(eid)
+        entry_eid = getattr(entry, "entity_id", None)
+        if entry_eid and entry_eid not in seen:
+            seen.add(entry_eid)
+            ordered.append(entry_eid)
     return ordered
 
 
