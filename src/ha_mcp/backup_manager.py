@@ -1720,7 +1720,7 @@ async def _restore_entity_state(client: Any, entity_id: str, config: Any) -> Any
 # best-effort.
 
 
-async def _fetch_device(client: Any, entity_id: str) -> Any:
+async def _fetch_device(client: Any, device_id: str) -> Any:
     # Route the single-device capture through the component's ``device_get`` when
     # available (one in-process read of the raw DeviceEntry) instead of dumping the
     # whole registry — the same pre-write snapshot ``ha_set_device`` /
@@ -1729,14 +1729,14 @@ async def _fetch_device(client: Any, entity_id: str) -> Any:
     # unavailable"; fall back to the full-list scan.
     from .tools.component_devices import fetch_device_via_component
 
-    result = await fetch_device_via_component(client, entity_id)
+    result = await fetch_device_via_component(client, device_id)
     if result is not None:
         return result.get("device")
     items = await _ws_send(client, {"type": "config/device_registry/list"})
     if not isinstance(items, list):
         return None
     for item in items:
-        if item.get("id") == entity_id:
+        if item.get("id") == device_id:
             return item
     return None
 

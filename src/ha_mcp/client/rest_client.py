@@ -1445,6 +1445,7 @@ class HomeAssistantClient:
                         return {
                             "success": False,
                             "error": f"WebSocket request blocked (403 Forbidden): {error_str}",
+                            "error_code": getattr(e, "code", None),
                             "suggestions": [
                                 "This may be caused by a reverse proxy or security filter",
                                 "Try simplifying the request (e.g., shorter templates, fewer parameters)",
@@ -1454,7 +1455,10 @@ class HomeAssistantClient:
                         }
 
                 logger.error(f"WebSocket message failed: {e}")
-                return {"success": False, "error": str(e)}
+                # Preserve HA's structured error code (e.g. ``not_found``) so callers
+                # can distinguish HA's authoritative verdict from a transient failure
+                # instead of only seeing the stringified message.
+                return {"success": False, "error": str(e), "error_code": getattr(e, "code", None)}
 
         return {"success": False, "error": "WebSocket request failed"}
 

@@ -221,9 +221,7 @@ class BlueprintTools:
             # full triggers/conditions/actions/sequence come from the ha_mcp_tools
             # component when installed. Merge it additively under `config`; without
             # the component the response stays metadata + inputs.
-            config = await self._blueprint_config_via_component(domain, path)
-            if config is not None:
-                result["config"] = config
+            await self._merge_blueprint_config(result, domain, path)
 
             return result
 
@@ -241,25 +239,48 @@ class BlueprintTools:
             )
             return None  # unreachable: exception_to_structured_error always raises
 
+    async def _merge_blueprint_config(
+        self, result: dict[str, Any], domain: str, path: str
+    ) -> None:
+        """Fetch the component-served blueprint body and merge it into ``result``.
+
+        Adds ``config`` when the body was read, or a top-level ``warnings`` entry
+        when a present component returned an unreadable body; a metadata-only
+        outcome (no component / capability) leaves ``result`` untouched.
+        """
+        config, config_warning = await self._blueprint_config_via_component(
+            domain, path
+        )
+        if config is not None:
+            result["config"] = config
+        elif config_warning is not None:
+            result.setdefault("warnings", []).append(config_warning)
+
     async def _blueprint_config_via_component(
         self, domain: str, path: str
-    ) -> dict[str, Any] | None:
-        """Fetch a blueprint's full parsed body via the component; ``None`` ⇒ metadata-only.
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Fetch a blueprint's full parsed body via the component.
 
         core's ``blueprint/list`` returns only ``{metadata}`` (no body), so
         without the component ``ha_get_blueprint`` can serve metadata + inputs
         only. When the component advertises ``blueprint_get`` it reads the on-disk
         blueprint file (path-jailed, executor-offloaded) and returns the full
-        parsed body, merged additively under ``config``. Returns ``None`` — keeping
-        the response metadata-only — when the component is absent / lacks the
-        capability, was downgraded (``unknown_command`` → invalidate the cached
-        caps), errored (logged), or could not read the file (jail reject, missing,
-        parse error → the component returns a null ``config``). The server has
-        already confirmed the path is a real installed blueprint before this runs.
+        parsed body, merged additively under ``config``. Returns
+        ``(config, warning)``:
+
+        - ``(dict, None)`` — the parsed body was read.
+        - ``(None, None)`` — metadata-only is the expected outcome: the component
+          is absent / lacks the capability, was downgraded (``unknown_command`` →
+          invalidate the cached caps), or errored (logged).
+        - ``(None, warning)`` — the component is present and the server has already
+          confirmed the path is a real installed blueprint, yet it returned a null
+          ``config`` (corrupt / unparseable file, read error). Metadata-only would
+          otherwise be indistinguishable from component-not-installed, so a
+          top-level warning is surfaced instead.
         """
         caps = await get_component_caps(self._client)
         if not component_supports(caps, "blueprint_get"):
-            return None
+            return None, None
         try:
             ws = await get_websocket_client(
                 url=self._client.base_url, token=self._client.token
@@ -275,10 +296,15 @@ class BlueprintTools:
                     "ha_mcp_tools/blueprint_get failed; served metadata-only: %r",
                     exc,
                 )
-            return None
+            return None, None
         result = raw.get("result") or {}
         config = result.get("config")
-        return config if isinstance(config, dict) else None
+        if isinstance(config, dict):
+            return config, None
+        return None, (
+            "Blueprint body could not be read or parsed by the ha_mcp_tools "
+            "component; returning metadata only"
+        )
 
     @tool(
         name="ha_import_blueprint",

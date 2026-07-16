@@ -182,10 +182,11 @@ def _build_entity_maps(
 async def _fetch_entity_rows(client: Any) -> list[dict[str, Any]]:
     """Entity-registry rows for the device<->entity maps; tolerant ([] on failure).
 
-    There is no per-device entity capability, so a device's entity list still
-    comes from the full ``config/entity_registry/list``. Entity-registry failure
-    is non-fatal (the caller just loses the entity list / hidden filter), matching
-    the prior concurrent-fetch behaviour.
+    ``device_list`` carries no per-device entity join (only ``device_get`` does),
+    so the full-detail list and the single-device legacy fallback still read the
+    whole ``config/entity_registry/list``. Entity-registry failure is non-fatal
+    (the caller just loses the entity list / hidden filter), matching the prior
+    concurrent-fetch behaviour.
     """
     entity_result = await client.send_websocket_message(
         {"type": "config/entity_registry/list"}
@@ -226,13 +227,48 @@ async def _fetch_device_rows(client: Any) -> list[dict[str, Any]]:
     return await _legacy_device_rows(client)
 
 
+# HA core replies with this error code (ERR_NOT_FOUND) from
+# ``config/entity_registry/get`` for a genuinely unknown entity. Any other failure
+# code is a transient / structural WS problem, NOT HA's "unknown entity" verdict.
+_ENTITY_NOT_FOUND_CODE = "not_found"
+
+
+async def _resolve_device_id_via_legacy(client: Any, entity_id: str) -> str:
+    """Resolve entity_id → device_id via the full ``config/entity_registry/list``.
+
+    The whole-registry scan :func:`_resolve_device_id_for_entity` replaced, kept as
+    the fallback for a transient failure of the targeted read so a real entity is
+    never misreported as nonexistent. Raises ENTITY_NOT_FOUND when the entity is
+    absent or carries no device (the same contract).
+    """
+    entity_to_device, _ = _build_entity_maps(
+        await _fetch_entity_rows(client), need_full=False
+    )
+    device_id = entity_to_device.get(entity_id)
+    if device_id:
+        return device_id
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.ENTITY_NOT_FOUND,
+            f"Entity '{entity_id}' not found or has no associated device",
+            suggestions=["Use ha_search() to find valid entity IDs"],
+            context={"entity_id": entity_id},
+        )
+    )
+    raise AssertionError  # unreachable: raise_tool_error is NoReturn
+
+
 async def _resolve_device_id_for_entity(client: Any, entity_id: str) -> str:
     """Resolve an entity_id to its device_id via a single native entity read.
 
     Uses HA's targeted ``config/entity_registry/get`` (one entity, no
-    whole-registry dump) rather than scanning the full entity registry. Raises
-    ENTITY_NOT_FOUND when the entity is missing or has no associated device (the
-    same contract the old full-map lookup produced).
+    whole-registry dump) rather than scanning the full entity registry. HA returns
+    ``success: false`` both for a genuinely unknown entity (error code
+    ``not_found``) AND for a transient failure, so the two are told apart by the
+    structured error code: ``not_found`` (or a successful read with no device)
+    raises ENTITY_NOT_FOUND — the same contract the old full-map lookup produced —
+    while any OTHER failure falls back to the legacy whole-registry read so a WS
+    hiccup never misreports a real entity as nonexistent.
     """
     result = await client.send_websocket_message(
         {"type": "config/entity_registry/get", "entity_id": entity_id}
@@ -241,6 +277,8 @@ async def _resolve_device_id_for_entity(client: Any, entity_id: str) -> str:
         device_id = (result.get("result") or {}).get("device_id")
         if device_id:
             return str(device_id)
+    elif result.get("error_code") != _ENTITY_NOT_FOUND_CODE:
+        return await _resolve_device_id_via_legacy(client, entity_id)
     raise_tool_error(
         create_error_response(
             ErrorCode.ENTITY_NOT_FOUND,

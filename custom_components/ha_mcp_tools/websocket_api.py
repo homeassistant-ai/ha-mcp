@@ -186,11 +186,6 @@ CAPABILITIES: list[str] = [
     "exposure",
 ]
 
-# Voice-assistant identifiers, mirrored from core's exposed_entities.KNOWN_ASSISTANTS
-# so ``exposure`` filters the same set core's ws_list_exposed_entities does. Order
-# is irrelevant (used as a membership set for the should_expose filter).
-KNOWN_ASSISTANTS = ("cloud.alexa", "cloud.google_assistant", "conversation")
-
 # Blueprint domains this component will read a body for. Mirrors core's blueprint
 # domains; the WS schema gates on it so an out-of-range domain never reaches the
 # path jail. Kept next to the blueprint command it governs.
@@ -2123,7 +2118,14 @@ def _do_states(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
         if state is None:
             missing.append(entity_id)
             continue
-        states[entity_id] = _state_as_dict(state)
+        as_dict = _state_as_dict(state)
+        if as_dict is None:
+            # A live state that could not be serialized (core drift) goes to
+            # ``missing`` rather than emitting a null state indistinguishable from
+            # a real value — the server maps ``missing`` onto its per-id contract.
+            missing.append(entity_id)
+            continue
+        states[entity_id] = as_dict
     return {"states": states, "missing": missing}
 
 
@@ -2333,6 +2335,11 @@ def _do_device_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, An
         repr_dict = _device_dict_repr(dev)
         if repr_dict is not None:
             out.append(repr_dict)
+        else:
+            _LOGGER.warning(
+                "device_list: skipping device %r with unavailable dict_repr",
+                getattr(dev, "id", None),
+            )
     return {"devices": out}
 
 
@@ -2491,9 +2498,10 @@ def _do_exposure(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
 def _entity_exposed_to(hass: HomeAssistant, entity_id: str) -> dict[str, bool]:
     """``{assistant: True}`` for the entity's ``should_expose``-true assistants.
 
-    Reads core's :func:`_async_get_entity_settings` and keeps only assistants whose
-    settings carry a truthy ``should_expose`` (guardrail 1 — the raw helper is not
-    pre-filtered like ``ws_list_exposed_entities``). A junk id whose helper raises
+    Reads core's ``async_get_entity_settings`` (via the local
+    :func:`_async_get_entity_settings` test-seam wrapper) and keeps only assistants
+    whose settings carry a truthy ``should_expose`` (guardrail 1 — the raw helper is
+    not pre-filtered like ``ws_list_exposed_entities``). A junk id whose helper raises
     ``HomeAssistantError("Unknown entity")`` degrades to ``{}`` (guardrail 2), the
     same not-exposed default the legacy path returns for an id it never listed.
     """
@@ -2609,9 +2617,15 @@ def _is_unknown_entity_error(exc: Exception) -> bool:
 
     Keyed off the exception type NAME (not an ``isinstance`` against the imported
     class) so the fake-hass suite — which stubs ``homeassistant.exceptions`` — can
-    raise a stand-in ``HomeAssistantError`` without importing the real class.
-    ``async_get_entity_settings`` raises ``HomeAssistantError`` only for an unknown
-    entity, so matching the type is precise enough to keep the guardrail from
-    masking an unrelated fault.
+    raise a stand-in ``HomeAssistantError`` without importing the real class. The
+    type name alone is too wide: core raises a plain ``HomeAssistantError`` for
+    other faults too, so the message is also required to carry ``unknown entity``
+    (case-insensitive). A store-read failure that raises a bare
+    ``HomeAssistantError`` therefore propagates instead of being silently reported
+    as not-exposed; the audit guardrail (junk id → not-exposed default) still
+    matches because that raise carries the ``Unknown entity`` message.
     """
-    return type(exc).__name__ == "HomeAssistantError"
+    return (
+        type(exc).__name__ == "HomeAssistantError"
+        and "unknown entity" in str(exc).lower()
+    )

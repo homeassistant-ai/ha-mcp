@@ -1,5 +1,6 @@
 """Unit tests for project_fields helper in util_helpers (issue #1199)."""
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -644,6 +645,55 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
         data = result
         for entity in data["entities"]:
             assert set(entity.keys()) == {"entity_id"}
+
+    @pytest.mark.asyncio
+    async def test_enrichment_healthy_reads_emit_no_warning(self, search_tool):
+        """Byte-parity guard: with every registry read succeeding, an enrichment
+        request adds no degraded-enrichment warning."""
+        data = await search_tool(query="light", result_fields=["entity_id", "area"])
+        assert not any(
+            "enrichment incomplete" in w for w in data.get("warnings", [])
+        ), f"healthy enrichment must not warn; got {data.get('warnings')}"
+
+
+class TestHaSearchEnrichmentDegraded(_SearchToolFixture):
+    """A failed registry read during result_fields enrichment surfaces a top-level
+    warning and logs, instead of silently emitting null area/floor/labels
+    indistinguishable from a genuinely-unassigned entity (silent-failure fix,
+    issue #1813 F1)."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(return_value=_MULTI_ENTITY_STATES)
+
+        async def _ws(msg):
+            # One registry read fails; every other read succeeds (empty).
+            if msg.get("type") == "config/area_registry/list":
+                return {"success": False, "error": "boom"}
+            return {"success": True, "result": []}
+
+        client.send_websocket_message = AsyncMock(side_effect=_ws)
+        return client
+
+    @pytest.mark.asyncio
+    async def test_degraded_enrichment_read_surfaces_warning(self, search_tool, caplog):
+        with caplog.at_level(logging.WARNING):
+            data = await search_tool(
+                query="light", result_fields=["entity_id", "area"]
+            )
+        # Records are still returned — enrichment never withholds results.
+        assert data["entities"], "entities must still be returned on a degraded join"
+        # The degradation is surfaced as a top-level warning...
+        assert any("enrichment incomplete" in w for w in data.get("warnings", [])), (
+            f"expected a degraded-enrichment warning; got {data.get('warnings')}"
+        )
+        # ...and logged, not silent.
+        assert any(
+            "result_fields_enrichment_failed" in r.getMessage() for r in caplog.records
+        )
 
 
 # Fuzzy results returned by smart_tools.smart_entity_search mock.

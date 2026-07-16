@@ -1788,6 +1788,22 @@ class TestStates:
         assert list(res["states"]) == ["light.a"]
         assert res["missing"] == []
 
+    def test_unserializable_state_goes_to_missing(self):
+        """A live state whose ``as_dict()`` returns None (core drift) is routed to
+        ``missing`` rather than emitting a null state indistinguishable from a real
+        value (issue #1813 F5)."""
+
+        class _NullState:
+            entity_id = "sensor.x"
+
+            def as_dict(self):
+                return None
+
+        res = wsapi._do_states(
+            FakeHass(states=[_NullState()]), {"entity_ids": ["sensor.x"]}
+        )
+        assert res == {"states": {}, "missing": ["sensor.x"]}
+
 
 # =============================================================================
 # blueprint_get — jailed file read, !input preserved, !secret neutralized
@@ -2449,7 +2465,7 @@ class TestDeviceList:
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         assert wsapi._do_device_list(FakeHass(), {}) == {"devices": []}
 
-    def test_skips_unserializable_entry(self, monkeypatch):
+    def test_skips_unserializable_entry(self, monkeypatch, caplog):
         class _BadDevice:
             id = "bad"
 
@@ -2463,8 +2479,14 @@ class TestDeviceList:
             "_resolve_registries",
             lambda h: make_view(devices=[_BadDevice(), good]),
         )
-        res = wsapi._do_device_list(FakeHass(), {})
+        with caplog.at_level(logging.WARNING):
+            res = wsapi._do_device_list(FakeHass(), {})
         assert [d["id"] for d in res["devices"]] == ["good"]
+        # The skip is logged (with the offending id), not silent (issue #1813 F5).
+        assert any(
+            "skipping device" in r.getMessage() and "bad" in r.getMessage()
+            for r in caplog.records
+        )
 
 
 # =============================================================================
@@ -2547,6 +2569,28 @@ class _UnknownEntityError(Exception):
 
 
 _UnknownEntityError.__name__ = "HomeAssistantError"
+
+
+class TestIsUnknownEntityError:
+    """``_is_unknown_entity_error`` matches ONLY core's 'Unknown entity' raise: the
+    type name alone is too wide, so a same-type store-read failure is not swallowed
+    (issue #1813 F4)."""
+
+    def test_matches_unknown_entity_message(self):
+        assert wsapi._is_unknown_entity_error(_UnknownEntityError("Unknown entity"))
+        # Case-insensitive, substring anywhere in the message.
+        assert wsapi._is_unknown_entity_error(
+            _UnknownEntityError("unknown entity light.x")
+        )
+
+    def test_rejects_same_type_other_message(self):
+        # Right type name, unrelated fault → NOT a match (must propagate).
+        assert not wsapi._is_unknown_entity_error(
+            _UnknownEntityError("settings store read failed")
+        )
+
+    def test_rejects_other_type_same_message(self):
+        assert not wsapi._is_unknown_entity_error(ValueError("Unknown entity"))
 
 
 # =============================================================================
@@ -2702,6 +2746,19 @@ class TestExposure:
         assert "state" not in info
         assert info["domain"] == "light"
         assert info["area"] == "Kitchen"
+
+    def test_non_unknown_ha_error_propagates(self, monkeypatch):
+        """A same-typed HomeAssistantError whose message is NOT 'unknown entity'
+        (e.g. a settings-store read failure) propagates instead of being silently
+        reported as not-exposed (issue #1813 F4)."""
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+
+        def boom(hass, entity_id):
+            raise _UnknownEntityError("settings store read failed")
+
+        monkeypatch.setattr(wsapi, "_async_get_entity_settings", boom)
+        with pytest.raises(_UnknownEntityError):
+            wsapi._do_exposure(FakeHass(states=[]), {"entity_id": "light.kitchen"})
 
     def test_list_mode_mirrors_ws_list(self, monkeypatch):
         """List mode walks the registry, keeps only exposed ids, enriches each."""

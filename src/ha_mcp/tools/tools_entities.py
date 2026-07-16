@@ -137,9 +137,10 @@ def _merge_entity_enrichment(
     The base record already carries ``area_id`` and label *ids* (``labels``); the
     component join adds the resolved, device-inherited NAMES under non-clobbering
     keys — ``area`` / ``floor`` / ``label_names`` — so nothing existing is
-    overwritten. ``aliases`` is already on the base record (identical value), so it
-    is not re-added. A ``None`` / empty enrichment is a no-op: on a capability miss
-    the fields are simply absent, leaving the legacy response shape unchanged.
+    overwritten. ``aliases`` is already on the base record (same set — the
+    component sorts, so ordering may differ — and the base value is authoritative),
+    so it is not re-added. A ``None`` / empty enrichment is a no-op: on a capability
+    miss the fields are simply absent, leaving the legacy response shape unchanged.
     """
     if not enrichment:
         return
@@ -1898,6 +1899,9 @@ class EntityTools:
           resolves area_id above)
         - floor: Floor NAME of the assigned area
         - label_names: Assigned label NAMES (resolves the label ids in labels)
+        Resolved label names live under label_names HERE (this tool's base
+        `labels` already carries the label ids); ha_search result_fields and
+        ha_get_entity_exposure instead emit the resolved names under `labels`.
         """
         try:
             # Resolver mode (unique_id) is mutually exclusive with entity_id.

@@ -198,6 +198,28 @@ async def test_single_missing_via_component_raises_not_found() -> None:
 
 
 @pytest.mark.asyncio
+async def test_malformed_states_payload_falls_back_to_legacy() -> None:
+    """A component payload whose ``states`` is not a dict (shape drift) is a None
+    miss → legacy per-id REST fetch serves the read (issue #1813 T3)."""
+    ws = make_ws(
+        "ha_mcp_tools/states",
+        info_result=_CAPS_STATES,
+        cmd_result={"states": ["not", "a", "dict"], "missing": []},
+    )
+    client = RoutingClient()
+    get_state = _build_get_state(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await get_state("light.a")
+
+    assert resp["data"]["entity_id"] == "light.a"
+    assert resp["data"]["state"] == "on"
+    # The component was tried once, but its malformed shape routed to legacy REST.
+    assert len(_states_calls(ws)) == 1
+    assert client.get_state_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_max_entities_enforced_regardless_of_backend() -> None:
     """Over-limit bulk call is rejected before any backend is touched."""
     ws = make_ws(

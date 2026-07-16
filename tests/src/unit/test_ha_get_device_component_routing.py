@@ -25,7 +25,10 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools import component_api, component_devices
-from ha_mcp.tools.tools_registry import register_registry_tools
+from ha_mcp.tools.tools_registry import (
+    _resolve_device_id_for_entity,
+    register_registry_tools,
+)
 
 from ._component_routing_helpers import make_ws, patch_ws
 
@@ -303,6 +306,66 @@ async def test_capsless_component_uses_legacy_registries() -> None:
     # Both registries came from the legacy WS path.
     assert client.device_list_calls == 1
     assert not _device_get_calls(ws)
+
+
+class _ResolveStubClient:
+    """Minimal client for ``_resolve_device_id_for_entity``: a controllable
+    ``config/entity_registry/get`` reply plus a legacy entity-registry list."""
+
+    def __init__(
+        self,
+        get_response: dict[str, Any],
+        entities: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.base_url = "http://ha.local:8123"
+        self.token = "tok"
+        self.verify_ssl = False
+        self._get_response = get_response
+        self._entities = list(entities or [])
+        self.entity_list_calls = 0
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        msg_type = msg.get("type")
+        if msg_type == "config/entity_registry/get":
+            return self._get_response
+        if msg_type == "config/entity_registry/list":
+            self.entity_list_calls += 1
+            return {"success": True, "result": list(self._entities)}
+        raise AssertionError(f"unexpected ws message {msg_type!r}")
+
+
+@pytest.mark.asyncio
+async def test_resolve_success_returns_device_id_no_dump() -> None:
+    """A successful targeted read returns the device_id without a registry dump."""
+    client = _ResolveStubClient({"success": True, "result": {"device_id": "dev-9"}})
+    assert await _resolve_device_id_for_entity(client, "light.x") == "dev-9"
+    assert client.entity_list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_resolve_not_found_code_raises_without_legacy_dump() -> None:
+    """HA's authoritative ``not_found`` code raises ENTITY_NOT_FOUND directly — no
+    wasteful whole-registry fallback (issue #1813 F3)."""
+    client = _ResolveStubClient(
+        {"success": False, "error_code": "not_found", "error": "Entity not found"}
+    )
+    with pytest.raises(ToolError) as excinfo:
+        await _resolve_device_id_for_entity(client, "sensor.ghost")
+    assert "sensor.ghost" in str(excinfo.value)
+    assert client.entity_list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_resolve_transient_failure_falls_back_to_legacy() -> None:
+    """A failure WITHOUT the ``not_found`` code is a transient WS hiccup, not HA's
+    'unknown entity' verdict: fall back to the legacy whole-registry read so a real
+    entity is not misreported as nonexistent (issue #1813 F3)."""
+    client = _ResolveStubClient(
+        {"success": False, "error": "WebSocket request failed"},
+        entities=[{"entity_id": "light.lr", "device_id": "dev-1"}],
+    )
+    assert await _resolve_device_id_for_entity(client, "light.lr") == "dev-1"
+    assert client.entity_list_calls == 1
 
 
 @pytest.mark.asyncio

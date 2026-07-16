@@ -802,6 +802,18 @@ def _ws_registry_index(resp: Any, key: str) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _ws_read_failed(resp: Any) -> bool:
+    """True when a gathered registry read raised or returned a non-success reply.
+
+    Mirrors the guard inside :func:`_ws_result_map` / :func:`_ws_registry_index`
+    (which quietly degrade a bad reply to an empty map). Surfacing the same
+    condition lets the enrichment join report the degradation instead of emitting
+    present-but-null area/floor/labels/aliases indistinguishable from a genuinely
+    unassigned entity.
+    """
+    return not (isinstance(resp, dict) and resp.get("success"))
+
+
 def _entity_enrichment_fields(
     entry: dict[str, Any],
     areas: dict[str, dict[str, Any]],
@@ -2276,7 +2288,7 @@ class SearchTools:
         entity_ids: list[str],
         requested: tuple[str, ...],
         prefetched_entries: dict[str, dict[str, Any]] | None = None,
-    ) -> dict[str, dict[str, Any]]:
+    ) -> tuple[dict[str, dict[str, Any]], list[str]]:
         """Join area/floor/label NAMES + aliases for entity_ids (legacy enrichment).
 
         Generalises the area-mode alias join (:meth:`_fetch_area_entity_entries`):
@@ -2290,11 +2302,14 @@ class SearchTools:
         ``prefetched_entries`` so no second ``get_entries`` round-trip is made.
         Each fetch is fault-tolerant (``return_exceptions=True`` + the ``_ws_*``
         guards degrade a failed list to an empty index), so a registry hiccup drops
-        that field to empty rather than failing the search. Returns
-        ``{entity_id: {requested field: value}}``.
+        that field to empty rather than failing the search — but a failed read is no
+        longer silent: it is logged and reported so the join does not emit
+        present-but-null fields indistinguishable from a genuinely unassigned
+        entity. Returns ``({entity_id: {requested field: value}}, warnings)`` where
+        ``warnings`` is non-empty only when a needed read failed.
         """
         if not entity_ids or not requested:
-            return {}
+            return {}, []
         need_names = bool(set(requested) & {"area", "floor", "labels"})
         coros: list[Any] = []
         if prefetched_entries is None:
@@ -2317,47 +2332,82 @@ class SearchTools:
                 )
             )
         fetched = await asyncio.gather(*coros, return_exceptions=True)
+        for item in fetched:
+            # A cancelled read must propagate, not degrade to an empty field.
+            if isinstance(item, asyncio.CancelledError):
+                raise item
+        failed_reads: list[str] = []
         if prefetched_entries is None:
+            if _ws_read_failed(fetched[0]):
+                failed_reads.append("entity registry entries")
             entries = _ws_result_map(fetched[0])
             names = fetched[1:]
         else:
             entries = prefetched_entries
             names = fetched
+        if need_names:
+            failed_reads.extend(
+                label
+                for label, resp in zip(
+                    ("area registry", "floor registry", "label registry", "device registry"),
+                    names,
+                    strict=True,
+                )
+                if _ws_read_failed(resp)
+            )
         areas = _ws_registry_index(names[0], "area_id") if need_names else {}
         floors = _ws_registry_index(names[1], "floor_id") if need_names else {}
         labels = _ws_registry_index(names[2], "label_id") if need_names else {}
         devices = _ws_registry_index(names[3], "id") if need_names else {}
-        return {
+        enrichment = {
             eid: _entity_enrichment_fields(
                 entries.get(eid) or {}, areas, floors, labels, devices, requested
             )
             for eid in entity_ids
         }
+        warnings: list[str] = []
+        if failed_reads:
+            logger.warning(
+                "result_fields_enrichment_failed: %d registry read(s) failed (%s) "
+                "for %d entities; area/floor/labels/aliases may be incomplete",
+                len(failed_reads),
+                ", ".join(failed_reads),
+                len(entity_ids),
+            )
+            warnings.append(
+                "result_fields enrichment incomplete: one or more registry reads "
+                "failed, so area/floor/labels/aliases may be missing or empty for "
+                "some entities"
+            )
+        return enrichment, warnings
 
     async def _maybe_enrich_entity_records(
         self,
         records: list[dict[str, Any]],
         parsed_result_fields: list[str] | None,
         prefetched_entries: dict[str, dict[str, Any]] | None = None,
-    ) -> None:
+    ) -> list[str]:
         """Add requested area/floor/labels/aliases to entity records in place (opt-in).
 
         A no-op unless ``result_fields`` names an enrichment field, so the default
         search pays nothing. Records are mutated in place, so a ``by_domain`` view
         built from the same dicts before projection is enriched too. Applied before
         the ``result_fields`` projection so the requested enrichment keys survive
-        it. Never withholds results: a failed enrichment fetch just leaves the
-        fields absent. ``prefetched_entries`` lets a caller that already fetched
-        the registry entries (area mode's haystack fetch) avoid a duplicate
-        ``get_entries`` round-trip.
+        it. Never withholds results: a failed registry read leaves the enrichment
+        fields empty and returns a warning (which the caller surfaces at the top
+        level) rather than silently emitting null fields. ``prefetched_entries``
+        lets a caller that already fetched the registry entries (area mode's
+        haystack fetch) avoid a duplicate ``get_entries`` round-trip. Returns any
+        degraded-enrichment warnings (empty on the happy path or when enrichment is
+        not requested).
         """
         requested = _requested_enrichment(parsed_result_fields)
         if not requested or not records:
-            return
+            return []
         entity_ids: list[str] = [
             r["entity_id"] for r in records if isinstance(r.get("entity_id"), str)
         ]
-        enrichment = await self._fetch_entity_enrichment(
+        enrichment, warnings = await self._fetch_entity_enrichment(
             entity_ids, requested, prefetched_entries
         )
         for record in records:
@@ -2366,6 +2416,7 @@ class SearchTools:
                 fields = enrichment.get(eid)
                 if fields:
                     record.update(fields)
+        return warnings
 
     async def _fetch_area_entity_entries(
         self,
@@ -2503,7 +2554,7 @@ class SearchTools:
                 "fuzzy-search dataset and may yield empty pages"
             )
 
-        await self._maybe_enrich_entity_records(
+        enrich_warnings = await self._maybe_enrich_entity_records(
             results, parsed_result_fields, prefetched_entries=entries_map
         )
         _apply_by_domain_grouping(
@@ -2514,6 +2565,7 @@ class SearchTools:
             parsed_result_fields,
         )
         _apply_result_fields_to_response(search_data, parsed_result_fields)
+        merge_visibility_warnings(search_data, enrich_warnings)
 
         # No add_timezone_metadata: entity records carry no timestamp fields, so
         # the enrichment converted nothing and its /api/config fetch was pure
@@ -2584,7 +2636,9 @@ class SearchTools:
                 f"No {domain_filter} entities found in area: {area_filter}"
             )
 
-        await self._maybe_enrich_entity_records(paginated, parsed_result_fields)
+        enrich_warnings = await self._maybe_enrich_entity_records(
+            paginated, parsed_result_fields
+        )
         _apply_by_domain_grouping(
             area_search_data,
             paginated,
@@ -2593,6 +2647,7 @@ class SearchTools:
             parsed_result_fields,
         )
         _apply_result_fields_to_response(area_search_data, parsed_result_fields)
+        merge_visibility_warnings(area_search_data, enrich_warnings)
 
         # No add_timezone_metadata — see _search_area_with_query.
         return area_search_data
@@ -2747,7 +2802,9 @@ class SearchTools:
         if state_filter is not None:
             domain_list_data["state_filter"] = state_filter
 
-        await self._maybe_enrich_entity_records(results, parsed_result_fields)
+        enrich_warnings = await self._maybe_enrich_entity_records(
+            results, parsed_result_fields
+        )
         _apply_result_fields_to_response(domain_list_data, parsed_result_fields)
         if group_by_domain_bool:
             domain_list_data["by_domain"] = _build_domain_only_by_domain(
@@ -2755,7 +2812,9 @@ class SearchTools:
             )
 
         # No add_timezone_metadata — see _search_area_with_query.
-        return merge_visibility_warnings(domain_list_data, visibility_warnings)
+        return merge_visibility_warnings(
+            domain_list_data, [*visibility_warnings, *enrich_warnings]
+        )
 
     async def _search_regular(
         self,
@@ -2854,7 +2913,7 @@ class SearchTools:
                 "fuzzy-search dataset and may yield empty pages"
             )
 
-        await self._maybe_enrich_entity_records(
+        enrich_warnings = await self._maybe_enrich_entity_records(
             result.get("results", []), parsed_result_fields
         )
         _apply_by_domain_grouping(
@@ -2873,6 +2932,7 @@ class SearchTools:
             result["partial"] = True
 
         _apply_result_fields_to_response(result, parsed_result_fields)
+        merge_visibility_warnings(result, enrich_warnings)
 
         # No add_timezone_metadata — see _search_area_with_query.
         return result
