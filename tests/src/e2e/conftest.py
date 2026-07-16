@@ -1450,7 +1450,12 @@ def _blueprint_http_server():
     logger.info(f"🌐 Blueprint HTTP server on :{port}, container URL: {base_url}")
 
     try:
-        yield {"base_url": base_url, "port": port, "extra_hosts": env["extra_hosts"]}
+        yield {
+            "base_url": base_url,
+            "port": port,
+            "extra_hosts": env["extra_hosts"],
+            "local_dir": str(assets_dir),
+        }
     finally:
         srv.shutdown()
 
@@ -1471,6 +1476,7 @@ def _copy_local_blueprint_to_www(config_path: Path) -> dict[str, str]:
     return {
         "base_url": "http://localhost:8123/local",
         "filename": blueprint_name,
+        "local_dir": str(www_dir),
     }
 
 

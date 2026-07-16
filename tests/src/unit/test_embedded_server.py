@@ -197,6 +197,62 @@ class TestConstruction:
         assert mgr._pip_spec == "ha-mcp @ https://example/tarball.tgz"
 
 
+class TestLoopbackDerivation:
+    """Issue #1890: the default loopback URL honors the http integration's real
+    port and SSL configuration (``hass.config.api``) instead of hardcoding
+    ``http://127.0.0.1:8123`` — which spoke plaintext into a TLS socket on any
+    instance with ``http.ssl_certificate`` configured, killing every HA
+    round-trip while the MCP handshake kept working."""
+
+    def test_no_api_object_falls_back_to_constant(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = None
+        assert es._derive_loopback_url(hass) == ("http://127.0.0.1:8123", None)
+
+    def test_ssl_enabled_derives_https_with_verify_off(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8123, use_ssl=True)
+        assert es._derive_loopback_url(hass) == ("https://127.0.0.1:8123", False)
+
+    def test_custom_port_is_honored(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8444, use_ssl=False)
+        assert es._derive_loopback_url(hass) == ("http://127.0.0.1:8444", None)
+
+    def test_unusable_port_falls_back_to_8123(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=object(), use_ssl=True)
+        assert es._derive_loopback_url(hass) == ("https://127.0.0.1:8123", False)
+
+    def test_manager_derives_when_no_override(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8443, use_ssl=True)
+        mgr = es.EmbeddedServerManager(hass, _make_entry())
+        assert mgr._server_url == "https://127.0.0.1:8443"
+        assert mgr._loopback_verify_ssl is False
+
+    def test_manager_explicit_override_wins_verbatim(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8443, use_ssl=True)
+        mgr = es.EmbeddedServerManager(
+            hass, _make_entry(options={OPT_SERVER_URL: "http://ha.local:8123/"})
+        )
+        assert mgr._server_url == "http://ha.local:8123"
+        assert mgr._loopback_verify_ssl is None
+
+    def test_manager_treats_stored_default_as_no_override(self, tmp_path):
+        # Older options forms pre-filled DEFAULT_LOOPBACK_URL as
+        # suggested_value, so entries whose owner never chose an override
+        # carry it verbatim — it must not pin the scheme/port.
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8123, use_ssl=True)
+        mgr = es.EmbeddedServerManager(
+            hass, _make_entry(options={OPT_SERVER_URL: "http://127.0.0.1:8123"})
+        )
+        assert mgr._server_url == "https://127.0.0.1:8123"
+        assert mgr._loopback_verify_ssl is False
+
+
 class TestChannelResolution:
     def test_default_channel_is_stable_unpinned(self, tmp_path):
         mgr, _hass, _entry = _manager(tmp_path)
@@ -1067,6 +1123,56 @@ class TestThreadEnvStaging:
         set_conn.assert_called_once_with("http://ha.local:8123", "tok-xyz")
         # _serve raised on the ha_mcp.server import → captured, thread didn't hang.
         assert mgr._thread_exc is not None
+
+    def test_serve_passes_verify_ssl_for_derived_https_loopback(
+        self, tmp_path, monkeypatch
+    ):
+        # Issue #1890 end-to-end: an SSL-enabled instance (no URL override)
+        # must register the derived https loopback WITH verify_ssl=False —
+        # dropping the kwarg would re-introduce the cert-verification failure
+        # the derivation exists to fix.
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8123, use_ssl=True)
+        mgr = es.EmbeddedServerManager(hass, _make_entry())
+        set_conn = MagicMock(name="set_embedded_connection")
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_config = ModuleType("ha_mcp.config")
+        ha_mcp_config.set_embedded_connection = set_conn
+        monkeypatch.setitem(sys.modules, "ha_mcp", ha_mcp_mod)
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", ha_mcp_config)
+        monkeypatch.delitem(sys.modules, "ha_mcp.server", raising=False)
+
+        mgr._thread_main("tok-xyz")
+
+        set_conn.assert_called_once_with(
+            "https://127.0.0.1:8123", "tok-xyz", verify_ssl=False
+        )
+
+    def test_serve_falls_back_to_two_arg_registration_on_old_server(
+        self, tmp_path, monkeypatch
+    ):
+        # An installed server predating the verify_ssl parameter rejects the
+        # three-arg call with TypeError; the manager must fall back to the
+        # legacy two-arg registration (still starts, TLS verification stays
+        # on) instead of crashing the worker thread.
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8123, use_ssl=True)
+        mgr = es.EmbeddedServerManager(hass, _make_entry())
+        calls: list[tuple[str, str]] = []
+
+        def old_set_conn(url, token):  # 2-arg signature: verify_ssl= raises
+            calls.append((url, token))
+
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_config = ModuleType("ha_mcp.config")
+        ha_mcp_config.set_embedded_connection = old_set_conn
+        monkeypatch.setitem(sys.modules, "ha_mcp", ha_mcp_mod)
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", ha_mcp_config)
+        monkeypatch.delitem(sys.modules, "ha_mcp.server", raising=False)
+
+        mgr._thread_main("tok-xyz")
+
+        assert calls == [("https://127.0.0.1:8123", "tok-xyz")]
 
     def test_serve_resets_cached_settings_before_registering_connection(
         self, tmp_path, monkeypatch

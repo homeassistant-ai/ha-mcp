@@ -218,3 +218,37 @@ class TestEmbeddedConnection:
         assert config.get_global_settings().homeassistant_url == (
             "http://127.0.0.1:8123"
         )
+
+    def test_verify_ssl_false_applies_to_settings(self):
+        # Issue #1890: on an SSL-enabled HA the component derives an
+        # https://127.0.0.1 loopback URL whose certificate can never verify
+        # (issued for the hostname, not 127.0.0.1) — the component passes
+        # verify_ssl=False alongside it.
+        config.set_embedded_connection(
+            "https://127.0.0.1:8123", "tok123", verify_ssl=False
+        )
+        settings = config.Settings(_env_file=None)
+        config._apply_embedded_connection(settings)
+        assert settings.homeassistant_url == "https://127.0.0.1:8123"
+        assert settings.verify_ssl is False
+
+    def test_verify_ssl_default_leaves_settings_alone(self):
+        # A pre-#1890 component (or a plaintext loopback) registers only
+        # url+token; Settings.verify_ssl keeps its own resolution (default
+        # True, or whatever HA_VERIFY_SSL/the override file said).
+        config.set_embedded_connection("http://127.0.0.1:8123", "tok123")
+        settings = config.Settings(_env_file=None)
+        config._apply_embedded_connection(settings)
+        assert settings.verify_ssl is True
+
+    def test_verify_ssl_reregistration_without_flag_clears_it(self):
+        # Re-registering without the flag (e.g. the entry reloads with the
+        # override URL restored to plain http) must not keep forcing the old
+        # verify_ssl=False onto rebuilt Settings.
+        config.set_embedded_connection(
+            "https://127.0.0.1:8123", "tok123", verify_ssl=False
+        )
+        config.set_embedded_connection("http://127.0.0.1:8123", "tok123")
+        settings = config.Settings(_env_file=None)
+        config._apply_embedded_connection(settings)
+        assert settings.verify_ssl is True

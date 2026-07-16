@@ -222,3 +222,30 @@ jobs:
       RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
     permissions:
       contents: write
+
+  # Publish the hotfix to PyPI / server Docker images / MCPB. Hotfix releases
+  # never reached release-publish.yml before: its workflow_run trigger listens
+  # only for "SemVer Release", and adding this workflow there wouldn't help —
+  # the workflow_run branches filter matches this run's HEAD branch (hotfix/*,
+  # not master). That gap is how v7.12.2/v7.12.3 shipped on GitHub/HACS while
+  # PyPI stayed at 7.12.1, so stable-channel pip installs silently never
+  # received them (issue #1889/#1890 investigation fallout).
+  #
+  # An explicit workflow_dispatch (the sanctioned way to chain workflows with
+  # GITHUB_TOKEN) is also semantically right: release-publish's guard FORCES a
+  # republish of the latest stable tag on manual dispatch, whereas its
+  # workflow_run path refuses to publish while master carries unreleased
+  # feat/fix commits — which is precisely the normal state of master when a
+  # hotfix goes out.
+  trigger-release-publish:
+    name: Trigger Release Publish
+    needs: semantic-release
+    if: needs.semantic-release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch release-publish.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-publish.yml --repo "$GITHUB_REPOSITORY" --ref master

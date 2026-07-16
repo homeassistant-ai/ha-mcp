@@ -1440,10 +1440,12 @@ _settings: Settings | None = None
 # THROUGH THIS DICT — never
 # via os.environ — so the admin token can't be read from the shared HA process
 # environment. Applied onto the Settings singleton in ``get_global_settings``.
-_EMBEDDED_CONNECTION: dict[str, str] = {}
+_EMBEDDED_CONNECTION: dict[str, str | bool] = {}
 
 
-def set_embedded_connection(url: str, token: str) -> None:
+def set_embedded_connection(
+    url: str, token: str, verify_ssl: bool | None = None
+) -> None:
     """Register the in-process HA connection for embedded mode.
 
     Embedded-mode only: called by the ha_mcp_tools custom component's in-process
@@ -1459,9 +1461,20 @@ def set_embedded_connection(url: str, token: str) -> None:
     Registration therefore cannot assume it runs before the first build — the
     integration imports this function from the very package whose import
     creates the singleton.
+
+    ``verify_ssl`` lets the component disable certificate verification when it
+    derives an ``https://127.0.0.1`` loopback URL from Home Assistant's SSL
+    config (issue #1890): HA's certificate is issued for its hostname, never
+    for 127.0.0.1, so verification on the loopback connection can only fail.
+    ``None`` (the default, and what pre-#1890 components pass implicitly)
+    leaves ``Settings.verify_ssl`` alone.
     """
     _EMBEDDED_CONNECTION["url"] = url
     _EMBEDDED_CONNECTION["token"] = token
+    if verify_ssl is None:
+        _EMBEDDED_CONNECTION.pop("verify_ssl", None)
+    else:
+        _EMBEDDED_CONNECTION["verify_ssl"] = verify_ssl
     if _settings is not None:
         _apply_embedded_connection(_settings)
 
@@ -1764,7 +1777,7 @@ def _apply_backup_overrides(settings: "Settings") -> None:
 
 
 def _apply_embedded_connection(settings: "Settings") -> None:
-    """Apply the in-process embedded HA connection (url/token) if registered.
+    """Apply the in-process embedded HA connection (url/token/verify_ssl) if registered.
 
     No-op outside embedded mode. Plain ``setattr`` (``validate_assignment`` is off
     on ``Settings``, mirroring ``_apply_backup_overrides``), so the loopback URL
@@ -1773,10 +1786,13 @@ def _apply_embedded_connection(settings: "Settings") -> None:
     """
     url = _EMBEDDED_CONNECTION.get("url")
     token = _EMBEDDED_CONNECTION.get("token")
-    if url:
+    if isinstance(url, str) and url:
         settings.homeassistant_url = url.rstrip("/")
-    if token:
+    if isinstance(token, str) and token:
         settings.homeassistant_token = token
+    verify_ssl = _EMBEDDED_CONNECTION.get("verify_ssl")
+    if isinstance(verify_ssl, bool):
+        settings.verify_ssl = verify_ssl
 
 
 def get_global_settings() -> Settings:

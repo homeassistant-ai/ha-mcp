@@ -510,7 +510,9 @@ class TestServerOptionsFlow:
             const.OPT_BIND_HOST: const.BIND_HOST_ALL,
             const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
             const.OPT_PIP_SPEC: "ha-mcp @ https://example/x.tgz",  # real override
-            const.OPT_SERVER_URL: const.DEFAULT_LOOPBACK_URL,
+            # A REAL URL override — DEFAULT_LOOPBACK_URL would be normalized
+            # away (see test_server_url_default_loopback_normalized_away).
+            const.OPT_SERVER_URL: "http://ha.internal:8123",
         }
         result = asyncio.run(flow.async_step_init(user_input))
         assert result["type"] == "entry"
@@ -567,6 +569,22 @@ class TestServerOptionsFlow:
         )
         assert result["data"][const.OPT_SERVER_URL] == "http://ha.local:8123"
 
+    def test_server_url_default_loopback_normalized_away(self):
+        # Older forms pre-filled DEFAULT_LOOPBACK_URL as suggested_value, so a
+        # plain options save stored it as an explicit override. Persisting it
+        # would pin the plaintext scheme and port, defeating the SSL/port-aware
+        # loopback derivation (issue #1890) — collapse it to "no override".
+        flow = _make_options_flow()
+        result = asyncio.run(
+            flow.async_step_init(
+                {
+                    const.OPT_CHANNEL: const.CHANNEL_STABLE,
+                    const.OPT_SERVER_URL: const.DEFAULT_LOOPBACK_URL + "/",
+                }
+            )
+        )
+        assert const.OPT_SERVER_URL not in result["data"]
+
     def test_pip_spec_field_empty_when_no_override(self):
         # The "leave blank to follow the channel" field must actually BE
         # blank when no override is stored — pre-filling the default dist
@@ -577,6 +595,18 @@ class TestServerOptionsFlow:
         form = asyncio.run(flow.async_step_init(None))
         marker = next(
             m for m in form["data_schema"].schema if m.schema == const.OPT_PIP_SPEC
+        )
+        assert marker.description["suggested_value"] == ""
+
+    def test_server_url_field_empty_when_no_override(self):
+        # Same pattern as pip_spec above: pre-filling DEFAULT_LOOPBACK_URL made
+        # every options save persist the constant as an explicit override,
+        # pinning the plaintext scheme/port that the #1890 loopback derivation
+        # replaces. No override stored -> empty field.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        marker = next(
+            m for m in form["data_schema"].schema if m.schema == const.OPT_SERVER_URL
         )
         assert marker.description["suggested_value"] == ""
 

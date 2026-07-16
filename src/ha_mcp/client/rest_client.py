@@ -1454,11 +1454,18 @@ class HomeAssistantClient:
                             ],
                         }
 
-                logger.error(f"WebSocket message failed: {e}")
+                # Name the command in the log line: a bare "Command failed:
+                # Unknown command." is undiagnosable from a user's log
+                # (issue #1889 took a live reproduction to attribute).
+                logger.error(f"WebSocket message failed ({message.get('type')}): {e}")
                 # Preserve HA's structured error code (e.g. ``not_found``) so callers
                 # can distinguish HA's authoritative verdict from a transient failure
                 # instead of only seeing the stringified message.
-                return {"success": False, "error": str(e), "error_code": getattr(e, "code", None)}
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "error_code": getattr(e, "code", None),
+                }
 
         return {"success": False, "error": "WebSocket request failed"}
 
