@@ -1124,6 +1124,56 @@ class TestThreadEnvStaging:
         # _serve raised on the ha_mcp.server import → captured, thread didn't hang.
         assert mgr._thread_exc is not None
 
+    def test_serve_passes_verify_ssl_for_derived_https_loopback(
+        self, tmp_path, monkeypatch
+    ):
+        # Issue #1890 end-to-end: an SSL-enabled instance (no URL override)
+        # must register the derived https loopback WITH verify_ssl=False —
+        # dropping the kwarg would re-introduce the cert-verification failure
+        # the derivation exists to fix.
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8123, use_ssl=True)
+        mgr = es.EmbeddedServerManager(hass, _make_entry())
+        set_conn = MagicMock(name="set_embedded_connection")
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_config = ModuleType("ha_mcp.config")
+        ha_mcp_config.set_embedded_connection = set_conn
+        monkeypatch.setitem(sys.modules, "ha_mcp", ha_mcp_mod)
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", ha_mcp_config)
+        monkeypatch.delitem(sys.modules, "ha_mcp.server", raising=False)
+
+        mgr._thread_main("tok-xyz")
+
+        set_conn.assert_called_once_with(
+            "https://127.0.0.1:8123", "tok-xyz", verify_ssl=False
+        )
+
+    def test_serve_falls_back_to_two_arg_registration_on_old_server(
+        self, tmp_path, monkeypatch
+    ):
+        # An installed server predating the verify_ssl parameter rejects the
+        # three-arg call with TypeError; the manager must fall back to the
+        # legacy two-arg registration (still starts, TLS verification stays
+        # on) instead of crashing the worker thread.
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8123, use_ssl=True)
+        mgr = es.EmbeddedServerManager(hass, _make_entry())
+        calls: list[tuple[str, str]] = []
+
+        def old_set_conn(url, token):  # 2-arg signature: verify_ssl= raises
+            calls.append((url, token))
+
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_config = ModuleType("ha_mcp.config")
+        ha_mcp_config.set_embedded_connection = old_set_conn
+        monkeypatch.setitem(sys.modules, "ha_mcp", ha_mcp_mod)
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", ha_mcp_config)
+        monkeypatch.delitem(sys.modules, "ha_mcp.server", raising=False)
+
+        mgr._thread_main("tok-xyz")
+
+        assert calls == [("https://127.0.0.1:8123", "tok-xyz")]
+
     def test_serve_resets_cached_settings_before_registering_connection(
         self, tmp_path, monkeypatch
     ):

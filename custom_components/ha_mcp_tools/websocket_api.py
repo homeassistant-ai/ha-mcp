@@ -692,8 +692,16 @@ def _entity_record(state: Any, view: _RegistryView) -> dict[str, Any]:
     friendly = attrs.get("friendly_name", entity_id)
 
     reg = _reg_entity(view, entity_id)
+    # String entries only: HA core's aliases can carry the COMPUTED_NAME
+    # sentinel (entity_registry.ComputedNameType._singleton, "the computed
+    # entity name is an alias"). Blind str() published it as a literal
+    # "ComputedNameType._singleton" alias on every carrying entity — fake data
+    # in results AND a scored match_text. The name it stands for is already
+    # matched via ``friendly``, so dropping the sentinel loses nothing.
     aliases = (
-        sorted(str(a) for a in (getattr(reg, "aliases", None) or [])) if reg else []
+        sorted(a for a in (getattr(reg, "aliases", None) or []) if isinstance(a, str))
+        if reg
+        else []
     )
     area_id = getattr(reg, "area_id", None) if reg else None
     device_id = getattr(reg, "device_id", None) if reg else None

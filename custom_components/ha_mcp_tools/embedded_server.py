@@ -139,6 +139,13 @@ def _derive_loopback_url(hass: HomeAssistant) -> tuple[str, bool | None]:
     """
     api = getattr(hass.config, "api", None)
     if api is None:
+        # Leave a trail: if this ever fires on a real instance, the resulting
+        # failure looks exactly like issue #1890 (TLS loopback broken, MCP
+        # handshake fine) and took a live reproduction to diagnose last time.
+        _LOGGER.debug(
+            "hass.config.api unavailable; using hardcoded loopback default %s",
+            DEFAULT_LOOPBACK_URL,
+        )
         return DEFAULT_LOOPBACK_URL, None
     # Strict type checks (not coercion / truthiness): a malformed api object
     # must resolve to the plaintext default on port 8123, never to a surprise

@@ -1777,7 +1777,7 @@ def _apply_backup_overrides(settings: "Settings") -> None:
 
 
 def _apply_embedded_connection(settings: "Settings") -> None:
-    """Apply the in-process embedded HA connection (url/token) if registered.
+    """Apply the in-process embedded HA connection (url/token/verify_ssl) if registered.
 
     No-op outside embedded mode. Plain ``setattr`` (``validate_assignment`` is off
     on ``Settings``, mirroring ``_apply_backup_overrides``), so the loopback URL

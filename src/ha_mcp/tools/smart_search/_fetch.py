@@ -1,4 +1,4 @@
-"""Shared 3-tier config fetching and entry scoring for deep search."""
+"""Shared two-tier config fetching (bulk REST, then budgeted per-id) for deep search."""
 
 import asyncio
 import logging
@@ -35,7 +35,7 @@ def is_timeout_error(exc: BaseException) -> bool:
 
 
 class ConfigFetchMixin(ScoringMixin):
-    """REST/WebSocket bulk + budgeted individual config fetch, and scoring of fetched entries."""
+    """REST bulk + budgeted individual config fetch, and scoring of fetched entries."""
 
     @staticmethod
     def _index_configs(
