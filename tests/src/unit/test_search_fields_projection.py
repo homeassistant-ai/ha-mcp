@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_search import register_search_tools
+from ha_mcp.tools.tools_search import _entity_enrichment_fields, register_search_tools
 from ha_mcp.tools.util_helpers import project_fields
 
 
@@ -783,3 +783,98 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
         assert "entities" in data
         # entity_total_matches is also force-retained (in _ALWAYS_KEEP_PROJECTION).
         assert "entity_total_matches" in data
+
+
+class TestEntityEnrichmentAliasSentinel:
+    """The legacy ``result_fields`` enrichment must drop the COMPUTED_NAME alias
+    sentinel (serialized ``null`` over the WS registry read) rather than emit the
+    literal string ``"None"`` — the component's join filters non-strings, so a blind
+    ``str()`` cast desynced the two paths and exposed a bogus alias (Codex P3)."""
+
+    def test_null_alias_sentinel_is_dropped_not_stringified(self):
+        entry = {"aliases": ["Kitchen", None, "Cocina"]}
+        fields = _entity_enrichment_fields(entry, {}, {}, {}, {}, ("aliases",))
+        assert fields["aliases"] == ["Cocina", "Kitchen"]
+        assert "None" not in fields["aliases"]
+
+    def test_all_string_aliases_unaffected(self):
+        entry = {"aliases": ["b", "a"]}
+        fields = _entity_enrichment_fields(entry, {}, {}, {}, {}, ("aliases",))
+        assert fields["aliases"] == ["a", "b"]
+
+    def test_missing_aliases_key_yields_empty(self):
+        fields = _entity_enrichment_fields({}, {}, {}, {}, {}, ("aliases",))
+        assert fields["aliases"] == []
+
+
+class TestHaSearchAreaQueryPrefetchFailure(_SearchToolFixture):
+    """A FAILED entity-registry prefetch in the area+query branch must surface the
+    degraded-enrichment warning, not collapse to an empty map that bypasses it.
+
+    The prefetch (``config/entity_registry/get_entries`` for the alias haystack) is
+    reused as ``prefetched_entries`` for opt-in enrichment. When it fails it now
+    returns ``None`` (vs an empty-but-successful ``{}``), so the enrichment re-fetches
+    and reports the failure instead of silently emitting null area/floor/labels
+    indistinguishable from a genuinely-unassigned entity (Codex P2)."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(return_value=_MULTI_ENTITY_STATES)
+
+        async def _ws(msg):
+            # The entity-registry entries read (prefetch AND enrichment re-fetch)
+            # fails; every other registry read succeeds (empty).
+            if msg.get("type") == "config/entity_registry/get_entries":
+                return {"success": False, "error": "boom"}
+            return {"success": True, "result": []}
+
+        client.send_websocket_message = AsyncMock(side_effect=_ws)
+        return client
+
+    @pytest.fixture
+    def mock_smart_tools(self):
+        smart = MagicMock()
+        smart.get_entities_by_area = AsyncMock(
+            return_value={
+                "areas": {
+                    "kitchen": {
+                        "area_name": "Kitchen",
+                        "entities": {
+                            "light": [
+                                {
+                                    "entity_id": "light.kitchen",
+                                    "friendly_name": "Kitchen Light",
+                                    "state": "on",
+                                    "_hidden_by": None,
+                                }
+                            ],
+                        },
+                    }
+                }
+            }
+        )
+        return smart
+
+    @pytest.mark.asyncio
+    async def test_failed_prefetch_surfaces_enrichment_warning(
+        self, search_tool, caplog
+    ):
+        with caplog.at_level(logging.WARNING):
+            data = await search_tool(
+                query="kitchen",
+                area_filter="kitchen",
+                result_fields=["entity_id", "area"],
+            )
+        assert data["search_type"] == "area_filtered_query"
+        # Records are still returned — enrichment never withholds results.
+        assert data["entities"], "entities must still be returned on a degraded join"
+        # The failed prefetch is surfaced as a top-level warning, not swallowed.
+        assert any("enrichment incomplete" in w for w in data.get("warnings", [])), (
+            f"expected a degraded-enrichment warning; got {data.get('warnings')}"
+        )
+        assert any(
+            "result_fields_enrichment_failed" in r.getMessage() for r in caplog.records
+        )

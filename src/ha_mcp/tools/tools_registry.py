@@ -194,6 +194,29 @@ async def _fetch_entity_rows(client: Any) -> list[dict[str, Any]]:
     return entity_result.get("result", []) if entity_result.get("success") else []
 
 
+async def _strict_entity_rows(client: Any) -> list[dict[str, Any]]:
+    """Full entity registry; raises SERVICE_CALL_FAILED on a failed read.
+
+    The device-id resolver's fallback read. Unlike the tolerant
+    :func:`_fetch_entity_rows` (whose callers treat a missing entity list as a
+    non-fatal degrade), a failed read here MUST surface as a service failure rather
+    than collapse to ``[]`` — otherwise the resolver would misreport a real entity
+    as ENTITY_NOT_FOUND when the read itself failed (a double transient failure:
+    the targeted ``get`` failed, then this fallback list failed too).
+    """
+    entity_result = await client.send_websocket_message(
+        {"type": "config/entity_registry/list"}
+    )
+    if not entity_result.get("success"):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to access entity registry: {entity_result.get('error', 'Unknown error')}",
+            )
+        )
+    return list(entity_result.get("result", []))
+
+
 async def _legacy_device_rows(client: Any) -> list[dict[str, Any]]:
     """Full device registry via the legacy ``config/device_registry/list``.
 
@@ -238,11 +261,14 @@ async def _resolve_device_id_via_legacy(client: Any, entity_id: str) -> str:
 
     The whole-registry scan :func:`_resolve_device_id_for_entity` replaced, kept as
     the fallback for a transient failure of the targeted read so a real entity is
-    never misreported as nonexistent. Raises ENTITY_NOT_FOUND when the entity is
-    absent or carries no device (the same contract).
+    never misreported as nonexistent. Uses the STRICT list read so a failure of
+    THIS fallback surfaces as a service failure rather than an empty list that would
+    itself misreport the entity as ENTITY_NOT_FOUND. Raises ENTITY_NOT_FOUND only
+    when the read succeeds and the entity is absent or carries no device (the same
+    contract).
     """
     entity_to_device, _ = _build_entity_maps(
-        await _fetch_entity_rows(client), need_full=False
+        await _strict_entity_rows(client), need_full=False
     )
     device_id = entity_to_device.get(entity_id)
     if device_id:

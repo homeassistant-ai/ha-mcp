@@ -319,12 +319,16 @@ class _ResolveStubClient:
         self,
         get_response: dict[str, Any],
         entities: list[dict[str, Any]] | None = None,
+        list_response: dict[str, Any] | None = None,
     ) -> None:
         self.base_url = "http://ha.local:8123"
         self.token = "tok"
         self.verify_ssl = False
         self._get_response = get_response
         self._entities = list(entities or [])
+        # When set, the legacy list read returns this instead of a success dump —
+        # lets a test simulate the fallback list ALSO failing.
+        self._list_response = list_response
         self.entity_list_calls = 0
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
@@ -333,6 +337,8 @@ class _ResolveStubClient:
             return self._get_response
         if msg_type == "config/entity_registry/list":
             self.entity_list_calls += 1
+            if self._list_response is not None:
+                return self._list_response
             return {"success": True, "result": list(self._entities)}
         raise AssertionError(f"unexpected ws message {msg_type!r}")
 
@@ -368,6 +374,25 @@ async def test_resolve_transient_failure_falls_back_to_legacy() -> None:
         entities=[{"entity_id": "light.lr", "device_id": "dev-1"}],
     )
     assert await _resolve_device_id_for_entity(client, "light.lr") == "dev-1"
+    assert client.entity_list_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_double_transient_failure_raises_service_error() -> None:
+    """When BOTH the targeted read and the legacy fallback list fail transiently, a
+    real entity must NOT be misreported as ENTITY_NOT_FOUND: the fallback uses a
+    strict list read, so the second failure surfaces as SERVICE_CALL_FAILED (Codex
+    P2)."""
+    client = _ResolveStubClient(
+        {"success": False, "error": "WebSocket request failed"},
+        list_response={"success": False, "error": "registry unavailable"},
+    )
+    with pytest.raises(ToolError) as excinfo:
+        await _resolve_device_id_for_entity(client, "light.lr")
+    msg = str(excinfo.value)
+    assert "SERVICE_CALL_FAILED" in msg
+    assert "ENTITY_NOT_FOUND" not in msg
+    # The fallback list was attempted (and its failure is what surfaced).
     assert client.entity_list_calls == 1
 
 

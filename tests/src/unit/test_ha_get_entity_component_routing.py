@@ -13,8 +13,9 @@ cached caps + fields absent; a command error/timeout → fields absent silently)
 
 from __future__ import annotations
 
+import math
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -23,7 +24,12 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
 )
 from ha_mcp.tools import component_api, tools_entities
-from ha_mcp.tools.tools_entities import register_entity_tools
+from ha_mcp.tools.tools_entities import (
+    _GET_ENTRIES_CHUNK_SIZE,
+    WS_ENTITY_ENRICH,
+    fetch_entity_enrichment_via_component,
+    register_entity_tools,
+)
 
 from ._component_routing_helpers import make_ws, patch_ws
 
@@ -254,3 +260,79 @@ async def test_command_error_omits_fields_silently() -> None:
     assert entry["entity_id"] == "light.a"
     assert "area" not in entry
     assert "label_names" not in entry
+
+
+class _CredClient:
+    """Minimal credentialed client for the direct enrichment-fetch chunking tests."""
+
+    def __init__(self) -> None:
+        self.base_url = "http://ha.local:8123"
+        self.token = "tok"
+
+
+def _make_enrich_recording_ws(
+    caps: dict[str, Any], recorder: list[list[str]]
+) -> AsyncMock:
+    """A WS whose enrich replies echo the requested ids; each frame is recorded."""
+    ws = AsyncMock()
+
+    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+        if command_type == "ha_mcp_tools/info":
+            return {"success": True, "result": caps}
+        if command_type == WS_ENTITY_ENRICH:
+            ids = list(kwargs["entity_ids"])
+            recorder.append(ids)
+            return {
+                "success": True,
+                "result": {
+                    "entities": {
+                        eid: {"area": "A", "floor": None, "labels": [], "aliases": []}
+                        for eid in ids
+                    }
+                },
+            }
+        raise AssertionError(f"unexpected command {command_type!r}")
+
+    ws.send_command = AsyncMock(side_effect=_send)
+    return ws
+
+
+@pytest.mark.asyncio
+async def test_bulk_enrichment_is_chunked() -> None:
+    """A large bulk enrichment fans out into ``_GET_ENTRIES_CHUNK_SIZE`` chunks so a
+    big id list can't produce an over-cap WS frame; the per-chunk maps merge into
+    one (Codex P2). Mirrors the chunk bound of the sibling get_entries read."""
+    recorder: list[list[str]] = []
+    ws = _make_enrich_recording_ws(_CAPS_ENRICH, recorder)
+    client = _CredClient()
+    ids = [f"light.e{i}" for i in range(_GET_ENTRIES_CHUNK_SIZE + 1)]
+
+    with patch_ws(ws, tools_entities):
+        result = await fetch_entity_enrichment_via_component(client, ids)
+
+    assert result is not None
+    # Two bounded chunks: 500 + 1.
+    assert len(recorder) == math.ceil(len(ids) / _GET_ENTRIES_CHUNK_SIZE) == 2
+    for chunk in recorder:
+        assert len(chunk) <= _GET_ENTRIES_CHUNK_SIZE
+    # Every id fetched exactly once and present in the merged map.
+    flat = [eid for chunk in recorder for eid in chunk]
+    assert sorted(flat) == sorted(ids)
+    assert set(result) == set(ids)
+
+
+@pytest.mark.asyncio
+async def test_below_chunk_size_issues_single_enrich_frame() -> None:
+    """A bulk enrichment at the chunk size issues exactly one frame (no needless
+    fan-out for the common single-chunk case)."""
+    recorder: list[list[str]] = []
+    ws = _make_enrich_recording_ws(_CAPS_ENRICH, recorder)
+    client = _CredClient()
+    ids = [f"light.e{i}" for i in range(_GET_ENTRIES_CHUNK_SIZE)]
+
+    with patch_ws(ws, tools_entities):
+        result = await fetch_entity_enrichment_via_component(client, ids)
+
+    assert result is not None
+    assert len(recorder) == 1
+    assert recorder[0] == ids

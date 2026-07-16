@@ -105,28 +105,42 @@ async def fetch_entity_enrichment_via_component(
     ``HomeAssistantConnectionError`` (WS down) is not caught here, so it propagates
     to the tool's own error handling. Follows the same caps-gate discipline as
     ``component_devices.fetch_device_via_component``.
+
+    The ids are split into ``_GET_ENTRIES_CHUNK_SIZE`` chunks (the same bound the
+    sibling ``config/entity_registry/get_entries`` read uses) so a large bulk
+    request cannot produce an over-cap WebSocket frame or stall in the optional
+    enrichment step. Enrichment stays all-or-nothing: any chunk failing or drifting
+    in shape returns ``None`` (legacy shape), never a partially-enriched response.
     """
     if not entity_ids:
         return None
     caps = await get_component_caps(client)
     if not component_supports(caps, "entity_enrich"):
         return None
+    ids = list(entity_ids)
+    chunks = [
+        ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
+        for i in range(0, len(ids), _GET_ENTRIES_CHUNK_SIZE)
+    ]
+    merged: dict[str, dict[str, Any]] = {}
     try:
         ws = await get_websocket_client(url=client.base_url, token=client.token)
-        raw = await ws.send_command(WS_ENTITY_ENRICH, entity_ids=list(entity_ids))
+        for chunk in chunks:
+            raw = await ws.send_command(WS_ENTITY_ENRICH, entity_ids=chunk)
+            result = raw.get("result")
+            if not isinstance(result, dict):
+                return None
+            entities = result.get("entities")
+            if not isinstance(entities, dict):
+                return None
+            merged.update(entities)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)
         else:
             logger.warning("%s failed; skipped enrichment: %r", WS_ENTITY_ENRICH, exc)
         return None
-    result = raw.get("result")
-    if not isinstance(result, dict):
-        return None
-    entities = result.get("entities")
-    if not isinstance(entities, dict):
-        return None
-    return entities
+    return merged
 
 
 def _merge_entity_enrichment(

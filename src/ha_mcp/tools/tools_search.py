@@ -18,6 +18,7 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
 from ..config import get_global_settings
@@ -829,8 +830,14 @@ def _entity_enrichment_fields(
     (the entity's own value wins, else the device's), area→floor resolution, and
     label id→name (falling back to the id when a label has no name). ``aliases``
     pass through from the registry entry. Only the requested keys are returned.
+
+    String aliases only: HA core's aliases can carry the COMPUTED_NAME sentinel,
+    which serializes as ``null`` over the WS registry read; a blind ``str()`` would
+    publish it as the literal alias ``"None"``. The component's join filters the
+    same way, so dropping non-strings keeps the two paths byte-identical (the name
+    the sentinel stands for is already matched via the friendly name).
     """
-    aliases = sorted(str(a) for a in (entry.get("aliases") or []))
+    aliases = sorted(a for a in (entry.get("aliases") or []) if isinstance(a, str))
     area_id = entry.get("area_id")
     label_ids = set(entry.get("labels") or [])
     device_id = entry.get("device_id")
@@ -2426,12 +2433,17 @@ class SearchTools:
     async def _fetch_area_entity_entries(
         self,
         area_entity_ids: list[str],
-    ) -> dict[str, dict[str, Any]]:
+    ) -> dict[str, dict[str, Any]] | None:
         """Fetch entity registry entries for a list of entity IDs in one WS call.
 
         Returns the full ``get_entries`` result map so the caller can derive the
         alias haystack AND reuse the same entries for opt-in enrichment without a
-        second round-trip.
+        second round-trip. ``None`` (NOT an empty map) signals a FAILED read — a
+        non-success reply or a malformed payload — so the caller can tell a genuine
+        empty-but-successful prefetch (which correctly enriches to empty with no
+        warning) from a read failure, and let the enrichment re-fetch and report the
+        degradation instead of silently trusting the empty map. An empty ``{}`` is
+        returned only for an empty input list.
         """
         entries_map: dict[str, dict[str, Any]] = {}
         if not area_entity_ids:
@@ -2444,25 +2456,24 @@ class SearchTools:
                 }
             )
             if isinstance(entries_resp, dict) and entries_resp.get("success"):
-                entries_map = {
+                return {
                     eid: entry
                     for eid, entry in (entries_resp.get("result", {}) or {}).items()
                     if isinstance(entry, dict)
                 }
-            else:
-                logger.warning(
-                    "alias_enrichment_failed: get_entries returned non-success "
-                    "for %d area entities (resp=%r)",
-                    len(area_entity_ids),
-                    entries_resp,
-                )
+            logger.warning(
+                "alias_enrichment_failed: get_entries returned non-success "
+                "for %d area entities (resp=%r)",
+                len(area_entity_ids),
+                entries_resp,
+            )
         except (KeyError, TypeError, AttributeError) as alias_err:
             logger.warning(
                 "alias_enrichment_failed: malformed payload for %d area entities (err=%r)",
                 len(area_entity_ids),
                 alias_err,
             )
-        return entries_map
+        return None
 
     async def _search_area_with_query(
         self,
@@ -2496,9 +2507,14 @@ class SearchTools:
         area_entity_ids = sorted(
             e.get("entity_id", "") for e in all_area_entities if e.get("entity_id")
         )
+        # ``None`` = the prefetch read FAILED (vs an empty-but-successful map). On
+        # failure the haystack loses alias tokens (as before), and passing ``None``
+        # as ``prefetched_entries`` below lets the enrichment re-fetch and report the
+        # degradation instead of silently trusting an empty map as authoritative.
         entries_map = await self._fetch_area_entity_entries(area_entity_ids)
         aliases_map = {
-            eid: (entry.get("aliases") or []) for eid, entry in entries_map.items()
+            eid: (entry.get("aliases") or [])
+            for eid, entry in (entries_map or {}).items()
         }
 
         from ..utils.fuzzy_search import create_fuzzy_searcher
@@ -3943,17 +3959,26 @@ class SearchTools:
         ``ha_search`` / ``ha_get_zone`` which append a ``warnings[]`` entry —
         because ``ha_get_state``'s single- and bulk-mode responses do not share one
         warnings channel; the ``log.warning`` preserves operator visibility and the
-        legacy REST path returns the byte-identical correct data either way. A
-        ``HomeAssistantConnectionError`` (WS down) is not caught here, so it
-        propagates to the tool's structured-error handler; the legacy path shares
-        the same socket and would fail identically.
+        legacy REST path returns the byte-identical correct data either way. Unlike
+        ``ha_search`` / ``ha_get_overview`` (whose legacy paths also read the
+        WebSocket registry, so a connection failure fails both backends identically
+        and is left to propagate), ``ha_get_state``'s legacy path is a REST
+        ``get_entity_state`` read on a SEPARATE transport, so a WS transport/connect
+        failure (``HomeAssistantConnectionError``) is caught here and falls back to
+        REST — an install whose REST API still works keeps getting its state instead
+        of a spurious connection error. If REST is also down, the legacy path raises
+        the same connection error itself.
         """
         caps = await get_component_caps(self._client)
         if not component_supports(caps, "states"):
             return None
         try:
             raw = await self._send_component_states(entity_ids)
-        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+        except (
+            HomeAssistantCommandError,
+            HomeAssistantCommandTimeout,
+            HomeAssistantConnectionError,
+        ) as exc:
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
             else:

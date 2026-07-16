@@ -27,6 +27,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, tools_search
 from ha_mcp.tools.smart_search import SmartSearchTools
@@ -294,3 +295,31 @@ async def test_command_error_falls_back_to_legacy_silently() -> None:
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert client.get_state_calls == 2
     assert "warnings" not in resp["data"]
+
+
+@pytest.mark.asyncio
+async def test_ws_connection_error_falls_back_to_legacy_rest() -> None:
+    """A WS transport failure on the component read falls back to the REST legacy
+    path — a SEPARATE transport — instead of surfacing a spurious connection error.
+
+    ``ha_get_state``'s legacy read is REST ``get_entity_state`` (not the WebSocket
+    the search/overview legacy paths share), so an install whose REST API still
+    works must keep getting its state when only the component WS is down (Codex P2).
+    """
+    ws = make_ws(
+        "ha_mcp_tools/states",
+        info_result=_CAPS_STATES,
+        cmd_exc=HomeAssistantConnectionError("WebSocket not authenticated"),
+    )
+    client = RoutingClient()
+    get_state = _build_get_state(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await get_state(["light.a", "sensor.b"])
+
+    # The connection error was caught → both ids served from the REST legacy path.
+    assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
+    assert client.get_state_calls == 2
+    assert "warnings" not in resp["data"]
+    # The component was tried exactly once before falling back.
+    assert len(_states_calls(ws)) == 1
