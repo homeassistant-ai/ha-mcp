@@ -354,11 +354,13 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 ): str,
                 vol.Optional(
                     OPT_SERVER_URL,
-                    description={
-                        "suggested_value": opts.get(
-                            OPT_SERVER_URL, DEFAULT_LOOPBACK_URL
-                        )
-                    },
+                    # Only a genuinely saved override is suggested (same
+                    # pattern as OPT_PIP_SPEC above). Pre-filling
+                    # DEFAULT_LOOPBACK_URL made every options save store the
+                    # constant as an explicit override, which would pin the
+                    # scheme/port even after issue #1890's SSL/port-aware
+                    # loopback derivation.
+                    description={"suggested_value": opts.get(OPT_SERVER_URL, "")},
                 ): str,
                 vol.Required(
                     OPT_ENABLE_WEBHOOK,
@@ -480,9 +482,13 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         # server_url gets no _normalize-forced empty like the fields above; strip
         # it and drop it entirely when blank so a whitespace-only value can't be
         # stored verbatim (it would bypass the consumer's empty -> loopback
-        # fallback and break the HA connection).
+        # fallback and break the HA connection). A value equal to
+        # DEFAULT_LOOPBACK_URL is likewise dropped: older forms pre-filled it,
+        # so it reaches here from users who never chose an override, and
+        # storing it would pin the scheme/port the #1890 loopback derivation
+        # exists to resolve.
         server_url = str(cleaned.get(OPT_SERVER_URL, "") or "").strip().rstrip("/")
-        if server_url:
+        if server_url and server_url != DEFAULT_LOOPBACK_URL:
             cleaned[OPT_SERVER_URL] = server_url
         else:
             cleaned.pop(OPT_SERVER_URL, None)

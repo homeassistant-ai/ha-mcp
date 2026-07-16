@@ -221,7 +221,16 @@ class EntitySearchMixin(_SearchBase):
                 if isinstance(entries_resp, dict) and entries_resp.get("success"):
                     for eid, entry in (entries_resp.get("result", {}) or {}).items():
                         if isinstance(entry, dict):
-                            aliases_map[eid] = entry.get("aliases", []) or []
+                            # String entries only: HA serializes the
+                            # COMPUTED_NAME alias sentinel ("the computed
+                            # entity name is an alias") as null over the
+                            # websocket API; ingesting it would put None in
+                            # every downstream alias string op.
+                            aliases_map[eid] = [
+                                a
+                                for a in (entry.get("aliases") or [])
+                                if isinstance(a, str)
+                            ]
                 else:
                     failed_chunks += 1
                     logger.warning(

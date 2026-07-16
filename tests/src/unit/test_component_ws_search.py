@@ -452,6 +452,32 @@ class TestEntityJoins:
             assert res["entities"], f"expected a hit for {query!r}"
             assert res["entities"][0]["entity_id"] == "light.lamp"
 
+    def test_computed_name_alias_sentinel_is_dropped(self, monkeypatch):
+        """HA core's aliases can carry the COMPUTED_NAME sentinel
+        (entity_registry.ComputedNameType._singleton — "the computed entity
+        name is an alias"). Blind str() published it as a literal
+        'ComputedNameType._singleton' alias on every carrying entity and made
+        it a scored match text. Only real string aliases may surface."""
+        from enum import Enum
+
+        class ComputedNameType(Enum):  # mirrors homeassistant.helpers.entity_registry
+            _singleton = 0
+
+        states = [FakeState("light.lamp", "on", "Desk Lamp")]
+        entry = FakeRegEntry(
+            "light.lamp",
+            aliases={"reading light", ComputedNameType._singleton},
+        )
+        view = make_view(entity={"light.lamp": entry})
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+        h = FakeHass(states=states)
+
+        res = wsapi._do_search(h, {"query": "reading light"})
+        assert res["entities"][0]["aliases"] == ["reading light"]
+
+        # The sentinel must not be a match text either.
+        assert not wsapi._do_search(h, {"query": "singleton"})["entities"]
+
     def test_domain_filter_applies_to_entities(self, monkeypatch):
         states = [
             FakeState("light.kitchen", "on", "Kitchen"),
