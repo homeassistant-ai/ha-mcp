@@ -2,7 +2,7 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. v1.1.0 ships ten commands (nine capabilities):
+capability gate. v1.1.1 ships ten commands (nine capabilities):
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
   + ``component_version`` + advisory ``limits``. One cached probe tells the
@@ -172,7 +172,7 @@ SCHEMA_VERSION = 1
 
 # Which commands exist. Grows one entry per shipped command; the server gates
 # each consumer on ``capability in caps.capabilities``. Never remove an entry
-# without a major bump. (``info`` is always present in 1.1.0, so it carries no
+# without a major bump. (``info`` is always present in 1.1.0+, so it carries no
 # capability key of its own.)
 CAPABILITIES: list[str] = [
     "search",
