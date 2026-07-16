@@ -402,6 +402,17 @@ class TestExtractClientCreds:
         cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
         assert (cid, secret) == ("c@id", "p@ss/word")
 
+    def test_basic_creds_form_decode_plus_as_space_not_literal(self):
+        # RFC 6749 §2.3.1 form-urlencodes Basic creds, so "+" is a SPACE and a
+        # literal "+" arrives as "%2B" -- unquote_plus must distinguish them
+        # (plain unquote would leave "+" literal, corrupting a secret with a
+        # space). #1880 review finding.
+        encoded = base64.b64encode(b"c+id:p%2Bss word").decode()
+        request = MagicMock()
+        request.headers = {"Authorization": f"Basic {encoded}"}
+        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
+        assert (cid, secret) == ("c id", "p+ss word")
+
 
 # ---------------------------------------------------------------------------
 # Redirect URI validation
@@ -1035,7 +1046,7 @@ class TestEnsureLegacyOAuthSecrets:
         assert changed is False
         assert data == snapshot
 
-    def test_regenerate_mints_fresh_id_and_secret_but_never_rotates_signing_key(self):
+    def test_regenerate_mints_fresh_id_secret_and_rotates_signing_key(self):
         data = {
             DATA_OAUTH_CLIENT_ID: "hamcp-old",
             DATA_OAUTH_CLIENT_SECRET: "old-secret",
@@ -1048,7 +1059,10 @@ class TestEnsureLegacyOAuthSecrets:
         assert changed is True
         assert data[DATA_OAUTH_CLIENT_ID] != "hamcp-old"
         assert data[DATA_OAUTH_CLIENT_SECRET] != "old-secret"
-        assert data[DATA_OAUTH_SIGNING_KEY] == "aa" * 32
+        # Every credential change rotates the key (hard revocation; kills the
+        # A->B->A resurrection). #1880 review finding.
+        assert data[DATA_OAUTH_SIGNING_KEY] != "aa" * 32
+        bytes.fromhex(data[DATA_OAUTH_SIGNING_KEY])
         assert options[OPT_OAUTH_REGENERATE] is False
         assert options[OPT_OAUTH_CLIENT_ID] == ""
         assert options[OPT_OAUTH_CLIENT_SECRET] == ""
@@ -1065,9 +1079,10 @@ class TestEnsureLegacyOAuthSecrets:
 
         assert changed is True
         assert data[DATA_OAUTH_CLIENT_ID] == "my-custom-client-id"
-        # A client_id change revokes outstanding tokens via the cid claim at
-        # the restart that rebinds the views -- no signing-key rotation needed.
-        assert data[DATA_OAUTH_SIGNING_KEY] == "cc" * 32
+        # A client_id change also rotates the key so a re-used former id
+        # (A->B->A) can't resurrect its old tokens (#1880 review finding).
+        assert data[DATA_OAUTH_SIGNING_KEY] != "cc" * 32
+        bytes.fromhex(data[DATA_OAUTH_SIGNING_KEY])
         # The override is consumed out of options (cleartext must not linger
         # where ha_get_integration(include_options=True) can read it).
         assert options[OPT_OAUTH_CLIENT_ID] == ""

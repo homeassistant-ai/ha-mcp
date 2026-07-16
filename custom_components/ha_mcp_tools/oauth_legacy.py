@@ -41,7 +41,7 @@ import time
 from collections.abc import Callable
 from html import escape
 from typing import TYPE_CHECKING, TypedDict
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote_plus, urlparse
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
@@ -741,12 +741,15 @@ class TokenView(HomeAssistantView):
                 return None, None
             if ":" in decoded:
                 cid, _, sec = decoded.partition(":")
-                # RFC 6749 §2.3.1: client_secret_basic values are percent-encoded
-                # before base64, so decode them back. A no-op for the generated
-                # credentials (URL-safe alphabets, nothing to decode) but required
-                # for custom overrides containing reserved characters — mirrors
-                # the form-body path below, which aiohttp already url-decodes.
-                return unquote(cid), unquote(sec)
+                # RFC 6749 §2.3.1: client_secret_basic values are
+                # application/x-www-form-urlencoded before base64, so decode
+                # them back with unquote_PLUS ("+" means space in that
+                # encoding — plain unquote would leave it literal). A no-op for
+                # the generated credentials (URL-safe alphabets, nothing to
+                # decode) but required for custom overrides containing reserved
+                # characters — matches the form-body path below, which aiohttp
+                # also form-decodes ("+" → space).
+                return unquote_plus(cid), unquote_plus(sec)
             return None, None
         return form.get("client_id"), form.get("client_secret")
 

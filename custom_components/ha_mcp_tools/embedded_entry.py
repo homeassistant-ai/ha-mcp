@@ -306,21 +306,24 @@ def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
 
     Mirrors the ``OPT_REGENERATE_SECRETS`` shape above: ``OPT_OAUTH_REGENERATE``
     is one-shot, minting a fresh client_id/client_secret and clearing itself
-    plus the two override fields. The regenerate path and a client_id override
-    leave ``signing_key`` alone — the new client_id revokes every outstanding
-    token at the restart that rebinds the views, because the signed token
-    payload carries ``cid`` (see
-    ``oauth_legacy.LegacyOAuthProvider._validate_token``). A client_secret
-    override change is the one path that DOES rotate the signing key: token
-    validation never involves the secret, so without the rotation a
-    secret-only change would leave outstanding tokens valid for the rest of
-    their access TTL even after the restart that activates the new
-    credentials. Rotating the key evicts them at that restart. It does NOT
-    shorten the pre-restart window — the bound views keep serving the old
-    identity until then (see ``oauth_legacy.bind_legacy_views``) — which is
-    why the startup log also withholds rotated credentials until they are
-    active (``embedded_setup._surface_connect_urls`` via
-    ``oauth_legacy.legacy_credentials_active``; review finding on #1880).
+    plus the two override fields.
+
+    ANY credential change — regenerate, a client_id override, or a
+    client_secret override — also rotates ``signing_key``, making every
+    rotation a hard revocation of outstanding tokens (they take effect at the
+    restart that rebinds the views). Rotating the key on a secret change is
+    load-bearing (token validation never involves the secret, so the cid
+    claim alone would not evict anything). Rotating it on a client_id change
+    is defence in depth: the cid claim already evicts on a normal rotation,
+    but without a fresh key an ``A → B → A`` client_id sequence would
+    resurrect id-A's still-unexpired tokens, since they re-match the cid
+    claim under the unchanged-key HMAC. Rotating the key kills that echo at
+    zero cost. Rotation does NOT shorten the pre-restart window — the bound
+    views keep serving the old identity until the restart (see
+    ``oauth_legacy.bind_legacy_views``) — which is why the startup log also
+    withholds rotated credentials until they are active
+    (``embedded_setup._surface_connect_urls`` via
+    ``oauth_legacy.legacy_credentials_active``; review findings on #1880).
 
     Returns True if ``data``/``options`` were mutated.
     """
@@ -328,6 +331,10 @@ def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
     if options.get(OPT_OAUTH_REGENERATE):
         data[DATA_OAUTH_CLIENT_ID] = f"hamcp-{secrets.token_hex(16)}"
         data[DATA_OAUTH_CLIENT_SECRET] = secrets.token_urlsafe(32)
+        # Every credential change rotates the key — see docstring (kills the
+        # A->B->A client_id resurrection; regenerate mints random ids so it
+        # can't recur to a former id, but the key rotation is kept uniform).
+        data[DATA_OAUTH_SIGNING_KEY] = secrets.token_hex(32)
         options[OPT_OAUTH_REGENERATE] = False
         options[OPT_OAUTH_CLIENT_ID] = ""
         options[OPT_OAUTH_CLIENT_SECRET] = ""
@@ -336,6 +343,9 @@ def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
         client_id_override = str(options.get(OPT_OAUTH_CLIENT_ID) or "").strip()
         if client_id_override and data.get(DATA_OAUTH_CLIENT_ID) != client_id_override:
             data[DATA_OAUTH_CLIENT_ID] = client_id_override
+            # Rotate the key so a re-used former client_id can't resurrect its
+            # old tokens (see docstring).
+            data[DATA_OAUTH_SIGNING_KEY] = secrets.token_hex(32)
             changed = True
         client_secret_override = str(options.get(OPT_OAUTH_CLIENT_SECRET) or "").strip()
         if (
