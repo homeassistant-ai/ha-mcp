@@ -681,9 +681,7 @@ class TestHaSearchEnrichmentDegraded(_SearchToolFixture):
     @pytest.mark.asyncio
     async def test_degraded_enrichment_read_surfaces_warning(self, search_tool, caplog):
         with caplog.at_level(logging.WARNING):
-            data = await search_tool(
-                query="light", result_fields=["entity_id", "area"]
-            )
+            data = await search_tool(query="light", result_fields=["entity_id", "area"])
         # Records are still returned — enrichment never withholds results.
         assert data["entities"], "entities must still be returned on a degraded join"
         # The degradation is surfaced as a top-level warning...

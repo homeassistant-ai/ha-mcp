@@ -243,3 +243,65 @@ async def test_command_error_falls_back_to_legacy() -> None:
     assert resp["exposed_entities"] == _LEGACY_MAP
     assert "entity_info" not in resp
     assert client.legacy_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_single_mode_missing_entity_info_omits_enrichment() -> None:
+    """Single mode where the component's ``entity_info`` has no entry for the queried
+    id (``None`` info) merges nothing: the byte-identical legacy exposure keys are
+    returned and no enrichment key is invented, no crash (issue #1813 T6)."""
+    ws = make_ws(
+        "ha_mcp_tools/exposure",
+        info_result=_CAPS_EXPOSURE,
+        cmd_result={
+            "exposed_entities": {"light.a": {"conversation": True}},
+            "entity_info": {},  # no entry for light.a
+        },
+    )
+    client = RoutingClient(_LEGACY_MAP)
+    exposure = _build_exposure(client)
+
+    with patch_ws(ws, tools_voice_assistant):
+        resp = await exposure(entity_id="light.a")
+
+    assert resp["exposed_to"]["conversation"] is True
+    for key in ("friendly_name", "domain", "area", "floor", "labels", "state"):
+        assert key not in resp
+    # The component answered authoritatively; the legacy WS list was never touched.
+    assert client.legacy_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_single_mode_stateless_entity_omits_live_state_keys() -> None:
+    """A component ``entity_info`` carrying only registry keys (a disabled /
+    legacy-only entity with no live state, so the component omits friendly_name /
+    state) merges just those keys — the live-state keys stay absent rather than
+    being emitted as null (issue #1813 T6)."""
+    ws = make_ws(
+        "ha_mcp_tools/exposure",
+        info_result=_CAPS_EXPOSURE,
+        cmd_result={
+            "exposed_entities": {"light.a": {"conversation": True}},
+            "entity_info": {
+                "light.a": {
+                    "domain": "light",
+                    "area": "Kitchen",
+                    "floor": "Main",
+                    "labels": [],
+                }
+            },
+        },
+    )
+    client = RoutingClient(_LEGACY_MAP)
+    exposure = _build_exposure(client)
+
+    with patch_ws(ws, tools_voice_assistant):
+        resp = await exposure(entity_id="light.a")
+
+    # Registry-derived keys merged...
+    assert resp["domain"] == "light"
+    assert resp["area"] == "Kitchen"
+    assert resp["floor"] == "Main"
+    # ...but the live-state keys the component omitted are NOT present.
+    assert "friendly_name" not in resp
+    assert "state" not in resp

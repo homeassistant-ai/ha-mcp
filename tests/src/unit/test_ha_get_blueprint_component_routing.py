@@ -187,9 +187,9 @@ async def test_null_config_from_component_warns_metadata_only() -> None:
     assert "config" not in resp
     assert len(_bp_calls(ws)) == 1
     # The null-body outcome is surfaced, not silent.
-    assert any(
-        "could not be read or parsed" in w for w in resp.get("warnings", [])
-    ), f"expected a metadata-only warning; got {resp.get('warnings')}"
+    assert any("could not be read or parsed" in w for w in resp.get("warnings", [])), (
+        f"expected a metadata-only warning; got {resp.get('warnings')}"
+    )
 
 
 @pytest.mark.asyncio
@@ -209,9 +209,7 @@ async def test_capability_miss_serves_metadata_only_no_warning() -> None:
 
     assert resp["success"] is True
     assert "config" not in resp
-    assert not any(
-        "could not be read or parsed" in w for w in resp.get("warnings", [])
-    )
+    assert not any("could not be read or parsed" in w for w in resp.get("warnings", []))
 
 
 @pytest.mark.asyncio

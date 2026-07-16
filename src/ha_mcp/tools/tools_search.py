@@ -2349,7 +2349,12 @@ class SearchTools:
             failed_reads.extend(
                 label
                 for label, resp in zip(
-                    ("area registry", "floor registry", "label registry", "device registry"),
+                    (
+                        "area registry",
+                        "floor registry",
+                        "label registry",
+                        "device registry",
+                    ),
                     names,
                     strict=True,
                 )

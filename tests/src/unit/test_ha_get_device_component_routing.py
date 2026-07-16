@@ -23,7 +23,10 @@ from unittest.mock import MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
 from ha_mcp.tools import component_api, component_devices
 from ha_mcp.tools.tools_registry import (
     _resolve_device_id_for_entity,
@@ -390,3 +393,104 @@ async def test_unknown_command_falls_back_and_invalidates_caps() -> None:
     assert client.device_list_calls == 1
     # Caps were invalidated (dropped from the cache) so the next call re-probes.
     assert client not in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_non_unknown_error_falls_back_without_invalidating_caps() -> None:
+    """A non-unknown device_get error (a command timeout) falls back to the legacy
+    registries for the byte-identical result WITHOUT invalidating caps — the
+    capability is still advertised, only this one frame failed (issue #1813 T1)."""
+    ws = make_ws(
+        "ha_mcp_tools/device_get",
+        info_result=_CAPS_DEVICES,
+        cmd_exc=HomeAssistantCommandTimeout("timeout"),
+    )
+    client = RoutingClient(
+        devices=[_raw_device("dev-1")],
+        entities=[_entity_row("sensor.x", "dev-1")],
+    )
+    get_device = _build_get_device(client)
+
+    with patch_ws(ws, component_devices):
+        resp = await get_device(device_id="dev-1")
+
+    # The legacy registries served the byte-identical device + entity list.
+    assert resp["device"]["device_id"] == "dev-1"
+    assert client.device_list_calls == 1
+    assert client.entity_list_calls == 1
+    assert resp["entity_count"] == 1
+    # Caps stay cached: a transient failure is not a downgrade, so the next call
+    # still routes through the component instead of re-probing.
+    assert client in component_api._CAPS_CACHE
+
+
+# --- device seam error taxonomy (direct fetch_* calls; issue #1813 T2 / T4) ----
+# The consumer routing tests above cover device_get through ``ha_get_device``;
+# these pin the ``component_devices`` seam functions directly, mirroring the
+# device_get taxonomy for ``device_list`` and the device_get shape guard.
+
+
+@pytest.mark.asyncio
+async def test_device_list_unknown_command_invalidates_caps() -> None:
+    """unknown_command on device_list → invalidate caps, return None (→ legacy),
+    mirroring device_get's downgrade branch (issue #1813 T2)."""
+    ws = make_ws(
+        "ha_mcp_tools/device_list",
+        info_result=_CAPS_DEVICES,
+        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
+    )
+    client = RoutingClient()
+
+    with patch_ws(ws, component_devices):
+        assert await component_devices.fetch_device_list_via_component(client) is None
+    assert client not in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_device_list_non_unknown_error_keeps_caps() -> None:
+    """A non-unknown device_list error (timeout) → None (→ legacy) WITHOUT
+    invalidating the still-advertised capability (issue #1813 T2)."""
+    ws = make_ws(
+        "ha_mcp_tools/device_list",
+        info_result=_CAPS_DEVICES,
+        cmd_exc=HomeAssistantCommandTimeout("timeout"),
+    )
+    client = RoutingClient()
+
+    with patch_ws(ws, component_devices):
+        assert await component_devices.fetch_device_list_via_component(client) is None
+    assert client in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_device_list_malformed_shape_falls_back() -> None:
+    """A device_list reply whose ``devices`` is not a list (shape drift) → None so
+    the caller reads the legacy registry instead of trusting it (issue #1813 T2)."""
+    ws = make_ws(
+        "ha_mcp_tools/device_list",
+        info_result=_CAPS_DEVICES,
+        cmd_result={"devices": "not-a-list"},
+    )
+    client = RoutingClient()
+
+    with patch_ws(ws, component_devices):
+        assert await component_devices.fetch_device_list_via_component(client) is None
+
+
+@pytest.mark.asyncio
+async def test_device_get_missing_device_key_falls_back() -> None:
+    """A device_get reply with NO ``device`` key (shape drift) → None, so the single
+    lookup degrades to the legacy registries rather than trusting the payload. This
+    is distinct from ``{"device": None}``, the component's authoritative 'no such
+    device' verdict (issue #1813 T4)."""
+    ws = make_ws(
+        "ha_mcp_tools/device_get",
+        info_result=_CAPS_DEVICES,
+        cmd_result={"entities": []},  # "device" key absent
+    )
+    client = RoutingClient()
+
+    with patch_ws(ws, component_devices):
+        assert (
+            await component_devices.fetch_device_via_component(client, "dev-1") is None
+        )
