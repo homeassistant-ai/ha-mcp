@@ -234,16 +234,19 @@ class BlueprintTools:
 
         Returns the blueprint/save result payload (contains overrides_existing).
         """
-        save_response = await self._client.send_websocket_message(
-            {
-                "type": "blueprint/save",
-                "domain": domain,
-                "path": path,
-                "yaml": yaml_data,
-                "source_url": url,
-                "allow_override": overwrite,
-            }
-        )
+        save_message: dict[str, Any] = {
+            "type": "blueprint/save",
+            "domain": domain,
+            "path": path,
+            "yaml": yaml_data,
+            "source_url": url,
+        }
+        # allow_override only exists on HA >= 2023.12 and the WS schema
+        # rejects unknown keys - only send it when actually overwriting
+        if overwrite:
+            save_message["allow_override"] = True
+
+        save_response = await self._client.send_websocket_message(save_message)
 
         if not save_response.get("success"):
             error = save_response.get("error", {})
@@ -258,7 +261,11 @@ class BlueprintTools:
                 "Use ha_get_blueprint() to check if it already exists",
             ]
 
-            if "already exists" in save_error.lower():
+            # Reachable despite the early exists check: a race between
+            # import and save, or an installed file that failed to load
+            # (core reports exists=false for those)
+            already_exists = "already exists" in save_error.lower()
+            if already_exists:
                 suggestions.insert(
                     0,
                     "A blueprint with this path already exists - pass overwrite=true to re-import it",
@@ -266,7 +273,9 @@ class BlueprintTools:
 
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
+                    ErrorCode.RESOURCE_ALREADY_EXISTS
+                    if already_exists
+                    else ErrorCode.SERVICE_CALL_FAILED,
                     save_error,
                     context={"url": url, "path": path},
                     suggestions=suggestions,
@@ -393,6 +402,24 @@ class BlueprintTools:
             # suggested_filename without the extension (e.g. "user/blueprint_name")
             if not suggested_filename.endswith((".yaml", ".yml")):
                 suggested_filename = suggested_filename + ".yaml"
+
+            # blueprint/save does not re-run these checks (currently the
+            # blueprint's min Home Assistant version) - without this gate an
+            # unsupported blueprint saves cleanly and reports success
+            validation_errors = result_data.get("validation_errors")
+            if validation_errors:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_FAILED,
+                        "Blueprint failed validation: "
+                        + "; ".join(str(e) for e in validation_errors),
+                        context={"url": url, "validation_errors": validation_errors},
+                        suggestions=[
+                            "The blueprint is not compatible with this Home Assistant installation",
+                            "Update Home Assistant to satisfy the blueprint's minimum version requirement",
+                        ],
+                    )
+                )
 
             # blueprint/import reports whether the target path is already
             # installed - fail early with a re-import hint instead of letting

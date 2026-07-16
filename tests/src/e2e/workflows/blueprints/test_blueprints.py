@@ -10,6 +10,8 @@ and production environments. Blueprint availability may vary.
 """
 
 import logging
+import uuid
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +23,33 @@ from ...utilities.assertions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _blueprint_yaml(name: str, description: str, min_version: str | None = None) -> str:
+    """Render a minimal automation blueprint for import tests."""
+    homeassistant_block = (
+        f'  homeassistant:\n    min_version: "{min_version}"\n' if min_version else ""
+    )
+    return f"""blueprint:
+  name: {name}
+  description: {description}
+  domain: automation
+{homeassistant_block}  input:
+    target_entity:
+      name: Target Entity
+      description: The entity to control
+      selector:
+        entity: {{}}
+
+trigger:
+  - platform: time
+    at: "00:00:00"
+
+action:
+  - service: homeassistant.turn_on
+    target:
+      entity_id: !input target_entity
+"""
 
 
 @pytest.mark.blueprint
@@ -389,6 +418,124 @@ class TestBlueprintManagement:
                 f"Blueprint path should end with .yaml, got: {imported.get('path')}"
             )
             logger.info("Blueprint re-imported with overwrite=true")
+
+    @pytest.mark.slow
+    async def test_reimport_updates_blueprint_content(
+        self, mcp_client, local_blueprint_server
+    ):
+        """
+        Test: Re-import actually replaces the installed blueprint content (issue #1894)
+
+        The issue-#1894 user story: a blueprint's source changed upstream and the
+        user re-imports to pick up the new version. Serves v1 of a uniquely-named
+        blueprint, imports it (overwrite=true on a fresh import must succeed with
+        overrides_existing=False), then serves changed content and re-imports,
+        verifying via ha_get_blueprint that the NEW content landed.
+        """
+        local_dir = local_blueprint_server.get("local_dir")
+        assert local_dir, (
+            "local_blueprint_server must expose local_dir (writable served directory)"
+        )
+
+        run_id = uuid.uuid4().hex[:8]
+        filename = f"e2e_reimport_{run_id}.yaml"
+        served_file = Path(local_dir) / filename
+        test_url = f"{local_blueprint_server['base_url']}/{filename}"
+        marker_v1 = f"reimport-v1-{run_id}"
+        marker_v2 = f"reimport-v2-{run_id}"
+
+        try:
+            served_file.write_text(
+                _blueprint_yaml(f"Reimport E2E {run_id}", marker_v1), encoding="utf-8"
+            )
+
+            async with MCPAssertions(mcp_client) as mcp:
+                # overwrite=true on a not-yet-installed blueprint: plain install
+                first = await mcp.call_tool_success(
+                    "ha_import_blueprint",
+                    {"url": test_url, "overwrite": True},
+                )
+                assert first.get("overrides_existing") is False, (
+                    f"Fresh import must not report an override, got: {first}"
+                )
+                blueprint_path = first["imported_blueprint"]["path"]
+
+                # Serve changed content and re-import
+                served_file.write_text(
+                    _blueprint_yaml(f"Reimport E2E {run_id}", marker_v2),
+                    encoding="utf-8",
+                )
+                second = await mcp.call_tool_success(
+                    "ha_import_blueprint",
+                    {"url": test_url, "overwrite": True},
+                )
+                assert second.get("overrides_existing") is True, (
+                    f"Re-import must report the override, got: {second}"
+                )
+                assert "reload" in second.get("message", "").lower(), (
+                    f"Override response should mention the consumer reload, got: {second}"
+                )
+
+                # The installed blueprint must now carry the v2 content
+                detail = await mcp.call_tool_success(
+                    "ha_get_blueprint",
+                    {"path": blueprint_path, "domain": "automation"},
+                )
+                description = (detail.get("metadata") or {}).get("description") or ""
+                assert marker_v2 in description, (
+                    f"Re-imported blueprint should carry '{marker_v2}', got: {description}"
+                )
+                assert marker_v1 not in description, (
+                    f"Old content '{marker_v1}' should be gone, got: {description}"
+                )
+                logger.info("Re-import replaced blueprint content on disk")
+        finally:
+            served_file.unlink(missing_ok=True)
+
+    @pytest.mark.slow
+    async def test_import_blueprint_min_version_rejected(
+        self, mcp_client, local_blueprint_server
+    ):
+        """
+        Test: import surfaces blueprint/import validation_errors
+
+        blueprint/save does not re-run the min-version check, so the tool must
+        fail the import itself instead of silently saving an unsupported
+        blueprint (found while reviewing #1894's overwrite path, where it would
+        clobber a working installed blueprint).
+        """
+        local_dir = local_blueprint_server.get("local_dir")
+        assert local_dir, (
+            "local_blueprint_server must expose local_dir (writable served directory)"
+        )
+
+        run_id = uuid.uuid4().hex[:8]
+        filename = f"e2e_minversion_{run_id}.yaml"
+        served_file = Path(local_dir) / filename
+        test_url = f"{local_blueprint_server['base_url']}/{filename}"
+
+        try:
+            served_file.write_text(
+                _blueprint_yaml(
+                    f"MinVersion E2E {run_id}",
+                    "requires an impossible HA version",
+                    min_version="9999.1.0",
+                ),
+                encoding="utf-8",
+            )
+
+            async with MCPAssertions(mcp_client) as mcp:
+                result = await mcp.call_tool_failure(
+                    "ha_import_blueprint",
+                    {"url": test_url, "overwrite": True},
+                    expected_error="Requires at least Home Assistant",
+                )
+                assert result["error"]["code"] == "VALIDATION_FAILED", (
+                    f"Expected VALIDATION_FAILED, got: {result['error']}"
+                )
+                logger.info("Unsupported blueprint properly rejected at import")
+        finally:
+            served_file.unlink(missing_ok=True)
 
 
 @pytest.mark.blueprint
