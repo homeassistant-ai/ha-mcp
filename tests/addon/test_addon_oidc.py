@@ -8,7 +8,9 @@ import sys
 from pathlib import Path
 
 # Import start.py from the addon directory
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "homeassistant-addon"))
+sys.path.insert(
+    0, str(Path(__file__).resolve().parent.parent.parent / "homeassistant-addon")
+)
 from start import _get_oidc_config, _validate_oidc_config
 
 
@@ -172,7 +174,9 @@ class TestValidateOidcConfig:
 
     def test_error_suggests_secret_path_mode(self):
         """Error message should mention secret path mode as alternative."""
-        config = {"oidc_config_url": "https://auth.example.com/.well-known/openid-configuration"}
+        config = {
+            "oidc_config_url": "https://auth.example.com/.well-known/openid-configuration"
+        }
         error = _validate_oidc_config(config)
         assert "secret path mode" in error
 

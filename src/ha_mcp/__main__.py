@@ -1225,7 +1225,6 @@ async def _run_oauth_server(
     )
 
 
-
 def main_oidc() -> None:
     """Run server with OIDC authentication over HTTP.
 
@@ -1297,7 +1296,13 @@ def main_oidc() -> None:
 
     _run_entrypoint(
         _run_oidc_server(
-            oidc_config_url, oidc_client_id, oidc_client_secret, base_url, host, port, path
+            oidc_config_url,
+            oidc_client_id,
+            oidc_client_secret,
+            base_url,
+            host,
+            port,
+            path,
         ),
         "OIDC server",
     )
@@ -1343,7 +1348,9 @@ async def _run_oidc_server(
         client_secret=client_secret,
         base_url=base_url,
         require_authorization_consent=False,  # OIDC provider handles consent
-        jwt_signing_key=os.getenv("OIDC_JWT_SIGNING_KEY"),  # Persist tokens across restarts
+        jwt_signing_key=os.getenv(
+            "OIDC_JWT_SIGNING_KEY"
+        ),  # Persist tokens across restarts
     )
 
     # Standard server with shared credentials (no proxy client needed)
@@ -1358,8 +1365,6 @@ async def _run_oidc_server(
     await _run_with_shutdown(
         mcp_instance.run_async(**_http_run_kwargs("streamable-http", host, port, path))
     )
-
-
 
 
 if __name__ == "__main__":

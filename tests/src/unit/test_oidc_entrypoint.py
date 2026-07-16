@@ -34,7 +34,10 @@ class TestMainOidcValidation:
         }
         clean_env = dict(env)
 
-        with patch.dict(os.environ, clean_env, clear=True), pytest.raises(SystemExit) as exc_info:
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            pytest.raises(SystemExit) as exc_info,
+        ):
             main_module.main_oidc()
 
         assert exc_info.value.code == 1
@@ -43,7 +46,12 @@ class TestMainOidcValidation:
         """main_oidc should exit when any single OIDC env var is missing."""
         import ha_mcp.__main__ as main_module
 
-        for missing_key in ["OIDC_CONFIG_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "MCP_BASE_URL"]:
+        for missing_key in [
+            "OIDC_CONFIG_URL",
+            "OIDC_CLIENT_ID",
+            "OIDC_CLIENT_SECRET",
+            "MCP_BASE_URL",
+        ]:
             env = dict(self._VALID_OIDC_ENV)
             del env[missing_key]
 
@@ -51,7 +59,9 @@ class TestMainOidcValidation:
                 with pytest.raises(SystemExit) as exc_info:
                     main_module.main_oidc()
 
-                assert exc_info.value.code == 1, f"Expected exit 1 when {missing_key} is missing"
+                assert exc_info.value.code == 1, (
+                    f"Expected exit 1 when {missing_key} is missing"
+                )
 
     def test_missing_ha_credentials_exits(self):
         """main_oidc should exit when HA credentials are missing."""
@@ -81,7 +91,9 @@ class TestMainOidcValidation:
 
         with (
             patch.dict(os.environ, self._VALID_OIDC_ENV, clear=True),
-            patch.object(main_module, "_run_entrypoint", side_effect=mock_run_entrypoint),
+            patch.object(
+                main_module, "_run_entrypoint", side_effect=mock_run_entrypoint
+            ),
         ):
             main_module.main_oidc()
 
@@ -115,7 +127,9 @@ class TestMainOidcLogging:
         with (
             patch.dict(os.environ, env, clear=True),
             patch.object(main_module, "_setup_logging", side_effect=mock_setup_logging),
-            patch.object(main_module, "_run_entrypoint", side_effect=lambda c, _l: c.close()),
+            patch.object(
+                main_module, "_run_entrypoint", side_effect=lambda c, _l: c.close()
+            ),
         ):
             main_module.main_oidc()
 
@@ -137,7 +151,9 @@ class TestMainOidcLogging:
         with (
             patch.dict(os.environ, env, clear=True),
             patch.object(main_module, "_setup_logging", side_effect=mock_setup_logging),
-            patch.object(main_module, "_run_entrypoint", side_effect=lambda c, _l: c.close()),
+            patch.object(
+                main_module, "_run_entrypoint", side_effect=lambda c, _l: c.close()
+            ),
         ):
             main_module.main_oidc()
 
@@ -158,7 +174,9 @@ class TestMainOidcLogging:
         with (
             patch.dict(os.environ, env, clear=True),
             patch.object(main_module, "_setup_logging", side_effect=mock_setup_logging),
-            patch.object(main_module, "_run_entrypoint", side_effect=lambda c, _l: c.close()),
+            patch.object(
+                main_module, "_run_entrypoint", side_effect=lambda c, _l: c.close()
+            ),
         ):
             main_module.main_oidc()
 
@@ -186,15 +204,24 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(side_effect=lambda **kwargs: fake_run_async(**kwargs))
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
             coro.close()
 
         with (
-            patch("ha_mcp.__main__.OIDCProxy" if hasattr(main_module, "OIDCProxy") else "fastmcp.server.auth.oidc_proxy.OIDCProxy", MockOIDCProxy),
-            patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server),
+            patch(
+                "ha_mcp.__main__.OIDCProxy"
+                if hasattr(main_module, "OIDCProxy")
+                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                MockOIDCProxy,
+            ),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
             patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
         ):
             await main_module._run_oidc_server(
@@ -207,7 +234,10 @@ class TestRunOidcServer:
                 path="/mcp",
             )
 
-        assert proxy_init_args["config_url"] == "https://auth.example.com/.well-known/openid-configuration"
+        assert (
+            proxy_init_args["config_url"]
+            == "https://auth.example.com/.well-known/openid-configuration"
+        )
         assert proxy_init_args["client_id"] == "test-id"
         assert proxy_init_args["client_secret"] == "test-secret"
         assert proxy_init_args["base_url"] == "https://mcp.example.com"
@@ -231,16 +261,27 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(side_effect=lambda **kwargs: fake_run_async(**kwargs))
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
             coro.close()
 
         with (
-            patch.dict(os.environ, {"OIDC_JWT_SIGNING_KEY": "test-jwt-key"}, clear=False),
-            patch("ha_mcp.__main__.OIDCProxy" if hasattr(main_module, "OIDCProxy") else "fastmcp.server.auth.oidc_proxy.OIDCProxy", MockOIDCProxy),
-            patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server),
+            patch.dict(
+                os.environ, {"OIDC_JWT_SIGNING_KEY": "test-jwt-key"}, clear=False
+            ),
+            patch(
+                "ha_mcp.__main__.OIDCProxy"
+                if hasattr(main_module, "OIDCProxy")
+                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                MockOIDCProxy,
+            ),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
             patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
         ):
             await main_module._run_oidc_server(
@@ -273,17 +314,28 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(side_effect=lambda **kwargs: fake_run_async(**kwargs))
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
             coro.close()
 
-        env_without_key = {k: v for k, v in os.environ.items() if k != "OIDC_JWT_SIGNING_KEY"}
+        env_without_key = {
+            k: v for k, v in os.environ.items() if k != "OIDC_JWT_SIGNING_KEY"
+        }
         with (
             patch.dict(os.environ, env_without_key, clear=True),
-            patch("ha_mcp.__main__.OIDCProxy" if hasattr(main_module, "OIDCProxy") else "fastmcp.server.auth.oidc_proxy.OIDCProxy", MockOIDCProxy),
-            patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server),
+            patch(
+                "ha_mcp.__main__.OIDCProxy"
+                if hasattr(main_module, "OIDCProxy")
+                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                MockOIDCProxy,
+            ),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
             patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
         ):
             await main_module._run_oidc_server(
@@ -322,8 +374,12 @@ class TestRunOidcServer:
 
         with (
             patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", return_value=mock_auth),
-            patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server),
-            patch.object(main_module, "_run_with_shutdown", side_effect=capture_run_with_shutdown),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
+            patch.object(
+                main_module, "_run_with_shutdown", side_effect=capture_run_with_shutdown
+            ),
         ):
             await main_module._run_oidc_server(
                 config_url="https://auth.example.com/.well-known/openid-configuration",
@@ -363,8 +419,12 @@ class TestRunOidcServer:
 
         with (
             patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", return_value=MagicMock()),
-            patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server),
-            patch.object(main_module, "_run_with_shutdown", side_effect=capture_run_with_shutdown),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
+            patch.object(
+                main_module, "_run_with_shutdown", side_effect=capture_run_with_shutdown
+            ),
         ):
             await main_module._run_oidc_server(
                 config_url="https://auth.example.com/.well-known/openid-configuration",

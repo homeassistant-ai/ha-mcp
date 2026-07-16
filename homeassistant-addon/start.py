@@ -560,7 +560,9 @@ def _run_secret_path_mode(secret_path: str, port: int) -> int:
         cause = e.__cause__ or e.__context__
         if cause:
             log_error(f"Caused by: {cause}")
-            traceback.print_exception(type(cause), cause, cause.__traceback__, file=sys.stderr)
+            traceback.print_exception(
+                type(cause), cause, cause.__traceback__, file=sys.stderr
+            )
         if isinstance(e, SystemExit):
             return int(e.code) if isinstance(e.code, int) else 1
         return 1
