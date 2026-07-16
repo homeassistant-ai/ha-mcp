@@ -14,7 +14,7 @@ configuration:
   secret_path:
     name: Secret path override
     description: |
-      Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path. Ignored when OIDC is enabled.
+      Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path.
   enable_tool_search:
     name: Enable tool search
     description: >-
@@ -277,23 +277,3 @@ configuration:
       certificate or hostname mismatch. Disabling weakens transport
       security — leave on unless you know you need it. Requires restart
       to take effect.
-  oidc_config_url:
-    name: OIDC Discovery URL
-    description: |
-      OpenID Connect discovery URL from your identity provider (e.g., https://auth.example.com/application/o/ha-mcp/.well-known/openid-configuration). All four OIDC fields must be set to enable OIDC authentication.
-  oidc_client_id:
-    name: OIDC Client ID
-    description: |
-      OAuth client ID registered with your OIDC provider.
-  oidc_client_secret:
-    name: OIDC Client Secret
-    description: |
-      OAuth client secret from your OIDC provider.
-  oidc_base_url:
-    name: Public Base URL
-    description: |
-      The public HTTPS URL where this MCP server is accessible through your reverse proxy (e.g., https://mcp.example.com). Required for OIDC redirect flows.
-  oidc_jwt_signing_key:
-    name: JWT Signing Key
-    description: |
-      Secret key for signing session tokens. Set this to persist logins across add-on restarts. Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"

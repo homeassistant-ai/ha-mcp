@@ -79,11 +79,6 @@ schema:
   enable_snapshot_delete: bool?
   snapshot_delete_min_age_days: int(0,365)?
   verify_ssl: bool?
-  oidc_config_url: url?
-  oidc_client_id: str?
-  oidc_client_secret: password?
-  oidc_base_url: url?
-  oidc_jwt_signing_key: password?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583

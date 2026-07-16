@@ -94,10 +94,5 @@ schema:
   disabled_tools: str?
   pinned_tools: str?
   verify_ssl: bool?
-  oidc_config_url: url?
-  oidc_client_id: str?
-  oidc_client_secret: password?
-  oidc_base_url: url?
-  oidc_jwt_signing_key: password?
 ports:
   9583/tcp: 9583

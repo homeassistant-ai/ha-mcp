@@ -326,251 +326,6 @@ def cleanup_stale_migration_marker(data_dir: Path) -> None:
         )
 
 
-_OIDC_REQUIRED_FIELDS = frozenset(
-    {"oidc_config_url", "oidc_client_id", "oidc_client_secret", "oidc_base_url"}
-)
-_OIDC_OPTIONAL_FIELDS = frozenset({"oidc_jwt_signing_key"})
-
-
-def _get_oidc_config(config: dict) -> dict[str, str]:
-    """Extract OIDC configuration from add-on options.
-
-    Returns an empty dict when no required OIDC field is set (including the case
-    where only the optional ``oidc_jwt_signing_key`` is configured), so callers
-    can use a plain truthiness check to decide whether OIDC mode should be entered.
-    """
-    raw = {
-        k: v.strip() if isinstance(v, str) else str(v)
-        for k in _OIDC_REQUIRED_FIELDS | _OIDC_OPTIONAL_FIELDS
-        if (v := config.get(k, ""))
-    }
-    result = {k: v for k, v in raw.items() if v}
-    # Only return a non-empty dict when at least one required field is present;
-    # a config with only the optional signing key must not trigger OIDC mode.
-    if not (set(result) & _OIDC_REQUIRED_FIELDS):
-        return {}
-    return result
-
-
-def _validate_oidc_config(oidc_config: dict[str, str]) -> str | None:
-    """Validate OIDC configuration completeness.
-
-    Returns:
-        Error message if partial config detected, None if valid or empty.
-    """
-    present = set(oidc_config.keys()) & _OIDC_REQUIRED_FIELDS
-
-    if not present:
-        return None  # No OIDC config — use secret path mode
-
-    missing = _OIDC_REQUIRED_FIELDS - present
-    if missing:
-        friendly_names = {
-            "oidc_config_url": "OIDC Discovery URL",
-            "oidc_client_id": "OIDC Client ID",
-            "oidc_client_secret": "OIDC Client Secret",
-            "oidc_base_url": "OIDC Public Base URL",
-        }
-        missing_names = [friendly_names[f] for f in sorted(missing)]
-        return (
-            f"Incomplete OIDC configuration. Missing: {', '.join(missing_names)}. "
-            f"Either set all OIDC fields or leave them all empty to use secret path mode."
-        )
-
-    return None  # All fields present — valid
-
-
-def _run_oidc_mode(oidc_config: dict[str, str], port: int) -> int:
-    """Start the server in OIDC authentication mode.
-
-    Args:
-        oidc_config: Validated OIDC configuration dict.
-        port: Internal container port.
-
-    Returns:
-        Exit code.
-    """
-    # Set OIDC environment variables for ha_mcp.__main__.main_oidc()
-    os.environ["OIDC_CONFIG_URL"] = oidc_config["oidc_config_url"]
-    os.environ["OIDC_CLIENT_ID"] = oidc_config["oidc_client_id"]
-    os.environ["OIDC_CLIENT_SECRET"] = oidc_config["oidc_client_secret"]
-    os.environ["MCP_BASE_URL"] = oidc_config["oidc_base_url"]
-    os.environ["MCP_PORT"] = str(port)
-    os.environ["MCP_SECRET_PATH"] = "/mcp"
-
-    # Optional: JWT signing key for persistent sessions across restarts
-    jwt_key = oidc_config.get("oidc_jwt_signing_key", "")
-    if jwt_key:
-        os.environ["OIDC_JWT_SIGNING_KEY"] = jwt_key
-
-    base_url = oidc_config["oidc_base_url"].rstrip("/")
-
-    log_info("")
-    log_info("=" * 80)
-    log_info("  OIDC Authentication Mode")
-    log_info("")
-    log_info(f"  MCP Endpoint: {base_url}/mcp")
-    log_info(f"  OIDC Provider: {oidc_config['oidc_config_url']}")
-    log_info(f"  Auth Callback: {base_url}/auth/callback")
-    log_info("")
-    log_info("  Users must authenticate via your OIDC provider before accessing MCP.")
-    log_info(f"  Ensure your reverse proxy forwards HTTPS traffic to port {port}.")
-    log_info("=" * 80)
-    log_info("")
-
-    try:
-        log_info("Starting OIDC-authenticated MCP server...")
-        from ha_mcp.__main__ import main_oidc
-
-        main_oidc()
-    except Exception as e:
-        log_error(f"Failed to start OIDC server: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return 1
-
-    return 0
-
-
-def _run_secret_path_mode(secret_path: str, port: int) -> int:
-    """Start the server in secret path mode (no authentication).
-
-    Args:
-        secret_path: The obfuscated URL path.
-        port: Internal container port.
-
-    Returns:
-        Exit code.
-    """
-    log_info("")
-    log_info("=" * 80)
-    log_info(f"🔐 MCP Server URL: http://<home-assistant-ip>:{port}{secret_path}")
-    log_info("")
-    log_info(f"   Secret Path: {secret_path}")
-    log_info("")
-    log_info("   ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!")
-    log_info("   💡 This path is auto-generated and persisted to /data/secret_path.txt")
-    log_info("=" * 80)
-    log_info("")
-
-    # Configure logging before server start (v3 removed log_level from run())
-    import logging
-
-    logging.basicConfig(level=logging.INFO)
-
-    # Import and register browser landing before server start
-    log_info("Importing ha_mcp module...")
-    from ha_mcp.__main__ import (
-        StatelessSessionLogFilter,
-        _get_server,
-        _get_timestamped_uvicorn_log_config,
-        _log_startup_version,
-        mcp,
-        register_browser_landing,
-    )
-    from ha_mcp.settings_ui import register_settings_routes
-
-    # Log the ha-mcp version + a self-update banner when a newer release is
-    # available. In the add-on that comes from the Supervisor add-on store, not
-    # PyPI (see update_check._resolve_update_info's is_running_in_addon branch).
-    # The addon runs its own startup here (it doesn't go through
-    # __main__.main_web), so without this the ha-mcp banner never reaches the
-    # addon logs — only FastMCP's own banner does (via run_async). Mirrors how
-    # FastMCP surfaces its update notice in these same startup logs.
-    _log_startup_version()
-
-    # Re-apply the effective log level now that ha_mcp is imported —
-    # the basicConfig above could only hardcode INFO. Without this, the
-    # web Settings UI "Log level" setting never reaches the addon log
-    # (#1721).
-    effective_log_level = resolve_effective_log_level()
-    logging.getLogger().setLevel(effective_log_level)
-    # Proof-of-application canary: emitted through the logging system
-    # (not print), so it reaches the addon log ONLY when the DEBUG level
-    # actually took effect. Support threads can key on this line to tell
-    # "user set DEBUG" apart from "DEBUG is really active".
-    logging.getLogger("addon_start").debug(
-        "Debug logging active (log_level applied from settings)"
-    )
-
-    if effective_log_level == logging.DEBUG:
-        log_info("Debug log level active — arming kill-signal diagnostics")
-        # Defers SA_SIGINFO install until uvicorn's capture_signals has
-        # run. Otherwise uvicorn's signal.signal() call would overwrite
-        # our handler before any signal arrived.
-        # Wrapped because diagnostics must never block addon startup.
-        try:
-            from ha_mcp.utils.kill_signal_diagnostics import (
-                schedule_install_after_uvicorn,
-            )
-
-            schedule_install_after_uvicorn()
-        except Exception as e:
-            log_error(f"kill-signal diagnostics install failed: {e!r}; continuing")
-
-    register_browser_landing(mcp, secret_path)
-    # Mount settings UI routes both at root (for HA ingress proxy) and
-    # under the secret path (for direct port access). See
-    # register_settings_routes docstring for the auth model. Use the
-    # server's actual FastMCP instance (not the _DeferredMCP wrapper)
-    # so mypy doesn't trip over the duck-typed __getattr__ forwarding.
-    server_instance = _get_server()
-    register_settings_routes(
-        server_instance.mcp, server_instance, secret_path=secret_path
-    )
-    logging.getLogger("mcp.server.streamable_http").addFilter(
-        StatelessSessionLogFilter()
-    )
-
-    # fastmcp's DNS-rebinding guard is defaulted off in ha_mcp's _create_server
-    # (reached above via _get_server() / the `mcp` proxy, before the app is
-    # built), so the addon -- ingress, direct port, and reverse proxies / tunnels
-    # on arbitrary hosts -- is covered. See ha_mcp.transport_security.
-
-    # The addon normally binds to 0.0.0.0 so HA Supervisor ingress can
-    # reach it inside the container; MCP_HOST override is provided for
-    # parity with the standard CLI entry points (see issue #1434).
-    bind_host = os.getenv("MCP_HOST", "0.0.0.0")
-
-    try:
-        log_info("Starting MCP server...")
-        if bind_host != "0.0.0.0":
-            log_info(f"Bind host overridden via MCP_HOST: {bind_host}")
-        mcp.run(
-            transport="http",
-            host=bind_host,
-            port=port,
-            path=secret_path,
-            stateless_http=True,
-            uvicorn_config={"log_config": _get_timestamped_uvicorn_log_config()},
-        )
-    except KeyboardInterrupt:
-        log_info("Interrupted, exiting")
-        return 0
-    except BaseException as e:
-        # Top-level crash handler: intentionally catch ANY exit (including
-        # SystemExit, translated to its code below) so the add-on supervisor
-        # always sees a clean process exit code instead of a traceback.
-        import traceback
-
-        log_error(f"MCP server crashed: {e}")
-        traceback.print_exc(file=sys.stderr)
-        # Log the root cause if this exception was chained
-        cause = e.__cause__ or e.__context__
-        if cause:
-            log_error(f"Caused by: {cause}")
-            traceback.print_exception(
-                type(cause), cause, cause.__traceback__, file=sys.stderr
-            )
-        if isinstance(e, SystemExit):
-            return int(e.code) if isinstance(e.code, int) else 1
-        return 1
-
-    log_info("MCP server stopped")
-    return 0
-
-
 def main() -> int:
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
@@ -806,6 +561,15 @@ def main() -> int:
         log_error("SUPERVISOR_TOKEN not found! Cannot authenticate.")
         return 1
 
+    # Generate or retrieve secret path
+    secret_path = get_or_create_secret_path(data_dir, custom_secret_path)
+
+    # Persist secret path back to addon options so other addons (e.g. the
+    # webhook proxy) can read it via `GET /addons/{slug}/info → options`
+    # instead of scraping it from this addon's logs (#941). Details and
+    # the skip/retry rules live in maybe_persist_secret_path().
+    maybe_persist_secret_path(config, secret_path, supervisor_token)
+
     log_info(f"Backup hint mode: {backup_hint}")
     log_info(f"Verify SSL: {verify_ssl}")
 
@@ -950,27 +714,132 @@ def main() -> int:
     # Fixed port (internal container port)
     port = 9583
 
-    # Check for OIDC configuration
-    oidc_config = _get_oidc_config(config)
-    oidc_error = _validate_oidc_config(oidc_config)
+    log_info("")
+    log_info("=" * 80)
+    log_info(f"🔐 MCP Server URL: http://<home-assistant-ip>:9583{secret_path}")
+    log_info("")
+    log_info(f"   Secret Path: {secret_path}")
+    log_info("")
+    log_info("   ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!")
+    log_info("   💡 This path is auto-generated and persisted to /data/secret_path.txt")
+    log_info("=" * 80)
+    log_info("")
 
-    if oidc_error:
-        log_error(oidc_error)
+    # Configure logging before server start (v3 removed log_level from run())
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+
+    # Import and register browser landing before server start
+    log_info("Importing ha_mcp module...")
+    from ha_mcp.__main__ import (
+        StatelessSessionLogFilter,
+        _get_server,
+        _get_timestamped_uvicorn_log_config,
+        _log_startup_version,
+        mcp,
+        register_browser_landing,
+    )
+    from ha_mcp.settings_ui import register_settings_routes
+
+    # Log the ha-mcp version + a self-update banner when a newer release is
+    # available. In the add-on that comes from the Supervisor add-on store, not
+    # PyPI (see update_check._resolve_update_info's is_running_in_addon branch).
+    # The addon runs its own startup here (it doesn't go through
+    # __main__.main_web), so without this the ha-mcp banner never reaches the
+    # addon logs — only FastMCP's own banner does (via run_async). Mirrors how
+    # FastMCP surfaces its update notice in these same startup logs.
+    _log_startup_version()
+
+    # Re-apply the effective log level now that ha_mcp is imported —
+    # the basicConfig above could only hardcode INFO. Without this, the
+    # web Settings UI "Log level" setting never reaches the addon log
+    # (#1721).
+    effective_log_level = resolve_effective_log_level()
+    logging.getLogger().setLevel(effective_log_level)
+    # Proof-of-application canary: emitted through the logging system
+    # (not print), so it reaches the addon log ONLY when the DEBUG level
+    # actually took effect. Support threads can key on this line to tell
+    # "user set DEBUG" apart from "DEBUG is really active".
+    logging.getLogger("addon_start").debug(
+        "Debug logging active (log_level applied from settings)"
+    )
+
+    if effective_log_level == logging.DEBUG:
+        log_info("Debug log level active — arming kill-signal diagnostics")
+        # Defers SA_SIGINFO install until uvicorn's capture_signals has
+        # run. Otherwise uvicorn's signal.signal() call would overwrite
+        # our handler before any signal arrived.
+        # Wrapped because diagnostics must never block addon startup.
+        try:
+            from ha_mcp.utils.kill_signal_diagnostics import (
+                schedule_install_after_uvicorn,
+            )
+
+            schedule_install_after_uvicorn()
+        except Exception as e:
+            log_error(f"kill-signal diagnostics install failed: {e!r}; continuing")
+
+    register_browser_landing(mcp, secret_path)
+    # Mount settings UI routes both at root (for HA ingress proxy) and
+    # under the secret path (for direct port access). See
+    # register_settings_routes docstring for the auth model. Use the
+    # server's actual FastMCP instance (not the _DeferredMCP wrapper)
+    # so mypy doesn't trip over the duck-typed __getattr__ forwarding.
+    server_instance = _get_server()
+    register_settings_routes(
+        server_instance.mcp, server_instance, secret_path=secret_path
+    )
+    logging.getLogger("mcp.server.streamable_http").addFilter(
+        StatelessSessionLogFilter()
+    )
+
+    # fastmcp's DNS-rebinding guard is defaulted off in ha_mcp's _create_server
+    # (reached above via _get_server() / the `mcp` proxy, before the app is
+    # built), so the addon -- ingress, direct port, and reverse proxies / tunnels
+    # on arbitrary hosts -- is covered. See ha_mcp.transport_security.
+
+    # The addon normally binds to 0.0.0.0 so HA Supervisor ingress can
+    # reach it inside the container; MCP_HOST override is provided for
+    # parity with the standard CLI entry points (see issue #1434).
+    bind_host = os.getenv("MCP_HOST", "0.0.0.0")
+
+    try:
+        log_info("Starting MCP server...")
+        if bind_host != "0.0.0.0":
+            log_info(f"Bind host overridden via MCP_HOST: {bind_host}")
+        mcp.run(
+            transport="http",
+            host=bind_host,
+            port=port,
+            path=secret_path,
+            stateless_http=True,
+            uvicorn_config={"log_config": _get_timestamped_uvicorn_log_config()},
+        )
+    except KeyboardInterrupt:
+        log_info("Interrupted, exiting")
+        return 0
+    except BaseException as e:
+        # Top-level crash handler: intentionally catch ANY exit (including
+        # SystemExit, translated to its code below) so the add-on supervisor
+        # always sees a clean process exit code instead of a traceback.
+        import traceback
+
+        log_error(f"MCP server crashed: {e}")
+        traceback.print_exc(file=sys.stderr)
+        # Log the root cause if this exception was chained
+        cause = e.__cause__ or e.__context__
+        if cause:
+            log_error(f"Caused by: {cause}")
+            traceback.print_exception(
+                type(cause), cause, cause.__traceback__, file=sys.stderr
+            )
+        if isinstance(e, SystemExit):
+            return int(e.code) if isinstance(e.code, int) else 1
         return 1
 
-    if oidc_config:
-        return _run_oidc_mode(oidc_config, port)
-
-    # Fall back to secret path mode
-    secret_path = get_or_create_secret_path(data_dir, custom_secret_path)
-
-    # Persist secret path back to addon options so other addons (e.g. the
-    # webhook proxy) can read it via `GET /addons/{slug}/info → options`
-    # instead of scraping it from this addon's logs (#941). Details and
-    # the skip/retry rules live in maybe_persist_secret_path().
-    maybe_persist_secret_path(config, secret_path, supervisor_token)
-
-    return _run_secret_path_mode(secret_path, port)
+    log_info("MCP server stopped")
+    return 0
 
 
 if __name__ == "__main__":
