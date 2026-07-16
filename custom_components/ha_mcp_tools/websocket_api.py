@@ -2,7 +2,7 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. v1.1.0 ships four commands (three capabilities):
+capability gate. v1.1.0 ships six commands (five capabilities):
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
   + ``component_version`` + advisory ``limits``. One cached probe tells the
@@ -23,6 +23,20 @@ capability gate. v1.1.0 ships four commands (three capabilities):
   enumerated, so the server falls back to its legacy ``<type>/list`` path for an
   uncovered type (e.g. ``tag``, which has no state entity) instead of trusting an
   empty result.
+* ``ha_mcp_tools/states`` — a bulk state read: ``State.as_dict()`` for each
+  requested entity_id (a pure ``hass.states.get`` in-memory read) plus the list
+  of ids with no state, so the server's ``ha_get_state`` serves a 100-entity
+  bulk call from one in-process frame instead of up to 100 REST GETs. The body
+  is byte-identical to the REST ``/api/states/<id>`` serialization by
+  construction; the server maps found/missing onto its per-id error contract.
+* ``ha_mcp_tools/blueprint_get`` — the full body of one installed blueprint
+  (``{metadata, config}``), which core's ``blueprint/list`` never returns (it
+  serves only ``{metadata}``). The path is jailed under
+  ``<config>/blueprints/<domain>/`` (symlink-safe containment, mirroring the
+  file-tool jail) and the file read + parse run off the event loop in the async
+  prep. ``!input`` markers are preserved; every other custom tag (``!secret`` /
+  ``!include`` / …) is neutralized to ``None`` at load time, so no resolved
+  secret plaintext can ever reach the body.
 
 ``ha_mcp_tools/config_get`` was withdrawn before release: it served an entity's
 ``raw_config``, whose freshness lags the config file between a write and the next
@@ -69,6 +83,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -104,6 +119,8 @@ WS_INFO = f"{WS_API_PREFIX}/info"
 WS_SEARCH = f"{WS_API_PREFIX}/search"
 WS_OVERVIEW = f"{WS_API_PREFIX}/overview"
 WS_HELPERS_LIST = f"{WS_API_PREFIX}/helpers_list"
+WS_STATES = f"{WS_API_PREFIX}/states"
+WS_BLUEPRINT_GET = f"{WS_API_PREFIX}/blueprint_get"
 
 # Wire-format generation of the request/response envelopes. Bumped only on an
 # *incompatible* shape change to an existing command; additive fields do not
@@ -114,7 +131,18 @@ SCHEMA_VERSION = 1
 # each consumer on ``capability in caps.capabilities``. Never remove an entry
 # without a major bump. (``info`` is always present in 1.1.0, so it carries no
 # capability key of its own.)
-CAPABILITIES: list[str] = ["search", "overview", "helpers_list"]
+CAPABILITIES: list[str] = [
+    "search",
+    "overview",
+    "helpers_list",
+    "states",
+    "blueprint_get",
+]
+
+# Blueprint domains this component will read a body for. Mirrors core's blueprint
+# domains; the WS schema gates on it so an out-of-range domain never reaches the
+# path jail. Kept next to the blueprint command it governs.
+BLUEPRINT_DOMAINS = ("automation", "script")
 
 # Advisory caps advertised in ``info.limits`` so no single WS frame balloons.
 MAX_RESULTS = 500
@@ -252,6 +280,8 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_search_schema(), _do_search, _search_prep),
         (_overview_schema(), _do_overview, None),
         (_helpers_list_schema(), _do_helpers_list, None),
+        (_states_schema(), _do_states, None),
+        (_blueprint_get_schema(), _do_blueprint_get, _blueprint_get_prep),
     ]
 
 
@@ -309,6 +339,21 @@ def _helpers_list_schema() -> dict[Any, Any]:
         vol.Required("type"): WS_HELPERS_LIST,
         vol.Optional("helper_types"): [str],
         vol.Optional("include_flow_helpers", default=True): bool,
+    }
+
+
+def _states_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_STATES,
+        vol.Required("entity_ids"): [str],
+    }
+
+
+def _blueprint_get_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_BLUEPRINT_GET,
+        vol.Required("domain"): vol.In(BLUEPRINT_DOMAINS),
+        vol.Required("path"): str,
     }
 
 
@@ -1942,3 +1987,184 @@ def _overview_repairs(hass: HomeAssistant) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+# =============================================================================
+# ha_mcp_tools/states
+# =============================================================================
+def _do_states(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return ``State.as_dict()`` for each requested entity_id + a ``missing`` list.
+
+    ``hass.states.get(id)`` is a pure O(1) in-memory dict read, and core's
+    ``State.as_dict()`` is exactly the serialization the REST ``/api/states/<id>``
+    endpoint emits — so a component-served record is byte-identical to the legacy
+    per-id REST fetch by construction (the WS transport JSON-encodes the same
+    datetimes to the same ISO strings the REST layer does). The body is returned
+    UNMODIFIED — never ``_plainify``'d — precisely so that byte-parity holds:
+    ``_plainify``'s ``str()`` would render a datetime with a space separator where
+    both REST and WS use ``isoformat``'s ``T``. No freshness or secrets concern:
+    state bodies are always live and carry no ``!secret`` plaintext. The server
+    enforces its own ``MAX_ENTITIES`` cap before calling, so no per-frame guard is
+    needed here (100 full states is well within one frame — ``overview`` already
+    returns every state in one call).
+    """
+    entity_ids = params.get("entity_ids") or []
+    states: dict[str, Any] = {}
+    missing: list[str] = []
+    for entity_id in entity_ids:
+        state = _state_get(hass, entity_id)
+        if state is None:
+            missing.append(entity_id)
+            continue
+        states[entity_id] = _state_as_dict(state)
+    return {"states": states, "missing": missing}
+
+
+def _state_get(hass: HomeAssistant, entity_id: str) -> Any:
+    """``hass.states.get(entity_id)`` guarded against core drift (``None`` if absent)."""
+    states = getattr(hass, "states", None)
+    getter = getattr(states, "get", None) if states is not None else None
+    if getter is None:
+        return None
+    try:
+        return getter(entity_id)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _state_as_dict(state: Any) -> Any:
+    """core ``State.as_dict()`` verbatim — the REST ``/api/states/<id>`` shape.
+
+    Returned unmodified so the WS transport encodes its datetimes with the same
+    ``isoformat`` the REST layer uses (byte-parity — see :func:`_do_states`).
+    """
+    as_dict = getattr(state, "as_dict", None)
+    if callable(as_dict):
+        try:
+            return as_dict()
+        except Exception:  # pragma: no cover - defensive
+            return None
+    return None
+
+
+# =============================================================================
+# ha_mcp_tools/blueprint_get
+# =============================================================================
+def _do_blueprint_get(
+    hass: HomeAssistant,
+    params: dict[str, Any],
+    *,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return one installed blueprint's full body as ``{metadata, config}``.
+
+    core's ``blueprint/list`` returns only ``{metadata}`` (no triggers /
+    conditions / actions / sequence), so the server can otherwise serve metadata
+    only. This reads the on-disk blueprint file and returns the parsed body:
+    ``config`` is the full file (the server merges it additively over the
+    ``blueprint/list`` metadata) and ``metadata`` is its ``blueprint:`` section.
+    When the file is missing, unparseable, or the requested path escapes the jail,
+    both come back ``None`` (the server keeps metadata-only) — see
+    :func:`_read_blueprint_file`.
+
+    Pure: the blocking jail-resolve + file read + YAML parse run in the executor
+    via :func:`_blueprint_get_prep`, which passes the parsed ``body`` in.
+    """
+    if not isinstance(body, dict):
+        return {"metadata": None, "config": None}
+    metadata = body.get("blueprint")
+    return {
+        "metadata": _plainify(metadata) if isinstance(metadata, dict) else None,
+        "config": _plainify(body),
+    }
+
+
+async def _blueprint_get_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Async pre-step for ``blueprint_get``: jail + read + parse off the loop.
+
+    The path jail (symlink-safe ``Path.resolve`` containment), the ``open()`` and
+    the YAML parse are all blocking filesystem work, so they run in the executor
+    via :meth:`hass.async_add_executor_job` — keeping :func:`_do_blueprint_get` a
+    pure assembler over the parsed ``body`` this returns (``None`` on any failure).
+    """
+    domain = msg["domain"]
+    path = msg["path"]
+    body = await hass.async_add_executor_job(_read_blueprint_file, hass, domain, path)
+    return {"body": body}
+
+
+def _read_blueprint_file(
+    hass: HomeAssistant, domain: str, path: str
+) -> dict[str, Any] | None:
+    """Resolve + jail + read + parse one blueprint YAML file. ``None`` on failure.
+
+    Blueprint files live under ``<config>/blueprints/<domain>/``. The requested
+    ``path`` is joined under that root and resolved symlink-safe (mirrors the
+    file-tool jail's ``_resolves_within`` — resolve the RAW input, following
+    symlinks, THEN check containment, so ``<root>/<symlink>/..`` cannot escape). A
+    path escaping the root — via ``..``, an absolute path, or a symlink — yields
+    ``None`` (rejected, never opened). A missing file, a non-file target, a read
+    error, or a YAML parse error also yields ``None``. Only a valid, contained,
+    parseable blueprint returns its full parsed body.
+
+    Parsed with :class:`_BlueprintLoader`: ``!input`` markers are preserved and
+    every other custom tag (``!secret`` / ``!include`` / …) is neutralized to
+    ``None``, so no resolved secret plaintext can ever enter the returned body
+    (defense in depth — blueprints use ``!input``, not ``!secret``).
+    """
+    config = getattr(hass, "config", None)
+    path_fn = getattr(config, "path", None)
+    if not callable(path_fn):
+        return None
+    try:
+        base = Path(path_fn("blueprints", domain))
+        candidate = Path(path) if path.startswith("/") else base / path
+        real = candidate.resolve()
+        base_real = base.resolve()
+    except (OSError, ValueError):
+        return None
+    if not (real == base_real or real.is_relative_to(base_real)):
+        return None
+    try:
+        with open(real, encoding="utf-8") as handle:
+            # Instance form (not yaml.load) mirrors the component's existing
+            # _PackagesDirLoader usage; _BlueprintLoader is a SafeLoader subclass,
+            # so no !!python/object can construct arbitrary types.
+            loader = _BlueprintLoader(handle)
+            try:
+                parsed = loader.get_single_data()
+            finally:
+                loader.dispose()
+    except (OSError, ValueError, yaml.YAMLError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _construct_blueprint_input(loader: Any, node: Any) -> dict[str, str]:
+    """Represent ``!input <name>`` as ``{"__input__": <name>}``.
+
+    A JSON-safe, unambiguous marker of a blueprint input substitution point (the
+    body is a display artifact, not a runnable config), so a consumer can see
+    which fields an input fills without the tag crashing a plain safe-load.
+    """
+    return {"__input__": str(getattr(node, "value", ""))}
+
+
+def _drop_blueprint_tag(loader: Any, tag_suffix: Any, node: Any) -> None:
+    """Neutralize every non-``!input`` custom tag to ``None`` (never resolve it).
+
+    ``!secret`` must never resolve to plaintext; ``!include`` / ``!env_var`` /
+    unknown tags are irrelevant to a read-only body view. Mirrors the component's
+    ``_ignore_unknown_tag`` pattern in ``__init__.py``.
+    """
+    return None
+
+
+class _BlueprintLoader(yaml.SafeLoader):
+    """SafeLoader for blueprint files: keep ``!input``, neutralize all other tags."""
+
+
+_BlueprintLoader.add_constructor("!input", _construct_blueprint_input)
+_BlueprintLoader.add_multi_constructor("!", _drop_blueprint_tag)

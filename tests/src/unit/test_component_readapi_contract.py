@@ -25,6 +25,7 @@ import pytest
 
 from ha_mcp.tools import (
     component_api,
+    tools_blueprints,
     tools_config_helpers,
     tools_search,
 )
@@ -54,6 +55,18 @@ from .test_ha_config_list_helpers_component_routing import (
 from .test_ha_config_list_helpers_component_routing import (
     _build_list_helpers,
 )
+from .test_ha_get_blueprint_component_routing import (
+    RoutingClient as BlueprintRoutingClient,
+)
+from .test_ha_get_blueprint_component_routing import (
+    _build_get_blueprint,
+)
+from .test_ha_get_state_component_routing import (
+    RoutingClient as StateRoutingClient,
+)
+from .test_ha_get_state_component_routing import (
+    _build_get_state,
+)
 from .test_ha_overview_component_routing import (
     OverviewRoutingClient,
     _build_overview_tool,
@@ -63,6 +76,14 @@ from .test_ha_overview_component_routing import (
 _REAL_FNS = {
     "ha_mcp_tools/overview": wsapi._do_overview,
     "ha_mcp_tools/helpers_list": wsapi._do_helpers_list,
+    "ha_mcp_tools/states": wsapi._do_states,
+    "ha_mcp_tools/blueprint_get": wsapi._do_blueprint_get,
+}
+
+# Commands whose blocking work lives in an async prep pre-step (run here so the
+# seam exercises the real executor-offloaded jail/read, then the pure handler).
+_PREP_FNS = {
+    "ha_mcp_tools/blueprint_get": wsapi._blueprint_get_prep,
 }
 
 
@@ -70,9 +91,9 @@ def _real_component_ws(hass: FakeHass) -> AsyncMock:
     """A WS mock whose commands are served by the REAL component functions.
 
     ``info`` returns the real ``_do_info()`` (so the caps probe sees the real
-    capability list), and each read command runs the real ``_do_*`` against
-    ``hass`` — the seam under test is everything between that return value and
-    the tool response.
+    capability list), and each read command runs the real ``_do_*`` (after its
+    real async ``prep``, when it has one) against ``hass`` — the seam under test
+    is everything between that return value and the tool response.
     """
     ws = AsyncMock()
 
@@ -80,7 +101,10 @@ def _real_component_ws(hass: FakeHass) -> AsyncMock:
         if command_type == "ha_mcp_tools/info":
             return {"success": True, "result": wsapi._do_info()}
         fn = _REAL_FNS[command_type]
-        return {"success": True, "result": fn(hass, dict(kwargs))}
+        params = dict(kwargs)
+        prep = _PREP_FNS.get(command_type)
+        extra = await prep(hass, params) if prep is not None else {}
+        return {"success": True, "result": fn(hass, params, **extra)}
 
     ws.send_command = AsyncMock(side_effect=_send)
     return ws
@@ -367,3 +391,117 @@ class TestHelpersListSeam:
         assert resp["success"] is True
         assert [h["id"] for h in resp["helpers"]] == ["tag-42"]
         assert client.list_calls >= 1, "tag must be served by legacy"
+
+
+# --- states ---------------------------------------------------------------------
+class TestStatesSeam:
+    @pytest.mark.asyncio
+    async def test_bulk_states_shaped_from_real_output(self) -> None:
+        """A bulk ha_get_state runs over the REAL ``_do_states``: hits carry the
+        component's ``State.as_dict()`` body verbatim, a missing id lands in
+        ``errors`` as ENTITY_NOT_FOUND, and no legacy REST GET fires."""
+        hass = FakeHass(
+            states=[
+                FakeState("light.lamp", "on", friendly_name="Lamp"),
+                FakeState("sensor.temp", "21", friendly_name="Temp"),
+            ]
+        )
+        client = StateRoutingClient()
+        ws = _real_component_ws(hass)
+        tool = _build_get_state(client)
+        with patch_ws(ws, tools_search):
+            resp = await tool(["light.lamp", "sensor.temp", "light.ghost"])
+
+        data = resp["data"]
+        assert data["success"] is True
+        assert set(data["states"]) == {"light.lamp", "sensor.temp"}
+        # The per-id body is the component's real as_dict() output (REST parity).
+        assert data["states"]["light.lamp"]["state"] == "on"
+        assert data["states"]["light.lamp"]["attributes"]["friendly_name"] == "Lamp"
+        assert data["error_count"] == 1
+        assert data["errors"][0]["entity_id"] == "light.ghost"
+        assert data["errors"][0]["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert client.get_state_calls == 0, "states must be fully component-served"
+
+    @pytest.mark.asyncio
+    async def test_single_state_shaped_from_real_output(self) -> None:
+        """Single-entity ha_get_state served by the REAL ``_do_states``."""
+        hass = FakeHass(states=[FakeState("light.lamp", "on", friendly_name="Lamp")])
+        client = StateRoutingClient()
+        ws = _real_component_ws(hass)
+        tool = _build_get_state(client)
+        with patch_ws(ws, tools_search):
+            resp = await tool("light.lamp")
+        assert resp["data"]["entity_id"] == "light.lamp"
+        assert resp["data"]["state"] == "on"
+        assert client.get_state_calls == 0
+
+
+# --- blueprint_get --------------------------------------------------------------
+_MOTION_BLUEPRINT = (
+    "blueprint:\n"
+    "  name: Motion Light\n"
+    "  domain: automation\n"
+    "  input:\n"
+    "    motion_sensor:\n"
+    "      name: Motion Sensor\n"
+    "trigger:\n"
+    "  - platform: state\n"
+    "    entity_id: !input motion_sensor\n"
+    "action:\n"
+    "  - service: light.turn_on\n"
+)
+
+
+class TestBlueprintGetSeam:
+    def _hass(self, tmp_path: Any) -> FakeHass:
+        return FakeHass(config=FakeConfig(base_dir=tmp_path))
+
+    @pytest.mark.asyncio
+    async def test_full_body_merged_from_real_file_read(self, tmp_path) -> None:
+        """ha_get_blueprint merges the REAL executor-read, jailed file body under
+        ``config`` (``!input`` preserved as a marker) over the list metadata."""
+        target = tmp_path / "blueprints" / "automation" / "user" / "motion.yaml"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_MOTION_BLUEPRINT, encoding="utf-8")
+
+        client = BlueprintRoutingClient()  # its blueprint/list serves user/motion.yaml
+        ws = _real_component_ws(self._hass(tmp_path))
+        tool = _build_get_blueprint(client)
+        with patch_ws(ws, tools_blueprints):
+            resp = await tool(path="user/motion.yaml", domain="automation")
+
+        assert resp["success"] is True
+        assert resp["metadata"]["name"] == "Motion Light"
+        assert resp["config"]["trigger"][0]["entity_id"] == {
+            "__input__": "motion_sensor"
+        }
+        assert resp["config"]["action"] == [{"service": "light.turn_on"}]
+
+    @pytest.mark.asyncio
+    async def test_path_traversal_rejected_by_real_jail(self, tmp_path) -> None:
+        """A blueprint whose list key escapes the jail is never read: the REAL
+        jail returns a null body and the tool serves metadata-only."""
+        # A secret sitting outside the blueprints jail.
+        (tmp_path / "secrets.yaml").write_text("db_pw: hunter2\n", encoding="utf-8")
+        evil = "../../secrets.yaml"
+
+        class _EvilListClient(BlueprintRoutingClient):
+            async def send_websocket_message(
+                self, msg: dict[str, Any]
+            ) -> dict[str, Any]:
+                self.list_calls += 1
+                if msg.get("type") == "blueprint/list":
+                    return {"success": True, "result": {evil: {"metadata": {}}}}
+                return {"success": False, "error": "unexpected"}
+
+        client = _EvilListClient()
+        ws = _real_component_ws(self._hass(tmp_path))
+        tool = _build_get_blueprint(client)
+        with patch_ws(ws, tools_blueprints):
+            resp = await tool(path=evil, domain="automation")
+
+        assert resp["success"] is True
+        # The real jail blocked the read — no body, and the secret never leaked.
+        assert "config" not in resp
+        assert "hunter2" not in json.dumps(resp)

@@ -72,20 +72,48 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # Fakes
 # =============================================================================
 class FakeState:
-    def __init__(self, entity_id, state="on", friendly_name=None, **attrs):
+    def __init__(
+        self,
+        entity_id,
+        state="on",
+        friendly_name=None,
+        last_changed="2026-07-16T00:00:00+00:00",
+        last_updated="2026-07-16T00:00:00+00:00",
+        **attrs,
+    ):
         self.entity_id = entity_id
         self.state = state
         self.attributes = dict(attrs)
         if friendly_name is not None:
             self.attributes["friendly_name"] = friendly_name
+        self.last_changed = last_changed
+        self.last_updated = last_updated
+
+    def as_dict(self):
+        # Mirrors core ``State.as_dict()`` / the REST ``/api/states/<id>`` shape.
+        # Timestamps are already ISO strings here — the real WS transport encodes
+        # core's datetimes to the same isoformat, so the server sees plain JSON
+        # either way (see websocket_api._do_states byte-parity note).
+        return {
+            "entity_id": self.entity_id,
+            "state": self.state,
+            "attributes": dict(self.attributes),
+            "last_changed": self.last_changed,
+            "last_updated": self.last_updated,
+            "context": {"id": "01ABC", "parent_id": None, "user_id": None},
+        }
 
 
 class FakeStates:
     def __init__(self, states):
         self._states = list(states)
+        self._by_id = {getattr(s, "entity_id", None): s for s in self._states}
 
     def async_all(self):
         return list(self._states)
+
+    def get(self, entity_id):
+        return self._by_id.get(entity_id)
 
 
 class FakeConfigEntries:
@@ -389,6 +417,8 @@ class TestInfo:
             "search",
             "overview",
             "helpers_list",
+            "states",
+            "blueprint_get",
         ]
         # config_get was withdrawn before release (raw_config freshness lags the
         # config file between write and reload) — it must not be advertised.
@@ -1384,13 +1414,17 @@ _ALL_COMMANDS = [
     "ha_mcp_tools/search",
     "ha_mcp_tools/overview",
     "ha_mcp_tools/helpers_list",
+    "ha_mcp_tools/states",
+    "ha_mcp_tools/blueprint_get",
 ]
 
 # Minimal well-formed message body per command (Required fields) so the admin
-# gate / async_response wrappers reach the pure handler. Empty now that
-# config_get (which required domain + item_id) is withdrawn — every remaining
-# command has no Required field beyond ``type``.
-_CMD_MSG_EXTRA: dict[str, dict[str, object]] = {}
+# gate / async_response wrappers reach the pure handler. ``states`` requires
+# ``entity_ids``; ``blueprint_get`` requires ``domain`` + ``path``.
+_CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
+    "ha_mcp_tools/states": {"entity_ids": []},
+    "ha_mcp_tools/blueprint_get": {"domain": "automation", "path": "x.yaml"},
+}
 
 
 class TestRegistrationAndAdminGate:
@@ -1400,6 +1434,8 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_SEARCH,
             wsapi.WS_OVERVIEW,
             wsapi.WS_HELPERS_LIST,
+            wsapi.WS_STATES,
+            wsapi.WS_BLUEPRINT_GET,
         }
         # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
@@ -1492,6 +1528,212 @@ class TestNewCommandSchemas:
         schema = self._schema(monkeypatch, wsapi._helpers_list_schema)
         with pytest.raises(_REAL_VOL.Invalid):
             schema(bad)
+
+    def test_states_requires_entity_ids_list(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._states_schema)
+        out = schema({"type": wsapi.WS_STATES, "entity_ids": ["light.a", "light.b"]})
+        assert out["entity_ids"] == ["light.a", "light.b"]
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/states"},  # entity_ids required
+            {"type": "ha_mcp_tools/states", "entity_ids": "light.a"},  # not a list
+            {"type": "ha_mcp_tools/states", "entity_ids": [1, 2]},  # not strings
+        ],
+    )
+    def test_states_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._states_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
+
+    def test_blueprint_get_valid(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._blueprint_get_schema)
+        out = schema(
+            {
+                "type": wsapi.WS_BLUEPRINT_GET,
+                "domain": "script",
+                "path": "user/x.yaml",
+            }
+        )
+        assert out["domain"] == "script"
+        assert out["path"] == "user/x.yaml"
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/blueprint_get", "path": "x.yaml"},  # domain required
+            {"type": "ha_mcp_tools/blueprint_get", "domain": "automation"},  # path req
+            # domain must be one of the blueprint domains
+            {"type": "ha_mcp_tools/blueprint_get", "domain": "scene", "path": "x.yaml"},
+        ],
+    )
+    def test_blueprint_get_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._blueprint_get_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
+
+
+# =============================================================================
+# states — bulk State.as_dict() read + missing list
+# =============================================================================
+class TestStates:
+    def test_found_and_missing_split(self):
+        hass = FakeHass(
+            states=[
+                FakeState("light.a", "on", friendly_name="A"),
+                FakeState("sensor.b", "21", friendly_name="B"),
+            ]
+        )
+        res = wsapi._do_states(
+            hass, {"entity_ids": ["light.a", "sensor.b", "light.ghost"]}
+        )
+        assert set(res["states"]) == {"light.a", "sensor.b"}
+        assert res["missing"] == ["light.ghost"]
+
+    def test_body_is_state_as_dict_verbatim(self):
+        """The per-id body is core ``State.as_dict()`` unmodified (REST parity)."""
+        state = FakeState("light.a", "on", friendly_name="A", brightness=128)
+        res = wsapi._do_states(FakeHass(states=[state]), {"entity_ids": ["light.a"]})
+        assert res["states"]["light.a"] == state.as_dict()
+        # Timestamps pass through untouched (no _plainify str() mangling).
+        assert res["states"]["light.a"]["last_changed"] == "2026-07-16T00:00:00+00:00"
+
+    def test_empty_request(self):
+        res = wsapi._do_states(FakeHass(states=[FakeState("light.a")]), {})
+        assert res == {"states": {}, "missing": []}
+
+    def test_all_missing_when_no_state_machine(self):
+        # A hass with no usable states.get degrades every id to missing, never raises.
+        res = wsapi._do_states(FakeHass(states=[]), {"entity_ids": ["light.a"]})
+        assert res == {"states": {}, "missing": ["light.a"]}
+
+    def test_duplicate_ids_map_once(self):
+        res = wsapi._do_states(
+            FakeHass(states=[FakeState("light.a")]),
+            {"entity_ids": ["light.a", "light.a"]},
+        )
+        assert list(res["states"]) == ["light.a"]
+        assert res["missing"] == []
+
+
+# =============================================================================
+# blueprint_get — jailed file read, !input preserved, !secret neutralized
+# =============================================================================
+class TestBlueprintGet:
+    _MOTION_LIGHT = (
+        "blueprint:\n"
+        "  name: Motion Light\n"
+        "  description: Turn on a light on motion.\n"
+        "  domain: automation\n"
+        "  input:\n"
+        "    motion_sensor:\n"
+        "      name: Motion Sensor\n"
+        "      selector:\n"
+        "        entity:\n"
+        "          domain: binary_sensor\n"
+        "trigger:\n"
+        "  - platform: state\n"
+        "    entity_id: !input motion_sensor\n"
+        "    to: 'on'\n"
+        "action:\n"
+        "  - service: light.turn_on\n"
+        "    entity_id: !input target_light\n"
+    )
+
+    def _write_blueprint(self, tmp_path, domain, rel_path, text):
+        target = tmp_path / "blueprints" / domain / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        return target
+
+    def _hass(self, tmp_path):
+        return FakeHass(config=FakeConfig(base_dir=tmp_path))
+
+    def test_reads_full_body_metadata_and_config(self, tmp_path):
+        self._write_blueprint(
+            tmp_path, "automation", "user/motion.yaml", self._MOTION_LIGHT
+        )
+        body = wsapi._read_blueprint_file(
+            self._hass(tmp_path), "automation", "user/motion.yaml"
+        )
+        res = wsapi._do_blueprint_get(
+            self._hass(tmp_path), {"domain": "automation"}, body=body
+        )
+        assert res["metadata"]["name"] == "Motion Light"
+        assert res["config"]["blueprint"]["domain"] == "automation"
+        # The body (triggers/actions) core's blueprint/list never returns.
+        assert res["config"]["trigger"][0]["platform"] == "state"
+        assert res["config"]["action"][0]["service"] == "light.turn_on"
+
+    def test_input_tag_preserved_as_marker(self, tmp_path):
+        self._write_blueprint(
+            tmp_path, "automation", "user/motion.yaml", self._MOTION_LIGHT
+        )
+        body = wsapi._read_blueprint_file(
+            self._hass(tmp_path), "automation", "user/motion.yaml"
+        )
+        assert body["trigger"][0]["entity_id"] == {"__input__": "motion_sensor"}
+        assert body["action"][0]["entity_id"] == {"__input__": "target_light"}
+
+    def test_secret_tag_neutralized_never_resolved(self, tmp_path):
+        text = (
+            "blueprint:\n"
+            "  name: Has Secret\n"
+            "  domain: automation\n"
+            "action:\n"
+            "  - service: notify.notify\n"
+            "    data:\n"
+            "      token: !secret my_api_token\n"
+        )
+        self._write_blueprint(tmp_path, "automation", "sneaky.yaml", text)
+        body = wsapi._read_blueprint_file(
+            self._hass(tmp_path), "automation", "sneaky.yaml"
+        )
+        # The !secret leaf is None — never a resolved plaintext value.
+        assert body["action"][0]["data"] == {"token": None}
+        assert "my_api_token" not in json.dumps(body)
+
+    @pytest.mark.parametrize(
+        "evil",
+        [
+            "../../secrets.yaml",
+            "../../../etc/passwd",
+            "/etc/passwd",
+            "user/../../escape.yaml",
+        ],
+    )
+    def test_path_traversal_rejected(self, tmp_path, evil):
+        # Even if the target exists outside the jail, it must never be read.
+        (tmp_path / "secrets.yaml").write_text("db_pw: hunter2\n", encoding="utf-8")
+        body = wsapi._read_blueprint_file(self._hass(tmp_path), "automation", evil)
+        assert body is None
+
+    def test_missing_file_returns_none(self, tmp_path):
+        assert (
+            wsapi._read_blueprint_file(self._hass(tmp_path), "automation", "nope.yaml")
+            is None
+        )
+
+    def test_do_blueprint_get_without_body(self):
+        res = wsapi._do_blueprint_get(FakeHass(), {"domain": "automation"}, body=None)
+        assert res == {"metadata": None, "config": None}
+
+    @pytest.mark.asyncio
+    async def test_prep_offloads_read_and_feeds_do(self, tmp_path):
+        self._write_blueprint(
+            tmp_path,
+            "script",
+            "user/s.yaml",
+            "blueprint:\n  name: S\n  domain: script\nsequence:\n  - delay: 1\n",
+        )
+        hass = self._hass(tmp_path)
+        extra = await wsapi._blueprint_get_prep(
+            hass, {"domain": "script", "path": "user/s.yaml"}
+        )
+        res = wsapi._do_blueprint_get(hass, {"domain": "script"}, **extra)
+        assert res["metadata"]["name"] == "S"
+        assert res["config"]["sequence"] == [{"delay": 1}]
 
 
 # =============================================================================

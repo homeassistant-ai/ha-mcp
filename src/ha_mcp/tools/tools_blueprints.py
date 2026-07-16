@@ -12,7 +12,18 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
+from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -105,8 +116,11 @@ class BlueprintTools:
         Get blueprint information - list all blueprints or get details for a specific one.
 
         Without a path: Lists all installed blueprints for the specified domain.
-        With a path: Retrieves full blueprint configuration including inputs, triggers,
-        conditions, and actions.
+        With a path: Returns the blueprint's metadata and input definitions. The
+        full body (triggers/conditions/actions for automations, sequence for
+        scripts) is included under `config` ONLY when the ha_mcp_tools custom
+        component is installed — core's blueprint API exposes metadata alone, so
+        without the component the body cannot be read.
 
         EXAMPLES:
         - List all automation blueprints: ha_get_blueprint(domain="automation")
@@ -120,7 +134,8 @@ class BlueprintTools:
         RETURNS (when getting specific blueprint):
         - Blueprint metadata (name, description, author, source_url)
         - Input definitions with selectors and defaults
-        - Blueprint configuration (triggers, conditions, actions for automations; sequence for scripts)
+        - `config`: the full parsed blueprint body (only with the ha_mcp_tools
+          component; `!input` substitution points appear as `{"__input__": name}`)
         """
         try:
             # Validate domain
@@ -202,9 +217,13 @@ class BlueprintTools:
                 if "input" in meta:
                     result["inputs"] = meta["input"]
 
-            # Add blueprint configuration if available
-            if "blueprint" in blueprint_data:
-                result["blueprint"] = blueprint_data["blueprint"]
+            # Core's blueprint/list returns metadata only (never a body), so the
+            # full triggers/conditions/actions/sequence come from the ha_mcp_tools
+            # component when installed. Merge it additively under `config`; without
+            # the component the response stays metadata + inputs.
+            config = await self._blueprint_config_via_component(domain, path)
+            if config is not None:
+                result["config"] = config
 
             return result
 
@@ -221,6 +240,45 @@ class BlueprintTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+
+    async def _blueprint_config_via_component(
+        self, domain: str, path: str
+    ) -> dict[str, Any] | None:
+        """Fetch a blueprint's full parsed body via the component; ``None`` ⇒ metadata-only.
+
+        core's ``blueprint/list`` returns only ``{metadata}`` (no body), so
+        without the component ``ha_get_blueprint`` can serve metadata + inputs
+        only. When the component advertises ``blueprint_get`` it reads the on-disk
+        blueprint file (path-jailed, executor-offloaded) and returns the full
+        parsed body, merged additively under ``config``. Returns ``None`` — keeping
+        the response metadata-only — when the component is absent / lacks the
+        capability, was downgraded (``unknown_command`` → invalidate the cached
+        caps), errored (logged), or could not read the file (jail reject, missing,
+        parse error → the component returns a null ``config``). The server has
+        already confirmed the path is a real installed blueprint before this runs.
+        """
+        caps = await get_component_caps(self._client)
+        if not component_supports(caps, "blueprint_get"):
+            return None
+        try:
+            ws = await get_websocket_client(
+                url=self._client.base_url, token=self._client.token
+            )
+            raw = await ws.send_command(
+                "ha_mcp_tools/blueprint_get", domain=domain, path=path
+            )
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+            else:
+                logger.warning(
+                    "ha_mcp_tools/blueprint_get failed; served metadata-only: %r",
+                    exc,
+                )
+            return None
+        result = raw.get("result") or {}
+        config = result.get("config")
+        return config if isinstance(config, dict) else None
 
     @tool(
         name="ha_import_blueprint",
