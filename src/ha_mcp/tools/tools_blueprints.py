@@ -222,6 +222,68 @@ class BlueprintTools:
             )
             return None  # unreachable: exception_to_structured_error always raises
 
+    async def _save_blueprint(
+        self,
+        url: str,
+        domain: str,
+        path: str,
+        yaml_data: str,
+        overwrite: bool,
+    ) -> dict[str, Any]:
+        """Persist a validated blueprint via blueprint/save, raising on failure.
+
+        Returns the blueprint/save result payload (contains overrides_existing).
+        """
+        save_message: dict[str, Any] = {
+            "type": "blueprint/save",
+            "domain": domain,
+            "path": path,
+            "yaml": yaml_data,
+            "source_url": url,
+        }
+        # allow_override only exists on HA >= 2023.12 and the WS schema
+        # rejects unknown keys - only send it when actually overwriting
+        if overwrite:
+            save_message["allow_override"] = True
+
+        save_response = await self._client.send_websocket_message(save_message)
+
+        if not save_response.get("success"):
+            error = save_response.get("error", {})
+            save_error = (
+                error.get("message", str(error))
+                if isinstance(error, dict)
+                else str(error)
+            )
+
+            suggestions = [
+                "The blueprint was validated but could not be saved to disk",
+                "Use ha_get_blueprint() to check if it already exists",
+            ]
+
+            # Reachable despite the early exists check: a race between
+            # import and save, or an installed file that failed to load
+            # (core reports exists=false for those)
+            already_exists = "already exists" in save_error.lower()
+            if already_exists:
+                suggestions.insert(
+                    0,
+                    "A blueprint with this path already exists - pass overwrite=true to re-import it",
+                )
+
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_ALREADY_EXISTS
+                    if already_exists
+                    else ErrorCode.SERVICE_CALL_FAILED,
+                    save_error,
+                    context={"url": url, "path": path},
+                    suggestions=suggestions,
+                )
+            )
+
+        return save_response.get("result") or {}
+
     @tool(
         name="ha_import_blueprint",
         tags={"Blueprints"},
@@ -240,17 +302,29 @@ class BlueprintTools:
                 description="URL to import blueprint from (GitHub, Home Assistant Community, or direct YAML URL)"
             ),
         ],
+        overwrite: Annotated[
+            bool,
+            Field(
+                description="Overwrite the blueprint if it is already installed (re-import). "
+                "Home Assistant reloads all automations/scripts using the blueprint.",
+                default=False,
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """
         Import a blueprint from a URL.
 
         Imports a blueprint from GitHub, Home Assistant Community forums,
-        or any direct URL to a blueprint YAML file.
+        or any direct URL to a blueprint YAML file. Set overwrite=true to
+        re-import a blueprint that is already installed (equivalent to the
+        UI's "Re-import blueprint" action) - Home Assistant then reloads all
+        automations/scripts that use it.
 
         EXAMPLES:
         - Import from GitHub: ha_import_blueprint("https://github.com/user/repo/blob/main/blueprint.yaml")
         - Import from HA Community: ha_import_blueprint("https://community.home-assistant.io/t/motion-light/123456")
         - Import direct YAML: ha_import_blueprint("https://example.com/my-blueprint.yaml")
+        - Re-import an installed blueprint: ha_import_blueprint("https://example.com/my-blueprint.yaml", overwrite=True)
 
         SUPPORTED SOURCES:
         - GitHub repository URLs (will be converted to raw URLs)
@@ -260,6 +334,7 @@ class BlueprintTools:
         RETURNS:
         - Import result with the blueprint path where it was saved
         - Blueprint metadata (name, domain, description)
+        - overrides_existing: true when an installed blueprint was overwritten
         - Error details if import fails
         """
         try:
@@ -328,43 +403,50 @@ class BlueprintTools:
             if not suggested_filename.endswith((".yaml", ".yml")):
                 suggested_filename = suggested_filename + ".yaml"
 
-            # Save the blueprint to disk (blueprint/import only validates)
-            save_response = await self._client.send_websocket_message(
-                {
-                    "type": "blueprint/save",
-                    "domain": domain,
-                    "path": suggested_filename,
-                    "yaml": raw_data,
-                    "source_url": url,
-                }
-            )
-
-            if not save_response.get("success"):
-                error = save_response.get("error", {})
-                save_error = (
-                    error.get("message", str(error))
-                    if isinstance(error, dict)
-                    else str(error)
-                )
-
-                suggestions = [
-                    "The blueprint was validated but could not be saved to disk",
-                    "Use ha_get_blueprint() to check if it already exists",
-                ]
-
-                if "already exists" in save_error.lower():
-                    suggestions.insert(0, "A blueprint with this path already exists")
-
+            # blueprint/save does not re-run these checks (currently the
+            # blueprint's min Home Assistant version) - without this gate an
+            # unsupported blueprint saves cleanly and reports success
+            validation_errors = result_data.get("validation_errors")
+            if validation_errors:
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        save_error,
-                        context={"url": url, "path": suggested_filename},
-                        suggestions=suggestions,
+                        ErrorCode.VALIDATION_FAILED,
+                        "Blueprint failed validation: "
+                        + "; ".join(str(e) for e in validation_errors),
+                        context={"url": url, "validation_errors": validation_errors},
+                        suggestions=[
+                            "The blueprint is not compatible with this Home Assistant installation",
+                            "Update Home Assistant to satisfy the blueprint's minimum version requirement",
+                        ],
                     )
                 )
 
-            save_result = save_response.get("result") or {}
+            # blueprint/import reports whether the target path is already
+            # installed - fail early with a re-import hint instead of letting
+            # blueprint/save reject the write
+            if result_data.get("exists") and not overwrite:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_ALREADY_EXISTS,
+                        f"Blueprint already exists at '{suggested_filename}'. "
+                        "Pass overwrite=true to re-import it.",
+                        context={
+                            "url": url,
+                            "path": suggested_filename,
+                            "domain": domain,
+                        },
+                        suggestions=[
+                            "Call ha_import_blueprint with overwrite=true to update the installed blueprint",
+                            "Use ha_get_blueprint() to inspect the currently installed version",
+                        ],
+                    )
+                )
+
+            # Save the blueprint to disk (blueprint/import only validates)
+            save_result = await self._save_blueprint(
+                url, domain, suggested_filename, raw_data, overwrite
+            )
+            overrides_existing = save_result.get("overrides_existing", False)
 
             return {
                 "success": True,
@@ -375,8 +457,12 @@ class BlueprintTools:
                     "name": blueprint_meta.get("name"),
                     "description": blueprint_meta.get("description"),
                 },
-                "overrides_existing": save_result.get("overrides_existing", False),
-                "message": "Blueprint imported successfully. Use ha_get_blueprint() to see all installed blueprints.",
+                "overrides_existing": overrides_existing,
+                "message": (
+                    "Blueprint re-imported successfully. Automations/scripts using it were reloaded."
+                    if overrides_existing
+                    else "Blueprint imported successfully. Use ha_get_blueprint() to see all installed blueprints."
+                ),
             }
 
         except ToolError:
