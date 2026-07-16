@@ -718,6 +718,131 @@ _ENTITY_RECORD_KEYS = (
     "match_type",
 )
 
+# Opt-in enrichment fields result_fields= can request on top of the base record
+# (issue #1813 C1). Emitted per entity ONLY when named in result_fields — the
+# default record shape stays the six _ENTITY_RECORD_KEYS. The component search
+# already computes these per hit (its area/floor/labels/aliases registry join);
+# the legacy path joins them from the registries on demand
+# (SearchTools._fetch_entity_enrichment). Ordered so a projected record lists them
+# consistently regardless of the caller's result_fields order.
+_ENRICHMENT_FIELDS: tuple[str, ...] = ("area", "floor", "labels", "aliases")
+
+# Every field name result_fields= accepts — base record keys plus the opt-in
+# enrichment keys. A requested name outside this set is rejected up front with the
+# standard validation error rather than silently projecting to empty records.
+_ALLOWED_RESULT_FIELDS: frozenset[str] = frozenset(_ENTITY_RECORD_KEYS) | frozenset(
+    _ENRICHMENT_FIELDS
+)
+
+
+def _validate_result_field_names(parsed: list[str] | None) -> None:
+    """Reject unknown ``result_fields`` names with the standard validation error.
+
+    ``result_fields`` now drives area/floor/labels/aliases enrichment (issue #1813
+    C1), so an unrecognised name is a hard error rather than a silently-empty
+    projection: the server must know which fields to compute. Empty is rejected too
+    (omit the parameter for full records). Called once in ``ha_search`` so both the
+    component and legacy serving paths share one contract.
+    """
+    if parsed is None:
+        return
+    if not parsed:
+        raise_tool_error(
+            create_validation_error(
+                "result_fields must contain at least one key; omit the parameter "
+                "for full records.",
+                parameter="result_fields",
+            )
+        )
+    unknown = [f for f in parsed if f not in _ALLOWED_RESULT_FIELDS]
+    if unknown:
+        raise_tool_error(
+            create_validation_error(
+                f"Unknown result_fields: {unknown}. "
+                f"Valid keys: {sorted(_ALLOWED_RESULT_FIELDS)}.",
+                parameter="result_fields",
+            )
+        )
+
+
+def _requested_enrichment(parsed_result_fields: list[str] | None) -> tuple[str, ...]:
+    """The enrichment fields named in ``result_fields``, in canonical order.
+
+    Empty when ``result_fields`` is unset or names only base record keys — the
+    signal that no enrichment work (component key retention or a legacy registry
+    join) is needed, keeping the default search path cost-free.
+    """
+    if not parsed_result_fields:
+        return ()
+    requested = set(parsed_result_fields)
+    return tuple(f for f in _ENRICHMENT_FIELDS if f in requested)
+
+
+def _ws_result_map(resp: Any) -> dict[str, dict[str, Any]]:
+    """The ``{entity_id: entry}`` map from a ``config/entity_registry/get_entries`` reply."""
+    if isinstance(resp, dict) and resp.get("success"):
+        result = resp.get("result")
+        if isinstance(result, dict):
+            return {k: v for k, v in result.items() if isinstance(v, dict)}
+    return {}
+
+
+def _ws_registry_index(resp: Any, key: str) -> dict[str, dict[str, Any]]:
+    """Index a ``config/*_registry/list`` reply by its id field (area_id/floor_id/…).
+
+    A failed / malformed reply (the ``return_exceptions=True`` gather may hand back
+    an exception) yields an empty index so the enrichment degrades that field to
+    empty rather than raising.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    if isinstance(resp, dict) and resp.get("success"):
+        for item in resp.get("result") or []:
+            if isinstance(item, dict) and item.get(key):
+                out[item[key]] = item
+    return out
+
+
+def _entity_enrichment_fields(
+    entry: dict[str, Any],
+    areas: dict[str, dict[str, Any]],
+    floors: dict[str, dict[str, Any]],
+    labels: dict[str, dict[str, Any]],
+    devices: dict[str, dict[str, Any]],
+    requested: tuple[str, ...],
+) -> dict[str, Any]:
+    """Compute the requested enrichment fields for one entity from registry data.
+
+    Mirrors the component's ``_registry_enrichment`` so the legacy and
+    component-served ``result_fields`` values agree: device-inherited area/labels
+    (the entity's own value wins, else the device's), area→floor resolution, and
+    label id→name (falling back to the id when a label has no name). ``aliases``
+    pass through from the registry entry. Only the requested keys are returned.
+    """
+    aliases = sorted(str(a) for a in (entry.get("aliases") or []))
+    area_id = entry.get("area_id")
+    label_ids = set(entry.get("labels") or [])
+    device_id = entry.get("device_id")
+    device = devices.get(device_id) if device_id else None
+    if device:
+        if area_id is None:
+            area_id = device.get("area_id")
+        label_ids |= set(device.get("labels") or [])
+    area = areas.get(area_id) if area_id else None
+    area_name = area.get("name") if area else None
+    floor_id = area.get("floor_id") if area else None
+    floor = floors.get(floor_id) if floor_id else None
+    floor_name = floor.get("name") if floor else None
+    label_names = [
+        (labels.get(lid) or {}).get("name") or lid for lid in sorted(label_ids)
+    ]
+    full: dict[str, Any] = {
+        "area": area_name,
+        "floor": floor_name,
+        "labels": label_names,
+        "aliases": aliases,
+    }
+    return {k: full[k] for k in requested}
+
 
 def _normalize_component_config_record(
     bucket: str, rec: dict[str, Any], include_config: bool
@@ -824,13 +949,18 @@ def _shape_component_search_response(
 
     if req.registry_eligible:
         parsed_result_fields = _parse_component_result_fields(req.result_fields)
-        # Normalize to the documented entity-record key set (the same six keys
-        # the legacy paths emit and result_fields= advertises). The component
-        # enriches records with area/floor/labels/aliases joins — dropped here
-        # for shape parity with the legacy path; adding enrichment to BOTH
-        # paths together is a separate change.
+        # Base record is the six documented keys. result_fields may additionally
+        # request enrichment fields (area/floor/labels/aliases) that the component
+        # already computed per hit via its registry join — retain exactly those
+        # requested keys before the result_fields projection so the enrichment
+        # survives it, while a search that requests none still emits the default
+        # six-key shape (parity with the legacy path).
+        record_keys = (
+            *_ENTITY_RECORD_KEYS,
+            *_requested_enrichment(parsed_result_fields),
+        )
         entities = [
-            {key: rec.get(key) for key in _ENTITY_RECORD_KEYS}
+            {key: rec.get(key) for key in record_keys}
             for rec in _as_record_list(component_result.get("entities"))
         ]
         entity_has_more = bool(component_result.get("entity_has_more", False))
@@ -1533,7 +1663,10 @@ class SearchTools:
                 default=None,
                 description=(
                     "Project each entity-registry record to only the specified "
-                    'keys (e.g. ["entity_id", "state"]). None = full records.'
+                    'keys (e.g. ["entity_id", "state"]). None = full records. '
+                    "Base keys: entity_id, friendly_name, domain, state, score, "
+                    "match_type. Opt-in enrichment keys (joined on request): "
+                    "area, floor, labels, aliases. An unknown key is rejected."
                 ),
             ),
         ] = None,
@@ -1640,6 +1773,19 @@ class SearchTools:
             parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
         except ValueError as exc:
             raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+
+        # Validate result_fields once up front so BOTH serving paths reject an
+        # unknown enrichment key identically (the sub-paths re-parse the same raw
+        # value for their own projection).
+        try:
+            parsed_result_fields = parse_string_list_param(
+                result_fields, "result_fields", allow_csv=True
+            )
+        except ValueError as exc:
+            raise_tool_error(
+                create_validation_error(str(exc), parameter="result_fields")
+            )
+        _validate_result_field_names(parsed_result_fields)
 
         # Normalise the caller-input strings once; the eligibility helper
         # below is purely a function of normalized inputs so it stays
@@ -1977,9 +2123,10 @@ class SearchTools:
                 description=(
                     "Project each entity record in results[] to only the specified keys. "
                     'E.g. ["entity_id", "state"] returns slim entity records. '
-                    "None = full records (default). Unknown keys yield empty records; "
-                    "omit result_fields to see all available keys. "
-                    "Available keys: entity_id, friendly_name, domain, state, score, match_type."
+                    "None = full records (default). "
+                    "Base keys: entity_id, friendly_name, domain, state, score, match_type. "
+                    "Opt-in enrichment keys (joined on request): area, floor, labels, aliases. "
+                    "An unknown key is rejected."
                 ),
             ),
         ] = None,
@@ -2124,6 +2271,85 @@ class SearchTools:
             )
             return None  # unreachable: error helpers above always raise
 
+    async def _fetch_entity_enrichment(
+        self, entity_ids: list[str], requested: tuple[str, ...]
+    ) -> dict[str, dict[str, Any]]:
+        """Join area/floor/label NAMES + aliases for entity_ids (legacy enrichment).
+
+        Generalises the area-mode alias join (:meth:`_fetch_area_entity_aliases`):
+        one ``config/entity_registry/get_entries`` gives each id's aliases + area_id
+        + label ids + device_id, and the area/floor/label registry lists resolve
+        those ids to NAMES (the device registry supplies device-inherited
+        area/labels, matching the component's ``_registry_enrichment``). Only the
+        registries a requested field actually needs are fetched — an aliases-only
+        request skips the four ``*_registry/list`` reads. Each fetch is
+        fault-tolerant (``return_exceptions=True`` + the ``_ws_*`` guards degrade a
+        failed list to an empty index), so a registry hiccup drops that field to
+        empty rather than failing the search. Returns
+        ``{entity_id: {requested field: value}}``.
+        """
+        if not entity_ids or not requested:
+            return {}
+        need_names = bool(set(requested) & {"area", "floor", "labels"})
+        coros: list[Any] = [
+            self._client.send_websocket_message(
+                {
+                    "type": "config/entity_registry/get_entries",
+                    "entity_ids": entity_ids,
+                }
+            )
+        ]
+        if need_names:
+            coros.extend(
+                self._client.send_websocket_message({"type": command})
+                for command in (
+                    "config/area_registry/list",
+                    "config/floor_registry/list",
+                    "config/label_registry/list",
+                    "config/device_registry/list",
+                )
+            )
+        fetched = await asyncio.gather(*coros, return_exceptions=True)
+        entries = _ws_result_map(fetched[0])
+        areas = _ws_registry_index(fetched[1], "area_id") if need_names else {}
+        floors = _ws_registry_index(fetched[2], "floor_id") if need_names else {}
+        labels = _ws_registry_index(fetched[3], "label_id") if need_names else {}
+        devices = _ws_registry_index(fetched[4], "id") if need_names else {}
+        return {
+            eid: _entity_enrichment_fields(
+                entries.get(eid) or {}, areas, floors, labels, devices, requested
+            )
+            for eid in entity_ids
+        }
+
+    async def _maybe_enrich_entity_records(
+        self,
+        records: list[dict[str, Any]],
+        parsed_result_fields: list[str] | None,
+    ) -> None:
+        """Add requested area/floor/labels/aliases to entity records in place (opt-in).
+
+        A no-op unless ``result_fields`` names an enrichment field, so the default
+        search pays nothing. Records are mutated in place, so a ``by_domain`` view
+        built from the same dicts before projection is enriched too. Applied before
+        the ``result_fields`` projection so the requested enrichment keys survive
+        it. Never withholds results: a failed enrichment fetch just leaves the
+        fields absent.
+        """
+        requested = _requested_enrichment(parsed_result_fields)
+        if not requested or not records:
+            return
+        entity_ids: list[str] = [
+            r["entity_id"] for r in records if isinstance(r.get("entity_id"), str)
+        ]
+        enrichment = await self._fetch_entity_enrichment(entity_ids, requested)
+        for record in records:
+            eid = record.get("entity_id")
+            if isinstance(eid, str):
+                fields = enrichment.get(eid)
+                if fields:
+                    record.update(fields)
+
     async def _fetch_area_entity_aliases(
         self,
         area_entity_ids: list[str],
@@ -2250,6 +2476,7 @@ class SearchTools:
                 "fuzzy-search dataset and may yield empty pages"
             )
 
+        await self._maybe_enrich_entity_records(results, parsed_result_fields)
         _apply_by_domain_grouping(
             search_data,
             results,
@@ -2328,6 +2555,7 @@ class SearchTools:
                 f"No {domain_filter} entities found in area: {area_filter}"
             )
 
+        await self._maybe_enrich_entity_records(paginated, parsed_result_fields)
         _apply_by_domain_grouping(
             area_search_data,
             paginated,
@@ -2490,6 +2718,7 @@ class SearchTools:
         if state_filter is not None:
             domain_list_data["state_filter"] = state_filter
 
+        await self._maybe_enrich_entity_records(results, parsed_result_fields)
         _apply_result_fields_to_response(domain_list_data, parsed_result_fields)
         if group_by_domain_bool:
             domain_list_data["by_domain"] = _build_domain_only_by_domain(
@@ -2596,6 +2825,9 @@ class SearchTools:
                 "fuzzy-search dataset and may yield empty pages"
             )
 
+        await self._maybe_enrich_entity_records(
+            result.get("results", []), parsed_result_fields
+        )
         _apply_by_domain_grouping(
             result,
             result.get("results", []),

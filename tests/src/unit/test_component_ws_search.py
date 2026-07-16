@@ -529,6 +529,8 @@ class TestInfo:
             "blueprint_get",
             "device_get",
             "device_list",
+            "entity_enrich",
+            "exposure",
         ]
         # config_get was withdrawn before release (raw_config freshness lags the
         # config file between write and reload) — it must not be advertised.
@@ -1528,6 +1530,8 @@ _ALL_COMMANDS = [
     "ha_mcp_tools/blueprint_get",
     "ha_mcp_tools/device_get",
     "ha_mcp_tools/device_list",
+    "ha_mcp_tools/entity_enrich",
+    "ha_mcp_tools/exposure",
 ]
 
 # Minimal well-formed message body per command (Required fields) so the admin
@@ -1538,6 +1542,9 @@ _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     "ha_mcp_tools/states": {"entity_ids": []},
     "ha_mcp_tools/blueprint_get": {"domain": "automation", "path": "x.yaml"},
     "ha_mcp_tools/device_get": {"device_id": "d1"},
+    "ha_mcp_tools/entity_enrich": {"entity_ids": []},
+    # exposure: no entity_id (list mode) — the registries resolve empty here so
+    # no per-entity settings lookup runs, keeping the admin-gate probe pure.
 }
 
 
@@ -1552,6 +1559,8 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_BLUEPRINT_GET,
             wsapi.WS_DEVICE_GET,
             wsapi.WS_DEVICE_LIST,
+            wsapi.WS_ENTITY_ENRICH,
+            wsapi.WS_EXPOSURE,
         }
         # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
@@ -2528,3 +2537,193 @@ class TestDeviceGetEntities:
         )
         assert res["device"] is None
         assert res["entities"] == []
+
+
+# A stand-in for core's ``HomeAssistantError`` whose type NAME matches, so the
+# ``exposure`` guardrail (``_is_unknown_entity_error`` keys off the name, not an
+# isinstance against the MagicMock-stubbed ``homeassistant.exceptions``) fires.
+class _UnknownEntityError(Exception):
+    pass
+
+
+_UnknownEntityError.__name__ = "HomeAssistantError"
+
+
+# =============================================================================
+# entity_enrich
+# =============================================================================
+class TestEntityEnrich:
+    """``ha_mcp_tools/entity_enrich`` — the shared registry join for a set of ids."""
+
+    def _view(self):
+        return make_view(
+            entity={
+                "light.lamp": FakeRegEntry(
+                    "light.lamp",
+                    aliases={"reading light"},
+                    area_id="a1",
+                    labels={"lb1"},
+                ),
+                # No own area/labels — must inherit both from device d1.
+                "switch.plug": FakeRegEntry("switch.plug", device_id="d1"),
+            },
+            areas=[
+                FakeArea("a1", "Office", floor_id="f1"),
+                FakeArea("a9", "Garage", floor_id="f2"),
+            ],
+            floors=[FakeFloor("f1", "Upstairs"), FakeFloor("f2", "Downstairs")],
+            labels=[FakeLabel("lb1", "Favorites"), FakeLabel("lb2", "Auto")],
+            devices=[FakeDevice("d1", area_id="a9", labels={"lb2"})],
+        )
+
+    def test_resolves_names_for_each_id(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_entity_enrich(FakeHass(), {"entity_ids": ["light.lamp"]})
+        rec = res["entities"]["light.lamp"]
+        assert rec == {
+            "area": "Office",
+            "floor": "Upstairs",
+            "labels": ["Favorites"],
+            "aliases": ["reading light"],
+        }
+
+    def test_device_inherited_area_and_labels(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_entity_enrich(FakeHass(), {"entity_ids": ["switch.plug"]})
+        rec = res["entities"]["switch.plug"]
+        assert rec["area"] == "Garage"  # inherited from device d1
+        assert rec["floor"] == "Downstairs"
+        assert rec["labels"] == ["Auto"]  # inherited from device d1
+        assert rec["aliases"] == []
+
+    def test_unknown_id_kept_with_empty_fields(self, monkeypatch):
+        """A registry-less id is not dropped — the caller keys the result back."""
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_entity_enrich(FakeHass(), {"entity_ids": ["light.ghost"]})
+        assert res["entities"]["light.ghost"] == {
+            "area": None,
+            "floor": None,
+            "labels": [],
+            "aliases": [],
+        }
+
+    def test_empty_id_list(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        assert wsapi._do_entity_enrich(FakeHass(), {"entity_ids": []}) == {
+            "entities": {}
+        }
+
+    def test_reuses_the_search_join(self, monkeypatch):
+        """entity_enrich and the search record derive from the same join, so their
+        area/floor/labels/aliases agree for the same entity (no drift)."""
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        enrich = wsapi._do_entity_enrich(FakeHass(), {"entity_ids": ["light.lamp"]})[
+            "entities"
+        ]["light.lamp"]
+        record = wsapi._entity_record(
+            FakeState("light.lamp", "on", "Lamp"), self._view()
+        )
+        for key in ("area", "floor", "labels", "aliases"):
+            assert enrich[key] == record[key]
+
+
+# =============================================================================
+# exposure
+# =============================================================================
+class TestExposure:
+    """``ha_mcp_tools/exposure`` — list + single mode with the enrichment join."""
+
+    def _view(self):
+        return make_view(
+            entity={
+                "light.kitchen": FakeRegEntry("light.kitchen", area_id="a1"),
+                "light.attic": FakeRegEntry("light.attic", area_id="a1"),
+            },
+            areas=[FakeArea("a1", "Kitchen", floor_id="f1")],
+            floors=[FakeFloor("f1", "Main")],
+        )
+
+    def _patch(self, monkeypatch, settings_map, legacy_ids=()):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+
+        def fake_settings(hass, entity_id):
+            if entity_id not in settings_map:
+                raise _UnknownEntityError("Unknown entity")
+            return settings_map[entity_id]
+
+        monkeypatch.setattr(wsapi, "_async_get_entity_settings", fake_settings)
+        monkeypatch.setattr(
+            wsapi, "_legacy_exposed_entity_ids", lambda h: list(legacy_ids)
+        )
+
+    def test_single_should_expose_filter(self, monkeypatch):
+        """Guardrail 1: only should_expose-true assistants are reported (the raw
+        helper returns every assistant that has any stored option)."""
+        self._patch(
+            monkeypatch,
+            {
+                "light.kitchen": {
+                    "conversation": {"should_expose": True},
+                    "cloud.alexa": {"should_expose": False},
+                    "cloud.google_assistant": {"some_other_option": "x"},
+                }
+            },
+        )
+        states = [FakeState("light.kitchen", "on", "Kitchen Light")]
+        res = wsapi._do_exposure(
+            FakeHass(states=states), {"entity_id": "light.kitchen"}
+        )
+        assert res["exposed_entities"] == {"light.kitchen": {"conversation": True}}
+        info = res["entity_info"]["light.kitchen"]
+        assert info["friendly_name"] == "Kitchen Light"
+        assert info["domain"] == "light"
+        assert info["area"] == "Kitchen"
+        assert info["floor"] == "Main"
+        assert info["state"] == "on"
+
+    def test_unknown_entity_degrades_to_not_exposed(self, monkeypatch):
+        """Guardrail 2: HomeAssistantError('Unknown entity') → not-exposed default,
+        never a raise (the legacy path never raises on a junk id)."""
+        self._patch(monkeypatch, {})  # every id is "unknown"
+        states = [FakeState("light.ghost", "on", "Ghost")]
+        res = wsapi._do_exposure(FakeHass(states=states), {"entity_id": "light.ghost"})
+        assert res["exposed_entities"] == {}
+        # Enrichment is still provided for the requested id.
+        assert res["entity_info"]["light.ghost"]["domain"] == "light"
+
+    def test_missing_state_omits_live_fields(self, monkeypatch):
+        """Guardrail 3: no hass.states.get → friendly_name/state omitted, not a crash."""
+        self._patch(
+            monkeypatch, {"light.attic": {"conversation": {"should_expose": True}}}
+        )
+        res = wsapi._do_exposure(FakeHass(states=[]), {"entity_id": "light.attic"})
+        info = res["entity_info"]["light.attic"]
+        assert "friendly_name" not in info
+        assert "state" not in info
+        assert info["domain"] == "light"
+        assert info["area"] == "Kitchen"
+
+    def test_list_mode_mirrors_ws_list(self, monkeypatch):
+        """List mode walks the registry, keeps only exposed ids, enriches each."""
+        self._patch(
+            monkeypatch,
+            {
+                "light.kitchen": {"conversation": {"should_expose": True}},
+                "light.attic": {"cloud.alexa": {"should_expose": False}},
+            },
+        )
+        states = [FakeState("light.kitchen", "on", "Kitchen Light")]
+        res = wsapi._do_exposure(FakeHass(states=states), {})
+        assert res["exposed_entities"] == {"light.kitchen": {"conversation": True}}
+        assert set(res["entity_info"]) == {"light.kitchen"}
+
+    def test_list_mode_includes_legacy_store_ids(self, monkeypatch):
+        """An exposed entity present only in the legacy store (no registry entry)
+        is still enumerated — the union of store ids and registry ids."""
+        self._patch(
+            monkeypatch,
+            {"scene.movie": {"conversation": {"should_expose": True}}},
+            legacy_ids=["scene.movie"],
+        )
+        res = wsapi._do_exposure(FakeHass(states=[]), {})
+        assert res["exposed_entities"] == {"scene.movie": {"conversation": True}}

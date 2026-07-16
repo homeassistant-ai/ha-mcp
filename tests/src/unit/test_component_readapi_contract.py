@@ -28,7 +28,9 @@ from ha_mcp.tools import (
     component_devices,
     tools_blueprints,
     tools_config_helpers,
+    tools_entities,
     tools_search,
+    tools_voice_assistant,
 )
 from ha_mcp.tools.radio.zigbee import _resolve_ieee
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
@@ -42,7 +44,9 @@ from .test_component_ws_search import (
     FakeConfigEntry,
     FakeDevice,
     FakeErModule,
+    FakeFloor,
     FakeHass,
+    FakeLabel,
     FakeRegEntry,
     FakeServices,
     FakeState,
@@ -69,6 +73,19 @@ from .test_ha_get_device_component_routing import (
 )
 from .test_ha_get_device_component_routing import (
     _build_get_device,
+)
+from .test_ha_get_entity_component_routing import (
+    RoutingClient as EntityRoutingClient,
+)
+from .test_ha_get_entity_component_routing import (
+    _build_get_entity,
+    _raw_entry,
+)
+from .test_ha_get_entity_exposure_component_routing import (
+    RoutingClient as ExposureRoutingClient,
+)
+from .test_ha_get_entity_exposure_component_routing import (
+    _build_exposure,
 )
 from .test_ha_get_state_component_routing import (
     RoutingClient as StateRoutingClient,
@@ -98,6 +115,8 @@ _REAL_FNS = {
     "ha_mcp_tools/blueprint_get": wsapi._do_blueprint_get,
     "ha_mcp_tools/device_get": wsapi._do_device_get,
     "ha_mcp_tools/device_list": wsapi._do_device_list,
+    "ha_mcp_tools/entity_enrich": wsapi._do_entity_enrich,
+    "ha_mcp_tools/exposure": wsapi._do_exposure,
 }
 
 # Commands whose blocking work lives in an async prep pre-step (run here so the
@@ -661,3 +680,151 @@ class TestDeviceSeam:
         # _resolve_ieee parsed the identifiers out of the same raw shape.
         assert ieee == "00:11:22:33:44:55:66:77"
         assert client.device_list_calls == 0
+
+
+# --- entity_enrich --------------------------------------------------------------
+class TestEntityEnrichSeam:
+    """``ha_get_entity`` decorated by the REAL ``_do_entity_enrich`` join.
+
+    The base registry record comes from the native ``config/entity_registry/get``;
+    the additive area/floor/label NAMES come from running the real component join
+    over a fake registry view, so a drift between the component's field names and
+    the server's ``_merge_entity_enrichment`` mapping fails here.
+    """
+
+    def _view(self):
+        return make_view(
+            entity={
+                "light.lamp": FakeRegEntry(
+                    "light.lamp", aliases={"desk"}, area_id="a1", labels={"lb1"}
+                )
+            },
+            areas=[FakeArea("a1", "Office", floor_id="f1")],
+            floors=[FakeFloor("f1", "Upstairs")],
+            labels=[FakeLabel("lb1", "Favorites")],
+        )
+
+    @pytest.mark.asyncio
+    async def test_single_get_enriched_from_real_component(self, monkeypatch) -> None:
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        client = EntityRoutingClient(
+            {"light.lamp": _raw_entry("light.lamp", area_id="a1", labels=["lb1"])}
+        )
+        ws = _real_component_ws(FakeHass())
+        tool = _build_get_entity(client)
+        with patch_ws(ws, tools_entities):
+            resp = await tool("light.lamp")
+
+        entry = resp["entity_entry"]
+        # Base registry fields untouched.
+        assert entry["area_id"] == "a1"
+        assert entry["labels"] == ["lb1"]
+        # Additive resolved-name enrichment from the real join.
+        assert entry["area"] == "Office"
+        assert entry["floor"] == "Upstairs"
+        assert entry["label_names"] == ["Favorites"]
+
+    @pytest.mark.asyncio
+    async def test_bulk_get_enriched_from_real_component(self, monkeypatch) -> None:
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        client = EntityRoutingClient(
+            {
+                "light.lamp": _raw_entry("light.lamp", area_id="a1", labels=["lb1"]),
+                "light.plain": _raw_entry("light.plain", area_id=None, labels=[]),
+            }
+        )
+        ws = _real_component_ws(FakeHass())
+        tool = _build_get_entity(client)
+        with patch_ws(ws, tools_entities):
+            resp = await tool(["light.lamp", "light.plain"])
+
+        by_id = {e["entity_id"]: e for e in resp["entity_entries"]}
+        assert by_id["light.lamp"]["area"] == "Office"
+        assert by_id["light.lamp"]["label_names"] == ["Favorites"]
+        # An entity absent from the fake view still gets empty additive fields.
+        assert by_id["light.plain"]["area"] is None
+        assert by_id["light.plain"]["label_names"] == []
+
+
+# --- exposure -------------------------------------------------------------------
+class TestExposureSeam:
+    """``ha_get_entity_exposure`` served + enriched by the REAL ``_do_exposure``.
+
+    Drives the real list/single exposure command (its should_expose filter and
+    registry-join enrichment) through the real server shaper, pinning that the
+    legacy ``exposed_to`` keys stay byte-identical while the ``entity_info`` /
+    single-entity enrichment is additive.
+    """
+
+    def _view(self):
+        return make_view(
+            entity={
+                "light.lamp": FakeRegEntry("light.lamp", area_id="a1"),
+                "light.attic": FakeRegEntry("light.attic", area_id="a1"),
+            },
+            areas=[FakeArea("a1", "Office", floor_id="f1")],
+            floors=[FakeFloor("f1", "Upstairs")],
+        )
+
+    def _patch(self, monkeypatch, settings_map):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+
+        def fake_settings(hass, entity_id):
+            return settings_map.get(entity_id, {})
+
+        monkeypatch.setattr(wsapi, "_async_get_entity_settings", fake_settings)
+        monkeypatch.setattr(wsapi, "_legacy_exposed_entity_ids", lambda h: [])
+
+    @pytest.mark.asyncio
+    async def test_single_exposure_enriched_from_real_component(
+        self, monkeypatch
+    ) -> None:
+        self._patch(
+            monkeypatch,
+            {"light.lamp": {"conversation": {"should_expose": True}}},
+        )
+        client = ExposureRoutingClient({"light.lamp": {"conversation": True}})
+        hass = FakeHass(states=[FakeState("light.lamp", "on", friendly_name="Lamp")])
+        ws = _real_component_ws(hass)
+        tool = _build_exposure(client)
+        with patch_ws(ws, tools_voice_assistant):
+            resp = await tool(entity_id="light.lamp")
+
+        # Legacy keys byte-identical.
+        assert resp["exposed_to"] == {
+            "conversation": True,
+            "cloud.alexa": False,
+            "cloud.google_assistant": False,
+        }
+        assert resp["is_exposed_anywhere"] is True
+        # Additive enrichment from the real join.
+        assert resp["friendly_name"] == "Lamp"
+        assert resp["domain"] == "light"
+        assert resp["area"] == "Office"
+        assert resp["floor"] == "Upstairs"
+        # The legacy expose_entity/list was never touched.
+        assert client.legacy_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_list_exposure_enriched_from_real_component(
+        self, monkeypatch
+    ) -> None:
+        self._patch(
+            monkeypatch,
+            {
+                "light.lamp": {"conversation": {"should_expose": True}},
+                # not exposed: filtered out of the list
+                "light.attic": {"cloud.alexa": {"should_expose": False}},
+            },
+        )
+        client = ExposureRoutingClient({})
+        hass = FakeHass(states=[FakeState("light.lamp", "on", friendly_name="Lamp")])
+        ws = _real_component_ws(hass)
+        tool = _build_exposure(client)
+        with patch_ws(ws, tools_voice_assistant):
+            resp = await tool()
+
+        assert resp["exposed_entities"] == {"light.lamp": {"conversation": True}}
+        assert set(resp["entity_info"]) == {"light.lamp"}
+        assert resp["entity_info"]["light.lamp"]["area"] == "Office"
+        assert client.legacy_calls == 0

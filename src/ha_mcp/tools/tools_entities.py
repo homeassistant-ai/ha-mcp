@@ -14,8 +14,19 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
+from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
@@ -32,6 +43,11 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The ha_mcp_tools/entity_enrich WS command: resolved area/floor/label NAMES +
+# aliases per entity_id, byte-shaped like the component's registry join. Named
+# once so the routing helper and its tests stay in lockstep.
+WS_ENTITY_ENRICH = "ha_mcp_tools/entity_enrich"
 
 # Bounds the per-frame size of a bulk config/entity_registry/get_entries call
 # (extended entries, ~1KB each) so a large id list can't produce an over-cap
@@ -71,6 +87,65 @@ def _format_fetched_entity(entry: dict[str, Any]) -> dict[str, Any]:
         "config_entry_id": entry.get("config_entry_id"),
         "unique_id": entry.get("unique_id"),
     }
+
+
+async def fetch_entity_enrichment_via_component(
+    client: Any, entity_ids: list[str]
+) -> dict[str, dict[str, Any]] | None:
+    """One ``ha_mcp_tools/entity_enrich`` read; ``None`` ⇒ skip enrichment (legacy).
+
+    Returns the component's ``{id: {area, floor, labels, aliases}}`` map (resolved
+    area/floor/label NAMES the raw registry entry lacks — it carries ``area_id`` /
+    label *ids*) or ``None`` when the component lacks the ``entity_enrich``
+    capability, was downgraded (``unknown_command`` → invalidate the cached caps),
+    or errored (logged). ``None`` means "no enrichment available", NOT "no such
+    entity": ``ha_get_entity``'s registry read already served the base record, so a
+    ``None`` here simply leaves the additive fields off — the enrichment is
+    strictly additive, so its absence changes nothing else. A
+    ``HomeAssistantConnectionError`` (WS down) is not caught here, so it propagates
+    to the tool's own error handling. Follows the same caps-gate discipline as
+    ``component_devices.fetch_device_via_component``.
+    """
+    if not entity_ids:
+        return None
+    caps = await get_component_caps(client)
+    if not component_supports(caps, "entity_enrich"):
+        return None
+    try:
+        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        raw = await ws.send_command(WS_ENTITY_ENRICH, entity_ids=list(entity_ids))
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+        if is_unknown_command(exc):
+            invalidate_caps(client)
+        else:
+            logger.warning("%s failed; skipped enrichment: %r", WS_ENTITY_ENRICH, exc)
+        return None
+    result = raw.get("result")
+    if not isinstance(result, dict):
+        return None
+    entities = result.get("entities")
+    if not isinstance(entities, dict):
+        return None
+    return entities
+
+
+def _merge_entity_enrichment(
+    record: dict[str, Any], enrichment: dict[str, Any] | None
+) -> None:
+    """Additively attach resolved area/floor/label NAMES to an entity record.
+
+    The base record already carries ``area_id`` and label *ids* (``labels``); the
+    component join adds the resolved, device-inherited NAMES under non-clobbering
+    keys — ``area`` / ``floor`` / ``label_names`` — so nothing existing is
+    overwritten. ``aliases`` is already on the base record (identical value), so it
+    is not re-added. A ``None`` / empty enrichment is a no-op: on a capability miss
+    the fields are simply absent, leaving the legacy response shape unchanged.
+    """
+    if not enrichment:
+        return
+    record["area"] = enrichment.get("area")
+    record["floor"] = enrichment.get("floor")
+    record["label_names"] = enrichment.get("labels") or []
 
 
 def _match_registry_by_unique_id(
@@ -1816,6 +1891,13 @@ class EntityTools:
           helper's current config (template body, group members, etc.) without
           scanning a domain list.
         - unique_id: Integration's unique identifier
+
+        Resolved-name enrichment (present only when the ha_mcp_tools component
+        advertises it; otherwise these keys are absent):
+        - area: Assigned area NAME (device-inherited when the entity has none;
+          resolves area_id above)
+        - floor: Floor NAME of the assigned area
+        - label_names: Assigned label NAMES (resolves the label ids in labels)
         """
         try:
             # Resolver mode (unique_id) is mutually exclusive with entity_id.
@@ -1870,35 +1952,43 @@ class EntityTools:
             )
             return None  # unreachable: exception_to_structured_error always raises
 
+    async def _get_single_entity(self, eid: str) -> dict[str, Any]:
+        """Look up one entity registry entry, with additive enrichment."""
+        logger.info(f"Getting entity registry entry for {eid}")
+        try:
+            result = await self._fetch_entity(eid)
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Entity not found: {e}",
+                    context={"entity_id": eid},
+                    suggestions=[
+                        "Use ha_search() to find valid entity IDs",
+                        "Check the entity_id spelling and format (e.g., 'sensor.temperature')",
+                    ],
+                )
+            )
+        # Additive area/floor/label-name enrichment via the component when it
+        # advertises entity_enrich; a capability miss leaves the fields off
+        # (legacy shape unchanged).
+        enriched = await fetch_entity_enrichment_via_component(self._client, [eid])
+        if enriched is not None:
+            _merge_entity_enrichment(result, enriched.get(eid))
+        return {
+            "success": True,
+            "entity_id": eid,
+            "entity_entry": result,
+        }
+
     async def _get_by_entity_id(self, entity_id: str | list[str]) -> dict[str, Any]:
         """Look up entities by entity_id (single or bulk list)."""
         entity_ids, is_bulk, early_response = _parse_get_entity_ids(entity_id)
         if early_response is not None:
             return early_response
 
-        # Single entity case
         if not is_bulk:
-            eid = entity_ids[0]
-            logger.info(f"Getting entity registry entry for {eid}")
-            try:
-                result = await self._fetch_entity(eid)
-            except ValueError as e:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Entity not found: {e}",
-                        context={"entity_id": eid},
-                        suggestions=[
-                            "Use ha_search() to find valid entity IDs",
-                            "Check the entity_id spelling and format (e.g., 'sensor.temperature')",
-                        ],
-                    )
-                )
-            return {
-                "success": True,
-                "entity_id": eid,
-                "entity_entry": result,
-            }
+            return await self._get_single_entity(entity_ids[0])
 
         # Bulk case - fetch all entities in one chunked get_entries call
         # (native HA bulk command) instead of one registry get per id.
@@ -1921,6 +2011,20 @@ class EntityTools:
                         "error": error_map.get(eid, "Entity not found"),
                     }
                 )
+
+        # Additive area/floor/label-name enrichment for the found entities via the
+        # component's entity_enrich capability; missing ⇒ fields simply absent.
+        found_ids: list[str] = [
+            e["entity_id"]
+            for e in entity_entries
+            if isinstance(e.get("entity_id"), str)
+        ]
+        enriched = await fetch_entity_enrichment_via_component(self._client, found_ids)
+        if enriched is not None:
+            for entry in entity_entries:
+                entry_id = entry.get("entity_id")
+                if isinstance(entry_id, str):
+                    _merge_entity_enrichment(entry, enriched.get(entry_id))
 
         response: dict[str, Any] = {
             "success": True,

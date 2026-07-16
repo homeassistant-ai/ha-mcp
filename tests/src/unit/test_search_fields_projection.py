@@ -626,16 +626,16 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
         assert "count" in data
 
     @pytest.mark.asyncio
-    async def test_result_fields_unknown_key_emits_warning(self, search_tool):
-        """result_fields with only unknown keys emits a diagnostic warning."""
-        result = await search_tool(query="light", result_fields=["nonexistent_key"])
-        data = result
-        # Each entity record is projected to {} since the key doesn't exist
-        for entity in data["entities"]:
-            assert entity == {}
-        # A diagnostic warning should be present
-        assert "warnings" in data
-        assert any("nonexistent_key" in w for w in data["warnings"])
+    async def test_result_fields_unknown_key_rejected(self, search_tool):
+        """An unknown result_fields key is now a hard validation error.
+
+        result_fields drives area/floor/labels/aliases enrichment (issue #1813
+        C1), so the server must recognise every requested key — an unknown one is
+        rejected up front rather than silently projecting each record to ``{}``.
+        """
+        with pytest.raises(ToolError) as excinfo:
+            await search_tool(query="light", result_fields=["nonexistent_key"])
+        assert "Unknown result_fields" in str(excinfo.value)
 
     @pytest.mark.asyncio
     async def test_result_fields_domain_listing_branch(self, search_tool):

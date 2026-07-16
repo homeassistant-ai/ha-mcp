@@ -18,6 +18,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
@@ -360,6 +361,193 @@ class ListingModeClient(RoutingClient):
             self.ws_types[msg_type] += 1
             return self.registry_with_area
         return await super().send_websocket_message(msg)
+
+
+def _enriched_entity_search_result() -> dict[str, Any]:
+    """A component search result whose entity record carries the enrichment join."""
+    result = _entity_search_result()
+    result["entities"][0].update(
+        {
+            "area": "Kitchen",
+            "floor": "Main",
+            "labels": ["Favorites"],
+            "aliases": ["lamp"],
+        }
+    )
+    return result
+
+
+# The registry replies the legacy enrichment join reads (one get_entries + the
+# area/floor/label/device lists), served by EnrichmentClient below.
+_GET_ENTRIES_RESULT = {
+    "success": True,
+    "result": {
+        "light.kitchen": {
+            "entity_id": "light.kitchen",
+            "aliases": ["lamp"],
+            "area_id": "ar1",
+            "labels": ["lb1"],
+            "device_id": None,
+        },
+        "sensor.kitchen_temp": {
+            "entity_id": "sensor.kitchen_temp",
+            "aliases": [],
+            "area_id": "ar1",
+            "labels": [],
+            "device_id": None,
+        },
+    },
+}
+_ENRICH_REGISTRIES = {
+    "config/area_registry/list": {
+        "success": True,
+        "result": [{"area_id": "ar1", "name": "Kitchen", "floor_id": "f1"}],
+    },
+    "config/floor_registry/list": {
+        "success": True,
+        "result": [{"floor_id": "f1", "name": "Main"}],
+    },
+    "config/label_registry/list": {
+        "success": True,
+        "result": [{"label_id": "lb1", "name": "Favorites"}],
+    },
+    "config/device_registry/list": {"success": True, "result": []},
+}
+
+
+class EnrichmentClient(RoutingClient):
+    """RoutingClient + the registry reads the legacy enrichment join needs."""
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        msg_type = msg.get("type", "")
+        if msg_type == "config/entity_registry/get_entries":
+            self.ws_types[msg_type] += 1
+            return _GET_ENTRIES_RESULT
+        if msg_type in _ENRICH_REGISTRIES:
+            self.ws_types[msg_type] += 1
+            return _ENRICH_REGISTRIES[msg_type]
+        return await super().send_websocket_message(msg)
+
+
+class TestResultFieldsEnrichment:
+    """``result_fields`` opt-in area/floor/labels/aliases on both serving paths."""
+
+    @pytest.mark.asyncio
+    async def test_component_path_retains_requested_enrichment(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Component path: requested enrichment keys survive the projection."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        ws = make_ws(
+            "ha_mcp_tools/search",
+            info_result=_CAPS_SEARCH,
+            cmd_result=_enriched_entity_search_result(),
+        )
+        client = RoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search):
+            resp = await ha_search(
+                query="kitchen", result_fields=["entity_id", "area", "floor"]
+            )
+
+        rec = resp["entities"][0]
+        assert rec == {"entity_id": "light.kitchen", "area": "Kitchen", "floor": "Main"}
+        # No legacy enrichment fetch on the component path.
+        assert client.ws_types == Counter()
+
+    @pytest.mark.asyncio
+    async def test_component_default_shape_unchanged(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """No result_fields → the default six-key record (enrichment absent)."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        ws = make_ws(
+            "ha_mcp_tools/search",
+            info_result=_CAPS_SEARCH,
+            cmd_result=_enriched_entity_search_result(),
+        )
+        client = RoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search):
+            resp = await ha_search(query="kitchen")
+
+        rec = resp["entities"][0]
+        assert set(rec) == {
+            "entity_id",
+            "friendly_name",
+            "domain",
+            "state",
+            "score",
+            "match_type",
+        }
+        assert "area" not in rec
+
+    @pytest.mark.asyncio
+    async def test_legacy_path_joins_enrichment(self, tmp_path, monkeypatch) -> None:
+        """Legacy path: the registry join fills the requested enrichment fields."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        # info unknown_command → no caps → the legacy pipeline serves the search.
+        ws = make_ws(
+            "ha_mcp_tools/search",
+            info_exc=HomeAssistantCommandError("no info", "unknown_command"),
+        )
+        client = EnrichmentClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search):
+            resp = await ha_search(
+                query="kitchen",
+                result_fields=["entity_id", "area", "floor", "labels", "aliases"],
+            )
+
+        by_id = {r["entity_id"]: r for r in resp["entities"]}
+        assert by_id["light.kitchen"]["area"] == "Kitchen"
+        assert by_id["light.kitchen"]["floor"] == "Main"
+        assert by_id["light.kitchen"]["labels"] == ["Favorites"]
+        assert by_id["light.kitchen"]["aliases"] == ["lamp"]
+        # The generalized area-mode join fetched get_entries + the name registries.
+        assert client.ws_types["config/entity_registry/get_entries"] == 1
+        assert client.ws_types["config/area_registry/list"] == 1
+
+    @pytest.mark.asyncio
+    async def test_legacy_default_skips_enrichment_fetch(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """No result_fields → the legacy path issues no enrichment registry reads."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        ws = make_ws(
+            "ha_mcp_tools/search",
+            info_exc=HomeAssistantCommandError("no info", "unknown_command"),
+        )
+        client = EnrichmentClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search):
+            await ha_search(query="kitchen")
+
+        assert client.ws_types["config/entity_registry/get_entries"] == 0
+        assert client.ws_types["config/area_registry/list"] == 0
+
+    @pytest.mark.asyncio
+    async def test_unknown_result_field_rejected(self, tmp_path, monkeypatch) -> None:
+        """An unknown result_fields name is a hard validation error, both paths."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        ws = make_ws(
+            "ha_mcp_tools/search",
+            info_result=_CAPS_SEARCH,
+            cmd_result=_enriched_entity_search_result(),
+        )
+        client = RoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search), pytest.raises(ToolError) as excinfo:
+            await ha_search(query="kitchen", result_fields=["frobnicate"])
+
+        assert "Unknown result_fields" in str(excinfo.value)
+        # Rejected before any backend was consulted.
+        assert not ws.send_command.await_count
 
 
 class TestListingModesBypassComponent:
