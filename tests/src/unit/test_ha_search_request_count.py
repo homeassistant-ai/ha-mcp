@@ -199,3 +199,41 @@ async def test_fuzzy_domain_filter_fetches_aliases_only_for_survivors(
     # Aliases fetched exactly once, and only for the surviving light entity —
     # the sensor and scene are filtered out before the alias fan-out.
     assert client.get_entries_entity_ids == [["light.kitchen"]]
+
+
+# The WS "bulk config list" command types the legacy fetch used to try when
+# the REST bulk endpoint failed. None of them has ever existed in HA core, so
+# every attempt came back ``unknown_command`` and was ERROR-logged by
+# ``send_websocket_message`` — the paired "WebSocket message failed: Command
+# failed: Unknown command." spam of issue #1889.
+_PHANTOM_BULK_WS_TYPES = (
+    "config/automation/config/list",
+    "automation/config/list",
+    "config/script/config/list",
+    "script/config/list",
+    "config/scene/config/list",
+    "scene/config/list",
+)
+
+
+@pytest.mark.asyncio
+async def test_config_search_never_sends_phantom_bulk_ws_commands(
+    tmp_path, monkeypatch
+):
+    """Issue #1889: with the REST bulk fetch failing (as it does against real
+    HA, which has no bulk config REST endpoint either), the config branch must
+    fall straight to budgeted individual fetches — never through the
+    nonexistent ``config/<domain>/config/list`` / ``<domain>/config/list``
+    WebSocket commands."""
+    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+    client = CountingClient()
+    ha_search = _build_ha_search(client)
+    resp = await ha_search(
+        query="kitchen", search_types=["automation", "script", "scene"]
+    )
+
+    assert resp["success"] is True
+    for ws_type in _PHANTOM_BULK_WS_TYPES:
+        assert client.ws_types[ws_type] == 0, ws_type

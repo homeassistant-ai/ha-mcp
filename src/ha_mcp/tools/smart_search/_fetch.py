@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from ._config import BULK_WEBSOCKET_TIMEOUT, INDIVIDUAL_FETCH_BATCH_SIZE
+from ._config import INDIVIDUAL_FETCH_BATCH_SIZE
 from ._scoring import ScoringMixin
 
 logger = logging.getLogger(__name__)
@@ -53,17 +53,25 @@ class ConfigFetchMixin(ScoringMixin):
     async def _bulk_fetch_configs(
         self,
         rest_endpoint: str,
-        ws_types: list[str],
         id_of: Callable[[dict[str, Any]], str | None],
         rest_timeout: float,
         label: str,
     ) -> dict[str, dict[str, Any]] | None:
-        """Bulk-fetch all configs of one domain: REST endpoint, then WS list endpoints.
+        """Bulk-fetch all configs of one domain from its REST endpoint.
 
-        Returns ``{id: config}`` (possibly empty) on the first successful
-        attempt, or ``None`` when every attempt failed. An empty-but-successful
-        REST list returns ``{}`` (not ``None``) so the caller skips the
-        individual-fetch fallback exactly as it would for a populated response.
+        Returns ``{id: config}`` (possibly empty) on success, or ``None`` when
+        the fetch failed (the caller then falls back to budgeted individual
+        fetches). An empty-but-successful REST list returns ``{}`` (not
+        ``None``) so the caller skips the individual-fetch fallback exactly as
+        it would for a populated response.
+
+        There is deliberately NO WebSocket fallback here: the
+        ``config/<domain>/config/list`` and ``<domain>/config/list`` command
+        types this used to try have never existed in HA core, so every legacy
+        config search fired paired ``unknown_command`` rejections that
+        ``send_websocket_message`` logged as ERRORs — the recurring
+        "WebSocket message failed: Command failed: Unknown command." log spam
+        of issue #1889.
         """
         try:
             resp = await asyncio.wait_for(
@@ -74,17 +82,6 @@ class ConfigFetchMixin(ScoringMixin):
                 return self._index_configs(resp, id_of)
         except Exception as e:
             logger.debug(f"{label} REST bulk fetch failed: {e}")
-
-        for ws_type in ws_types:
-            try:
-                ws_resp = await asyncio.wait_for(
-                    self.client.send_websocket_message({"type": ws_type}),
-                    timeout=BULK_WEBSOCKET_TIMEOUT,
-                )
-                if isinstance(ws_resp, dict) and ws_resp.get("success"):
-                    return self._index_configs(ws_resp.get("result", []), id_of)
-            except Exception as e:
-                logger.debug(f"{label} WebSocket bulk fetch ({ws_type}) failed: {e}")
         return None
 
     async def _individual_fetch_budgeted(

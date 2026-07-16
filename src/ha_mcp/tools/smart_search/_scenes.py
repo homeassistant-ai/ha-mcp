@@ -239,7 +239,6 @@ class SceneSearchMixin(ConfigFetchMixin):
         # Phase 2: bulk fetch
         configs = await self._bulk_fetch_configs(
             "/config/scene/config",
-            ["config/scene/config/list", "scene/config/list"],
             lambda item: (
                 item.get("id") or item.get("name", "").lower().replace(" ", "_")
             ),

@@ -360,10 +360,9 @@ class DeepSearchMixin(SceneSearchMixin):
                 )
             )
 
-        # Phase 2: bulk fetch (Attempt A REST, Attempt B WebSocket)
+        # Phase 2: bulk fetch (REST)
         configs = await self._bulk_fetch_configs(
             "/config/automation/config",
-            ["config/automation/config/list", "automation/config/list"],
             lambda item: item.get("id"),
             BULK_REST_TIMEOUT,
             "Automation",
@@ -500,7 +499,6 @@ class DeepSearchMixin(SceneSearchMixin):
         # Phase 2: bulk fetch
         configs = await self._bulk_fetch_configs(
             "/config/script/config",
-            ["config/script/config/list", "script/config/list"],
             lambda item: (
                 item.get("id") or item.get("alias", "").lower().replace(" ", "_")
             ),

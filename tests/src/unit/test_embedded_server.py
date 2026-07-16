@@ -197,6 +197,62 @@ class TestConstruction:
         assert mgr._pip_spec == "ha-mcp @ https://example/tarball.tgz"
 
 
+class TestLoopbackDerivation:
+    """Issue #1890: the default loopback URL honors the http integration's real
+    port and SSL configuration (``hass.config.api``) instead of hardcoding
+    ``http://127.0.0.1:8123`` — which spoke plaintext into a TLS socket on any
+    instance with ``http.ssl_certificate`` configured, killing every HA
+    round-trip while the MCP handshake kept working."""
+
+    def test_no_api_object_falls_back_to_constant(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = None
+        assert es._derive_loopback_url(hass) == ("http://127.0.0.1:8123", None)
+
+    def test_ssl_enabled_derives_https_with_verify_off(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8123, use_ssl=True)
+        assert es._derive_loopback_url(hass) == ("https://127.0.0.1:8123", False)
+
+    def test_custom_port_is_honored(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8444, use_ssl=False)
+        assert es._derive_loopback_url(hass) == ("http://127.0.0.1:8444", None)
+
+    def test_unusable_port_falls_back_to_8123(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=object(), use_ssl=True)
+        assert es._derive_loopback_url(hass) == ("https://127.0.0.1:8123", False)
+
+    def test_manager_derives_when_no_override(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8443, use_ssl=True)
+        mgr = es.EmbeddedServerManager(hass, _make_entry())
+        assert mgr._server_url == "https://127.0.0.1:8443"
+        assert mgr._loopback_verify_ssl is False
+
+    def test_manager_explicit_override_wins_verbatim(self, tmp_path):
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8443, use_ssl=True)
+        mgr = es.EmbeddedServerManager(
+            hass, _make_entry(options={OPT_SERVER_URL: "http://ha.local:8123/"})
+        )
+        assert mgr._server_url == "http://ha.local:8123"
+        assert mgr._loopback_verify_ssl is None
+
+    def test_manager_treats_stored_default_as_no_override(self, tmp_path):
+        # Older options forms pre-filled DEFAULT_LOOPBACK_URL as
+        # suggested_value, so entries whose owner never chose an override
+        # carry it verbatim — it must not pin the scheme/port.
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8123, use_ssl=True)
+        mgr = es.EmbeddedServerManager(
+            hass, _make_entry(options={OPT_SERVER_URL: "http://127.0.0.1:8123"})
+        )
+        assert mgr._server_url == "https://127.0.0.1:8123"
+        assert mgr._loopback_verify_ssl is False
+
+
 class TestChannelResolution:
     def test_default_channel_is_stable_unpinned(self, tmp_path):
         mgr, _hass, _entry = _manager(tmp_path)

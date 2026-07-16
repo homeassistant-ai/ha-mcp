@@ -119,6 +119,43 @@ _PIP_UNINSTALL_TIMEOUT_SECONDS = 120
 MIN_EMBEDDED_SERVER_VERSION = "7.10.0"
 
 
+def _derive_loopback_url(hass: HomeAssistant) -> tuple[str, bool | None]:
+    """Resolve the loopback base URL for HA core from the http integration.
+
+    Returns ``(url, verify_ssl)`` where ``verify_ssl`` is ``False`` when the
+    URL is ``https`` (HA's certificate is issued for its hostname, never for
+    127.0.0.1, so verification on the loopback hop can only fail) and ``None``
+    when no override of the server's default is needed.
+
+    The hardcoded ``http://127.0.0.1:8123`` default this replaces broke every
+    instance with ``http.ssl_certificate`` configured (issue #1890): port 8123
+    speaks TLS there, so the server's plaintext REST/WS calls died with
+    "Server disconnected without sending a response" / "did not receive a
+    valid HTTP response" on every tool call — while the MCP handshake and
+    tools/list (no HA round-trip) kept working. A custom ``server_port``
+    similarly broke the hardcoded port. Both live in ``hass.config.api``,
+    set by the ``http`` integration this component depends on; the constant
+    remains the fallback if it is ever absent.
+    """
+    api = getattr(hass.config, "api", None)
+    if api is None:
+        return DEFAULT_LOOPBACK_URL, None
+    # Strict type checks (not coercion / truthiness): a malformed api object
+    # must resolve to the plaintext default on port 8123, never to a surprise
+    # port or https flip. bool is excluded because it is an int subclass.
+    port_raw = getattr(api, "port", None)
+    port = (
+        port_raw
+        if isinstance(port_raw, int)
+        and not isinstance(port_raw, bool)
+        and 0 < port_raw <= 65535
+        else 8123
+    )
+    if getattr(api, "use_ssl", False) is True:
+        return f"https://127.0.0.1:{port}", False
+    return f"http://127.0.0.1:{port}", None
+
+
 class EmbeddedServerError(Exception):
     """Raised when the in-process ha-mcp server could not be installed or started.
 
@@ -146,9 +183,17 @@ class EmbeddedServerManager:
         options = entry.options
         self._port: int = int(options.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT))
         self._bind_host: str = str(options.get(OPT_BIND_HOST, DEFAULT_BIND_HOST))
-        self._server_url: str = str(
-            options.get(OPT_SERVER_URL) or DEFAULT_LOOPBACK_URL
-        ).rstrip("/")
+        # An explicit server_url override wins verbatim (the operator manages
+        # scheme/verification themselves via the settings UI). A stored value
+        # equal to DEFAULT_LOOPBACK_URL is treated as no-override: the options
+        # form used to pre-fill that constant as suggested_value, so existing
+        # entries carry it without the user ever having chosen it.
+        _url_override = str(options.get(OPT_SERVER_URL) or "").rstrip("/")
+        self._loopback_verify_ssl: bool | None = None
+        if _url_override and _url_override != DEFAULT_LOOPBACK_URL:
+            self._server_url: str = _url_override
+        else:
+            self._server_url, self._loopback_verify_ssl = _derive_loopback_url(hass)
         self._channel: str = str(options.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
         # An explicit pip-spec override (the pre-release test channel) wins over
         # the channel selector. DEFAULT_PIP_SPEC in the field means "no override,
@@ -805,7 +850,27 @@ class EmbeddedServerManager:
                 "entry may serve stale override values until HA restarts"
             )
 
-        _hamcp_config.set_embedded_connection(self._server_url, access_token)
+        if self._loopback_verify_ssl is None:
+            _hamcp_config.set_embedded_connection(self._server_url, access_token)
+        else:
+            try:
+                _hamcp_config.set_embedded_connection(
+                    self._server_url,
+                    access_token,
+                    verify_ssl=self._loopback_verify_ssl,
+                )
+            except TypeError:
+                # Server predates the verify_ssl parameter (< the release
+                # carrying issue #1890's fix). Register url+token the old way;
+                # on an SSL-enabled instance the wss loopback will fail
+                # certificate verification until the server package updates —
+                # no worse than the plaintext failure it replaces.
+                _LOGGER.warning(
+                    "Installed ha-mcp server does not accept verify_ssl for "
+                    "the embedded connection; loopback TLS verification stays "
+                    "enabled until the server package updates"
+                )
+                _hamcp_config.set_embedded_connection(self._server_url, access_token)
 
         # Imported here, in the worker thread, after the connection is registered.
         from ha_mcp.server import HomeAssistantSmartMCPServer
