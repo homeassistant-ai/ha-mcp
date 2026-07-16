@@ -979,6 +979,36 @@ def _healthz_enabled() -> bool:
     return os.getenv("MCP_HEALTHZ", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _oidc_verify_id_token_enabled() -> bool:
+    """True when OIDC_VERIFY_ID_TOKEN opts in to ID-token verification.
+
+    Off by default: FastMCP's OIDCProxy verifies the access token as a JWT,
+    which works for providers like Authentik and Keycloak. Providers that
+    issue opaque access tokens (Google always; Auth0 without an API
+    audience) need ``verify_id_token=True`` so FastMCP verifies the ID token
+    instead.
+    """
+    return os.getenv("OIDC_VERIFY_ID_TOKEN", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _oidc_allowed_client_redirect_uris() -> list[str] | None:
+    """Parse OIDC_ALLOWED_CLIENT_REDIRECT_URIS into a list, or None if unset.
+
+    Comma-separated list of redirect URI patterns FastMCP's OIDCProxy will
+    accept from dynamically-registered clients. With open DCR and an
+    allow-all redirect policy, a malicious dynamically-registered client can
+    ride a victim's IdP session; internet-facing deployments should set this.
+    """
+    raw = os.getenv("OIDC_ALLOWED_CLIENT_REDIRECT_URIS", "")
+    uris = [uri.strip() for uri in raw.split(",") if uri.strip()]
+    return uris or None
+
+
 def register_browser_landing(
     mcp_instance: "FastMCP | _DeferredMCP",
     path: str,
@@ -1245,6 +1275,11 @@ def main_oidc() -> None:
     - HOMEASSISTANT_TOKEN (required): Home Assistant long-lived access token or supervisor token
     - OIDC_JWT_SIGNING_KEY (optional): Secret key for signing FastMCP JWTs. Set this to
       persist sessions across server restarts. Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    - OIDC_ALLOWED_CLIENT_REDIRECT_URIS (optional): Comma-separated list of redirect URI
+      patterns accepted from dynamically-registered clients. Strongly recommended for
+      internet-facing deployments.
+    - OIDC_VERIFY_ID_TOKEN (optional, default: false): Set true for providers that issue
+      opaque access tokens (e.g. Google, or Auth0 without an API audience).
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     - LOG_LEVEL (optional, default: INFO)
@@ -1255,6 +1290,7 @@ def main_oidc() -> None:
     for logger_name in ["ha_mcp", "ha_mcp.auth", "ha_mcp.auth.provider"]:
         logging.getLogger(logger_name).setLevel(getattr(logging, log_level))
     logger.info(f"OIDC mode logging configured at {log_level} level")
+    _log_startup_version()
 
     # Validate HA credentials (OIDC mode needs them — unlike OAuth mode)
     from ha_mcp.config import get_settings
@@ -1328,6 +1364,7 @@ async def _run_oidc_server(
         client_id: OAuth client ID from the OIDC provider
         client_secret: OAuth client secret from the OIDC provider
         base_url: Public HTTPS URL where this server is accessible
+        host: Bind host (typically 0.0.0.0; override via MCP_HOST)
         port: Port to listen on
         path: MCP endpoint path
     """
@@ -1341,17 +1378,29 @@ async def _run_oidc_server(
     # not rejected with 421/403 before OIDC auth runs.
     ensure_host_origin_guard_default_off()
 
+    proxy_kwargs: dict[str, Any] = {
+        "config_url": config_url,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "base_url": base_url,
+        # "external" tells FastMCP that consent is handled by the upstream
+        # IdP (Authentik, Keycloak, etc.) -- unlike `False`, this does not
+        # log a security warning at startup that consent is disabled.
+        "require_authorization_consent": "external",
+        # Preserve `or None`: an empty-but-set env var must not bypass
+        # FastMCP's derive-from-client-secret default for jwt_signing_key.
+        "jwt_signing_key": os.getenv("OIDC_JWT_SIGNING_KEY") or None,
+    }
+
+    allowed_redirect_uris = _oidc_allowed_client_redirect_uris()
+    if allowed_redirect_uris:
+        proxy_kwargs["allowed_client_redirect_uris"] = allowed_redirect_uris
+
+    if _oidc_verify_id_token_enabled():
+        proxy_kwargs["verify_id_token"] = True
+
     # Create OIDC auth provider — auto-discovers endpoints from config_url
-    auth = OIDCProxy(
-        config_url=config_url,
-        client_id=client_id,
-        client_secret=client_secret,
-        base_url=base_url,
-        require_authorization_consent=False,  # OIDC provider handles consent
-        jwt_signing_key=os.getenv(
-            "OIDC_JWT_SIGNING_KEY"
-        ),  # Persist tokens across restarts
-    )
+    auth = OIDCProxy(**proxy_kwargs)
 
     # Standard server with shared credentials (no proxy client needed)
     global _server
@@ -1360,10 +1409,12 @@ async def _run_oidc_server(
     mcp_instance.auth = auth
 
     logger.info("Server created with OIDC authentication")
+    if _healthz_enabled():
+        _register_healthz_route(mcp_instance)
     logger.info(f"Starting OIDC-enabled MCP server at {base_url}{path}")
 
     await _run_with_shutdown(
-        mcp_instance.run_async(**_http_run_kwargs("streamable-http", host, port, path))
+        mcp_instance.run_async(**_http_run_kwargs("http", host, port, path))
     )
 
 
