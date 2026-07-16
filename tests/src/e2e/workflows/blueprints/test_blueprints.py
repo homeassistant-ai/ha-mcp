@@ -333,6 +333,63 @@ class TestBlueprintManagement:
 
             logger.info("ha_import_blueprint save-to-disk test completed")
 
+    @pytest.mark.slow
+    async def test_reimport_blueprint_with_overwrite(
+        self, mcp_client, local_blueprint_server
+    ):
+        """
+        Test: Re-import an installed blueprint with overwrite=true (issue #1894)
+
+        Validates the "Re-import Blueprint" equivalent: importing an already
+        installed blueprint fails with RESOURCE_ALREADY_EXISTS unless
+        overwrite=true is passed, in which case the save succeeds and reports
+        overrides_existing=True.
+        """
+        test_url = f"{local_blueprint_server['base_url']}/e2e_test_blueprint.yaml"
+        logger.info(f"Testing blueprint re-import with URL: {test_url}")
+
+        async with MCPAssertions(mcp_client) as mcp:
+            # Ensure the blueprint is installed (tolerate a prior import)
+            first = await safe_call_tool(
+                mcp_client,
+                "ha_import_blueprint",
+                {"url": test_url},
+            )
+            if not first.get("success"):
+                error_msg = extract_error_message(first)
+                assert "already exists" in error_msg.lower(), (
+                    f"Expected 'already exists' error, got: {first}"
+                )
+                logger.info("Blueprint already installed from a prior run")
+
+            # Re-import without overwrite must fail with a structured error
+            failure = await mcp.call_tool_failure(
+                "ha_import_blueprint",
+                {"url": test_url},
+                expected_error="already exists",
+            )
+            assert failure["error"]["code"] == "RESOURCE_ALREADY_EXISTS", (
+                f"Expected RESOURCE_ALREADY_EXISTS, got: {failure['error']}"
+            )
+            assert "overwrite" in str(failure["error"]).lower(), (
+                "Error should point the caller at overwrite=true"
+            )
+            logger.info("Re-import without overwrite properly rejected")
+
+            # Re-import with overwrite succeeds and reports the override
+            result = await mcp.call_tool_success(
+                "ha_import_blueprint",
+                {"url": test_url, "overwrite": True},
+            )
+            assert result.get("overrides_existing") is True, (
+                f"Expected overrides_existing=True, got: {result}"
+            )
+            imported = result.get("imported_blueprint", {})
+            assert imported.get("path", "").endswith(".yaml"), (
+                f"Blueprint path should end with .yaml, got: {imported.get('path')}"
+            )
+            logger.info("Blueprint re-imported with overwrite=true")
+
 
 @pytest.mark.blueprint
 async def test_blueprint_discovery_workflow(mcp_client):
