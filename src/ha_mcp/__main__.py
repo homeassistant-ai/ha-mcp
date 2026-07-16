@@ -1329,6 +1329,12 @@ async def _run_oidc_server(
     from fastmcp.server.auth.oidc_proxy import OIDCProxy
 
     from ha_mcp.server import HomeAssistantSmartMCPServer
+    from ha_mcp.transport_security import ensure_host_origin_guard_default_off
+
+    # OIDC mode is deployed behind a public reverse proxy or LAN hostname;
+    # disable FastMCP's Host/Origin rebinding guard so proxied requests are
+    # not rejected with 421/403 before OIDC auth runs.
+    ensure_host_origin_guard_default_off()
 
     # Create OIDC auth provider — auto-discovers endpoints from config_url
     auth = OIDCProxy(

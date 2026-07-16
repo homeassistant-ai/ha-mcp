@@ -326,20 +326,30 @@ def cleanup_stale_migration_marker(data_dir: Path) -> None:
         )
 
 
+_OIDC_REQUIRED_FIELDS = frozenset(
+    {"oidc_config_url", "oidc_client_id", "oidc_client_secret", "oidc_base_url"}
+)
+_OIDC_OPTIONAL_FIELDS = frozenset({"oidc_jwt_signing_key"})
+
+
 def _get_oidc_config(config: dict) -> dict[str, str]:
     """Extract OIDC configuration from add-on options.
 
-    Returns:
-        Dict with OIDC fields that are set (non-empty).
+    Returns an empty dict when no required OIDC field is set (including the case
+    where only the optional ``oidc_jwt_signing_key`` is configured), so callers
+    can use a plain truthiness check to decide whether OIDC mode should be entered.
     """
-    oidc_fields = {
-        "oidc_config_url": config.get("oidc_config_url", ""),
-        "oidc_client_id": config.get("oidc_client_id", ""),
-        "oidc_client_secret": config.get("oidc_client_secret", ""),
-        "oidc_base_url": config.get("oidc_base_url", ""),
-        "oidc_jwt_signing_key": config.get("oidc_jwt_signing_key", ""),
+    raw = {
+        k: v.strip() if isinstance(v, str) else str(v)
+        for k in _OIDC_REQUIRED_FIELDS | _OIDC_OPTIONAL_FIELDS
+        if (v := config.get(k, ""))
     }
-    return {k: v for k, v in oidc_fields.items() if v and v.strip()}
+    result = {k: v for k, v in raw.items() if v}
+    # Only return a non-empty dict when at least one required field is present;
+    # a config with only the optional signing key must not trigger OIDC mode.
+    if not (set(result) & _OIDC_REQUIRED_FIELDS):
+        return {}
+    return result
 
 
 def _validate_oidc_config(oidc_config: dict[str, str]) -> str | None:
@@ -348,13 +358,12 @@ def _validate_oidc_config(oidc_config: dict[str, str]) -> str | None:
     Returns:
         Error message if partial config detected, None if valid or empty.
     """
-    all_fields = {"oidc_config_url", "oidc_client_id", "oidc_client_secret", "oidc_base_url"}
-    present = set(oidc_config.keys()) & all_fields  # Only check required fields
+    present = set(oidc_config.keys()) & _OIDC_REQUIRED_FIELDS
 
     if not present:
         return None  # No OIDC config — use secret path mode
 
-    missing = all_fields - present
+    missing = _OIDC_REQUIRED_FIELDS - present
     if missing:
         friendly_names = {
             "oidc_config_url": "OIDC Discovery URL",

@@ -95,6 +95,16 @@ class TestGetOidcConfig:
         assert len(result) == 2
         assert "backup_hint" not in result
 
+    def test_only_jwt_signing_key_returns_empty(self):
+        """Config with only the optional jwt signing key must return empty dict.
+
+        Regression test: a truthy dict with only oidc_jwt_signing_key caused
+        main() to dispatch to _run_oidc_mode() which crashed with KeyError on
+        the missing required fields.
+        """
+        config = {"oidc_jwt_signing_key": "my-signing-key"}
+        assert _get_oidc_config(config) == {}
+
 
 class TestValidateOidcConfig:
     """Tests for _validate_oidc_config() completeness checking."""
@@ -165,3 +175,8 @@ class TestValidateOidcConfig:
         config = {"oidc_config_url": "https://auth.example.com/.well-known/openid-configuration"}
         error = _validate_oidc_config(config)
         assert "secret path mode" in error
+
+    def test_only_jwt_signing_key_returns_no_error(self):
+        """Config with only the optional jwt signing key is treated as 'no OIDC' — no error."""
+        config = {"oidc_jwt_signing_key": "my-signing-key"}
+        assert _validate_oidc_config(config) is None
