@@ -254,6 +254,18 @@ class FakeDevice:
         labels=(),
         manufacturer=None,
         model=None,
+        identifiers=(),
+        connections=(),
+        config_entries=(),
+        disabled_by=None,
+        sw_version=None,
+        hw_version=None,
+        serial_number=None,
+        via_device_id=None,
+        model_id=None,
+        configuration_url=None,
+        entry_type=None,
+        primary_config_entry=None,
     ):
         self.id = device_id
         self.name = name
@@ -262,6 +274,51 @@ class FakeDevice:
         self.labels = set(labels)
         self.manufacturer = manufacturer
         self.model = model
+        # DeviceEntry stores identifiers/connections/config_entries as sets of
+        # tuples/strings; the caller passes tuples so they stay hashable.
+        self.identifiers = set(identifiers)
+        self.connections = set(connections)
+        self.config_entries = set(config_entries)
+        self.disabled_by = disabled_by
+        self.sw_version = sw_version
+        self.hw_version = hw_version
+        self.serial_number = serial_number
+        self.via_device_id = via_device_id
+        self.model_id = model_id
+        self.configuration_url = configuration_url
+        self.entry_type = entry_type
+        self.primary_config_entry = primary_config_entry
+
+    @property
+    def dict_repr(self):
+        # Mirrors core ``DeviceEntry.dict_repr`` (one ``config/device_registry/
+        # list`` element): the key set + order the device_get/device_list commands
+        # return VERBATIM. Sets are rendered to lists here as core does; timestamps
+        # are fixed floats (their exact value is irrelevant to the consumers).
+        return {
+            "area_id": self.area_id,
+            "configuration_url": self.configuration_url,
+            "config_entries": list(self.config_entries),
+            "config_entries_subentries": {},
+            "connections": list(self.connections),
+            "created_at": 0.0,
+            "disabled_by": self.disabled_by,
+            "entry_type": self.entry_type,
+            "hw_version": self.hw_version,
+            "id": self.id,
+            "identifiers": list(self.identifiers),
+            "labels": list(self.labels),
+            "manufacturer": self.manufacturer,
+            "model": self.model,
+            "model_id": self.model_id,
+            "modified_at": 0.0,
+            "name_by_user": self.name_by_user,
+            "name": self.name,
+            "primary_config_entry": self.primary_config_entry,
+            "serial_number": self.serial_number,
+            "sw_version": self.sw_version,
+            "via_device_id": self.via_device_id,
+        }
 
 
 class FakeDeviceReg:
@@ -419,6 +476,8 @@ class TestInfo:
             "helpers_list",
             "states",
             "blueprint_get",
+            "device_get",
+            "device_list",
         ]
         # config_get was withdrawn before release (raw_config freshness lags the
         # config file between write and reload) — it must not be advertised.
@@ -1416,14 +1475,18 @@ _ALL_COMMANDS = [
     "ha_mcp_tools/helpers_list",
     "ha_mcp_tools/states",
     "ha_mcp_tools/blueprint_get",
+    "ha_mcp_tools/device_get",
+    "ha_mcp_tools/device_list",
 ]
 
 # Minimal well-formed message body per command (Required fields) so the admin
 # gate / async_response wrappers reach the pure handler. ``states`` requires
-# ``entity_ids``; ``blueprint_get`` requires ``domain`` + ``path``.
+# ``entity_ids``; ``blueprint_get`` requires ``domain`` + ``path``; ``device_get``
+# requires ``device_id``.
 _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     "ha_mcp_tools/states": {"entity_ids": []},
     "ha_mcp_tools/blueprint_get": {"domain": "automation", "path": "x.yaml"},
+    "ha_mcp_tools/device_get": {"device_id": "d1"},
 }
 
 
@@ -1436,6 +1499,8 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_HELPERS_LIST,
             wsapi.WS_STATES,
             wsapi.WS_BLUEPRINT_GET,
+            wsapi.WS_DEVICE_GET,
+            wsapi.WS_DEVICE_LIST,
         }
         # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
@@ -1572,6 +1637,33 @@ class TestNewCommandSchemas:
         schema = self._schema(monkeypatch, wsapi._blueprint_get_schema)
         with pytest.raises(_REAL_VOL.Invalid):
             schema(bad)
+
+    def test_device_get_requires_device_id(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._device_get_schema)
+        out = schema({"type": wsapi.WS_DEVICE_GET, "device_id": "d1"})
+        assert out["device_id"] == "d1"
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/device_get"},  # device_id required
+            {"type": "ha_mcp_tools/device_get", "device_id": 5},  # not a string
+        ],
+    )
+    def test_device_get_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._device_get_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
+
+    def test_device_list_valid(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._device_list_schema)
+        out = schema({"type": wsapi.WS_DEVICE_LIST})
+        assert out["type"] == wsapi.WS_DEVICE_LIST
+
+    def test_device_list_rejects_extra_keys(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._device_list_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema({"type": wsapi.WS_DEVICE_LIST, "area_id": "x"})
 
 
 # =============================================================================
@@ -2192,3 +2284,104 @@ class TestOverview:
         assert "entity_registry" in res["slice_errors"]
         assert res["entity_registry"] == []
         assert res["states"], "an unrelated slice must still be populated"
+
+
+# =============================================================================
+# device_get + device_list — raw DeviceEntry.dict_repr reads
+# =============================================================================
+def _zha_device():
+    """A DeviceEntry-ish fake carrying the fields the server transforms read."""
+    return FakeDevice(
+        "dev-1",
+        name="Kitchen Sensor",
+        name_by_user="Kitchen",
+        area_id="a1",
+        labels=("important",),
+        manufacturer="Aqara",
+        model="T1",
+        identifiers=(("zha", "00:11:22:33:44:55:66:77"),),
+        connections=(("zigbee", "00:11:22:33:44:55:66:77"),),
+        config_entries=("cfg-1",),
+        disabled_by=None,
+        sw_version="1.2.3",
+        via_device_id="coordinator-1",
+    )
+
+
+class TestDeviceGet:
+    def test_found_returns_dict_repr_verbatim(self, monkeypatch):
+        dev = _zha_device()
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[dev])
+        )
+        res = wsapi._do_device_get(FakeHass(), {"device_id": "dev-1"})
+        # The body is DeviceEntry.dict_repr UNMODIFIED — the byte-parity contract
+        # with one config/device_registry/list element.
+        assert res["device"] == dev.dict_repr
+        assert res["device"]["id"] == "dev-1"
+        assert res["device"]["name_by_user"] == "Kitchen"
+        assert res["device"]["config_entries"] == ["cfg-1"]
+        assert res["device"]["identifiers"] == [("zha", "00:11:22:33:44:55:66:77")]
+
+    def test_missing_device_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[_zha_device()])
+        )
+        res = wsapi._do_device_get(FakeHass(), {"device_id": "ghost"})
+        assert res == {"device": None}
+
+    def test_absent_device_id_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[_zha_device()])
+        )
+        res = wsapi._do_device_get(FakeHass(), {})
+        assert res == {"device": None}
+
+    def test_unserializable_dict_repr_degrades_to_none(self, monkeypatch):
+        class _BadDevice:
+            id = "dev-x"
+
+            @property
+            def dict_repr(self):
+                raise RuntimeError("core drift")
+
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[_BadDevice()])
+        )
+        res = wsapi._do_device_get(FakeHass(), {"device_id": "dev-x"})
+        assert res == {"device": None}
+
+
+class TestDeviceList:
+    def test_lists_all_dict_reprs(self, monkeypatch):
+        d1 = FakeDevice("d1", name="One")
+        d2 = FakeDevice("d2", name="Two", area_id="a2")
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[d1, d2])
+        )
+        res = wsapi._do_device_list(FakeHass(), {})
+        by_id = {d["id"]: d for d in res["devices"]}
+        assert set(by_id) == {"d1", "d2"}
+        assert by_id["d1"] == d1.dict_repr
+        assert by_id["d2"]["area_id"] == "a2"
+
+    def test_empty_registry(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
+        assert wsapi._do_device_list(FakeHass(), {}) == {"devices": []}
+
+    def test_skips_unserializable_entry(self, monkeypatch):
+        class _BadDevice:
+            id = "bad"
+
+            @property
+            def dict_repr(self):
+                raise RuntimeError("core drift")
+
+        good = FakeDevice("good", name="Good")
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(devices=[_BadDevice(), good]),
+        )
+        res = wsapi._do_device_list(FakeHass(), {})
+        assert [d["id"] for d in res["devices"]] == ["good"]

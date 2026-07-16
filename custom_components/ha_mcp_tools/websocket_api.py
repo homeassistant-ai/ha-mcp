@@ -2,7 +2,7 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. v1.1.0 ships six commands (five capabilities):
+capability gate. v1.1.0 ships eight commands (seven capabilities):
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
   + ``component_version`` + advisory ``limits``. One cached probe tells the
@@ -37,6 +37,19 @@ capability gate. v1.1.0 ships six commands (five capabilities):
   prep. ``!input`` markers are preserved; every other custom tag (``!secret`` /
   ``!include`` / …) is neutralized to ``None`` at load time, so no resolved
   secret plaintext can ever reach the body.
+* ``ha_mcp_tools/device_get`` — one device registry entry by id
+  (``{device: <DeviceEntry.dict_repr> | None}``), so a single-device lookup no
+  longer pulls the entire device registry. The body is core's
+  ``DeviceEntry.dict_repr`` returned VERBATIM — byte-identical to one element of
+  ``config/device_registry/list`` (which sends ``json_bytes(entry.dict_repr)``)
+  by construction, since this command's ``connection.send_result`` runs the same
+  JSON encoder over the same dict. Consumers keep their own transforms over the
+  raw shape; ``device`` is ``None`` when no such device exists.
+* ``ha_mcp_tools/device_list`` — every device registry entry as that same raw
+  ``DeviceEntry.dict_repr`` shape (``{devices: [...]}``): the in-process
+  equivalent of ``config/device_registry/list`` served through the component
+  seam, so ``ha_get_device`` list mode need not mix a legacy WS read with the
+  component path.
 
 ``ha_mcp_tools/config_get`` was withdrawn before release: it served an entity's
 ``raw_config``, whose freshness lags the config file between a write and the next
@@ -121,6 +134,8 @@ WS_OVERVIEW = f"{WS_API_PREFIX}/overview"
 WS_HELPERS_LIST = f"{WS_API_PREFIX}/helpers_list"
 WS_STATES = f"{WS_API_PREFIX}/states"
 WS_BLUEPRINT_GET = f"{WS_API_PREFIX}/blueprint_get"
+WS_DEVICE_GET = f"{WS_API_PREFIX}/device_get"
+WS_DEVICE_LIST = f"{WS_API_PREFIX}/device_list"
 
 # Wire-format generation of the request/response envelopes. Bumped only on an
 # *incompatible* shape change to an existing command; additive fields do not
@@ -137,6 +152,8 @@ CAPABILITIES: list[str] = [
     "helpers_list",
     "states",
     "blueprint_get",
+    "device_get",
+    "device_list",
 ]
 
 # Blueprint domains this component will read a body for. Mirrors core's blueprint
@@ -282,6 +299,8 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_helpers_list_schema(), _do_helpers_list, None),
         (_states_schema(), _do_states, None),
         (_blueprint_get_schema(), _do_blueprint_get, _blueprint_get_prep),
+        (_device_get_schema(), _do_device_get, None),
+        (_device_list_schema(), _do_device_list, None),
     ]
 
 
@@ -355,6 +374,17 @@ def _blueprint_get_schema() -> dict[Any, Any]:
         vol.Required("domain"): vol.In(BLUEPRINT_DOMAINS),
         vol.Required("path"): str,
     }
+
+
+def _device_get_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_DEVICE_GET,
+        vol.Required("device_id"): str,
+    }
+
+
+def _device_list_schema() -> dict[Any, Any]:
+    return {vol.Required("type"): WS_DEVICE_LIST}
 
 
 # =============================================================================
@@ -2168,3 +2198,60 @@ class _BlueprintLoader(yaml.SafeLoader):
 
 _BlueprintLoader.add_constructor("!input", _construct_blueprint_input)
 _BlueprintLoader.add_multi_constructor("!", _drop_blueprint_tag)
+
+
+# =============================================================================
+# ha_mcp_tools/device_get + ha_mcp_tools/device_list
+# =============================================================================
+def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return one device registry entry by id: ``{device: dict_repr | None}``.
+
+    ``registry.async_get(device_id)`` is a pure O(1) in-memory dict read, and the
+    emitted body is core's ``DeviceEntry.dict_repr`` returned UNMODIFIED — exactly
+    the shape ``config/device_registry/list`` serializes (it sends
+    ``json_bytes(entry.dict_repr)``), so a component-served record is byte-identical
+    to one legacy list element by construction (the WS transport JSON-encodes the
+    same dict with the same encoder). The body is never ``_plainify``'d: that would
+    ``str()`` the ``disabled_by`` / ``entry_type`` enums to their repr instead of the
+    wire value core's encoder emits, breaking parity. ``device`` is ``None`` when no
+    such device exists — the server maps that onto its own not-found contract.
+    """
+    device_id = params.get("device_id")
+    view = _resolve_registries(hass)
+    entry = _device(view, device_id) if device_id else None
+    return {"device": _device_dict_repr(entry) if entry is not None else None}
+
+
+def _do_device_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return every device registry entry as ``{devices: [dict_repr, ...]}``.
+
+    The in-process equivalent of ``config/device_registry/list``: each element is
+    core's ``DeviceEntry.dict_repr`` returned VERBATIM (same byte-parity rationale
+    as :func:`_do_device_get`), so the server's existing device transforms consume
+    it unchanged. An entry whose ``dict_repr`` is unavailable is skipped rather
+    than emitted as a partial record.
+    """
+    view = _resolve_registries(hass)
+    reg = view.device
+    devices = getattr(reg, "devices", None) if reg is not None else None
+    out: list[dict[str, Any]] = []
+    for dev in _mapping_values(devices):
+        repr_dict = _device_dict_repr(dev)
+        if repr_dict is not None:
+            out.append(repr_dict)
+    return {"devices": out}
+
+
+def _device_dict_repr(entry: Any) -> dict[str, Any] | None:
+    """core ``DeviceEntry.dict_repr`` verbatim — the ``config/device_registry/list`` shape.
+
+    Returned UNMODIFIED so the WS transport encodes it with the same JSON
+    serializer ``config/device_registry/list`` uses (byte-parity — see
+    :func:`_do_device_get`). Guarded against core drift: a missing/raising
+    ``dict_repr`` yields ``None`` rather than propagating.
+    """
+    try:
+        repr_dict = entry.dict_repr
+    except Exception:  # pragma: no cover - defensive; core drift
+        return None
+    return repr_dict if isinstance(repr_dict, dict) else None

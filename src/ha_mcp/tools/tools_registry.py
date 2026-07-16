@@ -17,6 +17,10 @@ from pydantic import Field
 from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .component_devices import (
+    fetch_device_list_via_component,
+    fetch_device_via_component,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -175,13 +179,28 @@ def _build_entity_maps(
     return entity_to_device, device_to_entities
 
 
-async def _fetch_registries(
-    client: Any,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Fetch device and entity registries concurrently; raises ToolError on device registry failure."""
-    list_result, entity_result = await asyncio.gather(
-        client.send_websocket_message({"type": "config/device_registry/list"}),
-        client.send_websocket_message({"type": "config/entity_registry/list"}),
+async def _fetch_entity_rows(client: Any) -> list[dict[str, Any]]:
+    """Entity-registry rows for the device<->entity maps; tolerant ([] on failure).
+
+    There is no per-device entity capability, so a device's entity list still
+    comes from the full ``config/entity_registry/list``. Entity-registry failure
+    is non-fatal (the caller just loses the entity list / hidden filter), matching
+    the prior concurrent-fetch behaviour.
+    """
+    entity_result = await client.send_websocket_message(
+        {"type": "config/entity_registry/list"}
+    )
+    return entity_result.get("result", []) if entity_result.get("success") else []
+
+
+async def _legacy_device_rows(client: Any) -> list[dict[str, Any]]:
+    """Full device registry via the legacy ``config/device_registry/list``.
+
+    Raises SERVICE_CALL_FAILED when the read fails, preserving the prior
+    fatal-on-device-registry-failure contract.
+    """
+    list_result = await client.send_websocket_message(
+        {"type": "config/device_registry/list"}
     )
     if not list_result.get("success"):
         raise_tool_error(
@@ -190,10 +209,76 @@ async def _fetch_registries(
                 f"Failed to access device registry: {list_result.get('error', 'Unknown error')}",
             )
         )
-    all_entities = (
-        entity_result.get("result", []) if entity_result.get("success") else []
-    )
-    return list_result.get("result", []), all_entities
+    return list(list_result.get("result", []))
+
+
+async def _fetch_device_rows(client: Any) -> list[dict[str, Any]]:
+    """Full device registry — component ``device_list`` or legacy list.
+
+    Routes through ``ha_mcp_tools/device_list`` when the component serves it (the
+    raw ``DeviceEntry`` shape, byte-identical to ``config/device_registry/list``),
+    else the legacy WS list. Used for LIST mode, where the whole registry is the
+    intended payload.
+    """
+    result = await fetch_device_list_via_component(client)
+    if result is not None:
+        return list(result.get("devices", []))
+    return await _legacy_device_rows(client)
+
+
+async def _device_rows_for_single_lookup(
+    client: Any, device_id: str
+) -> list[dict[str, Any]]:
+    """Device rows for a single lookup: just the target, else the full registry.
+
+    When the component serves ``device_get`` and the device exists, returns
+    ``[device]`` (one in-process read — no whole-registry dump). Otherwise (device
+    absent, or the component can't serve device_get) returns the full registry via
+    the LEGACY list so a not-found error can still suggest valid ids — not the
+    component ``device_list``, since a device_get that just failed
+    ``unknown_command`` invalidated the caps and re-probing for a sibling command
+    is pointless churn.
+    """
+    result = await fetch_device_via_component(client, device_id)
+    if result is not None:
+        device = result.get("device")
+        if isinstance(device, dict):
+            return [device]
+        # Component authoritative not-found: fall through to the full list so the
+        # not-found error carries available_device_ids.
+    return await _legacy_device_rows(client)
+
+
+async def _lookup_device_for_remove(client: Any, device_id: str) -> dict[str, Any]:
+    """Return the raw device row for ``ha_remove_device``; raise if it does not exist.
+
+    Uses the component's ``device_get`` for the single-device read when available
+    (no whole-registry dump), falling back to the legacy full list — also used to
+    build the not-found error's available-ids suggestion.
+    """
+    result = await fetch_device_via_component(client, device_id)
+    if result is not None:
+        device = result.get("device")
+        if isinstance(device, dict):
+            return device
+    all_rows = await _legacy_device_rows(client)
+    device = next((d for d in all_rows if d.get("id") == device_id), None)
+    if device is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Device not found: {device_id}",
+                suggestions=["Use ha_get_device() to find valid device IDs"],
+                context={
+                    "device_id": device_id,
+                    "available_device_ids": [
+                        d.get("id") for d in all_rows[:10] if d.get("id")
+                    ],
+                },
+            )
+        )
+        return {}  # unreachable: raise_tool_error always raises
+    return device
 
 
 async def _enrich_zha_metrics(client: Any, device_info: dict[str, Any]) -> None:
@@ -711,9 +796,13 @@ class RegistryTools:
         reachability, IPs, fabrics). For management use ha_manage_radio.
         """
         try:
-            all_devices, all_entities = await _fetch_registries(self._client)
-
+            # A device's entity list (and entity_id -> device resolution) still
+            # needs the entity registry; a summary list needs neither, so its
+            # entity fetch is skipped. The device rows come from the component's
+            # device_get (single lookup) / device_list (list) when available, so a
+            # single lookup no longer dumps the whole device registry.
             need_full = bool(device_id or entity_id or detail_level == "full")
+            all_entities = await _fetch_entity_rows(self._client) if need_full else []
             entity_to_device, device_to_entities = _build_entity_maps(
                 all_entities, need_full
             )
@@ -732,9 +821,13 @@ class RegistryTools:
                 device_id = resolved
 
             if device_id:
+                all_devices = await _device_rows_for_single_lookup(
+                    self._client, device_id
+                )
                 return await _get_single_device_result(
                     self._client, device_id, entity_id, all_devices, device_to_entities
                 )
+            all_devices = await _fetch_device_rows(self._client)
             return _list_devices_result(
                 all_devices,
                 device_to_entities,
@@ -898,35 +991,7 @@ class RegistryTools:
                 "device_id",
                 suggestions=["Use ha_get_device() to find valid device IDs"],
             )
-            list_result = await self._client.send_websocket_message(
-                {"type": "config/device_registry/list"}
-            )
-            if not list_result.get("success"):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to access device registry: {list_result.get('error', 'Unknown error')}",
-                    )
-                )
-
-            device_by_id = {d.get("id"): d for d in list_result.get("result", [])}
-            device = device_by_id.get(device_id)
-            if not device:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Device not found: {device_id}",
-                        suggestions=["Use ha_get_device() to find valid device IDs"],
-                        context={
-                            "device_id": device_id,
-                            "available_device_ids": [
-                                d.get("id")
-                                for d in list_result.get("result", [])[:10]
-                                if d.get("id")
-                            ],
-                        },
-                    )
-                )
+            device = await _lookup_device_for_remove(self._client, device_id)
 
             config_entries = device.get("config_entries", [])
             device_name = device.get("name_by_user") or device.get("name")

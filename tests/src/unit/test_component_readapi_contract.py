@@ -19,16 +19,18 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from ha_mcp.tools import (
     component_api,
+    component_devices,
     tools_blueprints,
     tools_config_helpers,
     tools_search,
 )
+from ha_mcp.tools.radio.zigbee import _resolve_ieee
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
@@ -61,6 +63,15 @@ from .test_ha_get_blueprint_component_routing import (
 from .test_ha_get_blueprint_component_routing import (
     _build_get_blueprint,
 )
+from .test_ha_get_device_component_routing import (
+    RoutingClient as GetDeviceRoutingClient,
+)
+from .test_ha_get_device_component_routing import (
+    _build_get_device,
+)
+from .test_ha_get_device_component_routing import (
+    _entity_row as _device_entity_row,
+)
 from .test_ha_get_state_component_routing import (
     RoutingClient as StateRoutingClient,
 )
@@ -72,12 +83,23 @@ from .test_ha_overview_component_routing import (
     _build_overview_tool,
     _setup_visibility_disabled,
 )
+from .test_ha_remove_device_component_routing import (
+    RoutingClient as RemoveDeviceRoutingClient,
+)
+from .test_ha_remove_device_component_routing import (
+    _build_remove_device,
+)
+from .test_radio_zigbee_component_routing import (
+    RoutingClient as ZigbeeRoutingClient,
+)
 
 _REAL_FNS = {
     "ha_mcp_tools/overview": wsapi._do_overview,
     "ha_mcp_tools/helpers_list": wsapi._do_helpers_list,
     "ha_mcp_tools/states": wsapi._do_states,
     "ha_mcp_tools/blueprint_get": wsapi._do_blueprint_get,
+    "ha_mcp_tools/device_get": wsapi._do_device_get,
+    "ha_mcp_tools/device_list": wsapi._do_device_list,
 }
 
 # Commands whose blocking work lives in an async prep pre-step (run here so the
@@ -505,3 +527,106 @@ class TestBlueprintGetSeam:
         # The real jail blocked the read — no body, and the secret never leaked.
         assert "config" not in resp
         assert "hunter2" not in json.dumps(resp)
+
+
+# --- device_get / device_list ---------------------------------------------------
+class TestDeviceSeam:
+    """The raw ``DeviceEntry.dict_repr`` shape reconciles every device consumer.
+
+    One REAL ``_do_device_get`` output drives THREE consumer sites through their
+    real server code: ``ha_get_device`` (its transform), ``ha_remove_device`` (its
+    ``config_entries`` read), and ``_resolve_ieee`` (its ``identifiers`` read). A
+    drift on either side of the seam — the component emitting a different key set,
+    or a consumer reading a field the raw shape does not carry — fails here. Each
+    consumer is served the device in one in-process ``device_get`` frame, never the
+    whole-registry dump.
+    """
+
+    def _device(self) -> FakeDevice:
+        return FakeDevice(
+            "dev-1",
+            name="Kitchen Sensor",
+            name_by_user="Kitchen",
+            area_id="a1",
+            labels=("important",),
+            manufacturer="Aqara",
+            model="T1",
+            identifiers=(("zha", "00:11:22:33:44:55:66:77"),),
+            config_entries=("cfg-1",),
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_device_transform_from_real_component(self, monkeypatch) -> None:
+        dev = self._device()
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[dev])
+        )
+        client = GetDeviceRoutingClient(
+            entities=[_device_entity_row("sensor.kitchen", "dev-1")]
+        )
+        # A zha device triggers the ZHA metrics enricher (a dedicated path outside
+        # the device_get seam); serve it an empty result so it is a graceful no-op.
+        base_send = client.send_websocket_message
+
+        async def _send(msg: Any) -> dict[str, Any]:
+            if msg.get("type") == "zha/devices":
+                return {"success": True, "result": []}
+            return await base_send(msg)
+
+        client.send_websocket_message = _send  # type: ignore[assignment]
+        ws = _real_component_ws(FakeHass())
+        get_device = _build_get_device(client)
+        with patch_ws(ws, component_devices):
+            resp = await get_device(device_id="dev-1")
+
+        assert resp["success"] is True
+        info = resp["device"]
+        # Every field the transform surfaces was read out of the raw dict_repr.
+        assert info["device_id"] == "dev-1"
+        assert info["name"] == "Kitchen"  # name_by_user preferred over name
+        assert info["area_id"] == "a1"
+        assert info["labels"] == ["important"]
+        assert info["config_entries"] == ["cfg-1"]
+        assert info["integration_type"] == "zha"
+        assert info["ieee_address"] == "00:11:22:33:44:55:66:77"
+        # Served by the component — the whole device registry was never dumped.
+        assert client.device_list_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_remove_device_config_entries_from_real_component(
+        self, monkeypatch
+    ) -> None:
+        dev = self._device()
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[dev])
+        )
+        settings = MagicMock()
+        settings.enable_auto_backup = False
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings", lambda: settings
+        )
+        client = RemoveDeviceRoutingClient()
+        ws = _real_component_ws(FakeHass())
+        remove_device = _build_remove_device(client)
+        with patch_ws(ws, component_devices):
+            resp = await remove_device(device_id="dev-1")
+
+        assert resp["success"] is True
+        # ha_remove_device read config_entries straight out of the raw shape.
+        assert client.remove_calls == ["cfg-1"]
+        assert client.device_list_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_resolve_ieee_from_real_component(self, monkeypatch) -> None:
+        dev = self._device()
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[dev])
+        )
+        client = ZigbeeRoutingClient()
+        ws = _real_component_ws(FakeHass())
+        with patch_ws(ws, component_devices):
+            ieee = await _resolve_ieee(client, "dev-1")
+
+        # _resolve_ieee parsed the identifiers out of the same raw shape.
+        assert ieee == "00:11:22:33:44:55:66:77"
+        assert client.device_list_calls == 0

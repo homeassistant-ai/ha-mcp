@@ -19,6 +19,7 @@ from typing import Any
 from fastmcp.exceptions import ToolError
 
 from ...errors import ErrorCode, create_error_response
+from ..component_devices import fetch_device_via_component
 from ..helpers import raise_tool_error
 from .base import (
     ActionSpec,
@@ -123,17 +124,40 @@ SUPPORTED: dict[str, ActionSpec] = {
 }
 
 
+async def _resolve_ieee_devices(client: Any, device_id: Any) -> list[dict[str, Any]]:
+    """The device rows ``_resolve_ieee`` scans — component ``device_get`` or legacy.
+
+    Returns just the one matching device (``[device]``, or ``[]`` when it does not
+    exist) via ``ha_mcp_tools/device_get`` when the component serves it, else the
+    whole ``config/device_registry/list`` for the caller to filter. Only a
+    non-empty string ``device_id`` is eligible for the component read; anything
+    else takes the legacy path (and is rejected by the caller's scan).
+    """
+    if isinstance(device_id, str) and device_id:
+        result = await fetch_device_via_component(client, device_id)
+        if result is not None:
+            device = result.get("device")
+            return [device] if isinstance(device, dict) else []
+    devices = await ws_call(
+        client, "config/device_registry/list", context={"device_id": device_id}
+    )
+    return list(devices or [])
+
+
 async def _resolve_ieee(client: Any, device_id: Any) -> str:
     """Resolve a ``device_id`` to its ZHA IEEE address via the device registry.
 
     Parses the ``["zha", "<ieee>"]`` registry identifier (falling back to an
     ``("ieee", ...)`` connection). Raises VALIDATION_INVALID_PARAMETER when the
     device is not a ZHA device.
+
+    Routes the single-device lookup through the component's ``device_get`` when
+    available (one in-process read of the raw ``DeviceEntry`` shape) instead of
+    dumping the whole device registry; falls back to
+    ``config/device_registry/list`` when the component can't serve it.
     """
-    devices = await ws_call(
-        client, "config/device_registry/list", context={"device_id": device_id}
-    )
-    for device in devices or []:
+    devices = await _resolve_ieee_devices(client, device_id)
+    for device in devices:
         if device.get("id") != device_id:
             continue
         for ident in device.get("identifiers", []):
