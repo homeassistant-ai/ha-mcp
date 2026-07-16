@@ -189,7 +189,7 @@ Configure there just reports that.)
 | **Automatic server updates** | on | When on, the selected channel's newest release is installed automatically (on reload/restart and via a periodic check). When off, the server stays on the version currently installed — new releases are still offered on the server's update entity, and its **Install** button installs one without turning automatic updates back on. Governs the ha-mcp **server package** only — component updates still come through HACS. A package override below overrides this. |
 | **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the add-on's `9583` so an existing add-on install does not conflict. |
 | **Network access** | `0.0.0.0` | The default matches the add-on: the port is reachable on your LAN with the secret path as the credential. `127.0.0.1` restricts direct access to the Home Assistant machine (the webhook and panel work either way). |
-| **Webhook authentication** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. See [Security](#security). |
+| **Authentication mode** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. `legacy`: self-hosted OAuth with a static Client ID + Secret, for OAuth-only clients (Gemini Spark, Copilot CLI). See [Security](#security). |
 | **ha-mcp package (advanced)** | empty (tracks the selected release channel) | The pip requirement installed at runtime. Leave it empty unless you are testing a pre-release — it accepts any pip requirement string, including a version pin or a GitHub tarball URL. An explicit value overrides the release channel and **disables automatic updates** (a pin stays put until you clear it); changing it forces a reinstall on the next reload. |
 | **Home Assistant URL for the server (advanced)** | `http://127.0.0.1:8123` | How the in-process server reaches Home Assistant. The loopback default works for almost everyone; only change it for unusual SSL-only setups. |
 | **Remote access via webhook** | on | Turn off for local-only mode: the webhook is never registered, so Home Assistant (including Nabu Casa) cannot reach the server at all. Direct port access and the sidebar panel keep working. |
@@ -275,8 +275,8 @@ re-adding the entry also rotates everything, including the internal token.)
 
 ## Security
 
-The in-process server offers two authentication postures, chosen with the
-**Webhook authentication** option:
+The in-process server offers three authentication postures, chosen with the
+**Authentication mode** option:
 
 - **`none` (default): the secret webhook URL is the credential.** The webhook id
   is a high-entropy random string, and anyone who has the full URL can reach the
@@ -292,10 +292,22 @@ The in-process server offers two authentication postures, chosen with the
   its own provisioned admin token, so a non-admin login is refused rather than
   silently granted admin-equivalent control. There is no separate password or
   credential to manage — it is your existing Home Assistant admin login.
+- **`legacy`: a self-hosted OAuth server with a static Client ID + Secret.** For
+  OAuth-only clients that `ha_auth` can't serve (Google Gemini Spark, GitHub
+  Copilot CLI). The component runs its own OAuth 2.1 authorization server at the
+  Home Assistant root and issues a static **Client ID / Client Secret** to paste
+  into the client — the secret *is* the credential and grants admin-equivalent
+  access, so guard it like the `none` URL. Tokens are self-issued (1h access /
+  30d refresh) and carry no Home Assistant login; **rotating** the credential
+  (regenerate toggle, or a custom Client ID / Secret override) invalidates
+  outstanding tokens, but only after the Home Assistant restart the repair
+  prompts for. See [SECURITY.md](../SECURITY.md#in-process-server-ha_mcp_tools-in-process-server-entry)
+  for the full threat model (unauthenticated consent page, permissive redirect
+  URIs, route ownership vs the add-on).
 
-Both postures ride Home Assistant's own remote access (Nabu Casa / your reverse
-proxy) for TLS. If you expose the server to the internet, prefer `ha_auth`, or
-keep the `none` URL strictly private.
+All three postures ride Home Assistant's own remote access (Nabu Casa / your
+reverse proxy) for TLS. If you expose the server to the internet, prefer
+`ha_auth`; keep the `none` URL — or a `legacy` Client Secret — strictly private.
 
 The server reaches Home Assistant with a dedicated admin token the component
 provisions and stores in the config entry; that token is handed to the server

@@ -110,7 +110,7 @@ def fake_manager(monkeypatch):
 def _spy(monkeypatch):
     """Patch webhook register/unregister, issue-registry, and connect-URL
     surfacing to spies (the connect-URL tests restore the real surfacing)."""
-    monkeypatch.setattr(esetup, "async_register_webhook", AsyncMock())
+    monkeypatch.setattr(esetup, "async_register_webhook", AsyncMock(return_value=False))
     monkeypatch.setattr(esetup, "async_unregister_webhook", AsyncMock())
     monkeypatch.setattr(esetup, "async_register_llm_api", AsyncMock())
     monkeypatch.setattr(esetup, "async_unregister_llm_api", MagicMock())
@@ -120,6 +120,55 @@ def _spy(monkeypatch):
 
 
 class TestBringUp:
+    async def test_legacy_bring_up_passes_creds_active_verdict(
+        self, fake_manager, monkeypatch
+    ):
+        # The bring-up must consult legacy_credentials_active and hand its
+        # verdict to _surface_connect_urls -- the gate that keeps rotated
+        # credentials out of the startup log (review finding on #1880).
+        monkeypatch.setattr(
+            esetup, "legacy_credentials_active", MagicMock(return_value=False)
+        )
+        hass = _make_hass()
+        entry = _make_entry(
+            options={esetup.OPT_WEBHOOK_AUTH: esetup.WEBHOOK_AUTH_LEGACY}
+        )
+
+        await esetup.async_bring_up_server(hass, entry)
+
+        esetup.legacy_credentials_active.assert_called_once()
+        assert (
+            esetup._surface_connect_urls.call_args.kwargs["oauth_creds_active"] is False
+        )
+
+    async def test_legacy_restart_needed_files_repair(self, fake_manager, monkeypatch):
+        # Review gap: every bring-up test mocked async_register_webhook with
+        # restart_needed=False, so the create-issue branch of
+        # _async_update_legacy_oauth_issue was never exercised.
+        monkeypatch.setattr(
+            esetup, "async_register_webhook", AsyncMock(return_value=True)
+        )
+        hass = _make_hass()
+        entry = _make_entry(
+            options={esetup.OPT_WEBHOOK_AUTH: esetup.WEBHOOK_AUTH_LEGACY}
+        )
+
+        await esetup.async_bring_up_server(hass, entry)
+
+        created = [
+            c
+            for c in esetup.ir.async_create_issue.call_args_list
+            if esetup.ISSUE_LEGACY_OAUTH_RESTART in c.args
+        ]
+        assert created, "legacy-OAuth restart repair was not filed"
+        # The same restart-needed verdict must thread into the connect-URL
+        # surfacing so the log carries the first-enable "not live" caveat --
+        # deleting that kwarg would silently drop the caveat.
+        assert (
+            esetup._surface_connect_urls.call_args.kwargs["oauth_restart_pending"]
+            is True
+        )
+
     async def test_success_starts_registers_and_surfaces(self, fake_manager):
         hass = _make_hass()
         entry = _make_entry()
@@ -154,6 +203,10 @@ class TestBringUp:
             esetup.ISSUE_PACKAGE_FAILED,
             esetup.ISSUE_START_FAILED,
             esetup.ISSUE_UPDATE_HELD,
+            # A non-legacy bring-up (async_register_webhook returned
+            # restart_needed=False) also clears any stale legacy-OAuth restart
+            # repair from a prior legacy configuration.
+            esetup.ISSUE_LEGACY_OAUTH_RESTART,
         }
 
     async def test_local_only_skips_endpoint_but_keeps_forwarding(
@@ -317,6 +370,16 @@ class TestRevokeOnRemove:
         await esetup.async_revoke_credentials_on_remove(hass, entry)
         fake_manager.async_revoke_credentials.assert_awaited_once()
         esetup.ir.async_delete_issue.assert_called()
+
+    async def test_clears_legacy_oauth_restart_repair(self, fake_manager):
+        # The legacy-OAuth restart repair is filed only from bring-up, which
+        # never runs again for a removed entry — so removal must clear it too,
+        # or a still-pending restart leaves a dangling warning for a gone server.
+        hass = _make_hass()
+        entry = _make_entry()
+        await esetup.async_revoke_credentials_on_remove(hass, entry)
+        cleared = {c.args[2] for c in esetup.ir.async_delete_issue.call_args_list}
+        assert esetup.ISSUE_LEGACY_OAUTH_RESTART in cleared
 
 
 # ---------------------------------------------------------------------------
@@ -497,6 +560,79 @@ class TestSurfaceConnectUrls:
         # Strengthened: even in local-only mode the direct line names the host.
         assert "http://192.168.1.5:9584/priv (direct access)" in caplog.text
         assert "disabled" in self._message()
+
+    def test_legacy_active_creds_go_to_log_never_notification(self, caplog):
+        import logging
+
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(
+                hass,
+                entry,
+                esetup.WEBHOOK_AUTH_LEGACY,
+                oauth_client_id="cid-abc123",
+                oauth_client_secret="sec-xyz789",
+            )
+        assert "cid-abc123" in caplog.text
+        assert "sec-xyz789" in caplog.text
+        assert "cid-abc123" not in self._message()
+        assert "sec-xyz789" not in self._message()
+        # Live views (no pending restart): no not-live caveat.
+        assert "not live until the restart" not in caplog.text
+
+    def test_legacy_first_enable_logs_creds_with_not_live_caveat(self, caplog):
+        # Review finding on #1880: first-enable mid-session late-binds the
+        # views, so the credentials ARE the bound identity (logged in full)
+        # but /authorize is not live until the restart the repair asks for --
+        # the log must say so, matching the options hint and regenerate text.
+        import logging
+
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(
+                hass,
+                entry,
+                esetup.WEBHOOK_AUTH_LEGACY,
+                oauth_client_id="cid-abc123",
+                oauth_client_secret="sec-xyz789",
+                oauth_creds_active=True,
+                oauth_restart_pending=True,
+            )
+        # Credentials still shown (they are the ones that will be served)...
+        assert "cid-abc123" in caplog.text
+        assert "sec-xyz789" in caplog.text
+        # ...with the not-live-until-restart caveat.
+        assert "not live until the restart" in caplog.text
+
+    def test_legacy_pending_rotation_withholds_creds_from_log(self, caplog):
+        # Review finding on #1880: while a rotation is pending the restart,
+        # the bound views still serve the OLD identity, so an outstanding
+        # token stays valid and can read this log through the server's own
+        # log tools. The NEW credentials must not appear anywhere in it.
+        import logging
+
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(
+                hass,
+                entry,
+                esetup.WEBHOOK_AUTH_LEGACY,
+                oauth_client_id="cid-abc123",
+                oauth_client_secret="sec-xyz789",
+                oauth_creds_active=False,
+            )
+        assert "cid-abc123" not in caplog.text
+        assert "sec-xyz789" not in caplog.text
+        assert "cid-abc123" not in self._message()
+        assert "sec-xyz789" not in self._message()
+        # The log still tells the admin where the new credentials live.
+        assert "Configure" in caplog.text
 
     def test_cloud_import_error_falls_back_to_local_url(self, monkeypatch, caplog):
         # Review gap: plain HA Core has no cloud integration at all - the

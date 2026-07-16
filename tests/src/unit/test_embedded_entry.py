@@ -16,6 +16,7 @@ replaced with fakes so the entry-point wiring is exercised in isolation.
 from __future__ import annotations
 
 import asyncio
+import secrets
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -278,6 +279,132 @@ class TestSetup:
         await _drain_background_tasks(hass, entry)
 
         fake_collaborators.panel.async_register_ui_panel.assert_not_awaited()
+
+
+class TestPrebindLegacyOAuthViews:
+    """`_prebind_legacy_oauth_views` binds the root /authorize + /token views
+    synchronously at setup — before the background bring-up's slow install — so
+    they are live at boot instead of racing HA reaching RUNNING."""
+
+    def _legacy_entry(self) -> MagicMock:
+        entry = _make_entry()
+        entry.options = {
+            const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY,
+            const.OPT_ENABLE_WEBHOOK: True,
+        }
+        entry.data = {
+            **entry.data,
+            const.DATA_OAUTH_CLIENT_ID: "cid",
+            const.DATA_OAUTH_CLIENT_SECRET: "secret",
+            const.DATA_OAUTH_SIGNING_KEY: secrets.token_hex(32),
+        }
+        return entry
+
+    def test_legacy_mode_binds_root_views_at_setup(self):
+        from custom_components.ha_mcp_tools import oauth_legacy
+
+        hass = _make_hass()
+        hass.is_running = False
+        hass.http = MagicMock()
+
+        eentry._prebind_legacy_oauth_views(hass, self._legacy_entry())
+
+        # 7 RFC 8414/9728 discovery views + the 2 root /authorize + /token views.
+        assert hass.http.register_view.call_count == 9
+        assert hass.data.get(oauth_legacy.OAUTH_ROUTE_OWNER_KEY) == oauth_legacy._DOMAIN
+
+    def test_non_legacy_mode_binds_nothing(self):
+        hass = _make_hass()
+        hass.http = MagicMock()
+        entry = _make_entry()
+        entry.options = {const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
+
+        eentry._prebind_legacy_oauth_views(hass, entry)
+
+        hass.http.register_view.assert_not_called()
+
+    def test_webhook_disabled_binds_nothing(self):
+        hass = _make_hass()
+        hass.http = MagicMock()
+        entry = self._legacy_entry()
+        entry.options = {**entry.options, const.OPT_ENABLE_WEBHOOK: False}
+
+        eentry._prebind_legacy_oauth_views(hass, entry)
+
+        hass.http.register_view.assert_not_called()
+
+    def test_partial_credentials_bind_nothing(self):
+        # _ensure_secrets mints all three whenever legacy is configured; a gap
+        # means a partial config, deferred to the bring-up path to surface.
+        hass = _make_hass()
+        hass.http = MagicMock()
+        entry = self._legacy_entry()
+        entry.data = {
+            k: v for k, v in entry.data.items() if k != const.DATA_OAUTH_CLIENT_SECRET
+        }
+
+        eentry._prebind_legacy_oauth_views(hass, entry)
+
+        hass.http.register_view.assert_not_called()
+
+    def test_route_conflict_is_swallowed_at_setup(self):
+        # The webhook-proxy add-on owning the root routes makes
+        # bind_legacy_views raise; setup must survive (the bring-up
+        # re-encounters the conflict and files the user-facing repair).
+        from custom_components.ha_mcp_tools import oauth_legacy
+
+        hass = _make_hass()
+        hass.is_running = False
+        hass.http = MagicMock()
+        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "webhook_proxy_addon"
+
+        eentry._prebind_legacy_oauth_views(hass, self._legacy_entry())
+
+        assert hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] == "webhook_proxy_addon"
+
+
+class TestEnsureSecretsLegacyWiring:
+    """`_ensure_secrets` is the persistence path for the legacy credential
+    lifecycle: it must fold `_ensure_legacy_oauth_secrets` mutations into the
+    same `async_update_entry` call — including OPTIONS (the one-shot
+    regenerate flag lives there), which pre-legacy code never persisted."""
+
+    def _capturing_hass(self) -> tuple[MagicMock, dict]:
+        hass = _make_hass()
+        captured: dict = {}
+
+        def _update(entry, *, data=None, options=None):
+            captured["data"] = data
+            captured["options"] = options
+
+        hass.config_entries.async_update_entry = MagicMock(side_effect=_update)
+        return hass, captured
+
+    def test_legacy_regenerate_persists_new_creds_and_clears_flag(self):
+        hass, captured = self._capturing_hass()
+        entry = _make_entry()
+        entry.options = {
+            const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY,
+            const.OPT_OAUTH_REGENERATE: True,
+        }
+
+        eentry._ensure_secrets(hass, entry)
+
+        assert captured["data"][const.DATA_OAUTH_CLIENT_ID].startswith("hamcp-")
+        assert captured["data"][const.DATA_OAUTH_CLIENT_SECRET]
+        assert captured["data"][const.DATA_OAUTH_SIGNING_KEY]
+        assert captured["options"][const.OPT_OAUTH_REGENERATE] is False
+
+    def test_non_legacy_mode_mints_no_oauth_credentials(self):
+        hass, captured = self._capturing_hass()
+        entry = _make_entry()
+        entry.options = {const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
+
+        eentry._ensure_secrets(hass, entry)
+
+        # Webhook id + secret path already present -> nothing changed, no
+        # update call at all (and in particular no OAuth minting).
+        assert captured == {}
 
 
 class TestUnload:
