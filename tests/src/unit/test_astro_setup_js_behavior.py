@@ -837,3 +837,130 @@ class TestTunnelPort:
         # would false-match. Only the `localhost:${serverPort}` lines vary.
         assert expected_port in instructions
         assert wrong_port not in instructions
+
+
+# ---------------------------------------------------------------------------
+# Legacy-OAuth gating (legacyOauthReady -> working steps vs. method notice)
+# ---------------------------------------------------------------------------
+
+# Verbatim markers from setup.astro's instruction templates. Plain text only:
+# the capture reads `setup-instructions` innerHTML back out of a serialized
+# data-* attribute, where markup comes back entity-escaped, so a substring
+# containing tags or entities would never match.
+_LEGACY_NOTICE_HEADLINE = (
+    "Pick the HA-MCP Server component with its built-in webhook first"
+)
+_LEGACY_NOTICE_GO_BACK = "Go back to"
+_SPARK_LEGACY_WHY = "Why legacy OAuth mode"
+_COPILOT_HTTP_TITLE = "Copilot CLI Configuration (HTTP)"
+_COPILOT_STDIO_TITLE = "Copilot CLI Configuration (STDIO)"
+_COPILOT_CLIENT_ID_CALLOUT = "Client ID required: use legacy OAuth mode"
+
+
+def _instructions_after(
+    setup_script: str, prelude: str, wizard_vars: dict[str, Any], flow: str
+) -> str:
+    """Drive ``flow`` and return the rendered ``setup-instructions`` HTML.
+
+    Captured into a body dataset attr inside ``invoke`` (the live-DOM pattern
+    the other tests use); callers assert plain-text substrings only, per the
+    escaping note above.
+    """
+    result = run_script(
+        setup_script,
+        prelude=prelude,
+        initial_html=_build_wizard_dom(wizard_vars),
+        invoke=(
+            flow + "document.body.dataset.instructions = "
+            "document.getElementById('setup-instructions').innerHTML;\n"
+        ),
+    )
+    _assert_clean_init(result)
+    match = re.search(r'data-instructions="([^"]*)"', result.dom)
+    assert match is not None, "setup-instructions innerHTML was not captured"
+    return match.group(1)
+
+
+class TestLegacyOauthGating:
+    """``legacyOauthReady`` (ha-component AND builtin-webhook remote path)
+    decides whether the OAuth-only UI clients — Gemini Spark, Copilot CLI over
+    HTTP — get their working legacy-mode steps or the amber "pick the
+    component first" notice. A flipped gate hands users an instruction set
+    whose OAuth flow cannot complete (or hides the working one), so both
+    sides are pinned with branch-specific markers, not just non-emptiness.
+    """
+
+    def test_copilot_cli_http_on_builtin_webhook_gets_client_id_steps(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        """ha-component -> copilot-cli -> remote -> builtin-webhook is the
+        legacy-eligible HTTP path: the HTTP form steps plus the legacy
+        Client ID / Client Secret callout render, and neither the STDIO
+        branch (copilot-cli has a stdio transport too) nor the notice fires.
+        """
+        instructions = _instructions_after(
+            setup_script,
+            prelude,
+            wizard_vars,
+            _click("server-method", "ha-component")
+            + _click("client", "copilot-cli")
+            + _click("scope", "remote")
+            + _click("remote-path", "builtin-webhook"),
+        )
+        assert _COPILOT_HTTP_TITLE in instructions
+        assert _COPILOT_CLIENT_ID_CALLOUT in instructions
+        assert _COPILOT_STDIO_TITLE not in instructions
+        assert _LEGACY_NOTICE_HEADLINE not in instructions
+
+    def test_gemini_spark_on_builtin_webhook_gets_legacy_steps(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        """Same eligible path for Spark renders the legacy-mode walkthrough
+        (pinned via its "Why legacy OAuth mode" callout — the notice shares
+        the "Gemini Spark Configuration" title, so the title alone cannot
+        discriminate) and not the notice."""
+        instructions = _instructions_after(
+            setup_script,
+            prelude,
+            wizard_vars,
+            _click("server-method", "ha-component")
+            + _click("client", "gemini-spark")
+            + _click("scope", "remote")
+            + _click("remote-path", "builtin-webhook"),
+        )
+        assert _SPARK_LEGACY_WHY in instructions
+        assert _LEGACY_NOTICE_HEADLINE not in instructions
+
+    # Two incompatible shapes, one per side of the `legacyOauthReady`
+    # conjunction: right method but wrong remote path (component +
+    # cloudflared), and wrong method entirely (docker). `working_marker` is
+    # the branch-specific text that must NOT render alongside the notice.
+    @pytest.mark.parametrize(
+        "client_id, method, working_marker",
+        [
+            ("copilot-cli", "ha-component", _COPILOT_HTTP_TITLE),
+            ("gemini-spark", "docker", _SPARK_LEGACY_WHY),
+        ],
+        ids=["copilot-cli-component-cloudflared", "gemini-spark-docker"],
+    )
+    def test_incompatible_path_shows_legacy_method_notice(
+        self,
+        client_id: str,
+        method: str,
+        working_marker: str,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        instructions = _instructions_after(
+            setup_script,
+            prelude,
+            wizard_vars,
+            _click("server-method", method)
+            + _click("client", client_id)
+            + _click("scope", "remote")
+            + _click("remote-path", "cloudflared"),
+        )
+        assert _LEGACY_NOTICE_HEADLINE in instructions
+        assert _LEGACY_NOTICE_GO_BACK in instructions
+        assert working_marker not in instructions
