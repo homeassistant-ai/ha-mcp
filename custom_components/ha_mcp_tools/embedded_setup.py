@@ -33,6 +33,9 @@ from .const import (
     COMPONENT_MANIFEST_AT_TAG_URL,
     DATA_BRINGUP_TASK,
     DATA_MANAGER,
+    DATA_OAUTH_CLIENT_ID,
+    DATA_OAUTH_CLIENT_SECRET,
+    DATA_OAUTH_SIGNING_KEY,
     DATA_PENDING_UPDATE_NOTIFY,
     DATA_SECRET_PATH,
     DATA_UPDATE_COORDINATOR,
@@ -45,6 +48,7 @@ from .const import (
     DOMAIN,
     HACS_COMPONENT_URL,
     ISSUE_COMPONENT_OUTDATED,
+    ISSUE_LEGACY_OAUTH_RESTART,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
     ISSUE_UPDATE_HELD,
@@ -58,12 +62,14 @@ from .const import (
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_WEBHOOK_AUTH,
+    WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
     channel_for_dist,
 )
 from .embedded_server import EmbeddedServerError, EmbeddedServerManager
 from .llm_api import async_register_llm_api, async_unregister_llm_api
 from .mcp_webhook import async_register_webhook, async_unregister_webhook
+from .oauth_legacy import legacy_credentials_active
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -111,23 +117,50 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         auth_mode = str(entry.options.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE))
         secret_path = str(entry.data[DATA_SECRET_PATH])
         webhook_enabled = bool(entry.options.get(OPT_ENABLE_WEBHOOK, True))
+        oauth_client_id = entry.data.get(DATA_OAUTH_CLIENT_ID)
+        oauth_client_secret = entry.data.get(DATA_OAUTH_CLIENT_SECRET)
         # Always set up the loopback forwarding config — the sidebar settings
         # panel proxies through it (#1803); the option gates only the public
-        # webhook endpoint.
-        await async_register_webhook(
+        # webhook endpoint. oauth_* args are ignored unless auth_mode is legacy.
+        oauth_restart_needed = await async_register_webhook(
             hass,
             entry,
             port=manager.port,
             secret_path=secret_path,
             auth_mode=auth_mode,
             register_endpoint=webhook_enabled,
+            oauth_client_id=oauth_client_id,
+            oauth_client_secret=oauth_client_secret,
+            oauth_signing_key=entry.data.get(DATA_OAUTH_SIGNING_KEY),
         )
+        _async_update_legacy_oauth_issue(hass, oauth_restart_needed)
         if not webhook_enabled:
             _LOGGER.info(
                 "Webhook access disabled by option - the server is local-only "
                 "(direct port + sidebar panel)"
             )
-        _surface_connect_urls(hass, entry, auth_mode, webhook_enabled=webhook_enabled)
+        # Only surface cleartext credentials once the bound provider actually
+        # serves them: while a rotation is pending restart, an old-identity
+        # token still validates and can read this log (see
+        # legacy_credentials_active).
+        oauth_creds_active = True
+        if webhook_enabled and auth_mode == WEBHOOK_AUTH_LEGACY:
+            oauth_creds_active = legacy_credentials_active(
+                hass,
+                str(oauth_client_id or ""),
+                str(oauth_client_secret or ""),
+                str(entry.data.get(DATA_OAUTH_SIGNING_KEY) or ""),
+            )
+        _surface_connect_urls(
+            hass,
+            entry,
+            auth_mode,
+            webhook_enabled=webhook_enabled,
+            oauth_client_id=oauth_client_id,
+            oauth_client_secret=oauth_client_secret,
+            oauth_creds_active=oauth_creds_active,
+            oauth_restart_pending=oauth_restart_needed,
+        )
         # Conversation-agent LLM API (#1745), gated on its option (default on).
         # Advisory: registration failures are contained inside (logged, feature
         # absent) — the running server must never be taken down by them.
@@ -189,6 +222,11 @@ async def async_revoke_credentials_on_remove(
     await EmbeddedServerManager(hass, entry).async_revoke_credentials()
     _clear_issues(hass)
     ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)
+    # Clear the legacy-OAuth restart repair too: it is filed only from bring-up,
+    # which never runs again for a removed entry, so a restart that was still
+    # pending at removal would otherwise leave a dangling warning for a server
+    # that no longer exists. (Re-enabling legacy on a fresh entry re-files it.)
+    ir.async_delete_issue(hass, DOMAIN, ISSUE_LEGACY_OAUTH_RESTART)
 
 
 def build_connect_urls(
@@ -266,23 +304,80 @@ def _surface_connect_urls(
     auth_mode: str,
     *,
     webhook_enabled: bool = True,
+    oauth_client_id: str | None = None,
+    oauth_client_secret: str | None = None,
+    oauth_creds_active: bool = True,
+    oauth_restart_pending: bool = False,
 ) -> None:
     """Log the connect URLs and (re)create a persistent notification."""
     urls = build_connect_urls(hass, entry, webhook_enabled=webhook_enabled)
-    auth_note = (
-        "Webhook access is disabled (local-only mode)."
-        if not webhook_enabled
-        else "The webhook URL is the shared secret (no bearer required)."
-        if auth_mode == WEBHOOK_AUTH_NONE
-        else "Clients authenticate with your Home Assistant account (ha_auth)."
-    )
+    if not webhook_enabled:
+        auth_note = "Webhook access is disabled (local-only mode)."
+    elif auth_mode == WEBHOOK_AUTH_NONE:
+        auth_note = "The webhook URL is the shared secret (no bearer required)."
+    elif auth_mode == WEBHOOK_AUTH_LEGACY:
+        # Kept secret-free (unlike the log line below) — see the SECURITY note
+        # on the persistent notification further down, which reuses this text.
+        creds_where = (
+            "the Home Assistant log or the entry's Configure screen"
+            if oauth_creds_active
+            else "the entry's Configure screen"
+        )
+        auth_note = (
+            "OAuth (Beta) is ENABLED for this URL (legacy mode) - see "
+            f"{creds_where} for the Client ID and Client Secret to paste "
+            "into your MCP client."
+        )
+    else:
+        auth_note = "Clients authenticate with your Home Assistant account (ha_auth)."
 
     url_lines = "\n".join(f"- {url}" for url in urls)
-    _LOGGER.info(
-        "HA-MCP in-process server is running. Connect URL(s):\n%s\n%s",
-        url_lines,
-        auth_note,
+    log_message = (
+        "HA-MCP in-process server is running. "
+        f"Connect URL(s):\n{url_lines}\n{auth_note}"
     )
+    if webhook_enabled and auth_mode == WEBHOOK_AUTH_LEGACY:
+        if oauth_creds_active:
+            # Admin-only log (mirrors the webhook-proxy add-on's own startup
+            # log, start.py). Cleartext credentials — deliberately NOT in the
+            # persistent notification below, which every signed-in user can
+            # see.
+            log_message += (
+                f"\n  OAuth Client ID:     {oauth_client_id}"
+                f"\n  OAuth Client Secret: {oauth_client_secret}"
+            )
+            if oauth_restart_pending:
+                # First-enable mid-session late-binds the root views, so
+                # /authorize is not live until the restart the repair asks
+                # for. The credentials ARE the ones that will be served
+                # (oauth_creds_active is True), but pasting them now gets a
+                # connection that fails until the restart — same caveat the
+                # rotation branch, the options hint, and the oauth_regenerate
+                # help text carry.
+                log_message += (
+                    "\n  Legacy OAuth is not live until the restart Home "
+                    "Assistant is asking for; these credentials work once "
+                    "you restart."
+                )
+            log_message += (
+                "\n  Paste both into your MCP client's OAuth connector setup "
+                "(e.g. Google Gemini Spark: Advanced settings)."
+            )
+        else:
+            # SECURITY (review finding on #1880): while a credential rotation
+            # is pending the restart, the bound root views still serve the OLD
+            # identity, so a token issued under it stays valid — and could
+            # read this log through the server's own log tools. Logging the
+            # NEW credentials here would hand them to exactly the party the
+            # rotation is meant to evict, so they are withheld until the
+            # restart makes them active (which also kills every old token).
+            log_message += (
+                "\n  The OAuth credentials were rotated and take effect after "
+                "the restart Home Assistant is asking for; until then the "
+                "previous credentials remain active. The new Client ID and "
+                "Client Secret are on the entry's Configure screen."
+            )
+    _LOGGER.info(log_message)
     if not bool(entry.options.get(OPT_ENABLE_STARTUP_NOTIFICATION, True)):
         # Notification suppressed by option: clear any notification created
         # before the toggle was turned off, then skip creating a fresh one. The
@@ -320,6 +415,29 @@ def _surface_connect_urls(
         title="HA-MCP Server",
         notification_id=_NOTIFICATION_ID,
     )
+
+
+def _async_update_legacy_oauth_issue(hass: HomeAssistant, restart_needed: bool) -> None:
+    """File/clear the legacy-OAuth restart repair per ``async_register_webhook``'s
+    return value.
+
+    Raised on BOTH transitions (see that function's docstring): enabling
+    legacy mode (the root views just bound, or bound with different
+    credentials than before) and disabling it (the views are still bound from
+    a prior legacy registration). aiohttp can neither bind nor release an HTTP
+    view without a full Home Assistant restart either way.
+    """
+    if restart_needed:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            ISSUE_LEGACY_OAUTH_RESTART,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_LEGACY_OAUTH_RESTART,
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, ISSUE_LEGACY_OAUTH_RESTART)
 
 
 _ISSUE_BY_KIND = {

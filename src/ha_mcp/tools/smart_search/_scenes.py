@@ -212,7 +212,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         config_time_budget: float | None = None,
         prefetched_registry: Any = None,
     ) -> tuple[list[dict[str, Any]], int, int, int, bool, int]:
-        """Deep-search scenes: 3-tier strategy plus registry-walk augmentation.
+        """Deep-search scenes: two-tier strategy plus registry-walk augmentation.
 
         Scenes have no listing primitive, so entities are enumerated from
         get_states() and configs fetched per id. Returns the scene results plus
@@ -239,7 +239,6 @@ class SceneSearchMixin(ConfigFetchMixin):
         # Phase 2: bulk fetch
         configs = await self._bulk_fetch_configs(
             "/config/scene/config",
-            ["config/scene/config/list", "scene/config/list"],
             lambda item: (
                 item.get("id") or item.get("name", "").lower().replace(" ", "_")
             ),

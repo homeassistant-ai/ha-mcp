@@ -1453,7 +1453,10 @@ class HomeAssistantClient:
                             ],
                         }
 
-                logger.error(f"WebSocket message failed: {e}")
+                # Name the command in the log line: a bare "Command failed:
+                # Unknown command." is undiagnosable from a user's log
+                # (issue #1889 took a live reproduction to attribute).
+                logger.error(f"WebSocket message failed ({message.get('type')}): {e}")
                 return {"success": False, "error": str(e)}
 
         return {"success": False, "error": "WebSocket request failed"}

@@ -319,7 +319,7 @@ class DeepSearchMixin(SceneSearchMixin):
         *,
         config_time_budget: float | None = None,
     ) -> tuple[list[dict[str, Any]], int, int, int, int]:
-        """Deep-search automations: 3-tier config fetch (REST bulk -> WS bulk -> individual).
+        """Deep-search automations: two-tier config fetch (REST bulk -> budgeted individual).
 
         Returns ``(matches, skipped_count, failed_count, yaml_skipped_count,
         timeout_count)``. ``skipped_count`` is non-zero only when bulk fetch
@@ -360,10 +360,9 @@ class DeepSearchMixin(SceneSearchMixin):
                 )
             )
 
-        # Phase 2: bulk fetch (Attempt A REST, Attempt B WebSocket)
+        # Phase 2: bulk fetch (REST)
         configs = await self._bulk_fetch_configs(
             "/config/automation/config",
-            ["config/automation/config/list", "automation/config/list"],
             lambda item: item.get("id"),
             BULK_REST_TIMEOUT,
             "Automation",
@@ -474,7 +473,7 @@ class DeepSearchMixin(SceneSearchMixin):
         *,
         config_time_budget: float | None = None,
     ) -> tuple[list[dict[str, Any]], int, int, int, int]:
-        """Deep-search scripts: same 3-tier strategy as automations.
+        """Deep-search scripts: same two-tier strategy as automations.
 
         Returns ``(matches, skipped_count, failed_count, yaml_skipped_count,
         timeout_count)``; semantics identical to ``_deep_search_automations``
@@ -500,7 +499,6 @@ class DeepSearchMixin(SceneSearchMixin):
         # Phase 2: bulk fetch
         configs = await self._bulk_fetch_configs(
             "/config/script/config",
-            ["config/script/config/list", "script/config/list"],
             lambda item: (
                 item.get("id") or item.get("alias", "").lower().replace(" ", "_")
             ),

@@ -125,14 +125,15 @@ The consent form explains this revocation path. Reports about token opacity
 The `ha_mcp_tools` component's **in-process MCP server** config entry can run the
 ha-mcp server in-process inside Home Assistant and expose it through a Home
 Assistant webhook (see [docs/in-process-server.md](docs/in-process-server.md)).
-It offers two authentication postures, selected in the entry options:
+It offers three authentication postures, selected by the **Authentication
+mode** option in the entry options:
 
-- **Secret webhook URL (default).** The webhook id is a high-entropy random
-  string and *is* the credential — the same secret-URL trust model as standard
-  mode above, except the URL is designed to be reached remotely through Home
-  Assistant's own remote access (Nabu Casa or a TLS-terminating reverse proxy).
-  Any party that has the full webhook URL is a trusted principal; keep the URL
-  secret.
+- **Secret webhook URL (default, `none`).** The webhook id is a high-entropy
+  random string and *is* the credential — the same secret-URL trust model as
+  standard mode above, except the URL is designed to be reached remotely through
+  Home Assistant's own remote access (Nabu Casa or a TLS-terminating reverse
+  proxy). Any party that has the full webhook URL is a trusted principal; keep
+  the URL secret.
 - **Home Assistant account (`ha_auth`).** Home Assistant Core is the OAuth
   authorization server: the entry serves the discovery documents and
   validates inbound Bearer tokens against Home Assistant's own auth, so access
@@ -143,6 +144,50 @@ It offers two authentication postures, selected in the entry options:
   system-generated users are rejected. This is distinct from the beta OAuth mode
   below — no bespoke authorization server or self-issued token is involved, and
   revoking the user's Home Assistant token/session revokes access.
+- **Legacy OAuth (`legacy`).** A self-hosted OAuth 2.1 authorization server the
+  component runs at the Home Assistant root (`/authorize` + `/token`), for
+  OAuth-only MCP clients that HA Core's native OAuth cannot serve (Google Gemini
+  Spark's cross-origin Client-ID-Metadata-Document redirect, GitHub Copilot
+  CLI's dynamic registration). The credential is a **static `client_id` +
+  `client_secret`** the component generates (or the admin overrides), plus a
+  signing key — all persisted in the config entry. Its security properties:
+  - **The client secret is the boundary.** Anyone holding the `client_id` +
+    `client_secret` can complete the flow and mint tokens; there is no
+    per-user identity. Access is **admin-equivalent** — the same provisioned
+    admin token backs it as the other modes. Keep the secret secret.
+  - **Self-issued Bearer tokens**, HMAC-signed and stateless, carrying
+    `{kind, iat, exp, jti, cid}` — **no** Home Assistant LLAT (unlike the beta
+    OAuth mode in "OAuth Bearer token design" above; that section's
+    LLAT-revocation model does **not** apply here). Access tokens live 1 hour,
+    refresh tokens 30 days.
+  - **Revocation is rotation + restart.** Regenerating the credential or
+    changing the `client_id`/`client_secret` override rotates the signing key,
+    which invalidates every outstanding token — but only once Home Assistant
+    restarts, because the root `/authorize`/`/token` views cannot be rebound
+    without a restart (a repair issue prompts for it). Until that restart the
+    previous credential keeps working; the startup log withholds the rotated
+    credential during that window so a still-valid old token cannot read it.
+  - **The consent endpoint is unauthenticated** (no HA session) — it is a
+    plain human-approval page. This is safe because the authorization code is
+    inert without the `client_secret` at the token endpoint (the client is
+    authenticated before any code is redeemed) and PKCE S256 binds the code to
+    the caller.
+  - **Redirect URIs are validated to a spec floor, not exact-matched:** any
+    `https://` URL (or `http://` loopback per RFC 8252, for CLI clients on
+    variable ports) with a valid host/port and no fragment is accepted. There
+    is deliberately **no** per-client redirect allowlist — the mode exists
+    precisely for clients whose redirect URIs cannot be pre-registered (Spark's
+    is cross-origin; Copilot CLI's loopback port varies). A permissive
+    redirect is not exploitable for token theft here (the code is inert without
+    the secret), so this is an accepted deviation from RFC 9700's exact-match
+    guidance, scoped to this single-tenant self-hosted AS.
+  - **TLS is required in practice** — the endpoints ride Home Assistant's own
+    HTTP, so expose them only over HA's HTTPS remote access (Nabu Casa or a
+    TLS-terminating reverse proxy), never plaintext over the internet.
+  - **Route ownership:** the component and the Webhook Proxy add-on both bind
+    the root `/authorize`/`/token`; only one may own them per Home Assistant
+    instance. A cross-integration guard refuses to enable legacy mode (with a
+    repair prompt) rather than clash silently.
 
 The connect notification deliberately carries no secrets: Home Assistant
 shows persistent notifications to every authenticated user, so the webhook

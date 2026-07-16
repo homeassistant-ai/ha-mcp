@@ -15,7 +15,8 @@ BULK_REST_TIMEOUT = 5.0  # Timeout for bulk REST endpoint calls
 BULK_WEBSOCKET_TIMEOUT = 3.0  # Timeout for bulk WebSocket calls
 
 
-# Attempt-C (per-id fallback) tuning knobs. Sourced from the resolved
+# Attempt-C (per-id fallback; the letter predates the removal of the phantom
+# WS bulk tier in #1889 and is kept as a proper name) tuning knobs. Sourced from the resolved
 # Settings (issues #1538 / #1784) so the env var, the web Settings UI
 # override file, and the field defaults all flow through one precedence path
 # — and so add-on users (who cannot set raw env vars) can tune them from the

@@ -30,7 +30,7 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.const import __version__ as HA_VERSION
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.selector import (
     SelectOptionDict,
     SelectSelector,
@@ -46,6 +46,9 @@ from .const import (
     CHANNEL_DEV,
     CHANNEL_STABLE,
     CONF_ENTRY_TYPE,
+    DATA_OAUTH_CLIENT_ID,
+    DATA_OAUTH_CLIENT_SECRET,
+    DATA_OAUTH_SIGNING_KEY,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
     DEFAULT_AUTO_UPDATE,
@@ -75,6 +78,9 @@ from .const import (
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_LLM_API_EXPOSURE,
+    OPT_OAUTH_CLIENT_ID,
+    OPT_OAUTH_CLIENT_SECRET,
+    OPT_OAUTH_REGENERATE,
     OPT_PIP_SPEC,
     OPT_REGENERATE_SECRETS,
     OPT_SECRET_PATH_OVERRIDE,
@@ -84,6 +90,7 @@ from .const import (
     OPT_WEBHOOK_ID_OVERRIDE,
     TOOLS_ENTRY_TITLE,
     WEBHOOK_AUTH_HA,
+    WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
 )
 
@@ -97,6 +104,29 @@ _SERVER_UNIQUE_ID = f"{DOMAIN}-server"
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _legacy_credentials_active(
+    hass: HomeAssistant, client_id: str, client_secret: str, signing_key: str
+) -> bool:
+    """Deferred-import seam for :func:`oauth_legacy.legacy_credentials_active`.
+
+    oauth_legacy pulls in the aiohttp/HTTP view layer at import time; the
+    config-flow module must stay importable without it (Home Assistant imports
+    config flows early, and the flow unit tests stub only the config-entries
+    surface) — same pattern as ``oauth_legacy._live_auth_mode``.
+    """
+    from .oauth_legacy import legacy_credentials_active
+
+    return legacy_credentials_active(hass, client_id, client_secret, signing_key)
+
+
+def _legacy_restart_pending(hass: HomeAssistant) -> bool:
+    """Deferred-import seam for :func:`oauth_legacy.legacy_restart_pending`
+    (see :func:`_legacy_credentials_active` for why the import is deferred)."""
+    from .oauth_legacy import legacy_restart_pending
+
+    return legacy_restart_pending(hass)
 
 
 def _installed_server_version() -> str | None:
@@ -249,6 +279,24 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         opts = self.config_entry.options
         schema = vol.Schema(
             {
+                # Authentication mode first, directly under the connect URLs
+                # shown in the step description (#1875): it is the setting users
+                # most need to find, and legacy mode is what unblocks OAuth-only
+                # clients such as Google Gemini Spark and Copilot CLI.
+                vol.Required(
+                    OPT_WEBHOOK_AUTH,
+                    default=opts.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            WEBHOOK_AUTH_NONE,
+                            WEBHOOK_AUTH_HA,
+                            WEBHOOK_AUTH_LEGACY,
+                        ],
+                        translation_key="server_webhook_auth",
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
                 vol.Required(
                     OPT_CHANNEL,
                     default=opts.get(OPT_CHANNEL, DEFAULT_CHANNEL),
@@ -288,16 +336,6 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
-                vol.Required(
-                    OPT_WEBHOOK_AUTH,
-                    default=opts.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE),
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA],
-                        translation_key="server_webhook_auth",
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
-                ),
                 vol.Optional(
                     OPT_PIP_SPEC,
                     # Pre-fill via suggested_value, NOT a schema default: a
@@ -316,11 +354,13 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 ): str,
                 vol.Optional(
                     OPT_SERVER_URL,
-                    description={
-                        "suggested_value": opts.get(
-                            OPT_SERVER_URL, DEFAULT_LOOPBACK_URL
-                        )
-                    },
+                    # Only a genuinely saved override is suggested (same
+                    # pattern as OPT_PIP_SPEC above). Pre-filling
+                    # DEFAULT_LOOPBACK_URL made every options save store the
+                    # constant as an explicit override, which would pin the
+                    # scheme/port even after issue #1890's SSL/port-aware
+                    # loopback derivation.
+                    description={"suggested_value": opts.get(OPT_SERVER_URL, "")},
                 ): str,
                 vol.Required(
                     OPT_ENABLE_WEBHOOK,
@@ -372,6 +412,23 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     OPT_REGENERATE_SECRETS,
                     default=False,
                 ): bool,
+                # Legacy OAuth mode (Google Gemini Spark) credential overrides —
+                # same shape as the webhook id/secret-path overrides above.
+                # Empty = auto-generate/keep the current value.
+                vol.Optional(
+                    OPT_OAUTH_CLIENT_ID,
+                    description={"suggested_value": opts.get(OPT_OAUTH_CLIENT_ID, "")},
+                ): str,
+                vol.Optional(
+                    OPT_OAUTH_CLIENT_SECRET,
+                    description={
+                        "suggested_value": opts.get(OPT_OAUTH_CLIENT_SECRET, "")
+                    },
+                ): str,
+                vol.Optional(
+                    OPT_OAUTH_REGENERATE,
+                    default=False,
+                ): bool,
             }
         )
         # The sidebar-panel sentence in the description is only truthful while
@@ -391,6 +448,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             description_placeholders={
                 "versions": await self._versions_hint(),
                 "connect_url": self._connect_url_hint(),
+                "oauth_creds": self._oauth_creds_hint(),
                 "llm_api_docs_url": LLM_API_DOCS_URL,
                 "panel_hint": panel_hint,
             },
@@ -416,15 +474,21 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             OPT_EXTERNAL_URL,
             OPT_WEBHOOK_ID_OVERRIDE,
             OPT_SECRET_PATH_OVERRIDE,
+            OPT_OAUTH_CLIENT_ID,
+            OPT_OAUTH_CLIENT_SECRET,
         ):
             cleaned[key] = str(cleaned.get(key, "") or "").strip()
         cleaned[OPT_EXTERNAL_URL] = cleaned[OPT_EXTERNAL_URL].rstrip("/")
         # server_url gets no _normalize-forced empty like the fields above; strip
         # it and drop it entirely when blank so a whitespace-only value can't be
         # stored verbatim (it would bypass the consumer's empty -> loopback
-        # fallback and break the HA connection).
+        # fallback and break the HA connection). A value equal to
+        # DEFAULT_LOOPBACK_URL is likewise dropped: older forms pre-filled it,
+        # so it reaches here from users who never chose an override, and
+        # storing it would pin the scheme/port the #1890 loopback derivation
+        # exists to resolve.
         server_url = str(cleaned.get(OPT_SERVER_URL, "") or "").strip().rstrip("/")
-        if server_url:
+        if server_url and server_url != DEFAULT_LOOPBACK_URL:
             cleaned[OPT_SERVER_URL] = server_url
         else:
             cleaned.pop(OPT_SERVER_URL, None)
@@ -527,3 +591,50 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 f"http://<home-assistant-ip>:{port}{secret_path}"
             )
         return hint
+
+    def _oauth_creds_hint(self) -> str:
+        """Return the resolved legacy OAuth Client ID + Secret for the options
+        form, or a note pointing at the mode selector when legacy mode isn't
+        the CONFIGURED mode. Admin-only screen (like ``_connect_url_hint``),
+        so showing the secret in cleartext here is acceptable — and this is
+        the surface the startup log points at while a rotation is pending
+        (``_surface_connect_urls`` withholds pending credentials from the
+        log, where a still-valid old-identity token could read them; an HA
+        admin here is trusted). A pending rotation gets a caveat so the admin
+        doesn't paste values that only start working after the restart.
+        """
+        configured_mode = str(self.config_entry.options.get(OPT_WEBHOOK_AUTH) or "")
+        if configured_mode != WEBHOOK_AUTH_LEGACY:
+            return (
+                "Set Authentication mode to legacy OAuth above and save to "
+                "generate a Client ID and Client Secret."
+            )
+        client_id = self.config_entry.data.get(DATA_OAUTH_CLIENT_ID)
+        client_secret = self.config_entry.data.get(DATA_OAUTH_CLIENT_SECRET)
+        if not client_id or not client_secret:
+            # Not minted yet — the entry hasn't finished a bring-up cycle
+            # since legacy mode was selected (e.g. this save just turned it
+            # on). They appear after the next reload.
+            return (
+                "The Client ID and Client Secret appear here once the server "
+                "has started."
+            )
+        creds = f"Client ID: {client_id}\nClient Secret: {client_secret}"
+        signing_key = str(self.config_entry.data.get(DATA_OAUTH_SIGNING_KEY) or "")
+        active = _legacy_credentials_active(
+            self.hass, str(client_id), str(client_secret), signing_key
+        )
+        if active and not _legacy_restart_pending(self.hass):
+            return creds  # bound and live
+        # Not serving these credentials yet: a mid-session first enable
+        # (bound but not live until the restart), a pending rotation (the old
+        # identity still bound), the webhook disabled, or another integration
+        # owning the routes. State-agnostic wording — the previous "the
+        # previous Client ID and Client Secret remain active" was false at a
+        # first enable and when nothing of ours is bound. Matches the startup
+        # log's first-enable caveat and the oauth_regenerate help text.
+        return (
+            f"{creds}\n"
+            "Legacy OAuth is not serving these yet — restart Home Assistant "
+            "when it asks you to, to activate them."
+        )

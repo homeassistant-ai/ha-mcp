@@ -61,7 +61,9 @@ class TestSceneRegistryAugmentation:
                 ),
             ]
         )
-        # REST bulk endpoint fails to force WS bulk path.
+        # Each test points _request at its scene list — the REST endpoint is
+        # the only bulk path (the WS fallback was removed in #1889: its
+        # command types never existed in HA core).
         client._request = AsyncMock(side_effect=Exception("REST bulk unavailable"))
         return client
 
@@ -80,27 +82,26 @@ class TestSceneRegistryAugmentation:
         the augmentation backfills the second key as an alias of the first.
         """
 
-        # WS bulk returns the scene config keyed by the *storage* id.
+        # REST bulk returns the scene config keyed by the *storage* id.
         # Registry list returns the unique_id → entity_id mapping that
         # diverges from the storage id — Phase 2.5 backfills the alias.
+        mock_client._request = AsyncMock(
+            return_value=[
+                {
+                    "id": "night_light_led_desk_strip",
+                    "name": "LED Desk Strip Night Light",
+                    "entities": {
+                        "light.led_desk_strip": {
+                            "state": "on",
+                            "brightness": 30,
+                        }
+                    },
+                }
+            ]
+        )
+
         async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
             msg_type = message.get("type")
-            if msg_type in ("config/scene/config/list", "scene/config/list"):
-                return {
-                    "success": True,
-                    "result": [
-                        {
-                            "id": "night_light_led_desk_strip",
-                            "name": "LED Desk Strip Night Light",
-                            "entities": {
-                                "light.led_desk_strip": {
-                                    "state": "on",
-                                    "brightness": 30,
-                                }
-                            },
-                        }
-                    ],
-                }
             if msg_type == "config/entity_registry/list":
                 return {
                     "success": True,
@@ -144,22 +145,20 @@ class TestSceneRegistryAugmentation:
         """
         unrenamed_entity = _make_scene_entity("scene.movie_night", "Movie Night")
         mock_client.get_states = AsyncMock(return_value=[unrenamed_entity])
+        mock_client._request = AsyncMock(
+            return_value=[
+                {
+                    "id": "movie_night",
+                    "name": "Movie Night",
+                    "entities": {
+                        "light.living_room": {"state": "off"},
+                    },
+                }
+            ]
+        )
 
         async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
             msg_type = message.get("type")
-            if msg_type in ("config/scene/config/list", "scene/config/list"):
-                return {
-                    "success": True,
-                    "result": [
-                        {
-                            "id": "movie_night",
-                            "name": "Movie Night",
-                            "entities": {
-                                "light.living_room": {"state": "off"},
-                            },
-                        }
-                    ],
-                }
             if msg_type == "config/entity_registry/list":
                 # Augmentation step fails — must not break the branch.
                 raise RuntimeError("registry list failed")

@@ -296,6 +296,16 @@ DEFAULT_AUTO_UPDATE = True
 OPT_SERVER_PORT = "server_port"
 OPT_BIND_HOST = "bind_host"
 OPT_WEBHOOK_AUTH = "webhook_auth"
+# Legacy OAuth mode (self-hosted authorization server, static client_id/secret
+# for Google Gemini Spark) credential management — mirrors the
+# OPT_WEBHOOK_ID_OVERRIDE / OPT_REGENERATE_SECRETS shape below. Empty override
+# fields mean "keep the current value"; OPT_OAUTH_REGENERATE is one-shot.
+# _override suffix distinguishes these OPTIONS keys from the DATA_OAUTH_*
+# entry.data keys (which store the resolved values under the un-suffixed
+# names) — mirrors OPT_WEBHOOK_ID_OVERRIDE vs DATA_WEBHOOK_ID.
+OPT_OAUTH_CLIENT_ID = "oauth_client_id_override"
+OPT_OAUTH_CLIENT_SECRET = "oauth_client_secret_override"
+OPT_OAUTH_REGENERATE = "oauth_regenerate"
 OPT_PIP_SPEC = "pip_spec"
 OPT_SERVER_URL = "server_url"
 # Connect-URL surface + secret management (owner request, parity with the
@@ -337,6 +347,22 @@ OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"
 DATA_SECRET_PATH = "secret_path"
+# Legacy OAuth mode credentials, minted by embedded_entry._ensure_secrets and
+# consumed by oauth_legacy.LegacyOAuthProvider. DATA_OAUTH_SIGNING_KEY is a hex
+# string (entry.data must be JSON-serializable, so raw bytes aren't stored
+# directly) — the provider converts it with bytes.fromhex(). The signed token
+# payload carries the client_id (not the secret), so rotating the client_id
+# revokes every outstanding token at the restart that rebinds the views (see
+# LegacyOAuthProvider._validate_token).
+# Because validation never involves the client_secret, a secret-only override
+# change instead rotates the signing key, evicting outstanding tokens at the
+# restart that activates the new credentials (see
+# embedded_entry._ensure_legacy_oauth_secrets). Until that restart the bound
+# views keep serving the OLD identity, so the startup log withholds rotated
+# credentials (embedded_setup._surface_connect_urls).
+DATA_OAUTH_CLIENT_ID = "oauth_client_id"
+DATA_OAUTH_CLIENT_SECRET = "oauth_client_secret"
+DATA_OAUTH_SIGNING_KEY = "oauth_signing_key"
 DATA_SERVER_USER_ID = "server_user_id"
 DATA_REFRESH_TOKEN_ID = "refresh_token_id"
 DATA_ACCESS_TOKEN = "access_token"
@@ -381,6 +407,12 @@ DATA_LLM_API_UNSUB = "llm_api_unsub"
 # Webhook auth modes (mirrors the webhook-proxy add-on's default posture).
 WEBHOOK_AUTH_NONE = "none"  # secret webhook URL is the shared secret (default)
 WEBHOOK_AUTH_HA = "ha_auth"  # HA-native bearer (HA core is the OAuth AS)
+# Self-hosted OAuth 2.1 authorization server with a static client_id/secret,
+# ported from the webhook-proxy add-on's "legacy" mode. Needed because HA
+# core's /auth/authorize does not yet fetch Client ID Metadata Documents for
+# cross-origin redirect_uris (home-assistant/core#176282), which is what
+# Google Gemini Spark's custom connected apps require.
+WEBHOOK_AUTH_LEGACY = "legacy"
 
 # Default bind host + port. 9584 (not the add-on's 9583) so this in-process
 # server and an add-on install can coexist on the same box.
@@ -455,3 +487,10 @@ ISSUE_UPDATE_HELD = "server_update_held"
 # mechanism, so this only self-resolves if the user re-adds the dedicated
 # mirror (homeassistant-ai/ha-mcp-integration).
 ISSUE_LEGACY_HACS_SOURCE = "legacy_hacs_source"
+# Repair issue surfaced when the legacy OAuth mode's root /authorize + /token
+# views are out of sync with the CONFIGURED webhook_auth mode — either just
+# enabled (views not yet bound with the current credentials) or just disabled
+# (views still bound and serving the old identity). aiohttp can neither bind
+# nor unbind an HTTP view without a full Home Assistant restart, so both
+# transitions need one; see oauth_legacy.bind_legacy_views.
+ISSUE_LEGACY_OAUTH_RESTART = "legacy_oauth_restart"

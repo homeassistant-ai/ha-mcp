@@ -26,14 +26,23 @@ from homeassistant.core import HomeAssistant, callback
 from .const import (
     DATA_BRINGUP_TASK,
     DATA_LAST_OPTIONS,
+    DATA_OAUTH_CLIENT_ID,
+    DATA_OAUTH_CLIENT_SECRET,
+    DATA_OAUTH_SIGNING_KEY,
     DATA_SECRET_PATH,
     DATA_UPDATE_COORDINATOR,
     DATA_WEBHOOK_ID,
     DOMAIN,
     OPT_ENABLE_SIDEBAR_PANEL,
+    OPT_ENABLE_WEBHOOK,
+    OPT_OAUTH_CLIENT_ID,
+    OPT_OAUTH_CLIENT_SECRET,
+    OPT_OAUTH_REGENERATE,
     OPT_REGENERATE_SECRETS,
     OPT_SECRET_PATH_OVERRIDE,
+    OPT_WEBHOOK_AUTH,
     OPT_WEBHOOK_ID_OVERRIDE,
+    WEBHOOK_AUTH_LEGACY,
 )
 
 # NOTE: embedded_setup / coordinator (and their embedded_server / mcp_webhook
@@ -65,6 +74,9 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     from .ui_panel import async_register_ui_panel
 
     _ensure_secrets(hass, entry)
+    # Bind the legacy OAuth root views synchronously here — before the slow
+    # background bring-up below — so they are live at boot (see the helper).
+    _prebind_legacy_oauth_views(hass, entry)
 
     # Admin-only "Open Web UI" sidebar panel + proxy. Registered while the entry
     # exists (its proxy returns 503 until the server is actually running), so the
@@ -178,6 +190,50 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
     await hass.config_entries.async_reload(entry.entry_id)
 
 
+def _prebind_legacy_oauth_views(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Register the legacy OAuth root ``/authorize`` + ``/token`` views during
+    entry setup, before the background bring-up's (slow) package install.
+
+    An aiohttp route is only ever live if it is registered before Home Assistant
+    freezes its HTTP app at the end of startup. Binding these views from the
+    background bring-up task races HA reaching RUNNING: on a slow-install boot
+    the routes would register AFTER the freeze — never live until a restart —
+    and ``bind_legacy_views`` would see ``hass.is_running`` True and file a
+    restart repair that the restart cannot clear. Binding here, while the entry
+    is still setting up (``hass.is_running`` is False at boot), mirrors the
+    webhook-proxy add-on, which binds in its own ``async_setup_entry``. The
+    bring-up's ``async_register_webhook`` then reuses this already-bound provider.
+
+    Only relevant when legacy is the configured mode and the webhook endpoint is
+    enabled (legacy OAuth guards that endpoint; with no webhook there is nothing
+    to protect). A route-ownership conflict with the webhook-proxy add-on is
+    swallowed here — the bring-up re-encounters it and files the user-facing
+    start-failed repair.
+    """
+    if str(entry.options.get(OPT_WEBHOOK_AUTH, "")) != WEBHOOK_AUTH_LEGACY:
+        return
+    if not bool(entry.options.get(OPT_ENABLE_WEBHOOK, True)):
+        return
+    client_id = entry.data.get(DATA_OAUTH_CLIENT_ID)
+    client_secret = entry.data.get(DATA_OAUTH_CLIENT_SECRET)
+    signing_key = entry.data.get(DATA_OAUTH_SIGNING_KEY)
+    if not (client_id and client_secret and signing_key):
+        # _ensure_secrets mints these whenever legacy mode is configured; a gap
+        # means a partial config — let the bring-up path surface it.
+        return
+    from .mcp_webhook import _register_metadata_views
+    from .oauth_legacy import LegacyOAuthRouteConflict, bind_legacy_views
+
+    with suppress(LegacyOAuthRouteConflict):
+        # Register the RFC 8414/9728 discovery views alongside the root
+        # /authorize + /token views, both at setup time, so the discovery
+        # doc's resource_metadata URL resolves at boot for RFC-compliant
+        # clients — not just the root views. Both are idempotent, so the
+        # bring-up's async_register_webhook reuses them.
+        _register_metadata_views(hass)
+        bind_legacy_views(hass, client_id, client_secret, signing_key)
+
+
 def _ensure_secrets(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Generate + persist the stable webhook id and secret path on first setup.
 
@@ -192,6 +248,13 @@ def _ensure_secrets(hass: HomeAssistant, entry: ConfigEntry) -> None:
        ``secret_path_override`` replaces the stored value (normalized: the
        secret path gets a leading ``/``).
     3. First setup: mint random values for whatever is still missing.
+
+    When the configured webhook auth mode is legacy, the same three-path
+    lifecycle additionally applies to the legacy OAuth client_id/client_secret
+    (see :func:`_ensure_legacy_oauth_secrets`) — folded into this same
+    read-mutate-write cycle so a single ``async_update_entry`` call covers
+    every field that changed this load, including when BOTH a webhook secret
+    regenerate and an OAuth credential regenerate are requested together.
     """
     data = dict(entry.data)
     options = dict(entry.options)
@@ -206,20 +269,19 @@ def _ensure_secrets(hass: HomeAssistant, entry: ConfigEntry) -> None:
         options[OPT_REGENERATE_SECRETS] = False
         options[OPT_WEBHOOK_ID_OVERRIDE] = ""
         options[OPT_SECRET_PATH_OVERRIDE] = ""
-        hass.config_entries.async_update_entry(entry, data=data, options=options)
-        return
-
-    webhook_override = str(options.get(OPT_WEBHOOK_ID_OVERRIDE) or "").strip()
-    if webhook_override and data.get(DATA_WEBHOOK_ID) != webhook_override:
-        data[DATA_WEBHOOK_ID] = webhook_override
         changed = True
-    path_override = str(options.get(OPT_SECRET_PATH_OVERRIDE) or "").strip()
-    if path_override:
-        if not path_override.startswith("/"):
-            path_override = f"/{path_override}"
-        if data.get(DATA_SECRET_PATH) != path_override:
-            data[DATA_SECRET_PATH] = path_override
+    else:
+        webhook_override = str(options.get(OPT_WEBHOOK_ID_OVERRIDE) or "").strip()
+        if webhook_override and data.get(DATA_WEBHOOK_ID) != webhook_override:
+            data[DATA_WEBHOOK_ID] = webhook_override
             changed = True
+        path_override = str(options.get(OPT_SECRET_PATH_OVERRIDE) or "").strip()
+        if path_override:
+            if not path_override.startswith("/"):
+                path_override = f"/{path_override}"
+            if data.get(DATA_SECRET_PATH) != path_override:
+                data[DATA_SECRET_PATH] = path_override
+                changed = True
 
     if not data.get(DATA_WEBHOOK_ID):
         data[DATA_WEBHOOK_ID] = f"mcp_{secrets.token_hex(16)}"
@@ -227,5 +289,117 @@ def _ensure_secrets(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if not data.get(DATA_SECRET_PATH):
         data[DATA_SECRET_PATH] = f"/private_{secrets.token_urlsafe(16)}"
         changed = True
+
+    if options.get(OPT_WEBHOOK_AUTH) == WEBHOOK_AUTH_LEGACY:
+        changed = _ensure_legacy_oauth_secrets(data, options) or changed
+
     if changed:
-        hass.config_entries.async_update_entry(entry, data=data)
+        hass.config_entries.async_update_entry(entry, data=data, options=options)
+
+
+def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
+    """Mint/persist/rotate the legacy OAuth mode's credentials into ``data``
+    (mutated in place, along with ``options`` for the one-shot regenerate
+    flag). Only called while the configured webhook auth mode is legacy —
+    switching away leaves whatever was last minted in place, so switching
+    back reuses it rather than silently rotating.
+
+    Mirrors the ``OPT_REGENERATE_SECRETS`` shape above: ``OPT_OAUTH_REGENERATE``
+    is one-shot, minting a fresh client_id/client_secret and clearing itself
+    plus the two override fields.
+
+    ANY credential change — regenerate, a client_id override, or a
+    client_secret override — also rotates ``signing_key``, making every
+    rotation a hard revocation of outstanding tokens (they take effect at the
+    restart that rebinds the views). Rotating the key on a secret change is
+    load-bearing (token validation never involves the secret, so the cid
+    claim alone would not evict anything). Rotating it on a client_id change
+    is defence in depth: the cid claim already evicts on a normal rotation,
+    but without a fresh key an ``A → B → A`` client_id sequence would
+    resurrect id-A's still-unexpired tokens, since they re-match the cid
+    claim under the unchanged-key HMAC. Rotating the key kills that echo at
+    zero cost. Rotation does NOT shorten the pre-restart window — the bound
+    views keep serving the old identity until the restart (see
+    ``oauth_legacy.bind_legacy_views``) — which is why the startup log also
+    withholds rotated credentials until they are active
+    (``embedded_setup._surface_connect_urls`` via
+    ``oauth_legacy.legacy_credentials_active``; review findings on #1880).
+
+    Returns True if ``data``/``options`` were mutated.
+    """
+    changed = False
+    if options.get(OPT_OAUTH_REGENERATE):
+        data[DATA_OAUTH_CLIENT_ID] = f"hamcp-{secrets.token_hex(16)}"
+        data[DATA_OAUTH_CLIENT_SECRET] = secrets.token_urlsafe(32)
+        # Every credential change rotates the key — see docstring (kills the
+        # A->B->A client_id resurrection; regenerate mints random ids so it
+        # can't recur to a former id, but the key rotation is kept uniform).
+        data[DATA_OAUTH_SIGNING_KEY] = secrets.token_hex(32)
+        options[OPT_OAUTH_REGENERATE] = False
+        options[OPT_OAUTH_CLIENT_ID] = ""
+        options[OPT_OAUTH_CLIENT_SECRET] = ""
+        changed = True
+    else:
+        client_id_override = str(options.get(OPT_OAUTH_CLIENT_ID) or "").strip()
+        if client_id_override and data.get(DATA_OAUTH_CLIENT_ID) != client_id_override:
+            data[DATA_OAUTH_CLIENT_ID] = client_id_override
+            # Rotate the key so a re-used former client_id can't resurrect its
+            # old tokens (see docstring).
+            data[DATA_OAUTH_SIGNING_KEY] = secrets.token_hex(32)
+            changed = True
+        client_secret_override = str(options.get(OPT_OAUTH_CLIENT_SECRET) or "").strip()
+        if (
+            client_secret_override
+            and data.get(DATA_OAUTH_CLIENT_SECRET) != client_secret_override
+        ):
+            data[DATA_OAUTH_CLIENT_SECRET] = client_secret_override
+            # Evict outstanding tokens along with the old secret — see the
+            # docstring for why a secret-only rotation must not leave them
+            # valid for the rest of their TTL.
+            data[DATA_OAUTH_SIGNING_KEY] = secrets.token_hex(32)
+            changed = True
+        # Consume the OAuth override fields once applied. entry.options is
+        # readable through the server's own tools
+        # (ha_get_integration(include_options=True) rebuilds it from the
+        # options-form suggested_values), so a rotated client_secret left here
+        # in cleartext would let a pre-restart old-identity token holder read
+        # the NEW secret that way — the exact party the rotation evicts, and
+        # the same leak the startup log withholds. The resolved values live in
+        # entry.data and on the admin-only Configure screen
+        # (config_flow._oauth_creds_hint), so nothing is lost. Cleared even
+        # when the override matched the current value: the cleartext must not
+        # linger regardless of whether it changed data.
+        #
+        # DELIBERATE divergence from the webhook_id / secret_path overrides
+        # above, which persist. Three reasons the OAuth secret is different:
+        # (1) A client_secret override IS the OAuth rotation path and gates a
+        #     per-connection revocable bearer, so a lingering copy defeats the
+        #     very revocation the rotation performs. secret_path's own rotation
+        #     (OPT_REGENERATE_SECRETS) already clears its override, so that
+        #     path is not self-defeating; a standalone secret_path override is
+        #     configuration, not rotation.
+        # (2) A connected legacy client learns the OAuth secret only via this
+        #     options leak (entry.data is not tool-exposed; the webhook is
+        #     OAuth-gated). secret_path gates the direct LAN port, and per
+        #     SECURITY.md the local network is the trusted zone and the client
+        #     is a trusted principal — LAN-peer access to standard-mode
+        #     endpoints is explicitly out of scope.
+        # (3) Persisting the webhook_id/secret_path override is deliberate UX
+        #     (the admin sees their configured value in the form).
+        if options.get(OPT_OAUTH_CLIENT_ID):
+            options[OPT_OAUTH_CLIENT_ID] = ""
+            changed = True
+        if options.get(OPT_OAUTH_CLIENT_SECRET):
+            options[OPT_OAUTH_CLIENT_SECRET] = ""
+            changed = True
+
+    if not data.get(DATA_OAUTH_CLIENT_ID):
+        data[DATA_OAUTH_CLIENT_ID] = f"hamcp-{secrets.token_hex(16)}"
+        changed = True
+    if not data.get(DATA_OAUTH_CLIENT_SECRET):
+        data[DATA_OAUTH_CLIENT_SECRET] = secrets.token_urlsafe(32)
+        changed = True
+    if not data.get(DATA_OAUTH_SIGNING_KEY):
+        data[DATA_OAUTH_SIGNING_KEY] = secrets.token_hex(32)
+        changed = True
+    return changed

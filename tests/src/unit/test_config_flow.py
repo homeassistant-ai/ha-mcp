@@ -130,6 +130,10 @@ def _make_flow() -> cf.HaMcpToolsConfigFlow:
 def _make_options_flow(*, options=None, data=None) -> cf.HaMcpServerOptionsFlow:
     flow = cf.HaMcpServerOptionsFlow()
     flow.config_entry = SimpleNamespace(options=options or {}, data=data or {})
+    # Bare hass with empty data: legacy_credentials_active() resolves False
+    # (nothing bound) unless a test monkeypatches it.
+    flow.hass = MagicMock(name="hass")
+    flow.hass.data = {}
     flow.async_show_form = MagicMock(side_effect=lambda **kw: {"type": "form", **kw})
     flow.async_create_entry = MagicMock(
         side_effect=lambda **kw: {"type": "entry", **kw}
@@ -223,6 +227,77 @@ class TestServerBranch:
             "required": "2026.6.0",
         }
         flow.async_set_unique_id.assert_not_awaited()
+
+
+class TestOAuthCredsHint:
+    """All three branches of the admin-only credentials hint on the options
+    form (review gap: zero coverage on any of them)."""
+
+    def test_non_legacy_mode_points_at_the_mode_selector(self):
+        flow = _make_options_flow(
+            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
+        )
+        hint = flow._oauth_creds_hint()
+        assert "Set Authentication mode" in hint
+        assert "Client ID" in hint
+
+    def test_legacy_mode_before_minting_says_appear_after_start(self):
+        flow = _make_options_flow(
+            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY}
+        )
+        hint = flow._oauth_creds_hint()
+        assert "once the server" in hint
+
+    def test_legacy_mode_live_creds_shows_values_without_caveat(self, monkeypatch):
+        # Bound AND live (post-restart steady state): no restart caveat.
+        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: True)
+        monkeypatch.setattr(cf, "_legacy_restart_pending", lambda *a: False)
+        flow = _make_options_flow(
+            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
+            data={
+                const.DATA_OAUTH_CLIENT_ID: "hamcp-abc",
+                const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
+            },
+        )
+        hint = flow._oauth_creds_hint()
+        assert "Client ID: hamcp-abc" in hint
+        assert "Client Secret: s3cr3t" in hint
+        assert "not serving these yet" not in hint
+
+    def test_legacy_mode_first_enable_carries_not_live_caveat(self, monkeypatch):
+        # Review finding: mid-session first enable binds the current identity
+        # (active True) but /authorize is not live until the restart -- the
+        # hint must caveat, matching the startup log's first-enable branch.
+        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: True)
+        monkeypatch.setattr(cf, "_legacy_restart_pending", lambda *a: True)
+        flow = _make_options_flow(
+            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
+            data={
+                const.DATA_OAUTH_CLIENT_ID: "hamcp-abc",
+                const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
+            },
+        )
+        hint = flow._oauth_creds_hint()
+        assert "Client ID: hamcp-abc" in hint
+        assert "not serving these yet" in hint
+
+    def test_legacy_mode_pending_rotation_carries_restart_caveat(self, monkeypatch):
+        # Review finding on #1880: after a rotation, entry.data updates
+        # immediately but the bound views keep the previous identity until
+        # restart -- the hint must say the shown values do not work yet.
+        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: False)
+        flow = _make_options_flow(
+            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
+            data={
+                const.DATA_OAUTH_CLIENT_ID: "hamcp-new",
+                const.DATA_OAUTH_CLIENT_SECRET: "new-secret",
+            },
+        )
+        hint = flow._oauth_creds_hint()
+        assert "Client ID: hamcp-new" in hint
+        assert "Client Secret: new-secret" in hint
+        assert "not serving these yet" in hint
+        assert "restart" in hint
 
 
 class TestOptionsFlowDispatch:
@@ -337,11 +412,13 @@ class TestServerOptionsFlow:
         assert "not installed yet" in versions
         assert versions.startswith("Component unknown")
 
-    def test_channel_is_first_option_field(self):
+    def test_webhook_auth_is_first_option_field(self):
+        # #1875: Authentication mode sits at the top of the options form,
+        # directly under the connect URLs, so users find it without scrolling.
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         form = asyncio.run(flow.async_step_init(None))
         markers = list(form["data_schema"].schema)
-        assert markers[0].schema == const.OPT_CHANNEL
+        assert markers[0].schema == const.OPT_WEBHOOK_AUTH
 
     def test_channel_defaults_to_stable(self):
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
@@ -383,6 +460,8 @@ class TestServerOptionsFlow:
             const.OPT_EXTERNAL_URL: "https://ha.example.com",
             const.OPT_WEBHOOK_ID_OVERRIDE: "my_custom_hook",
             const.OPT_SECRET_PATH_OVERRIDE: "/custom_path",
+            const.OPT_OAUTH_CLIENT_ID: "hamcp-deadbeef",
+            const.OPT_OAUTH_CLIENT_SECRET: "super-secret-value",
         }
         flow = _make_options_flow(
             data={const.DATA_WEBHOOK_ID: "mcp_abc"}, options=saved
@@ -398,6 +477,8 @@ class TestServerOptionsFlow:
             const.OPT_EXTERNAL_URL,
             const.OPT_WEBHOOK_ID_OVERRIDE,
             const.OPT_SECRET_PATH_OVERRIDE,
+            const.OPT_OAUTH_CLIENT_ID,
+            const.OPT_OAUTH_CLIENT_SECRET,
         )
         for key in text_fields:
             assert markers[key].description["suggested_value"] == saved[key]
@@ -411,6 +492,8 @@ class TestServerOptionsFlow:
         # `python -O` would strip) before comparing the remainder.
         regenerate_default = defaults.pop(const.OPT_REGENERATE_SECRETS)
         assert regenerate_default is False
+        oauth_regenerate_default = defaults.pop(const.OPT_OAUTH_REGENERATE)
+        assert oauth_regenerate_default is False
         webhook_default = defaults.pop(const.OPT_ENABLE_WEBHOOK)
         assert webhook_default is True
         notification_default = defaults.pop(const.OPT_ENABLE_STARTUP_NOTIFICATION)
@@ -427,7 +510,9 @@ class TestServerOptionsFlow:
             const.OPT_BIND_HOST: const.BIND_HOST_ALL,
             const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
             const.OPT_PIP_SPEC: "ha-mcp @ https://example/x.tgz",  # real override
-            const.OPT_SERVER_URL: const.DEFAULT_LOOPBACK_URL,
+            # A REAL URL override — DEFAULT_LOOPBACK_URL would be normalized
+            # away (see test_server_url_default_loopback_normalized_away).
+            const.OPT_SERVER_URL: "http://ha.internal:8123",
         }
         result = asyncio.run(flow.async_step_init(user_input))
         assert result["type"] == "entry"
@@ -440,6 +525,8 @@ class TestServerOptionsFlow:
             const.OPT_EXTERNAL_URL: "",
             const.OPT_WEBHOOK_ID_OVERRIDE: "",
             const.OPT_SECRET_PATH_OVERRIDE: "",
+            const.OPT_OAUTH_CLIENT_ID: "",
+            const.OPT_OAUTH_CLIENT_SECRET: "",
         }
 
     def test_default_pip_spec_normalized_to_empty(self):
@@ -482,6 +569,22 @@ class TestServerOptionsFlow:
         )
         assert result["data"][const.OPT_SERVER_URL] == "http://ha.local:8123"
 
+    def test_server_url_default_loopback_normalized_away(self):
+        # Older forms pre-filled DEFAULT_LOOPBACK_URL as suggested_value, so a
+        # plain options save stored it as an explicit override. Persisting it
+        # would pin the plaintext scheme and port, defeating the SSL/port-aware
+        # loopback derivation (issue #1890) — collapse it to "no override".
+        flow = _make_options_flow()
+        result = asyncio.run(
+            flow.async_step_init(
+                {
+                    const.OPT_CHANNEL: const.CHANNEL_STABLE,
+                    const.OPT_SERVER_URL: const.DEFAULT_LOOPBACK_URL + "/",
+                }
+            )
+        )
+        assert const.OPT_SERVER_URL not in result["data"]
+
     def test_pip_spec_field_empty_when_no_override(self):
         # The "leave blank to follow the channel" field must actually BE
         # blank when no override is stored — pre-filling the default dist
@@ -492,6 +595,18 @@ class TestServerOptionsFlow:
         form = asyncio.run(flow.async_step_init(None))
         marker = next(
             m for m in form["data_schema"].schema if m.schema == const.OPT_PIP_SPEC
+        )
+        assert marker.description["suggested_value"] == ""
+
+    def test_server_url_field_empty_when_no_override(self):
+        # Same pattern as pip_spec above: pre-filling DEFAULT_LOOPBACK_URL made
+        # every options save persist the constant as an explicit override,
+        # pinning the plaintext scheme/port that the #1890 loopback derivation
+        # replaces. No override stored -> empty field.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        marker = next(
+            m for m in form["data_schema"].schema if m.schema == const.OPT_SERVER_URL
         )
         assert marker.description["suggested_value"] == ""
 

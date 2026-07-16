@@ -200,3 +200,30 @@ class TestAliasFetchChunking:
         assert aliases_map == {}
         assert warnings == []
         assert client.calls == []
+
+    @pytest.mark.asyncio
+    async def test_non_string_alias_entries_are_dropped(self):
+        """HA serializes the COMPUTED_NAME alias sentinel ("the computed
+        entity name is an alias") as null over the websocket API — get_entries
+        then carries ``aliases: [null, ...]``. Ingesting the null would put
+        None into every downstream alias string op; only strings may enter the
+        map."""
+
+        class SentinelAliasClient(RecordingClient):
+            async def send_websocket_message(self, message: dict) -> dict:
+                self.calls.append(message)
+                return {
+                    "success": True,
+                    "result": {
+                        eid: {"aliases": [None, "Real Alias"]}
+                        for eid in message["entity_ids"]
+                    },
+                }
+
+        client = SentinelAliasClient()
+        tools = _make_tools(client)
+
+        aliases_map, warnings = await tools._fetch_entity_aliases(["light.lamp"])
+
+        assert warnings == []
+        assert aliases_map == {"light.lamp": ["Real Alias"]}
