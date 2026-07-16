@@ -161,6 +161,13 @@ class TestBringUp:
             if esetup.ISSUE_LEGACY_OAUTH_RESTART in c.args
         ]
         assert created, "legacy-OAuth restart repair was not filed"
+        # The same restart-needed verdict must thread into the connect-URL
+        # surfacing so the log carries the first-enable "not live" caveat --
+        # deleting that kwarg would silently drop the caveat.
+        assert (
+            esetup._surface_connect_urls.call_args.kwargs["oauth_restart_pending"]
+            is True
+        )
 
     async def test_success_starts_registers_and_surfaces(self, fake_manager):
         hass = _make_hass()

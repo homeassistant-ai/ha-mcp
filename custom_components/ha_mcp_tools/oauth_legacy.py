@@ -266,6 +266,17 @@ def legacy_credentials_active(
     return hmac.compare_digest(bound, current)
 
 
+def legacy_restart_pending(hass: HomeAssistant) -> bool:
+    """Whether the root views were bound mid-session and are not live until a
+    restart (see :func:`bind_legacy_views`). Distinct from
+    :func:`legacy_credentials_active`: at a mid-session FIRST enable the bound
+    views serve exactly the current credentials (active is True) yet
+    ``/authorize`` is not live until the pending restart — the admin surfaces
+    (options hint, startup log) use this to caveat credentials that are
+    correct but not yet serving."""
+    return bool(hass.data.get(_LEGACY_PENDING_RESTART_KEY))
+
+
 def _live_auth_mode(hass: HomeAssistant) -> str | None:
     """Read the CURRENTLY configured webhook auth mode from hass.data.
 

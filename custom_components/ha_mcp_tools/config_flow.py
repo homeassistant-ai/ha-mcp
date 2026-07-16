@@ -119,6 +119,14 @@ def _legacy_credentials_active(
     return legacy_credentials_active(hass, client_id, client_secret, signing_key)
 
 
+def _legacy_restart_pending(hass: HomeAssistant) -> bool:
+    """Deferred-import seam for :func:`oauth_legacy.legacy_restart_pending`
+    (see :func:`_legacy_credentials_active` for why the import is deferred)."""
+    from .oauth_legacy import legacy_restart_pending
+
+    return legacy_restart_pending(hass)
+
+
 def _installed_server_version() -> str | None:
     """Return the installed ha-mcp server version, or None if not installed.
 
@@ -587,17 +595,20 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             )
         creds = f"Client ID: {client_id}\nClient Secret: {client_secret}"
         signing_key = str(self.config_entry.data.get(DATA_OAUTH_SIGNING_KEY) or "")
-        if not _legacy_credentials_active(
+        active = _legacy_credentials_active(
             self.hass, str(client_id), str(client_secret), signing_key
-        ):
-            # Same restart-gating as the startup log: the bound root views
-            # keep serving the previous identity until the restart, so
-            # freshly rotated values do not work yet (matches the
-            # oauth_regenerate help text on this form).
-            return (
-                f"{creds}\n"
-                "These take effect after the restart Home Assistant is "
-                "asking for; until then the previous Client ID and Client "
-                "Secret remain active."
-            )
-        return creds
+        )
+        if active and not _legacy_restart_pending(self.hass):
+            return creds  # bound and live
+        # Not serving these credentials yet: a mid-session first enable
+        # (bound but not live until the restart), a pending rotation (the old
+        # identity still bound), the webhook disabled, or another integration
+        # owning the routes. State-agnostic wording — the previous "the
+        # previous Client ID and Client Secret remain active" was false at a
+        # first enable and when nothing of ours is bound. Matches the startup
+        # log's first-enable caveat and the oauth_regenerate help text.
+        return (
+            f"{creds}\n"
+            "Legacy OAuth is not serving these yet — restart Home Assistant "
+            "when it asks you to, to activate them."
+        )

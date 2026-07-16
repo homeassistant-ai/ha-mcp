@@ -239,10 +239,10 @@ class TestOAuthCredsHint:
         hint = flow._oauth_creds_hint()
         assert "once the server" in hint
 
-    def test_legacy_mode_with_active_creds_shows_values_without_caveat(
-        self, monkeypatch
-    ):
+    def test_legacy_mode_live_creds_shows_values_without_caveat(self, monkeypatch):
+        # Bound AND live (post-restart steady state): no restart caveat.
         monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: True)
+        monkeypatch.setattr(cf, "_legacy_restart_pending", lambda *a: False)
         flow = _make_options_flow(
             options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
             data={
@@ -253,7 +253,24 @@ class TestOAuthCredsHint:
         hint = flow._oauth_creds_hint()
         assert "Client ID: hamcp-abc" in hint
         assert "Client Secret: s3cr3t" in hint
-        assert "remain active" not in hint
+        assert "not serving these yet" not in hint
+
+    def test_legacy_mode_first_enable_carries_not_live_caveat(self, monkeypatch):
+        # Review finding: mid-session first enable binds the current identity
+        # (active True) but /authorize is not live until the restart -- the
+        # hint must caveat, matching the startup log's first-enable branch.
+        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: True)
+        monkeypatch.setattr(cf, "_legacy_restart_pending", lambda *a: True)
+        flow = _make_options_flow(
+            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
+            data={
+                const.DATA_OAUTH_CLIENT_ID: "hamcp-abc",
+                const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
+            },
+        )
+        hint = flow._oauth_creds_hint()
+        assert "Client ID: hamcp-abc" in hint
+        assert "not serving these yet" in hint
 
     def test_legacy_mode_pending_rotation_carries_restart_caveat(self, monkeypatch):
         # Review finding on #1880: after a rotation, entry.data updates
@@ -270,7 +287,7 @@ class TestOAuthCredsHint:
         hint = flow._oauth_creds_hint()
         assert "Client ID: hamcp-new" in hint
         assert "Client Secret: new-secret" in hint
-        assert "remain active" in hint
+        assert "not serving these yet" in hint
         assert "restart" in hint
 
 

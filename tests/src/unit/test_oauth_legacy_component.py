@@ -1097,7 +1097,7 @@ class TestEnsureLegacyOAuthSecrets:
     def test_matching_override_is_still_consumed_from_options(self):
         # Even when the override equals the current value (no data change),
         # the cleartext copy must be cleared out of options -- so this now
-        # reports a change (it did before the security fix land).
+        # reports a change (it did not before the security fix landed).
         data = {
             DATA_OAUTH_CLIENT_ID: "already-set",
             DATA_OAUTH_CLIENT_SECRET: "s",
