@@ -44,7 +44,12 @@ capability gate. v1.1.0 ships eight commands (seven capabilities):
   ``config/device_registry/list`` (which sends ``json_bytes(entry.dict_repr)``)
   by construction, since this command's ``connection.send_result`` runs the same
   JSON encoder over the same dict. Consumers keep their own transforms over the
-  raw shape; ``device`` is ``None`` when no such device exists.
+  raw shape; ``device`` is ``None`` when no such device exists. With
+  ``include_entities`` set, a sibling ``entities`` key carries the device's
+  entity-registry rows (``RegistryEntry.as_partial_dict``, the
+  ``config/entity_registry/list`` shape, disabled entities included) so listing a
+  device's entities no longer pulls the whole entity registry either — the raw
+  DeviceEntry stays untouched; the join is a sibling.
 * ``ha_mcp_tools/device_list`` — every device registry entry as that same raw
   ``DeviceEntry.dict_repr`` shape (``{devices: [...]}``): the in-process
   equivalent of ``config/device_registry/list`` served through the component
@@ -380,6 +385,7 @@ def _device_get_schema() -> dict[Any, Any]:
     return {
         vol.Required("type"): WS_DEVICE_GET,
         vol.Required("device_id"): str,
+        vol.Optional("include_entities", default=False): bool,
     }
 
 
@@ -2204,22 +2210,39 @@ _BlueprintLoader.add_multi_constructor("!", _drop_blueprint_tag)
 # ha_mcp_tools/device_get + ha_mcp_tools/device_list
 # =============================================================================
 def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
-    """Return one device registry entry by id: ``{device: dict_repr | None}``.
+    """Return one device registry entry by id, optionally with its entities.
 
-    ``registry.async_get(device_id)`` is a pure O(1) in-memory dict read, and the
-    emitted body is core's ``DeviceEntry.dict_repr`` returned UNMODIFIED — exactly
-    the shape ``config/device_registry/list`` serializes (it sends
+    ``{device: <DeviceEntry.dict_repr> | None}`` — ``registry.async_get(device_id)``
+    is a pure O(1) in-memory dict read, and the emitted body is core's
+    ``DeviceEntry.dict_repr`` returned UNMODIFIED — exactly the shape
+    ``config/device_registry/list`` serializes (it sends
     ``json_bytes(entry.dict_repr)``), so a component-served record is byte-identical
     to one legacy list element by construction (the WS transport JSON-encodes the
     same dict with the same encoder). The body is never ``_plainify``'d: that would
     ``str()`` the ``disabled_by`` / ``entry_type`` enums to their repr instead of the
     wire value core's encoder emits, breaking parity. ``device`` is ``None`` when no
     such device exists — the server maps that onto its own not-found contract.
+
+    When ``include_entities`` is set, a SIBLING ``entities`` key carries the device's
+    entity-registry rows (``[<RegistryEntry.as_partial_dict>, ...]`` — the same shape
+    and serialization ``config/entity_registry/list`` emits), so a single-device
+    lookup no longer pulls the WHOLE entity registry to list one device's entities.
+    ``er.async_entries_for_device`` is called with ``include_disabled_entities=True``
+    to match what ``config/entity_registry/list`` returns (it lists disabled entities
+    too). The DeviceEntry dict itself stays exactly the raw shape — the join is a
+    sibling, so consumers keep their own transforms. The ``entities`` key is present
+    only when requested.
     """
     device_id = params.get("device_id")
+    include_entities = params.get("include_entities", False)
     view = _resolve_registries(hass)
     entry = _device(view, device_id) if device_id else None
-    return {"device": _device_dict_repr(entry) if entry is not None else None}
+    result: dict[str, Any] = {
+        "device": _device_dict_repr(entry) if entry is not None else None
+    }
+    if include_entities:
+        result["entities"] = _device_entities(view, device_id) if device_id else []
+    return result
 
 
 def _do_device_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
@@ -2255,3 +2278,55 @@ def _device_dict_repr(entry: Any) -> dict[str, Any] | None:
     except Exception:  # pragma: no cover - defensive; core drift
         return None
     return repr_dict if isinstance(repr_dict, dict) else None
+
+
+def _device_entities(view: _RegistryView, device_id: str) -> list[dict[str, Any]]:
+    """The device's entity-registry rows as ``config/entity_registry/list`` elements.
+
+    Each row is core's ``RegistryEntry.as_partial_dict`` returned VERBATIM (the same
+    shape + serialization ``config/entity_registry/list`` emits — it sends
+    ``json_bytes(entry.partial_json_repr)`` over ``as_partial_dict``), so the
+    server's device<->entity map builds identically off the join or the legacy list.
+    A row whose ``as_partial_dict`` is unavailable is skipped.
+    """
+    out: list[dict[str, Any]] = []
+    for entry in _entries_for_device(view, device_id):
+        partial = _entity_partial_dict(entry)
+        if partial is not None:
+            out.append(partial)
+    return out
+
+
+def _entries_for_device(view: _RegistryView, device_id: str) -> list[Any]:
+    """Entity-registry entries bound to ``device_id``, disabled ones INCLUDED.
+
+    Delegates to core's ``er.async_entries_for_device`` (its device_id index) with
+    ``include_disabled_entities=True`` so the result matches what
+    ``config/entity_registry/list`` returns — that command lists disabled entities
+    too, and dropping them would diverge the join from the legacy shape. Guarded
+    against a missing registry / core drift (returns ``[]``).
+    """
+    reg = view.entity
+    if reg is None or not device_id:
+        return []
+    try:
+        entries = er.async_entries_for_device(
+            reg, device_id, include_disabled_entities=True
+        )
+    except Exception:  # pragma: no cover - defensive; core drift
+        return []
+    return list(entries)
+
+
+def _entity_partial_dict(entry: Any) -> dict[str, Any] | None:
+    """core ``RegistryEntry.as_partial_dict`` verbatim — the ``config/entity_registry/list`` shape.
+
+    Returned UNMODIFIED so the WS transport encodes it with the same serializer
+    ``config/entity_registry/list`` uses (byte-parity, mirroring
+    :func:`_device_dict_repr`). Guarded against core drift.
+    """
+    try:
+        partial = entry.as_partial_dict
+    except Exception:  # pragma: no cover - defensive; core drift
+        return None
+    return partial if isinstance(partial, dict) else None

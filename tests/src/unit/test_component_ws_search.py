@@ -186,6 +186,36 @@ class FakeRegEntry:
         self.platform = platform
         self.disabled_by = disabled_by
 
+    @property
+    def as_partial_dict(self):
+        # Mirrors core ``RegistryEntry.as_partial_dict`` (one
+        # ``config/entity_registry/list`` element): the shape device_get's
+        # include_entities join returns VERBATIM. Sets rendered to lists as core
+        # does; timestamps fixed floats (value irrelevant to the consumers).
+        return {
+            "area_id": self.area_id,
+            "categories": dict(self.categories),
+            "config_entry_id": self.config_entry_id,
+            "config_subentry_id": None,
+            "created_at": 0.0,
+            "device_id": self.device_id,
+            "disabled_by": self.disabled_by,
+            "entity_category": self.entity_category,
+            "entity_id": self.entity_id,
+            "has_entity_name": False,
+            "hidden_by": self.hidden_by,
+            "icon": None,
+            "id": self.unique_id,
+            "labels": sorted(self.labels),
+            "modified_at": 0.0,
+            "name": self.name,
+            "options": {},
+            "original_name": self.original_name,
+            "platform": self.platform,
+            "translation_key": None,
+            "unique_id": self.unique_id,
+        }
+
 
 class FakeEntityReg:
     def __init__(self, entries):
@@ -196,6 +226,27 @@ class FakeEntityReg:
 
     def async_get(self, entity_id):
         return self._entries.get(entity_id)
+
+
+class FakeErModule:
+    """Faithful stand-in for the ``entity_registry`` module's device index.
+
+    ``_do_device_get(include_entities)`` calls ``er.async_entries_for_device``;
+    the real ``er`` is MagicMock-stubbed at import, so tests monkeypatch
+    ``wsapi.er`` with this. Mirrors core's filter — disabled entities are excluded
+    unless ``include_disabled_entities`` (the component passes True, matching
+    ``config/entity_registry/list``)."""
+
+    @staticmethod
+    def async_entries_for_device(registry, device_id, include_disabled_entities=False):
+        out = []
+        for entry in registry.entities.values():
+            if getattr(entry, "device_id", None) != device_id:
+                continue
+            if not include_disabled_entities and getattr(entry, "disabled_by", None):
+                continue
+            out.append(entry)
+        return out
 
 
 class FakeArea:
@@ -1642,6 +1693,26 @@ class TestNewCommandSchemas:
         schema = self._schema(monkeypatch, wsapi._device_get_schema)
         out = schema({"type": wsapi.WS_DEVICE_GET, "device_id": "d1"})
         assert out["device_id"] == "d1"
+        # include_entities defaults False (device-only reads stay minimal).
+        assert out["include_entities"] is False
+
+    def test_device_get_accepts_include_entities(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._device_get_schema)
+        out = schema(
+            {"type": wsapi.WS_DEVICE_GET, "device_id": "d1", "include_entities": True}
+        )
+        assert out["include_entities"] is True
+
+    def test_device_get_include_entities_must_be_bool(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._device_get_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(
+                {
+                    "type": wsapi.WS_DEVICE_GET,
+                    "device_id": "d1",
+                    "include_entities": "yes",
+                }
+            )
 
     @pytest.mark.parametrize(
         "bad",
@@ -2385,3 +2456,75 @@ class TestDeviceList:
         )
         res = wsapi._do_device_list(FakeHass(), {})
         assert [d["id"] for d in res["devices"]] == ["good"]
+
+
+# =============================================================================
+# device_get include_entities — the per-device entity join
+# =============================================================================
+class TestDeviceGetEntities:
+    def _view_with_entities(self):
+        return make_view(
+            devices=[FakeDevice("dev-1", name="D1")],
+            entity={
+                "sensor.a": FakeRegEntry(
+                    "sensor.a", device_id="dev-1", platform="zha", name="A"
+                ),
+                "update.a": FakeRegEntry("update.a", device_id="dev-1", platform="zha"),
+                "sensor.disabled": FakeRegEntry(
+                    "sensor.disabled", device_id="dev-1", disabled_by="user"
+                ),
+                "sensor.other": FakeRegEntry("sensor.other", device_id="dev-2"),
+            },
+        )
+
+    def test_include_entities_joins_device_rows(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: self._view_with_entities()
+        )
+        monkeypatch.setattr(wsapi, "er", FakeErModule())
+        res = wsapi._do_device_get(
+            FakeHass(), {"device_id": "dev-1", "include_entities": True}
+        )
+        assert res["device"]["id"] == "dev-1"
+        ids = {e["entity_id"] for e in res["entities"]}
+        # dev-1's entities (incl. the disabled one); dev-2's is excluded.
+        assert ids == {"sensor.a", "update.a", "sensor.disabled"}
+        # Rows are the raw as_partial_dict shape (config/entity_registry/list parity).
+        row = next(e for e in res["entities"] if e["entity_id"] == "sensor.a")
+        assert row["device_id"] == "dev-1"
+        assert row["platform"] == "zha"
+        assert row["name"] == "A"
+
+    def test_disabled_entities_included(self, monkeypatch):
+        # include_disabled_entities=True is what the component passes — matching
+        # config/entity_registry/list, which lists disabled entities too.
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: self._view_with_entities()
+        )
+        monkeypatch.setattr(wsapi, "er", FakeErModule())
+        res = wsapi._do_device_get(
+            FakeHass(), {"device_id": "dev-1", "include_entities": True}
+        )
+        assert any(
+            e["entity_id"] == "sensor.disabled" and e["disabled_by"] == "user"
+            for e in res["entities"]
+        )
+
+    def test_entities_omitted_when_not_requested(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: self._view_with_entities()
+        )
+        monkeypatch.setattr(wsapi, "er", FakeErModule())
+        res = wsapi._do_device_get(FakeHass(), {"device_id": "dev-1"})
+        assert "entities" not in res
+
+    def test_entities_empty_for_unknown_device(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: self._view_with_entities()
+        )
+        monkeypatch.setattr(wsapi, "er", FakeErModule())
+        res = wsapi._do_device_get(
+            FakeHass(), {"device_id": "ghost", "include_entities": True}
+        )
+        assert res["device"] is None
+        assert res["entities"] == []

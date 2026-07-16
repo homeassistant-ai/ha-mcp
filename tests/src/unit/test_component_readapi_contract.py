@@ -41,6 +41,7 @@ from .test_component_ws_search import (
     FakeConfig,
     FakeConfigEntry,
     FakeDevice,
+    FakeErModule,
     FakeHass,
     FakeRegEntry,
     FakeServices,
@@ -68,9 +69,6 @@ from .test_ha_get_device_component_routing import (
 )
 from .test_ha_get_device_component_routing import (
     _build_get_device,
-)
-from .test_ha_get_device_component_routing import (
-    _entity_row as _device_entity_row,
 )
 from .test_ha_get_state_component_routing import (
     RoutingClient as StateRoutingClient,
@@ -531,15 +529,17 @@ class TestBlueprintGetSeam:
 
 # --- device_get / device_list ---------------------------------------------------
 class TestDeviceSeam:
-    """The raw ``DeviceEntry.dict_repr`` shape reconciles every device consumer.
+    """The raw ``DeviceEntry.dict_repr`` + entity-row shapes reconcile every consumer.
 
-    One REAL ``_do_device_get`` output drives THREE consumer sites through their
-    real server code: ``ha_get_device`` (its transform), ``ha_remove_device`` (its
-    ``config_entries`` read), and ``_resolve_ieee`` (its ``identifiers`` read). A
-    drift on either side of the seam — the component emitting a different key set,
-    or a consumer reading a field the raw shape does not carry — fails here. Each
-    consumer is served the device in one in-process ``device_get`` frame, never the
-    whole-registry dump.
+    One REAL ``_do_device_get`` output drives consumer sites through their real
+    server code: ``ha_get_device`` (its device transform AND its per-device entity
+    join via ``include_entities``), ``ha_remove_device`` (its ``config_entries``
+    read), and ``_resolve_ieee`` (its ``identifiers`` read). A drift on either side
+    of a seam — the component emitting a different key set, or a consumer reading a
+    field the raw shape does not carry — fails here. Each consumer is served the
+    device in one in-process ``device_get`` frame, never the whole-registry dump;
+    the entity join carries ``config/entity_registry/list``-shaped rows so the
+    device's entity list needs no separate entity-registry dump either.
     """
 
     def _device(self) -> FakeDevice:
@@ -555,15 +555,29 @@ class TestDeviceSeam:
             config_entries=("cfg-1",),
         )
 
+    def _entities(self) -> dict[str, Any]:
+        return {
+            "sensor.kitchen": FakeRegEntry(
+                "sensor.kitchen", device_id="dev-1", platform="zha", name="Kitchen Temp"
+            ),
+            "update.kitchen": FakeRegEntry(
+                "update.kitchen", device_id="dev-1", platform="zha"
+            ),
+        }
+
     @pytest.mark.asyncio
     async def test_get_device_transform_from_real_component(self, monkeypatch) -> None:
         dev = self._device()
         monkeypatch.setattr(
-            wsapi, "_resolve_registries", lambda h: make_view(devices=[dev])
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(devices=[dev], entity=self._entities()),
         )
-        client = GetDeviceRoutingClient(
-            entities=[_device_entity_row("sensor.kitchen", "dev-1")]
-        )
+        # _do_device_get(include_entities) reads the device's entities through core's
+        # er.async_entries_for_device index — stubbed MagicMock at import, so pin the
+        # faithful fake here.
+        monkeypatch.setattr(wsapi, "er", FakeErModule())
+        client = GetDeviceRoutingClient()
         # A zha device triggers the ZHA metrics enricher (a dedicated path outside
         # the device_get seam); serve it an empty result so it is a graceful no-op.
         base_send = client.send_websocket_message
@@ -589,8 +603,25 @@ class TestDeviceSeam:
         assert info["config_entries"] == ["cfg-1"]
         assert info["integration_type"] == "zha"
         assert info["ieee_address"] == "00:11:22:33:44:55:66:77"
-        # Served by the component — the whole device registry was never dumped.
+        # The device's entity list came from the include_entities join over the REAL
+        # component output — the whole device AND entity registries were never dumped.
+        assert resp["entity_count"] == 2
+        assert {e["entity_id"] for e in resp["entities"]} == {
+            "sensor.kitchen",
+            "update.kitchen",
+        }
         assert client.device_list_calls == 0
+        assert client.entity_list_calls == 0
+
+        # Pin the RAW entity-row shape the component emits (config/entity_registry/list
+        # parity, device_id carried) so the join survives byte-for-byte across the seam.
+        raw = wsapi._do_device_get(
+            FakeHass(), {"device_id": "dev-1", "include_entities": True}
+        )
+        raw_row = next(e for e in raw["entities"] if e["entity_id"] == "sensor.kitchen")
+        assert raw_row["device_id"] == "dev-1"
+        assert raw_row["platform"] == "zha"
+        assert raw_row["name"] == "Kitchen Temp"
 
     @pytest.mark.asyncio
     async def test_remove_device_config_entries_from_real_component(

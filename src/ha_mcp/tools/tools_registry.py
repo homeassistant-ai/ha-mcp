@@ -226,27 +226,63 @@ async def _fetch_device_rows(client: Any) -> list[dict[str, Any]]:
     return await _legacy_device_rows(client)
 
 
-async def _device_rows_for_single_lookup(
+async def _resolve_device_id_for_entity(client: Any, entity_id: str) -> str:
+    """Resolve an entity_id to its device_id via a single native entity read.
+
+    Uses HA's targeted ``config/entity_registry/get`` (one entity, no
+    whole-registry dump) rather than scanning the full entity registry. Raises
+    ENTITY_NOT_FOUND when the entity is missing or has no associated device (the
+    same contract the old full-map lookup produced).
+    """
+    result = await client.send_websocket_message(
+        {"type": "config/entity_registry/get", "entity_id": entity_id}
+    )
+    if result.get("success"):
+        device_id = (result.get("result") or {}).get("device_id")
+        if device_id:
+            return str(device_id)
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.ENTITY_NOT_FOUND,
+            f"Entity '{entity_id}' not found or has no associated device",
+            suggestions=["Use ha_search() to find valid entity IDs"],
+            context={"entity_id": entity_id},
+        )
+    )
+    raise AssertionError  # unreachable: raise_tool_error is NoReturn
+
+
+async def _single_device_and_entities(
     client: Any, device_id: str
-) -> list[dict[str, Any]]:
-    """Device rows for a single lookup: just the target, else the full registry.
+) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+    """(``all_devices``, ``device_to_entities``) for a single-device lookup.
 
     When the component serves ``device_get`` and the device exists, returns
-    ``[device]`` (one in-process read — no whole-registry dump). Otherwise (device
-    absent, or the component can't serve device_get) returns the full registry via
-    the LEGACY list so a not-found error can still suggest valid ids — not the
-    component ``device_list``, since a device_get that just failed
-    ``unknown_command`` invalidated the caps and re-probing for a sibling command
-    is pointless churn.
+    ``[device]`` plus its entity map — both from ONE ``device_get(include_entities)``
+    frame, so neither the device NOR the entity registry is dumped. Falls back to
+    the legacy full device + entity registries (so a not-found error can still
+    suggest valid ids and the device's entities are still listed) when the device
+    is absent (component said ``None``), the component can't serve device_get, or
+    the component served the device but not the additive entities half (no
+    ``entities`` key — an older device_get predating ``include_entities``): the
+    join's absence degrades to legacy rather than reporting a device with zero
+    entities.
     """
-    result = await fetch_device_via_component(client, device_id)
+    result = await fetch_device_via_component(client, device_id, include_entities=True)
     if result is not None:
         device = result.get("device")
-        if isinstance(device, dict):
-            return [device]
-        # Component authoritative not-found: fall through to the full list so the
-        # not-found error carries available_device_ids.
-    return await _legacy_device_rows(client)
+        entities = result.get("entities")
+        if isinstance(device, dict) and isinstance(entities, list):
+            _, device_to_entities = _build_entity_maps(entities, need_full=True)
+            return [device], device_to_entities
+        # Either an authoritative not-found (device is None) — fall through so the
+        # error carries available_device_ids — or a component that served
+        # device_get without the entities half. Both take the legacy device AND
+        # entity registries.
+    all_entities = await _fetch_entity_rows(client)
+    _, device_to_entities = _build_entity_maps(all_entities, need_full=True)
+    all_devices = await _legacy_device_rows(client)
+    return all_devices, device_to_entities
 
 
 async def _lookup_device_for_remove(client: Any, device_id: str) -> dict[str, Any]:
@@ -796,37 +832,29 @@ class RegistryTools:
         reachability, IPs, fabrics). For management use ha_manage_radio.
         """
         try:
-            # A device's entity list (and entity_id -> device resolution) still
-            # needs the entity registry; a summary list needs neither, so its
-            # entity fetch is skipped. The device rows come from the component's
-            # device_get (single lookup) / device_list (list) when available, so a
-            # single lookup no longer dumps the whole device registry.
-            need_full = bool(device_id or entity_id or detail_level == "full")
-            all_entities = await _fetch_entity_rows(self._client) if need_full else []
-            entity_to_device, device_to_entities = _build_entity_maps(
-                all_entities, need_full
-            )
-
+            # entity_id -> device_id is a single native entity read (no dump).
             if entity_id and not device_id:
-                resolved = entity_to_device.get(entity_id)
-                if not resolved:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.ENTITY_NOT_FOUND,
-                            f"Entity '{entity_id}' not found or has no associated device",
-                            suggestions=["Use ha_search() to find valid entity IDs"],
-                            context={"entity_id": entity_id},
-                        )
-                    )
-                device_id = resolved
+                device_id = await _resolve_device_id_for_entity(self._client, entity_id)
 
             if device_id:
-                all_devices = await _device_rows_for_single_lookup(
+                # Single-device lookup: the device AND its entities come from one
+                # component device_get(include_entities) frame — no device- or
+                # entity-registry dump — or the legacy registries when the
+                # component can't serve it.
+                all_devices, device_to_entities = await _single_device_and_entities(
                     self._client, device_id
                 )
                 return await _get_single_device_result(
                     self._client, device_id, entity_id, all_devices, device_to_entities
                 )
+
+            # List mode: the device rows come from the component's device_list (or
+            # legacy list). The entity registry is read only for the full-detail
+            # list (a bulk device->entity map, where one dump beats N joins) and
+            # skipped for a summary list.
+            need_full = detail_level == "full"
+            all_entities = await _fetch_entity_rows(self._client) if need_full else []
+            _, device_to_entities = _build_entity_maps(all_entities, need_full)
             all_devices = await _fetch_device_rows(self._client)
             return _list_devices_result(
                 all_devices,
