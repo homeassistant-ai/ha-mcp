@@ -152,7 +152,7 @@ jobs:
 
                 // Latest request from a maintainer (push access, non-author, human) asking
                 // for changes or an update. Drive-by comments from non-maintainers and bot
-                // reviews/comments (Gemini, this workflow, etc.) never start or extend the clock.
+                // reviews/comments (Codex, this workflow, etc.) never start or extend the clock.
                 let lastMaintainerRequest = 0;
                 for (const c of [...comments, ...reviewComments]) {
                   if (c.user.login !== author && c.user.type !== 'Bot' &&

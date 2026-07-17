@@ -34,7 +34,7 @@ gh api graphql -F pr="$ARGUMENTS" -f query='query($pr: Int!) { repository(owner:
 ## Step 2: Triage Comments
 
 - **Human comments**: highest priority
-- **Bot comments** (Gemini, Copilot, Codex): treat as suggestions — assess whether they prevent a bug or improve maintainability; dismiss with explanation if not
+- **Bot comments** (Copilot, Codex, etc.): treat as suggestions — assess whether they prevent a bug or improve maintainability; dismiss with explanation if not
 
 Accept if: prevents a bug, improves clarity for future maintainers, aligns with project conventions, addresses security.
 Dismiss if: incorrect suggestion, reduces readability, conflicts with project patterns, already handled elsewhere.

@@ -1,23 +1,13 @@
 # Gemini Code Assist configuration for ha-mcp
+#
+# Google sunset Gemini Code Assist's GitHub review activities; the app now
+# only posts sunset-notice banners on PRs. Disable it fully so the lingering
+# installation cannot post. .gemini/styleguide.md remains the repo's
+# review-criteria document (see AGENTS.md § Automated Code Review).
 
-# Enable persistent memory to improve responses over time
-memory_config:
-  disabled: false
-
-# Code review configuration
 code_review:
-  # Require MEDIUM severity or higher to post comments
-  # This ensures test coverage and security issues are surfaced
-  comment_severity_threshold: MEDIUM
-
-  # Limit comments to avoid overwhelming contributors
-  max_review_comments: 15
-
-  # Enable automated PR features
+  disable: true
   pull_request_opened:
-    summary: true          # Provide PR summary
-    code_review: true      # Perform code review
-    include_drafts: true   # Review draft PRs too
-
-# No playful elements in professional project
-have_fun: false
+    summary: false
+    code_review: false
+    include_drafts: false
