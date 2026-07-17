@@ -1669,7 +1669,9 @@ class DashboardConfigTools:
           Each match names the url_path, view, card_path, card_type, and the
           matched field/value. Takes precedence over the other modes (list_only /
           entity_id / card_type / heading are ignored when mode="search").
-          YAML-mode dashboards are not searched.
+          YAML-mode dashboards are not searched. On installs without the
+          ha_mcp_tools component, the default (unnamed) dashboard is also not
+          searched — only dashboards with a url_path are.
 
         Return a stable `config_hash` (Get and Search modes only; not present in list_only mode) across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 

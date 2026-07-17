@@ -151,6 +151,66 @@ async def test_list_parity_storage_only() -> None:
     assert legacy_client.list_calls == 1
 
 
+@pytest.mark.asyncio
+async def test_list_icon_less_dashboard_shape_diverges() -> None:
+    """An icon-less dashboard's row shape diverges by key presence, not value.
+
+    The component builds each row as ``{key: meta.get(key) ...}``
+    (``websocket_api.py:_dashboard_list_rows``), so a dashboard whose stored
+    config never set an ``icon`` still carries the key with value ``None``.
+    Real HA's ``lovelace/dashboards/list`` response for the same dashboard
+    omits a never-set key entirely. This pins that documented, functionally
+    harmless divergence (``row.get("icon")`` is ``None`` on both paths) rather
+    than forcing src to manufacture parity.
+    """
+    hass = _component_hass(
+        {
+            "bare": FakeDashboard(
+                "bare",
+                "storage",
+                config={
+                    "id": "id-bare",
+                    "url_path": "bare",
+                    "title": "Bare",
+                    "show_in_sidebar": True,
+                    "require_admin": False,
+                },  # no "icon" key at all
+            )
+        }
+    )
+    ws = _real_component_ws(hass)
+    comp_client = RoutingClient()
+    with patch_ws(ws, tools_config_dashboards):
+        comp_resp = await _build_get_dashboard(comp_client)(list_only=True)
+
+    comp_row = comp_resp["dashboards"][0]
+    assert "icon" in comp_row
+    assert comp_row["icon"] is None
+
+    # Legacy: the real HA lovelace/dashboards/list response for a dashboard
+    # that never had an icon set simply omits the key.
+    bare_legacy_row = {
+        "id": "id-bare",
+        "url_path": "bare",
+        "title": "Bare",
+        "show_in_sidebar": True,
+        "require_admin": False,
+        "mode": "storage",
+    }
+    legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    legacy_client = RoutingClient(dashboards_list=[bare_legacy_row])
+    with patch_ws(legacy_ws, tools_config_dashboards):
+        legacy_resp = await _build_get_dashboard(legacy_client)(list_only=True)
+
+    legacy_row = legacy_resp["dashboards"][0]
+    assert "icon" not in legacy_row
+
+    # The rows diverge by key presence...
+    assert comp_row != legacy_row
+    # ...but agree on the effective value either way.
+    assert comp_row.get("icon") == legacy_row.get("icon") is None
+
+
 # --- get parity ---------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_get_parity_storage_body() -> None:
@@ -262,6 +322,103 @@ async def test_search_parity_component_vs_legacy_walk() -> None:
     assert comp_client.list_calls == 0 and comp_client.config_calls == []
     assert legacy_client.list_calls == 1
     assert sorted(legacy_client.config_calls) == ["home", "office"]
+
+
+@pytest.mark.asyncio
+async def test_search_parity_case_insensitive_query() -> None:
+    """An uppercase query still matches lowercase card content on both paths."""
+    dmap = {
+        "home": _storage_dash("home", "Home", body=_HOME_BODY),
+        "office": _storage_dash("office", "Office", body=_OFFICE_BODY),
+    }
+
+    hass = _component_hass(dmap)
+    ws = _real_component_ws(hass)
+    comp_client = RoutingClient()
+    with patch_ws(ws, tools_config_dashboards):
+        comp_resp = await _build_get_dashboard(comp_client)(mode="search", query="LIGHT")
+
+    legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    legacy_client = RoutingClient(
+        dashboards_list=[
+            {**_storage_dash("home", "Home").config, "mode": "storage"},
+            {**_storage_dash("office", "Office").config, "mode": "storage"},
+        ],
+        configs={"home": _HOME_BODY, "office": _OFFICE_BODY},
+    )
+    with patch_ws(legacy_ws, tools_config_dashboards):
+        legacy_resp = await _build_get_dashboard(legacy_client)(mode="search", query="LIGHT")
+
+    assert comp_resp["matches"]  # uppercase query still hits lowercase content
+    assert comp_resp["matches"] == legacy_resp["matches"]
+
+
+@pytest.mark.asyncio
+async def test_search_parity_truncation_cap() -> None:
+    """>200 matches truncate identically on both paths (mirrors the component cap)."""
+    cap = tools_config_dashboards._SEARCH_ALL_MATCH_CAP
+    entities = [f"light.e{i}" for i in range(cap + 25)]
+    body = {"views": [{"cards": [{"type": "entities", "entities": entities}]}]}
+    dmap = {"home": _storage_dash("home", "Home", body=body)}
+
+    hass = _component_hass(dmap)
+    ws = _real_component_ws(hass)
+    comp_client = RoutingClient()
+    with patch_ws(ws, tools_config_dashboards):
+        comp_resp = await _build_get_dashboard(comp_client)(mode="search", query="light.e")
+
+    legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    legacy_client = RoutingClient(
+        dashboards_list=[{**_storage_dash("home", "Home").config, "mode": "storage"}],
+        configs={"home": body},
+    )
+    with patch_ws(legacy_ws, tools_config_dashboards):
+        legacy_resp = await _build_get_dashboard(legacy_client)(mode="search", query="light.e")
+
+    assert comp_resp["truncated"] is True
+    assert legacy_resp["truncated"] is True
+    assert len(comp_resp["matches"]) == cap
+    assert comp_resp["matches"] == legacy_resp["matches"]
+
+
+@pytest.mark.asyncio
+async def test_search_default_dashboard_asymmetry() -> None:
+    """Documented asymmetry: the component walk covers the default (None-keyed)
+    dashboard; the component-less legacy walk excludes it, because
+    ``fetch_dashboards_list`` never returns the default so it is never fetched
+    for the server-side walk (see MODE 4 docstring caveat on
+    ``ha_config_get_dashboard``)."""
+    default_body = {
+        "views": [{"cards": [{"type": "entities", "entities": ["light.default_only"]}]}]
+    }
+    dmap = {
+        None: _storage_dash("lovelace", "Default", body=default_body),
+        "home": _storage_dash("home", "Home", body=_HOME_BODY),
+    }
+
+    hass = _component_hass(dmap)
+    ws = _real_component_ws(hass)
+    comp_client = RoutingClient()
+    with patch_ws(ws, tools_config_dashboards):
+        comp_resp = await _build_get_dashboard(comp_client)(
+            mode="search", query="light.default_only"
+        )
+
+    # Legacy: fetch_dashboards_list never returns the default (None key), so
+    # its dashboard is never fetched for the walk.
+    legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    legacy_client = RoutingClient(
+        dashboards_list=[{**_storage_dash("home", "Home").config, "mode": "storage"}],
+        configs={"home": _HOME_BODY},
+    )
+    with patch_ws(legacy_ws, tools_config_dashboards):
+        legacy_resp = await _build_get_dashboard(legacy_client)(
+            mode="search", query="light.default_only"
+        )
+
+    assert comp_resp["matches"]
+    assert comp_resp["matches"][0]["url_path"] is None  # the default's own key
+    assert legacy_resp["matches"] == []  # documented exclusion
 
 
 # --- set tool existence check -------------------------------------------------
