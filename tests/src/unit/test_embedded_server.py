@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.metadata
 import os
 import sys
+import threading
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -2240,6 +2241,116 @@ class TestPurgeSkippedWhileOrphanAlive:
 
         assert purges == [True]
         assert mgr._orphaned_thread is None  # bookkeeping cleared
+
+    async def test_purge_skipped_while_foreign_worker_importing(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # The orphan guard is per-manager, but every bring-up constructs a
+        # FRESH manager - a still-importing worker abandoned by a PREVIOUS
+        # manager must also block the purge (issue #1904: the reload-era
+        # purge crashed the old worker mid-import with KeyError).
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _AliveWorker:
+            def is_alive(self):
+                return True
+
+        foreign = _AliveWorker()
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {foreign})
+
+        with caplog.at_level("WARNING"):
+            await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == []
+        assert "Skipping the ha_mcp module purge" in caplog.text
+        assert foreign in es._IMPORTING_WORKERS  # live entry retained
+
+    async def test_purge_resumes_once_foreign_worker_died(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _DeadWorker:
+            def is_alive(self):
+                return False
+
+        dead = _DeadWorker()
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {dead})
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == [True]
+        assert not es._IMPORTING_WORKERS  # dead entry pruned
+
+
+class TestImportingWorkerRegistry:
+    """The worker must be registered for exactly its import window."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self):
+        # _thread_main stages HA_MCP_CONFIG_DIR/HA_MCP_EMBEDDED into
+        # os.environ; snapshot + restore so the flags never leak into
+        # unrelated suites on this worker.
+        keys = ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        saved = {k: os.environ.get(k) for k in keys}
+        for key in keys:
+            os.environ.pop(key, None)
+        yield
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_thread_main_registers_and_always_deregisters(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", set())
+        seen: list[bool] = []
+
+        async def _probe(access_token, stop_event):
+            seen.append(threading.current_thread() in es._IMPORTING_WORKERS)
+            raise SystemExit(3)
+
+        monkeypatch.setattr(mgr, "_serve", _probe)
+        mgr._thread_main("tok")
+
+        # Registered while _serve (the import site) ran; gone after exit even
+        # though _serve never reached its own early deregistration point.
+        assert seen == [True]
+        assert not es._IMPORTING_WORKERS
+
+    def test_serve_deregisters_before_building_the_app(self, tmp_path, monkeypatch):
+        # Once the import section completes, a concurrent purge is harmless -
+        # the worker must leave the registry BEFORE the listener build so a
+        # long-running healthy server never blocks later bring-ups' purges.
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", set())
+
+        class _StopServe(Exception):
+            pass
+
+        membership: list[bool] = []
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                membership.append(threading.current_thread() in es._IMPORTING_WORKERS)
+                raise _StopServe
+
+        _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: None)
+
+        mgr._thread_main("tok")
+
+        assert membership == [False]
+        assert isinstance(mgr._thread_exc, _StopServe)
 
 
 class TestPurgeSkippedOnWarmCache:
