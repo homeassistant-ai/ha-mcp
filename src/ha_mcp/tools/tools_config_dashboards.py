@@ -1129,14 +1129,17 @@ async def _capture_dashboard_screenshot_result(
     except ToolError:
         raise
     except Exception as exc:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.IMAGE_SERIALIZATION_FAILED,
-                "Rendered dashboard images could not be packaged into the MCP response.",
-                details=str(exc),
-                context={"capture_count": len(captures), "render_path": render_path},
-            )
+        error_payload = create_error_response(
+            ErrorCode.IMAGE_SERIALIZATION_FAILED,
+            "Rendered dashboard images could not be packaged into the MCP response.",
+            details=str(exc),
+            context={"capture_count": len(captures), "render_path": render_path},
         )
+        if guard_warnings:
+            # The render already happened, so a theme-guard warning (e.g. a
+            # failed restore) must stay visible even when packaging fails.
+            error_payload["warnings"] = list(guard_warnings)
+        raise_tool_error(error_payload)
     # raise_tool_error is typed -> NoReturn, but CodeQL cannot see that, so it
     # reports py/mixed-returns for the implicit None fall-through past the
     # except block. Keep this terminal statement to suppress the false positive.

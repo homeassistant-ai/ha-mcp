@@ -36,6 +36,7 @@ cannot tell the engine's write apart from a concurrent human one.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -59,6 +60,14 @@ _RESTORE_HINT = (
     "the engine token's user can re-select their theme under Profile > "
     "General in the Home Assistant UI"
 )
+
+# The engine returns the image as soon as the render settles, but the
+# frontend's settheme handler saves the user data asynchronously — with a
+# very low wait_ms the write can land after the HTTP response. Wait this
+# long before the post-capture read so it observes the engine's write
+# instead of racing it (a stale read would compare equal, skip the
+# restore, and let the late write survive).
+RESTORE_SETTLE_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,11 +196,11 @@ class ThemeGuard:
         if not self._snapshot_taken or self.credential is None:
             return
         try:
+            # Puppet's settheme dispatch happens during page navigation, but
+            # the frontend's resulting user-data write is asynchronous — let
+            # it land before reading (see RESTORE_SETTLE_SECONDS).
+            await asyncio.sleep(RESTORE_SETTLE_SECONDS)
             async with self._session() as ws:
-                # Ordering assumption: Puppet's settheme dispatch (and the
-                # frontend's resulting user-data write) happens during page
-                # navigation, before the engine returns the image — so a
-                # post-capture read observes the clobbered value.
                 current = await self._fetch_theme(ws)
                 if current != self._snapshot:
                     # A never-configured baseline must restore as {} rather

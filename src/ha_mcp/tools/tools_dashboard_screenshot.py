@@ -82,17 +82,20 @@ def _package_screenshot_result(
     except ToolError:
         raise
     except Exception as exc:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.IMAGE_SERIALIZATION_FAILED,
-                "Rendered dashboard images could not be packaged into the MCP response.",
-                details=str(exc),
-                context={
-                    "capture_count": len(captures),
-                    "render_path": target.render_path,
-                },
-            )
+        error_payload = create_error_response(
+            ErrorCode.IMAGE_SERIALIZATION_FAILED,
+            "Rendered dashboard images could not be packaged into the MCP response.",
+            details=str(exc),
+            context={
+                "capture_count": len(captures),
+                "render_path": target.render_path,
+            },
         )
+        if capture_warnings:
+            # The render already happened, so a theme-guard warning (e.g. a
+            # failed restore) must stay visible even when packaging fails.
+            error_payload["warnings"] = list(capture_warnings)
+        raise_tool_error(error_payload)
 
 
 class DashboardScreenshotTools:

@@ -240,6 +240,42 @@ class TestStandaloneScreenshotTool:
 
         assert "theme restore failed (unit)" in result.structured_content["warnings"]
 
+    async def test_packaging_failure_keeps_theme_guard_warning(
+        self, monkeypatch: Any
+    ) -> None:
+        """A restore warning survives even when image packaging fails."""
+        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
+            return DashboardRenderTarget(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                render_path="wall-panel/home",
+                view_index=0,
+                stable=True,
+            )
+
+        async def capture(*_a: Any, **kwargs: Any) -> list[Any]:
+            kwargs["capture_warnings"].append("theme restore failed (unit)")
+            return [_fake_dashboard_capture()]
+
+        def broken_content(*_a: Any, **_kw: Any) -> list[Any]:
+            raise RuntimeError("serialization boom")
+
+        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
+        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
+        monkeypatch.setattr(mod, "dashboard_image_content", broken_content)
+
+        with pytest.raises(ToolError) as exc_info:
+            await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
+                dashboard_url_path="wall-panel", view_path="home"
+            )
+
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "IMAGE_SERIALIZATION_FAILED"
+        assert "theme restore failed (unit)" in payload["warnings"]
+
     async def test_legacy_full_page_fallback_surfaces_warning(
         self, monkeypatch: Any
     ) -> None:
@@ -386,6 +422,57 @@ class TestResolveEngine:
         )
         with pytest.raises(ToolError):
             await provision.resolve_engine()
+
+    async def test_explicit_url_picks_up_addon_credential_in_addon_mode(
+        self, monkeypatch: Any
+    ) -> None:
+        # An explicit engine URL on HA OS must not disable the theme guard:
+        # the Puppet add-on's credential is still discovered best-effort.
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.dashboard_screenshot.theme_guard import EngineCredential
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "sup")
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(
+                dashboard_screenshot_engine_url="http://engine:10000"
+            ),
+        )
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
+                "/addons/def_puppet/info": {
+                    "data": _puppet_info(state="started", hostname="def-puppet")
+                },
+            },
+        )
+        target = await provision.resolve_engine()
+        assert target.url == "http://engine:10000"
+        assert target.addon_credential == EngineCredential(
+            url="http://homeassistant:8123", token="secret"
+        )
+
+    async def test_explicit_url_credential_discovery_failure_is_silent(
+        self, monkeypatch: Any
+    ) -> None:
+        import httpx
+
+        from ha_mcp.dashboard_screenshot import provision
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "sup")
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(
+                dashboard_screenshot_engine_url="http://engine:10000"
+            ),
+        )
+        _patch_supervisor(monkeypatch, {"/addons": httpx.ConnectError("boom")})
+        target = await provision.resolve_engine()
+        assert target.url == "http://engine:10000"
+        assert target.addon_credential is None
 
 
 # ---------------------------------------------------------------------------

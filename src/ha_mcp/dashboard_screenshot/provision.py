@@ -174,7 +174,10 @@ async def resolve_engine() -> EngineTarget:
 
     explicit = (get_global_settings().dashboard_screenshot_engine_url or "").strip()
     if explicit:
-        return EngineTarget(url=explicit.rstrip("/"))
+        return EngineTarget(
+            url=explicit.rstrip("/"),
+            addon_credential=await _addon_credential_best_effort(),
+        )
 
     if os.environ.get("SUPERVISOR_TOKEN"):
         return await _discover_engine_via_supervisor()
@@ -195,6 +198,33 @@ async def resolve_engine() -> EngineTarget:
     # reports py/mixed-returns for the implicit None fall-through past it. Keep
     # this terminal statement to suppress that false positive (repo convention).
     raise AssertionError("unreachable: raise_tool_error always raises")
+
+
+async def _addon_credential_best_effort() -> EngineCredential | None:
+    """Best-effort theme-guard credential for an explicitly configured URL.
+
+    HA OS / Supervised users may set ``HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL``
+    to override auto-discovery while still running the Puppet add-on; without
+    its token the theme guard would go inactive exactly where the add-on
+    credential exists (``_client_credential`` refuses Supervisor-proxy auth).
+    Any failure — no Supervisor, no verified add-on, not started — simply
+    means "no credential": the explicit URL may point at a non-add-on
+    engine, so this must never raise. If the explicit URL targets a
+    different engine than the discovered add-on, the guard still only ever
+    writes back a value that the discovered add-on's own user changed
+    mid-capture, which only that add-on's renders would do — a safe no-op.
+    """
+    if not os.environ.get("SUPERVISOR_TOKEN"):
+        return None
+    try:
+        return (await _discover_engine_via_supervisor()).addon_credential
+    except Exception:
+        logger.debug(
+            "No Supervisor-discoverable engine credential for the explicit "
+            "engine URL; the theme guard stays inactive.",
+            exc_info=True,
+        )
+        return None
 
 
 async def _discover_engine_via_supervisor() -> EngineTarget:

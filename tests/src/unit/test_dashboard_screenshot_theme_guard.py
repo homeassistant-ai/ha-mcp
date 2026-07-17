@@ -89,6 +89,10 @@ def _set_calls() -> list[dict[str, Any]]:
 @pytest.fixture(autouse=True)
 def _fresh_state(monkeypatch: Any) -> None:
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    # The real write-settle delay only matters against a live engine.
+    monkeypatch.setattr(
+        "ha_mcp.dashboard_screenshot.theme_guard.RESTORE_SETTLE_SECONDS", 0
+    )
     monkeypatch.setattr(
         "ha_mcp.client.websocket_client.HomeAssistantWebSocketClient",
         _FakeWsClient,
@@ -270,6 +274,25 @@ class TestSnapshotRestore:
         assert len(guard.warnings) == 1
         await guard.restore()
         assert _set_calls() == []
+
+    async def test_restore_waits_for_engine_write_to_settle(
+        self, monkeypatch: Any
+    ) -> None:
+        """The post-capture read must not race Puppet's async user-data save."""
+        from ha_mcp.dashboard_screenshot import theme_guard as guard_module
+
+        monkeypatch.setattr(guard_module, "RESTORE_SETTLE_SECONDS", 1.5)
+        sleeps: list[float] = []
+
+        async def record_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        monkeypatch.setattr(guard_module.asyncio, "sleep", record_sleep)
+
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await guard.take_snapshot()
+        await guard.restore()
+        assert sleeps == [1.5]
 
     async def test_restore_failure_warns_without_raising(self) -> None:
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
