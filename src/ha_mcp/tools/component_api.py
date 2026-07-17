@@ -79,13 +79,18 @@ class ComponentCaps:
     commands the component actually registered. ``schema_version`` guards the
     wire-format generation of those commands (a consumer needing a reshaped
     payload checks ``schema_version >= N``). ``component_version`` and
-    ``limits`` are advisory (display / body-size caps).
+    ``limits`` are advisory (display / body-size caps). ``timezone`` is the
+    instance's ``hass.config.time_zone`` (an additive ``info`` field — ``None``
+    on a component too old to report it, or when unset); it is cached here for
+    the consumers that localize timestamps (issue #1813 Phase 2), but nothing
+    routes on it — capability negotiation, not a timezone floor.
     """
 
     schema_version: int
     component_version: str
     capabilities: frozenset[str]
     limits: dict[str, Any]
+    timezone: str | None = None
 
 
 # Weak-keyed by client so the negotiated caps self-evict when the client is
@@ -162,11 +167,15 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
         schema_version = int(result.get("schema_version", 0) or 0)
     except (TypeError, ValueError):
         schema_version = 0
+    raw_timezone = result.get("timezone")
     return ComponentCaps(
         schema_version=schema_version,
         component_version=str(result.get("component_version", "")),
         capabilities=capabilities,
         limits=raw_limits if isinstance(raw_limits, dict) else {},
+        # Additive info field: a component too old to report it (or an unset
+        # time_zone) leaves this None; a non-string value is ignored likewise.
+        timezone=raw_timezone if isinstance(raw_timezone, str) else None,
     )
 
 

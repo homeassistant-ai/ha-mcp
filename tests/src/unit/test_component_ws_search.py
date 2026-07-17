@@ -32,7 +32,9 @@ import functools
 import json
 import logging
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -58,6 +60,29 @@ for _mod in (
     "homeassistant.loader",
 ):
     sys.modules.setdefault(_mod, MagicMock())
+
+
+class _StubHomeAssistantError(Exception):
+    """Stand-in for core's ``HomeAssistantError`` (raised by ``_do_backup_prep``).
+
+    ``websocket_api`` imports ``homeassistant.exceptions.HomeAssistantError``
+    function-locally when a backup read fails; the module is MagicMock-stubbed
+    like the rest of ``homeassistant.*``, so pin a real exception class as its
+    ``HomeAssistantError`` attribute (mirrors the ``homeassistant.components.
+    backup`` DATA_MANAGER stub below) so the raise path is exercisable.
+    """
+
+
+_exceptions_stub = MagicMock()
+_exceptions_stub.HomeAssistantError = _StubHomeAssistantError
+sys.modules.setdefault("homeassistant.exceptions", _exceptions_stub)
+
+# ``_do_backup_prep`` reads ``hass.data[DATA_MANAGER]`` where DATA_MANAGER is
+# core's ``HassKey("backup")`` (a str subclass equal to "backup"); the stub
+# supplies the literal so the function-local import resolves in the fake env.
+_backup_stub = MagicMock()
+_backup_stub.DATA_MANAGER = "backup"
+sys.modules.setdefault("homeassistant.components.backup", _backup_stub)
 
 from custom_components.ha_mcp_tools import websocket_api as wsapi  # noqa: E402
 from custom_components.ha_mcp_tools.const import COMPONENT_VERSION  # noqa: E402
@@ -123,6 +148,12 @@ class FakeConfigEntries:
 
     def async_entries(self):
         return list(self._entries)
+
+    def async_get_entry(self, entry_id):
+        for entry in self._entries:
+            if getattr(entry, "entry_id", None) == entry_id:
+                return entry
+        return None
 
 
 class FakeServices:
@@ -251,10 +282,34 @@ class FakeErModule:
 
 
 class FakeArea:
-    def __init__(self, area_id, name, floor_id=None):
+    def __init__(
+        self,
+        area_id,
+        name,
+        floor_id=None,
+        *,
+        aliases=(),
+        icon=None,
+        picture=None,
+        labels=(),
+        humidity_entity_id=None,
+        temperature_entity_id=None,
+        created_at=None,
+        modified_at=None,
+    ):
         self.id = area_id
         self.name = name
         self.floor_id = floor_id
+        # Full-field area-registry attrs (optional so the many (id, name, floor_id)
+        # callers are unaffected) — exercised by the ``registries`` row test.
+        self.aliases = set(aliases)
+        self.icon = icon
+        self.picture = picture
+        self.labels = set(labels)
+        self.humidity_entity_id = humidity_entity_id
+        self.temperature_entity_id = temperature_entity_id
+        self.created_at = created_at
+        self.modified_at = modified_at
 
 
 class FakeAreaReg:
@@ -269,9 +324,25 @@ class FakeAreaReg:
 
 
 class FakeFloor:
-    def __init__(self, floor_id, name):
+    def __init__(
+        self,
+        floor_id,
+        name,
+        *,
+        level=None,
+        icon=None,
+        aliases=(),
+        created_at=None,
+        modified_at=None,
+    ):
         self.floor_id = floor_id
         self.name = name
+        # Full-field floor-registry attrs (NOTE: core's FloorEntry has NO labels).
+        self.level = level
+        self.icon = icon
+        self.aliases = set(aliases)
+        self.created_at = created_at
+        self.modified_at = modified_at
 
 
 class FakeFloorReg:
@@ -281,11 +352,30 @@ class FakeFloorReg:
     def async_get_floor(self, floor_id):
         return self._floors.get(floor_id)
 
+    def async_list_floors(self):
+        return list(self._floors.values())
+
 
 class FakeLabel:
-    def __init__(self, label_id, name):
+    def __init__(
+        self,
+        label_id,
+        name,
+        *,
+        color=None,
+        description=None,
+        icon=None,
+        created_at=None,
+        modified_at=None,
+    ):
         self.label_id = label_id
         self.name = name
+        # Full-field label-registry attrs.
+        self.color = color
+        self.description = description
+        self.icon = icon
+        self.created_at = created_at
+        self.modified_at = modified_at
 
 
 class FakeLabelReg:
@@ -294,6 +384,45 @@ class FakeLabelReg:
 
     def async_get_label(self, label_id):
         return self._labels.get(label_id)
+
+    def async_list_labels(self):
+        return list(self._labels.values())
+
+
+class FakeCategory:
+    """Stand-in for a ``CategoryEntry`` (``registries`` category rows)."""
+
+    def __init__(self, category_id, name, *, icon=None, created_at=None, modified_at=None):
+        self.category_id = category_id
+        self.name = name
+        self.icon = icon
+        self.created_at = created_at
+        self.modified_at = modified_at
+
+
+class FakeCategoryReg:
+    """Stand-in for the category registry: ``async_list_categories(*, scope)``."""
+
+    def __init__(self, by_scope):
+        self._by_scope = {scope: list(cats) for scope, cats in dict(by_scope).items()}
+
+    def async_list_categories(self, *, scope):
+        return list(self._by_scope.get(scope, []))
+
+
+def _fake_backup_agent(name):
+    """A backup agent stand-in with just the ``.name`` the local-agent probe reads."""
+    return SimpleNamespace(name=name)
+
+
+def _fake_backup_manager(agents=None, password=None):
+    """Stand-in for the backup ``BackupManager`` (``backup_agents`` + config chain)."""
+    return SimpleNamespace(
+        backup_agents=dict(agents or {}),
+        config=SimpleNamespace(
+            data=SimpleNamespace(create_backup=SimpleNamespace(password=password))
+        ),
+    )
 
 
 class FakeDevice:
@@ -423,21 +552,69 @@ class FakeComponent:
 
 
 class FakeConfigEntry:
-    def __init__(self, domain, title="", options=None, data=None, entry_id="entry"):
+    def __init__(
+        self,
+        domain,
+        title="",
+        options=None,
+        data=None,
+        entry_id="entry",
+        *,
+        state=None,
+        source="user",
+        supports_options=False,
+        supports_remove_device=None,
+        supports_unload=None,
+        supports_reconfigure=False,
+        pref_disable_new_entities=False,
+        pref_disable_polling=False,
+        disabled_by=None,
+        reason=None,
+        subentries=None,
+    ):
         self.domain = domain
         self.title = title
         self.options = dict(options or {})
         self.data = dict(data or {})
         self.entry_id = entry_id
+        # config_entries-row fields (all optional so the many flow-helper callers
+        # that pass only domain/title/options/data/entry_id are unaffected).
+        self.state = state
+        self.source = source
+        self.supports_options = supports_options
+        self.supports_remove_device = supports_remove_device
+        self.supports_unload = supports_unload
+        self.supports_reconfigure = supports_reconfigure
+        self.pref_disable_new_entities = pref_disable_new_entities
+        self.pref_disable_polling = pref_disable_polling
+        self.disabled_by = disabled_by
+        self.reason = reason
+        # Modern core stores subentries as a MappingProxyType keyed by subentry_id.
+        self.subentries = dict(subentries or {})
+
+
+class FakeSubentry:
+    """Stand-in for a ``ConfigSubentry`` (config_entries row's subentries)."""
+
+    def __init__(self, subentry_id, subentry_type, title, unique_id=None, data=None):
+        self.subentry_id = subentry_id
+        self.subentry_type = subentry_type
+        self.title = title
+        self.unique_id = unique_id
+        # Present so a test can prove _config_subentries never emits it.
+        self.data = dict(data or {})
 
 
 class FakeConfig:
     """Stand-in for ``hass.config``: ``path()`` roots at a temp dir; ``as_dict()``
-    returns the injected HA-config payload (overview's system-info slice)."""
+    returns the injected HA-config payload (overview's system-info slice);
+    ``time_zone`` is the attribute ``_do_info`` reads for the additive timezone
+    field."""
 
-    def __init__(self, base_dir=None, data=None):
+    def __init__(self, base_dir=None, data=None, time_zone=None):
         self._base = Path(base_dir) if base_dir is not None else None
         self._data = dict(data or {})
+        self.time_zone = time_zone
 
     def path(self, *parts):
         return str(self._base.joinpath(*parts))
@@ -519,7 +696,9 @@ def empty_view(monkeypatch):
 # =============================================================================
 class TestInfo:
     def test_shape(self):
-        info = wsapi._do_info()
+        # Drift guard: info must advertise EVERY shipped capability (the server
+        # gates each consumer on membership) and mirror CAPABILITIES exactly.
+        info = wsapi._do_info(FakeHass(config=FakeConfig(time_zone="America/New_York")))
         assert info["schema_version"] == 1
         assert info["component_version"] == COMPONENT_VERSION
         assert info["capabilities"] == [
@@ -532,11 +711,26 @@ class TestInfo:
             "device_list",
             "entity_enrich",
             "exposure",
+            "config_entries",
+            "registry_lookup",
+            "system_snapshot",
+            "entity_lookup",
+            "backup_prep",
+            "registries",
         ]
+        assert info["capabilities"] == wsapi.CAPABILITIES
         # config_get was withdrawn before release (raw_config freshness lags the
         # config file between write and reload) — it must not be advertised.
         assert "config_get" not in info["capabilities"]
         assert info["limits"] == {"max_results": 500, "max_body_bytes": 1_000_000}
+        # Additive timezone field (hass.config.time_zone), detected by presence.
+        assert info["timezone"] == "America/New_York"
+
+    def test_timezone_none_without_hass_or_config(self):
+        # A hass-less probe (or one without a time_zone) degrades timezone to None
+        # rather than raising — the field is still present.
+        assert wsapi._do_info()["timezone"] is None
+        assert wsapi._do_info(FakeHass())["timezone"] is None
 
     def test_manifest_version_parity(self):
         """The manifest version and COMPONENT_VERSION must not drift."""
@@ -1559,6 +1753,12 @@ _ALL_COMMANDS = [
     "ha_mcp_tools/device_list",
     "ha_mcp_tools/entity_enrich",
     "ha_mcp_tools/exposure",
+    "ha_mcp_tools/config_entries",
+    "ha_mcp_tools/registry_lookup",
+    "ha_mcp_tools/system_snapshot",
+    "ha_mcp_tools/entity_lookup",
+    "ha_mcp_tools/backup_prep",
+    "ha_mcp_tools/registries",
 ]
 
 # Minimal well-formed message body per command (Required fields) so the admin
@@ -1572,7 +1772,23 @@ _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     "ha_mcp_tools/entity_enrich": {"entity_ids": []},
     # exposure: no entity_id (list mode) — the registries resolve empty here so
     # no per-entity settings lookup runs, keeping the admin-gate probe pure.
+    "ha_mcp_tools/entity_lookup": {"unique_id": "x"},
+    "ha_mcp_tools/registries": {"registries": []},
+    # config_entries / registry_lookup / system_snapshot need no required params.
+    # backup_prep needs a hass carrying a backup manager (see _admin_gate_hass).
 }
+
+
+def _admin_gate_hass(command):
+    """The hass for the admin-gate probe of ``command``.
+
+    Most commands read empty registries out of a bare FakeHass. ``backup_prep``
+    must find a backup manager or it (correctly) raises — so hand it one with no
+    agents, which returns a well-formed empty result the gate probe can assert on.
+    """
+    if command == wsapi.WS_BACKUP_PREP:
+        return FakeHass(data={"backup": _fake_backup_manager()})
+    return FakeHass()
 
 
 class TestRegistrationAndAdminGate:
@@ -1588,6 +1804,12 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_DEVICE_LIST,
             wsapi.WS_ENTITY_ENRICH,
             wsapi.WS_EXPOSURE,
+            wsapi.WS_CONFIG_ENTRIES,
+            wsapi.WS_REGISTRY_LOOKUP,
+            wsapi.WS_SYSTEM_SNAPSHOT,
+            wsapi.WS_ENTITY_LOOKUP,
+            wsapi.WS_BACKUP_PREP,
+            wsapi.WS_REGISTRIES,
         }
         # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
@@ -1611,7 +1833,7 @@ class TestRegistrationAndAdminGate:
         handler = functional_ws.registered[command]
         conn = _FakeConnection(is_admin=True)
         msg = {"id": 9, "type": command, **_CMD_MSG_EXTRA.get(command, {})}
-        handler(FakeHass(), conn, msg)
+        handler(_admin_gate_hass(command), conn, msg)
         assert 9 in conn.results
         assert isinstance(conn.results[9], dict)
 
@@ -1771,6 +1993,137 @@ class TestNewCommandSchemas:
         schema = self._schema(monkeypatch, wsapi._device_list_schema)
         with pytest.raises(_REAL_VOL.Invalid):
             schema({"type": wsapi.WS_DEVICE_LIST, "area_id": "x"})
+
+    # --- config_entries ---------------------------------------------------------
+    def test_config_entries_valid(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._config_entries_schema)
+        out = schema({"type": wsapi.WS_CONFIG_ENTRIES, "domain": "mqtt"})
+        assert out["domain"] == "mqtt"
+        # Both filters are optional (a no-filter call lists every entry).
+        assert schema({"type": wsapi.WS_CONFIG_ENTRIES}) == {
+            "type": wsapi.WS_CONFIG_ENTRIES
+        }
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/config_entries", "entry_id": 5},  # not str/None
+            {"type": "ha_mcp_tools/config_entries", "domain": 5},  # not str/None
+            {"type": "ha_mcp_tools/config_entries", "bogus": "x"},  # extra key
+        ],
+    )
+    def test_config_entries_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._config_entries_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
+
+    # --- registry_lookup --------------------------------------------------------
+    def test_registry_lookup_accepts_either_target(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._registry_lookup_schema)
+        assert schema(
+            {"type": wsapi.WS_REGISTRY_LOOKUP, "entity_ids": ["light.a"]}
+        )["entity_ids"] == ["light.a"]
+        assert (
+            schema({"type": wsapi.WS_REGISTRY_LOOKUP, "config_entry_id": "cfg1"})[
+                "config_entry_id"
+            ]
+            == "cfg1"
+        )
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            # Exclusive: both targets at once is rejected.
+            {
+                "type": "ha_mcp_tools/registry_lookup",
+                "entity_ids": ["light.a"],
+                "config_entry_id": "cfg1",
+            },
+            {"type": "ha_mcp_tools/registry_lookup", "entity_ids": "light.a"},  # not list
+            {"type": "ha_mcp_tools/registry_lookup", "config_entry_id": 5},  # not str
+        ],
+    )
+    def test_registry_lookup_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._registry_lookup_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
+
+    # --- system_snapshot --------------------------------------------------------
+    def test_system_snapshot_defaults(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._system_snapshot_schema)
+        out = schema({"type": wsapi.WS_SYSTEM_SNAPSHOT})
+        assert out["include_states"] is True
+        assert out["include_entities"] is True
+        assert out["include_issues"] is True
+        assert out["include_config_entries"] is True
+
+    def test_system_snapshot_malformed_rejected(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._system_snapshot_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema({"type": wsapi.WS_SYSTEM_SNAPSHOT, "include_states": "yes"})
+
+    # --- entity_lookup ----------------------------------------------------------
+    def test_entity_lookup_valid(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._entity_lookup_schema)
+        out = schema(
+            {"type": wsapi.WS_ENTITY_LOOKUP, "unique_id": "abc", "platform": "zha"}
+        )
+        assert out["unique_id"] == "abc"
+        assert out["platform"] == "zha"
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/entity_lookup"},  # unique_id required
+            {"type": "ha_mcp_tools/entity_lookup", "unique_id": 5},  # not str
+            {"type": "ha_mcp_tools/entity_lookup", "unique_id": "a", "domain": 5},
+        ],
+    )
+    def test_entity_lookup_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._entity_lookup_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
+
+    # --- backup_prep ------------------------------------------------------------
+    def test_backup_prep_valid_no_params(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._backup_prep_schema)
+        assert schema({"type": wsapi.WS_BACKUP_PREP}) == {"type": wsapi.WS_BACKUP_PREP}
+
+    def test_backup_prep_rejects_extra_keys(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._backup_prep_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema({"type": wsapi.WS_BACKUP_PREP, "agent_id": "x"})
+
+    # --- registries -------------------------------------------------------------
+    def test_registries_valid(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._registries_schema)
+        out = schema(
+            {
+                "type": wsapi.WS_REGISTRIES,
+                "registries": ["area", "category"],
+                "category_scopes": ["automation"],
+            }
+        )
+        assert out["registries"] == ["area", "category"]
+        assert out["category_scopes"] == ["automation"]
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/registries"},  # registries required
+            {"type": "ha_mcp_tools/registries", "registries": ["bogus"]},  # bad kind
+            {"type": "ha_mcp_tools/registries", "registries": "area"},  # not a list
+            {
+                "type": "ha_mcp_tools/registries",
+                "registries": ["area"],
+                "category_scopes": "automation",  # not a list
+            },
+        ],
+    )
+    def test_registries_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._registries_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
 
 
 # =============================================================================
@@ -2811,3 +3164,609 @@ class TestExposure:
         )
         res = wsapi._do_exposure(FakeHass(states=[]), {})
         assert res["exposed_entities"] == {"scene.movie": {"conversation": True}}
+
+
+# =============================================================================
+# config_entries — config_entries/get shape; options scrub; entry.data withheld
+# =============================================================================
+class TestConfigEntries:
+    """``ha_mcp_tools/config_entries`` — the config_entries/get row shape, the
+    resolved-``!secret`` options scrub, and the ``entry.data`` withholding."""
+
+    def _entry(self, domain="mqtt", entry_id="cfg1", **kw):
+        defaults = {
+            "title": "Mosquitto",
+            "options": {"discovery": True},
+            "data": {"password": "DATA_SECRET_XYZ"},
+            "entry_id": entry_id,
+            "state": _FakeEnum("loaded"),
+            "source": "user",
+            "supports_options": True,
+            "supports_remove_device": None,  # None -> False (core's `or False`)
+            "supports_unload": True,
+            "supports_reconfigure": False,
+            "pref_disable_new_entities": False,
+            "pref_disable_polling": True,
+            "disabled_by": None,
+            "reason": None,
+            "subentries": {
+                "sub1": FakeSubentry(
+                    "sub1", "device", "Sub One", unique_id="u1", data={"k": "SUBSECRET"}
+                )
+            },
+        }
+        defaults.update(kw)
+        return FakeConfigEntry(domain, **defaults)
+
+    def test_full_row_shape(self):
+        res = wsapi._do_config_entries(
+            FakeHass(config_entries=[self._entry()]), {"domain": "mqtt"}
+        )
+        assert res["entries"] == [
+            {
+                "entry_id": "cfg1",
+                "domain": "mqtt",
+                "title": "Mosquitto",
+                "state": "loaded",  # ConfigEntryState.value
+                "source": "user",
+                "supports_options": True,
+                "supports_remove_device": False,  # None coerced to False
+                "supports_unload": True,
+                "supports_reconfigure": False,
+                "pref_disable_new_entities": False,
+                "pref_disable_polling": True,
+                "disabled_by": None,
+                "reason": None,
+                "options": {"discovery": True},
+                "subentries": [
+                    {
+                        "subentry_id": "sub1",
+                        "subentry_type": "device",
+                        "title": "Sub One",
+                        "unique_id": "u1",
+                    }
+                ],
+            }
+        ]
+
+    def test_entry_data_never_read(self):
+        # entry.data (credentials) must never surface — neither the value nor the
+        # subentry data. Negative scan like the helpers_list entry.data test.
+        res = wsapi._do_config_entries(FakeHass(config_entries=[self._entry()]), {})
+        serialized = json.dumps(res)
+        assert "DATA_SECRET_XYZ" not in serialized
+        assert "SUBSECRET" not in serialized
+
+    def test_domain_filter(self):
+        hass = FakeHass(
+            config_entries=[
+                self._entry(domain="mqtt", entry_id="c1"),
+                self._entry(domain="zwave_js", entry_id="c2"),
+            ]
+        )
+        res = wsapi._do_config_entries(hass, {"domain": "mqtt"})
+        assert [e["entry_id"] for e in res["entries"]] == ["c1"]
+
+    def test_fetch_by_entry_id(self):
+        hass = FakeHass(
+            config_entries=[
+                self._entry(entry_id="c1"),
+                self._entry(entry_id="c2"),
+            ]
+        )
+        res = wsapi._do_config_entries(hass, {"entry_id": "c2"})
+        assert [e["entry_id"] for e in res["entries"]] == ["c2"]
+
+    def test_unknown_entry_id_empty(self):
+        hass = FakeHass(config_entries=[self._entry(entry_id="c1")])
+        assert wsapi._do_config_entries(hass, {"entry_id": "ghost"}) == {"entries": []}
+
+    def test_no_filter_lists_all(self):
+        hass = FakeHass(
+            config_entries=[
+                self._entry(entry_id="c1"),
+                self._entry(domain="hue", entry_id="c2"),
+            ]
+        )
+        res = wsapi._do_config_entries(hass, {})
+        assert {e["entry_id"] for e in res["entries"]} == {"c1", "c2"}
+
+    def test_options_secret_scrubbed_recursively(self):
+        secret = "s3cr3toptionvalue"
+        entry = self._entry(
+            options={
+                "top": secret,
+                "nested": {"inner": secret, "keep": "kept"},
+                "list": [secret, "also_kept"],
+            }
+        )
+        res = wsapi._do_config_entries(
+            FakeHass(config_entries=[entry]), {}, secret_values=frozenset({secret})
+        )
+        options = res["entries"][0]["options"]
+        assert options == {
+            "top": "**redacted**",
+            "nested": {"inner": "**redacted**", "keep": "kept"},
+            "list": ["**redacted**", "also_kept"],
+        }
+        assert secret not in json.dumps(res)
+
+    def test_options_not_scrubbed_without_secret_set(self):
+        # The default empty scrub set is a no-op (an entity-only concern doesn't
+        # apply; here the loader simply found no secrets.yaml).
+        secret = "s3cr3toptionvalue"
+        entry = self._entry(options={"token": secret})
+        res = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})
+        assert res["entries"][0]["options"] == {"token": secret}
+
+    def test_subentries_absent_degrades_to_empty_list(self):
+        # A core version without subentries (getattr -> None) yields [], not a raise.
+        entry = FakeConfigEntry("mqtt", entry_id="c1", state=_FakeEnum("loaded"))
+        entry.subentries = None
+        res = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})
+        assert res["entries"][0]["subentries"] == []
+
+    def test_mappingproxy_options_read(self):
+        # ConfigEntry.options is a MappingProxyType in live HA — it must still be
+        # read (mirrors the flow-helper MappingProxy regression).
+        from types import MappingProxyType
+
+        entry = self._entry(options={"discovery": True})
+        entry.options = MappingProxyType(dict(entry.options))
+        res = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})
+        assert res["entries"][0]["options"] == {"discovery": True}
+
+    @pytest.mark.asyncio
+    async def test_prep_loads_secret_values_off_loop(self, tmp_path):
+        (tmp_path / "secrets.yaml").write_text(
+            "api_password: sekret\n", encoding="utf-8"
+        )
+        hass = FakeHass()
+        hass.config = FakeConfig(tmp_path)
+        extra = await wsapi._config_entries_prep(hass, {"type": wsapi.WS_CONFIG_ENTRIES})
+        assert extra["secret_values"] == frozenset({"sekret"})
+
+
+# =============================================================================
+# registry_lookup — as_partial_dict rows for ids or a config entry (ALL matches)
+# =============================================================================
+class TestRegistryLookup:
+    """``ha_mcp_tools/registry_lookup`` — the config/entity_registry/list row shape
+    for a set of entity_ids or ALL entities of a config entry."""
+
+    def _view(self):
+        return make_view(
+            entity={
+                "sensor.meter": FakeRegEntry(
+                    "sensor.meter", config_entry_id="cfg1", unique_id="m"
+                ),
+                # Two more entities on the SAME config entry (a utility_meter and
+                # its tariff): the single-valued index would drop these.
+                "sensor.meter_peak": FakeRegEntry(
+                    "sensor.meter_peak", config_entry_id="cfg1", unique_id="mp"
+                ),
+                "sensor.meter_offpeak": FakeRegEntry(
+                    "sensor.meter_offpeak",
+                    config_entry_id="cfg1",
+                    unique_id="mo",
+                    disabled_by="user",
+                ),
+                "light.other": FakeRegEntry("light.other", config_entry_id="cfg2"),
+            }
+        )
+
+    def test_config_entry_id_returns_all_entities(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_registry_lookup(FakeHass(), {"config_entry_id": "cfg1"})
+        ids = {row["entity_id"] for row in res["entities"]}
+        # ALL three cfg1 entities (incl. the disabled one); cfg2's is excluded.
+        assert ids == {"sensor.meter", "sensor.meter_peak", "sensor.meter_offpeak"}
+        assert "missing" not in res
+
+    def test_config_entry_id_rows_are_partial_dict_shape(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_registry_lookup(FakeHass(), {"config_entry_id": "cfg1"})
+        row = next(r for r in res["entities"] if r["entity_id"] == "sensor.meter")
+        # config/entity_registry/list parity — the exact as_partial_dict shape.
+        assert row["config_entry_id"] == "cfg1"
+        assert row["id"] == "m"
+        assert "unique_id" in row and "disabled_by" in row
+
+    def test_disabled_entity_included_in_config_entry_scan(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_registry_lookup(FakeHass(), {"config_entry_id": "cfg1"})
+        disabled = next(
+            r for r in res["entities"] if r["entity_id"] == "sensor.meter_offpeak"
+        )
+        assert disabled["disabled_by"] == "user"
+
+    def test_entity_ids_found_and_missing_split(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_registry_lookup(
+            FakeHass(), {"entity_ids": ["sensor.meter", "sensor.ghost"]}
+        )
+        assert [r["entity_id"] for r in res["entities"]] == ["sensor.meter"]
+        assert res["missing"] == ["sensor.ghost"]
+
+    def test_no_target_is_empty(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        assert wsapi._do_registry_lookup(FakeHass(), {}) == {
+            "entities": [],
+            "missing": [],
+        }
+
+
+# =============================================================================
+# system_snapshot — one synchronous pass over the health-view slices
+# =============================================================================
+class TestSystemSnapshot:
+    """``ha_mcp_tools/system_snapshot`` — the four health slices from one pass."""
+
+    def _hass(self):
+        return FakeHass(
+            states=[FakeState("light.lamp", "on", friendly_name="Lamp")],
+            config_entries=[
+                FakeConfigEntry(
+                    "mqtt",
+                    title="Mosquitto",
+                    entry_id="cfg1",
+                    state=_FakeEnum("loaded"),
+                    source="user",
+                    options={"discovery": True},
+                    data={"password": "DATA_SECRET_XYZ"},
+                )
+            ],
+        )
+
+    def _view(self):
+        return make_view(
+            entity={"light.lamp": FakeRegEntry("light.lamp", unique_id="lamp")}
+        )
+
+    def _patch_issues(self, monkeypatch):
+        registry = FakeIssueRegistry([FakeIssue("iss1", "mqtt", severity="warning")])
+        monkeypatch.setattr(wsapi, "ir", FakeIssueRegModule(registry))
+
+    def test_all_slices_shaped(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        self._patch_issues(monkeypatch)
+        res = wsapi._do_system_snapshot(self._hass(), {})
+
+        # config_entries: identity-only row (no options/subentries).
+        assert res["config_entries"] == [
+            {
+                "entry_id": "cfg1",
+                "domain": "mqtt",
+                "title": "Mosquitto",
+                "state": "loaded",
+                "source": "user",
+                "disabled_by": None,
+            }
+        ]
+        # The health slice must not carry options/data — no credential leak.
+        assert "DATA_SECRET_XYZ" not in json.dumps(res)
+        assert "options" not in res["config_entries"][0]
+
+        # issues: the _overview_repairs slice shape.
+        assert res["issues"][0]["issue_id"] == "iss1"
+        assert res["issues"][0]["severity"] == "warning"
+
+        # entities: as_partial_dict rows.
+        assert [e["entity_id"] for e in res["entities"]] == ["light.lamp"]
+        assert res["entities"][0]["id"] == "lamp"
+
+        # states: State.as_dict() bodies.
+        assert res["states"][0]["entity_id"] == "light.lamp"
+        assert res["states"][0]["attributes"]["friendly_name"] == "Lamp"
+
+    def test_include_flags_gate_sections(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        self._patch_issues(monkeypatch)
+        res = wsapi._do_system_snapshot(
+            self._hass(),
+            {
+                "include_states": False,
+                "include_config_entries": False,
+                "include_entities": True,
+                "include_issues": True,
+            },
+        )
+        assert res["states"] == []
+        assert res["config_entries"] == []
+        # The requested slices are still populated.
+        assert res["entities"] and res["issues"]
+
+
+# =============================================================================
+# entity_lookup — unique_id scan with domain/platform narrowing
+# =============================================================================
+class TestEntityLookup:
+    """``ha_mcp_tools/entity_lookup`` — every registry entry matching a unique_id."""
+
+    def _view(self):
+        return make_view(
+            entity={
+                "sensor.a": FakeRegEntry(
+                    "sensor.a",
+                    unique_id="shared",
+                    platform="zha",
+                    config_entry_id="cfg1",
+                    categories={"automation": "cat1"},
+                    disabled_by=_FakeEnum("user"),
+                    hidden_by=_FakeEnum("integration"),
+                ),
+                "binary_sensor.b": FakeRegEntry(
+                    "binary_sensor.b",
+                    unique_id="shared",
+                    platform="mqtt",
+                    config_entry_id="cfg2",
+                ),
+                "light.c": FakeRegEntry("light.c", unique_id="other", platform="zha"),
+            }
+        )
+
+    def test_multiple_matches_returned(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_entity_lookup(FakeHass(), {"unique_id": "shared"})
+        assert {m["entity_id"] for m in res["matches"]} == {
+            "sensor.a",
+            "binary_sensor.b",
+        }
+
+    def test_match_field_shape(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_entity_lookup(FakeHass(), {"unique_id": "shared"})
+        match = next(m for m in res["matches"] if m["entity_id"] == "sensor.a")
+        assert match == {
+            "entity_id": "sensor.a",
+            "unique_id": "shared",
+            "platform": "zha",
+            "domain": "sensor",
+            "config_entry_id": "cfg1",
+            "categories": {"automation": "cat1"},
+            "disabled_by": "user",  # enum unwrapped
+            "hidden_by": "integration",
+        }
+
+    def test_platform_filter(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_entity_lookup(
+            FakeHass(), {"unique_id": "shared", "platform": "zha"}
+        )
+        assert [m["entity_id"] for m in res["matches"]] == ["sensor.a"]
+
+    def test_domain_filter(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_entity_lookup(
+            FakeHass(), {"unique_id": "shared", "domain": "binary_sensor"}
+        )
+        assert [m["entity_id"] for m in res["matches"]] == ["binary_sensor.b"]
+
+    def test_no_match_is_empty(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        assert wsapi._do_entity_lookup(FakeHass(), {"unique_id": "nope"}) == {
+            "matches": []
+        }
+
+
+# =============================================================================
+# backup_prep — agents + local-agent preference + password; manager-absent raises
+# =============================================================================
+class TestBackupPrep:
+    """``ha_mcp_tools/backup_prep`` — the backup identity, mirroring the server's
+    hassio-over-core local-agent preference; a missing manager raises."""
+
+    def _hass(self, agents=None, password=None):
+        return FakeHass(
+            data={"backup": _fake_backup_manager(agents=agents, password=password)}
+        )
+
+    def test_happy_path_prefers_hassio_local(self):
+        agents = {
+            "hassio.local": _fake_backup_agent("local"),
+            "backup.local": _fake_backup_agent("local"),
+            "remote.s3": _fake_backup_agent("S3"),
+        }
+        res = wsapi._do_backup_prep(self._hass(agents=agents, password="pw"), {})
+        assert set(res["agent_ids"]) == {"hassio.local", "backup.local", "remote.s3"}
+        assert res["local_agent_id"] == "hassio.local"
+        assert res["default_password"] == "pw"
+
+    def test_prefers_backup_local_when_no_hassio(self):
+        agents = {
+            "backup.local": _fake_backup_agent("local"),
+            "remote.s3": _fake_backup_agent("S3"),
+        }
+        res = wsapi._do_backup_prep(self._hass(agents=agents), {})
+        assert res["local_agent_id"] == "backup.local"
+
+    def test_falls_back_to_first_local_agent(self):
+        # A non-standard local agent (name "local", id neither hassio/backup).
+        agents = {"custom.local": _fake_backup_agent("local")}
+        res = wsapi._do_backup_prep(self._hass(agents=agents), {})
+        assert res["local_agent_id"] == "custom.local"
+
+    def test_no_local_agent_yields_none(self):
+        agents = {"remote.s3": _fake_backup_agent("S3")}
+        res = wsapi._do_backup_prep(self._hass(agents=agents), {})
+        assert res["local_agent_id"] is None
+        assert res["agent_ids"] == ["remote.s3"]
+
+    def test_password_absent_is_none(self):
+        agents = {"backup.local": _fake_backup_agent("local")}
+        res = wsapi._do_backup_prep(self._hass(agents=agents, password=None), {})
+        assert res["default_password"] is None
+
+    def test_manager_absent_raises(self):
+        # A hass with no backup manager raises so the server's command-error path
+        # falls back (not a silent empty result mistaken for "no agents").
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_backup_prep(FakeHass(), {})
+
+    def test_import_error_raises(self, monkeypatch):
+        # The backup integration not being importable also raises.
+        monkeypatch.setitem(sys.modules, "homeassistant.components.backup", None)
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_backup_prep(self._hass(), {})
+
+
+# =============================================================================
+# registries — FULL-FIELD area/floor/label/category rows (core parity)
+# =============================================================================
+_REG_CREATED = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+_REG_MODIFIED = datetime(2026, 2, 3, 4, 5, 6, tzinfo=UTC)
+
+
+class TestRegistries:
+    """``ha_mcp_tools/registries`` — each row byte-compatible with the legacy WS
+    list response (verified against core's registry serializers)."""
+
+    def test_area_full_field_row(self, monkeypatch):
+        area = FakeArea(
+            "a1",
+            "Office",
+            floor_id="f1",
+            aliases={"studio"},
+            icon="mdi:home",
+            picture="/pic.png",
+            labels={"lb1"},
+            humidity_entity_id="sensor.h",
+            temperature_entity_id="sensor.t",
+            created_at=_REG_CREATED,
+            modified_at=_REG_MODIFIED,
+        )
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(areas=[area])
+        )
+        res = wsapi._do_registries(FakeHass(), {"registries": ["area"]})
+        # Only the requested key is present.
+        assert list(res) == ["areas"]
+        assert res["areas"] == [
+            {
+                "aliases": ["studio"],
+                "area_id": "a1",
+                "floor_id": "f1",
+                "humidity_entity_id": "sensor.h",
+                "icon": "mdi:home",
+                "labels": ["lb1"],
+                "name": "Office",
+                "picture": "/pic.png",
+                "temperature_entity_id": "sensor.t",
+                "created_at": _REG_CREATED.timestamp(),
+                "modified_at": _REG_MODIFIED.timestamp(),
+            }
+        ]
+
+    def test_floor_full_field_row_has_no_labels(self, monkeypatch):
+        floor = FakeFloor(
+            "f1",
+            "Upstairs",
+            level=2,
+            icon="mdi:stairs",
+            aliases={"top"},
+            created_at=_REG_CREATED,
+            modified_at=_REG_MODIFIED,
+        )
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(floors=[floor])
+        )
+        res = wsapi._do_registries(FakeHass(), {"registries": ["floor"]})
+        assert res["floors"] == [
+            {
+                "aliases": ["top"],
+                "created_at": _REG_CREATED.timestamp(),
+                "floor_id": "f1",
+                "icon": "mdi:stairs",
+                "level": 2,
+                "name": "Upstairs",
+                "modified_at": _REG_MODIFIED.timestamp(),
+            }
+        ]
+        # core's FloorEntry has NO labels field — the row must not invent one.
+        assert "labels" not in res["floors"][0]
+
+    def test_label_full_field_row(self, monkeypatch):
+        label = FakeLabel(
+            "lb1",
+            "Favorites",
+            color="red",
+            description="fav",
+            icon="mdi:star",
+            created_at=_REG_CREATED,
+            modified_at=_REG_MODIFIED,
+        )
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(labels=[label])
+        )
+        res = wsapi._do_registries(FakeHass(), {"registries": ["label"]})
+        assert res["labels"] == [
+            {
+                "color": "red",
+                "created_at": _REG_CREATED.timestamp(),
+                "description": "fav",
+                "icon": "mdi:star",
+                "label_id": "lb1",
+                "name": "Favorites",
+                "modified_at": _REG_MODIFIED.timestamp(),
+            }
+        ]
+
+    def test_category_rows_scoped(self, monkeypatch):
+        cat = FakeCategory(
+            "cat1",
+            "Lights",
+            icon="mdi:lightbulb",
+            created_at=_REG_CREATED,
+            modified_at=_REG_MODIFIED,
+        )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
+        monkeypatch.setattr(
+            wsapi,
+            "_category_registry",
+            lambda h: FakeCategoryReg({"automation": [cat]}),
+        )
+        res = wsapi._do_registries(
+            FakeHass(),
+            {"registries": ["category"], "category_scopes": ["automation", "script"]},
+        )
+        assert res["categories"]["automation"] == [
+            {
+                "category_id": "cat1",
+                "created_at": _REG_CREATED.timestamp(),
+                "icon": "mdi:lightbulb",
+                "modified_at": _REG_MODIFIED.timestamp(),
+                "name": "Lights",
+            }
+        ]
+        # A requested scope with no categories is an empty list (not missing).
+        assert res["categories"]["script"] == []
+
+    def test_only_requested_registries_present(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(
+                areas=[FakeArea("a1", "Office")],
+                floors=[FakeFloor("f1", "Up")],
+                labels=[FakeLabel("lb1", "Fav")],
+            ),
+        )
+        res = wsapi._do_registries(FakeHass(), {"registries": ["area", "label"]})
+        assert set(res) == {"areas", "labels"}
+
+    def test_category_requested_without_scopes_is_empty_map(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
+        monkeypatch.setattr(
+            wsapi, "_category_registry", lambda h: FakeCategoryReg({})
+        )
+        res = wsapi._do_registries(FakeHass(), {"registries": ["category"]})
+        assert res["categories"] == {}
+
+    def test_timestamps_are_floats(self, monkeypatch):
+        area = FakeArea("a1", "Office", created_at=_REG_CREATED, modified_at=_REG_MODIFIED)
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(areas=[area])
+        )
+        row = wsapi._do_registries(FakeHass(), {"registries": ["area"]})["areas"][0]
+        assert isinstance(row["created_at"], float)
+        assert isinstance(row["modified_at"], float)

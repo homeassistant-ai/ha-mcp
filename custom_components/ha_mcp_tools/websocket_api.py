@@ -2,11 +2,13 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. v1.1.1 ships ten commands (nine capabilities):
+capability gate. It registers sixteen commands (fifteen capabilities):
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
-  + ``component_version`` + advisory ``limits``. One cached probe tells the
-  server which commands are live (capability negotiation, NOT a version floor).
+  + ``component_version`` + advisory ``limits`` + the instance ``timezone``
+  (an additive field consumers detect by presence — no capability entry). One
+  cached probe tells the server which commands are live (capability
+  negotiation, NOT a version floor).
 * ``ha_mcp_tools/search`` — a unified in-process search over live registries and
   states, joined and scored, mirroring today's ``ha_search`` response envelope.
 * ``ha_mcp_tools/overview`` — the raw in-process reads the server's
@@ -76,6 +78,50 @@ capability gate. v1.1.1 ships ten commands (nine capabilities):
   the not-exposed default (the legacy path never raises on junk); and a missing
   ``hass.states.get(id)`` omits the live-state fields (friendly_name/state) rather
   than crashing.
+
+* ``ha_mcp_tools/config_entries`` — config entries as the ``config_entries/get``
+  WS shape (``entry_id`` / ``domain`` / ``title`` / ``state`` / ``source`` /
+  ``supports_*`` / ``pref_disable_*`` / ``disabled_by`` / ``reason`` /
+  ``options`` / ``subentries``), filtered by ``domain`` or fetched by
+  ``entry_id``. ``state`` is serialized as ``ConfigEntryState.value`` (mirroring
+  core's ``as_json_fragment``). ``entry.data`` (integration credentials) is
+  NEVER read; ``options`` is passed through a resolved-``!secret`` scrub (an
+  options leaf equal to a ``secrets.yaml`` value becomes ``"**redacted**"``,
+  loaded off the loop by :func:`_config_entries_prep`) — data minimization
+  parity with the flow-helper indexing.
+* ``ha_mcp_tools/registry_lookup`` — entity-registry rows
+  (``RegistryEntry.as_partial_dict``, the ``config/entity_registry/list`` shape,
+  disabled entities included) for either a set of ``entity_ids`` (missing ids in
+  a sibling ``missing`` list) or ALL entities bound to a ``config_entry_id``. The
+  config-entry scan returns EVERY match — it does not reuse the single-valued
+  ``_entities_by_config_entry`` index, so a multi-entity flow helper
+  (utility_meter + its tariffs) does not silently lose its sub-entities.
+* ``ha_mcp_tools/system_snapshot`` — one consistent synchronous pass over the
+  live objects the health path reads: ``config_entries`` (identity fields only —
+  no options/subentries), ``issues`` (the ``_overview_repairs`` slice),
+  ``entities`` (the ``registry_lookup`` row shape), ``states``
+  (``State.as_dict()``). ``include_*`` flags gate each section. Reading them in a
+  single frame kills the 3x ``config_entries/get`` TOCTOU the server had.
+* ``ha_mcp_tools/entity_lookup`` — registry entries whose ``unique_id`` matches
+  (optionally narrowed by ``domain`` / ``platform``), returned as
+  ``{matches: [{entity_id, unique_id, platform, domain, config_entry_id,
+  categories, disabled_by, hidden_by}]}``. Multiple matches across platforms are
+  all returned; the server picks. The in-process read is authoritative
+  immediately (no registry-write settle retry).
+* ``ha_mcp_tools/backup_prep`` — the backup identity the server needs before a
+  create: ``{agent_ids, local_agent_id, default_password}`` read from the backup
+  integration's in-process ``DATA_MANAGER``. ``local_agent_id`` uses the SAME
+  preference the server's ``_get_local_backup_agent_id`` does (``hassio.local``
+  over ``backup.local``). A missing backup integration / manager raises
+  ``HomeAssistantError`` so the server's command-error fallback fires. The
+  password is sensitive but the legacy ``backup/config/info`` already serves it
+  to the same admin connection — parity, not new exposure.
+* ``ha_mcp_tools/registries`` — the area / floor / label / category registries as
+  the FULL-FIELD ``config/<x>_registry/list`` shapes (byte-compatible with the
+  legacy WS list responses; timestamps as ``created_at`` / ``modified_at``
+  floats via ``.timestamp()``). Only the requested ``registries`` keys are
+  present; ``category`` requires ``category_scopes`` (categories are scoped).
+  ``category_registry`` is imported function-locally (not needed at module top).
 
 ``ha_mcp_tools/config_get`` was withdrawn before release: it served an entity's
 ``raw_config``, whose freshness lags the config file between a write and the next
@@ -164,6 +210,12 @@ WS_DEVICE_GET = f"{WS_API_PREFIX}/device_get"
 WS_DEVICE_LIST = f"{WS_API_PREFIX}/device_list"
 WS_ENTITY_ENRICH = f"{WS_API_PREFIX}/entity_enrich"
 WS_EXPOSURE = f"{WS_API_PREFIX}/exposure"
+WS_CONFIG_ENTRIES = f"{WS_API_PREFIX}/config_entries"
+WS_REGISTRY_LOOKUP = f"{WS_API_PREFIX}/registry_lookup"
+WS_SYSTEM_SNAPSHOT = f"{WS_API_PREFIX}/system_snapshot"
+WS_ENTITY_LOOKUP = f"{WS_API_PREFIX}/entity_lookup"
+WS_BACKUP_PREP = f"{WS_API_PREFIX}/backup_prep"
+WS_REGISTRIES = f"{WS_API_PREFIX}/registries"
 
 # Wire-format generation of the request/response envelopes. Bumped only on an
 # *incompatible* shape change to an existing command; additive fields do not
@@ -184,7 +236,18 @@ CAPABILITIES: list[str] = [
     "device_list",
     "entity_enrich",
     "exposure",
+    "config_entries",
+    "registry_lookup",
+    "system_snapshot",
+    "entity_lookup",
+    "backup_prep",
+    "registries",
 ]
+
+# The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates
+# on this so an out-of-range kind never reaches the reader; ``category`` also
+# requires ``category_scopes`` (categories are scoped).
+REGISTRY_KINDS = ("area", "floor", "label", "category")
 
 # Blueprint domains this component will read a body for. Mirrors core's blueprint
 # domains; the WS schema gates on it so an out-of-range domain never reaches the
@@ -323,7 +386,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
     ``_do_*`` function a pure, synchronous in-memory read.
     """
     return [
-        (_info_schema(), lambda hass, msg: _do_info(), None),
+        (_info_schema(), lambda hass, msg: _do_info(hass), None),
         (_search_schema(), _do_search, _search_prep),
         (_overview_schema(), _do_overview, None),
         (_helpers_list_schema(), _do_helpers_list, None),
@@ -333,6 +396,12 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_device_list_schema(), _do_device_list, None),
         (_entity_enrich_schema(), _do_entity_enrich, None),
         (_exposure_schema(), _do_exposure, None),
+        (_config_entries_schema(), _do_config_entries, _config_entries_prep),
+        (_registry_lookup_schema(), _do_registry_lookup, None),
+        (_system_snapshot_schema(), _do_system_snapshot, None),
+        (_entity_lookup_schema(), _do_entity_lookup, None),
+        (_backup_prep_schema(), _do_backup_prep, None),
+        (_registries_schema(), _do_registries, None),
     ]
 
 
@@ -434,17 +503,82 @@ def _exposure_schema() -> dict[Any, Any]:
     }
 
 
+def _config_entries_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_CONFIG_ENTRIES,
+        vol.Optional("entry_id"): vol.Any(str, None),
+        vol.Optional("domain"): vol.Any(str, None),
+    }
+
+
+def _registry_lookup_schema() -> dict[Any, Any]:
+    # Exactly one of entity_ids / config_entry_id is meaningful; ``vol.Exclusive``
+    # rejects a request carrying BOTH (the two share the ``target`` group). Neither
+    # present is a valid-but-empty request (the handler returns no matches).
+    return {
+        vol.Required("type"): WS_REGISTRY_LOOKUP,
+        vol.Exclusive("entity_ids", "target"): [str],
+        vol.Exclusive("config_entry_id", "target"): str,
+    }
+
+
+def _system_snapshot_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_SYSTEM_SNAPSHOT,
+        vol.Optional("include_states", default=True): bool,
+        vol.Optional("include_entities", default=True): bool,
+        vol.Optional("include_issues", default=True): bool,
+        vol.Optional("include_config_entries", default=True): bool,
+    }
+
+
+def _entity_lookup_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_ENTITY_LOOKUP,
+        vol.Required("unique_id"): str,
+        vol.Optional("domain"): vol.Any(str, None),
+        vol.Optional("platform"): vol.Any(str, None),
+    }
+
+
+def _backup_prep_schema() -> dict[Any, Any]:
+    return {vol.Required("type"): WS_BACKUP_PREP}
+
+
+def _registries_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_REGISTRIES,
+        vol.Required("registries"): [vol.In(REGISTRY_KINDS)],
+        vol.Optional("category_scopes"): [str],
+    }
+
+
 # =============================================================================
 # ha_mcp_tools/info
 # =============================================================================
-def _do_info() -> dict[str, Any]:
-    """Return the handshake payload (pure; no hass access)."""
+def _do_info(hass: HomeAssistant | None = None) -> dict[str, Any]:
+    """Return the handshake payload.
+
+    ``timezone`` is an additive field (``hass.config.time_zone``) consumers detect
+    by presence — it carries NO capability entry and does NOT bump
+    ``schema_version``. ``hass`` is optional (defaulting to ``None`` so a direct
+    ``_do_info()`` still works for callers that only need the static handshake);
+    when absent, ``timezone`` degrades to ``None``.
+    """
     return {
         "schema_version": SCHEMA_VERSION,
         "component_version": COMPONENT_VERSION,
         "capabilities": list(CAPABILITIES),
         "limits": dict(LIMITS),
+        "timezone": _config_time_zone(hass),
     }
+
+
+def _config_time_zone(hass: HomeAssistant | None) -> str | None:
+    """``hass.config.time_zone`` as a string, guarded against a hass-less call."""
+    config = getattr(hass, "config", None)
+    tz = getattr(config, "time_zone", None)
+    return tz if isinstance(tz, str) and tz else None
 
 
 # =============================================================================
@@ -1626,11 +1760,32 @@ def _enum_value(value: Any) -> Any:
     """Unwrap a StrEnum-ish registry field (``entity_category``/``hidden_by``/…).
 
     HA stores these as enums whose ``.value`` is the wire string; a plain string
-    (or None) passes through unchanged.
+    (or None) passes through unchanged. Also unwraps ``ConfigEntryState`` (a plain
+    ``Enum`` whose ``.value`` is the wire string, e.g. ``"loaded"``) — core's
+    ``config_entries/get`` serializes it as ``entry.state.value``.
     """
     if value is None or isinstance(value, str):
         return value
     return getattr(value, "value", str(value))
+
+
+def _timestamp(value: Any) -> float | None:
+    """Serialize a datetime-ish registry timestamp as a float, like core.
+
+    core's registry WS list responses emit ``created_at`` / ``modified_at`` via
+    ``entry.created_at.timestamp()`` (a float, seconds since epoch), so mirror
+    that. A value that is already numeric passes through; anything else (or a
+    ``.timestamp()`` that raises) degrades to ``None``.
+    """
+    if value is None:
+        return None
+    ts = getattr(value, "timestamp", None)
+    if callable(ts):
+        try:
+            return float(ts())
+        except Exception:  # pragma: no cover - defensive
+            return None
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 def _reg_name(reg: Any) -> str | None:
@@ -2637,3 +2792,553 @@ def _is_unknown_entity_error(exc: Exception) -> bool:
         type(exc).__name__ == "HomeAssistantError"
         and "unknown entity" in str(exc).lower()
     )
+
+
+# =============================================================================
+# ha_mcp_tools/config_entries
+# =============================================================================
+def _do_config_entries(
+    hass: HomeAssistant,
+    params: dict[str, Any],
+    *,
+    secret_values: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Return config entries in the ``config_entries/get`` WS shape.
+
+    ``{entries: [{entry_id, domain, title, state, source, supports_options,
+    supports_remove_device, supports_unload, supports_reconfigure,
+    pref_disable_new_entities, pref_disable_polling, disabled_by, reason,
+    options, subentries}]}``. Filtered by ``domain`` when given, or the single
+    entry by ``entry_id`` (``hass.config_entries.async_get_entry`` — absent id
+    yields an empty list). ``state`` is serialized as ``ConfigEntryState.value``
+    (mirroring how core's ``config_entries/get`` emits it via
+    ``as_json_fragment``).
+
+    Data minimization: ``entry.data`` (integration credentials) is NEVER read.
+    ``options`` is the only credential-bearing surface emitted, so it is passed
+    through the resolved-``!secret`` scrub — an options leaf (dict value, list
+    item, or scalar) that exactly equals a ``secrets.yaml`` value becomes
+    ``"**redacted**"`` (``secret_values`` loaded off the loop by
+    :func:`_config_entries_prep`). ``subentries`` carries identity fields only
+    (``subentry_id`` / ``subentry_type`` / ``title`` / ``unique_id``) — never a
+    subentry's ``data``; a core version without subentries degrades to ``[]``.
+
+    Pure over ``hass``: the blocking ``secrets.yaml`` read is offloaded by the
+    async prep, so this stays a synchronous in-memory read.
+    """
+    entry_id = params.get("entry_id")
+    domain = params.get("domain")
+    if entry_id:
+        entry = _config_entry_by_id(hass, entry_id)
+        entries: list[Any] = [entry] if entry is not None else []
+    else:
+        entries = _iter_config_entries(hass)
+        if domain:
+            entries = [e for e in entries if getattr(e, "domain", None) == domain]
+    return {"entries": [_config_entry_row(e, secret_values) for e in entries]}
+
+
+async def _config_entries_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Async pre-step for ``config_entries``: load the secret-scrub set off the loop.
+
+    Unlike ``search`` (which skips the read for an entity-only query),
+    ``config_entries`` ALWAYS emits ``options``, so the ``secrets.yaml`` read is
+    unconditional. The blocking ``open()`` + ``yaml.safe_load`` runs in the
+    executor via :meth:`hass.async_add_executor_job`, keeping
+    :func:`_do_config_entries` a pure in-memory read. See :func:`_load_secret_values`.
+    """
+    values = await hass.async_add_executor_job(_load_secret_values, hass)
+    return {"secret_values": values}
+
+
+def _config_entry_by_id(hass: HomeAssistant, entry_id: str) -> Any:
+    """``hass.config_entries.async_get_entry(entry_id)`` guarded (``None`` if absent)."""
+    config_entries = getattr(hass, "config_entries", None)
+    getter = (
+        getattr(config_entries, "async_get_entry", None)
+        if config_entries is not None
+        else None
+    )
+    if getter is None:
+        return None
+    try:
+        return getter(entry_id)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _config_entry_row(entry: Any, secret_values: frozenset[str]) -> dict[str, Any]:
+    """One config entry as the ``config_entries/get`` row (options scrubbed)."""
+    raw_options = getattr(entry, "options", None)
+    options = _plainify(dict(raw_options)) if isinstance(raw_options, Mapping) else {}
+    options = _scrub_secret_values(options, secret_values)
+    return {
+        "entry_id": getattr(entry, "entry_id", None),
+        "domain": getattr(entry, "domain", None),
+        "title": getattr(entry, "title", None),
+        "state": _enum_value(getattr(entry, "state", None)),
+        "source": getattr(entry, "source", None),
+        # supports_* are computed properties (they touch the flow handler) — read
+        # through _safe_prop so a domain whose handler is unavailable degrades
+        # instead of raising. ``or False`` mirrors core's as_json_fragment, which
+        # coerces the optional bools to False.
+        "supports_options": bool(_safe_prop(entry, "supports_options")),
+        "supports_remove_device": _safe_prop(entry, "supports_remove_device") or False,
+        "supports_unload": _safe_prop(entry, "supports_unload") or False,
+        "supports_reconfigure": bool(_safe_prop(entry, "supports_reconfigure")),
+        "pref_disable_new_entities": bool(
+            getattr(entry, "pref_disable_new_entities", False)
+        ),
+        "pref_disable_polling": bool(getattr(entry, "pref_disable_polling", False)),
+        "disabled_by": _enum_value(getattr(entry, "disabled_by", None)),
+        "reason": getattr(entry, "reason", None),
+        "options": options,
+        "subentries": _config_subentries(entry),
+    }
+
+
+def _config_subentries(entry: Any) -> list[dict[str, Any]]:
+    """Identity fields of each config subentry — NEVER the subentry ``data``.
+
+    ``entry.subentries`` is a ``MappingProxyType`` keyed by subentry_id in modern
+    core; a version without it (``getattr`` -> ``None``) degrades to ``[]``.
+    """
+    return [
+        {
+            "subentry_id": getattr(sub, "subentry_id", None),
+            "subentry_type": getattr(sub, "subentry_type", None),
+            "title": getattr(sub, "title", None),
+            "unique_id": getattr(sub, "unique_id", None),
+        }
+        for sub in _mapping_values(getattr(entry, "subentries", None))
+    ]
+
+
+def _scrub_secret_values(value: Any, secret_values: frozenset[str]) -> Any:
+    """Recursively replace any string equal to a known secret with ``"**redacted**"``.
+
+    Walks dict values, list items, and scalars of the (already ``_plainify``'d)
+    options structure. A leaf string that exactly equals a ``secrets.yaml`` value
+    is redacted so a resolved ``!secret`` never leaves the component; every other
+    value passes through. An empty ``secret_values`` is a no-op (fast path).
+    """
+    if not secret_values:
+        return value
+    if isinstance(value, dict):
+        return {k: _scrub_secret_values(v, secret_values) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_scrub_secret_values(v, secret_values) for v in value]
+    if isinstance(value, str) and value in secret_values:
+        return "**redacted**"
+    return value
+
+
+def _safe_prop(obj: Any, name: str, default: Any = None) -> Any:
+    """Read a possibly-computed property, degrading to ``default`` if it raises.
+
+    ``getattr`` alone only defaults on ``AttributeError``; a ConfigEntry's
+    ``supports_options`` / ``supports_reconfigure`` are computed off the flow
+    handler and can raise other errors when it is unavailable, so catch broadly.
+    """
+    try:
+        return getattr(obj, name, default)
+    except Exception:  # pragma: no cover - defensive; core drift
+        return default
+
+
+# =============================================================================
+# ha_mcp_tools/registry_lookup
+# =============================================================================
+def _do_registry_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return entity-registry rows for a set of ids or one config entry.
+
+    Rows are core's ``RegistryEntry.as_partial_dict`` VERBATIM (the
+    ``config/entity_registry/list`` shape, disabled entities included), so the
+    consumers that parse that exact shape today read the component-served rows
+    unchanged.
+
+    * ``config_entry_id`` — scans the whole entity registry and returns EVERY
+      entity bound to that entry (``{entities: [...]}``). It deliberately does
+      NOT reuse :func:`_entities_by_config_entry` (single-valued — first entity
+      only), so a multi-entity flow helper (a utility_meter and its tariff
+      sub-entities) does not silently lose members.
+    * ``entity_ids`` — looks each up (``{entities: [...], missing: [...]}``); an
+      id with no registry entry lands in ``missing`` rather than being dropped.
+
+    Pure O(n)/O(id) in-memory registry reads. Exactly one of the two params is
+    meaningful (the schema rejects both); neither yields an empty result.
+    """
+    view = _resolve_registries(hass)
+    config_entry_id = params.get("config_entry_id")
+    if config_entry_id:
+        rows = [
+            _entity_partial_dict(entry)
+            for entry in _all_entity_entries(view)
+            if getattr(entry, "config_entry_id", None) == config_entry_id
+        ]
+        return {"entities": [row for row in rows if row is not None]}
+
+    entity_ids = params.get("entity_ids") or []
+    found: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for entity_id in entity_ids:
+        entry = _reg_entity(view, entity_id)
+        row = _entity_partial_dict(entry) if entry is not None else None
+        if row is None:
+            missing.append(entity_id)
+        else:
+            found.append(row)
+    return {"entities": found, "missing": missing}
+
+
+# =============================================================================
+# ha_mcp_tools/system_snapshot
+# =============================================================================
+def _do_system_snapshot(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """One consistent synchronous pass over the live objects the health path reads.
+
+    ``{config_entries: [...], issues: [...], entities: [...], states: [...]}`` —
+    every section read from the live in-memory objects in a SINGLE synchronous
+    handler call, which is the point: it collapses the server's former 3x
+    ``config_entries/get`` fetches (a TOCTOU where entries changed mid-read) into
+    one coherent snapshot. ``include_*`` flags gate each section; a disabled
+    section is an empty list (present, so the consumer need not special-case a
+    missing key).
+
+    * ``config_entries`` — identity fields only (``entry_id`` / ``domain`` /
+      ``title`` / ``state`` / ``source`` / ``disabled_by``); the health view does
+      not need ``options`` / ``subentries`` (and skipping them avoids the secret
+      scrub here).
+    * ``issues`` — the ``_overview_repairs`` slice, reused verbatim.
+    * ``entities`` — the ``registry_lookup`` row shape (``as_partial_dict``).
+    * ``states`` — ``State.as_dict()`` per state (REST-parity bodies).
+    """
+    view = _resolve_registries(hass)
+    result: dict[str, Any] = {}
+    result["config_entries"] = (
+        [_config_entry_identity_row(e) for e in _iter_config_entries(hass)]
+        if params.get("include_config_entries", True)
+        else []
+    )
+    result["issues"] = (
+        _overview_repairs(hass) if params.get("include_issues", True) else []
+    )
+    result["entities"] = (
+        [
+            row
+            for row in (_entity_partial_dict(e) for e in _all_entity_entries(view))
+            if row is not None
+        ]
+        if params.get("include_entities", True)
+        else []
+    )
+    result["states"] = (
+        _snapshot_states(hass) if params.get("include_states", True) else []
+    )
+    return result
+
+
+def _config_entry_identity_row(entry: Any) -> dict[str, Any]:
+    """Identity-only config-entry row for the health snapshot (no options/subentries)."""
+    return {
+        "entry_id": getattr(entry, "entry_id", None),
+        "domain": getattr(entry, "domain", None),
+        "title": getattr(entry, "title", None),
+        "state": _enum_value(getattr(entry, "state", None)),
+        "source": getattr(entry, "source", None),
+        "disabled_by": _enum_value(getattr(entry, "disabled_by", None)),
+    }
+
+
+def _snapshot_states(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Every live state as ``State.as_dict()`` (REST-parity body, unmodified)."""
+    out: list[dict[str, Any]] = []
+    for state in _iter_states(hass):
+        if not getattr(state, "entity_id", None):
+            continue
+        as_dict = _state_as_dict(state)
+        if as_dict is not None:
+            out.append(as_dict)
+    return out
+
+
+# =============================================================================
+# ha_mcp_tools/entity_lookup
+# =============================================================================
+def _do_entity_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return registry entries whose ``unique_id`` matches (domain/platform narrow).
+
+    ``{matches: [{entity_id, unique_id, platform, domain, config_entry_id,
+    categories, disabled_by, hidden_by}]}``. Scans the entity registry for every
+    entry whose ``unique_id`` equals the requested one, optionally narrowed by
+    ``domain`` (the entity's own domain, from its entity_id) and ``platform``
+    (the owning integration). Multiple matches across platforms are all returned
+    — the server picks. ``categories`` mirrors ``as_partial_dict``'s
+    ``dict(entry.categories)``; ``disabled_by`` / ``hidden_by`` are unwrapped to
+    their wire strings. In-process, so the read is authoritative immediately (no
+    registry-write settle retry).
+    """
+    unique_id = params.get("unique_id")
+    domain = params.get("domain")
+    platform = params.get("platform")
+    view = _resolve_registries(hass)
+    matches: list[dict[str, Any]] = []
+    for entry in _all_entity_entries(view):
+        if getattr(entry, "unique_id", None) != unique_id:
+            continue
+        entity_id = getattr(entry, "entity_id", "") or ""
+        ent_domain = entity_id.split(".")[0] if "." in entity_id else ""
+        if domain and ent_domain != domain:
+            continue
+        if platform and getattr(entry, "platform", None) != platform:
+            continue
+        matches.append(
+            {
+                "entity_id": entity_id,
+                "unique_id": getattr(entry, "unique_id", None),
+                "platform": getattr(entry, "platform", None),
+                "domain": ent_domain,
+                "config_entry_id": getattr(entry, "config_entry_id", None),
+                "categories": _plainify(getattr(entry, "categories", None) or {}),
+                "disabled_by": _enum_value(getattr(entry, "disabled_by", None)),
+                "hidden_by": _enum_value(getattr(entry, "hidden_by", None)),
+            }
+        )
+    return {"matches": matches}
+
+
+# =============================================================================
+# ha_mcp_tools/backup_prep
+# =============================================================================
+def _do_backup_prep(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return the backup identity the server needs before a create.
+
+    ``{agent_ids: [...], local_agent_id: <str|None>, default_password:
+    <str|None>}`` read from the backup integration's in-process manager
+    (``hass.data[DATA_MANAGER]``). ``local_agent_id`` uses the SAME preference the
+    server's ``_get_local_backup_agent_id`` does — an agent whose ``name`` is
+    ``"local"``, preferring ``hassio.local`` (Supervised) over ``backup.local``
+    (Core). ``default_password`` is getattr-chained off
+    ``manager.config.data.create_backup.password``.
+
+    A missing backup integration (``ImportError``) or an uninitialized manager
+    raises ``HomeAssistantError`` so the server's command-error path falls back to
+    its legacy WS reads — NOT a silent empty result the server could mistake for
+    "no agents". The password is sensitive, but the legacy ``backup/config/info``
+    already serves it to the same admin connection (parity, not new exposure). All
+    reads are getattr-guarded against core drift.
+    """
+    try:
+        from homeassistant.components.backup import DATA_MANAGER
+    except ImportError as exc:
+        raise _backup_unavailable("backup integration is not available") from exc
+    manager = _hass_data_get(hass, DATA_MANAGER)
+    if manager is None:
+        raise _backup_unavailable("backup manager is not initialized")
+    agents = getattr(manager, "backup_agents", None)
+    agent_ids = list(agents) if isinstance(agents, Mapping) else []
+    return {
+        "agent_ids": [str(a) for a in agent_ids],
+        "local_agent_id": _preferred_local_agent_id(agents),
+        "default_password": _backup_default_password(manager),
+    }
+
+
+def _backup_unavailable(message: str) -> Exception:
+    """Build a ``HomeAssistantError`` (imported function-locally — test-stubbable)."""
+    from homeassistant.exceptions import HomeAssistantError
+
+    return HomeAssistantError(message)
+
+
+def _hass_data_get(hass: HomeAssistant, key: Any) -> Any:
+    """``hass.data.get(key)`` guarded against a non-mapping / drift."""
+    data = getattr(hass, "data", None)
+    if not isinstance(data, Mapping):
+        return None
+    try:
+        return data.get(key)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _preferred_local_agent_id(agents: Any) -> str | None:
+    """The local backup agent id, mirroring the server's hassio-over-core preference.
+
+    Collects agent ids whose agent ``name`` is exactly ``"local"``
+    (``hassio.local`` on Supervised, ``backup.local`` on Core both use that
+    name), prefers ``hassio.local`` then ``backup.local``, else the first local
+    agent, else ``None``.
+    """
+    if not isinstance(agents, Mapping):
+        return None
+    local_ids: list[str] = [
+        str(agent_id)
+        for agent_id, agent in agents.items()
+        if getattr(agent, "name", None) == "local"
+    ]
+    for preferred in ("hassio.local", "backup.local"):
+        if preferred in local_ids:
+            return preferred
+    return local_ids[0] if local_ids else None
+
+
+def _backup_default_password(manager: Any) -> str | None:
+    """``manager.config.data.create_backup.password`` (getattr-chained; ``str``/None)."""
+    config = getattr(manager, "config", None)
+    data = getattr(config, "data", None)
+    create_backup = getattr(data, "create_backup", None)
+    password = getattr(create_backup, "password", None)
+    return password if isinstance(password, str) else None
+
+
+# =============================================================================
+# ha_mcp_tools/registries
+# =============================================================================
+def _do_registries(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return the requested registries as the FULL-FIELD ``config/<x>_registry/list`` shapes.
+
+    ``{areas: [...], floors: [...], labels: [...], categories: {scope: [...]}}`` —
+    only the requested ``registries`` keys are present. Each row is byte-compatible
+    with the legacy WS list response the consumers parse (verified against core's
+    registry serializers): area = aliases / area_id / floor_id /
+    humidity_entity_id / icon / labels / name / picture / temperature_entity_id /
+    created_at / modified_at; floor = aliases / created_at / floor_id / icon /
+    level / name / modified_at (floor rows carry NO ``labels`` — core omits it);
+    label = color / created_at / description / icon / label_id / name /
+    modified_at; category = category_id / created_at / icon / modified_at / name.
+    Timestamps are floats (``.timestamp()``), matching core.
+
+    ``category`` is scoped: ``category_scopes`` names which scopes to list (a
+    ``{scope: [rows]}`` map). The category registry is imported function-locally
+    (not needed at module top). Pure in-memory reads over the resolved registries.
+    """
+    requested = params.get("registries") or []
+    view = _resolve_registries(hass)
+    result: dict[str, Any] = {}
+    if "area" in requested:
+        result["areas"] = [_area_row(a) for a in _all_area_entries(view)]
+    if "floor" in requested:
+        result["floors"] = [_floor_row(f) for f in _all_floor_entries(view)]
+    if "label" in requested:
+        result["labels"] = [_label_row(x) for x in _all_label_entries(view)]
+    if "category" in requested:
+        result["categories"] = _category_rows(
+            hass, params.get("category_scopes") or []
+        )
+    return result
+
+
+def _area_row(area: Any) -> dict[str, Any]:
+    """One area as core's ``AreaEntry.json_fragment`` shape (id renamed to area_id)."""
+    return {
+        "aliases": sorted(str(a) for a in (getattr(area, "aliases", None) or [])),
+        "area_id": getattr(area, "id", None) or getattr(area, "area_id", None),
+        "floor_id": getattr(area, "floor_id", None),
+        "humidity_entity_id": getattr(area, "humidity_entity_id", None),
+        "icon": getattr(area, "icon", None),
+        "labels": sorted(str(x) for x in (getattr(area, "labels", None) or [])),
+        "name": getattr(area, "name", None),
+        "picture": getattr(area, "picture", None),
+        "temperature_entity_id": getattr(area, "temperature_entity_id", None),
+        "created_at": _timestamp(getattr(area, "created_at", None)),
+        "modified_at": _timestamp(getattr(area, "modified_at", None)),
+    }
+
+
+def _floor_row(floor: Any) -> dict[str, Any]:
+    """One floor as core's ``config/floor_registry/list`` shape (NO ``labels`` field)."""
+    return {
+        "aliases": sorted(str(a) for a in (getattr(floor, "aliases", None) or [])),
+        "created_at": _timestamp(getattr(floor, "created_at", None)),
+        "floor_id": getattr(floor, "floor_id", None),
+        "icon": getattr(floor, "icon", None),
+        "level": getattr(floor, "level", None),
+        "name": getattr(floor, "name", None),
+        "modified_at": _timestamp(getattr(floor, "modified_at", None)),
+    }
+
+
+def _label_row(label: Any) -> dict[str, Any]:
+    """One label as core's ``config/label_registry/list`` shape."""
+    return {
+        "color": getattr(label, "color", None),
+        "created_at": _timestamp(getattr(label, "created_at", None)),
+        "description": getattr(label, "description", None),
+        "icon": getattr(label, "icon", None),
+        "label_id": getattr(label, "label_id", None),
+        "name": getattr(label, "name", None),
+        "modified_at": _timestamp(getattr(label, "modified_at", None)),
+    }
+
+
+def _category_rows(hass: HomeAssistant, scopes: list[str]) -> dict[str, Any]:
+    """``{scope: [category rows]}`` for each requested scope (categories are scoped)."""
+    registry = _category_registry(hass)
+    return {
+        scope: [_category_row(c) for c in _list_categories(registry, scope)]
+        for scope in scopes
+    }
+
+
+def _category_row(category: Any) -> dict[str, Any]:
+    """One category as core's ``config/category_registry/list`` shape."""
+    return {
+        "category_id": getattr(category, "category_id", None),
+        "created_at": _timestamp(getattr(category, "created_at", None)),
+        "icon": getattr(category, "icon", None),
+        "modified_at": _timestamp(getattr(category, "modified_at", None)),
+        "name": getattr(category, "name", None),
+    }
+
+
+def _category_registry(hass: HomeAssistant) -> Any:
+    """The category registry (imported function-locally). Test seam. ``None`` on drift."""
+    try:
+        from homeassistant.helpers import category_registry as cr
+    except ImportError:  # pragma: no cover - defensive; core drift
+        return None
+    return _safe(cr.async_get, hass)
+
+
+def _list_categories(registry: Any, scope: str) -> list[Any]:
+    """``registry.async_list_categories(scope=...)`` guarded (scope is keyword-only)."""
+    if registry is None:
+        return []
+    lister = getattr(registry, "async_list_categories", None)
+    if not callable(lister):
+        return []
+    try:
+        return list(lister(scope=scope))
+    except Exception:  # pragma: no cover - defensive
+        return []
+
+
+def _all_floor_entries(view: _RegistryView) -> list[Any]:
+    """All floor-registry entries via ``async_list_floors()`` or the ``floors`` mapping."""
+    reg = view.floor
+    if reg is None:
+        return []
+    listed = _call_no_arg(reg, "async_list_floors")
+    if listed is not None:
+        try:
+            return list(listed)
+        except Exception:  # pragma: no cover - defensive
+            return []
+    return _mapping_values(getattr(reg, "floors", None))
+
+
+def _all_label_entries(view: _RegistryView) -> list[Any]:
+    """All label-registry entries via ``async_list_labels()`` or the ``labels`` mapping."""
+    reg = view.label
+    if reg is None:
+        return []
+    listed = _call_no_arg(reg, "async_list_labels")
+    if listed is not None:
+        try:
+            return list(listed)
+        except Exception:  # pragma: no cover - defensive
+            return []
+    return _mapping_values(getattr(reg, "labels", None))

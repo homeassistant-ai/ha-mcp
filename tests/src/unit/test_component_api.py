@@ -88,6 +88,29 @@ async def test_info_probe_parses_capabilities() -> None:
     assert caps.schema_version == 1
     assert caps.component_version == "1.1.0"
     assert caps.limits == {"max_results": 500}
+    # _INFO_OK carries no timezone (a component too old to report it): None.
+    assert caps.timezone is None
+
+
+@pytest.mark.asyncio
+async def test_info_probe_parses_timezone_present() -> None:
+    """An ``info`` payload carrying ``timezone`` (a newer component) is cached."""
+    ws = _make_ws(info_result={**_INFO_OK, "timezone": "Europe/London"})
+    with _patch_ws(ws):
+        caps = await get_component_caps(_client())
+
+    assert isinstance(caps, ComponentCaps)
+    assert caps.timezone == "Europe/London"
+
+
+@pytest.mark.asyncio
+async def test_info_probe_non_string_timezone_is_none() -> None:
+    """A non-string ``timezone`` (malformed / drift) is ignored (None)."""
+    ws = _make_ws(info_result={**_INFO_OK, "timezone": 123})
+    with _patch_ws(ws):
+        caps = await get_component_caps(_client())
+
+    assert caps.timezone is None
 
 
 @pytest.mark.asyncio
