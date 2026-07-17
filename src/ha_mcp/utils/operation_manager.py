@@ -421,6 +421,21 @@ def store_pending_operation(
     )
 
 
+def fail_pending_operation(operation_id: str, error_message: str) -> bool:
+    """Mark a just-registered operation FAILED after its dispatch raised.
+
+    Register-before-dispatch (so a fast ``state_changed`` can't beat the
+    operation into the table) means a dispatch that then raises leaves a
+    PENDING operation the caller never got to await. Flip it to FAILED so a
+    later, unrelated ``state_changed`` for the same entity can't spuriously
+    complete it, and so its status read reports the real dispatch failure.
+    """
+    manager = get_operation_manager()
+    return manager.update_operation_status(
+        operation_id, OperationStatus.FAILED, error_message=error_message
+    )
+
+
 def get_operation_from_memory(operation_id: str) -> DeviceOperation | None:
     """Get operation from memory by ID."""
     manager = get_operation_manager()

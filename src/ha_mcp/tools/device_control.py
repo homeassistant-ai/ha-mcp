@@ -19,7 +19,11 @@ from ..client.websocket_listener import start_websocket_listener
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from ..utils.domain_handlers import get_domain_handler
-from ..utils.operation_manager import get_operation_from_memory, store_pending_operation
+from ..utils.operation_manager import (
+    fail_pending_operation,
+    get_operation_from_memory,
+    store_pending_operation,
+)
 from .helpers import (
     exception_to_structured_error,
     raise_tool_error,
@@ -139,23 +143,28 @@ class DeviceControlTools:
                 current_state if validate_first else None, action, parameters, domain
             )
 
+            # Register the pending operation BEFORE dispatching the service so a
+            # fast entity's state_changed event can't arrive (and be dropped for
+            # having no matching op) in the window between the call returning and
+            # the operation being stored. On a dispatch failure the operation is
+            # flipped to FAILED so it can't be spuriously completed by a later,
+            # unrelated event for the same entity.
+            operation_id = store_pending_operation(
+                entity_id=entity_id,
+                action=action,
+                service_domain=service_call["domain"],
+                service_name=service_call["service"],
+                service_data=service_call["data"],
+                expected_state=expected_state,
+                timeout_ms=timeout_seconds * 1000,
+            )
+
             # Execute service call
             try:
                 await self.client.call_service(
                     service_call["domain"],
                     service_call["service"],
                     service_call["data"],
-                )
-
-                # Store operation for async verification
-                operation_id = store_pending_operation(
-                    entity_id=entity_id,
-                    action=action,
-                    service_domain=service_call["domain"],
-                    service_name=service_call["service"],
-                    service_data=service_call["data"],
-                    expected_state=expected_state,
-                    timeout_ms=timeout_seconds * 1000,
                 )
 
                 return {
@@ -179,8 +188,10 @@ class DeviceControlTools:
                 }
 
             except ToolError:
+                fail_pending_operation(operation_id, "Service dispatch failed")
                 raise
             except Exception as e:
+                fail_pending_operation(operation_id, f"Service dispatch failed: {e}")
                 exception_to_structured_error(
                     e,
                     context={"entity_id": entity_id, "action": action},
