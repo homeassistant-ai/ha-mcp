@@ -1143,7 +1143,9 @@ class TestGroupMasterToggle:
             r'<input[^>]*name="tool:ha_get_skill_guide:enabled"[^>]*>',
             result.dom,
         )
-        assert m is not None, f"skill-guide row not rendered; dom tail: {result.dom[-2000:]}"
+        assert m is not None, (
+            f"skill-guide row not rendered; dom tail: {result.dom[-2000:]}"
+        )
         assert "checked" in m.group(0), (
             f"bps-locked tool must render enabled; got: {m.group(0)}"
         )
@@ -1154,9 +1156,7 @@ class TestGroupMasterToggle:
             "bps-locked row must carry the note naming strict mode"
         )
 
-    def test_bps_unlocked_tool_row_stays_editable(
-        self, settings_script: str
-    ) -> None:
+    def test_bps_unlocked_tool_row_stays_editable(self, settings_script: str) -> None:
         """With ``bps_locked_tools`` empty (strict mode off), the skill
         guide renders as a normal editable row — no lock, no note."""
         tools = [
@@ -1184,8 +1184,7 @@ class TestGroupMasterToggle:
         )
         assert m is not None
         assert " disabled" not in m.group(0), (
-            f"skill guide must be editable when strict mode is off; "
-            f"got: {m.group(0)}"
+            f"skill guide must be editable when strict mode is off; got: {m.group(0)}"
         )
         assert "Strict best-practices mode" not in result.dom
 

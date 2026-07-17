@@ -51,13 +51,14 @@ class ToolStub(TypedDict):
 _VALID_STATES = frozenset({"enabled", "disabled", "pinned"})
 
 # Tools that are always enabled regardless of saved config — the server
-# strips them out of any disable list before applying. Five of these
+# strips them out of any disable list before applying. Four of these
 # overlap with DEFAULT_PINNED_TOOLS in transforms/categorized_search.py
-# (ha_search, ha_get_overview, ha_report_issue, ha_get_skill_guide,
-# ha_manage_backup); ha_get_state is mandatory but not pinned-by-default
-# because it is reachable via the ha_call_read_tool proxy when tool search
-# is on. Keep these lists in sync where it matters and divergent where it
-# matters — don't merge them.
+# (ha_search, ha_get_overview, ha_report_issue, ha_manage_backup);
+# ha_get_state is mandatory but not pinned-by-default because it is
+# reachable via the ha_call_read_tool proxy when tool search is on.
+# ha_get_skill_guide is conditionally mandatory via BPS_MANDATORY_TOOLS
+# below. Keep these lists in sync where it matters and divergent where
+# it matters — don't merge them.
 MANDATORY_TOOLS: set[str] = {
     "ha_search",
     "ha_get_overview",
@@ -105,6 +106,7 @@ def effective_mandatory_tools(settings: Settings) -> set[str]:
     ):
         return MANDATORY_TOOLS | BPS_MANDATORY_TOOLS
     return set(MANDATORY_TOOLS)
+
 
 # Tools created by FastMCP transforms (not registered through
 # local_provider). No transform-generated tools are currently in use —

@@ -477,9 +477,7 @@ class TestSkillToolMandatoryPinning:
         assert SKILL_TOOL_NAME in BPS_MANDATORY_TOOLS
         assert SKILL_TOOL_NAME not in MANDATORY_TOOLS
 
-        strict = MagicMock(
-            enable_mandatory_bps=True, enable_strict_mandatory_bps=True
-        )
+        strict = MagicMock(enable_mandatory_bps=True, enable_strict_mandatory_bps=True)
         non_strict = MagicMock(
             enable_mandatory_bps=True, enable_strict_mandatory_bps=False
         )

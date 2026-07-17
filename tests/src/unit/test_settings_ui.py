@@ -4612,9 +4612,7 @@ class TestBpsSkillGuideDependency:
     acknowledgment key exclusively through that tool. Both save handlers
     reject whichever direction introduces the conflict."""
 
-    def _handlers(
-        self, monkeypatch, tmp_path, *, strict_on: bool, extra_flags=None
-    ):
+    def _handlers(self, monkeypatch, tmp_path, *, strict_on: bool, extra_flags=None):
         monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -4727,9 +4725,7 @@ class TestBpsSkillGuideDependency:
         self._teardown()
 
     @pytest.mark.asyncio
-    async def test_get_tools_reports_bps_locked_tools(
-        self, monkeypatch, tmp_path
-    ):
+    async def test_get_tools_reports_bps_locked_tools(self, monkeypatch, tmp_path):
         handlers = self._handlers(monkeypatch, tmp_path, strict_on=True)
         resp = await handlers["get_tools"](MagicMock())
         assert json.loads(resp.body)["bps_locked_tools"] == ["ha_get_skill_guide"]
@@ -4784,9 +4780,7 @@ class TestBpsSkillGuideDependency:
             extra_flags={"enable_mandatory_bps": False},
         )
         request = MagicMock()
-        request.json = AsyncMock(
-            return_value={"flags": {"enable_mandatory_bps": True}}
-        )
+        request.json = AsyncMock(return_value={"flags": {"enable_mandatory_bps": True}})
         resp = await handlers["save_feature_flags"](request)
         assert resp.status_code == 409
         assert "ha_get_skill_guide" in str(json.loads(resp.body))

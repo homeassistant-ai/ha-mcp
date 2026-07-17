@@ -78,9 +78,7 @@ def _bps_locked_tools() -> list[str]:
 
     try:
         settings = get_global_settings()
-        if not (
-            settings.enable_mandatory_bps and settings.enable_strict_mandatory_bps
-        ):
+        if not (settings.enable_mandatory_bps and settings.enable_strict_mandatory_bps):
             return []
     except Exception:
         logger.warning(
