@@ -2,7 +2,7 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. It registers twenty-one commands (twenty-one capabilities — the
+capability gate. It registers twenty-two commands (twenty-two capabilities — the
 ``search_visibility`` capability is a flag on the existing ``search`` command,
 and ``info`` itself carries no capability entry):
 
@@ -132,6 +132,20 @@ and ``info`` itself carries no capability entry):
   (``get_caller_token`` → arbitrary config-dir file/YAML writes). A confirmation
   timeout is reported as ``partial`` (``success`` still holds); a failure BEFORE
   the dispatch raises, a failure AFTER it does not (the call already landed).
+* ``ha_mcp_tools/bulk_call_service`` — the BATCH write capability (D5a). One frame
+  runs the D1 ``ha_mcp_tools`` domain block for EVERY operation FIRST, before any
+  dispatch or listener: a batch is fail-closed — one refused op raises the whole
+  frame and NOTHING dispatches, so no partial batch can smuggle a
+  ``ha_mcp_tools.*`` (or unknown-service) op past the guard. It then registers ALL
+  confirmation listeners in one synchronous pass BEFORE any dispatch
+  (register-before-fire is trivially correct for the batch), fires the operations
+  (``parallel`` by default, or sequentially), and waits on ONE shared deadline for
+  every op's transition. A per-op ``async_call`` failure under ``parallel`` is
+  captured on that op's result (``error`` + ``dispatched: false``) WITHOUT aborting
+  the others; a post-dispatch confirmation timeout is ``partial``, never a failure.
+  All awaiting work lives in :func:`_bulk_call_service_prep`;
+  :func:`_do_bulk_call_service` is a pure formatter that reuses the single
+  ``call_service`` guard / transition / diff helpers.
 
 * ``ha_mcp_tools/config_entries`` — config entries as the ``config_entries/get``
   WS shape (``created_at`` / ``modified_at`` / ``entry_id`` / ``domain`` /
@@ -288,6 +302,7 @@ WS_SERVICES_LIST = f"{WS_API_PREFIX}/services_list"
 WS_REFERENCE_DATA = f"{WS_API_PREFIX}/reference_data"
 WS_SERVER_ENTRY = f"{WS_API_PREFIX}/server_entry"
 WS_CALL_SERVICE = f"{WS_API_PREFIX}/call_service"
+WS_BULK_CALL_SERVICE = f"{WS_API_PREFIX}/bulk_call_service"
 
 # Wire-format generation of the request/response envelopes. Bumped only on an
 # *incompatible* shape change to an existing command; additive fields do not
@@ -327,6 +342,10 @@ CAPABILITIES: list[str] = [
     # component route on this; an old component that lacks it is never sent a
     # component write and stays on the legacy REST path.
     "call_service",
+    # The BATCH write capability (Phase 3, D5a). The server gates its bulk-control
+    # component route on this; a component that lacks it is never sent a batch
+    # write and stays on the legacy per-entity path.
+    "bulk_call_service",
 ]
 
 # The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates
@@ -504,6 +523,14 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         # inherently async, so ALL of the work lives in the ``_call_service_prep``
         # async pre-step and ``_do_call_service`` is a pure response formatter.
         (_call_service_schema(), _do_call_service, _call_service_prep),
+        # The BATCH write command (D5a): the same async seam — all guards, the
+        # register-before-fire pass, the dispatches, and the bounded wait live in
+        # ``_bulk_call_service_prep``; ``_do_bulk_call_service`` is a pure formatter.
+        (
+            _bulk_call_service_schema(),
+            _do_bulk_call_service,
+            _bulk_call_service_prep,
+        ),
     ]
 
 
@@ -747,6 +774,33 @@ def _call_service_schema() -> dict[Any, Any]:
             vol.Any(int, float), vol.Range(min=0, max=CALL_SERVICE_MAX_TIMEOUT)
         ),
         vol.Optional("return_response", default=False): bool,
+    }
+
+
+def _bulk_call_service_schema() -> dict[Any, Any]:
+    # A batch of fully-resolved operations, each the single ``call_service`` row
+    # minus its own ``wait`` / ``timeout`` / ``return_response`` (those are batch
+    # scoped: one ``wait`` flag, one shared ``timeout`` deadline, and no per-op
+    # ``return_response`` — bulk stays simple, the single call covers that need).
+    # ``operations`` must be non-empty (an empty batch is a caller error, not a
+    # no-op). ``timeout`` is capped at ``CALL_SERVICE_MAX_TIMEOUT`` so a single
+    # batch frame cannot park the connection past that bound. Mutable per-op
+    # defaults use the callable form so each validation yields a fresh ``{}`` /
+    # ``[]``.
+    operation = {
+        vol.Required("domain"): str,
+        vol.Required("service"): str,
+        vol.Optional("service_data", default=dict): dict,
+        vol.Optional("entity_ids", default=list): [str],
+    }
+    return {
+        vol.Required("type"): WS_BULK_CALL_SERVICE,
+        vol.Required("operations"): vol.All([operation], vol.Length(min=1)),
+        vol.Optional("parallel", default=True): bool,
+        vol.Optional("wait", default=True): bool,
+        vol.Optional("timeout", default=CALL_SERVICE_DEFAULT_TIMEOUT): vol.All(
+            vol.Any(int, float), vol.Range(min=0, max=CALL_SERVICE_MAX_TIMEOUT)
+        ),
     }
 
 
@@ -5263,4 +5317,263 @@ def _call_service_transition(
         "new_state": new_state,
         "changed": old.get("state") != new.get("state"),
         "attributes_changed": attributes_changed,
+    }
+
+
+# =============================================================================
+# ha_mcp_tools/bulk_call_service  (the BATCH write capability — Phase 3, D5a)
+# =============================================================================
+def _do_bulk_call_service(
+    hass: HomeAssistant, params: dict[str, Any], *, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Pure sync formatter for ``bulk_call_service``.
+
+    Like :func:`_do_call_service`, ALL of the work — the per-op D1 domain block,
+    the ``ServiceNotFound`` checks, the register-before-fire pass, the dispatches,
+    and the one bounded batch wait — happens in the async
+    :func:`_bulk_call_service_prep`, which hands the finished envelope in as
+    ``result``. This function only returns it, so no awaiting / blocking work runs
+    in a ``_do_*`` step (D2).
+    """
+    return result
+
+
+async def _bulk_call_service_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Do all of ``bulk_call_service``'s async work; return ``{"result": ...}``.
+
+    Register-before-fire is trivially correct for the batch: every listener is
+    registered in one synchronous pass BEFORE any ``async_call`` is issued, so no
+    op's confirming event can arrive before its listener exists. The order is
+    load-bearing:
+
+    1. **D1 batch fail-closed (security-critical).** Run
+       :func:`_guard_call_service_target` for EVERY operation FIRST — before any
+       pre-state read, listener, or dispatch. A single op targeting the
+       ``ha_mcp_tools`` domain (or an unknown service) makes the WHOLE frame raise:
+       no partial batch is dispatched, so no ``ha_mcp_tools.*`` op can ever slip
+       through in a batch (register-before-fire + all-guards-first means a refused
+       op aborts before any real write lands).
+    2. Pre-state capture for every op's ``entity_ids`` (synchronous in-memory).
+    3. Register ALL confirmation listeners in one pass BEFORE any dispatch; every
+       ``unsub`` is torn down in the ``finally``.
+    4. Dispatch: ``parallel`` fans the ``async_call``s out through
+       :func:`asyncio.gather` with ``return_exceptions=True`` so one op's failure
+       does not abort the others (its exception is recorded on that op, NOT raised —
+       UNLIKE the step-1 guards, which DO raise the whole frame pre-dispatch);
+       ``parallel=False`` awaits them in order. Each op flips its own ``dispatched``
+       flag the moment its ``async_call`` returns.
+    5. Bounded wait (D4): ONE shared deadline across the batch (not per-op serial
+       timeouts) for every confirmable, dispatched op's transition.
+    6. Per-op pre→post diff, reusing the single-call transition/build helpers.
+    7. Return every op's result plus batch counts.
+    """
+    operations = list(msg.get("operations") or [])
+    parallel = bool(msg.get("parallel", True))
+    wait = bool(msg.get("wait", True))
+    timeout = msg.get("timeout", CALL_SERVICE_DEFAULT_TIMEOUT)
+
+    # 1. D1 batch fail-closed: guard EVERY op before ANY pre-state / listener /
+    #    dispatch. A refused op (``ha_mcp_tools`` domain or unknown service) raises
+    #    the whole frame here, so nothing in the batch is ever dispatched partially.
+    for op in operations:
+        _guard_call_service_target(hass, op["domain"], op["service"])
+
+    # 2. Normalize + pre-state capture (synchronous in-memory reads) per op.
+    ops = [_bulk_op_record(hass, op, wait=wait) for op in operations]
+
+    # 3. Register-before-fire (D5): every confirmable op's listener is registered in
+    #    one synchronous pass BEFORE any dispatch; ALL unsubs torn down in finally.
+    unsubs = _bulk_register_all(hass, ops)
+    try:
+        await _bulk_dispatch_all(hass, ops, parallel=parallel)  # 4
+        await _bulk_wait_all(ops, timeout)  # 5 (one shared deadline; expiry=partial)
+    finally:
+        for unsub in unsubs:
+            unsub()
+
+    # 6./7. Per-op pre→post diff + batch counts.
+    return {"result": _build_bulk_result(hass, ops)}
+
+
+def _bulk_op_record(
+    hass: HomeAssistant, op: Mapping[str, Any], *, wait: bool
+) -> dict[str, Any]:
+    """A mutable working record for one batch operation (incl. its pre-state).
+
+    Reads the resolved ``{domain, service, service_data?, entity_ids?}`` row
+    defensively (the direct-prep tests pass raw dicts that never went through the
+    schema, so the mutable defaults are re-applied here). ``pre`` is the synchronous
+    in-memory pre-state per target; ``dispatched`` / ``error`` / ``response`` start
+    empty and are filled during dispatch; ``should_confirm`` is true only when the
+    batch is waiting AND this op names targets to confirm.
+    """
+    entity_ids = list(op.get("entity_ids") or [])
+    return {
+        "domain": op["domain"],
+        "service": op["service"],
+        "service_data": op.get("service_data") or {},
+        "entity_ids": entity_ids,
+        "should_confirm": bool(wait and entity_ids),
+        "pre": {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids},
+        "evt": None,
+        "captured": {},
+        "dispatched": False,
+        "response": None,
+        "error": None,
+    }
+
+
+async def _bulk_dispatch_one(hass: HomeAssistant, op: dict[str, Any]) -> None:
+    """Fire exactly one op's ``async_call`` and flip its ``dispatched`` flag.
+
+    Mirrors the single-call dispatch (``blocking=True``), but bulk never requests a
+    per-op ``return_response`` (D5a keeps the batch simple — the single
+    ``call_service`` covers response-returning calls). ``dispatched`` is set only
+    AFTER ``async_call`` returns, so a raise (captured per-op by the caller) leaves
+    it ``False`` and the op is never counted as a landed write.
+    """
+    op["response"] = await hass.services.async_call(
+        op["domain"],
+        op["service"],
+        dict(op["service_data"]),
+        blocking=True,
+        return_response=False,
+    )
+    op["dispatched"] = True
+
+
+def _bulk_register_all(hass: HomeAssistant, ops: list[dict[str, Any]]) -> list[Any]:
+    """Register every confirmable op's transition listener in one pass (D5).
+
+    One synchronous sweep BEFORE any dispatch, so no op's confirming event can
+    arrive before its listener exists. Each confirmable op is handed its own ``evt``
+    / ``captured`` (mutating the op record); the returned ``unsub`` list is torn down
+    in the prep's ``finally``. Non-confirmable ops register nothing.
+    """
+    unsubs: list[Any] = []
+    for op in ops:
+        if op["should_confirm"]:
+            evt, captured, unsub = _register_transition_waiter(
+                hass, set(op["entity_ids"])
+            )
+            op["evt"] = evt
+            op["captured"] = captured
+            unsubs.append(unsub)
+    return unsubs
+
+
+async def _bulk_dispatch_all(
+    hass: HomeAssistant, ops: list[dict[str, Any]], *, parallel: bool
+) -> None:
+    """Fire every op's dispatch, recording a per-op failure without aborting the batch.
+
+    ``parallel`` fans the dispatches out through :func:`asyncio.gather` with
+    ``return_exceptions=True`` so one op's ``async_call`` raising is captured on THAT
+    op (``error`` set, ``dispatched`` left ``False``) and the others still run;
+    ``parallel=False`` awaits them in order, catching each op's failure the same way.
+    Neither mode propagates a per-op dispatch error — that is the whole point of the
+    batch (UNLIKE the pre-dispatch D1/ServiceNotFound guards, which DO raise).
+    """
+    import asyncio
+
+    if parallel:
+        outcomes = await asyncio.gather(
+            *(_bulk_dispatch_one(hass, op) for op in ops),
+            return_exceptions=True,
+        )
+        for op, outcome in zip(ops, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                op["error"] = _bulk_op_error(outcome)
+    else:
+        for op in ops:
+            try:
+                await _bulk_dispatch_one(hass, op)
+            except Exception as err:
+                op["error"] = _bulk_op_error(err)
+
+
+async def _bulk_wait_all(ops: list[dict[str, Any]], timeout: float) -> None:
+    """Bounded confirmation wait for the batch: ONE shared deadline (D4).
+
+    Waits up to ``timeout`` for EVERY dispatched, confirmable op's transition on a
+    single shared deadline (not per-op serial timeouts). Expiry is swallowed —
+    whichever ops did not report are ``partial`` (never a failure); the ops that did
+    report stay confirmed. A batch with nothing to confirm returns immediately.
+    """
+    import asyncio
+
+    waiters = [
+        op["evt"].wait() for op in ops if op["should_confirm"] and op["dispatched"]
+    ]
+    if not waiters:
+        return
+    try:
+        await asyncio.wait_for(asyncio.gather(*waiters), timeout)
+    except TimeoutError:
+        pass  # partial confirmation for whichever ops did not report (D4)
+
+
+def _bulk_op_error(exc: BaseException) -> str:
+    """A short, stable error string for a per-op dispatch failure.
+
+    A per-op ``async_call`` exception under the batch is recorded here (never
+    propagated past the frame — the other ops still return their results), so the
+    server can surface which op failed and why without the whole batch aborting.
+    """
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+def _build_bulk_op_result(hass: HomeAssistant, op: Mapping[str, Any]) -> dict[str, Any]:
+    """Assemble one op's result envelope from its captured transition.
+
+    Reuses the single-call :func:`_call_service_transition` / :func:`_post_state`
+    diff helpers so the per-op transition shape is byte-identical to
+    ``call_service``. ``confirmed`` requires the op to have DISPATCHED and every
+    target to have reported within the shared wait; ``partial`` is a dispatched-but
+    -unconfirmed op (never a failure); an op whose ``async_call`` raised carries
+    ``error`` with ``dispatched: false`` and is neither confirmed nor partial.
+    """
+    entity_ids = list(op["entity_ids"])
+    captured = op["captured"]
+    should_confirm = op["should_confirm"]
+    dispatched = op["dispatched"]
+    transitions = [
+        _call_service_transition(
+            eid, op["pre"].get(eid), _post_state(hass, eid, captured)
+        )
+        for eid in entity_ids
+    ]
+    confirmed = bool(should_confirm and dispatched and set(entity_ids) <= set(captured))
+    result: dict[str, Any] = {
+        "domain": op["domain"],
+        "service": op["service"],
+        "entity_ids": entity_ids,
+        "dispatched": dispatched,
+        "confirmed": confirmed,
+        "partial": bool(should_confirm and dispatched and not confirmed),
+        "transitions": transitions,
+    }
+    if op["error"] is not None:
+        result["error"] = op["error"]
+    return result
+
+
+def _build_bulk_result(
+    hass: HomeAssistant, ops: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """The batch envelope: every op's result plus the batch counts.
+
+    ``dispatched`` counts ops whose single ``async_call`` fired; ``failed`` counts
+    ops that recorded a per-op ``error`` (dispatch raised). ``total`` is the batch
+    size, so ``total - dispatched`` is the refused/failed-before-landing count.
+    """
+    op_results = [_build_bulk_op_result(hass, op) for op in ops]
+    return {
+        "operations": op_results,
+        "total": len(op_results),
+        "dispatched": sum(1 for r in op_results if r["dispatched"]),
+        "failed": sum(1 for r in op_results if r.get("error") is not None),
     }

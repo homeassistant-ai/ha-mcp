@@ -744,6 +744,7 @@ class TestInfo:
             "search_visibility",
             "server_entry",
             "call_service",
+            "bulk_call_service",
         ]
         assert info["capabilities"] == wsapi.CAPABILITIES
         # config_get was withdrawn before release (raw_config freshness lags the
@@ -1852,6 +1853,9 @@ class TestRegistrationAndAdminGate:
             # Phase 3 write capability; its prep + admin-gate coverage lives in
             # test_component_ws_phase2_async.py (this set only guards drift).
             wsapi.WS_CALL_SERVICE,
+            # Phase 3 batch write capability (D5a); same as above — prep +
+            # admin-gate coverage lives in test_component_ws_phase2_async.py.
+            wsapi.WS_BULK_CALL_SERVICE,
         }
         # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered

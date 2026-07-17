@@ -1797,3 +1797,408 @@ class TestCallServiceSchema:
             }
         )
         assert out["timeout"] == 60
+
+
+# =============================================================================
+# bulk_call_service (Phase 3, D5a — the BATCH write capability, issue #1813)
+# =============================================================================
+class _FakeBulkServices:
+    """``hass.services`` stand-in with PER-``(domain, service)`` dispatch behavior.
+
+    ``behaviors`` maps ``(domain, service)`` to an optional dict carrying ``on_call``
+    (a hook run mid-dispatch, e.g. fire THIS op's confirming state_changed event),
+    ``raises`` (an exception to raise for THIS op only), and ``response``. Unlike the
+    single-call ``_FakeCallServices`` (one shared hook / raise), the per-op routing
+    lets one batch op raise while another confirms — the parallel-isolation case.
+    ``has_service`` answers from the behavior keys plus any extra ``known``.
+    """
+
+    def __init__(self, behaviors=None, known=()):
+        self._behaviors = {k: dict(v) for k, v in dict(behaviors or {}).items()}
+        self._known = set(known) | set(self._behaviors)
+        self.calls = []
+
+    def has_service(self, domain, service):
+        return (domain, service) in self._known
+
+    async def async_call(
+        self, domain, service, service_data, blocking=True, return_response=False
+    ):
+        self.calls.append(
+            {
+                "domain": domain,
+                "service": service,
+                "service_data": service_data,
+                "blocking": blocking,
+                "return_response": return_response,
+            }
+        )
+        behavior = self._behaviors.get((domain, service), {})
+        if behavior.get("raises") is not None:
+            raise behavior["raises"]
+        if behavior.get("on_call") is not None:
+            behavior["on_call"]()
+        return behavior.get("response")
+
+    @property
+    def call_count(self):
+        return len(self.calls)
+
+
+def _run_bulk_call_service(hass, msg):
+    """Drive the async prep then the pure formatter, as the WS wrapper does."""
+    extra = asyncio.run(wsapi._bulk_call_service_prep(hass, msg))
+    return wsapi._do_bulk_call_service(hass, msg, **extra)
+
+
+class TestBulkCallServiceDomainBlock:
+    """D1 batch fail-closed — THE load-bearing batch security test.
+
+    A batch where even ONE op targets ``ha_mcp_tools`` must raise BEFORE any
+    dispatch or listener registration, so NOTHING in the batch lands. The
+    ``ha_mcp_tools`` op is placed SECOND, behind a perfectly valid ``light`` op, to
+    prove the whole batch is guarded up front (all-guards-first): the valid op ahead
+    of it is never dispatched either.
+    """
+
+    @pytest.mark.parametrize("bad_domain", ["ha_mcp_tools", " HA_MCP_TOOLS "])
+    def test_one_ha_mcp_tools_op_dispatches_nothing(self, monkeypatch, bad_domain):
+        monkeypatch.setitem(
+            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
+        )
+        bus = _FakeBus()
+        # Both services EXIST in the registry — only the D1 block stops the batch.
+        services = _FakeBulkServices(
+            known={("light", "turn_on"), ("ha_mcp_tools", "get_caller_token")}
+        )
+        hass = _call_hass([FakeState("light.a", state="off")], services, bus)
+        msg = {
+            "type": wsapi.WS_BULK_CALL_SERVICE,
+            "operations": [
+                {"domain": "light", "service": "turn_on", "entity_ids": ["light.a"]},
+                {"domain": bad_domain, "service": "get_caller_token"},
+            ],
+        }
+        with pytest.raises(_base._StubHomeAssistantError) as exc:
+            asyncio.run(wsapi._bulk_call_service_prep(hass, msg))
+        # The D1 refusal, not a coincidental ServiceNotFound.
+        assert "not callable" in str(exc.value)
+        assert not isinstance(exc.value, _StubServiceNotFound)
+        # THE assertion: ZERO dispatches for the whole batch — not even the valid
+        # ``light`` op ahead of the refused one — and no listener was registered.
+        assert services.call_count == 0
+        assert bus.listeners == []
+        assert bus.unsub_count == 0
+
+
+class TestBulkCallServiceNotFound:
+    def test_one_unknown_service_aborts_whole_batch(self, monkeypatch):
+        monkeypatch.setitem(
+            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
+        )
+        bus = _FakeBus()
+        # Only ``light.turn_on`` exists; the second op's service is unknown.
+        services = _FakeBulkServices(known={("light", "turn_on")})
+        hass = _call_hass([FakeState("light.a", state="off")], services, bus)
+        msg = {
+            "type": wsapi.WS_BULK_CALL_SERVICE,
+            "operations": [
+                {"domain": "light", "service": "turn_on", "entity_ids": ["light.a"]},
+                {"domain": "light", "service": "does_not_exist"},
+            ],
+        }
+        with pytest.raises(_StubServiceNotFound):
+            asyncio.run(wsapi._bulk_call_service_prep(hass, msg))
+        # Pre-dispatch abort: nothing fired, no register-before-fire listener.
+        assert services.call_count == 0
+        assert bus.listeners == []
+
+
+class TestBulkCallServiceHappyPath:
+    def test_parallel_both_confirmed_real_transitions(self):
+        old_a = FakeState("light.a", state="off", brightness=100)
+        new_a = FakeState("light.a", state="on", brightness=255)
+        old_b = FakeState("switch.b", state="off")
+        new_b = FakeState("switch.b", state="on")
+        bus = _FakeBus()
+        services = _FakeBulkServices(
+            behaviors={
+                ("light", "turn_on"): {"on_call": lambda: bus.fire("light.a", new_a)},
+                ("switch", "turn_on"): {"on_call": lambda: bus.fire("switch.b", new_b)},
+            }
+        )
+        hass = _call_hass([old_a, old_b], services, bus)
+        res = _run_bulk_call_service(
+            hass,
+            {
+                "type": wsapi.WS_BULK_CALL_SERVICE,
+                "operations": [
+                    {
+                        "domain": "light",
+                        "service": "turn_on",
+                        "entity_ids": ["light.a"],
+                        "service_data": {"brightness": 255},
+                    },
+                    {
+                        "domain": "switch",
+                        "service": "turn_on",
+                        "entity_ids": ["switch.b"],
+                    },
+                ],
+                "parallel": True,
+            },
+        )
+        assert res["total"] == 2
+        assert res["dispatched"] == 2
+        assert res["failed"] == 0
+        op1, op2 = res["operations"]
+        # Op order is preserved regardless of dispatch fan-out.
+        assert op1["domain"] == "light"
+        assert op2["domain"] == "switch"
+        for op in (op1, op2):
+            assert op["dispatched"] is True
+            assert op["confirmed"] is True
+            assert op["partial"] is False
+            assert "error" not in op
+        (t1,) = op1["transitions"]
+        assert t1["old_state"]["state"] == "off"
+        assert t1["new_state"]["state"] == "on"
+        assert t1["changed"] is True
+        assert t1["attributes_changed"] == ["brightness"]
+        # Both ops fired exactly once, with the per-op service_data preserved.
+        assert services.call_count == 2
+        assert {(c["domain"], c["service"]) for c in services.calls} == {
+            ("light", "turn_on"),
+            ("switch", "turn_on"),
+        }
+        assert services.calls[0]["service_data"] == {"brightness": 255}
+        # Every register-before-fire listener torn down.
+        assert bus.unsub_count == 2
+
+
+class TestBulkCallServiceSequential:
+    def test_parallel_false_dispatches_in_order(self):
+        new_a = FakeState("light.a", state="on")
+        new_b = FakeState("light.b", state="on")
+        bus = _FakeBus()
+        services = _FakeBulkServices(
+            behaviors={
+                ("light", "turn_on"): {"on_call": lambda: bus.fire("light.a", new_a)},
+                ("light", "turn_off"): {"on_call": lambda: bus.fire("light.b", new_b)},
+            }
+        )
+        hass = _call_hass(
+            [FakeState("light.a", state="off"), FakeState("light.b", state="on")],
+            services,
+            bus,
+        )
+        res = _run_bulk_call_service(
+            hass,
+            {
+                "type": wsapi.WS_BULK_CALL_SERVICE,
+                "operations": [
+                    {
+                        "domain": "light",
+                        "service": "turn_on",
+                        "entity_ids": ["light.a"],
+                    },
+                    {
+                        "domain": "light",
+                        "service": "turn_off",
+                        "entity_ids": ["light.b"],
+                    },
+                ],
+                "parallel": False,
+            },
+        )
+        assert res["dispatched"] == 2
+        # Sequential awaits: the calls land in operation order.
+        assert [(c["domain"], c["service"]) for c in services.calls] == [
+            ("light", "turn_on"),
+            ("light", "turn_off"),
+        ]
+        assert all(op["confirmed"] is True for op in res["operations"])
+
+
+class TestBulkCallServiceParallelIsolation:
+    def test_one_op_raises_others_unaffected(self):
+        # Under ``parallel`` (gather return_exceptions), one op's async_call raising
+        # is captured on THAT op — the OTHER op still dispatches and confirms.
+        boom = _base._StubHomeAssistantError("boom")
+        new_b = FakeState("switch.b", state="on")
+        bus = _FakeBus()
+        services = _FakeBulkServices(
+            behaviors={
+                ("light", "turn_on"): {"raises": boom},
+                ("switch", "turn_on"): {"on_call": lambda: bus.fire("switch.b", new_b)},
+            }
+        )
+        hass = _call_hass(
+            [FakeState("light.a", state="off"), FakeState("switch.b", state="off")],
+            services,
+            bus,
+        )
+        res = _run_bulk_call_service(
+            hass,
+            {
+                "type": wsapi.WS_BULK_CALL_SERVICE,
+                "operations": [
+                    {
+                        "domain": "light",
+                        "service": "turn_on",
+                        "entity_ids": ["light.a"],
+                    },
+                    {
+                        "domain": "switch",
+                        "service": "turn_on",
+                        "entity_ids": ["switch.b"],
+                    },
+                ],
+                "parallel": True,
+            },
+        )
+        assert res["total"] == 2
+        assert res["dispatched"] == 1
+        assert res["failed"] == 1
+        failed, ok = res["operations"]
+        # The failed op: error recorded, NOT dispatched, neither confirmed nor partial.
+        assert failed["domain"] == "light"
+        assert failed["dispatched"] is False
+        assert failed["confirmed"] is False
+        assert failed["partial"] is False
+        assert "boom" in failed["error"]
+        # The other op is entirely unaffected — it dispatched and confirmed.
+        assert ok["domain"] == "switch"
+        assert ok["dispatched"] is True
+        assert ok["confirmed"] is True
+        assert "error" not in ok
+        # Both listeners (including the failed op's) were torn down.
+        assert bus.unsub_count == 2
+
+
+class TestBulkCallServiceWait:
+    def test_no_events_all_partial_no_raise(self):
+        # No op fires its confirming event: the one shared deadline lapses and every
+        # confirmable op is ``partial`` (dispatched, unconfirmed) — never a failure.
+        bus = _FakeBus()
+        services = _FakeBulkServices(
+            known={("light", "turn_on"), ("lock", "lock")}  # no on_call anywhere
+        )
+        hass = _call_hass(
+            [
+                FakeState("light.a", state="off"),
+                FakeState("lock.front", state="unlocked"),
+            ],
+            services,
+            bus,
+        )
+        res = _run_bulk_call_service(
+            hass,
+            {
+                "type": wsapi.WS_BULK_CALL_SERVICE,
+                "operations": [
+                    {
+                        "domain": "light",
+                        "service": "turn_on",
+                        "entity_ids": ["light.a"],
+                    },
+                    {
+                        "domain": "lock",
+                        "service": "lock",
+                        "entity_ids": ["lock.front"],
+                    },
+                ],
+                "timeout": 0.01,
+            },
+        )
+        assert res["dispatched"] == 2
+        assert res["failed"] == 0
+        for op in res["operations"]:
+            assert op["dispatched"] is True
+            assert op["confirmed"] is False
+            assert op["partial"] is True
+        # unsub ran on the timeout path too, for every registered listener.
+        assert bus.unsub_count == 2
+
+
+class TestBulkCallServiceUnsub:
+    def test_every_registered_listener_torn_down(self):
+        # A mix of a confirmable op (registers a listener) and a non-entity op
+        # (registers none): every listener that WAS registered is torn down, and the
+        # non-entity op registers nothing (register-before-fire is moot for it).
+        new_a = FakeState("light.a", state="on")
+        bus = _FakeBus()
+        services = _FakeBulkServices(
+            behaviors={
+                ("light", "turn_on"): {"on_call": lambda: bus.fire("light.a", new_a)},
+                ("automation", "trigger"): {},
+            }
+        )
+        hass = _call_hass([FakeState("light.a", state="off")], services, bus)
+        res = _run_bulk_call_service(
+            hass,
+            {
+                "type": wsapi.WS_BULK_CALL_SERVICE,
+                "operations": [
+                    {
+                        "domain": "light",
+                        "service": "turn_on",
+                        "entity_ids": ["light.a"],
+                    },
+                    {"domain": "automation", "service": "trigger", "entity_ids": []},
+                ],
+            },
+        )
+        # Only the confirmable op registered a listener; it was torn down.
+        assert len(bus.listeners) == 1
+        assert bus.unsub_count == len(bus.listeners) == 1
+        light_op, automation_op = res["operations"]
+        assert light_op["confirmed"] is True
+        # The non-entity op has nothing to confirm: no transitions, not partial.
+        assert automation_op["dispatched"] is True
+        assert automation_op["confirmed"] is False
+        assert automation_op["partial"] is False
+        assert automation_op["transitions"] == []
+
+
+class TestBulkCallServiceSchema:
+    def _schema(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
+        return _REAL_VOL.Schema(wsapi._bulk_call_service_schema())
+
+    def test_defaults(self, monkeypatch):
+        out = self._schema(monkeypatch)(
+            {
+                "type": wsapi.WS_BULK_CALL_SERVICE,
+                "operations": [{"domain": "light", "service": "turn_on"}],
+            }
+        )
+        assert out["parallel"] is True
+        assert out["wait"] is True
+        assert out["timeout"] == 10.0
+        op = out["operations"][0]
+        assert op["service_data"] == {}
+        assert op["entity_ids"] == []
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/bulk_call_service"},  # operations missing
+            {  # operations must be non-empty
+                "type": "ha_mcp_tools/bulk_call_service",
+                "operations": [],
+            },
+            {  # timeout over the 60s cap
+                "type": "ha_mcp_tools/bulk_call_service",
+                "operations": [{"domain": "light", "service": "turn_on"}],
+                "timeout": 120,
+            },
+            {  # an operation missing its required service
+                "type": "ha_mcp_tools/bulk_call_service",
+                "operations": [{"domain": "light"}],
+            },
+        ],
+    )
+    def test_malformed_rejected(self, monkeypatch, bad):
+        with pytest.raises(_REAL_VOL.Invalid):
+            self._schema(monkeypatch)(bad)
