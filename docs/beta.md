@@ -182,9 +182,9 @@ saves a "light" selection, which used to flip a dark-mode user's whole UI to
 light on every screenshot. ha-mcp now brackets every capture: it reads that
 user's saved theme before rendering and writes it back afterwards if the
 render changed it (in add-on mode it authenticates with the Puppet add-on's
-own configured token; in sidecar/standalone mode with ha-mcp's own HA
-credentials, which protects the user whenever both tokens belong to the same
-account). The restore is best-effort — a failed restore surfaces as a
+own configured token; in sidecar / self-hosted non-add-on mode with ha-mcp's
+own HA credentials, which protects the user whenever both tokens belong to the
+same account). The restore is best-effort — a failed restore surfaces as a
 `warnings` entry on the tool response. A dedicated Puppet account remains a
 sound belt-and-suspenders setup. Language selection is local to Puppet's
 browser session.

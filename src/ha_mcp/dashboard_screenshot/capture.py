@@ -761,9 +761,30 @@ async def _request_or_collect_failure(
         return None
 
 
+def _viewport_params(
+    options: _CaptureOptions, viewport: _ViewportRequest
+) -> dict[str, str]:
+    """Build one viewport's engine query parameters."""
+    params: dict[str, str] = {
+        "viewport": f"{viewport.width}x{viewport.height}",
+        "zoom": str(options.zoom),
+        "wait": str(options.wait_ms),
+        "format": options.image_format,
+    }
+    if options.theme is not None:
+        params["theme"] = options.theme
+    if options.dark_mode:
+        # Puppet checks only for query-key presence.
+        params["dark"] = ""
+    if options.language is not None:
+        params["lang"] = options.language
+    return params
+
+
 def _complete_capture_batch(
     captures: list[DashboardImageCapture],
     partial_failures: list[dict[str, Any]] | None,
+    guard_warnings: list[str],
 ) -> list[DashboardImageCapture]:
     """Return partial successes, but raise when every requested capture failed."""
     if not captures and partial_failures:
@@ -773,8 +794,39 @@ def _complete_capture_batch(
             "failure_count": len(partial_failures),
             "screenshot_failures": partial_failures,
         }
+        if guard_warnings:
+            aggregate_failure["warnings"] = [
+                *aggregate_failure.get("warnings", []),
+                *guard_warnings,
+            ]
         raise_tool_error(aggregate_failure)
     return captures
+
+
+def _reraise_with_guard_warnings(error: ToolError, warnings: list[str]) -> NoReturn:
+    """Re-raise a capture ToolError with the theme guard's warnings attached.
+
+    A batch that raises may already have rendered (and clobbered the engine
+    user's theme) before failing, so a failed restore must stay visible on
+    the error path too — otherwise the tool contract ("an attempted but
+    failed restore surfaces as a warning") silently breaks exactly when the
+    theme is most likely left flipped.
+    """
+    if not warnings:
+        raise error
+    try:
+        payload = json.loads(str(error))
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+    if not isinstance(payload, dict):
+        raise error
+    existing = payload.get("warnings")
+    payload["warnings"] = [
+        *(existing if isinstance(existing, list) else []),
+        *warnings,
+    ]
+    raise_tool_error(payload)
+    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 async def capture_dashboard_images(
@@ -837,26 +889,15 @@ async def capture_dashboard_images(
     # profile (issue #1909). Snapshot before, restore after — including when
     # the batch fails, since the engine may already have rendered (and
     # written) before the failure.
-    guard = ThemeGuard.for_capture(engine_target.addon_options, client)
+    guard = ThemeGuard.for_capture(engine_target.addon_credential, client)
     await guard.take_snapshot()
+    batch_error: ToolError | None = None
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(options.render_timeout_seconds)
         ) as http_client:
             for capture_index, viewport in enumerate(viewports):
-                params: dict[str, str] = {
-                    "viewport": f"{viewport.width}x{viewport.height}",
-                    "zoom": str(options.zoom),
-                    "wait": str(options.wait_ms),
-                    "format": options.image_format,
-                }
-                if options.theme is not None:
-                    params["theme"] = options.theme
-                if options.dark_mode:
-                    # Puppet checks only for query-key presence.
-                    params["dark"] = ""
-                if options.language is not None:
-                    params["lang"] = options.language
+                params = _viewport_params(options, viewport)
 
                 request_context = {
                     "path": path,
@@ -924,9 +965,15 @@ async def capture_dashboard_images(
                         legacy_full_page_fallback=fallback_used,
                     )
                 )
+    except ToolError as exc:
+        # Held (not re-raised here) so the restore in ``finally`` runs first
+        # and its outcome can be attached to the error payload below.
+        batch_error = exc
     finally:
         await guard.restore()
         if capture_warnings is not None:
             capture_warnings.extend(guard.warnings)
 
-    return _complete_capture_batch(captures, partial_failures)
+    if batch_error is not None:
+        _reraise_with_guard_warnings(batch_error, guard.warnings)
+    return _complete_capture_batch(captures, partial_failures, guard.warnings)

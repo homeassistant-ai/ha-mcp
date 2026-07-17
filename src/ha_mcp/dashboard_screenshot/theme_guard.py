@@ -19,9 +19,9 @@ Credential resolution mirrors engine discovery:
   ``home_assistant_url`` options, taken from the Supervisor add-on info that
   engine discovery already fetches. The token lives only in process memory
   for the duration of one capture batch and is never logged or returned.
-- **Docker / standalone / OAuth** — ha-mcp's direct Home Assistant
-  credentials. These protect the user whenever the sidecar engine runs with
-  a token for the same user (the common single-user setup).
+- **Docker / standalone / OAuth / embedded** — ha-mcp's direct Home
+  Assistant credentials. These protect the user whenever the sidecar engine
+  runs with a token for the same user (the common single-user setup).
 - Anything else (e.g. Supervisor-proxy auth with no discoverable engine
   token) — the guard stays inactive and captures behave as before.
 
@@ -37,11 +37,15 @@ cannot tell the engine's write apart from a concurrent human one.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from .._version import is_running_in_addon
+
+if TYPE_CHECKING:
+    from ..client.websocket_client import HomeAssistantWebSocketClient
 
 logger = logging.getLogger(__name__)
 
@@ -58,59 +62,73 @@ _RESTORE_HINT = (
 
 
 @dataclass(frozen=True, slots=True)
-class _EngineCredential:
-    """Home Assistant URL + token that authenticate as the engine's user."""
+class EngineCredential:
+    """Home Assistant URL + token that authenticate as the engine's user.
+
+    Deliberately carries only the two values the theme guard needs, so the
+    engine add-on's raw Supervisor options (a secret-bearing dict) never
+    cross module boundaries. The token must never be logged or surfaced in
+    responses.
+    """
 
     url: str
     token: str
 
 
-def _addon_credential(
+def addon_credential_from_options(
     addon_options: Mapping[str, Any] | None,
-) -> _EngineCredential | None:
-    """Build a credential from the discovered Puppet add-on's options."""
+) -> EngineCredential | None:
+    """Extract the engine user's credential from Puppet add-on options."""
     if not addon_options:
         return None
     token = str(addon_options.get("access_token") or "").strip()
     if not token:
         return None
     url = str(addon_options.get("home_assistant_url") or "").strip()
-    return _EngineCredential(url=url or DEFAULT_ENGINE_HA_URL, token=token)
+    return EngineCredential(url=url or DEFAULT_ENGINE_HA_URL, token=token)
 
 
-def _client_credential(client: Any) -> _EngineCredential | None:
+def _client_credential(client: Any) -> EngineCredential | None:
     """Fall back to ha-mcp's own direct Home Assistant credential.
 
     Only meaningful outside add-on mode: the Supervisor proxy authenticates
     as the Supervisor system user, whose frontend profile is unrelated to
     the engine token's user, so protecting it would be a silent no-op.
+    Embedded mode is deliberately NOT excluded — there the HA core container
+    carries ``SUPERVISOR_TOKEN`` but the server is a plain admin client with
+    a real user token, exactly what this fallback needs.
     """
-    if os.environ.get("SUPERVISOR_TOKEN"):
+    if is_running_in_addon():
         return None
     base_url = str(getattr(client, "base_url", "") or "").strip()
     token = str(getattr(client, "token", "") or "").strip()
     if not base_url.startswith(("http://", "https://")) or not token:
         return None
-    return _EngineCredential(url=base_url, token=token)
+    return EngineCredential(url=base_url, token=token)
 
 
 @dataclass
 class ThemeGuard:
-    """Per-capture-batch snapshot/restore of the engine user's saved theme."""
+    """Per-capture-batch snapshot/restore of the engine user's saved theme.
 
-    credential: _EngineCredential | None
-    snapshot: Any = None
-    snapshot_taken: bool = False
+    ``credential`` and ``warnings`` are the public contract; the snapshot
+    pair is internal lifecycle state driven only by :meth:`take_snapshot`
+    and :meth:`restore`.
+    """
+
+    credential: EngineCredential | None
     warnings: list[str] = field(default_factory=list)
+    _snapshot: Any = None
+    _snapshot_taken: bool = False
 
     @classmethod
     def for_capture(
         cls,
-        addon_options: Mapping[str, Any] | None,
+        addon_credential: EngineCredential | None,
         client: Any,
     ) -> ThemeGuard:
         """Resolve the engine user's credential for one capture batch."""
-        credential = _addon_credential(addon_options) or _client_credential(client)
+        credential = addon_credential or _client_credential(client)
         if credential is None:
             logger.debug(
                 "Dashboard theme guard inactive: no engine credential is "
@@ -119,7 +137,7 @@ class ThemeGuard:
         return cls(credential=credential)
 
     @asynccontextmanager
-    async def _session(self) -> AsyncIterator[Any]:
+    async def _session(self) -> AsyncIterator[HomeAssistantWebSocketClient]:
         """Yield a short-lived authenticated WebSocket as the engine user."""
         from ..client.websocket_client import HomeAssistantWebSocketClient
 
@@ -137,12 +155,12 @@ class ThemeGuard:
             await ws.disconnect()
 
     @staticmethod
-    async def _fetch_theme(ws: Any) -> Any:
+    async def _fetch_theme(ws: HomeAssistantWebSocketClient) -> Any:
         """Read the persisted ``theme`` frontend user-data value (may be None)."""
         response = await ws.send_command(
             "frontend/get_user_data", key=THEME_USER_DATA_KEY
         )
-        payload = response.get("result")
+        payload = response.get("result") if isinstance(response, dict) else None
         return payload.get("value") if isinstance(payload, dict) else None
 
     async def take_snapshot(self) -> None:
@@ -151,8 +169,8 @@ class ThemeGuard:
             return
         try:
             async with self._session() as ws:
-                self.snapshot = await self._fetch_theme(ws)
-            self.snapshot_taken = True
+                self._snapshot = await self._fetch_theme(ws)
+            self._snapshot_taken = True
         except Exception as exc:
             logger.warning(
                 "Could not read the screenshot engine user's saved theme "
@@ -166,16 +184,27 @@ class ThemeGuard:
 
     async def restore(self) -> None:
         """Write the snapshot back if the render changed it. Never raises."""
-        if not self.snapshot_taken or self.credential is None:
+        if not self._snapshot_taken or self.credential is None:
             return
         try:
             async with self._session() as ws:
+                # Ordering assumption: Puppet's settheme dispatch (and the
+                # frontend's resulting user-data write) happens during page
+                # navigation, before the engine returns the image — so a
+                # post-capture read observes the clobbered value.
                 current = await self._fetch_theme(ws)
-                if current != self.snapshot:
+                if current != self._snapshot:
+                    # A never-configured baseline must restore as {} rather
+                    # than null: live frontend sessions ignore a null
+                    # subscription push (they would stay flipped until
+                    # reload), while an empty settings object re-applies
+                    # default/auto behavior immediately and means the same
+                    # thing on the next frontend boot.
+                    restore_value = self._snapshot if self._snapshot is not None else {}
                     await ws.send_command(
                         "frontend/set_user_data",
                         key=THEME_USER_DATA_KEY,
-                        value=self.snapshot,
+                        value=restore_value,
                     )
         except Exception as exc:
             logger.warning(

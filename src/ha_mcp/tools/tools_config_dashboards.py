@@ -1245,13 +1245,20 @@ def _attach_screenshot_tool_error(
         {
             key: value
             for key, value in error_payload.items()
-            if key not in {"success", "error"}
+            if key not in {"success", "error", "warnings"}
         }
     )
     result["screenshot_error"] = screenshot_error
     result.setdefault("warnings", []).append(
         f"Screenshot unavailable: {extract_tool_error_message(error)}"
     )
+    # Theme-guard warnings ride on the error payload (a failing batch may
+    # already have rendered and clobbered the engine user's theme); keep them
+    # visible on the degraded-to-warning path instead of burying them in
+    # screenshot_error.
+    payload_warnings = error_payload.get("warnings")
+    if isinstance(payload_warnings, list):
+        result["warnings"].extend(str(warning) for warning in payload_warnings)
     return result
 
 

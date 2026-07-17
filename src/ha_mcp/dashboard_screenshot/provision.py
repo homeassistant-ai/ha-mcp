@@ -31,6 +31,7 @@ from fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error
+from .theme_guard import EngineCredential, addon_credential_from_options
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +40,16 @@ logger = logging.getLogger(__name__)
 class EngineTarget:
     """A resolved screenshot engine endpoint.
 
-    ``addon_options`` carries the Puppet add-on's Supervisor options
-    (``access_token``, ``home_assistant_url``, ...) when the engine was
-    discovered via the Supervisor, so the theme guard can authenticate as
-    the engine's user without a second discovery round-trip. It is ``None``
-    for an explicitly configured engine URL. The token inside never leaves
-    the server process — it must not be logged or surfaced in responses.
+    ``addon_credential`` authenticates as the engine's user (extracted from
+    the Puppet add-on's Supervisor options during discovery, so the theme
+    guard needs no second round-trip and the raw secret-bearing options
+    dict never leaves this module). It is ``None`` for an explicitly
+    configured engine URL. The token inside never leaves the server process
+    — it must not be logged or surfaced in responses.
     """
 
     url: str
-    addon_options: dict[str, Any] | None = None
+    addon_credential: EngineCredential | None = None
 
 
 ENGINE_PORT = 10000
@@ -164,11 +165,6 @@ def _supervisor_addon_listing(payload: Any) -> list[dict[str, Any]]:
     return addons
 
 
-async def resolve_engine_url() -> str:
-    """Return the base URL of the screenshot engine, or raise ToolError."""
-    return (await resolve_engine()).url
-
-
 async def resolve_engine() -> EngineTarget:
     """Resolve the screenshot engine endpoint, or raise ToolError.
 
@@ -255,7 +251,9 @@ async def _discover_engine_via_supervisor() -> EngineTarget:
             options = data.get("options")
             return EngineTarget(
                 url=f"http://{hostname}:{ENGINE_PORT}",
-                addon_options=options if isinstance(options, dict) else None,
+                addon_credential=addon_credential_from_options(
+                    options if isinstance(options, dict) else None
+                ),
             )
     except ToolError:
         raise

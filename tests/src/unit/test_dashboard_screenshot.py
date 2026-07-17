@@ -106,7 +106,7 @@ class TestSettings:
             config.Settings()
 
     def test_engine_url_validator_strips_trailing_slash(self, monkeypatch: Any) -> None:
-        # The field validator (not just resolve_engine_url) normalizes the URL.
+        # The field validator (not just resolve_engine) normalizes the URL.
         monkeypatch.setenv(
             "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL", "http://engine:10000/"
         )
@@ -210,6 +210,35 @@ class TestStandaloneScreenshotTool:
         assert [
             item["content_index"] for item in result.structured_content["screenshots"]
         ] == [0, 1]
+
+    async def test_theme_guard_warning_reaches_tool_response(
+        self, monkeypatch: Any
+    ) -> None:
+        """A failed theme restore must surface in the standalone tool output."""
+        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
+            return DashboardRenderTarget(
+                dashboard_url_path="wall-panel",
+                view_path="home",
+                render_path="wall-panel/home",
+                view_index=0,
+                stable=True,
+            )
+
+        async def capture(*_a: Any, **kwargs: Any) -> list[Any]:
+            kwargs["capture_warnings"].append("theme restore failed (unit)")
+            return [_fake_dashboard_capture()]
+
+        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
+        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
+
+        result = await mod.DashboardScreenshotTools(
+            object()
+        ).ha_get_dashboard_screenshot(dashboard_url_path="wall-panel", view_path="home")
+
+        assert "theme restore failed (unit)" in result.structured_content["warnings"]
 
     async def test_legacy_full_page_fallback_surfaces_warning(
         self, monkeypatch: Any
@@ -331,7 +360,7 @@ class TestStandaloneScreenshotTool:
 # ---------------------------------------------------------------------------
 
 
-class TestResolveEngineUrl:
+class TestResolveEngine:
     async def test_explicit_url_strips_trailing_slash(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
@@ -342,7 +371,10 @@ class TestResolveEngineUrl:
                 dashboard_screenshot_engine_url="http://engine:10000/"
             ),
         )
-        assert await provision.resolve_engine_url() == "http://engine:10000"
+        target = await provision.resolve_engine()
+        assert target.url == "http://engine:10000"
+        # An explicitly configured engine has no discoverable credential.
+        assert target.addon_credential is None
 
     async def test_stdio_no_token_raises(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import provision
@@ -353,7 +385,7 @@ class TestResolveEngineUrl:
             lambda: SimpleNamespace(dashboard_screenshot_engine_url=""),
         )
         with pytest.raises(ToolError):
-            await provision.resolve_engine_url()
+            await provision.resolve_engine()
 
 
 # ---------------------------------------------------------------------------
@@ -437,9 +469,13 @@ class TestDiscoverEngineViaSupervisor:
         )
         target = await provision._discover_engine_via_supervisor()
         assert target.url == "http://def-puppet:10000"
-        # The discovered add-on's options ride along so the theme guard can
-        # authenticate as the engine's user without a second discovery.
-        assert target.addon_options == _puppet_options(keep_browser_open=False)
+        # The engine user's credential rides along so the theme guard can
+        # authenticate without a second discovery round-trip.
+        from ha_mcp.dashboard_screenshot.theme_guard import EngineCredential
+
+        assert target.addon_credential == EngineCredential(
+            url="http://homeassistant:8123", token="secret"
+        )
 
     async def test_multiple_verified_started_matches_fail_closed(
         self, monkeypatch: Any
@@ -1959,6 +1995,27 @@ class TestNoteScreenshotIgnored:
         assert any("ignored in search mode" in w for w in result["warnings"])
 
 
+class TestAttachScreenshotToolError:
+    def test_error_payload_warnings_merge_into_result_warnings(self) -> None:
+        """Theme-guard warnings on a failed capture survive the degraded path."""
+        from ha_mcp.tools.tools_config_dashboards import _attach_screenshot_tool_error
+
+        error = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {"code": "SERVICE_CALL_FAILED", "message": "boom"},
+                    "warnings": ["theme restore failed (unit)"],
+                }
+            )
+        )
+        result = _attach_screenshot_tool_error({"success": True}, error)
+
+        assert "theme restore failed (unit)" in result["warnings"]
+        # Kept out of screenshot_error so the warning isn't duplicated.
+        assert "warnings" not in result["screenshot_error"]
+
+
 class TestPublicScreenshotOptionForwarding:
     """Public dashboard get/set methods forward view_path only.
 
@@ -2085,6 +2142,49 @@ class TestPublicScreenshotOptionForwarding:
 
         assert isinstance(result, ToolResult)
         self._assert_capture_call(capture_call)
+
+    async def test_include_screenshot_surfaces_theme_guard_warning(
+        self, monkeypatch: Any
+    ) -> None:
+        """A failed theme restore must surface in the config-tool response."""
+        from fastmcp.tools.tool import ToolResult
+
+        from ha_mcp.dashboard_screenshot import capture
+        from ha_mcp.tools import tools_config_dashboards as dashboard_tools
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(
+                enable_dashboard_screenshot=True,
+                enable_mandatory_bps=False,
+            ),
+        )
+
+        async def record(path: str, **kwargs: Any) -> list[Any]:
+            kwargs["capture_warnings"].append("theme restore failed (unit)")
+            return [_fake_dashboard_capture()]
+
+        monkeypatch.setattr(capture, "capture_dashboard_images", record)
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "result": {
+                    "views": [{"title": "Home", "path": "home"}],
+                }
+            }
+        )
+
+        result = await dashboard_tools.DashboardConfigTools(
+            client
+        ).ha_config_get_dashboard(
+            url_path="wall-panel",
+            include_screenshot=True,
+            view_path="home",
+        )
+
+        assert isinstance(result, ToolResult)
+        assert "theme restore failed (unit)" in result.structured_content["warnings"]
 
 
 def test_public_screenshot_option_names_stay_in_parity() -> None:
