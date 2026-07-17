@@ -264,7 +264,7 @@
     "backup.bulk.prompt_days": "Backups löschen, die älter als N Tage sind (lasse leer, um nur aktuelle Filter zu verwenden):",
     "backup.bulk.filter_required": "Setze mindestens einen Filter (Domäne, Entität oder Alter in Tagen).",
     "backup.bulk.confirm": "Alle Backups löschen, die übereinstimmen: {filters}?",
-    "backup.bulk.deleted": "{count} Backup(s) gelöscht",
+    "backup.bulk.deleted": "Gelöschte Backups: {count}",
     "filesystem.custom.title": "Benutzerdefinierte Dateisystem-Verzeichnisse (erweitert)",
     "filesystem.custom.help": "Zusätzliche Verzeichnisse (eines pro Zeile), die Datei-Tools <strong>lesen und schreiben</strong> können. Relative Konfigurationspfade und erlaubte HAOS-Geschwister-Volumes werden unterstützt. Wirkt sofort.",
     "filesystem.custom.blocked": "Immer blockiert: {paths}, Pfad-Traversierung (<code>..</code>) und absolute Pfade außerhalb erlaubter HAOS-Volumes.",
