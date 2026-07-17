@@ -8,7 +8,10 @@ the call carries an acknowledgment key that is published ONLY inside the
 best-practices skill content served by ``ha_get_skill_guide``. The block
 error tells the model exactly how to obtain the key but never the key
 itself, forcing it to actually fetch/read the best practices before
-writing.
+writing. It also pre-arms the model with a recovery hint for clients that
+validate tool calls against a stale cached tool schema and reject the
+``BestPracticeKey`` retry client-side (#1901) — that rejection never
+reaches the server, so it cannot be handled anywhere else.
 
 Strict mode is *effective* only when BOTH ``enable_mandatory_bps`` (the
 parent, #1182) and ``enable_strict_mandatory_bps`` (the child, #1779) are
@@ -161,8 +164,8 @@ def strict_bps_ack_line() -> str:
 def _raise_bps_ack_required_error(name: str) -> NoReturn:
     """Raise the structured block error for a gated write missing the key.
 
-    The suggestions tell the model how to obtain the key but never contain
-    the key itself. The second suggestion pre-arms the model for clients
+    Neither suggestion ever contains the key itself. The first tells the
+    model how to obtain it; the second pre-arms the model for clients
     that validate tool arguments against a stale cached tool schema and
     reject the ``BestPracticeKey`` retry client-side (#1901) — that
     rejection never reaches the server, so this error is the only server
