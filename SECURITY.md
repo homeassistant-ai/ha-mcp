@@ -274,10 +274,12 @@ networks and place it behind a TLS-terminating reverse proxy.
 
 ### OIDC Mode
 
-The OIDC entrypoint (`ha-mcp-oidc`) is also **new** and builds on the same
-`OAuthProxy` foundation as OAuth mode above. It additionally exposes dynamic
-client registration (DCR) to any client that can reach the discovery
-endpoints. The same TLS/reverse-proxy recommendations apply, and
+The OIDC entrypoint (`ha-mcp-oidc`) is also **new**. It proxies
+authentication to your external identity provider via FastMCP's
+`OAuthProxy` — unlike OAuth mode's self-contained authorization server —
+and, like OAuth mode, exposes dynamic client registration (DCR) to any
+client that can reach the discovery endpoints. The same TLS/reverse-proxy
+recommendations apply, and
 `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` should be set for internet-facing
 deployments (see [docs/oidc.md](docs/oidc.md)).
 

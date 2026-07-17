@@ -1287,7 +1287,10 @@ def main_oidc() -> None:
       opaque access tokens (e.g. Google, or Auth0 without an API audience).
     - OIDC_AUDIENCE (optional): Expected `aud` claim for IdP-issued access tokens.
       Without it (and with OIDC_VERIFY_ID_TOKEN off), FastMCP's JWT verifier checks
-      issuer, signature, and expiry but not audience.
+      issuer, signature, and expiry but not audience. With OIDC_VERIFY_ID_TOKEN=true,
+      verification pins `aud` to OIDC_CLIENT_ID instead and this value is only
+      forwarded to the IdP's authorize/token endpoints (it is what makes Auth0
+      issue JWT rather than opaque access tokens).
     - MCP_HOST (optional, default: "0.0.0.0"; set 127.0.0.1 to restrict to loopback
       behind a same-host reverse proxy)
     - MCP_PORT (optional, default: 8086)
