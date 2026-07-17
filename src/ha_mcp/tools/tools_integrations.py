@@ -29,7 +29,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .component_registry import resolve_entities_via_component
+from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_config_entry,

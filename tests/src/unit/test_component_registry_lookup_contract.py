@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ha_mcp.tools import component_api, component_registry
+from ha_mcp.tools import component_api, component_registry_lookup
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._component_routing_helpers import patch_ws
@@ -50,7 +50,7 @@ def _real_component_ws(hass: FakeHass) -> AsyncMock:
     async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
         if command_type == "ha_mcp_tools/info":
             return {"success": True, "result": wsapi._do_info(hass)}
-        if command_type == component_registry.WS_REGISTRY_LOOKUP:
+        if command_type == component_registry_lookup.WS_REGISTRY_LOOKUP:
             return {
                 "success": True,
                 "result": wsapi._do_registry_lookup(hass, dict(kwargs)),
@@ -141,7 +141,7 @@ async def test_flow_delete_finds_all_subentities_via_real_component(monkeypatch)
     )
     tools = IntegrationTools(client)
 
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
             target="sensor.energy_peak",
             helper_type="utility_meter",
@@ -162,7 +162,7 @@ async def test_flow_delete_finds_all_subentities_via_real_component(monkeypatch)
     lookups = [
         c
         for c in ws.send_command.call_args_list
-        if c.args[0] == component_registry.WS_REGISTRY_LOOKUP
+        if c.args[0] == component_registry_lookup.WS_REGISTRY_LOOKUP
     ]
     assert len(lookups) == 1
     assert lookups[0].kwargs["config_entry_id"] == "um_entry"
@@ -189,7 +189,7 @@ async def test_simple_delete_resolves_in_one_lookup_no_sleep(monkeypatch) -> Non
     tools = IntegrationTools(client)
 
     with (
-        patch_ws(ws, component_registry),
+        patch_ws(ws, component_registry_lookup),
         patch(
             "ha_mcp.tools.tools_integrations.asyncio.sleep", new_callable=AsyncMock
         ) as sleep_mock,
@@ -207,7 +207,7 @@ async def test_simple_delete_resolves_in_one_lookup_no_sleep(monkeypatch) -> Non
     lookups = [
         c
         for c in ws.send_command.call_args_list
-        if c.args[0] == component_registry.WS_REGISTRY_LOOKUP
+        if c.args[0] == component_registry_lookup.WS_REGISTRY_LOOKUP
     ]
     assert len(lookups) == 1
     assert lookups[0].kwargs["entity_ids"] == ["input_button.my_button"]
@@ -225,7 +225,7 @@ async def test_simple_delete_missing_entity_via_real_component(monkeypatch) -> N
     client = _ContractClient()
     tools = IntegrationTools(client)
 
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
             target="my_button",
             helper_type="input_button",

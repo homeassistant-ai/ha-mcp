@@ -31,7 +31,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .component_registry import fetch_entities_for_config_entry_via_component
+from .component_registry_lookup import fetch_entities_for_config_entry_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     SUPPORTED_HELPERS,

@@ -906,6 +906,12 @@ class TestServerEntrySchema:
         out = schema({"type": wsapi.WS_SERVER_ENTRY})
         assert out["type"] == wsapi.WS_SERVER_ENTRY
 
+    def test_rejects_extra_keys(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
+        schema = _REAL_VOL.Schema(wsapi._server_entry_schema())
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema({"type": wsapi.WS_SERVER_ENTRY, "entry_id": "x"})
+
 
 # =============================================================================
 # registration + admin gate for the four new commands

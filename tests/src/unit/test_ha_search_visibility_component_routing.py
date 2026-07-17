@@ -12,6 +12,10 @@ still take the fast path. These tests pin the four-way gate:
 - filter inactive → component WITHOUT the param (old components keep working)
 - component error on the visibility path → legacy fallback (filter still applied)
 - unloadable config → fail-closed to legacy (never route unfiltered)
+- ``unknown_command`` on the visibility search → invalidate caps + silent legacy
+  fallback
+- ``HomeAssistantConnectionError`` on the visibility search → propagates, not
+  swallowed
 
 The parity of what the component then DOES with that param lives in
 ``test_component_search_visibility_contract.py``; here the component WS is a
@@ -25,8 +29,11 @@ from collections import Counter
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
-from ha_mcp.tools import tools_search
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.tools import component_api, tools_search
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import VISIBILITY_FILENAME, save_visibility_config
@@ -199,6 +206,58 @@ async def test_component_error_on_visibility_path_falls_back_to_legacy(
     # Fallback still honours the filter (legacy excludes the denied entity).
     entity_ids = {e["entity_id"] for e in resp["entities"]}
     assert "light.kitchen" not in entity_ids
+
+
+@pytest.mark.asyncio
+async def test_unknown_command_falls_back_silently_and_invalidates(
+    tmp_path, monkeypatch
+) -> None:
+    """unknown_command on the visibility search → invalidate caps + silent legacy
+    fallback (no warning), same taxonomy as the plain ``search`` path."""
+    _write_active_deny(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH_VIS,
+        cmd_exc=HomeAssistantCommandError("Command failed: nope", "unknown_command"),
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert resp["success"] is True
+    # Legacy inventory served the request and still honours the filter.
+    assert client.get_states_calls == 1
+    entity_ids = {e["entity_id"] for e in resp["entities"]}
+    assert "light.kitchen" not in entity_ids
+    # Silent fallback: no component-failure warning.
+    assert not any("served via legacy path" in w for w in resp.get("warnings", []))
+    # Caps dropped from the cache so the next call re-probes.
+    assert client not in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_connection_error_on_visibility_path_propagates(
+    tmp_path, monkeypatch
+) -> None:
+    """A WS-down error on the visibility search frame is NOT swallowed to a legacy
+    fallback — it propagates (the legacy path shares the socket and would fail
+    identically), matching the Global-Constraint-2 taxonomy."""
+    _write_active_deny(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH_VIS,
+        cmd_exc=HomeAssistantConnectionError("ws down"),
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with (
+        patch_ws(ws, tools_search),
+        pytest.raises(HomeAssistantConnectionError),
+    ):
+        await ha_search(query="kitchen")
 
 
 @pytest.mark.asyncio

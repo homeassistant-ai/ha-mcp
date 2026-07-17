@@ -34,7 +34,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, component_registry
+from ha_mcp.tools import component_api, component_registry_lookup
 from ha_mcp.tools.tools_config_helpers import _wait_for_flow_entities
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
@@ -165,7 +165,7 @@ async def test_simple_delete_resolves_via_component_no_retry_loop() -> None:
     tools = IntegrationTools(client)
 
     with (
-        patch_ws(ws, component_registry),
+        patch_ws(ws, component_registry_lookup),
         patch("ha_mcp.tools.tools_integrations.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
     ):
         resp = await tools.ha_remove_helpers_integrations(
@@ -203,7 +203,7 @@ async def test_simple_delete_capability_miss_uses_legacy_loop() -> None:
     )
     tools = IntegrationTools(client)
 
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
             target="my_button",
             helper_type="input_button",
@@ -230,7 +230,7 @@ async def test_simple_delete_unknown_command_invalidates_and_falls_back() -> Non
     )
     tools = IntegrationTools(client)
 
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
             target="my_button",
             helper_type="input_button",
@@ -260,7 +260,7 @@ async def test_simple_delete_command_error_falls_back_keeps_caps() -> None:
     )
     tools = IntegrationTools(client)
 
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
             target="my_button",
             helper_type="input_button",
@@ -288,7 +288,7 @@ async def test_simple_delete_connection_error_propagates() -> None:
     client = RoutingClient()
     tools = IntegrationTools(client)
 
-    with patch_ws(ws, component_registry), pytest.raises(ToolError) as excinfo:
+    with patch_ws(ws, component_registry_lookup), pytest.raises(ToolError) as excinfo:
         await tools.ha_remove_helpers_integrations(
             target="my_button",
             helper_type="input_button",
@@ -326,7 +326,7 @@ async def test_simple_delete_falsy_unique_id_degrades_like_missing(
     client = DeleteFailsRoutingClient()
     tools = IntegrationTools(client)
 
-    with patch_ws(ws, component_registry), pytest.raises(ToolError) as excinfo:
+    with patch_ws(ws, component_registry_lookup), pytest.raises(ToolError) as excinfo:
         await tools.ha_remove_helpers_integrations(
             target="my_button",
             helper_type="input_button",
@@ -373,7 +373,7 @@ async def test_flow_delete_subentities_via_component_no_dump() -> None:
     )
     tools = IntegrationTools(client)
 
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
             target="sensor.energy_peak",
             helper_type="utility_meter",
@@ -416,7 +416,7 @@ async def test_flow_delete_capability_miss_uses_legacy_dump() -> None:
     )
     tools = IntegrationTools(client)
 
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
             target="sensor.energy_peak",
             helper_type="utility_meter",
@@ -454,7 +454,7 @@ async def test_set_helper_wait_resolves_via_component_no_dump_no_sleep() -> None
     client = RoutingClient()
 
     with (
-        patch_ws(ws, component_registry),
+        patch_ws(ws, component_registry_lookup),
         patch("ha_mcp.tools.tools_config_helpers.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
     ):
         entities, warnings = await _wait_for_flow_entities(
@@ -472,7 +472,7 @@ async def test_set_helper_wait_resolves_via_component_no_dump_no_sleep() -> None
     sleep_mock.assert_not_awaited()
 
 
-# --- component_registry seam functions (direct; error taxonomy) -----------------
+# --- component_registry_lookup seam functions (direct; error taxonomy) -----------------
 
 
 @pytest.mark.asyncio
@@ -483,9 +483,9 @@ async def test_config_entry_lookup_unknown_command_invalidates_caps() -> None:
         cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
     )
     client = RoutingClient()
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         assert (
-            await component_registry.fetch_entities_for_config_entry_via_component(
+            await component_registry_lookup.fetch_entities_for_config_entry_via_component(
                 client, "um_entry"
             )
             is None
@@ -501,9 +501,9 @@ async def test_config_entry_lookup_timeout_keeps_caps() -> None:
         cmd_exc=HomeAssistantCommandTimeout("slow"),
     )
     client = RoutingClient()
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         assert (
-            await component_registry.fetch_entities_for_config_entry_via_component(
+            await component_registry_lookup.fetch_entities_for_config_entry_via_component(
                 client, "um_entry"
             )
             is None
@@ -521,9 +521,9 @@ async def test_config_entry_lookup_malformed_shape_falls_back() -> None:
         cmd_result={"entities": "not-a-list"},
     )
     client = RoutingClient()
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         assert (
-            await component_registry.fetch_entities_for_config_entry_via_component(
+            await component_registry_lookup.fetch_entities_for_config_entry_via_component(
                 client, "um_entry"
             )
             is None
@@ -538,9 +538,9 @@ async def test_resolve_entities_unknown_command_invalidates_caps() -> None:
         cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
     )
     client = RoutingClient()
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         assert (
-            await component_registry.resolve_entities_via_component(
+            await component_registry_lookup.resolve_entities_via_component(
                 client, ["input_button.x"]
             )
             is None
@@ -556,9 +556,9 @@ async def test_resolve_entities_malformed_shape_falls_back() -> None:
         cmd_result={"missing": ["input_button.x"]},  # no "entities" key
     )
     client = RoutingClient()
-    with patch_ws(ws, component_registry):
+    with patch_ws(ws, component_registry_lookup):
         assert (
-            await component_registry.resolve_entities_via_component(
+            await component_registry_lookup.resolve_entities_via_component(
                 client, ["input_button.x"]
             )
             is None
@@ -576,9 +576,9 @@ async def test_resolve_entities_connection_error_propagates() -> None:
     )
     client = RoutingClient()
     with (
-        patch_ws(ws, component_registry),
+        patch_ws(ws, component_registry_lookup),
         pytest.raises(HomeAssistantConnectionError),
     ):
-        await component_registry.resolve_entities_via_component(
+        await component_registry_lookup.resolve_entities_via_component(
             client, ["input_button.x"]
         )
