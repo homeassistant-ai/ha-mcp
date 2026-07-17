@@ -830,16 +830,19 @@ def _should_lazy_resolve(error_msg: str) -> bool:
 # ``component_devices.WS_DEVICE_GET``).
 WS_DASHBOARDS = "ha_mcp_tools/dashboards"
 
-# ``LovelaceConfig.mode`` wire strings. The ha_mcp_tools component tags every
-# runtime ``list`` row with its mode; the legacy ``lovelace/dashboards/list`` does
-# NOT (its rows are the raw ``DashboardsCollection`` items, which carry no ``mode``
-# — verified against home-assistant/core ``lovelace/dashboard.py``
-# ``DashboardsCollectionWebSocket.ws_list_item``). A YAML dashboard's BODY may
-# carry resolved ``!secret`` plaintext, so the cross-dashboard ``search`` walk
-# reads a row's body ONLY when it is EXPLICITLY tagged ``storage`` — every other
-# value, including the untagged legacy rows, is skipped (fail-closed). ``list``
-# still surfaces YAML rows, since listing metadata is safe.
-_DASHBOARD_YAML_MODE = "yaml"
+# ``LovelaceConfig.mode`` wire string for a storage dashboard. On both paths the
+# ``list`` rows normally carry ``mode``: the ha_mcp_tools component tags every
+# runtime row, and the legacy ``lovelace/dashboards/list`` rows are the
+# ``LovelaceConfig.config`` dicts, where core's schemas stamp it (storage items
+# default ``mode: storage`` in ``STORAGE_DASHBOARD_CREATE_FIELDS``; YAML entries
+# REQUIRE ``mode: yaml`` in ``YAML_DASHBOARD_SCHEMA`` — verified against
+# home-assistant/core ``lovelace/{dashboard,const,__init__}.py``). A YAML
+# dashboard's BODY may carry resolved ``!secret`` plaintext, so the
+# cross-dashboard ``search`` walk reads a row's body ONLY when it is EXPLICITLY
+# tagged ``storage`` — fail-closed, which also skips the rare UNTAGGED row
+# (storage items persisted before core's mode default existed) rather than risk
+# reading a body it can't prove is storage. ``list`` still surfaces YAML rows,
+# since listing metadata is safe.
 _DASHBOARD_STORAGE_MODE = "storage"
 
 # Cross-dashboard ``search`` match cap — mirrors the component's
@@ -2122,13 +2125,14 @@ class DashboardConfigTools:
         ``fetch_dashboards_list``. A body is read ONLY when its row is EXPLICITLY
         tagged ``mode == "storage"`` — fail-closed. HA resolves ``!secret`` when it
         loads a YAML Lovelace config, so reading a YAML (or unknown-mode) body could
-        leak resolved secrets into a match. Only the ha_mcp_tools component tags
-        ``mode`` on its ``list`` rows; the legacy ``lovelace/dashboards/list`` tags
-        nothing, so on a component-less install every row is untagged and skipped —
-        the cross-dashboard walk yields no matches there rather than risk a leak
-        (the component is the supported way to search dashboard bodies safely). A
-        per-dashboard read failure is skipped (fail-soft, mirroring the component's
-        per-dashboard skip) so one broken dashboard doesn't fail the whole search.
+        leak resolved secrets into a match. Core's own schemas stamp ``mode`` on
+        both kinds of row (storage items default it; YAML entries require it), so
+        the legacy walk searches storage dashboards normally; the fail-closed check
+        additionally skips the rare UNTAGGED row (a storage item persisted before
+        core's mode default existed) rather than read a body it can't prove is
+        storage. A per-dashboard read failure is skipped (fail-soft, mirroring the
+        component's per-dashboard skip) so one broken dashboard doesn't fail the
+        whole search.
         """
         rows = await fetch_dashboards_list(self._client) or []
         docs: list[dict[str, Any]] = []

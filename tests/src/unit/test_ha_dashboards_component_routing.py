@@ -482,13 +482,13 @@ async def test_legacy_search_walk_skips_yaml_body() -> None:
 async def test_legacy_search_walk_skips_untagged_row() -> None:
     """Fail-closed: a legacy row with NO ``mode`` key is skipped WITHOUT a body read.
 
-    The real ``lovelace/dashboards/list`` never tags ``mode`` (only the ha_mcp_tools
-    component does — verified against home-assistant/core
-    ``DashboardsCollectionWebSocket.ws_list_item``), so on a component-less install
-    every row is untagged. An untagged row is not provably storage, and reading a
-    YAML body resolves ``!secret`` to plaintext, so the walk reads a body ONLY when
-    the row is EXPLICITLY tagged ``mode == "storage"`` — the untagged row's
-    ``lovelace/config`` is never requested.
+    Core's schemas normally stamp ``mode`` on every ``lovelace/dashboards/list``
+    row (storage items default ``mode: storage``; YAML entries require
+    ``mode: yaml``), but a storage item persisted before core's mode default
+    existed can surface untagged. An untagged row is not provably storage, and
+    reading a YAML body resolves ``!secret`` to plaintext, so the walk reads a
+    body ONLY when the row is EXPLICITLY tagged ``mode == "storage"`` — the
+    untagged row's ``lovelace/config`` is never requested.
     """
     ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     untagged_row = {k: v for k, v in _STORAGE_ROW.items() if k != "mode"}
