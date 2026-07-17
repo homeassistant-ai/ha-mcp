@@ -500,7 +500,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 ### Automations
 - `ha_config_get_automation` — Retrieve Home Assistant automation configuration.
 - `ha_config_remove_automation` — Delete a Home Assistant automation.
-- `ha_config_set_automation` — Create or update a Home Assistant automation. MUST call ha_get_skill_guide first.
+- `ha_config_set_automation` — Create or update a Home Assistant automation.
 
 ### Blueprints
 - `ha_get_blueprint` — Get blueprint information - list all blueprints or get details for a specific one.
@@ -522,7 +522,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_config_delete_dashboard_resource` — Delete a dashboard resource.
 - `ha_config_get_dashboard` — Get dashboard info - list all dashboards, get config, or search for cards.
 - `ha_config_list_dashboard_resources` — List Lovelace dashboard resources (custom cards, themes, CSS/JS).
-- `ha_config_set_dashboard` — Create or update a Home Assistant dashboard. MUST call ha_get_skill_guide first.
+- `ha_config_set_dashboard` — Create or update a Home Assistant dashboard.
 - `ha_config_set_dashboard_resource` — Create or update a dashboard resource (inline code or external URL).
 
 ### Developer
@@ -587,12 +587,12 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 ### Scenes
 - `ha_config_get_scene` — Retrieve Home Assistant scene configuration.
 - `ha_config_remove_scene` — Delete a Home Assistant scene.
-- `ha_config_set_scene` — Create or update a Home Assistant scene. MUST call ha_get_skill_guide first.
+- `ha_config_set_scene` — Create or update a Home Assistant scene.
 
 ### Scripts
 - `ha_config_get_script` — Retrieve Home Assistant script configuration.
 - `ha_config_remove_script` — Delete a Home Assistant script.
-- `ha_config_set_script` — Create or update a Home Assistant script. MUST call ha_get_skill_guide first.
+- `ha_config_set_script` — Create or update a Home Assistant script.
 
 ### Search & Discovery
 - `ha_get_overview` — Get AI-friendly system overview with intelligent categorization.
@@ -608,7 +608,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### System
 - `ha_config_get_yaml` **(beta — dev channel only)** — Get the current YAML fragment under a key, from one config file or across a glob.
-- `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT). MUST call ha_get_skill_guide first.
+- `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT).
 - `ha_manage_backup` — Polymorphic backup tool. See the tool description for the routing matrix.
 - `ha_manage_custom_tool` **(beta — dev channel only)** — Create and run a custom tool in a sandbox, or manage saved custom tools.
 - `ha_manage_theme` — Manage Home Assistant frontend themes.
