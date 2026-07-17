@@ -2639,7 +2639,11 @@ class TestPendingInstallTracking:
         await asyncio.sleep(0)  # let the task reach the shielded await
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            # Assignment form only to keep CodeQL's ineffectual-statement
+            # heuristic quiet: the await IS the effect (it delivers the
+            # cancellation this context manager asserts) and raises before
+            # the bind ever happens.
+            _ = await task
 
         assert not inner.cancelled()  # the job survives the awaiter's cancel
         inner.set_result(None)
