@@ -1384,36 +1384,13 @@ _base._exceptions_stub.ServiceNotFound = _StubServiceNotFound
 # (function-locally, only when it registers the confirmation listener). Under the
 # MagicMock stub that submodule is absent, so ensure it resolves; the fake bus
 # ignores the event-type value, so a literal is sufficient.
+# ``homeassistant.const.EVENT_STATE_CHANGED`` is guaranteed for every unit test by
+# an autouse fixture in conftest.py (the component's call_service waiter imports it
+# function-locally). The module-level default here keeps this file importable on
+# its own; conftest handles the full-suite collection-order case.
 sys.modules.setdefault(
     "homeassistant.const", SimpleNamespace(EVENT_STATE_CHANGED="state_changed")
 )
-
-
-@pytest.fixture(autouse=True)
-def _ensure_event_state_changed_const():
-    """Guarantee ``homeassistant.const.EVENT_STATE_CHANGED`` at RUN time.
-
-    The module-level ``setdefault`` above is a no-op when an earlier-collected
-    test module already installed a ``homeassistant.const`` stub lacking
-    ``EVENT_STATE_CHANGED`` — under full-suite collection the call_service
-    confirmation-waiter's function-local import then raised ``ImportError``. Set
-    the attribute on whatever stub is present (works for a SimpleNamespace or a
-    MagicMock; preserves its other attrs) so the waiter binds regardless of
-    collection order. Mirrors the per-test ``homeassistant.exceptions`` override.
-    """
-    mod = sys.modules.get("homeassistant.const")
-    if mod is None:
-        sys.modules["homeassistant.const"] = SimpleNamespace(
-            EVENT_STATE_CHANGED="state_changed"
-        )
-    elif not getattr(mod, "EVENT_STATE_CHANGED", None):
-        try:
-            mod.EVENT_STATE_CHANGED = "state_changed"
-        except (AttributeError, TypeError):
-            sys.modules["homeassistant.const"] = SimpleNamespace(
-                EVENT_STATE_CHANGED="state_changed"
-            )
-    yield
 
 
 class _FakeEvent:

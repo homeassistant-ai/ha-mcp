@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -701,22 +701,35 @@ class TestHaCallServiceRefusesMcpToolsDomain:
 
         tools = ServiceTools.__new__(ServiceTools)
         client = AsyncMock()
+        # A realistic credentialed client double: string base_url/token so the
+        # Phase 3 component-caps probe reaches its real routing decision (a real
+        # client's base_url is a str, not an AsyncMock whose .rstrip() would leak
+        # an unawaited coroutine inside get_websocket_client's cache-key build).
+        client.base_url = "http://ha.test:8123"
+        client.token = "tok"
         client.call_service.return_value = {"context": {"id": "ctx"}, "result": []}
         tools._client = client
         tools._device_tools = AsyncMock()
 
+        # Neutralize the component route deterministically: the probe returns None
+        # (component absent) so ha_call_service takes the legacy REST path. This
+        # test is about the refusal gate, not the component routing — pinning the
+        # probe keeps it fast (no real connect) and focused.
         # Should NOT raise the domain-refusal ToolError. (May still raise
-        # downstream for unrelated reasons; we just assert we got past
-        # the refusal gate.) wait=False skips the state-change-verification
-        # path so this test focuses on the refusal logic alone.
-        try:
-            await tools.ha_call_service(
-                domain="light",
-                service="turn_on",
-                entity_id="light.kitchen",
-                wait=False,
-            )
-        except ToolError as exc:
-            assert "ha_mcp_tools" not in str(exc), (
-                "Refusal incorrectly triggered for non-ha_mcp_tools domain"
-            )
+        # downstream for unrelated reasons; we just assert we got past the refusal
+        # gate.) wait=False skips the state-change-verification path.
+        with patch(
+            "ha_mcp.tools.tools_service.get_component_caps",
+            AsyncMock(return_value=None),
+        ):
+            try:
+                await tools.ha_call_service(
+                    domain="light",
+                    service="turn_on",
+                    entity_id="light.kitchen",
+                    wait=False,
+                )
+            except ToolError as exc:
+                assert "ha_mcp_tools" not in str(exc), (
+                    "Refusal incorrectly triggered for non-ha_mcp_tools domain"
+                )
