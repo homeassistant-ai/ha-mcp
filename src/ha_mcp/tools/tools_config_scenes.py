@@ -30,6 +30,7 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import with_auto_backup
+from .component_config_reads import fetch_entity_lookup_via_component
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -74,7 +75,9 @@ class ConfigSceneTools:
     # in suite runs.
     _RESOLVE_RETRY_DELAY = 0.2
 
-    async def _resolve_scene_entity_id(self, scene_id: str) -> str:
+    async def _resolve_scene_entity_id(
+        self, scene_id: str, *, allow_component: bool = False
+    ) -> str:
         """Resolve a scene's actual entity_id via the entity registry.
 
         Unlike scripts (where ``entity_id == 'script.<storage_key>'``), HA
@@ -97,12 +100,33 @@ class ConfigSceneTools:
         callsites see the real entity_id instead of trailing the lookup
         with a phantom (issue #1168 R3 blocker 1).
 
+        When ``allow_component`` (set/remove/post-write call sites only — a
+        config-get must never route through the component, see
+        ``component_config_reads`` and ``TestConfigGetSeam``) AND the component
+        advertises ``entity_lookup``, one in-process
+        ``entity_lookup(unique_id=scene_id, domain="scene")`` frame replaces the
+        whole-registry dump — authoritative on return, so NO sleep and NO retry.
+        A miss (empty matches) still lands on the naive ``scene.{scene_id}``
+        fallback. The component unavailable / errored ⇒ the legacy list+retry
+        path below runs unchanged (issue #1813 Phase 2).
+
         Accepts a bare ``scene_id`` ("movie_night") or a fully-qualified
         ``entity_id`` ("scene.movie_night") — the leading ``scene.`` is
         stripped so callers don't accidentally produce ``scene.scene.movie_night``
         on fallback. Mirrors ``rest_client.resolve_scene_id`` ergonomics.
         """
         scene_id = scene_id.removeprefix("scene.")
+        if allow_component:
+            matches = await fetch_entity_lookup_via_component(
+                self._client, scene_id, domain="scene"
+            )
+            if matches is not None:
+                # In-process read: authoritative on return (no settle retry).
+                for match in matches:
+                    entity_id = match.get("entity_id") or ""
+                    if entity_id.startswith("scene."):
+                        return entity_id
+                return f"scene.{scene_id}"
         retried = False
         for attempt in range(2):
             try:
@@ -781,7 +805,9 @@ class ConfigSceneTools:
                 # post-upsert finalisation the full-config branch runs. Without
                 # these, ``wait`` and ``category`` are silently dropped on
                 # python_transform calls.
-                entity_id = await self._resolve_scene_entity_id(resolved_id)
+                entity_id = await self._resolve_scene_entity_id(
+                    resolved_id, allow_component=True
+                )
                 if wait:
                     try:
                         registered = await wait_for_entity_registered(
@@ -905,7 +931,9 @@ class ConfigSceneTools:
             # Resolve actual entity_id via registry — HA derives scene
             # entity_ids from the 'name' slug, not the scene_id storage key,
             # so f"scene.{scene_id}" is wrong whenever a name is supplied.
-            entity_id = await self._resolve_scene_entity_id(resolved_id)
+            entity_id = await self._resolve_scene_entity_id(
+                resolved_id, allow_component=True
+            )
 
             # Wait for scene to be queryable
             if wait:
@@ -1045,7 +1073,9 @@ class ConfigSceneTools:
             # entry is gone, the unique_id lookup can no longer find it.
             # Falls back to f"scene.{resolved_id}" if the registry has no
             # matching unique_id (e.g. scene_id-as-entity-id slug case).
-            entity_id = await self._resolve_scene_entity_id(resolved_id)
+            entity_id = await self._resolve_scene_entity_id(
+                resolved_id, allow_component=True
+            )
 
             # ``resolved_id`` is already the storage key (resolved above), so
             # skip the redundant re-resolve inside delete_scene_config.

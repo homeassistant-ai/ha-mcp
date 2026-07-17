@@ -28,6 +28,11 @@ from ha_mcp.tools.tools_config_automations import (
 def mock_client():
     """Mock client satisfying read, transform, and delete paths."""
     client = MagicMock()
+    # Credential-less so the entity_lookup component gate short-circuits
+    # (get_component_caps returns None): these tests pin the legacy
+    # get_states-scan resolver, not the component route.
+    client.base_url = None
+    client.token = None
     client.get_automation_config = AsyncMock(
         return_value={
             "id": "abc123unique",

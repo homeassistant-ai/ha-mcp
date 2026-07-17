@@ -27,6 +27,8 @@ import asyncio
 import logging
 from typing import Any, TypedDict
 
+from .component_config_reads import fetch_reference_data_via_component
+
 logger = logging.getLogger(__name__)
 
 # Keys whose value (literal string) names a Home Assistant service in
@@ -249,10 +251,25 @@ async def validate_config_references(
         }
 
     try:
-        services_payload, states_payload = await asyncio.gather(
-            client.get_services(),
-            client.get_states(),
-        )
+        # When the component advertises ``reference_data``, one in-process frame
+        # returns the REST-shaped service catalog + the entity-id universe
+        # together, replacing the two REST round-trips. ``None`` ⇒ component
+        # unavailable/errored → the legacy gather. Either source feeds the same
+        # ``build_service_index`` / ``build_entity_set`` reducers, so the
+        # warnings are identical (pinned by the cross-seam contract test).
+        reference_data = await fetch_reference_data_via_component(client)
+        if reference_data is not None:
+            service_index = build_service_index(reference_data["services"])
+            entity_set = build_entity_set(
+                [{"entity_id": eid} for eid in reference_data["entity_ids"]]
+            )
+        else:
+            services_payload, states_payload = await asyncio.gather(
+                client.get_services(),
+                client.get_states(),
+            )
+            service_index = build_service_index(services_payload)
+            entity_set = build_entity_set(states_payload)
     except Exception:
         logger.exception(
             "Reference validator: failed to fetch service/entity registries; "
@@ -264,8 +281,6 @@ async def validate_config_references(
             "blueprint_skipped": False,
         }
 
-    service_index = build_service_index(services_payload)
-    entity_set = build_entity_set(states_payload)
     warnings = check_refs(walker_result["refs"], service_index, entity_set)
 
     return {
