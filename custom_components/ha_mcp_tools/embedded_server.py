@@ -296,77 +296,17 @@ class EmbeddedServerManager:
                 kind="package",
             )
 
-        ready_version = await self._async_ensure_package()
+        # Read the importer registry BEFORE the package step too: replacing
+        # the distribution's files on disk under a live importer corrupts it
+        # exactly like the sys.modules purge does (review finding), so a
+        # mutating install is deferred while any registered worker is alive.
+        ready_version = await self._async_ensure_package(
+            defer_mutations=_prune_and_check_importing_workers()
+        )
         access_token = await self._async_provision_token()
         await self._hass.async_add_executor_job(self._prepare_config_dir)
 
-        # Drop cached ha_mcp modules so the worker imports the code that is on
-        # disk NOW. Without this, a reload after a pip install keeps serving
-        # the OLD code forever: all workers are threads of the one HA core
-        # process, and Python resolves ``import ha_mcp`` from sys.modules —
-        # installs only took effect after a full HA core restart (issue
-        # observed live: options saves reinstalled the package, the web UI
-        # footer showed the new on-disk version, yet the serving worker kept
-        # reporting the version it was first imported with).
-        #
-        # SKIPPED while an orphaned worker may still be importing: ripping
-        # entries out of sys.modules under a live importer corrupts its
-        # import in progress (seen on QEMU-slow HAOS, where a cold import
-        # can outlive both the readiness timeout and the stop-join budget).
-        # The post-start staleness check below surfaces the consequence
-        # (old code possibly serving) instead.
-        #
-        # Also skipped when the cached modules already ARE the generation on
-        # disk (issue #1904): purging on every attempt made each retry pay
-        # the full cold import again, so slow hardware that missed the
-        # readiness window once could never recover. Never skipped under a
-        # pip-spec override — that is the one workflow where a reinstall can
-        # change the code without changing the version string (re-pointed
-        # tarball/pin), which a version-keyed skip would serve stale; channel
-        # installs mint a distinct version per build.
-        orphan = self._orphaned_thread
-        if orphan is not None and not orphan.is_alive():
-            self._orphaned_thread = orphan = None
-        # The per-manager orphan above cannot be the only guard: every
-        # bring-up constructs a FRESH manager (async_bring_up_server), so an
-        # entry reload during a slow cold import hands the purge to a manager
-        # that has never heard of the still-importing worker — which then
-        # crashed mid-import with KeyError: 'ha_mcp.config' when its modules
-        # were ripped out from under it (issue #1904, live on 1.1.1-dev.107).
-        # The process-global registry survives manager turnover.
-        with _IMPORTING_WORKERS_LOCK:
-            _IMPORTING_WORKERS.difference_update(
-                [t for t in _IMPORTING_WORKERS if not t.is_alive()]
-            )
-            importing_busy = bool(_IMPORTING_WORKERS)
-        if orphan is not None:
-            _LOGGER.warning(
-                "Skipping the ha_mcp module purge: a previous worker thread "
-                "is still shutting down. The new worker may serve the "
-                "previously imported code until Home Assistant restarts."
-            )
-        elif importing_busy:
-            # Distinct from the orphan message: this worker is still STARTING
-            # (mid cold-import, the #1904 incident shape), not shutting down —
-            # naming the actual state matters when reading logs during one.
-            _LOGGER.warning(
-                "Skipping the ha_mcp module purge: a previous bring-up's "
-                "worker thread is still importing. The new worker may serve "
-                "the previously imported code until Home Assistant restarts."
-            )
-        elif (
-            not self._pip_spec_override
-            and ready_version is not None
-            and _CACHED_IMPORT_VERSION is not None
-            and ready_version == _CACHED_IMPORT_VERSION
-        ):
-            _LOGGER.debug(
-                "Cached ha_mcp modules already match installed version %s; "
-                "skipping the module purge (warm start)",
-                ready_version,
-            )
-        else:
-            _purge_ha_mcp_modules()
+        self._maybe_purge_stale_modules(ready_version)
 
         self._thread_exc = None
         self._startup_phase = "waiting for the worker thread"
@@ -376,7 +316,19 @@ class EmbeddedServerManager:
             name="ha-mcp-server",
             daemon=True,
         )
-        self._thread.start()
+        # Registered by THIS (main) thread before start(): every bring-up
+        # runs its gate → register → start section synchronously on the one
+        # event loop, so another bring-up's purge gate can never interleave
+        # with a worker that exists but has not yet registered itself
+        # (review finding). The worker itself only ever deregisters.
+        with _IMPORTING_WORKERS_LOCK:
+            _IMPORTING_WORKERS.add(self._thread)
+        try:
+            self._thread.start()
+        except BaseException:
+            with _IMPORTING_WORKERS_LOCK:
+                _IMPORTING_WORKERS.discard(self._thread)
+            raise
 
         await self._async_wait_until_ready()
 
@@ -507,11 +459,85 @@ class EmbeddedServerManager:
             return None
         return DIST_NAME_STABLE if self._channel == CHANNEL_DEV else DIST_NAME_DEV
 
-    async def _async_ensure_package(self) -> str | None:
+    def _maybe_purge_stale_modules(self, ready_version: str | None) -> None:
+        """Purge cached ha_mcp modules unless doing so is unsafe or pointless.
+
+        The purge makes the next worker import the code that is on disk NOW.
+        Without it, a reload after a pip install keeps serving the OLD code
+        forever: all workers are threads of the one HA core process, and
+        Python resolves ``import ha_mcp`` from sys.modules — installs only
+        took effect after a full HA core restart (observed live: options
+        saves reinstalled the package, the web UI footer showed the new
+        on-disk version, yet the serving worker kept reporting the version
+        it was first imported with).
+
+        SKIPPED while any previous worker may still be importing — ripping
+        entries out of sys.modules under a live importer corrupts its import
+        in progress. Two guards cover that: the per-manager orphan (a worker
+        this manager's stop could not join), and the process-global
+        ``_IMPORTING_WORKERS`` registry, because every bring-up constructs a
+        FRESH manager (async_bring_up_server) and an entry reload during a
+        slow cold import otherwise hands the purge to a manager that has
+        never heard of the still-importing worker — which then crashed
+        mid-import with KeyError: 'ha_mcp.config' (issue #1904, live on
+        1.1.1-dev.107). The post-start staleness check surfaces the
+        consequence (old code possibly serving) instead.
+
+        Also skipped when the cached modules already ARE the generation on
+        disk: purging on every attempt made each retry pay the full cold
+        import again, so slow hardware that missed the readiness window once
+        could never recover (#1904). Never skipped under a pip-spec override
+        — the one workflow where a reinstall can change the code without
+        changing the version string (re-pointed tarball/pin), which a
+        version-keyed skip would serve stale; channel installs mint a
+        distinct version per build.
+        """
+        orphan = self._orphaned_thread
+        if orphan is not None and not orphan.is_alive():
+            self._orphaned_thread = orphan = None
+        importing_busy = _prune_and_check_importing_workers()
+        if orphan is not None:
+            _LOGGER.warning(
+                "Skipping the ha_mcp module purge: a previous worker thread "
+                "is still shutting down. The new worker may serve the "
+                "previously imported code until Home Assistant restarts."
+            )
+        elif importing_busy:
+            # Distinct from the orphan message: that worker is still STARTING
+            # (mid cold-import, the #1904 incident shape), not shutting down —
+            # naming the actual state matters when reading logs during one.
+            _LOGGER.warning(
+                "Skipping the ha_mcp module purge: a previous bring-up's "
+                "worker thread is still importing. The new worker may serve "
+                "the previously imported code until Home Assistant restarts."
+            )
+        elif (
+            not self._pip_spec_override
+            and ready_version is not None
+            and _CACHED_IMPORT_VERSION is not None
+            and ready_version == _CACHED_IMPORT_VERSION
+        ):
+            _LOGGER.debug(
+                "Cached ha_mcp modules already match installed version %s; "
+                "skipping the module purge (warm start)",
+                ready_version,
+            )
+        else:
+            _purge_ha_mcp_modules()
+
+    async def _async_ensure_package(
+        self, *, defer_mutations: bool = False
+    ) -> str | None:
         """Ensure ``ha-mcp`` is importable, installing the pip spec if needed.
 
         Returns the installed version that the worker is about to run, for the
         caller's warm-cache purge decision.
+
+        ``defer_mutations=True`` (a previous bring-up's worker is still
+        importing) downgrades any would-be uninstall/force-install to the
+        non-mutating fast path: replacing the distribution's files on disk
+        under a live importer corrupts it the same way a sys.modules purge
+        does. The deferred update applies on the next reload or HA restart.
 
         With auto-update on (the default) both channels install their
         distribution UNPINNED, so every entry reload / HA restart must pick up
@@ -607,6 +633,15 @@ class EmbeddedServerManager:
             and _is_compatible_embedded_version(installed_version)
         )
         if fast_path_ok:
+            await self._async_process_requirements_fast()
+        elif defer_mutations:
+            _LOGGER.warning(
+                "Deferring the ha-mcp install/upgrade: a previous bring-up's "
+                "worker thread is still importing, and replacing the package "
+                "files under it could corrupt that import. The currently "
+                "installed build will be used; reload the integration (or "
+                "restart Home Assistant) to apply the update."
+            )
             await self._async_process_requirements_fast()
         else:
             await self._async_remove_conflicting_dist()
@@ -863,13 +898,10 @@ class EmbeddedServerManager:
         stop_event = asyncio.Event()
         self._loop = loop
         self._stop_event = stop_event
-        # Registered BEFORE the first ha_mcp import so no later bring-up can
-        # purge sys.modules while this worker's imports are in flight — the
-        # per-manager orphan guard cannot cover this (managers are recreated
-        # per bring-up). Deregistered in _serve once the import section
-        # completes, and here on exit as the backstop.
-        with _IMPORTING_WORKERS_LOCK:
-            _IMPORTING_WORKERS.add(threading.current_thread())
+        # Registration in _IMPORTING_WORKERS happened on the MAIN thread,
+        # before start() — see async_start. This thread only deregisters:
+        # in _serve once the import section completes, and in the finally
+        # below on exit as the backstop.
         try:
             loop.run_until_complete(self._serve(access_token, stop_event))
         except SystemExit as err:
@@ -1207,9 +1239,10 @@ class EmbeddedServerManager:
 # sys.modules while any of them is alive corrupts the in-flight import
 # (KeyError from frozen importlib — issue #1904). Process-global because a
 # manager is recreated on every bring-up, so per-manager orphan tracking
-# cannot see a previous manager's abandoned worker. Workers register in
-# _thread_main before their first import and deregister once their import
-# section completes (or on thread exit, whichever comes first). All access
+# cannot see a previous manager's abandoned worker. The spawning (main)
+# thread registers the worker BEFORE start() — see async_start — and the
+# worker deregisters once its import section completes (or on thread exit,
+# whichever comes first). All access
 # goes through the lock: CPython's GIL would make the individual set ops
 # atomic, but the purge gate's prune-then-check is a composite read and the
 # lock keeps its correctness independent of GIL scheduling arguments.
@@ -1220,6 +1253,16 @@ class EmbeddedServerManager:
 # surface the condition.
 _IMPORTING_WORKERS_LOCK = threading.Lock()
 _IMPORTING_WORKERS: set[threading.Thread] = set()
+
+
+def _prune_and_check_importing_workers() -> bool:
+    """Drop dead workers from the registry; return True if any live one remains."""
+    with _IMPORTING_WORKERS_LOCK:
+        _IMPORTING_WORKERS.difference_update(
+            [t for t in _IMPORTING_WORKERS if not t.is_alive()]
+        )
+        return bool(_IMPORTING_WORKERS)
+
 
 # Version of the ha_mcp generation currently cached in sys.modules — set by
 # the worker right after its first import lands, cleared by the purge. Process-wide
