@@ -10,13 +10,25 @@ This module provides tools for Home Assistant system administration including:
 import asyncio
 import logging
 from collections.abc import Coroutine
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
+from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
@@ -34,6 +46,55 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The ha_mcp_tools/system_snapshot WS command: one consistent in-process read of
+# config_entries/issues/entities/states, collapsing what used to be up to 3x
+# ``config_entries/get`` fetches (a TOCTOU across sections) into one snapshot.
+WS_SYSTEM_SNAPSHOT = "ha_mcp_tools/system_snapshot"
+
+
+@dataclass(frozen=True)
+class _SystemSnapshotSlices:
+    """The component's ``system_snapshot`` slices, re-wrapped for the section
+    helpers that already unwrap the legacy ``{success, result}`` WS envelope
+    (mirrors ``ha_get_overview``'s ``_OverviewSlices`` in ``tools_search.py``).
+
+    ``config_entries`` / ``repairs`` / ``registry`` are wrapped in the
+    ``{success, result}`` envelope ``_fetch_zwave_network`` /
+    ``_fetch_matter_network`` / ``_fetch_repairs`` / ``_fetch_dead_entities``
+    (via ``_ws_result_list``) already unwrap; ``states`` stays the bare list
+    matching ``get_states()``, which ``_fetch_dead_entities`` reads directly.
+    """
+
+    config_entries: dict[str, Any]
+    repairs: dict[str, Any]
+    states: list[dict[str, Any]]
+    registry: dict[str, Any]
+
+
+def _build_system_snapshot_slices(
+    result: dict[str, Any],
+) -> _SystemSnapshotSlices | None:
+    """Adapt the component's bare ``system_snapshot`` slices into the envelope
+    shape the section helpers unwrap. Returns ``None`` (⇒ every consuming
+    section falls back to its legacy fetch) when the payload isn't
+    trustworthy: not a dict, or any of the four expected keys
+    (``config_entries`` / ``issues`` / ``entities`` / ``states``) missing or
+    not a list. All four are always present per the component's contract
+    (a disabled section is an empty list, never a missing key), so a missing
+    key here means the response is malformed, not merely disabled.
+    """
+    if not isinstance(result, dict):
+        return None
+    for key in ("config_entries", "issues", "entities", "states"):
+        if not isinstance(result.get(key), list):
+            return None
+    return _SystemSnapshotSlices(
+        config_entries={"success": True, "result": result["config_entries"]},
+        repairs={"success": True, "result": {"issues": result["issues"]}},
+        states=result["states"],
+        registry={"success": True, "result": result["entities"]},
+    )
 
 
 def _reraise_if_fatal(exc: BaseException) -> None:
@@ -736,6 +797,30 @@ class SystemTools:
                     want_themes
                 ) = False
 
+            want_dead_entities = "dead_entities" in includes
+
+            # One ``ha_mcp_tools/system_snapshot`` read up front, threaded into
+            # every consuming section below, when the component supports it and
+            # at least one consuming section was actually requested — never
+            # fetched (and never counted against the component) for a call that
+            # only wants zha_network/thread_network/themes/diagnostics/
+            # config_check. ``None`` (capability miss, command error/timeout, or
+            # a malformed slice) means every consuming section below falls back
+            # to its own legacy fetch — all-or-nothing per call, never a partial
+            # hybrid. Only the slices a requested section actually needs are
+            # asked for, so e.g. a repairs-only call doesn't pay for a full
+            # states/entities dump.
+            snapshot: _SystemSnapshotSlices | None = None
+            if want_repairs or want_zwave or want_matter or want_dead_entities:
+                snapshot = await self._fetch_system_snapshot(
+                    include_issues=want_repairs,
+                    include_config_entries=(
+                        want_zwave or want_matter or want_dead_entities
+                    ),
+                    include_entities=want_dead_entities,
+                    include_states=want_dead_entities,
+                )
+
             sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]] = []
             if want_repairs:
                 sections.append(
@@ -744,6 +829,9 @@ class SystemTools:
                         self._fetch_repairs(
                             ws_client,
                             include_dismissed=include_dismissed_repairs_bool,
+                            prefetched_repairs=(
+                                snapshot.repairs if snapshot else None
+                            ),
                         ),
                     )
                 )
@@ -752,14 +840,32 @@ class SystemTools:
                     ("zha_network", self._fetch_zha_network(ws_client, full=zha_full))
                 )
             if want_zwave:
-                sections.append(("zwave_network", self._fetch_zwave_network(ws_client)))
+                sections.append(
+                    (
+                        "zwave_network",
+                        self._fetch_zwave_network(
+                            ws_client,
+                            prefetched_entries=(
+                                snapshot.config_entries if snapshot else None
+                            ),
+                        ),
+                    )
+                )
             if want_thread:
                 sections.append(
                     ("thread_network", self._fetch_thread_network(ws_client))
                 )
             if want_matter:
                 sections.append(
-                    ("matter_network", self._fetch_matter_network(ws_client))
+                    (
+                        "matter_network",
+                        self._fetch_matter_network(
+                            ws_client,
+                            prefetched_entries=(
+                                snapshot.config_entries if snapshot else None
+                            ),
+                        ),
+                    )
                 )
             if want_themes:
                 sections.append(("themes", self._fetch_themes(ws_client)))
@@ -879,12 +985,20 @@ class SystemTools:
                 # in one call.
                 result["config_check"] = await self._fetch_config_check()
 
-            if "dead_entities" in includes:
+            if want_dead_entities:
                 # REST + the REST client's own per-client WebSocket bridge
                 # (states via /api/states, registry + config-entries via the
                 # bridge), not the health ws_client — so it runs inline like
-                # config_check and survives a baseline-WS-down install.
-                dead_section = await self._fetch_dead_entities()
+                # config_check and survives a baseline-WS-down install. When
+                # the snapshot fetched above succeeded, its entities/states/
+                # config_entries slices replace all three fetches.
+                dead_section = await self._fetch_dead_entities(
+                    prefetched_states=snapshot.states if snapshot else None,
+                    prefetched_registry=snapshot.registry if snapshot else None,
+                    prefetched_entries=(
+                        snapshot.config_entries if snapshot else None
+                    ),
+                )
                 # Pop the ``_warnings`` sentinel and bubble it to the top-level
                 # ``result["warnings"]`` (the documented contract location).
                 # The section helper uses this sentinel so its return signature
@@ -996,11 +1110,78 @@ class SystemTools:
 
         return ws_client, result
 
+    async def _fetch_system_snapshot(
+        self,
+        *,
+        include_issues: bool,
+        include_config_entries: bool,
+        include_entities: bool,
+        include_states: bool,
+    ) -> _SystemSnapshotSlices | None:
+        """One ``ha_mcp_tools/system_snapshot`` read; ``None`` ⇒ every consuming
+        section runs its own legacy fetch.
+
+        Threads into ``_fetch_repairs`` (issues), ``_fetch_zwave_network`` +
+        ``_fetch_matter_network`` (config_entries — the zwave_js/matter status
+        calls themselves are unchanged), and ``_fetch_dead_entities``
+        (entities + states + config_entries), collapsing what was up to 3x
+        ``config_entries/get`` round-trips (a TOCTOU across sections) into one
+        consistent in-process read.
+
+        All-or-nothing per call, mirroring ``_fetch_exposure_via_component`` /
+        ``_overview_via_component``: a capability miss, command error/timeout,
+        or malformed slice falls back to the legacy per-section fetches for
+        EVERY consuming section in this call — never a partial hybrid where
+        one section reads the snapshot and a sibling reads legacy data from a
+        different instant. ``unknown_command`` invalidates the cached caps
+        (component downgraded mid-session); any other command error/timeout
+        just logs and falls back, leaving caps cached. A
+        ``HomeAssistantConnectionError`` (WS down) is not caught here; it
+        propagates — the legacy path shares the same socket and would fail
+        identically.
+
+        Only the ``include_*`` flags the caller actually needs are requested
+        (mirroring which of ``want_repairs`` / ``want_zwave`` / ``want_matter``
+        / ``want_dead_entities`` are true), so a call asking only for
+        ``repairs`` doesn't pay for a full states/entities dump.
+        """
+        caps = await get_component_caps(self._client)
+        if not component_supports(caps, "system_snapshot"):
+            return None
+        try:
+            ws = await get_websocket_client(
+                url=self._client.base_url, token=self._client.token
+            )
+            raw = await ws.send_command(
+                WS_SYSTEM_SNAPSHOT,
+                include_issues=include_issues,
+                include_config_entries=include_config_entries,
+                include_entities=include_entities,
+                include_states=include_states,
+            )
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+            else:
+                logger.warning(
+                    "%s failed; fell back to legacy: %r", WS_SYSTEM_SNAPSHOT, exc
+                )
+            return None
+        return _build_system_snapshot_slices(raw.get("result") or {})
+
     @staticmethod
     async def _fetch_repairs(
-        ws_client: Any, *, include_dismissed: bool = False
+        ws_client: Any,
+        *,
+        include_dismissed: bool = False,
+        prefetched_repairs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Fetch repair issues from Home Assistant.
+
+        ``prefetched_repairs`` (the component's ``system_snapshot`` ``issues``
+        slice, re-wrapped in the ``{success, result: {issues: [...]}}``
+        envelope this helper already unwraps) skips the
+        ``repairs/list_issues`` WS call when given.
 
         Filters out user-dismissed ("ignored") repairs by default to match the
         HA Repairs UI. Pass ``include_dismissed=True`` to return all issues
@@ -1008,7 +1189,11 @@ class SystemTools:
         """
         repairs: dict[str, Any] = {"issues": [], "count": 0}
         try:
-            repairs_result = await ws_client.send_command("repairs/list_issues")
+            repairs_result = (
+                prefetched_repairs
+                if prefetched_repairs is not None
+                else await ws_client.send_command("repairs/list_issues")
+            )
             if repairs_result.get("success"):
                 all_issues = repairs_result.get("result", {}).get("issues", [])
                 visible_issues = filter_active_repairs(
@@ -1084,8 +1269,19 @@ class SystemTools:
         return zha_network
 
     @staticmethod
-    async def _fetch_zwave_network(ws_client: Any) -> dict[str, Any]:
-        """Fetch Z-Wave JS network status and node summary."""
+    async def _fetch_zwave_network(
+        ws_client: Any,
+        *,
+        prefetched_entries: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Fetch Z-Wave JS network status and node summary.
+
+        ``prefetched_entries`` (the component's ``system_snapshot``
+        ``config_entries`` slice, re-wrapped in the ``{success, result:
+        [...]}`` envelope) skips the ``config_entries/get`` WS call when
+        given; the ``zwave_js/network_status`` call itself always runs
+        (system_snapshot doesn't reach into the radio integration).
+        """
         ZWAVE_NODE_LIMIT = 50
         zwave_network: dict[str, Any] = {
             "controller": {},
@@ -1098,7 +1294,11 @@ class SystemTools:
             # is ``config_entries/get`` (underscore); the slash form is rejected
             # as "Unknown command", which the outer except would mask as
             # "Z-Wave JS integration not available".
-            entries_result = await ws_client.send_command("config_entries/get")
+            entries_result = (
+                prefetched_entries
+                if prefetched_entries is not None
+                else await ws_client.send_command("config_entries/get")
+            )
             zwave_entry_id = None
             if entries_result.get("success"):
                 for entry in entries_result.get("result", []):
@@ -1200,7 +1400,11 @@ class SystemTools:
         return thread_network
 
     @staticmethod
-    async def _fetch_matter_network(ws_client: Any) -> dict[str, Any]:
+    async def _fetch_matter_network(
+        ws_client: Any,
+        *,
+        prefetched_entries: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Fetch a lightweight Matter integration-presence summary.
 
         Resolves the Matter config entry via ``config_entries/get`` (filtering
@@ -1210,13 +1414,22 @@ class SystemTools:
         integration presence/state summary, not a per-device dump. Returns
         ``{"error": "Matter integration not found"}`` when no Matter entry
         exists.
+
+        ``prefetched_entries`` (the component's ``system_snapshot``
+        ``config_entries`` slice, re-wrapped in the ``{success, result:
+        [...]}`` envelope) skips the ``config_entries/get`` WS call when
+        given — mirrors ``_fetch_zwave_network``.
         """
         matter_network: dict[str, Any] = {}
         try:
             # ``config_entries/get`` (underscore) is the canonical command —
             # the slash form is rejected as "Unknown command" (same caveat the
             # zwave helper documents above).
-            entries_result = await ws_client.send_command("config_entries/get")
+            entries_result = (
+                prefetched_entries
+                if prefetched_entries is not None
+                else await ws_client.send_command("config_entries/get")
+            )
             matter_entry = None
             if entries_result.get("success"):
                 for entry in entries_result.get("result", []):
@@ -1315,7 +1528,13 @@ class SystemTools:
             return result, None
         return None, f"unexpected result shape: {type(result).__name__}"
 
-    async def _fetch_dead_entities(self) -> dict[str, Any]:
+    async def _fetch_dead_entities(
+        self,
+        *,
+        prefetched_states: list[dict[str, Any]] | None = None,
+        prefetched_registry: dict[str, Any] | None = None,
+        prefetched_entries: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Surface orphaned/stale entity-registry entries.
 
         Diffs the entity registry against the state machine and the live
@@ -1349,6 +1568,14 @@ class SystemTools:
         (``self._client``) for states plus its per-client WebSocket bridge for
         the registry + config entries, so it needs no system_health ws_client
         and runs even when the health baseline is unavailable.
+
+        ``prefetched_states`` / ``prefetched_registry`` / ``prefetched_entries``
+        (the component's ``system_snapshot`` ``states`` / ``entities`` /
+        ``config_entries`` slices — ``registry`` / ``entries`` re-wrapped in
+        the ``{success, result: [...]}`` envelope ``_ws_result_list`` already
+        unwraps, ``states`` as the bare list ``get_states()`` returns) are
+        supplied together by the caller as one unit; when given, all three
+        fetches below are skipped.
         """
         DEAD_ENTITIES_LIMIT = 50
         dead: dict[str, Any] = {
@@ -1365,18 +1592,27 @@ class SystemTools:
         # ``warnings`` key would collide with.
         bubble_warnings: list[str] = []
         try:
-            # Index the gather result (rather than tuple-unpack) so mypy can
-            # type each element through the return_exceptions=True overload;
-            # mirrors smart_search/_entities.py::_fetch_search_entities.
-            results = await asyncio.gather(
-                self._client.get_states(),
-                self._client.send_websocket_message(
-                    {"type": "config/entity_registry/list"}
-                ),
-                self._client.send_websocket_message({"type": "config_entries/get"}),
-                return_exceptions=True,
-            )
-            states = results[0]
+            if prefetched_registry is not None:
+                states: Any = prefetched_states if prefetched_states is not None else []
+                registry_raw: Any = prefetched_registry
+                entries_raw: Any = prefetched_entries
+            else:
+                # Index the gather result (rather than tuple-unpack) so mypy
+                # can type each element through the return_exceptions=True
+                # overload; mirrors smart_search/_entities.py::_fetch_search_entities.
+                results = await asyncio.gather(
+                    self._client.get_states(),
+                    self._client.send_websocket_message(
+                        {"type": "config/entity_registry/list"}
+                    ),
+                    self._client.send_websocket_message(
+                        {"type": "config_entries/get"}
+                    ),
+                    return_exceptions=True,
+                )
+                states = results[0]
+                registry_raw = results[1]
+                entries_raw = results[2]
 
             if isinstance(states, BaseException):
                 # Truly-fatal errors must propagate, not demote to a section
@@ -1390,7 +1626,7 @@ class SystemTools:
                     f"{type(states).__name__}"
                 )
                 return dead
-            registry, registry_err = self._ws_result_list(results[1])
+            registry, registry_err = self._ws_result_list(registry_raw)
             if registry is None:
                 # Preserve the underlying cause (envelope error message,
                 # exception type, or wrong-shape description) so the client
@@ -1405,7 +1641,7 @@ class SystemTools:
             # config-entries is the only optional source: without it the
             # definitive orphan tier can't be computed, but stale_restored still
             # can — so degrade rather than fail the whole section.
-            entries, entries_err = self._ws_result_list(results[2])
+            entries, entries_err = self._ws_result_list(entries_raw)
             live_entry_ids: set[str] | None = None
             if entries is None:
                 # Genuine fetch failure — preserve the cause so a backend
