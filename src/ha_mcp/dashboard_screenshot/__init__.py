@@ -19,7 +19,8 @@ from .capture import (
     DashboardImageCapture,
     capture_dashboard_images,
 )
-from .provision import resolve_engine_url
+from .provision import EngineTarget, resolve_engine, resolve_engine_url
+from .theme_guard import ThemeGuard
 
 __all__ = [
     "DEFAULT_HEIGHT",
@@ -27,6 +28,9 @@ __all__ = [
     "DEFAULT_WAIT_MS",
     "DEFAULT_WIDTH",
     "DashboardImageCapture",
+    "EngineTarget",
+    "ThemeGuard",
     "capture_dashboard_images",
+    "resolve_engine",
     "resolve_engine_url",
 ]

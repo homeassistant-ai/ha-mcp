@@ -175,11 +175,19 @@ page and (by its design) restarts; ha-mcp surfaces this as a clear "set the
 engine's access token" error rather than a silent failure.
 
 Puppet's theme and dark-mode renderer controls dispatch Home Assistant's
-`settheme` event and can persist preferences on the frontend profile used by
-that token; even a fresh Puppet browser's first default render may save the
-default theme/dark selection. Use a dedicated Puppet account so screenshot QA
-does not alter a person's normal frontend preferences. Language selection is
-local to Puppet's browser session.
+`settheme` event, which Home Assistant persists on the frontend profile of
+the user whose token the engine runs with — and syncs to that user's real
+web and mobile sessions. Even a fresh Puppet browser's first default render
+saves a "light" selection, which used to flip a dark-mode user's whole UI to
+light on every screenshot. ha-mcp now brackets every capture: it reads that
+user's saved theme before rendering and writes it back afterwards if the
+render changed it (in add-on mode it authenticates with the Puppet add-on's
+own configured token; in sidecar/standalone mode with ha-mcp's own HA
+credentials, which protects the user whenever both tokens belong to the same
+account). The restore is best-effort — a failed restore surfaces as a
+`warnings` entry on the tool response. A dedicated Puppet account remains a
+sound belt-and-suspenders setup. Language selection is local to Puppet's
+browser session.
 
 To change the Puppet engine add-on's own options (such as `keep_browser_open`)
 or to restart it, use `ha_manage_addon`; the screenshot tools only render and
@@ -254,8 +262,9 @@ render failure to a warning so it never breaks a write that already committed.
 screenshot *is* the requested payload, so a total render failure surfaces as
 an error (matching the standalone `ha_get_dashboard_screenshot` tool) rather
 than a warning a caller might miss. Because Puppet can persist theme/dark
-preferences, screenshot operations are blocked in server Read Only Mode;
-ordinary dashboard get/list/search calls remain available.
+preferences (and the theme-restore bracket writes frontend user data to undo
+that), screenshot operations are blocked in server Read Only Mode; ordinary
+dashboard get/list/search calls remain available.
 
 **Raw rendered paths remain constrained.** `ha_get_dashboard_screenshot`
 validates legacy `dashboard_path` values (rejects URLs, query strings,

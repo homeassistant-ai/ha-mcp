@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -32,6 +33,23 @@ from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class EngineTarget:
+    """A resolved screenshot engine endpoint.
+
+    ``addon_options`` carries the Puppet add-on's Supervisor options
+    (``access_token``, ``home_assistant_url``, ...) when the engine was
+    discovered via the Supervisor, so the theme guard can authenticate as
+    the engine's user without a second discovery round-trip. It is ``None``
+    for an explicitly configured engine URL. The token inside never leaves
+    the server process — it must not be logged or surfaced in responses.
+    """
+
+    url: str
+    addon_options: dict[str, Any] | None = None
+
 
 ENGINE_PORT = 10000
 # The Supervisor slug is ``<repo-hash>_puppet`` for balloob's Puppet add-on.
@@ -147,7 +165,12 @@ def _supervisor_addon_listing(payload: Any) -> list[dict[str, Any]]:
 
 
 async def resolve_engine_url() -> str:
-    """Return the base URL of the screenshot engine, or raise ToolError.
+    """Return the base URL of the screenshot engine, or raise ToolError."""
+    return (await resolve_engine()).url
+
+
+async def resolve_engine() -> EngineTarget:
+    """Resolve the screenshot engine endpoint, or raise ToolError.
 
     See module docstring for the three-mode resolution order.
     """
@@ -155,10 +178,10 @@ async def resolve_engine_url() -> str:
 
     explicit = (get_global_settings().dashboard_screenshot_engine_url or "").strip()
     if explicit:
-        return explicit.rstrip("/")
+        return EngineTarget(url=explicit.rstrip("/"))
 
     if os.environ.get("SUPERVISOR_TOKEN"):
-        return await _discover_engine_url_via_supervisor()
+        return await _discover_engine_via_supervisor()
 
     raise_tool_error(
         create_error_response(
@@ -178,8 +201,8 @@ async def resolve_engine_url() -> str:
     raise AssertionError("unreachable: raise_tool_error always raises")
 
 
-async def _discover_engine_url_via_supervisor() -> str:
-    """Find the Puppet add-on via the Supervisor and return its internal URL.
+async def _discover_engine_via_supervisor() -> EngineTarget:
+    """Find the Puppet add-on via the Supervisor and return its endpoint.
 
     Requires the ha-mcp add-on's ``manager`` role (already declared) for the
     read-only ``/addons`` + ``/addons/<slug>/info`` endpoints. Raises a
@@ -229,7 +252,11 @@ async def _discover_engine_url_via_supervisor() -> str:
                         context={"slug": slug},
                     )
                 )
-            return f"http://{hostname}:{ENGINE_PORT}"
+            options = data.get("options")
+            return EngineTarget(
+                url=f"http://{hostname}:{ENGINE_PORT}",
+                addon_options=options if isinstance(options, dict) else None,
+            )
     except ToolError:
         raise
     except (httpx.HTTPError, KeyError, ValueError) as e:

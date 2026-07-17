@@ -26,6 +26,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
 import ha_mcp.config as config
+from ha_mcp.dashboard_screenshot.provision import EngineTarget
 
 _PNG = b"\x89PNG\r\n\x1a\nunit"
 _JPEG = b"\xff\xd8\xffunit"
@@ -411,7 +412,7 @@ class TestDiscoverEngineViaSupervisor:
             {"/addons": {"data": {"addons": [{"slug": "core_ssh"}, {"slug": "a_db"}]}}},
         )
         with pytest.raises(ToolError) as exc:
-            await provision._discover_engine_url_via_supervisor()
+            await provision._discover_engine_via_supervisor()
         assert "not installed" in str(exc.value).lower()
 
     async def test_prefers_started_match(self, monkeypatch: Any) -> None:
@@ -434,8 +435,11 @@ class TestDiscoverEngineViaSupervisor:
                 },
             },
         )
-        url = await provision._discover_engine_url_via_supervisor()
-        assert url == "http://def-puppet:10000"
+        target = await provision._discover_engine_via_supervisor()
+        assert target.url == "http://def-puppet:10000"
+        # The discovered add-on's options ride along so the theme guard can
+        # authenticate as the engine's user without a second discovery.
+        assert target.addon_options == _puppet_options(keep_browser_open=False)
 
     async def test_multiple_verified_started_matches_fail_closed(
         self, monkeypatch: Any
@@ -463,7 +467,7 @@ class TestDiscoverEngineViaSupervisor:
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await provision._discover_engine_url_via_supervisor()
+            await provision._discover_engine_via_supervisor()
 
         assert "ambiguous" in str(exc_info.value)
 
@@ -478,7 +482,7 @@ class TestDiscoverEngineViaSupervisor:
             },
         )
         with pytest.raises(ToolError) as exc:
-            await provision._discover_engine_url_via_supervisor()
+            await provision._discover_engine_via_supervisor()
         assert "hostname" in str(exc.value).lower()
 
     async def test_installed_but_not_started_raises(self, monkeypatch: Any) -> None:
@@ -492,7 +496,7 @@ class TestDiscoverEngineViaSupervisor:
             },
         )
         with pytest.raises(ToolError) as exc:
-            await provision._discover_engine_url_via_supervisor()
+            await provision._discover_engine_via_supervisor()
         assert "not started" in str(exc.value).lower()
 
     async def test_supervisor_http_error_raises_connection_failed(
@@ -504,7 +508,7 @@ class TestDiscoverEngineViaSupervisor:
 
         _patch_supervisor(monkeypatch, {"/addons": httpx.ConnectError("boom")})
         with pytest.raises(ToolError) as exc:
-            await provision._discover_engine_url_via_supervisor()
+            await provision._discover_engine_via_supervisor()
         assert "supervisor" in str(exc.value).lower()
 
     @pytest.mark.parametrize(
@@ -524,7 +528,7 @@ class TestDiscoverEngineViaSupervisor:
         _patch_supervisor(monkeypatch, {"/addons": payload})
 
         with pytest.raises(ToolError) as exc_info:
-            await provision._discover_engine_url_via_supervisor()
+            await provision._discover_engine_via_supervisor()
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "CONNECTION_FAILED"
@@ -544,7 +548,7 @@ class TestDiscoverEngineViaSupervisor:
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await provision._discover_engine_url_via_supervisor()
+            await provision._discover_engine_via_supervisor()
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "CONNECTION_FAILED"
@@ -629,10 +633,10 @@ class TestCapture:
     async def test_builds_url_and_returns_png(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         png = b"\x89PNG\r\n\x1a\nfake"
         _FakeAsyncClient._next = _FakeResponse(200, png)
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
@@ -652,10 +656,10 @@ class TestCapture:
         """full_page=True uses Puppet's content-sized viewport request."""
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = _FakeResponse(200, b"\x89PNG\r\n\x1a\nfake")
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -670,10 +674,10 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient.gets = []
         _FakeAsyncClient._next = _FakeResponse(200, _PNG)
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
@@ -718,10 +722,10 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = _FakeResponse(200, _PNG)
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -744,10 +748,10 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient.gets = []
         _FakeAsyncClient._next = [
             _FakeResponse(400, b"", content_type="text/plain"),
@@ -771,10 +775,10 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient.gets = []
         _FakeAsyncClient._next = _FakeResponse(400, b"", content_type="text/plain")
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
@@ -789,11 +793,11 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
         response = _FakeResponse(200, b"12345", content_length=5)
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 8)
         _FakeAsyncClient._next = response
@@ -810,10 +814,10 @@ class TestCapture:
     async def test_chunked_oversize_stops_at_limit(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 8)
         _FakeAsyncClient._next = _FakeResponse(200, b"", chunks=[b"123", b"45"])
@@ -829,10 +833,10 @@ class TestCapture:
     async def test_exact_payload_boundary_succeeds(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 8)
         _FakeAsyncClient._next = _FakeResponse(
@@ -851,10 +855,10 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 6)
         _FakeAsyncClient._next = _FakeResponse(
@@ -883,10 +887,10 @@ class TestCapture:
 
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = [
             _FakeResponse(200, _PNG),
             httpx.ReadTimeout("desktop timed out"),
@@ -913,10 +917,10 @@ class TestCapture:
 
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = [
             httpx.ReadTimeout("mobile timed out"),
             _FakeResponse(200, _PNG),
@@ -942,10 +946,10 @@ class TestCapture:
 
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = [
             httpx.ReadTimeout("mobile timed out"),
             httpx.ReadTimeout("desktop timed out"),
@@ -977,10 +981,10 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 6)
         _FakeAsyncClient._next = _FakeResponse(
@@ -1006,10 +1010,10 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient.gets = []
         _FakeAsyncClient._next = _FakeResponse(200, _JPEG, content_type="image/jpeg")
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
@@ -1052,10 +1056,10 @@ class TestCapture:
     async def test_rejects_unexpected_content_type(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = _FakeResponse(
             200, b"not a jpeg", content_type="image/png"
         )
@@ -1083,10 +1087,10 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = _FakeResponse(200, body, content_type=mime_type)
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -1113,10 +1117,10 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = _FakeResponse(
             200, b"<html>login</html>", content_type=mime_type
         )
@@ -1139,10 +1143,10 @@ class TestCapture:
 
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = httpx.ReadTimeout("render too slow")
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -1164,10 +1168,10 @@ class TestCapture:
     async def test_http_error_raises_toolerror(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = _FakeResponse(502, b"", text="bad gateway")
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -1177,10 +1181,10 @@ class TestCapture:
     async def test_empty_body_raises_toolerror(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = _FakeResponse(200, b"")
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -1222,10 +1226,10 @@ class TestCapture:
         percent-encoded (defense-in-depth), not raw."""
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> str:
-            return "http://engine:10000"
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://engine:10000")
 
-        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient._next = _FakeResponse(200, b"\x89PNG\r\n\x1a\nfake")
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -1976,9 +1980,13 @@ class TestPublicScreenshotOptionForwarding:
         assert {
             key: value
             for key, value in capture_call.items()
-            if key not in {"path", "partial_failures"}
+            if key not in {"path", "partial_failures", "client", "capture_warnings"}
         } == defaults
         assert capture_call["partial_failures"] == []
+        # The theme guard needs the HA client for its non-add-on credential
+        # fallback and an accumulator for its non-fatal warnings.
+        assert capture_call["client"] is not None
+        assert capture_call["capture_warnings"] == []
 
     async def test_get_include_screenshot_forwards_view_path(
         self, monkeypatch: Any

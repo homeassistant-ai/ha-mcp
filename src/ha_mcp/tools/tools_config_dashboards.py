@@ -1080,6 +1080,7 @@ async def _capture_dashboard_screenshot_result(
             result.setdefault("warnings", []).extend(target.warnings)
 
     capture_failures: list[dict[str, Any]] = []
+    guard_warnings: list[str] = []
     captures = await screenshot_capture.capture_dashboard_images(
         render_path,
         width=options.width,
@@ -1095,6 +1096,8 @@ async def _capture_dashboard_screenshot_result(
         image_format=options.image_format,
         render_timeout_seconds=options.render_timeout_seconds,
         partial_failures=capture_failures,
+        client=client,
+        capture_warnings=guard_warnings,
     )
     # Build every fallible image/metadata object before publishing screenshot
     # fields. The write path can then degrade serialization failures to a
@@ -1110,7 +1113,10 @@ async def _capture_dashboard_screenshot_result(
         if capture_failures:
             structured_result["screenshot_partial"] = True
             structured_result["screenshot_failures"] = capture_failures
-        capture_warnings = dashboard_screenshot_warnings(captures)
+        capture_warnings = [
+            *dashboard_screenshot_warnings(captures),
+            *guard_warnings,
+        ]
         if capture_warnings:
             structured_result["warnings"] = [
                 *structured_result.get("warnings", []),

@@ -2,8 +2,11 @@
 
 The engine (balloob's Puppet add-on, or a docker-compose sidecar)
 authenticates to Home Assistant with its OWN configured long-lived token, so
-this client passes only the dashboard path + render parameters — no HA token
-ever flows through ha-mcp or the LLM for screenshots.
+this client passes only the dashboard path + render parameters to the engine
+— no HA token is ever sent to the engine or exposed to the LLM. The
+:mod:`theme_guard` bracket around each capture batch may hold the engine's
+token in server memory to restore the engine user's saved theme (issue
+#1909); see that module's docstring for the containment rules.
 """
 
 from __future__ import annotations
@@ -20,7 +23,8 @@ from fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error
-from .provision import TOKEN_HINT, resolve_engine_url
+from .provision import TOKEN_HINT, resolve_engine
+from .theme_guard import ThemeGuard
 
 logger = logging.getLogger(__name__)
 
@@ -789,6 +793,8 @@ async def capture_dashboard_images(
     image_format: ScreenshotFormat = "png",
     render_timeout_seconds: float = DEFAULT_RENDER_TIMEOUT_SECONDS,
     partial_failures: list[dict[str, Any]] | None = None,
+    client: Any | None = None,
+    capture_warnings: list[str] | None = None,
 ) -> list[DashboardImageCapture]:
     """Render one or more ordered dashboard images via the screenshot engine.
 
@@ -796,6 +802,12 @@ async def capture_dashboard_images(
     preset or custom dimensions when needed; omitting it preserves each
     preset's native orientation. ``full_page`` is a compatibility alias for
     requesting the engine's native ``WIDTHxauto`` viewport.
+
+    The batch is bracketed by a :class:`ThemeGuard` that restores the engine
+    user's saved frontend theme if rendering changed it (issue #1909).
+    ``client`` supplies the guard's non-add-on credential fallback and
+    ``capture_warnings`` collects the guard's non-fatal warnings; both are
+    optional and never affect the captures themselves.
     """
     path = _validate_dashboard_path(dashboard_path)
     options = validate_capture_parameters(
@@ -814,94 +826,107 @@ async def capture_dashboard_images(
     )
     viewports = _capture_viewports(options)
 
-    engine = await resolve_engine_url()
+    engine_target = await resolve_engine()
+    engine = engine_target.url
     url = f"{engine}/{path}"
     mime_type = _MIME_TYPES[options.image_format]
     captures: list[DashboardImageCapture] = []
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(options.render_timeout_seconds)
-    ) as http_client:
-        for capture_index, viewport in enumerate(viewports):
-            params: dict[str, str] = {
-                "viewport": f"{viewport.width}x{viewport.height}",
-                "zoom": str(options.zoom),
-                "wait": str(options.wait_ms),
-                "format": options.image_format,
-            }
-            if options.theme is not None:
-                params["theme"] = options.theme
-            if options.dark_mode:
-                # Puppet checks only for query-key presence.
-                params["dark"] = ""
-            if options.language is not None:
-                params["lang"] = options.language
+    # The engine dispatches a theme write into the authenticated frontend on
+    # cold renders, which Home Assistant persists to the engine user's real
+    # profile (issue #1909). Snapshot before, restore after — including when
+    # the batch fails, since the engine may already have rendered (and
+    # written) before the failure.
+    guard = ThemeGuard.for_capture(engine_target.addon_options, client)
+    await guard.take_snapshot()
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(options.render_timeout_seconds)
+        ) as http_client:
+            for capture_index, viewport in enumerate(viewports):
+                params: dict[str, str] = {
+                    "viewport": f"{viewport.width}x{viewport.height}",
+                    "zoom": str(options.zoom),
+                    "wait": str(options.wait_ms),
+                    "format": options.image_format,
+                }
+                if options.theme is not None:
+                    params["theme"] = options.theme
+                if options.dark_mode:
+                    # Puppet checks only for query-key presence.
+                    params["dark"] = ""
+                if options.language is not None:
+                    params["lang"] = options.language
 
-            request_context = {
-                "path": path,
-                "preset": viewport.preset,
-                "width": viewport.width,
-                "height": viewport.height,
-                "requested_format": options.image_format,
-                "capture_index": capture_index,
-                "capture_count": len(viewports),
-                "completed_count": len(captures),
-            }
-            aggregate_bytes = sum(capture.size_bytes for capture in captures)
-            remaining_batch_bytes = MAX_BATCH_PAYLOAD_BYTES - aggregate_bytes
-            if remaining_batch_bytes <= 0:
-                assert partial_failures is not None
-                partial_failures.append(
-                    create_error_response(
-                        ErrorCode.IMAGE_PAYLOAD_TOO_LARGE,
-                        "Screenshot image batch reached the server's safe "
-                        "inline-image limit.",
-                        context={
-                            **request_context,
-                            "aggregate_bytes_before_capture": aggregate_bytes,
-                            "limit_kind": "batch",
-                            "limit_bytes": MAX_BATCH_PAYLOAD_BYTES,
-                        },
+                request_context = {
+                    "path": path,
+                    "preset": viewport.preset,
+                    "width": viewport.width,
+                    "height": viewport.height,
+                    "requested_format": options.image_format,
+                    "capture_index": capture_index,
+                    "capture_count": len(viewports),
+                    "completed_count": len(captures),
+                }
+                aggregate_bytes = sum(capture.size_bytes for capture in captures)
+                remaining_batch_bytes = MAX_BATCH_PAYLOAD_BYTES - aggregate_bytes
+                if remaining_batch_bytes <= 0:
+                    assert partial_failures is not None
+                    partial_failures.append(
+                        create_error_response(
+                            ErrorCode.IMAGE_PAYLOAD_TOO_LARGE,
+                            "Screenshot image batch reached the server's safe "
+                            "inline-image limit.",
+                            context={
+                                **request_context,
+                                "aggregate_bytes_before_capture": aggregate_bytes,
+                                "limit_kind": "batch",
+                                "limit_bytes": MAX_BATCH_PAYLOAD_BYTES,
+                            },
+                        )
+                    )
+                    break
+
+                outcome = await _request_or_collect_failure(
+                    http_client,
+                    url=url,
+                    path=path,
+                    engine=engine,
+                    params=params,
+                    options=options,
+                    viewport=viewport,
+                    mime_type=mime_type,
+                    request_context=request_context,
+                    aggregate_bytes=aggregate_bytes,
+                    remaining_batch_bytes=remaining_batch_bytes,
+                    partial_failures=partial_failures,
+                )
+                if outcome is None:
+                    if (
+                        partial_failures
+                        and partial_failures[-1].get("limit_kind") == "batch"
+                    ):
+                        break
+                    continue
+                image_data, capture_height, fallback_used = outcome
+
+                captures.append(
+                    DashboardImageCapture(
+                        data=image_data,
+                        width=viewport.width,
+                        height=capture_height,
+                        preset=viewport.preset,
+                        orientation=viewport.orientation,
+                        image_format=options.image_format,
+                        mime_type=mime_type,
+                        size_bytes=len(image_data),
+                        options=options,
+                        legacy_full_page_fallback=fallback_used,
                     )
                 )
-                break
-
-            outcome = await _request_or_collect_failure(
-                http_client,
-                url=url,
-                path=path,
-                engine=engine,
-                params=params,
-                options=options,
-                viewport=viewport,
-                mime_type=mime_type,
-                request_context=request_context,
-                aggregate_bytes=aggregate_bytes,
-                remaining_batch_bytes=remaining_batch_bytes,
-                partial_failures=partial_failures,
-            )
-            if outcome is None:
-                if (
-                    partial_failures
-                    and partial_failures[-1].get("limit_kind") == "batch"
-                ):
-                    break
-                continue
-            image_data, capture_height, fallback_used = outcome
-
-            captures.append(
-                DashboardImageCapture(
-                    data=image_data,
-                    width=viewport.width,
-                    height=capture_height,
-                    preset=viewport.preset,
-                    orientation=viewport.orientation,
-                    image_format=options.image_format,
-                    mime_type=mime_type,
-                    size_bytes=len(image_data),
-                    options=options,
-                    legacy_full_page_fallback=fallback_used,
-                )
-            )
+    finally:
+        await guard.restore()
+        if capture_warnings is not None:
+            capture_warnings.extend(guard.warnings)
 
     return _complete_capture_batch(captures, partial_failures)
