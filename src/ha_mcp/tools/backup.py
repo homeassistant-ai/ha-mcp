@@ -30,10 +30,21 @@ from ..backup_manager import (
     MandatoryBackupError,
     get_backup_manager,
 )
-from ..client.rest_client import HomeAssistantClient, HomeAssistantError
-from ..client.websocket_client import HomeAssistantWebSocketClient
+from ..client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantError,
+)
+from ..client.websocket_client import HomeAssistantWebSocketClient, get_websocket_client
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
@@ -89,6 +100,9 @@ _BACKUP_PROGRESS_INTERVAL_S = 10
 # _wait_timeout) can be too tight for a slow or rate-limited remote agent —
 # same class of false-timeout problem this file already fixes for creation.
 _BACKUP_DELETE_WAIT_S = 60.0
+# WS command name is a module-local constant per the component-routing seam
+# pattern (see component_api.py / component_devices.py).
+WS_BACKUP_PREP = "ha_mcp_tools/backup_prep"
 
 
 def _get_backup_hint_text() -> str:
@@ -215,6 +229,74 @@ async def _get_backup_password(
         )
 
     return cast(str, default_password)
+
+
+async def _backup_prep_via_component(
+    client: HomeAssistantClient,
+) -> dict[str, Any] | None:
+    """One ``ha_mcp_tools/backup_prep`` read; ``None`` ⇒ run the legacy two-call path.
+
+    Returns the component's ``{agent_ids, local_agent_id, default_password}``
+    payload, replacing the sequential ``backup/agents/info`` (local-agent
+    discovery, :func:`_get_local_backup_agent_id`) + ``backup/config/info``
+    (default password, :func:`_get_backup_password`) WS round-trips with one
+    in-process read. ``None`` on capability miss, downgrade (``unknown_command``
+    → invalidate the cached caps), or command error/timeout (logged) — the
+    caller falls back to the legacy sequential calls. A
+    ``HomeAssistantConnectionError`` (WS down) is not caught here; it
+    propagates, since the legacy path shares the same socket and would fail
+    identically. Same caps-gate discipline as
+    ``component_devices.fetch_device_via_component``.
+    """
+    caps = await get_component_caps(client)
+    if not component_supports(caps, "backup_prep"):
+        return None
+    try:
+        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        raw = await ws.send_command(WS_BACKUP_PREP)
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+        if is_unknown_command(exc):
+            invalidate_caps(client)
+        else:
+            logger.warning("%s failed; fell back to legacy: %r", WS_BACKUP_PREP, exc)
+        return None
+    result = raw.get("result")
+    if not isinstance(result, dict) or "local_agent_id" not in result:
+        return None
+    return result
+
+
+def _raise_no_local_backup_agent_error(agent_ids: list[Any] | None) -> NoReturn:
+    """Same "no local agent" error ``_get_local_backup_agent_id`` raises.
+
+    Used when the ``backup_prep`` component read comes back with
+    ``local_agent_id: None`` — the SAME outcome as the legacy probe finding no
+    agent named ``"local"``, so both paths fail identically.
+    """
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "No local backup agent found",
+            context={"available_agents": [str(a) for a in (agent_ids or [])]},
+            suggestions=[
+                "Backup creation requires a local agent (hassio.local on "
+                "Supervised, backup.local on Core); none is registered",
+            ],
+        )
+    )
+
+
+def _raise_no_default_password_error() -> NoReturn:
+    """Same error ``_get_backup_password`` raises when no default password is configured."""
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "No default backup password configured in Home Assistant",
+            suggestions=[
+                "Configure automatic backups in Home Assistant settings to set a default password"
+            ],
+        )
+    )
 
 
 def _parse_backup_date(raw: Any) -> datetime | None:
@@ -530,13 +612,24 @@ async def create_backup(
             )
         ws_client = cast(HomeAssistantWebSocketClient, ws_client)
 
-        # Get backup password (raises ToolError on failure)
-        password = await _get_backup_password(ws_client)
+        # One component read replaces the sequential password + local-agent
+        # probes when the ha_mcp_tools component supports backup_prep.
+        prep = await _backup_prep_via_component(client)
+        if prep is not None:
+            password = prep.get("default_password")
+            if not password:
+                _raise_no_default_password_error()
+            local_agent = prep.get("local_agent_id")
+            if not local_agent:
+                _raise_no_local_backup_agent_error(prep.get("agent_ids"))
+        else:
+            # Get backup password (raises ToolError on failure)
+            password = await _get_backup_password(ws_client)
 
-        # Discover the local backup agent at call time. HA Core registers
-        # `backup.local`; HA Supervised registers `hassio.local`. Hardcoding
-        # either breaks the other deployment.
-        local_agent = await _get_local_backup_agent_id(ws_client)
+            # Discover the local backup agent at call time. HA Core registers
+            # `backup.local`; HA Supervised registers `hassio.local`. Hardcoding
+            # either breaks the other deployment.
+            local_agent = await _get_local_backup_agent_id(ws_client)
 
         # Generate backup name if not provided
         if not name:
@@ -768,19 +861,38 @@ async def restore_backup(
                 )
             )
 
-        # Discover the local backup agent (Supervisor's hassio.local on
-        # Supervised, backup.local on Core). Used for both the safety backup
-        # and the restore call below.
-        local_agent = await _get_local_backup_agent_id(ws_client)
+        # One component read replaces the sequential local-agent + password
+        # probes when the ha_mcp_tools component supports backup_prep.
+        prep = await _backup_prep_via_component(client)
+        if prep is not None:
+            # Local backup agent (Supervisor's hassio.local on Supervised,
+            # backup.local on Core). Used for both the safety backup and the
+            # restore call below.
+            local_agent = prep.get("local_agent_id")
+            if not local_agent:
+                _raise_no_local_backup_agent_error(prep.get("agent_ids"))
 
-        # Create safety backup BEFORE restoring
-        logger.info("Creating safety backup before restore...")
-        try:
-            password = await _get_backup_password(ws_client)
-        except ToolError:
-            # Password error - log warning but continue (restore might still work)
-            logger.warning("No default password - proceeding without safety backup")
-            password = None
+            # Create safety backup BEFORE restoring
+            logger.info("Creating safety backup before restore...")
+            password = prep.get("default_password")
+            if not password:
+                # No default password - log warning but continue (restore might still work)
+                logger.warning("No default password - proceeding without safety backup")
+                password = None
+        else:
+            # Discover the local backup agent (Supervisor's hassio.local on
+            # Supervised, backup.local on Core). Used for both the safety backup
+            # and the restore call below.
+            local_agent = await _get_local_backup_agent_id(ws_client)
+
+            # Create safety backup BEFORE restoring
+            logger.info("Creating safety backup before restore...")
+            try:
+                password = await _get_backup_password(ws_client)
+            except ToolError:
+                # Password error - log warning but continue (restore might still work)
+                logger.warning("No default password - proceeding without safety backup")
+                password = None
 
         safety_backup_id, safety_warnings = await _create_safety_backup(
             ws_client, password, local_agent, ctx=ctx
