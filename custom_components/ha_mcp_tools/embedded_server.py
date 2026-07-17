@@ -564,7 +564,14 @@ class EmbeddedServerManager:
                         _PENDING_INSTALL_DONE = None
 
         try:
-            return await self._hass.async_add_executor_job(_run)
+            # Shielded: cancelling the awaiter must NOT cancel the executor
+            # job. Unshielded, a cancel landing while the job is still
+            # QUEUED removes it from the pool — _run never starts, nothing
+            # ever sets the event, and the next bring-up waits the full
+            # budget on a job that does not exist (review finding). With the
+            # shield, _run always runs and its finally always fires; the
+            # awaiter still detaches immediately on cancel.
+            return await asyncio.shield(self._hass.async_add_executor_job(_run))
         except asyncio.CancelledError:
             # The job is queued or running and its finally will clear the
             # slot; leaving it registered is the whole point — the next

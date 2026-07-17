@@ -2622,6 +2622,29 @@ class TestPendingInstallTracking:
         with es._PENDING_INSTALL_LOCK:
             assert es._PENDING_INSTALL_DONE is None
 
+    async def test_cancelled_awaiter_does_not_cancel_the_executor_job(
+        self, tmp_path, monkeypatch
+    ):
+        # The dispatch is shielded: cancelling the awaiting bring-up must
+        # leave the executor job to run (a QUEUED job cancelled with the
+        # awaiter would never run _run, stranding the registration forever).
+        mgr, hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", None)
+        inner: asyncio.Future = asyncio.get_running_loop().create_future()
+        monkeypatch.setattr(hass, "async_add_executor_job", lambda fn, *a: inner)
+
+        task = asyncio.create_task(
+            mgr._async_run_tracked_install_job(lambda: "never observed")
+        )
+        await asyncio.sleep(0)  # let the task reach the shielded await
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert not inner.cancelled()  # the job survives the awaiter's cancel
+        inner.set_result(None)
+        await asyncio.sleep(0)
+
     async def test_dispatch_failure_clears_own_registration(
         self, tmp_path, monkeypatch
     ):
