@@ -31,6 +31,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .component_registry import fetch_entities_for_config_entry_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     SUPPORTED_HELPERS,
@@ -1563,17 +1564,28 @@ async def _get_entities_for_config_entry(
 ) -> list[dict[str, Any]]:
     """Return all entity_registry entries linked to the given config_entry_id.
 
-    Uses the config/entity_registry/list WebSocket API and filters client-side
-    by config_entry_id. Multi-entity helpers (e.g. utility_meter with tariffs)
-    are handled naturally — all entities for the same entry are returned.
+    When the component advertises ``registry_lookup`` a single in-process
+    ``registry_lookup(config_entry_id=...)`` read returns the rows already scoped
+    to the entry (byte-identical ``as_partial_dict`` shape), replacing the whole
+    ``config/entity_registry/list`` dump; on capability miss / component error the
+    legacy dump runs. Either way, multi-entity helpers (e.g. utility_meter with
+    tariffs) are handled naturally — all entities for the same entry are returned.
 
     On WebSocket failure (e.g. HA mid-restart, auth lost, connection drop) the
     caller would otherwise see `entity_ids: []` and be told that registry-update
     targets like `area_id` / `labels` were silently dropped. If `warnings` is
     provided, append a concrete message so the caller surfaces the partial
-    failure instead.
+    failure instead. The component read runs inside the same guard so a WS drop
+    on the in-process read degrades identically to the legacy dump — this
+    consumer swallows ALL registry-read failures into ``warnings`` and returns
+    ``[]`` (a flow-helper delete's REST step can still succeed), so a propagated
+    ``HomeAssistantConnectionError`` would change that behavior.
     """
     try:
+        rows = await fetch_entities_for_config_entry_via_component(client, entry_id)
+        if rows is not None:
+            # Component-served rows are ALREADY scoped to the entry.
+            return rows
         result = await client.send_websocket_message(
             {"type": "config/entity_registry/list"}
         )

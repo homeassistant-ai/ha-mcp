@@ -29,6 +29,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .component_registry import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_config_entry,
@@ -2300,64 +2301,92 @@ class IntegrationTools:
         )
 
         try:
-            # Resolve unique_id via the entity registry, with a retry loop
-            # for transient registry failures.
+            # Resolve the helper's unique_id from the entity registry. When the
+            # component advertises registry_lookup, ONE in-process read resolves
+            # it with no WS-timing race — so the 3-attempt exponential-backoff
+            # loop (which existed only to absorb that race between a helper's
+            # creation and its registry index catching up) is skipped entirely.
+            # On capability miss / component error the legacy retry loop runs
+            # unchanged.
             unique_id = None
             registry_result: dict[str, Any] | None = None
             max_retries = 3
 
-            for attempt in range(max_retries):
-                logger.info(
-                    f"Getting entity registry for: {entity_id} "
-                    f"(attempt {attempt + 1}/{max_retries})"
-                )
+            component = await resolve_entities_via_component(client, [entity_id])
+            if component is not None:
+                found = component.get("entities") or []
+                if found:
+                    # Shape a config/entity_registry/get-style ack so the
+                    # exhausted-fallback err_detail below reads registry_result
+                    # uniformly across both the component and legacy paths.
+                    registry_result = {"success": True, "result": found[0]}
+                    unique_id = found[0].get("unique_id")
+                    if unique_id:
+                        logger.info(f"Found unique_id: {unique_id} for {entity_id}")
+                else:
+                    registry_result = {
+                        "success": False,
+                        "error": "not found in entity registry",
+                    }
+            else:
+                for attempt in range(max_retries):
+                    logger.info(
+                        f"Getting entity registry for: {entity_id} "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
 
-                # State check is informational only — disabled entities are
-                # missing from the state machine but resolved via the registry
-                # below (issue #1057). Kept as a debug breadcrumb rather than
-                # removed; full removal is option 3.2 in #1057, deferred to a
-                # separate PR for minimal blast radius here.
-                try:
-                    state_check = await client.get_entity_state(entity_id)
-                    if not state_check:
-                        logger.debug(
-                            f"Entity {entity_id} not in state; "
-                            "proceeding to registry lookup"
-                        )
-                except HomeAssistantAPIError as e:
-                    # State check is best-effort here; an APIError (e.g. 404)
-                    # is informational. Auth/connection errors must propagate
-                    # so they're not re-reported as ENTITY_NOT_FOUND below.
-                    logger.debug(f"State check failed for {entity_id}: {e}")
+                    # State check is informational only — disabled entities are
+                    # missing from the state machine but resolved via the registry
+                    # below (issue #1057). Kept as a debug breadcrumb rather than
+                    # removed; full removal is option 3.2 in #1057, deferred to a
+                    # separate PR for minimal blast radius here.
+                    try:
+                        state_check = await client.get_entity_state(entity_id)
+                        if not state_check:
+                            logger.debug(
+                                f"Entity {entity_id} not in state; "
+                                "proceeding to registry lookup"
+                            )
+                    except HomeAssistantAPIError as e:
+                        # State check is best-effort here; an APIError (e.g. 404)
+                        # is informational. Auth/connection errors must propagate
+                        # so they're not re-reported as ENTITY_NOT_FOUND below.
+                        logger.debug(f"State check failed for {entity_id}: {e}")
 
-                # Registry lookup
-                registry_msg: dict[str, Any] = {
-                    "type": "config/entity_registry/get",
-                    "entity_id": entity_id,
-                }
-                try:
-                    registry_result = await client.send_websocket_message(registry_msg)
-                    if (registry_result or {}).get("success"):
-                        entity_entry = (registry_result or {}).get("result") or {}
-                        unique_id = entity_entry.get("unique_id")
-                        if unique_id:
-                            logger.info(f"Found unique_id: {unique_id} for {entity_id}")
-                            break
-                    if attempt < max_retries - 1:
-                        wait_time = 0.5 * (2**attempt)
-                        logger.debug(
-                            f"Registry lookup failed for {entity_id}, "
-                            f"waiting {wait_time}s before retry..."
+                    # Registry lookup
+                    registry_msg: dict[str, Any] = {
+                        "type": "config/entity_registry/get",
+                        "entity_id": entity_id,
+                    }
+                    try:
+                        registry_result = await client.send_websocket_message(
+                            registry_msg
                         )
-                        await asyncio.sleep(wait_time)
-                except HomeAssistantAPIError as e:
-                    # APIError (e.g. 404) is informational and worth a retry.
-                    # Auth/connection errors must propagate so they're not
-                    # re-reported as ENTITY_NOT_FOUND in the fallback below.
-                    logger.warning(f"Registry lookup attempt {attempt + 1} failed: {e}")
-                    if attempt < max_retries - 1:
-                        wait_time = 0.5 * (2**attempt)
-                        await asyncio.sleep(wait_time)
+                        if (registry_result or {}).get("success"):
+                            entity_entry = (registry_result or {}).get("result") or {}
+                            unique_id = entity_entry.get("unique_id")
+                            if unique_id:
+                                logger.info(
+                                    f"Found unique_id: {unique_id} for {entity_id}"
+                                )
+                                break
+                        if attempt < max_retries - 1:
+                            wait_time = 0.5 * (2**attempt)
+                            logger.debug(
+                                f"Registry lookup failed for {entity_id}, "
+                                f"waiting {wait_time}s before retry..."
+                            )
+                            await asyncio.sleep(wait_time)
+                    except HomeAssistantAPIError as e:
+                        # APIError (e.g. 404) is informational and worth a retry.
+                        # Auth/connection errors must propagate so they're not
+                        # re-reported as ENTITY_NOT_FOUND in the fallback below.
+                        logger.warning(
+                            f"Registry lookup attempt {attempt + 1} failed: {e}"
+                        )
+                        if attempt < max_retries - 1:
+                            wait_time = 0.5 * (2**attempt)
+                            await asyncio.sleep(wait_time)
 
             # Fallback strategy 1: direct-ID delete if unique_id not found
             if not unique_id:
