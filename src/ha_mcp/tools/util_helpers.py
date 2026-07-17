@@ -552,10 +552,9 @@ def filter_active_repairs(
     (the issue registry keeps inactive stubs for every non-persistent issue
     it has ever stored), but the component's raw registry dump does.
     """
-    live = [r for r in issues if r.get("active") is not False]
     if include_dismissed:
-        return live
-    return [r for r in live if not r.get("ignored")]
+        return [r for r in issues if r.get("active") is not False]
+    return [r for r in issues if r.get("active") is not False and not r.get("ignored")]
 
 
 def project_repair_fields(issue: dict[str, Any]) -> dict[str, Any]:
