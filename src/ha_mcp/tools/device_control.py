@@ -14,7 +14,12 @@ from typing import Any, ClassVar
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
-from ..client.rest_client import HomeAssistantClient
+from ..client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
+from ..client.websocket_client import get_websocket_client
 from ..client.websocket_listener import start_websocket_listener
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
@@ -24,6 +29,12 @@ from ..utils.operation_manager import (
     get_operation_from_memory,
     store_pending_operation,
 )
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .helpers import (
     exception_to_structured_error,
     raise_tool_error,
@@ -32,6 +43,14 @@ from .helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The ha_mcp_tools/bulk_call_service WS command (Phase 3, D5a): the BATCH write
+# capability. When the component advertises ``bulk_call_service`` the consumer
+# resolves every op's domain/service server-side (D6), sends one register-before-fire
+# batch frame, and maps the inline-confirmed per-op transitions back into the legacy
+# bulk response shape — no operation-id polling needed. Named once so the routing
+# helper and its tests agree on the wire string.
+WS_BULK_CALL_SERVICE = "ha_mcp_tools/bulk_call_service"
 
 
 class DeviceControlTools:
@@ -635,6 +654,25 @@ class DeviceControlTools:
                 f"{len(skipped_operations)} skipped, "
                 f"mode={'parallel' if parallel else 'sequential'}",
             )
+
+            # Route through the component's bulk_call_service capability when
+            # advertised (D5a): one register-before-fire batch frame confirms every
+            # op inline, so ops return already-verified (no operation-id polling). A
+            # None return means nothing dispatched (capability miss / unresolvable op
+            # / transport failure), so the legacy path below is a safe first fire
+            # (D9 at-most-once).
+            component_response = await self._bulk_via_component(
+                operations, valid_operations, skipped_operations, parallel
+            )
+            if component_response is not None:
+                await safe_progress(
+                    ctx,
+                    progress=len(valid_operations),
+                    total=len(valid_operations),
+                    message="dispatched via component (confirmed inline)",
+                )
+                return component_response
+
             await safe_progress(
                 ctx,
                 progress=0,
@@ -674,6 +712,202 @@ class DeviceControlTools:
                 suggestions=["Check operation parameters and try again"],
             )
             raise  # unreachable: exception_to_structured_error always raises
+
+    def _resolve_component_op(
+        self,
+        entity_id: str,
+        action: str,
+        parameters: Any,
+    ) -> dict[str, Any] | None:
+        """Resolve one bulk op into a fully-formed component operation row.
+
+        Verb resolution stays server-side (D6): reuses the SAME
+        ``get_domain_handler`` / ``_resolve_service_name`` / ``_build_service_call``
+        the legacy path uses, so the component receives only a fully-resolved
+        ``{domain, service, service_data, entity_ids}`` row and never guesses a
+        service name. ``entity_ids`` is the confirmation target; ``service_data``
+        already folds in the entity_id so the dispatch targets it.
+
+        Returns ``None`` for any op the legacy path would reject with a structured
+        per-op error (a malformed entity_id, an action outside the domain handler, or
+        unparseable parameters). A ``None`` aborts the WHOLE batch back to the legacy
+        path (nothing has dispatched yet), which then produces the proper per-op error
+        — cleaner than half-resolving a batch.
+        """
+        try:
+            if "." not in entity_id:
+                return None
+            domain = entity_id.split(".")[0]
+            handler = get_domain_handler(domain)
+            valid_actions = handler.get("valid_actions", ["on", "off", "toggle"])
+            if action not in valid_actions:
+                return None
+            parsed = self._parse_parameters(parameters, entity_id, action)
+            service_call = self._build_service_call(entity_id, domain, action, parsed)
+        except Exception:
+            # Any resolution failure (incl. a ToolError from _parse_parameters on
+            # invalid JSON) → abort the batch to legacy, which surfaces the error.
+            return None
+        return {
+            "domain": service_call["domain"],
+            "service": service_call["service"],
+            "service_data": service_call["data"],
+            "entity_ids": [entity_id],
+        }
+
+    def _map_component_op_result(
+        self,
+        op: dict[str, Any],
+        entity_id: str,
+        action: str,
+        row: dict[str, Any],
+        component_op: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Map one component op result into the legacy per-op result shape.
+
+        The component confirms inline, so the op returns already-verified with a
+        synthesized terminal status instead of the legacy ``pending_verification`` +
+        operation-id handle. A ``command_sent: True`` result is counted ``successful``
+        by ``_build_bulk_response`` exactly as the legacy dispatch result is; an op
+        whose ``async_call`` raised under the batch (``error`` set / not dispatched)
+        maps to a structured ``SERVICE_CALL_FAILED`` error and is NOT re-dispatched
+        (D9).
+        """
+        service_call = {
+            "domain": row["domain"],
+            "service": row["service"],
+            "data": row["service_data"],
+        }
+        if component_op.get("error") is not None or not component_op.get("dispatched"):
+            err = create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                str(component_op.get("error") or "Operation failed to dispatch"),
+                context={"entity_id": entity_id, "action": action},
+            )
+            err["service_call"] = service_call
+            return err
+        transitions = component_op.get("transitions") or []
+        final_state = next(
+            (
+                t["new_state"].get("state")
+                for t in transitions
+                if isinstance(t, dict) and isinstance(t.get("new_state"), dict)
+            ),
+            None,
+        )
+        confirmed = bool(component_op.get("confirmed"))
+        partial = bool(component_op.get("partial"))
+        return {
+            "entity_id": entity_id,
+            "action": action,
+            "parameters": op.get("parameters") or {},
+            "command_sent": True,
+            "status": "completed" if confirmed else "pending_verification",
+            "confirmed": confirmed,
+            "partial": partial,
+            "final_state": final_state,
+            "transitions": transitions,
+            "service_call": service_call,
+            "verification_method": "component_state_change",
+            "message": (
+                f"{entity_id} {action} " + ("confirmed" if confirmed else "dispatched")
+            ),
+        }
+
+    async def _bulk_via_component(
+        self,
+        operations: list[dict[str, Any]],
+        valid_operations: list[tuple[int, dict[str, Any], str, str]],
+        skipped_operations: list[dict[str, Any]],
+        parallel: bool,
+    ) -> dict[str, Any] | None:
+        """Route the batch through the component ``bulk_call_service`` capability.
+
+        Returns a legacy-shaped bulk response (built by the SAME
+        ``_build_bulk_response`` the legacy path uses, with ``operation_ids`` empty
+        and ``follow_up`` None since ops are confirmed inline) when the component
+        advertises ``bulk_call_service`` and the frame lands, else ``None`` so the
+        caller runs the unchanged legacy operation-registry path.
+
+        **D9 (at-most-once, per batch).** A ``None`` return means nothing dispatched:
+        a capability miss, an op that could not be resolved server-side, an empty
+        batch, an ``unknown_command`` (caps invalidated), or a command error/timeout /
+        connection-establishment failure — the component either was never reached or
+        fail-closed the WHOLE frame BEFORE any dispatch (its D1 / ServiceNotFound
+        guards all run first, so a raised command error is provably pre-dispatch). A
+        returned result means the batch dispatched: each op's own ``dispatched`` flag
+        is authoritative and NOTHING is re-dispatched, even the ops that failed.
+        """
+        caps = await get_component_caps(self.client)
+        if not component_supports(caps, "bulk_call_service"):
+            return None
+
+        rows: list[dict[str, Any]] = []
+        for _idx, op, entity_id, action in valid_operations:
+            row = self._resolve_component_op(entity_id, action, op.get("parameters"))
+            if row is None:
+                # An op the legacy path would per-op error on → abort to legacy
+                # BEFORE any dispatch, so no partial batch lands.
+                return None
+            rows.append(row)
+        if not rows:
+            # Nothing resolvable to send (all ops skipped/invalid) → legacy handles
+            # the skipped set; the component's schema rejects an empty batch anyway.
+            return None
+
+        try:
+            ws = await get_websocket_client(
+                url=self.client.base_url, token=self.client.token
+            )
+            raw = await ws.send_command(
+                WS_BULK_CALL_SERVICE,
+                operations=rows,
+                parallel=parallel,
+                wait=True,
+                timeout=10.0,
+            )
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+            # A raised command error is pre-dispatch by the component's all-guards-
+            # first design (D1 / ServiceNotFound abort the whole frame before any
+            # async_call), so legacy is a safe first fire. unknown_command →
+            # invalidate the cached caps so the next call re-probes.
+            if is_unknown_command(exc):
+                invalidate_caps(self.client)
+            else:
+                logger.warning(
+                    "%s failed; fell back to legacy: %r", WS_BULK_CALL_SERVICE, exc
+                )
+            return None
+        except Exception as exc:
+            logger.warning(
+                "%s connection error; falling back to legacy: %r",
+                WS_BULK_CALL_SERVICE,
+                exc,
+            )
+            return None
+
+        result = raw.get("result")
+        if not isinstance(result, dict):
+            return None
+        op_results = result.get("operations")
+        # The component preserves op order and returns exactly one result per row it
+        # was sent; a length drift means an incompatible response — treat as no usable
+        # component result (never reconcile a mismatched batch).
+        if not isinstance(op_results, list) or len(op_results) != len(rows):
+            return None
+
+        results = [
+            self._map_component_op_result(op, entity_id, action, row, component_op)
+            for (_idx, op, entity_id, action), row, component_op in zip(
+                valid_operations, rows, op_results, strict=True
+            )
+        ]
+        # Reuse the legacy response builder: operation_ids is empty (ops confirmed
+        # inline, no polling handle) → follow_up is None, and the successful/failed
+        # tallies key off command_sent exactly as the legacy path.
+        return self._build_bulk_response(
+            operations, results, [], skipped_operations, parallel
+        )
 
     @staticmethod
     def _tool_error_to_dict(e: ToolError) -> dict[str, Any]:
