@@ -116,7 +116,12 @@ def load_catalogs(directory: Path = LOCALES_DIR) -> dict[str, dict[str, Any]]:
 
 
 def _validate_placeholder_parity(catalogs: dict[str, dict[str, Any]]) -> None:
-    """Reject translations that drop or invent ``{name}`` placeholders."""
+    """Reject catalog-backed translations with mismatched placeholders.
+
+    Tool metadata normally comes from the runtime API rather than ``en.json``;
+    ``settings.js`` performs the corresponding parity check against those
+    canonical values before displaying a translated tool field.
+    """
     english_messages = catalogs[DEFAULT_LOCALE]["messages"]
     english_tools = catalogs[DEFAULT_LOCALE]["tools"]
     for locale, catalog in catalogs.items():
