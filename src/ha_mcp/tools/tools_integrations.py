@@ -16,10 +16,19 @@ from pydantic import Field
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_config_entry,
@@ -48,6 +57,13 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The ``ha_mcp_tools`` component command that serves config entries (identity +
+# already-materialized ``options`` + ``subentries``) from HA's live registry in
+# one in-process frame, replacing the REST list-all + OptionsFlow start/abort
+# dance + subentries WS call. Module-local constant per the component-routing
+# idiom (see ``component_devices.WS_DEVICE_GET``).
+WS_CONFIG_ENTRIES = "ha_mcp_tools/config_entries"
 
 
 FlowLookupReason = Literal[
@@ -215,6 +231,71 @@ async def fetch_entry_options_with_status(
                     f"Failed to abort options flow {flow_id}: "
                     f"{type(abort_err).__name__}: {abort_err}"
                 )
+
+
+async def _fetch_entries_via_component(
+    client: Any, *, entry_id: str | None = None, domain: str | None = None
+) -> list[dict[str, Any]] | None:
+    """One ``ha_mcp_tools/config_entries`` read; ``None`` ⇒ run the legacy path.
+
+    Returns the component's ``entries`` list — each row in the
+    ``config_entries/get`` shape (identity + status fields plus the entry's
+    already-materialized ``options`` [raw persisted, secret-scrubbed] and its
+    ``subentries`` identity rows) — so a single in-process frame replaces the
+    legacy REST list-all + OptionsFlow start/abort probe + subentries WS call.
+    Pass ``entry_id`` for the single entry (empty list ⇒ no such entry) or
+    ``domain`` to filter the list; neither lists all.
+
+    ``None`` on capability miss, downgrade (``unknown_command`` → invalidate the
+    cached caps), or command error/timeout (logged) — the caller falls back to
+    the legacy REST list + OptionsFlow probe. A ``HomeAssistantConnectionError``
+    (WS down) is not caught here; it propagates and the legacy path, sharing the
+    same socket, would fail identically. Same caps-gate discipline as
+    ``component_devices.fetch_device_via_component``.
+    """
+    caps = await get_component_caps(client)
+    if not component_supports(caps, "config_entries"):
+        return None
+    kwargs: dict[str, Any] = {}
+    if entry_id is not None:
+        kwargs["entry_id"] = entry_id
+    if domain is not None:
+        kwargs["domain"] = domain
+    try:
+        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        raw = await ws.send_command(WS_CONFIG_ENTRIES, **kwargs)
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+        if is_unknown_command(exc):
+            invalidate_caps(client)
+        else:
+            logger.warning(
+                "%s failed; fell back to legacy: %r", WS_CONFIG_ENTRIES, exc
+            )
+        return None
+    result = raw.get("result")
+    if not isinstance(result, dict) or not isinstance(result.get("entries"), list):
+        return None
+    return result["entries"]
+
+
+def _split_component_entry_row(
+    row: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Split a component ``config_entries`` row into ``(entry, subentries)``.
+
+    The returned ``entry`` mirrors the legacy REST per-entry shape: the row's
+    identity + status fields and its already-materialized ``options`` (raw
+    persisted, secret-scrubbed), with the nested ``subentries`` list lifted out
+    so callers surface subentries at the top level exactly like the legacy
+    ``include_subentries`` branch — and never leak them onto ``entry`` when
+    subentries were not requested. ``options`` values may be ``"**redacted**"``
+    where the component scrubbed a resolved ``!secret``.
+    """
+    entry = dict(row)
+    subentries = entry.pop("subentries", None)
+    if not isinstance(subentries, list):
+        subentries = []
+    return entry, subentries
 
 
 async def _get_entry_id_for_flow_helper(
@@ -587,6 +668,12 @@ class IntegrationTools:
         STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
         'failed_unload', 'migration_error'.
 
+        OPTIONS: ``options`` reflect the entry's persisted values; a field that
+        was never set may be absent (rather than shown at its schema default).
+        Values that match a ``secrets.yaml`` entry are returned as
+        ``"**redacted**"``. Use ``include_schema=True`` to see every editable
+        field and its default/type.
+
         Each entry carries:
 
         - ``log_level``: the canonical Python logger level name
@@ -733,6 +820,19 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """Fetch a single config entry by ID, optionally including its options schema."""
         try:
+            rows = await _fetch_entries_via_component(self._client, entry_id=entry_id)
+            if rows is not None:
+                return await self._single_entry_from_component(
+                    entry_id,
+                    rows,
+                    include_schema,
+                    include_subentries=include_subentries,
+                    include_subentry_schema=include_subentry_schema,
+                    subentry_type=subentry_type,
+                    subentry_id=subentry_id,
+                    show_advanced_options=show_advanced_options,
+                )
+
             result = await self._client.get_config_entry(entry_id)
             entry_domain = result.get("domain") if isinstance(result, dict) else None
 
@@ -805,6 +905,75 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+
+    async def _single_entry_from_component(
+        self,
+        entry_id: str,
+        rows: list[dict[str, Any]],
+        include_schema: bool | None,
+        *,
+        include_subentries: bool,
+        include_subentry_schema: bool,
+        subentry_type: str | None,
+        subentry_id: str | None,
+        show_advanced_options: bool,
+    ) -> dict[str, Any]:
+        """Build the single-entry response from a component ``config_entries`` read.
+
+        The component row already carries the entry identity, its raw persisted
+        ``options`` (secret-scrubbed), and its ``subentries`` identity rows — so
+        this one read replaces the legacy REST list-all + OptionsFlow
+        start/abort probe + subentries WS call. The options schema (and the
+        subentry schema) still come from the legacy live flow: a schema only
+        exists inside an open flow, which the component cannot serialize. When a
+        schema is requested the component's ``options`` are kept
+        (``populate_options=False``) rather than overwritten by the
+        OptionsFlow-derived suggested-value shape.
+
+        ``log_level`` / ``log_level_raw`` come from ``get_logger_levels`` on both
+        paths (the component does not carry logger overrides).
+        """
+        if not rows:
+            # ``async_get_entry(entry_id)`` found nothing — an authoritative
+            # not-found, mapped to the same 404 the legacy REST get raises.
+            raise HomeAssistantAPIError(
+                f"Config entry not found: {entry_id}", status_code=404
+            )
+        entry, subentries = _split_component_entry_row(rows[0])
+
+        resp: dict[str, Any] = {
+            "success": True,
+            "entry_id": entry_id,
+            "entry": entry,
+        }
+
+        # Surface the effective Python logger level for this integration
+        # (unconditionally, for symmetry with the legacy path and _format_entry).
+        logger_levels = await get_logger_levels(self._client)
+        level_info = logger_levels.get(entry.get("domain") or "")
+        resp["log_level"] = level_info["name"] if level_info else "DEFAULT"
+        resp["log_level_raw"] = level_info["raw"] if level_info else None
+
+        # Options schema only exists in a live options flow — read it from the
+        # legacy flow, but keep the component-provided options (populate_options
+        # False) so the raw persisted values win over the flow-derived shape.
+        if include_schema and entry.get("supports_options"):
+            await self._fetch_options_schema(entry_id, resp, populate_options=False)
+
+        if include_subentries:
+            resp["subentry_count"] = len(subentries)
+            resp["subentries"] = subentries
+
+        if include_subentry_schema:
+            await self._fetch_config_subentry_schema(
+                entry_id,
+                resp,
+                subentry_type=subentry_type,
+                subentry_id=subentry_id,
+                show_advanced_options=show_advanced_options,
+            )
+
+        return resp
 
     async def _attach_knx_project(self, resp: dict[str, Any], entry_id: str) -> None:
         """Attach the parsed KNX ETS project to a single-entry response.
@@ -963,12 +1132,17 @@ class IntegrationTools:
         """Class-method alias for :func:`options_from_form_flow`."""
         return options_from_form_flow(flow)
 
-    async def _fetch_options_schema(self, entry_id: str, resp: dict[str, Any]) -> None:
+    async def _fetch_options_schema(
+        self, entry_id: str, resp: dict[str, Any], *, populate_options: bool = True
+    ) -> None:
         """Start an options flow to read the schema, then abort it.
 
         Also populates ``resp["entry"]["options"]`` for form-type flows from
         the same flow result so callers requesting both schema and options
-        don't pay for two round-trips.
+        don't pay for two round-trips. Pass ``populate_options=False`` on the
+        component-served path, where ``options`` already carry the raw persisted
+        values and must NOT be overwritten by the OptionsFlow-derived
+        suggested-value shape.
         """
         flow_id = None
         try:
@@ -982,7 +1156,7 @@ class IntegrationTools:
                     "step_id": flow_result.get("step_id"),
                     "data_schema": flow_result.get("data_schema", []),
                 }
-                if entry is not None:
+                if entry is not None and populate_options:
                     entry["options"] = self._options_from_form_flow(flow_result)
             elif flow_type == "menu":
                 resp["options_schema"] = {
@@ -1021,6 +1195,17 @@ class IntegrationTools:
         offset_int: int,
     ) -> dict[str, Any]:
         """List config entries with optional domain/query filtering and pagination."""
+        # Component fast path: one in-process read (domain filtered server-side,
+        # options materialized on each row) replaces the REST list + per-entry
+        # OptionsFlow probes. Normalize the domain to HA's canonical lowercase so
+        # the component's exact-match filter mirrors the legacy client-side one.
+        domain_norm = domain.strip().lower() if domain else None
+        rows = await _fetch_entries_via_component(self._client, domain=domain_norm)
+        if rows is not None:
+            return await self._list_entries_from_component(
+                rows, domain, query, include_opts, exact_match, limit_int, offset_int
+            )
+
         # Use REST API endpoint for config entries
         response = await self._client._request("GET", "/config/config_entries/entry")
 
@@ -1076,6 +1261,59 @@ class IntegrationTools:
                     if not probe_ok:
                         probe_failures.append(entry["entry_id"])
 
+        return self._finalize_entry_list(
+            formatted_entries,
+            domain,
+            query,
+            exact_match,
+            limit_int,
+            offset_int,
+            probe_failures,
+        )
+
+    async def _list_entries_from_component(
+        self,
+        rows: list[dict[str, Any]],
+        domain: str | None,
+        query: str | None,
+        include_opts: bool | None,
+        exact_match: bool | None,
+        limit_int: int,
+        offset_int: int,
+    ) -> dict[str, Any]:
+        """List config entries from a component ``config_entries`` read.
+
+        The component already filtered by ``domain`` (server-side) and
+        materialized each entry's ``options`` on the row, so there is no
+        per-entry OptionsFlow probe and thus no probe-failure warnings.
+        ``options`` are raw persisted values (a field never set may be absent)
+        and may contain ``"**redacted**"`` markers — see ``ha_get_integration``'s
+        OPTIONS note.
+        """
+        logger_levels = await get_logger_levels(self._client)
+        formatted_entries = [
+            self._format_entry(row, include_opts, logger_levels) for row in rows
+        ]
+        return self._finalize_entry_list(
+            formatted_entries, domain, query, exact_match, limit_int, offset_int, []
+        )
+
+    def _finalize_entry_list(
+        self,
+        formatted_entries: list[dict[str, Any]],
+        domain: str | None,
+        query: str | None,
+        exact_match: bool | None,
+        limit_int: int,
+        offset_int: int,
+        probe_failures: list[str],
+    ) -> dict[str, Any]:
+        """Query-filter, summarize, and paginate formatted entries.
+
+        Shared tail of the component-served and legacy list paths so their
+        response shapes stay identical. ``probe_failures`` is always empty on
+        the component path (options ride the same read — no per-entry probe).
+        """
         # Apply search filter if query provided
         if query and query.strip():
             formatted_entries = self._filter_by_query(
