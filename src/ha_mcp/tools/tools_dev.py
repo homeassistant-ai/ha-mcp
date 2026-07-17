@@ -143,8 +143,10 @@ async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | Non
     verdict the component reaches in-process (its own ``DOMAIN`` entries),
     not a "try the legacy path" signal. Returns ``None`` (⇒ legacy probe) on
     capability miss, downgrade (``unknown_command`` → invalidate the cached
-    caps), or command error/timeout (logged) — same taxonomy as
-    ``component_devices.fetch_device_via_component``. A
+    caps), command error/timeout (logged), or an empty-string ``entry_id``
+    (a malformed reply shape — not the component's real "no entry" signal,
+    which is ``None`` — so it is not trusted as authoritative either) — same
+    taxonomy as ``component_devices.fetch_device_via_component``. A
     ``HomeAssistantConnectionError`` is not caught here; it propagates, since
     the legacy path shares the same socket and would fail identically.
     """
@@ -163,7 +165,25 @@ async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | Non
     result = raw.get("result")
     if not isinstance(result, dict) or "entry_id" not in result:
         return None
+    if result.get("entry_id") == "":
+        return None
     return result
+
+
+def _fields_from_flow_schema(flow: dict[str, Any]) -> dict[str, Any]:
+    """Map an options-flow's ``data_schema`` field names to their current values.
+
+    Shared by ``_open_server_entry_flow`` (the component-identified entry)
+    and ``find_server_config_entry``'s legacy per-candidate probe — both open
+    a flow and need the same ``{field_name: current_value}`` shape, via
+    ``_field_prefill``.
+    """
+    schema = flow.get("data_schema") or []
+    return {
+        str(item["name"]): _field_prefill(item)
+        for item in schema
+        if isinstance(item, dict) and item.get("name")
+    }
 
 
 async def _open_server_entry_flow(
@@ -172,7 +192,7 @@ async def _open_server_entry_flow(
     """Open the options flow for a KNOWN server ``entry_id``; ``None`` on failure.
 
     Builds ``current_options`` from the freshly-opened flow's own schema (via
-    ``_field_prefill``) rather than the component's narrower
+    ``_fields_from_flow_schema``) rather than the component's narrower
     ``{channel, pip_spec}`` shape, so callers like ``_update_source`` that
     resend ``_PRESERVED_OPTION_KEYS`` (``server_url`` / ``external_url`` /
     ``webhook_id_override`` / ``secret_path_override`` — fields the
@@ -187,13 +207,7 @@ async def _open_server_entry_flow(
         # authoritative "no server entry".
         logger.debug("Options-flow open failed for %s: %s", entry_id, exc)
         return None
-    schema = flow.get("data_schema") or []
-    fields: dict[str, Any] = {
-        str(item["name"]): _field_prefill(item)
-        for item in schema
-        if isinstance(item, dict) and item.get("name")
-    }
-    return str(entry_id), flow, fields
+    return str(entry_id), flow, _fields_from_flow_schema(flow)
 
 
 async def find_server_config_entry(
@@ -263,12 +277,7 @@ async def find_server_config_entry(
             # component that is already running.
             logger.debug("Options-flow probe failed for %s: %s", entry_id, exc)
             continue
-        schema = flow.get("data_schema") or []
-        fields: dict[str, Any] = {
-            str(item["name"]): _field_prefill(item)
-            for item in schema
-            if isinstance(item, dict) and item.get("name")
-        }
+        fields = _fields_from_flow_schema(flow)
         if flow.get("type") == "form" and _OPT_PIP_SPEC in fields:
             return str(entry_id), flow, fields
         # Not the server entry — close the probe flow if one opened.

@@ -256,6 +256,28 @@ async def test_malformed_component_result_falls_back_to_legacy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_string_entry_id_falls_back_to_legacy() -> None:
+    """An empty-string ``entry_id`` is NOT the component's real "no entry"
+    signal (that's ``None``) — it is treated like a malformed reply (a
+    component miss) and falls back to the legacy probe, rather than being
+    trusted as an authoritative "not found" verdict."""
+    ws = make_ws(
+        "ha_mcp_tools/server_entry",
+        info_result=_CAPS_SERVER_ENTRY,
+        cmd_result={"entry_id": "", "channel": None, "pip_spec": None},
+    )
+    client = RoutingClient(entries=[{"entry_id": "server-1"}])
+    client.set_flow("server-1", _flow("server-1", _SERVER_SCHEMA))
+
+    with patch_ws(ws, tools_dev):
+        found = await find_server_config_entry(client)
+
+    assert found is not None
+    assert found[0] == "server-1"
+    assert client.config_entries_get_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_identified_entry_flow_open_failure_falls_back_and_exhausts_legacy() -> None:
     """The component identifies an entry_id, but opening ITS options flow
     fails on every attempt (e.g. the entry was removed) — falls back to the
