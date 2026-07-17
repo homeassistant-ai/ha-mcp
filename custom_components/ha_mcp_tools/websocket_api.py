@@ -2,7 +2,9 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. It registers sixteen commands (fifteen capabilities):
+capability gate. It registers twenty commands (twenty capabilities — the
+``search_visibility`` capability is a flag on the existing ``search`` command,
+and ``info`` itself carries no capability entry):
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
   + ``component_version`` + advisory ``limits`` + the instance ``timezone``
@@ -78,6 +80,39 @@ capability gate. It registers sixteen commands (fifteen capabilities):
   the not-exposed default (the legacy path never raises on junk); and a missing
   ``hass.states.get(id)`` omits the live-state fields (friendly_name/state) rather
   than crashing.
+* ``ha_mcp_tools/dashboards`` — Lovelace dashboards read in-process, three modes.
+  ``list`` mirrors the ``lovelace/dashboards/list`` row shape (id/url_path/title/
+  icon/show_in_sidebar/require_admin) with an additive per-row ``mode`` so the
+  server can exclude YAML dashboards; ``get`` returns one dashboard's config body
+  (``await store.async_load`` in the async prep) with a structured
+  ``yaml_excluded`` status for YAML-mode dashboards (the server falls back to
+  legacy for those — a YAML body may carry resolved ``!secret`` plaintext);
+  ``search`` walks every STORAGE dashboard's views/cards/sections for a query
+  substring (capped at 200 with a ``truncated`` flag). YAML-dashboard bodies are
+  never emitted — storage-only. All Store loads run in :func:`_dashboards_prep`.
+* ``ha_mcp_tools/services_list`` — the REST ``/api/services`` service catalog
+  (``async_get_all_descriptions``) joined with the ``services`` backend
+  translations (``async_get_translations``), both loaded in the async prep. The
+  component coarse-filters by ``domain`` (exact) / ``query`` (a SUPERSET of the
+  server's own filter — kept if the query is a substring of the domain, any
+  service name, or any string in the service's description or translations) so the
+  server re-runs its exact filter + pagination over a reduced payload.
+* ``ha_mcp_tools/reference_data`` — the service index + entity-id universe the
+  config-reference validator consumes: ``{services: [{domain, services:{name:{}}}],
+  entity_ids: [...]}``. The ``services`` shape is the REST ``/api/services`` list
+  ``build_service_index`` reads (bodies are empty dicts — the index only reads
+  keys); ``entity_ids`` is every ``hass.states.async_all()`` id. Pure, no prep.
+* ``ha_mcp_tools/search`` (``search_visibility`` capability) — the search command
+  additionally accepts a raw ``visibility`` config dict; when present it excludes
+  the server's opt-in hidden entities before counts/pagination (the pure
+  :func:`_visibility_hidden_set` mirrors the server's ``hidden_entity_ids``, with
+  the Assist dimension delegated to core's ``async_should_expose``), so
+  ``ha_search`` can route through the component even with an active filter.
+* ``ha_mcp_tools/server_entry`` — the component locates its OWN server config
+  entry (``entry.data[CONF_ENTRY_TYPE] == server``, the one marker key it reads
+  from ``entry.data``) and returns ``{entry_id, channel, pip_spec}`` (channel /
+  pip_spec from ``entry.options``), so ``ha_dev_manage_server`` need not probe
+  every ``ha_mcp_tools``-domain entry's options-flow schema from the outside.
 
 * ``ha_mcp_tools/config_entries`` — config entries as the ``config_entries/get``
   WS shape (``entry_id`` / ``domain`` / ``title`` / ``state`` / ``source`` /
@@ -194,7 +229,14 @@ from homeassistant.helpers import (
     label_registry as lr,
 )
 
-from .const import COMPONENT_VERSION
+from .const import (
+    COMPONENT_VERSION,
+    CONF_ENTRY_TYPE,
+    DOMAIN,
+    ENTRY_TYPE_SERVER,
+    OPT_CHANNEL,
+    OPT_PIP_SPEC,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -216,6 +258,10 @@ WS_SYSTEM_SNAPSHOT = f"{WS_API_PREFIX}/system_snapshot"
 WS_ENTITY_LOOKUP = f"{WS_API_PREFIX}/entity_lookup"
 WS_BACKUP_PREP = f"{WS_API_PREFIX}/backup_prep"
 WS_REGISTRIES = f"{WS_API_PREFIX}/registries"
+WS_DASHBOARDS = f"{WS_API_PREFIX}/dashboards"
+WS_SERVICES_LIST = f"{WS_API_PREFIX}/services_list"
+WS_REFERENCE_DATA = f"{WS_API_PREFIX}/reference_data"
+WS_SERVER_ENTRY = f"{WS_API_PREFIX}/server_entry"
 
 # Wire-format generation of the request/response envelopes. Bumped only on an
 # *incompatible* shape change to an existing command; additive fields do not
@@ -242,6 +288,15 @@ CAPABILITIES: list[str] = [
     "entity_lookup",
     "backup_prep",
     "registries",
+    "dashboards",
+    "services_list",
+    "reference_data",
+    # A flag, not a standalone command: gates the optional ``visibility`` param
+    # the server may pass to ``ha_mcp_tools/search`` so an old component that
+    # would ignore the param is never sent it (param-sniffing is banned for
+    # routing; the CAPABILITIES flag is what the server gates on).
+    "search_visibility",
+    "server_entry",
 ]
 
 # The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates
@@ -402,6 +457,10 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_entity_lookup_schema(), _do_entity_lookup, None),
         (_backup_prep_schema(), _do_backup_prep, None),
         (_registries_schema(), _do_registries, None),
+        (_dashboards_schema(), _do_dashboards, _dashboards_prep),
+        (_services_list_schema(), _do_services_list, _services_list_prep),
+        (_reference_data_schema(), _do_reference_data, None),
+        (_server_entry_schema(), _do_server_entry, None),
     ]
 
 
@@ -443,6 +502,13 @@ def _search_schema() -> dict[Any, Any]:
             int, vol.Range(min=1, max=MAX_RESULTS)
         ),
         vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0)),
+        # Opt-in entity-visibility filter (``search_visibility`` capability): the
+        # server's raw VisibilityConfig hide dimensions. When present and
+        # non-empty, hidden entities are excluded from the entity results before
+        # counts/pagination, mirroring the legacy ``load_hidden_set`` hard-exclude
+        # so ``ha_search`` can drop its "filter active -> legacy only" gate. Gated
+        # by the CAPABILITIES flag, so an old component never receives it.
+        vol.Optional("visibility"): dict,
     }
 
 
@@ -551,6 +617,34 @@ def _registries_schema() -> dict[Any, Any]:
         vol.Required("registries"): [vol.In(REGISTRY_KINDS)],
         vol.Optional("category_scopes"): [str],
     }
+def _dashboards_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_DASHBOARDS,
+        vol.Optional("mode", default="list"): vol.In(("list", "get", "search")),
+        # ``None``/absent url_path = the default dashboard (``get`` mode).
+        vol.Optional("url_path"): vol.Any(str, None),
+        vol.Optional("query"): vol.Any(str, None),
+    }
+
+
+def _services_list_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_SERVICES_LIST,
+        vol.Optional("domain"): vol.Any(str, None),
+        vol.Optional("query"): vol.Any(str, None),
+        vol.Optional("language", default="en"): str,
+    }
+
+
+def _reference_data_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_REFERENCE_DATA,
+        vol.Optional("include_states", default=True): bool,
+    }
+
+
+def _server_entry_schema() -> dict[Any, Any]:
+    return {vol.Required("type"): WS_SERVER_ENTRY}
 
 
 # =============================================================================
@@ -640,6 +734,9 @@ def _do_search(
     domain_filter = params.get("domain_filter")
     area_filter = params.get("area_filter")
     state_filter = params.get("state_filter")
+    # Opt-in visibility filter (search_visibility capability). A non-empty dict of
+    # the server's raw VisibilityConfig fields; applied as a hard entity exclude.
+    visibility = params.get("visibility")
 
     view = _resolve_registries(hass)
     diagnostics: dict[str, int] = {}
@@ -667,6 +764,22 @@ def _do_search(
             area_filter=area_filter,
             state_filter=state_filter,
         )
+        # Opt-in visibility filter: a hard exclude applied BEFORE counts/pagination,
+        # exactly where the legacy path drops ``visibility_hidden`` entities at the
+        # top of ``_match_exact_search_entity`` (independent of ``include_hidden``,
+        # which the ``_search_entities`` join already applied). See
+        # :func:`_visibility_hidden_set`.
+        if isinstance(visibility, Mapping) and visibility:
+            hidden = _visibility_hidden_set(
+                view,
+                _iter_states(hass),
+                visibility,
+                lambda eid: _assist_should_expose(hass, eid),
+            )
+            if hidden:
+                scored_entities = [
+                    r for r in scored_entities if r["entity_id"] not in hidden
+                ]
         scored_entities.sort(key=lambda r: (-r["score"], r["entity_id"]))
         entity_total = len(scored_entities)
         page = scored_entities[offset : offset + limit]
@@ -3354,3 +3467,808 @@ def _all_label_entries(view: _RegistryView) -> list[Any]:
         except Exception:  # pragma: no cover - defensive
             return []
     return _mapping_values(getattr(reg, "labels", None))
+
+
+# =============================================================================
+# ha_mcp_tools/dashboards
+# =============================================================================
+# LovelaceConfig.mode returns these wire strings (MODE_STORAGE / MODE_YAML in
+# core's lovelace const). Compared as strings so a MagicMock-stubbed core in the
+# unit suite (no real constants) still exercises the branches.
+_LOVELACE_MODE_STORAGE = "storage"
+_LOVELACE_MODE_YAML = "yaml"
+
+# Keys of a stored dashboard collection item (core's STORAGE_DASHBOARD_*_FIELDS),
+# echoed by ``lovelace/dashboards/list`` — the row shape ``list`` mode mirrors.
+_DASHBOARD_ROW_KEYS = (
+    "id",
+    "url_path",
+    "title",
+    "icon",
+    "show_in_sidebar",
+    "require_admin",
+)
+
+# Cap on ``search``-mode matches per call so one WS frame stays bounded.
+_DASHBOARD_MATCH_CAP = 200
+
+# Structural keys walked as containers (not scored as leaf strings) in a card.
+_DASHBOARD_STRUCTURAL_KEYS = frozenset({"cards", "sections"})
+
+
+def _do_dashboards(
+    hass: HomeAssistant,
+    params: dict[str, Any],
+    *,
+    prepped: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return Lovelace dashboards read in-process (``list`` / ``get`` / ``search``).
+
+    Pure assembler over the plain dicts :func:`_dashboards_prep` loads off the
+    event loop — every Store load (``async_load``) happens in the prep, so this
+    function only shapes / walks already-materialized config. ``available`` is
+    ``False`` when the lovelace integration is not set up (no ``LOVELACE_DATA``);
+    the server falls back to its legacy ``lovelace/*`` path in that case.
+
+    YAML-mode dashboard bodies are NEVER emitted (``get`` returns a ``yaml_excluded``
+    status; ``search`` skips them) — their config may carry resolved ``!secret``
+    plaintext, so body emission for YAML belongs to a future file-based tool.
+    """
+    mode = params.get("mode", "list")
+    prepped = prepped or {}
+    if not prepped.get("available"):
+        result: dict[str, Any] = {"mode": mode, "available": False}
+        if mode == "list":
+            result["dashboards"] = []
+        elif mode == "search":
+            result["matches"] = []
+            result["truncated"] = False
+        return result
+
+    if mode == "get":
+        return {
+            "mode": "get",
+            "available": True,
+            "status": prepped.get("status"),
+            "url_path": prepped.get("url_path"),
+            "config": prepped.get("config"),
+        }
+    if mode == "search":
+        query_lower = (params.get("query") or "").strip().lower()
+        matches, truncated = _search_dashboard_docs(
+            prepped.get("docs") or [], query_lower
+        )
+        return {
+            "mode": "search",
+            "available": True,
+            "matches": matches,
+            "truncated": truncated,
+        }
+    return {"mode": "list", "available": True, "dashboards": prepped.get("rows") or []}
+
+
+async def _dashboards_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """Async pre-step for ``dashboards``: do ALL the Store loading off the loop.
+
+    Reaching ``hass.data[LOVELACE_DATA].dashboards`` is a pure in-memory read, but
+    loading a dashboard's config (``LovelaceConfig.async_load``) awaits a Store
+    read, so every mode's loading lives here and :func:`_do_dashboards` gets plain
+    dicts. Returns ``{"prepped": {...}}`` with ``available=False`` when lovelace is
+    not set up (the server falls back to legacy).
+    """
+    mode = msg.get("mode", "list")
+    dashboards_map = _lovelace_dashboards_map(hass)
+    if dashboards_map is None:
+        return {"prepped": {"available": False}}
+
+    prepped: dict[str, Any] = {"available": True}
+    if mode == "get":
+        prepped.update(await _dashboard_get_config(dashboards_map, msg.get("url_path")))
+    elif mode == "search":
+        prepped["docs"] = await _dashboard_search_docs(dashboards_map)
+    else:
+        prepped["rows"] = _dashboard_list_rows(dashboards_map)
+    return {"prepped": prepped}
+
+
+def _lovelace_dashboards_map(hass: HomeAssistant) -> Mapping[Any, Any] | None:
+    """The ``{url_path|None: LovelaceConfig}`` map, or ``None`` if lovelace is absent.
+
+    Reads ``hass.data[LOVELACE_DATA].dashboards`` via a function-local import of
+    core's key (older cores keyed ``hass.data["lovelace"]``, so both are tried),
+    guarded so a missing key / core drift degrades to ``None`` (the server keeps
+    its legacy path) rather than raising.
+    """
+    try:
+        from homeassistant.components.lovelace import LOVELACE_DATA
+
+        key: Any = LOVELACE_DATA
+    except Exception:  # pragma: no cover - defensive; core drift / older core
+        key = "lovelace"
+    data = getattr(hass, "data", None)
+    if not isinstance(data, Mapping):
+        return None
+    container = data.get(key)
+    if container is None and key != "lovelace":
+        container = data.get("lovelace")
+    if container is None:
+        return None
+    dashboards = getattr(container, "dashboards", None)
+    if dashboards is None and isinstance(container, Mapping):
+        dashboards = container.get("dashboards")
+    return dashboards if isinstance(dashboards, Mapping) else None
+
+
+def _dashboard_list_rows(dashboards_map: Mapping[Any, Any]) -> list[dict[str, Any]]:
+    """One metadata row per non-default dashboard, tagged with ``mode``.
+
+    Mirrors the ``lovelace/dashboards/list`` row shape (the stored collection item
+    for storage dashboards, read from ``LovelaceConfig.config``) plus an additive
+    ``mode`` so the server can exclude YAML dashboards. The default dashboard
+    (``url_path`` key ``None``) is omitted — the legacy list omits it too and the
+    server special-cases the built-in dashboard as always-existing; ``get`` mode
+    resolves ``None`` to that default instead.
+    """
+    rows: list[dict[str, Any]] = []
+    for url_path, dash in dashboards_map.items():
+        if url_path is None:
+            continue
+        config = getattr(dash, "config", None)
+        meta = config if isinstance(config, Mapping) else {}
+        row: dict[str, Any] = {key: meta.get(key) for key in _DASHBOARD_ROW_KEYS}
+        # The dict key is the authoritative url_path (the metadata may lack it).
+        row["url_path"] = url_path
+        row["mode"] = _dashboard_mode(dash)
+        rows.append(row)
+    return rows
+
+
+async def _dashboard_get_config(
+    dashboards_map: Mapping[Any, Any], url_path: Any
+) -> dict[str, Any]:
+    """Load one dashboard's config body; ``status`` names the outcome.
+
+    ``url_path`` ``None``/absent resolves to the default dashboard. A YAML-mode
+    dashboard returns ``status="yaml_excluded"`` with no body (its config may
+    carry resolved ``!secret`` plaintext — storage-only emission). A missing
+    dashboard or a load error returns ``status="not_found"``. Storage freshness is
+    safe: ``LovelaceStorage.async_save`` mutates the in-memory object
+    synchronously, so this read never lags a save (audit-verified).
+    """
+    dash = dashboards_map.get(url_path)
+    resolved = getattr(dash, "url_path", None) if dash is not None else url_path
+    if dash is None:
+        return {"status": "not_found", "url_path": url_path, "config": None}
+    if _dashboard_mode(dash) == _LOVELACE_MODE_YAML:
+        return {"status": "yaml_excluded", "url_path": resolved, "config": None}
+    loader = getattr(dash, "async_load", None)
+    if not callable(loader):
+        return {"status": "not_found", "url_path": resolved, "config": None}
+    try:
+        config = await loader(False)
+    except Exception:  # any load failure degrades to not_found (fail-soft)
+        return {"status": "not_found", "url_path": resolved, "config": None}
+    if not isinstance(config, dict):
+        return {"status": "not_found", "url_path": resolved, "config": None}
+    return {"status": "ok", "url_path": resolved, "config": _plainify(config)}
+
+
+async def _dashboard_search_docs(
+    dashboards_map: Mapping[Any, Any],
+) -> list[dict[str, Any]]:
+    """Load every STORAGE dashboard's config for the ``search`` walk.
+
+    Only storage dashboards are loaded — YAML bodies are never searched/emitted.
+    A per-dashboard load error is skipped (fail-soft) rather than failing the
+    whole search. Returns ``[{url_path, title, config}, ...]`` plain dicts.
+    """
+    docs: list[dict[str, Any]] = []
+    for url_path, dash in dashboards_map.items():
+        if _dashboard_mode(dash) != _LOVELACE_MODE_STORAGE:
+            continue
+        loader = getattr(dash, "async_load", None)
+        if not callable(loader):
+            continue
+        try:
+            config = await loader(False)
+        except Exception:  # skip an unreadable dashboard, keep going (fail-soft)
+            continue
+        if not isinstance(config, dict):
+            continue
+        title = config.get("title")
+        docs.append(
+            {
+                "url_path": url_path,
+                "title": str(title) if title is not None else None,
+                "config": config,
+            }
+        )
+    return docs
+
+
+def _dashboard_mode(dash: Any) -> str | None:
+    """A dashboard's ``mode`` (``storage``/``yaml``), guarded against core drift."""
+    mode = getattr(dash, "mode", None)
+    return str(mode) if isinstance(mode, str) else None
+
+
+def _search_dashboard_docs(
+    docs: list[dict[str, Any]], query_lower: str
+) -> tuple[list[dict[str, Any]], bool]:
+    """Walk each dashboard config for ``query_lower``; return ``(matches, truncated)``.
+
+    An empty query matches nothing (a bare substring would match every string).
+    Matches are capped at :data:`_DASHBOARD_MATCH_CAP` with a ``truncated`` flag.
+    """
+    if not query_lower:
+        return [], False
+    matches: list[dict[str, Any]] = []
+    for doc in docs:
+        _collect_dashboard_matches(doc, query_lower, matches)
+    truncated = len(matches) > _DASHBOARD_MATCH_CAP
+    return matches[:_DASHBOARD_MATCH_CAP], truncated
+
+
+def _collect_dashboard_matches(
+    doc: dict[str, Any], query_lower: str, matches: list[dict[str, Any]]
+) -> None:
+    """Append every ``query_lower`` hit in one dashboard config to ``matches``."""
+    config = doc.get("config")
+    if not isinstance(config, dict):
+        return
+    views = config.get("views")
+    if not isinstance(views, list):
+        return
+    url_path = doc.get("url_path")
+    dash_title = doc.get("title")
+    for view_index, view in enumerate(views):
+        if not isinstance(view, dict):
+            continue
+        view_title = view.get("title")
+        for cards, base_path in _view_card_containers(view, view_index):
+            _collect_card_matches(
+                cards,
+                base_path,
+                url_path,
+                dash_title,
+                view_index,
+                view_title,
+                query_lower,
+                matches,
+            )
+
+
+def _view_card_containers(
+    view: dict[str, Any], view_index: int
+) -> list[tuple[Any, str]]:
+    """The card lists in a view: top-level ``cards`` plus each section's ``cards``."""
+    containers: list[tuple[Any, str]] = []
+    if isinstance(view.get("cards"), list):
+        containers.append((view["cards"], f"views[{view_index}].cards"))
+    sections = view.get("sections")
+    if isinstance(sections, list):
+        for si, section in enumerate(sections):
+            if isinstance(section, dict) and isinstance(section.get("cards"), list):
+                containers.append(
+                    (section["cards"], f"views[{view_index}].sections[{si}].cards")
+                )
+    return containers
+
+
+def _collect_card_matches(
+    cards: Any,
+    base_path: str,
+    url_path: Any,
+    dash_title: Any,
+    view_index: int,
+    view_title: Any,
+    query_lower: str,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Recurse a card list, recording one match per string leaf containing the query.
+
+    ``matched_field`` is the leaf's immediate key (``entity`` / ``entities`` /
+    ``camera_image`` / any plain-string field); nested ``cards`` are walked as
+    their own cards (their strings are attributed to the nested card, not the
+    parent), so ``card_path`` / ``card_type`` always name the card the string
+    actually lives on.
+    """
+    if not isinstance(cards, list):
+        return
+    for card_index, card in enumerate(cards):
+        if not isinstance(card, dict):
+            continue
+        card_path = f"{base_path}[{card_index}]"
+        card_type = card.get("type")
+        for field, value in _card_string_leaves(card):
+            if query_lower in value.lower():
+                matches.append(
+                    {
+                        "url_path": url_path,
+                        "title": dash_title,
+                        "view_index": view_index,
+                        "view_title": view_title,
+                        "card_path": card_path,
+                        "card_type": card_type,
+                        "matched_field": field,
+                        "matched_value": value,
+                    }
+                )
+        nested = card.get("cards")
+        if isinstance(nested, list):
+            _collect_card_matches(
+                nested,
+                f"{card_path}.cards",
+                url_path,
+                dash_title,
+                view_index,
+                view_title,
+                query_lower,
+                matches,
+            )
+
+
+def _card_string_leaves(card: dict[str, Any]) -> list[tuple[str, str]]:
+    """``(immediate_key, string)`` for every string leaf of a card.
+
+    Descends into nested dicts/lists but NOT the structural ``cards``/``sections``
+    keys (those are walked as their own cards). The key attributed to a leaf is
+    the nearest dict key, so ``entities: [{entity: light.a}]`` yields
+    ``("entity", "light.a")`` and ``entities: [light.a]`` yields
+    ``("entities", "light.a")`` — matching the brief's field taxonomy.
+    """
+    out: list[tuple[str, str]] = []
+    _walk_card_leaves(card, "", out)
+    return out
+
+
+def _walk_card_leaves(value: Any, key: str, out: list[tuple[str, str]]) -> None:
+    """Recursive worker for :func:`_card_string_leaves` (module-level for clarity).
+
+    Descends dicts/lists collecting ``(nearest_key, string)`` leaves, skipping the
+    structural ``cards``/``sections`` keys (walked as their own cards). A top-level
+    card dict enters the ``dict`` branch, so its own keys attribute their leaves.
+    """
+    if isinstance(value, str):
+        if value:
+            out.append((key, value))
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            if k not in _DASHBOARD_STRUCTURAL_KEYS:
+                _walk_card_leaves(v, str(k), out)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _walk_card_leaves(item, key, out)
+
+
+# =============================================================================
+# ha_mcp_tools/services_list
+# =============================================================================
+def _do_services_list(
+    hass: HomeAssistant,
+    params: dict[str, Any],
+    *,
+    descriptions: Mapping[str, Any] | None = None,
+    translations: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reshape the service catalog to the REST ``/api/services`` list, coarse-filtered.
+
+    ``descriptions`` (``async_get_all_descriptions`` — ``{domain: {service:
+    desc}}``) and ``translations`` (``async_get_translations`` for the ``services``
+    category) are loaded off the loop by :func:`_services_list_prep`.
+
+    Coarse-filter contract — parity-by-construction: the kept set is a SUPERSET of
+    what the server's own filter matches. ``domain`` is an exact match (same
+    semantics); ``query`` keeps a whole domain entry if the lowercase query is a
+    substring of the domain, ANY service name, or ANY string in that service's
+    description or its translations (broader than the server's check is safe;
+    narrower would be a bug). The server re-runs its exact filter + pagination over
+    the reduced payload. Translations are filtered to the kept domains' key
+    prefixes.
+    """
+    descriptions = descriptions or {}
+    translations = translations or {}
+    domain_filter = params.get("domain")
+    query = (params.get("query") or "").strip().lower()
+
+    services: list[dict[str, Any]] = []
+    kept_domains: set[str] = set()
+    for domain, domain_services in descriptions.items():
+        if domain_filter and domain != domain_filter:
+            continue
+        services_map = (
+            dict(domain_services) if isinstance(domain_services, Mapping) else {}
+        )
+        if query and not _service_domain_matches(
+            str(domain), services_map, translations, query
+        ):
+            continue
+        services.append({"domain": domain, "services": services_map})
+        kept_domains.add(str(domain))
+
+    return {
+        "services": services,
+        "translations": _filter_service_translations(translations, kept_domains),
+    }
+
+
+async def _services_list_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Async pre-step for ``services_list``: load descriptions + translations off-loop.
+
+    Both ``async_get_all_descriptions`` and ``async_get_translations`` await
+    (translation loads touch the filesystem / integration setup), so they run in
+    the prep via the seam wrappers below and :func:`_do_services_list` stays a pure
+    reshape/filter.
+    """
+    language = msg.get("language") or "en"
+    descriptions = await _fetch_service_descriptions(hass)
+    translations = await _fetch_service_translations(hass, language)
+    return {"descriptions": descriptions, "translations": translations}
+
+
+async def _fetch_service_descriptions(hass: HomeAssistant) -> Mapping[str, Any]:
+    """core ``async_get_all_descriptions(hass)``; function-local import test seam."""
+    from homeassistant.helpers.service import async_get_all_descriptions
+
+    result = await async_get_all_descriptions(hass)
+    return result if isinstance(result, Mapping) else {}
+
+
+async def _fetch_service_translations(
+    hass: HomeAssistant, language: str
+) -> Mapping[str, Any]:
+    """core ``async_get_translations(hass, language, "services")``; test seam.
+
+    Fails soft (empty map) so a translation-load failure degrades to the untranslated
+    service list rather than failing the whole command.
+    """
+    from homeassistant.helpers.translation import async_get_translations
+
+    try:
+        result = await async_get_translations(hass, language, "services")
+    except Exception:  # translations are additive; degrade to none on any error
+        _LOGGER.warning(
+            "services_list: could not load service translations; "
+            "continuing without them",
+            exc_info=True,
+        )
+        return {}
+    return result if isinstance(result, Mapping) else {}
+
+
+def _service_domain_matches(
+    domain: str,
+    services_map: Mapping[str, Any],
+    translations: Mapping[str, Any],
+    query: str,
+) -> bool:
+    """Whether a domain's coarse match keeps it (a SUPERSET of the server's filter)."""
+    if query in domain.lower():
+        return True
+    for name in services_map:
+        if query in str(name).lower():
+            return True
+    for desc in services_map.values():
+        if _contains_query_string(desc, query):
+            return True
+    for key, value in translations.items():
+        if (
+            isinstance(value, str)
+            and _translation_key_domain(key) == domain
+            and query in value.lower()
+        ):
+            return True
+    return False
+
+
+def _contains_query_string(value: Any, query: str) -> bool:
+    """Whether any string leaf of ``value`` (nested dict/list) contains ``query``."""
+    if isinstance(value, str):
+        return query in value.lower()
+    if isinstance(value, Mapping):
+        return any(_contains_query_string(v, query) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_query_string(item, query) for item in value)
+    return False
+
+
+def _filter_service_translations(
+    translations: Mapping[str, Any], kept_domains: set[str]
+) -> dict[str, Any]:
+    """Keep only translation keys whose domain segment is in ``kept_domains``.
+
+    Backend ``services``-category keys are ``component.<domain>.services.<service>.…``
+    so the domain is the second dotted segment.
+    """
+    return {
+        key: value
+        for key, value in translations.items()
+        if _translation_key_domain(key) in kept_domains
+    }
+
+
+def _translation_key_domain(key: Any) -> str | None:
+    """The ``<domain>`` segment of a ``component.<domain>.services.…`` translation key."""
+    if not isinstance(key, str):
+        return None
+    parts = key.split(".")
+    return parts[1] if len(parts) > 1 else None
+
+
+# =============================================================================
+# ha_mcp_tools/reference_data
+# =============================================================================
+def _do_reference_data(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return the service index + entity-id universe the reference validator reads.
+
+    ``services`` is the REST ``/api/services`` list shape ``build_service_index``
+    consumes — reusing :func:`_overview_services`, whose per-service bodies are
+    EMPTY dicts (the index only reads service-name keys). ``entity_ids`` is every
+    ``hass.states.async_all()`` id (the ``build_entity_set`` universe). Pure,
+    synchronous, no prep — both are in-memory reads.
+    """
+    include_states = params.get("include_states", True)
+    entity_ids: list[str] = []
+    if include_states:
+        for state in _iter_states(hass):
+            entity_id = getattr(state, "entity_id", None)
+            if entity_id:
+                entity_ids.append(entity_id)
+    return {"services": _overview_services(hass), "entity_ids": entity_ids}
+
+
+# =============================================================================
+# ha_mcp_tools/search — search_visibility (opt-in hidden-set exclusion)
+# =============================================================================
+# HA's EntityCategory enum values (homeassistant.const). Mirrors the server
+# resolver's KNOWN_ENTITY_CATEGORIES so an unknown exclude_category hides nothing.
+_KNOWN_ENTITY_CATEGORIES = frozenset({"config", "diagnostic"})
+
+
+def _visibility_hidden_set(
+    view: _RegistryView,
+    states: Any,
+    visibility: Mapping[str, Any],
+    should_expose_fn: Any,
+) -> set[str]:
+    """Compute the opt-in hidden entity_id set, mirroring the server's resolver.
+
+    A pure replication of ``visibility.resolver.hidden_entity_ids`` over the live
+    ``_RegistryView`` + ``states`` (rather than the WS ``{success, result}``
+    payloads the server passes): a conjunction of independent hide dimensions —
+    the deny list, the category / hidden / area / label excludes (area/labels are
+    device-inherited), the allow-list restrict mode, and the Assist dimension. The
+    ONLY divergence from the resolver is the Assist dimension: instead of
+    reconstructing ``async_should_expose`` from expose-list + expose_new + domain
+    defaults, it delegates to the injectable ``should_expose_fn(entity_id) -> bool``
+    (core's real ``async_should_expose`` in production; a fake in tests) — the
+    authoritative computation, and the injection point the cross-seam contract test
+    aligns with the server's own Assist result.
+
+    ``should_expose_fn`` is consulted only when ``respect_assist_exposure`` is set.
+    Kept a standalone pure function so it is unit-testable without the full search
+    pipeline.
+    """
+    exclude_categories = set(visibility.get("exclude_categories") or [])
+    categories = exclude_categories & _KNOWN_ENTITY_CATEGORIES
+    exclude_hidden = bool(visibility.get("exclude_hidden"))
+    denied = set(visibility.get("deny_entity_ids") or [])
+    exclude_areas = set(visibility.get("exclude_areas") or [])
+    exclude_labels = set(visibility.get("exclude_labels") or [])
+    allow_entity_ids = set(visibility.get("allow_entity_ids") or [])
+    allow_areas = set(visibility.get("allow_areas") or [])
+    allow_labels = set(visibility.get("allow_labels") or [])
+    respect_assist = bool(visibility.get("respect_assist_exposure"))
+    allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
+
+    registry_by_id = _registry_index_by_id(view)
+    # states-only entity universe (YAML/template entities absent from the registry
+    # that the allow / Assist dimensions must still be able to hide).
+    state_ids = {
+        eid for eid in (getattr(s, "entity_id", None) for s in states or []) if eid
+    }
+
+    # Fail-open guard (mirrors the resolver): an area/label allowlist needs registry
+    # data to match; if the registry is empty but there are states-only candidates,
+    # restrict mode would blank everything, so drop those allow dimensions.
+    if (allow_areas or allow_labels) and not registry_by_id and state_ids:
+        allow_areas = set()
+        allow_labels = set()
+        allow_active = bool(allow_entity_ids)
+
+    hidden: set[str] = set(denied)
+    _apply_visibility_excludes(
+        view,
+        registry_by_id,
+        denied,
+        categories,
+        exclude_hidden,
+        exclude_areas,
+        exclude_labels,
+        hidden,
+    )
+    if allow_active or respect_assist:
+        _apply_visibility_allow_assist(
+            view,
+            registry_by_id,
+            state_ids,
+            allow_active,
+            allow_entity_ids,
+            allow_areas,
+            allow_labels,
+            respect_assist,
+            should_expose_fn,
+            hidden,
+        )
+    return hidden
+
+
+def _registry_index_by_id(view: _RegistryView) -> dict[str, Any]:
+    """Index the entity-registry entries by entity_id."""
+    index: dict[str, Any] = {}
+    for entry in _all_entity_entries(view):
+        eid = getattr(entry, "entity_id", None)
+        if eid:
+            index[eid] = entry
+    return index
+
+
+def _apply_visibility_excludes(
+    view: _RegistryView,
+    registry_by_id: dict[str, Any],
+    denied: set[str],
+    categories: set[str],
+    exclude_hidden: bool,
+    exclude_areas: set[str],
+    exclude_labels: set[str],
+    hidden: set[str],
+) -> None:
+    """Add the exclude-dimension hits to ``hidden`` (registry-derived, deny-first).
+
+    Mirrors the resolver's exclude loop. The empty-set dimensions are inert (``x in
+    set()`` / ``set() & x`` are falsy), so an inactive dimension hides nothing
+    without a guard; only ``exclude_hidden`` is a bool flag and keeps its guard.
+    """
+    for eid, entry in registry_by_id.items():
+        if eid in denied:
+            continue
+        if _enum_value(getattr(entry, "entity_category", None)) in categories:
+            hidden.add(eid)
+            continue
+        if exclude_hidden and getattr(entry, "hidden_by", None) is not None:
+            hidden.add(eid)
+            continue
+        if _effective_area_for_entry(view, entry) in exclude_areas:
+            hidden.add(eid)
+            continue
+        if exclude_labels & _effective_labels_for_entry(view, entry):
+            hidden.add(eid)
+
+
+def _apply_visibility_allow_assist(
+    view: _RegistryView,
+    registry_by_id: dict[str, Any],
+    state_ids: set[str],
+    allow_active: bool,
+    allow_entity_ids: set[str],
+    allow_areas: set[str],
+    allow_labels: set[str],
+    respect_assist: bool,
+    should_expose_fn: Any,
+    hidden: set[str],
+) -> None:
+    """Add allow-restrict + Assist hits to ``hidden`` over registry + states.
+
+    These conjunctive filters must reach states-only entities, so they iterate the
+    full candidate universe. Mirrors the resolver's allow/assist loop.
+    """
+    for eid in registry_by_id.keys() | state_ids:
+        if eid in hidden:
+            continue
+        entry = registry_by_id.get(eid)
+        if allow_active and not _entity_allowed(
+            view, eid, entry, allow_entity_ids, allow_areas, allow_labels
+        ):
+            hidden.add(eid)
+            continue
+        if respect_assist and not should_expose_fn(eid):
+            hidden.add(eid)
+
+
+def _entity_allowed(
+    view: _RegistryView,
+    eid: str,
+    entry: Any,
+    allow_entity_ids: set[str],
+    allow_areas: set[str],
+    allow_labels: set[str],
+) -> bool:
+    """Whether an entity satisfies the allowlist (restrict mode) — matched, so kept."""
+    if eid in allow_entity_ids:
+        return True
+    if entry is None:
+        return False
+    if _effective_area_for_entry(view, entry) in allow_areas:
+        return True
+    return bool(allow_labels & _effective_labels_for_entry(view, entry))
+
+
+def _effective_area_for_entry(view: _RegistryView, entry: Any) -> str | None:
+    """An entity's ``area_id`` falling back to its device's (HA area inheritance)."""
+    area_id = getattr(entry, "area_id", None)
+    if isinstance(area_id, str) and area_id:
+        return area_id
+    device_id = getattr(entry, "device_id", None)
+    if isinstance(device_id, str) and device_id:
+        dev = _device(view, device_id)
+        dev_area = getattr(dev, "area_id", None) if dev is not None else None
+        return dev_area if isinstance(dev_area, str) and dev_area else None
+    return None
+
+
+def _effective_labels_for_entry(view: _RegistryView, entry: Any) -> set[str]:
+    """An entity's labels plus its device's labels (device labels apply to entities)."""
+    labels = set(getattr(entry, "labels", None) or [])
+    device_id = getattr(entry, "device_id", None)
+    if isinstance(device_id, str) and device_id:
+        dev = _device(view, device_id)
+        if dev is not None:
+            labels |= set(getattr(dev, "labels", None) or [])
+    return labels
+
+
+def _assist_should_expose(hass: HomeAssistant, entity_id: str) -> bool:
+    """core ``async_should_expose(hass, "conversation", entity_id)``; test seam.
+
+    A sync ``@callback`` despite the ``async_`` name. Imported lazily so the
+    fake-hass unit suite can monkeypatch this whole function. Fails OPEN (returns
+    ``True`` — do not hide) on any error, matching the resolver's "skip the Assist
+    dimension when its data is unavailable" behaviour.
+    """
+    try:
+        from homeassistant.components.homeassistant.exposed_entities import (
+            async_should_expose,
+        )
+
+        return bool(async_should_expose(hass, "conversation", entity_id))
+    except Exception:  # fail open (do not hide) on any error, mirroring the resolver
+        return True
+
+
+# =============================================================================
+# ha_mcp_tools/server_entry
+# =============================================================================
+def _do_server_entry(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Locate the component's OWN server config entry and return its identity.
+
+    Iterates the component's ``DOMAIN`` config entries and picks the server-type
+    one by the explicit ``entry.data[CONF_ENTRY_TYPE] == ENTRY_TYPE_SERVER`` marker
+    the component's own config flow stamps — the single ``entry.data`` key this
+    reads (the documented data-minimization exception; nothing else from
+    ``entry.data`` is emitted). ``channel`` / ``pip_spec`` come from
+    ``entry.options`` (``None`` when absent); ``entry_id`` is ``None`` when no
+    server entry exists.
+    """
+    for entry in _iter_config_entries(hass):
+        if getattr(entry, "domain", None) != DOMAIN:
+            continue
+        if _entry_marker_type(entry) != ENTRY_TYPE_SERVER:
+            continue
+        options = getattr(entry, "options", None)
+        opts = options if isinstance(options, Mapping) else {}
+        return {
+            "entry_id": getattr(entry, "entry_id", None),
+            "channel": opts.get(OPT_CHANNEL),
+            "pip_spec": opts.get(OPT_PIP_SPEC),
+        }
+    return {"entry_id": None, "channel": None, "pip_spec": None}
+
+
+def _entry_marker_type(entry: Any) -> Any:
+    """Read ONLY ``entry.data[CONF_ENTRY_TYPE]`` — the entry-type marker key."""
+    data = getattr(entry, "data", None)
+    if isinstance(data, Mapping):
+        return data.get(CONF_ENTRY_TYPE)
+    return None

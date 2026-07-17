@@ -5,7 +5,7 @@ Mirrors the established component-test pattern (``test_caller_token_auth.py`` /
 stubbed with ``MagicMock`` and the pure ``_do_*`` functions are exercised with
 fake hass / registry objects injected through the ``_resolve_registries`` seam.
 
-Covers the v1.1.1 command surface (info / search / overview / helpers_list /
+Covers the v1.2.0 command surface (info / search / overview / helpers_list /
 states / blueprint_get / device_get / device_list / entity_enrich / exposure;
 config_get was withdrawn pre-release). Highlights:
 * ``_do_info`` handshake shape + manifest/const version parity (drift guard);
@@ -721,6 +721,11 @@ class TestInfo:
             "entity_lookup",
             "backup_prep",
             "registries",
+            "dashboards",
+            "services_list",
+            "reference_data",
+            "search_visibility",
+            "server_entry",
         ]
         assert info["capabilities"] == wsapi.CAPABILITIES
         # config_get was withdrawn before release (raw_config freshness lags the
@@ -743,7 +748,7 @@ class TestInfo:
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "1.1.1"
+        assert manifest["version"] == COMPONENT_VERSION == "1.2.0"
 
 
 # =============================================================================
@@ -1814,6 +1819,12 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_ENTITY_LOOKUP,
             wsapi.WS_BACKUP_PREP,
             wsapi.WS_REGISTRIES,
+            # Task-3 async-prep commands; their admin-gate/probe coverage lives in
+            # test_component_ws_phase2_async.py (this set only guards drift).
+            wsapi.WS_DASHBOARDS,
+            wsapi.WS_SERVICES_LIST,
+            wsapi.WS_REFERENCE_DATA,
+            wsapi.WS_SERVER_ENTRY,
         }
         # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
