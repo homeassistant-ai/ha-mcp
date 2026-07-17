@@ -76,7 +76,9 @@ def _row(
     return base
 
 
-def _rest_entry(entry_id: str = "cfg1", domain: str = "mqtt", **over: Any) -> dict[str, Any]:
+def _rest_entry(
+    entry_id: str = "cfg1", domain: str = "mqtt", **over: Any
+) -> dict[str, Any]:
     """A raw REST ``/config/config_entries/entry`` element (legacy fallback shape)."""
     base: dict[str, Any] = {
         "entry_id": entry_id,

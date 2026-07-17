@@ -72,7 +72,10 @@ def _real_services_list_ws(hass: FakeHass) -> AsyncMock:
         assert command_type == wsapi.WS_SERVICES_LIST
         params = dict(kwargs)
         extra = await wsapi._services_list_prep(hass, params)
-        return {"success": True, "result": wsapi._do_services_list(hass, params, **extra)}
+        return {
+            "success": True,
+            "result": wsapi._do_services_list(hass, params, **extra),
+        }
 
     ws.send_command = AsyncMock(side_effect=_send)
     return ws
@@ -178,7 +181,7 @@ async def test_component_path_matches_legacy_no_filter(
 async def test_query_that_would_coarse_drop_a_domain_still_parities(
     _fake_descriptions_and_translations: None,
 ) -> None:
-    """"warm" here matches only a field-level translation under "cover". If
+    """ "warm" here matches only a field-level translation under "cover". If
     ``query`` were forwarded to the component, its coarse per-domain scan
     (which reads every translation value, field-level included) would KEEP
     "cover" — but drop "light" entirely (zero matches anywhere in it), while

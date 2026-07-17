@@ -177,7 +177,9 @@ def _clear_caps_cache() -> Any:
 
 
 @pytest.mark.asyncio
-async def test_component_and_legacy_paths_agree(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_component_and_legacy_paths_agree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """repairs / zwave_network / matter_network / dead_entities are
     byte-identical whether served by the real component snapshot or the
     legacy per-section fetches over the same underlying data."""
@@ -248,7 +250,8 @@ async def test_component_and_legacy_paths_agree(monkeypatch: pytest.MonkeyPatch)
         for i in component_resp["dead_entities"]["config_entry_orphans"]["items"]
     }
     stale_ids = {
-        i["entity_id"] for i in component_resp["dead_entities"]["stale_restored"]["items"]
+        i["entity_id"]
+        for i in component_resp["dead_entities"]["stale_restored"]["items"]
     }
     assert orphan_ids == {"sensor.orphan"}
     assert stale_ids == {"light.stale"}

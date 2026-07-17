@@ -623,6 +623,8 @@ def _registries_schema() -> dict[Any, Any]:
         vol.Required("registries"): [vol.In(REGISTRY_KINDS)],
         vol.Optional("category_scopes"): [str],
     }
+
+
 def _dashboards_schema() -> dict[Any, Any]:
     return {
         vol.Required("type"): WS_DASHBOARDS,
@@ -3141,9 +3143,10 @@ def _registry_lookup_missing_target() -> Exception:
     """
     from homeassistant.exceptions import HomeAssistantError
 
-    return HomeAssistantError(
+    err: Exception = HomeAssistantError(
         "ha_mcp_tools/registry_lookup requires entity_ids or config_entry_id"
     )
+    return err
 
 
 # =============================================================================
@@ -3303,7 +3306,8 @@ def _backup_unavailable(message: str) -> Exception:
     """Build a ``HomeAssistantError`` (imported function-locally — test-stubbable)."""
     from homeassistant.exceptions import HomeAssistantError
 
-    return HomeAssistantError(message)
+    err: Exception = HomeAssistantError(message)
+    return err
 
 
 def _hass_data_get(hass: HomeAssistant, key: Any) -> Any:
@@ -3400,10 +3404,11 @@ def _registries_missing_category_scopes() -> Exception:
     """
     from homeassistant.exceptions import HomeAssistantError
 
-    return HomeAssistantError(
+    err: Exception = HomeAssistantError(
         "ha_mcp_tools/registries: category_scopes is required when "
         "'category' is requested"
     )
+    return err
 
 
 def _area_row(area: Any) -> dict[str, Any]:

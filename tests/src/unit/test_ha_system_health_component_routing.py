@@ -52,7 +52,9 @@ _CAPS_SNAPSHOT = {
 }
 
 
-def _issue(issue_id: str, *, domain: str = "hue", dismissed_version: str | None = None) -> dict[str, Any]:
+def _issue(
+    issue_id: str, *, domain: str = "hue", dismissed_version: str | None = None
+) -> dict[str, Any]:
     """A ``system_snapshot`` ``issues`` row (the ``_overview_repairs`` shape)."""
     return {
         "issue_id": issue_id,
@@ -71,7 +73,9 @@ def _issue(issue_id: str, *, domain: str = "hue", dismissed_version: str | None 
     }
 
 
-def _entry(entry_id: str, domain: str, *, state: str = "loaded", title: str = "Title") -> dict[str, Any]:
+def _entry(
+    entry_id: str, domain: str, *, state: str = "loaded", title: str = "Title"
+) -> dict[str, Any]:
     """A ``system_snapshot`` ``config_entries`` row (identity fields only)."""
     return {
         "entry_id": entry_id,
@@ -190,9 +194,7 @@ def _health_baseline(ws_client: Any) -> Any:
     return patch.object(
         SystemTools,
         "_fetch_health_info",
-        new=AsyncMock(
-            return_value=(ws_client, {"success": True, "health_info": {}})
-        ),
+        new=AsyncMock(return_value=(ws_client, {"success": True, "health_info": {}})),
     )
 
 
@@ -237,7 +239,9 @@ async def test_snapshot_fetched_once_for_multi_section_call() -> None:
         info_result=_CAPS_SNAPSHOT,
         cmd_result=snapshot_result,
     )
-    health_ws = _health_ws(zwave_status={"controller": {"name": "Z-Stick", "nodes": []}})
+    health_ws = _health_ws(
+        zwave_status={"controller": {"name": "Z-Stick", "nodes": []}}
+    )
     client = RoutingClient()
 
     with patch_ws(ws, tools_system), _health_baseline(health_ws):
@@ -261,7 +265,9 @@ async def test_snapshot_fetched_once_for_multi_section_call() -> None:
         "state": "loaded",
         "title": "Matter Hub",
     }
-    orphan_ids = {i["entity_id"] for i in resp["dead_entities"]["config_entry_orphans"]["items"]}
+    orphan_ids = {
+        i["entity_id"] for i in resp["dead_entities"]["config_entry_orphans"]["items"]
+    }
     assert orphan_ids == {"sensor.orphan"}
 
 
@@ -329,7 +335,9 @@ async def test_capability_miss_falls_back_to_legacy_per_section() -> None:
 
     assert resp["repairs"]["issues"] == [_issue("iss-1")]
     assert resp["matter_network"]["config_entry_id"] == "cfg-matter"
-    orphan_ids = {i["entity_id"] for i in resp["dead_entities"]["config_entry_orphans"]["items"]}
+    orphan_ids = {
+        i["entity_id"] for i in resp["dead_entities"]["config_entry_orphans"]["items"]
+    }
     assert orphan_ids == {"sensor.orphan"}
 
 
@@ -349,7 +357,9 @@ async def test_unknown_command_on_snapshot_invalidates_caps_and_falls_back() -> 
     client = RoutingClient()
 
     with patch_ws(ws, tools_system), _health_baseline(health_ws):
-        resp = await SystemTools(client).ha_get_system_health(include="repairs,zwave_network")
+        resp = await SystemTools(client).ha_get_system_health(
+            include="repairs,zwave_network"
+        )
 
     assert health_ws.repairs_calls == 1
     assert health_ws.config_entries_get_calls == 1
@@ -358,7 +368,9 @@ async def test_unknown_command_on_snapshot_invalidates_caps_and_falls_back() -> 
 
 
 @pytest.mark.asyncio
-async def test_non_unknown_snapshot_error_falls_back_without_invalidating_caps() -> None:
+async def test_non_unknown_snapshot_error_falls_back_without_invalidating_caps() -> (
+    None
+):
     """A snapshot command timeout falls back to legacy WITHOUT invalidating
     caps — the capability is still advertised, only this one frame failed."""
     ws = make_ws(
@@ -448,7 +460,11 @@ async def test_snapshot_connection_error_propagates() -> None:
     health_ws = _health_ws(zwave_status={"controller": {"nodes": []}})
     client = RoutingClient()
 
-    with patch_ws(ws, tools_system), _health_baseline(health_ws), pytest.raises(ToolError):
+    with (
+        patch_ws(ws, tools_system),
+        _health_baseline(health_ws),
+        pytest.raises(ToolError),
+    ):
         await SystemTools(client).ha_get_system_health(include=_INCLUDE_ALL)
 
     # No per-section legacy fallback ran -- the connection error surfaced

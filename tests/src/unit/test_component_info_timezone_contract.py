@@ -65,7 +65,9 @@ async def test_real_info_timezone_serves_metadata_with_no_rest_call() -> None:
     ws = _real_info_ws(hass)
     client = RoutingClient()
 
-    with patch.object(component_api, "get_websocket_client", AsyncMock(return_value=ws)):
+    with patch.object(
+        component_api, "get_websocket_client", AsyncMock(return_value=ws)
+    ):
         result = await add_timezone_metadata(
             client, {"last_changed": "2026-06-12T00:06:00+00:00"}
         )
@@ -85,7 +87,9 @@ async def test_real_info_without_timezone_falls_back_to_legacy() -> None:
     ws = _real_info_ws(hass)
     client = RoutingClient()
 
-    with patch.object(component_api, "get_websocket_client", AsyncMock(return_value=ws)):
+    with patch.object(
+        component_api, "get_websocket_client", AsyncMock(return_value=ws)
+    ):
         result = await add_timezone_metadata(
             client, {"last_changed": "2026-06-12T00:06:00+00:00"}
         )

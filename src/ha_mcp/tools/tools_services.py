@@ -285,9 +285,7 @@ async def _fetch_services_list_via_component(
         if is_unknown_command(exc):
             invalidate_caps(client)
         else:
-            logger.warning(
-                "%s failed; fell back to legacy: %r", WS_SERVICES_LIST, exc
-            )
+            logger.warning("%s failed; fell back to legacy: %r", WS_SERVICES_LIST, exc)
         return None
     result = raw.get("result")
     if (

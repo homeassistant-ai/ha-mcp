@@ -2031,9 +2031,7 @@ class DashboardConfigTools:
         )
         return search_result
 
-    async def _get_dashboard_search_all_mode(
-        self, query: str | None
-    ) -> dict[str, Any]:
+    async def _get_dashboard_search_all_mode(self, query: str | None) -> dict[str, Any]:
         """mode='search': find which storage dashboards contain ``query``.
 
         The component ``search`` walks every storage dashboard in one in-process

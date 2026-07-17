@@ -48,7 +48,9 @@ _CAPS_REGISTRY = {
 }
 
 
-def _row(entity_id: str, *, unique_id: str, config_entry_id: str | None = None) -> dict[str, Any]:
+def _row(
+    entity_id: str, *, unique_id: str, config_entry_id: str | None = None
+) -> dict[str, Any]:
     """A ``registry_lookup`` row (the ``config/entity_registry/list`` shape)."""
     return {
         "entity_id": entity_id,
@@ -98,7 +100,11 @@ class RoutingClient:
             if self._get_result is not None:
                 return self._get_result
             row = next(
-                (e for e in self._entities if e.get("entity_id") == msg.get("entity_id")),
+                (
+                    e
+                    for e in self._entities
+                    if e.get("entity_id") == msg.get("entity_id")
+                ),
                 None,
             )
             if row is None:
@@ -166,7 +172,9 @@ async def test_simple_delete_resolves_via_component_no_retry_loop() -> None:
 
     with (
         patch_ws(ws, component_registry_lookup),
-        patch("ha_mcp.tools.tools_integrations.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
+        patch(
+            "ha_mcp.tools.tools_integrations.asyncio.sleep", new_callable=AsyncMock
+        ) as sleep_mock,
     ):
         resp = await tools.ha_remove_helpers_integrations(
             target="my_button",
@@ -455,7 +463,9 @@ async def test_set_helper_wait_resolves_via_component_no_dump_no_sleep() -> None
 
     with (
         patch_ws(ws, component_registry_lookup),
-        patch("ha_mcp.tools.tools_config_helpers.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
+        patch(
+            "ha_mcp.tools.tools_config_helpers.asyncio.sleep", new_callable=AsyncMock
+        ) as sleep_mock,
     ):
         entities, warnings = await _wait_for_flow_entities(
             client, "um_entry", "create", wait=True

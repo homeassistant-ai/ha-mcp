@@ -75,9 +75,7 @@ async def fetch_entities_for_config_entry_via_component(
         return None
     try:
         ws = await get_websocket_client(url=client.base_url, token=client.token)
-        raw = await ws.send_command(
-            WS_REGISTRY_LOOKUP, config_entry_id=config_entry_id
-        )
+        raw = await ws.send_command(WS_REGISTRY_LOOKUP, config_entry_id=config_entry_id)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)
@@ -87,9 +85,12 @@ async def fetch_entities_for_config_entry_via_component(
             )
         return None
     result = raw.get("result")
-    if not isinstance(result, dict) or not isinstance(result.get("entities"), list):
+    if not isinstance(result, dict):
         return None
-    return result["entities"]
+    entities = result.get("entities")
+    if not isinstance(entities, list):
+        return None
+    return entities
 
 
 async def resolve_entities_via_component(

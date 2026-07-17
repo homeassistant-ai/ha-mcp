@@ -248,7 +248,12 @@ class AreaTools:
             # Build nested hierarchy, preserving all floor-registry fields for
             # forward compatibility with future HA Core additions
             topology = [
-                {**floor, "areas": floor_map.get(floor.get("floor_id"), [])}
+                {
+                    **floor,
+                    "areas": floor_map.get(fid, [])
+                    if (fid := floor.get("floor_id")) is not None
+                    else [],
+                }
                 for floor in floors
             ]
 

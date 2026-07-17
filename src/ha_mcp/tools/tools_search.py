@@ -1886,9 +1886,10 @@ class SearchTools:
         if req.query_text and not (req.area_filter or "").strip():
             caps = await get_component_caps(self._client)
             if component_supports(caps, "search"):
-                route_component, visibility = (
-                    await self._resolve_component_search_visibility(caps)
-                )
+                (
+                    route_component,
+                    visibility,
+                ) = await self._resolve_component_search_visibility(caps)
                 if route_component:
                     component_response = await self._ha_search_via_component(
                         req, ctx, visibility=visibility

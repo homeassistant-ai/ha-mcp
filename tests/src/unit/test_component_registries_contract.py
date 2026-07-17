@@ -204,7 +204,9 @@ class TestRegistriesSeam:
         cat = FakeCategory("cat1", "Lights", icon="mdi:lightbulb")
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         monkeypatch.setattr(
-            wsapi, "_category_registry", lambda h: FakeCategoryReg({"automation": [cat]})
+            wsapi,
+            "_category_registry",
+            lambda h: FakeCategoryReg({"automation": [cat]}),
         )
         client = _AreaFloorClient()
         ws = _real_registries_ws(FakeHass())

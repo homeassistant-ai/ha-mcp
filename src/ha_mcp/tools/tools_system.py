@@ -829,9 +829,7 @@ class SystemTools:
                         self._fetch_repairs(
                             ws_client,
                             include_dismissed=include_dismissed_repairs_bool,
-                            prefetched_repairs=(
-                                snapshot.repairs if snapshot else None
-                            ),
+                            prefetched_repairs=(snapshot.repairs if snapshot else None),
                         ),
                     )
                 )
@@ -995,9 +993,7 @@ class SystemTools:
                 dead_section = await self._fetch_dead_entities(
                     prefetched_states=snapshot.states if snapshot else None,
                     prefetched_registry=snapshot.registry if snapshot else None,
-                    prefetched_entries=(
-                        snapshot.config_entries if snapshot else None
-                    ),
+                    prefetched_entries=(snapshot.config_entries if snapshot else None),
                 )
                 # Pop the ``_warnings`` sentinel and bubble it to the top-level
                 # ``result["warnings"]`` (the documented contract location).
@@ -1615,9 +1611,7 @@ class SystemTools:
                     self._client.send_websocket_message(
                         {"type": "config/entity_registry/list"}
                     ),
-                    self._client.send_websocket_message(
-                        {"type": "config_entries/get"}
-                    ),
+                    self._client.send_websocket_message({"type": "config_entries/get"}),
                     return_exceptions=True,
                 )
                 states = results[0]

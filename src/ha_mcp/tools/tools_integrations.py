@@ -269,14 +269,15 @@ async def _fetch_entries_via_component(
         if is_unknown_command(exc):
             invalidate_caps(client)
         else:
-            logger.warning(
-                "%s failed; fell back to legacy: %r", WS_CONFIG_ENTRIES, exc
-            )
+            logger.warning("%s failed; fell back to legacy: %r", WS_CONFIG_ENTRIES, exc)
         return None
     result = raw.get("result")
-    if not isinstance(result, dict) or not isinstance(result.get("entries"), list):
+    if not isinstance(result, dict):
         return None
-    return result["entries"]
+    entries = result.get("entries")
+    if not isinstance(entries, list):
+        return None
+    return entries
 
 
 def _split_component_entry_row(
@@ -297,6 +298,31 @@ def _split_component_entry_row(
     if not isinstance(subentries, list):
         subentries = []
     return entry, subentries
+
+
+def _flatten_option_sections(options: dict[str, Any]) -> dict[str, Any]:
+    """Additively surface one level of nested option *sections* at the top level.
+
+    HA's OptionsFlow groups related fields under a *section* key, so a template
+    helper persists e.g. ``{"advanced_options": {"availability": "..."}}``. The
+    legacy OptionsFlow-derived read flattens those sections — exposing
+    ``options["availability"]`` directly — whereas the component serves the RAW
+    persisted mapping with the section nesting intact. To keep the two read paths
+    interchangeable for consumers, copy each nested section's leaf keys up to the
+    top level WITHOUT overwriting an existing top-level key (first section wins on
+    a cross-section collision) and WITHOUT removing the nested original (raw
+    nesting preserved for fidelity). Returns a NEW dict; the input is not mutated.
+    A non-dict is returned unchanged.
+    """
+    if not isinstance(options, dict):
+        return options
+    flattened: dict[str, Any] = dict(options)
+    for value in options.values():
+        if isinstance(value, dict):
+            for leaf_key, leaf_value in value.items():
+                if leaf_key not in flattened:
+                    flattened[leaf_key] = leaf_value
+    return flattened
 
 
 async def _get_entry_id_for_flow_helper(
@@ -673,7 +699,11 @@ class IntegrationTools:
         was never set may be absent (rather than shown at its schema default).
         Values that match a ``secrets.yaml`` entry are returned as
         ``"**redacted**"``. Use ``include_schema=True`` to see every editable
-        field and its default/type.
+        field and its default/type. Nested option *sections* (e.g. a template
+        helper's ``advanced_options``) are additively flattened one level —
+        each section's leaf keys are copied to the top of ``options`` (mirroring
+        the OptionsFlow-derived read) while the raw nested section is preserved
+        for fidelity, and an existing top-level key is never overwritten.
 
         Each entry carries:
 
@@ -942,6 +972,10 @@ class IntegrationTools:
             )
         entry, subentries = _split_component_entry_row(rows[0])
         entry.setdefault("options", {})
+        # Mirror the OptionsFlow-derived read: additively flatten one level of
+        # nested option sections (raw nesting preserved). See
+        # `_flatten_option_sections`.
+        entry["options"] = _flatten_option_sections(entry["options"])
 
         resp: dict[str, Any] = {
             "success": True,
@@ -1288,14 +1322,24 @@ class IntegrationTools:
         The component already filtered by ``domain`` (server-side) and
         materialized each entry's ``options`` on the row, so there is no
         per-entry OptionsFlow probe and thus no probe-failure warnings.
-        ``options`` are raw persisted values (a field never set may be absent)
-        and may contain ``"**redacted**"`` markers — see ``ha_get_integration``'s
-        OPTIONS note.
+        ``options`` are raw persisted values (a field never set may be absent),
+        may contain ``"**redacted**"`` markers, and have nested option sections
+        additively flattened one level (raw nesting preserved) — see
+        ``ha_get_integration``'s OPTIONS note and ``_flatten_option_sections``.
         """
         logger_levels = await get_logger_levels(self._client)
         formatted_entries = [
             self._format_entry(row, include_opts, logger_levels) for row in rows
         ]
+        # Mirror the OptionsFlow-derived read: additively flatten one level of
+        # nested option sections on each row (raw nesting preserved). Only the
+        # include_opts path carries an ``options`` key. See
+        # `_flatten_option_sections`.
+        if include_opts:
+            for formatted in formatted_entries:
+                formatted["options"] = _flatten_option_sections(
+                    formatted.get("options", {})
+                )
         return self._finalize_entry_list(
             formatted_entries, domain, query, exact_match, limit_int, offset_int, []
         )

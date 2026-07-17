@@ -63,9 +63,7 @@ class _StubClient:
         )
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        raise AssertionError(
-            f"legacy config_entries/get should not run: {msg!r}"
-        )
+        raise AssertionError(f"legacy config_entries/get should not run: {msg!r}")
 
 
 @pytest.fixture(autouse=True)

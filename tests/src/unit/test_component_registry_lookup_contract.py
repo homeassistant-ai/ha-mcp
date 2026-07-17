@@ -129,7 +129,9 @@ def _clear_caps_cache() -> Any:
 
 
 @pytest.mark.asyncio
-async def test_flow_delete_finds_all_subentities_via_real_component(monkeypatch) -> None:
+async def test_flow_delete_finds_all_subentities_via_real_component(
+    monkeypatch,
+) -> None:
     """The REAL _do_registry_lookup(config_entry_id) feeds the REAL _delete_flow_helper
     every tariff sub-entity — nothing is dropped, the whole-registry list is never
     dumped."""

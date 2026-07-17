@@ -311,8 +311,9 @@ class TestSceneResolverRouting:
             cmd_exc=HomeAssistantConnectionError("ws down"),
         )
         client = RoutingClient()
-        with patch_ws(ws, component_config_reads), pytest.raises(
-            HomeAssistantConnectionError
+        with (
+            patch_ws(ws, component_config_reads),
+            pytest.raises(HomeAssistantConnectionError),
         ):
             await ConfigSceneTools(client)._resolve_scene_entity_id(
                 "movie_night", allow_component=True
@@ -360,9 +361,7 @@ class TestAutomationResolverRouting:
         with patch_ws(ws, component_config_reads):
             entity_id = await AutomationConfigTools(
                 client
-            )._resolve_automation_entity_id(
-                "automation.morning", allow_component=True
-            )
+            )._resolve_automation_entity_id("automation.morning", allow_component=True)
         assert entity_id == "automation.morning"
         assert ws.send_command.await_count == 0
         assert client.get_states.await_count == 0
@@ -454,8 +453,9 @@ class TestAutomationResolverRouting:
             cmd_exc=HomeAssistantConnectionError("ws down"),
         )
         client = RoutingClient(states=self._states())
-        with patch_ws(ws, component_config_reads), pytest.raises(
-            HomeAssistantConnectionError
+        with (
+            patch_ws(ws, component_config_reads),
+            pytest.raises(HomeAssistantConnectionError),
         ):
             await AutomationConfigTools(client)._resolve_automation_entity_id(
                 "uid-1", allow_component=True
@@ -496,7 +496,10 @@ class TestReferenceDataRouting:
         client = RoutingClient()
         with patch_ws(ws, component_config_reads):
             result = await validate_config_references(client, _CONFIG)
-        assert _warning_set(result) == {("light.bogus", "service"), ("light.ghost", "entity")}
+        assert _warning_set(result) == {
+            ("light.bogus", "service"),
+            ("light.ghost", "entity"),
+        }
         assert client.get_services.await_count == 0
         assert client.get_states.await_count == 0
 
@@ -508,7 +511,10 @@ class TestReferenceDataRouting:
         )
         with patch_ws(ws, component_config_reads):
             result = await validate_config_references(client, _CONFIG)
-        assert _warning_set(result) == {("light.bogus", "service"), ("light.ghost", "entity")}
+        assert _warning_set(result) == {
+            ("light.bogus", "service"),
+            ("light.ghost", "entity"),
+        }
         assert client.get_services.await_count == 1
         assert client.get_states.await_count == 1
 
@@ -524,7 +530,10 @@ class TestReferenceDataRouting:
         )
         with patch_ws(ws, component_config_reads):
             result = await validate_config_references(client, _CONFIG)
-        assert _warning_set(result) == {("light.bogus", "service"), ("light.ghost", "entity")}
+        assert _warning_set(result) == {
+            ("light.bogus", "service"),
+            ("light.ghost", "entity"),
+        }
         assert client.get_services.await_count == 1
         assert client.get_states.await_count == 1
         assert client not in component_api._CAPS_CACHE
@@ -541,7 +550,10 @@ class TestReferenceDataRouting:
         )
         with patch_ws(ws, component_config_reads):
             result = await validate_config_references(client, _CONFIG)
-        assert _warning_set(result) == {("light.bogus", "service"), ("light.ghost", "entity")}
+        assert _warning_set(result) == {
+            ("light.bogus", "service"),
+            ("light.ghost", "entity"),
+        }
         assert client.get_services.await_count == 1
         assert client in component_api._CAPS_CACHE
 

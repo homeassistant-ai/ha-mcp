@@ -65,14 +65,10 @@ _HOME_BODY = {
                 {"type": "entities", "entities": ["light.kitchen", "light.hall"]},
                 {
                     "type": "vertical-stack",
-                    "cards": [
-                        {"type": "camera", "camera_image": "camera.front_door"}
-                    ],
+                    "cards": [{"type": "camera", "camera_image": "camera.front_door"}],
                 },
             ],
-            "sections": [
-                {"cards": [{"type": "markdown", "content": "kitchen notes"}]}
-            ],
+            "sections": [{"cards": [{"type": "markdown", "content": "kitchen notes"}]}],
         }
     ],
 }
@@ -100,7 +96,10 @@ def _real_component_ws(hass: FakeHass) -> AsyncMock:
         assert command_type == "ha_mcp_tools/dashboards"
         params = dict(kwargs)
         prep_out = await wsapi._dashboards_prep(hass, params)
-        return {"success": True, "result": wsapi._do_dashboards(hass, params, **prep_out)}
+        return {
+            "success": True,
+            "result": wsapi._do_dashboards(hass, params, **prep_out),
+        }
 
     ws.send_command = AsyncMock(side_effect=_send)
     return ws
@@ -207,8 +206,9 @@ async def test_list_icon_less_dashboard_shape_diverges() -> None:
 
     # The rows diverge by key presence...
     assert comp_row != legacy_row
-    # ...but agree on the effective value either way.
-    assert comp_row.get("icon") == legacy_row.get("icon") is None
+    # ...but agree on the effective value either way (both absent/None).
+    assert comp_row.get("icon") is None
+    assert legacy_row.get("icon") is None
 
 
 # --- get parity ---------------------------------------------------------------
@@ -277,7 +277,9 @@ async def test_get_yaml_dashboard_falls_back_to_legacy() -> None:
     assert client.config_calls == ["yaml-dash"]
     # The component WAS consulted first (one dashboards frame), then refused.
     dash_frames = [
-        c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/dashboards"
+        c
+        for c in ws.send_command.call_args_list
+        if c.args[0] == "ha_mcp_tools/dashboards"
     ]
     assert len(dash_frames) == 1
 
@@ -336,7 +338,9 @@ async def test_search_parity_case_insensitive_query() -> None:
     ws = _real_component_ws(hass)
     comp_client = RoutingClient()
     with patch_ws(ws, tools_config_dashboards):
-        comp_resp = await _build_get_dashboard(comp_client)(mode="search", query="LIGHT")
+        comp_resp = await _build_get_dashboard(comp_client)(
+            mode="search", query="LIGHT"
+        )
 
     legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     legacy_client = RoutingClient(
@@ -347,7 +351,9 @@ async def test_search_parity_case_insensitive_query() -> None:
         configs={"home": _HOME_BODY, "office": _OFFICE_BODY},
     )
     with patch_ws(legacy_ws, tools_config_dashboards):
-        legacy_resp = await _build_get_dashboard(legacy_client)(mode="search", query="LIGHT")
+        legacy_resp = await _build_get_dashboard(legacy_client)(
+            mode="search", query="LIGHT"
+        )
 
     assert comp_resp["matches"]  # uppercase query still hits lowercase content
     assert comp_resp["matches"] == legacy_resp["matches"]
@@ -365,7 +371,9 @@ async def test_search_parity_truncation_cap() -> None:
     ws = _real_component_ws(hass)
     comp_client = RoutingClient()
     with patch_ws(ws, tools_config_dashboards):
-        comp_resp = await _build_get_dashboard(comp_client)(mode="search", query="light.e")
+        comp_resp = await _build_get_dashboard(comp_client)(
+            mode="search", query="light.e"
+        )
 
     legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     legacy_client = RoutingClient(
@@ -373,7 +381,9 @@ async def test_search_parity_truncation_cap() -> None:
         configs={"home": body},
     )
     with patch_ws(legacy_ws, tools_config_dashboards):
-        legacy_resp = await _build_get_dashboard(legacy_client)(mode="search", query="light.e")
+        legacy_resp = await _build_get_dashboard(legacy_client)(
+            mode="search", query="light.e"
+        )
 
     assert comp_resp["truncated"] is True
     assert legacy_resp["truncated"] is True

@@ -67,7 +67,9 @@ class FakeDashboard:
     raises ``load_error`` to exercise the fail-soft paths).
     """
 
-    def __init__(self, url_path, mode="storage", config=None, body=None, load_error=None):
+    def __init__(
+        self, url_path, mode="storage", config=None, body=None, load_error=None
+    ):
         self._url_path = url_path
         self.mode = mode
         self.config = config
@@ -261,7 +263,10 @@ class TestDashboardsSearch:
                 {
                     "title": "Living",
                     "cards": [
-                        {"type": "entities", "entities": ["light.kitchen", "light.hall"]},
+                        {
+                            "type": "entities",
+                            "entities": ["light.kitchen", "light.hall"],
+                        },
                         {
                             "type": "vertical-stack",
                             "cards": [
@@ -279,9 +284,7 @@ class TestDashboardsSearch:
 
     def test_search_matches_entity_and_reports_path(self, patch_dashboards):
         patch_dashboards(self._dmap())
-        res = _run_dashboards(
-            FakeHass(), {"mode": "search", "query": "light.kitchen"}
-        )
+        res = _run_dashboards(FakeHass(), {"mode": "search", "query": "light.kitchen"})
         assert res["truncated"] is False
         matched = [m for m in res["matches"] if m["matched_value"] == "light.kitchen"]
         assert matched
@@ -319,7 +322,9 @@ class TestDashboardsSearch:
             "yaml-dash",
             "yaml",
             config={"url_path": "yaml-dash"},
-            body={"views": [{"cards": [{"type": "entities", "entities": ["light.x"]}]}]},
+            body={
+                "views": [{"cards": [{"type": "entities", "entities": ["light.x"]}]}]
+            },
         )
         patch_dashboards({"yaml-dash": yaml_dash})
         res = _run_dashboards(FakeHass(), {"mode": "search", "query": "light.x"})
@@ -327,9 +332,7 @@ class TestDashboardsSearch:
 
     def test_search_truncates_at_cap(self, patch_dashboards):
         entities = [f"light.e{i}" for i in range(wsapi._DASHBOARD_MATCH_CAP + 25)]
-        body = {
-            "views": [{"cards": [{"type": "entities", "entities": entities}]}]
-        }
+        body = {"views": [{"cards": [{"type": "entities", "entities": entities}]}]}
         patch_dashboards({"home": _storage_dash("home", "Home", body=body)})
         res = _run_dashboards(FakeHass(), {"mode": "search", "query": "light.e"})
         assert res["truncated"] is True
@@ -448,12 +451,10 @@ class TestServicesList:
 
     def test_translations_filtered_to_kept_domains(self):
         res = self._do({"query": "turn_on"})  # keeps light only
-        assert all(
-            key.split(".")[1] == "light" for key in res["translations"]
+        assert all(key.split(".")[1] == "light" for key in res["translations"])
+        assert (
+            "component.climate.services.set_temperature.name" not in res["translations"]
         )
-        assert "component.climate.services.set_temperature.name" not in res[
-            "translations"
-        ]
 
     def test_prep_feeds_do(self, monkeypatch):
         async def _fake_desc(hass):
@@ -517,9 +518,10 @@ class TestReferenceData:
         # entity_ids feed build_entity_set. build_entity_set expects the /api/states
         # dict shape, but reference_data returns a flat id list; assert the ids.
         assert set(res["entity_ids"]) == {"light.a", "sensor.b"}
-        assert build_entity_set(
-            [{"entity_id": eid} for eid in res["entity_ids"]]
-        ) == {"light.a", "sensor.b"}
+        assert build_entity_set([{"entity_id": eid} for eid in res["entity_ids"]]) == {
+            "light.a",
+            "sensor.b",
+        }
 
     def test_service_bodies_are_empty_dicts(self):
         res = wsapi._do_reference_data(self._hass(), {})
@@ -581,7 +583,9 @@ class TestVisibilityHiddenSet:
     def test_exclude_category(self):
         view = make_view(
             entity={
-                "sensor.diag": FakeRegEntry("sensor.diag", entity_category="diagnostic"),
+                "sensor.diag": FakeRegEntry(
+                    "sensor.diag", entity_category="diagnostic"
+                ),
                 "light.a": FakeRegEntry("light.a"),
             }
         )
@@ -598,7 +602,10 @@ class TestVisibilityHiddenSet:
             entity={"sensor.x": FakeRegEntry("sensor.x", entity_category="bogus")}
         )
         hidden = wsapi._visibility_hidden_set(
-            view, [FakeState("sensor.x")], {"exclude_categories": ["bogus"]}, _always_expose
+            view,
+            [FakeState("sensor.x")],
+            {"exclude_categories": ["bogus"]},
+            _always_expose,
         )
         assert hidden == set()
 
@@ -626,7 +633,11 @@ class TestVisibilityHiddenSet:
             },
             devices=[FakeDevice("d1", area_id="garage")],
         )
-        states = [FakeState("light.direct"), FakeState("light.viadev"), FakeState("light.keep")]
+        states = [
+            FakeState("light.direct"),
+            FakeState("light.viadev"),
+            FakeState("light.keep"),
+        ]
         hidden = wsapi._visibility_hidden_set(
             view, states, {"exclude_areas": ["garage"]}, _always_expose
         )
@@ -641,7 +652,11 @@ class TestVisibilityHiddenSet:
             },
             devices=[FakeDevice("d1", labels={"hide"})],
         )
-        states = [FakeState("light.direct"), FakeState("light.viadev"), FakeState("light.keep")]
+        states = [
+            FakeState("light.direct"),
+            FakeState("light.viadev"),
+            FakeState("light.keep"),
+        ]
         hidden = wsapi._visibility_hidden_set(
             view, states, {"exclude_labels": ["hide"]}, _always_expose
         )
@@ -654,7 +669,11 @@ class TestVisibilityHiddenSet:
                 "light.drop": FakeRegEntry("light.drop"),
             }
         )
-        states = [FakeState("light.keep"), FakeState("light.drop"), FakeState("light.statesonly")]
+        states = [
+            FakeState("light.keep"),
+            FakeState("light.drop"),
+            FakeState("light.statesonly"),
+        ]
         hidden = wsapi._visibility_hidden_set(
             view, states, {"allow_entity_ids": ["light.keep"]}, _always_expose
         )
@@ -734,7 +753,9 @@ class TestVisibilityHiddenSet:
         view = make_view(
             entity={
                 "light.viadev_area": FakeRegEntry("light.viadev_area", device_id="d1"),
-                "light.viadev_label": FakeRegEntry("light.viadev_label", device_id="d2"),
+                "light.viadev_label": FakeRegEntry(
+                    "light.viadev_label", device_id="d2"
+                ),
                 "light.drop": FakeRegEntry("light.drop"),
             },
             devices=[
@@ -799,7 +820,9 @@ class TestSearchVisibilityPlacement:
             }
         )
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
-        return FakeHass(states=[FakeState("light.a", "on", "A"), FakeState("light.b", "on", "B")])
+        return FakeHass(
+            states=[FakeState("light.a", "on", "A"), FakeState("light.b", "on", "B")]
+        )
 
     def test_no_visibility_returns_all(self, monkeypatch):
         h = self._hass_and_view(monkeypatch)
@@ -933,7 +956,9 @@ def functional_ws(monkeypatch):
     fake = _FakeWSApi()
     monkeypatch.setattr(wsapi, "websocket_api", fake)
     monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
-    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: wsapi._RegistryView())
+    monkeypatch.setattr(
+        wsapi, "_resolve_registries", lambda hass: wsapi._RegistryView()
+    )
     monkeypatch.setattr(wsapi, "_lovelace_dashboards_map", lambda hass: None)
 
     async def _empty_desc(hass):

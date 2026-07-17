@@ -58,13 +58,6 @@ from .test_ha_search_component_routing import RoutingClient, _build_ha_search
 # the server's.
 _QUERY = "vismark"
 
-_CAPS_SEARCH_VIS = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["search", "search_visibility"],
-    "limits": {},
-}
-
 
 @dataclass
 class _Ent:
@@ -239,7 +232,9 @@ def _component_view(scenario: _Scenario) -> Any:
 async def _run_component(
     scenario: _Scenario, monkeypatch: Any
 ) -> tuple[dict[str, Any], RoutingClient]:
-    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: _component_view(scenario))
+    monkeypatch.setattr(
+        wsapi, "_resolve_registries", lambda hass: _component_view(scenario)
+    )
     if scenario.exposed is not None:
         exposed = set(scenario.exposed)
         monkeypatch.setattr(

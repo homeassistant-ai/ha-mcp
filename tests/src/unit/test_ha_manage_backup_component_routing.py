@@ -64,7 +64,9 @@ def _clear_caps_cache() -> Any:
     component_api._CAPS_LOCKS.clear()
 
 
-def _legacy_ws(*, agent_id: str = "hassio.local", password: str | None = "pw") -> AsyncMock:
+def _legacy_ws(
+    *, agent_id: str = "hassio.local", password: str | None = "pw"
+) -> AsyncMock:
     """A scripted ephemeral WS client for the LEGACY sequential path.
 
     Raises on any command not explicitly scripted, so a stray fallback call
@@ -148,7 +150,9 @@ class TestCreateBackupRouting:
         assert "backup/config/info" not in legacy_calls
         # The actual generate call still used the component-resolved agent.
         generate_call = next(
-            c for c in legacy_ws.send_command.call_args_list if c.args[0] == "backup/generate"
+            c
+            for c in legacy_ws.send_command.call_args_list
+            if c.args[0] == "backup/generate"
         )
         assert generate_call.kwargs["agent_ids"] == ["hassio.local"]
         assert generate_call.kwargs["password"] == "pw"

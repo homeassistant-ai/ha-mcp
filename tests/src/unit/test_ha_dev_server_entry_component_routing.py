@@ -84,7 +84,9 @@ class RoutingClient:
         return {}
 
 
-def _flow(entry_id: str, schema: list[dict[str, Any]], flow_type: str = "form") -> dict[str, Any]:
+def _flow(
+    entry_id: str, schema: list[dict[str, Any]], flow_type: str = "form"
+) -> dict[str, Any]:
     return {"flow_id": f"flow-{entry_id}", "type": flow_type, "data_schema": schema}
 
 
@@ -160,9 +162,7 @@ async def test_capability_miss_falls_back_to_legacy_probe_loop() -> None:
             "limits": {},
         },
     )
-    client = RoutingClient(
-        entries=[{"entry_id": "tools-1"}, {"entry_id": "server-1"}]
-    )
+    client = RoutingClient(entries=[{"entry_id": "tools-1"}, {"entry_id": "server-1"}])
     client.set_flow("tools-1", _flow("tools-1", _TOOLS_SCHEMA))
     client.set_flow("server-1", _flow("server-1", _SERVER_SCHEMA))
 
@@ -278,7 +278,9 @@ async def test_empty_string_entry_id_falls_back_to_legacy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_identified_entry_flow_open_failure_falls_back_and_exhausts_legacy() -> None:
+async def test_identified_entry_flow_open_failure_falls_back_and_exhausts_legacy() -> (
+    None
+):
     """The component identifies an entry_id, but opening ITS options flow
     fails on every attempt (e.g. the entry was removed) — falls back to the
     legacy per-candidate probe loop, which retries the SAME entry, fails

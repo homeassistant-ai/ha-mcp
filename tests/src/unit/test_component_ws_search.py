@@ -392,7 +392,9 @@ class FakeLabelReg:
 class FakeCategory:
     """Stand-in for a ``CategoryEntry`` (``registries`` category rows)."""
 
-    def __init__(self, category_id, name, *, icon=None, created_at=None, modified_at=None):
+    def __init__(
+        self, category_id, name, *, icon=None, created_at=None, modified_at=None
+    ):
         self.category_id = category_id
         self.name = name
         self.icon = icon
@@ -592,7 +594,9 @@ class FakeConfigEntry:
         self.disabled_by = disabled_by
         self.reason = reason
         self.error_reason_translation_key = error_reason_translation_key
-        self.error_reason_translation_placeholders = error_reason_translation_placeholders
+        self.error_reason_translation_placeholders = (
+            error_reason_translation_placeholders
+        )
         # Modern core stores subentries as a MappingProxyType keyed by subentry_id.
         self.subentries = dict(subentries or {})
 
@@ -2038,9 +2042,9 @@ class TestNewCommandSchemas:
     # --- registry_lookup --------------------------------------------------------
     def test_registry_lookup_accepts_either_target(self, monkeypatch):
         schema = self._schema(monkeypatch, wsapi._registry_lookup_schema)
-        assert schema(
-            {"type": wsapi.WS_REGISTRY_LOOKUP, "entity_ids": ["light.a"]}
-        )["entity_ids"] == ["light.a"]
+        assert schema({"type": wsapi.WS_REGISTRY_LOOKUP, "entity_ids": ["light.a"]})[
+            "entity_ids"
+        ] == ["light.a"]
         assert (
             schema({"type": wsapi.WS_REGISTRY_LOOKUP, "config_entry_id": "cfg1"})[
                 "config_entry_id"
@@ -2057,7 +2061,10 @@ class TestNewCommandSchemas:
                 "entity_ids": ["light.a"],
                 "config_entry_id": "cfg1",
             },
-            {"type": "ha_mcp_tools/registry_lookup", "entity_ids": "light.a"},  # not list
+            {
+                "type": "ha_mcp_tools/registry_lookup",
+                "entity_ids": "light.a",
+            },  # not list
             {"type": "ha_mcp_tools/registry_lookup", "config_entry_id": 5},  # not str
         ],
     )
@@ -3358,7 +3365,9 @@ class TestConfigEntries:
         )
         hass = FakeHass()
         hass.config = FakeConfig(tmp_path)
-        extra = await wsapi._config_entries_prep(hass, {"type": wsapi.WS_CONFIG_ENTRIES})
+        extra = await wsapi._config_entries_prep(
+            hass, {"type": wsapi.WS_CONFIG_ENTRIES}
+        )
         assert extra["secret_values"] == frozenset({"sekret"})
 
 
@@ -3809,9 +3818,7 @@ class TestRegistries:
         # request raises rather than silently serving {} (issue #1813 M1
         # tightening).
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
-        monkeypatch.setattr(
-            wsapi, "_category_registry", lambda h: FakeCategoryReg({})
-        )
+        monkeypatch.setattr(wsapi, "_category_registry", lambda h: FakeCategoryReg({}))
         monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
         with pytest.raises(_StubHomeAssistantError):
             wsapi._do_registries(FakeHass(), {"registries": ["category"]})
@@ -3819,9 +3826,7 @@ class TestRegistries:
     def test_category_requested_with_empty_scopes_list_raises(self, monkeypatch):
         # An explicit empty category_scopes list is likewise rejected.
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
-        monkeypatch.setattr(
-            wsapi, "_category_registry", lambda h: FakeCategoryReg({})
-        )
+        monkeypatch.setattr(wsapi, "_category_registry", lambda h: FakeCategoryReg({}))
         monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
         with pytest.raises(_StubHomeAssistantError):
             wsapi._do_registries(
@@ -3829,7 +3834,9 @@ class TestRegistries:
             )
 
     def test_timestamps_are_floats(self, monkeypatch):
-        area = FakeArea("a1", "Office", created_at=_REG_CREATED, modified_at=_REG_MODIFIED)
+        area = FakeArea(
+            "a1", "Office", created_at=_REG_CREATED, modified_at=_REG_MODIFIED
+        )
         monkeypatch.setattr(
             wsapi, "_resolve_registries", lambda h: make_view(areas=[area])
         )

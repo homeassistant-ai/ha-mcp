@@ -102,9 +102,12 @@ async def fetch_entity_lookup_via_component(
             logger.warning("%s failed; fell back to legacy: %r", WS_ENTITY_LOOKUP, exc)
         return None
     result = raw.get("result")
-    if not isinstance(result, dict) or not isinstance(result.get("matches"), list):
+    if not isinstance(result, dict):
         return None
-    return result["matches"]
+    matches = result.get("matches")
+    if not isinstance(matches, list):
+        return None
+    return matches
 
 
 async def fetch_reference_data_via_component(
@@ -136,9 +139,7 @@ async def fetch_reference_data_via_component(
         if is_unknown_command(exc):
             invalidate_caps(client)
         else:
-            logger.warning(
-                "%s failed; fell back to legacy: %r", WS_REFERENCE_DATA, exc
-            )
+            logger.warning("%s failed; fell back to legacy: %r", WS_REFERENCE_DATA, exc)
         return None
     result = raw.get("result")
     if (
