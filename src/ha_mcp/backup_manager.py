@@ -1442,10 +1442,21 @@ def _strip_readonly(config: dict[str, Any], *extra: str) -> dict[str, Any]:
 
 
 async def _fetch_label(client: Any, entity_id: str) -> Any:
-    items = _require_list(
-        await _ws_send(client, {"type": "config/label_registry/list"}),
-        "config/label_registry/list",
-    )
+    # Route the capture through the component's ``registries`` capability when
+    # available (one in-process read of the label registry) instead of dumping
+    # the whole registry via WS. Lazy import to avoid the backup_manager →
+    # tools → backup_manager cycle (same pattern as ``_fetch_device``). ``None``
+    # from the helper means "component unavailable"; fall back to the full list.
+    from .tools.component_registries import fetch_registries_via_component
+
+    component_result = await fetch_registries_via_component(client, ["label"])
+    if component_result is not None:
+        items = component_result.get("labels") or []
+    else:
+        items = _require_list(
+            await _ws_send(client, {"type": "config/label_registry/list"}),
+            "config/label_registry/list",
+        )
     for item in items:
         if item.get("label_id") == entity_id:
             return item
@@ -1466,12 +1477,22 @@ async def _fetch_category(client: Any, entity_id: str) -> Any:
     scope, _, cat_id = entity_id.partition(":")
     if not cat_id:
         return None
-    items = _require_list(
-        await _ws_send(
-            client, {"type": "config/category_registry/list", "scope": scope}
-        ),
-        "config/category_registry/list",
+    # Same component-first routing as ``_fetch_label``; categories are scoped,
+    # so the requested scope rides ``category_scopes``.
+    from .tools.component_registries import fetch_registries_via_component
+
+    component_result = await fetch_registries_via_component(
+        client, ["category"], category_scopes=[scope]
     )
+    if component_result is not None:
+        items = (component_result.get("categories") or {}).get(scope, [])
+    else:
+        items = _require_list(
+            await _ws_send(
+                client, {"type": "config/category_registry/list", "scope": scope}
+            ),
+            "config/category_registry/list",
+        )
     for item in items:
         if item.get("category_id") == cat_id:
             return {"scope": scope, **item}
@@ -1607,19 +1628,30 @@ async def _fetch_area_or_floor(client: Any, entity_id: str) -> Any:
     kind, _, real_id = entity_id.partition(":")
     if not real_id:
         return None
+    # Same component-first routing as ``_fetch_label`` / ``_fetch_category``.
+    from .tools.component_registries import fetch_registries_via_component
+
     if kind == "area":
-        items = _require_list(
-            await _ws_send(client, {"type": "config/area_registry/list"}),
-            "config/area_registry/list",
-        )
+        component_result = await fetch_registries_via_component(client, ["area"])
+        if component_result is not None:
+            items = component_result.get("areas") or []
+        else:
+            items = _require_list(
+                await _ws_send(client, {"type": "config/area_registry/list"}),
+                "config/area_registry/list",
+            )
         for item in items:
             if item.get("area_id") == real_id:
                 return {"kind": "area", **item}
     elif kind == "floor":
-        items = _require_list(
-            await _ws_send(client, {"type": "config/floor_registry/list"}),
-            "config/floor_registry/list",
-        )
+        component_result = await fetch_registries_via_component(client, ["floor"])
+        if component_result is not None:
+            items = component_result.get("floors") or []
+        else:
+            items = _require_list(
+                await _ws_send(client, {"type": "config/floor_registry/list"}),
+                "config/floor_registry/list",
+            )
         for item in items:
             if item.get("floor_id") == real_id:
                 return {"kind": "floor", **item}

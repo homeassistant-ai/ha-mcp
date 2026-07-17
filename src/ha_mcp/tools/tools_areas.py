@@ -15,6 +15,7 @@ from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from .auto_backup import with_auto_backup
+from .component_registries import fetch_registries_via_component
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -183,7 +184,7 @@ class AreaTools:
 
         Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level. Optionally project the response with fields= (top-level keys) or area_fields= (per-area-record keys, applied uniformly across nested, unassigned, and orphaned buckets).
 
-        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas — a topology snapshot may diverge from individual list calls if the registries change between reads.
+        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas. When the ha_mcp_tools component's registries capability is available, both registries come from a single in-process snapshot, so this classification is always consistent. Without it (legacy path), the two registries are fetched via independent WebSocket calls and a registry change between reads may transiently misclassify an area.
         """
         # Validate projection params before any WS round-trips so a bad shape
         # fails fast without burning two registry reads.
@@ -215,59 +216,7 @@ class AreaTools:
             "phase": "start",
         }
         try:
-            # Fetch both registries concurrently. Sequential awaits add a
-            # round-trip per call on the WS transport; gather halves the
-            # tool-side latency. Use return_exceptions=True so a failure on
-            # one side doesn't cancel the other — the post-fetch guard
-            # below reports both registries' state in the error context for
-            # diagnosis. Indexed access + explicit annotations rather than
-            # tuple-unpack — gather returns list[Any] which mypy can't
-            # statically narrow to a 2-tuple.
-            results = await asyncio.gather(
-                self._client.send_websocket_message(
-                    {"type": "config/area_registry/list"}
-                ),
-                self._client.send_websocket_message(
-                    {"type": "config/floor_registry/list"}
-                ),
-                return_exceptions=True,
-            )
-            progress["phase"] = "registries_fetched"
-
-            # Re-raise transport-level exceptions from either fetch so the
-            # outer except handler classifies them via exception_to_structured_error.
-            if isinstance(results[0], BaseException):
-                raise results[0]
-            if isinstance(results[1], BaseException):
-                raise results[1]
-            areas_result: dict[str, Any] = results[0]
-            floors_result: dict[str, Any] = results[1]
-
-            # A response with success=True but no "result" key is malformed —
-            # treat it as a service call failure rather than silently returning
-            # floor_count=0, area_count=0 on a populated instance.
-            areas_ok = areas_result.get("success") and "result" in areas_result
-            floors_ok = floors_result.get("success") and "result" in floors_result
-            if not (areas_ok and floors_ok):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        "Failed to retrieve area or floor registry",
-                        context={
-                            "areas_success": areas_result.get("success"),
-                            "floors_success": floors_result.get("success"),
-                            "areas_response_keys": sorted(areas_result.keys()),
-                            "floors_response_keys": sorted(floors_result.keys()),
-                        },
-                        suggestions=[
-                            "Check Home Assistant connection",
-                            "Verify WebSocket connection is active",
-                        ],
-                    )
-                )
-
-            areas = areas_result["result"]
-            floors = floors_result["result"]
+            areas, floors = await self._fetch_area_floor_registries(progress)
 
             # Partition areas into three disjoint sets:
             #   - nested:    floor_id present AND points to a known floor
@@ -382,6 +331,77 @@ class AreaTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+
+    async def _fetch_area_floor_registries(
+        self, progress: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Return ``(areas, floors)`` as one consistent snapshot when possible.
+
+        Prefers the ``ha_mcp_tools`` component's ``registries`` capability — a
+        single in-process read of both registries, closing the TOCTOU window
+        between two independent list calls. Falls back to the legacy 2-call
+        ``asyncio.gather`` when the component is unavailable, downgraded, or
+        errors on this frame. Updates ``progress["phase"]`` for the caller's
+        error-context reporting either way.
+        """
+        component_result = await fetch_registries_via_component(
+            self._client, ["area", "floor"]
+        )
+        if component_result is not None:
+            progress["phase"] = "registries_fetched"
+            return (
+                component_result.get("areas") or [],
+                component_result.get("floors") or [],
+            )
+
+        # Fetch both registries concurrently. Sequential awaits add a
+        # round-trip per call on the WS transport; gather halves the
+        # tool-side latency. Use return_exceptions=True so a failure on
+        # one side doesn't cancel the other — the post-fetch guard
+        # below reports both registries' state in the error context for
+        # diagnosis. Indexed access + explicit annotations rather than
+        # tuple-unpack — gather returns list[Any] which mypy can't
+        # statically narrow to a 2-tuple.
+        results = await asyncio.gather(
+            self._client.send_websocket_message({"type": "config/area_registry/list"}),
+            self._client.send_websocket_message({"type": "config/floor_registry/list"}),
+            return_exceptions=True,
+        )
+        progress["phase"] = "registries_fetched"
+
+        # Re-raise transport-level exceptions from either fetch so the
+        # outer except handler classifies them via exception_to_structured_error.
+        if isinstance(results[0], BaseException):
+            raise results[0]
+        if isinstance(results[1], BaseException):
+            raise results[1]
+        areas_result: dict[str, Any] = results[0]
+        floors_result: dict[str, Any] = results[1]
+
+        # A response with success=True but no "result" key is malformed —
+        # treat it as a service call failure rather than silently returning
+        # floor_count=0, area_count=0 on a populated instance.
+        areas_ok = areas_result.get("success") and "result" in areas_result
+        floors_ok = floors_result.get("success") and "result" in floors_result
+        if not (areas_ok and floors_ok):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Failed to retrieve area or floor registry",
+                    context={
+                        "areas_success": areas_result.get("success"),
+                        "floors_success": floors_result.get("success"),
+                        "areas_response_keys": sorted(areas_result.keys()),
+                        "floors_response_keys": sorted(floors_result.keys()),
+                    },
+                    suggestions=[
+                        "Check Home Assistant connection",
+                        "Verify WebSocket connection is active",
+                    ],
+                )
+            )
+
+        return areas_result["result"], floors_result["result"]
 
     # ============================================================
     # COMBINED SET / REMOVE
