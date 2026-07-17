@@ -32,10 +32,12 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, tools_system
 from ha_mcp.tools.tools_system import SystemTools
@@ -428,3 +430,32 @@ async def test_section_error_still_degrades_to_error_subdict() -> None:
     assert "boom" in resp["zwave_network"]["error"]
     # The sibling repairs section, served from the same snapshot, is unaffected.
     assert resp["repairs"]["issues"] == [_issue("iss-1")]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_connection_error_propagates() -> None:
+    """A ``HomeAssistantConnectionError`` raised while fetching the snapshot
+    is NOT one of the (``HomeAssistantCommandError``, ``HomeAssistantCommandTimeout``)
+    types ``_fetch_system_snapshot`` catches, so it propagates out of
+    ``ha_get_system_health`` as a ``ToolError`` instead of being swallowed into
+    a per-section legacy fallback (the WS is down, so the legacy fetches would
+    fail identically anyway)."""
+    ws = make_ws(
+        "ha_mcp_tools/system_snapshot",
+        info_result=_CAPS_SNAPSHOT,
+        cmd_exc=HomeAssistantConnectionError("connection lost"),
+    )
+    health_ws = _health_ws(zwave_status={"controller": {"nodes": []}})
+    client = RoutingClient()
+
+    with patch_ws(ws, tools_system), _health_baseline(health_ws), pytest.raises(ToolError):
+        await SystemTools(client).ha_get_system_health(include=_INCLUDE_ALL)
+
+    # No per-section legacy fallback ran -- the connection error surfaced
+    # instead of degrading.
+    assert health_ws.repairs_calls == 0
+    assert health_ws.config_entries_get_calls == 0
+    assert health_ws.zwave_status_calls == 0
+    assert client.get_states_calls == 0
+    assert client.entity_registry_list_calls == 0
+    assert client.config_entries_get_calls == 0

@@ -1592,8 +1592,18 @@ class SystemTools:
         # ``warnings`` key would collide with.
         bubble_warnings: list[str] = []
         try:
-            if prefetched_registry is not None:
-                states: Any = prefetched_states if prefetched_states is not None else []
+            # All three slices are supplied together by the caller as one
+            # unit (the ``system_snapshot`` contract guarantees they're
+            # never partial — see ``_build_system_snapshot_slices``), so the
+            # gate requires all three rather than just ``prefetched_registry``
+            # to keep that invariant explicit here rather than relying on the
+            # call site.
+            if (
+                prefetched_states is not None
+                and prefetched_registry is not None
+                and prefetched_entries is not None
+            ):
+                states: Any = prefetched_states
                 registry_raw: Any = prefetched_registry
                 entries_raw: Any = prefetched_entries
             else:

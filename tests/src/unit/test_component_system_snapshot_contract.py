@@ -255,3 +255,76 @@ async def test_component_and_legacy_paths_agree(monkeypatch: pytest.MonkeyPatch)
     assert component_resp["repairs"]["issues"][0]["issue_id"] == "iss-mqtt"
     assert component_resp["zwave_network"]["controller"] == {"nodes": []}
     assert component_resp["matter_network"]["config_entry_id"] == "cfg-matter"
+
+
+@pytest.mark.asyncio
+async def test_include_dismissed_repairs_via_component_matches_legacy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``include_dismissed_repairs=True`` through the prefetched ``issues``
+    slice (the component's ``system_snapshot`` -> ``_fetch_repairs``
+    ``prefetched_repairs`` path) returns the same repairs payload -- dismissed
+    issue included -- as the legacy ``repairs/list_issues`` path."""
+    monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: _view())
+    monkeypatch.setattr(
+        wsapi,
+        "ir",
+        FakeIssueRegModule(
+            FakeIssueRegistry(
+                [
+                    FakeIssue(
+                        "iss-mqtt",
+                        "mqtt",
+                        translation_key="tk",
+                        created="2026-01-01T00:00:00+00:00",
+                        issue_domain="mqtt",
+                    ),
+                    FakeIssue(
+                        "iss-dismissed",
+                        "hue",
+                        translation_key="tk",
+                        created="2026-01-01T00:00:00+00:00",
+                        issue_domain="hue",
+                        dismissed_version="2026.1.0",
+                    ),
+                ]
+            )
+        ),
+    )
+    hass = _hass()
+
+    # --- component path: the real _do_system_snapshot's "issues" slice feeds
+    # _fetch_repairs' prefetched_repairs, which include_dismissed then filters ---
+    ws = _real_snapshot_ws(hass, info_result=_CAPS_SNAPSHOT)
+    component_client = RoutingClient()
+    component_health_ws = _health_ws()
+    with patch_ws(ws, tools_system), _health_baseline(component_health_ws):
+        component_resp = await SystemTools(component_client).ha_get_system_health(
+            include="repairs", include_dismissed_repairs=True
+        )
+
+    # --- legacy path: caps advertise nothing, so system_snapshot is never sent ---
+    ws_legacy = _real_snapshot_ws(hass, info_result=_CAPS_NONE)
+    legacy_client = RoutingClient()
+    legacy_health_ws = _health_ws(
+        repairs_issues=[
+            _issue("iss-mqtt", domain="mqtt"),
+            _issue("iss-dismissed", domain="hue", dismissed_version="2026.1.0"),
+        ]
+    )
+    with patch_ws(ws_legacy, tools_system), _health_baseline(legacy_health_ws):
+        legacy_resp = await SystemTools(legacy_client).ha_get_system_health(
+            include="repairs", include_dismissed_repairs=True
+        )
+
+    assert component_resp["repairs"] == legacy_resp["repairs"]
+    issue_ids = {i["issue_id"] for i in component_resp["repairs"]["issues"]}
+    assert issue_ids == {"iss-mqtt", "iss-dismissed"}
+    assert component_resp["repairs"]["count"] == 2
+    # include_dismissed=True never reports a separate dismissed_count.
+    assert "dismissed_count" not in component_resp["repairs"]
+
+    # The component path never touched the legacy repairs fetch; the legacy
+    # path paid for exactly the one it replaces.
+    assert component_health_ws.repairs_calls == 0
+    assert legacy_health_ws.repairs_calls == 1
