@@ -6,8 +6,29 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools import tools_history
 from ha_mcp.tools.tools_history import HistoryTools
+
+
+@pytest.fixture(autouse=True)
+def _no_real_caps_probe():
+    """Keep the ``ha_mcp_tools/info`` caps probe from opening a real socket.
+
+    The mock clients here carry a real-looking ``base_url``/``token`` but
+    never patch ``get_websocket_client``, so ``get_component_caps`` (invoked
+    by ``add_timezone_metadata`` -> ``_fetch_ha_timezone`` for every test that
+    completes ``ha_get_history`` successfully) would otherwise attempt a real
+    WS connection and pay its full failure latency per test. Forcing a
+    ``HomeAssistantConnectionError`` reproduces the "component absent" outcome
+    these tests already assume (they mock the legacy ``client.get_config``
+    fallback) without the real connection attempt.
+    """
+    with patch(
+        "ha_mcp.tools.component_api.get_websocket_client",
+        AsyncMock(side_effect=HomeAssistantConnectionError("no WS in unit tests")),
+    ):
+        yield
 
 
 class TestHaGetHistoryExceptionSuggestions:
