@@ -89,26 +89,24 @@ When implementing features or debugging, consult these resources:
 
 ## Issue & PR Management
 
-### Automated Code Review (Gemini Code Assist)
+### Automated Code Review (Codex)
 
-**Gemini Code Assist** runs automatically on all PRs, providing immediate feedback on:
-- Code quality (correctness, efficiency, maintainability)
-- Test coverage (enforces `src/` modifications must have tests)
-- Security patterns (eval/exec, SQL injection, credentials)
-- Tool naming conventions and MCP patterns
-- Safety annotation accuracy
-- Return value consistency
-
-**Configuration**: `.gemini/styleguide.md` and `.gemini/config.yaml`
+**Codex** reviews PRs automatically (`pr-codex-review-request.yml` /
+`pr-codex-review-delivery.yml`; posts as `chatgpt-codex-connector[bot]`).
+Gemini Code Assist is retired — Google sunset its GitHub review activities and
+the app now only posts sunset-notice banners, so `.gemini/config.yaml`
+disables it fully. `.gemini/styleguide.md` remains the repo's review-criteria
+document (code quality, test coverage, security patterns, MCP conventions,
+safety annotation accuracy).
 
 **Division of Labor:**
-- **Gemini (automatic)**: Code quality, test coverage, generic security, MCP conventions
-- **Claude `/contrib-pr-review` (on-demand)**: Repo-specific security (AGENTS.md, .github/), detailed test analysis, PR size assessment, issue linkage
+- **Codex (automatic)**: Code quality, test coverage, generic security, MCP conventions
+- **Claude `/contrib-pr-review` (on-demand)**: Repo-specific security (AGENTS.md, .github/, .claude/), detailed test analysis, PR size assessment, issue linkage
 - **Claude `/my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
 
 ### Issue Labels
 
-**Triage-state labels** (applied by `gemini-triage.yml` or manual triage):
+**Triage-state labels** (applied by `issue-triage.yml` or manual triage):
 
 | Label | Meaning |
 |-------|---------|
@@ -116,8 +114,8 @@ When implementing features or debugging, consult these resources:
 | `needs-choices` | Multiple approaches, needs stakeholder input |
 | `needs-info` | Awaiting clarification from reporter |
 | `priority: high/medium/low` | Relative priority |
-| `triaged` | Automated Gemini triage complete |
-| `triage-failed` | Automated Gemini triage failed; circuit breaker that blocks retrigger on comments. Clear it (or run via `workflow_dispatch`) to retry |
+| `triaged` | Automated triage complete |
+| `triage-failed` | Automated triage failed; circuit breaker that blocks retrigger on comments. Clear it (or run via `workflow_dispatch`) to retry |
 | `issue-analyzed` | Deep Claude analysis complete |
 
 **Bug-class labels** (applied via `.github/ISSUE_TEMPLATE/` form selection or manual triage):
@@ -151,7 +149,7 @@ When implementing features or debugging, consult these resources:
 
 ### Issue Analysis Workflow
 
-- **Automated Triage (Gemini)**: Runs on new issues via `.github/workflows/gemini-triage.yml`. Adds `triaged` label.
+- **Automated Triage**: Runs on new issues via `.github/workflows/issue-triage.yml` (GitHub Models). Adds `triaged` label.
 - **Deep Analysis (Claude)**: When user says "analyze issues", list issues missing `issue-analyzed` label, then invoke `/issue-analysis <number>` for each sequentially (the skill drafts analysis for user approval before posting).
 
 ```bash
@@ -161,7 +159,7 @@ gh issue list --state open --json number,title,labels --jq '.[] | select(.labels
 ### PR Review Comments
 
 **Always check for comments after pushing to a PR.** They come from bots
-(Gemini Code Assist, Copilot) or humans. Address human comments with highest
+(Codex, Copilot) or humans. Address human comments with highest
 priority; treat bot comments as suggestions to assess, not commands.
 
 **Reply, then resolve.** After addressing an inline comment, reply on its
@@ -288,7 +286,7 @@ If any are false: fix it now, or let it go. **Do not file an issue to "track" it
 
 The following phrases are red flags that you're making a scope decision unilaterally (list is non-exhaustive — match on intent, not exact string): "post-merge follow-up", "follow-up consideration", "forward-looking note", "nice to have", "Happy to file an issue", "out of scope for this PR", "not blocking this PR", "pre-existing — not touching it" (pre-existing is not a reason to skip; addressing pre-existing things is the point of this rule), "real design work, not N lines", "worth tracking as a follow-up issue".
 
-**Code-review bot suggestions** (Gemini Code Assist, CodeRabbit, Copilot non-blocking nits): apply inline or dismiss. Never spawn a follow-up issue from a bot suggestion unless the user explicitly confirms it's a large, out-of-scope change. See `.gemini/styleguide.md` § *Non-Blocking Suggestions and Scope* for the bot-side rule.
+**Code-review bot suggestions** (Codex, CodeRabbit, Copilot non-blocking nits): apply inline or dismiss. Never spawn a follow-up issue from a bot suggestion unless the user explicitly confirms it's a large, out-of-scope change. See `.gemini/styleguide.md` § *Non-Blocking Suggestions and Scope* for the bot-side rule.
 
 ### Hotfix Process (Critical Bugs Only)
 

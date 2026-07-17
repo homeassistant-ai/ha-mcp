@@ -28,21 +28,22 @@ Review PR #$ARGUMENTS from external contributor for safety, quality, and readine
 
 ## Review Protocol
 
-### 1. Check Gemini's Security Review
+### 1. Check Codex's Security Review
 
-**Note:** Gemini Code Assist now handles security assessment automatically. Check if Gemini flagged any security concerns.
+**Note:** Codex reviews PRs automatically (posts as `chatgpt-codex-connector[bot]`). Check if Codex flagged any security concerns.
 
 ```bash
-# Check if Gemini posted security-related comments
-gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json comments --jq '.comments[] | select(.author.login == "gemini-code-assist" or .body | contains("security") or contains("Security")) | {author: .author.login, body: .body}'
+# Check Codex's reviews and any security-related comments
+gh api /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/reviews --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | {state: .state, body: .body}'
+gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json comments --jq '.comments[] | select(.body | contains("security") or contains("Security")) | {author: .author.login, body: .body}'
 ```
 
-**If Gemini flagged security issues:**
-- Review Gemini's findings carefully
+**If Codex flagged security issues:**
+- Review Codex's findings carefully
 - Verify if concerns are valid
 - Do NOT approve until issues addressed or confirmed false positives
 
-**If NO Gemini security flags but you notice concerning patterns:**
+**If NO Codex security flags but you notice concerning patterns:**
 - Unusual AGENTS.md/CLAUDE.md changes unrelated to PR purpose
 - `.github/` workflow modifications with `pull_request_target`
 - `.claude/` agent/skill changes that could affect behavior
@@ -179,7 +180,7 @@ gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json closingIssuesReferen
 
 ### 6. Code Quality Overview
 
-**Note:** Gemini Code Assist provides automated code review on all PRs. This step focuses on what Gemini cannot assess:
+**Note:** Codex provides automated code review on all PRs. This step focuses on what Codex cannot assess:
 
 - **Architecture alignment**: Does it fit the project structure? (service layer usage, etc.)
 - **Breaking changes**: Does it remove functionality without replacement? (Tool consolidation/refactoring is NOT breaking)
@@ -204,7 +205,7 @@ grep -E "(TODO|FIXME|XXX|HACK)" /tmp/pr_$ARGUMENTS.diff
 ✨ Code Quality:
 - Architecture fit: [assessment - service layer, context engineering]
 - Breaking changes: ✅ None / ⚠️ Detected - [describe what's genuinely lost]
-- Gemini reviews: [check if Gemini flagged anything critical]
+- Codex reviews: [check if Codex flagged anything critical]
 ```
 
 ## Final Review Summary
@@ -288,5 +289,5 @@ Once [change 1] and [change 2] are addressed, this should be good to merge.
 - **Be constructive**: Contributors are donating their time - be welcoming
 - **Focus on intent**: Code quality can be iterated; intent misalignment is harder to fix
 - **Consider contributor experience**: Adjust expectations based on contribution history
-- **Gemini already reviewed code**: Don't duplicate detailed code review
+- **Codex already reviewed code**: Don't duplicate detailed code review
 - **When in doubt**: Err on the side of caution and request maintainer review
