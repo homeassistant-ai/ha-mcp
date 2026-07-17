@@ -680,9 +680,7 @@ class EmbeddedServerManager:
             _installed_ha_mcp_version
         )
 
-        pending_version = str(
-            self._entry.data.get(DATA_PENDING_INSTALL_VERSION) or ""
-        ).strip()
+        pending_version = self._pending_install_version(defer_mutations)
         target_dist = dist_for_channel(self._channel)
         if not self._pip_spec_override and pending_version:
             # Pin to the requested version. Its own value differs from
@@ -804,6 +802,21 @@ class EmbeddedServerManager:
         )
         await self._async_remove_distribution(target_dist)
 
+    def _pending_install_version(self, defer_mutations: bool) -> str:
+        """Return the update entity's pending-install version, or ``""``.
+
+        Always empty while mutations are deferred, leaving the marker in
+        ``entry.data`` untouched: the deferred branch runs no install, and
+        consuming the marker without an attempt would lose the user's Install
+        click entirely (with auto-update off, the next reload re-pins to the
+        OLD installed version). One-shot means one real ATTEMPT — a deferred
+        bring-up never attempts, so the marker survives to the next
+        undeferred reload (review finding on #1923).
+        """
+        if defer_mutations:
+            return ""
+        return str(self._entry.data.get(DATA_PENDING_INSTALL_VERSION) or "").strip()
+
     async def _async_defer_package_mutations(
         self, installed_version: str | None
     ) -> None:
@@ -883,8 +896,13 @@ class EmbeddedServerManager:
         reload/restart path, where ``upgrade=True`` alone is correct and an
         uninstall would churn — and briefly break — a healthy install on
         every restart), when the new spec is a direct URL (always installs
-        for real), or when the named distribution is not installed (e.g. a
-        cross-channel switch already removed it).
+        for real), when the named distribution is not installed (e.g. a
+        cross-channel switch already removed it), or when the stored spec is
+        an index requirement on the SAME distribution (a repin — e.g.
+        toggling auto-update rewrites bare ``ha-mcp`` to ``ha-mcp==X`` —
+        draws from the same index either way, so version resolution is
+        faithful and uninstalling a healthy install on a preference toggle
+        would only add an offline-breakage window).
 
         Unlike the other pre-install uninstalls this one is NOT best-effort:
         if the distribution survives a failed uninstall, the forced install
@@ -899,6 +917,11 @@ class EmbeddedServerManager:
             return
         replaced_dist = self._replaced_dist_name()
         if replaced_dist is None:
+            return
+        if _spec_is_index_requirement_on(stored_spec, replaced_dist):
+            # Same distribution, same index — only the pin changed. The old
+            # code on disk came from the index too, so "already satisfied by
+            # version" is the truth, not the #1914 lie.
             return
         if not await self._hass.async_add_executor_job(_dist_installed, replaced_dist):
             return
@@ -1675,6 +1698,25 @@ def _uninstall_distribution(dist_name: str, *, target: str | None = None) -> boo
         )
         return False
     return True
+
+
+def _spec_is_index_requirement_on(spec: str, dist_name: str) -> bool:
+    """Return whether ``spec`` is a plain index requirement on ``dist_name``.
+
+    True only for a PEP 508 requirement with no direct-URL part whose
+    canonical name matches — i.e. a spec that installs ``dist_name`` from the
+    package index (bare name or version pin). A direct URL (whether a plain
+    URL string, which does not parse as a requirement, or a ``name @ url``
+    form) returns False: its origin is not the index, so it is a genuine
+    source change for the replaced-source check.
+    """
+    try:
+        req = Requirement(spec)
+    except InvalidRequirement:
+        return False
+    if req.url:
+        return False
+    return canonicalize_name(req.name) == canonicalize_name(dist_name)
 
 
 def _is_compatible_embedded_version(version: str) -> bool:

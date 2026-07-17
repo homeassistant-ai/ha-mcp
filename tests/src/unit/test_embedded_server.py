@@ -480,9 +480,11 @@ class TestEnsurePackage:
         assert install_pkg.call_args.kwargs.get("upgrade") is True
 
     async def test_force_install_when_spec_changed(self, tmp_path, monkeypatch):
-        # Configured spec differs from the last-installed one (the pre-release
-        # test channel) ⇒ force a real reinstall (upgrade=True), not the fast
-        # path — and uninstall the replaced source first (#1914).
+        # Configured spec differs from the last-installed one ⇒ force a real
+        # reinstall (upgrade=True), not the fast path. Both specs are index
+        # pins on the SAME distribution, so no replaced-source uninstall: the
+        # index's version resolution is faithful for a repin, and the version
+        # change makes the install real by itself.
         mgr, _hass, entry = _manager(
             tmp_path,
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "ha-mcp==7.11.0"},
@@ -503,12 +505,42 @@ class TestEnsurePackage:
         await mgr._async_ensure_package()
 
         proc.assert_not_awaited()
-        uninstall.assert_called_once_with(DIST_NAME_STABLE)
+        uninstall.assert_not_called()
         install_pkg.assert_called_once()
         assert install_pkg.call_args.args[0] == "ha-mcp==7.12.1"
         assert install_pkg.call_args.kwargs.get("upgrade") is True
         # The just-installed spec is persisted so the next start takes the fast path.
         assert entry.data[DATA_LAST_PIP_SPEC] == "ha-mcp==7.12.1"
+
+    async def test_auto_update_toggle_repin_does_not_uninstall(
+        self, tmp_path, monkeypatch
+    ):
+        # Turning auto-update off rewrites the stored bare channel spec to a
+        # pin on the installed version. That is a repin on the same index
+        # distribution, not a source change — uninstalling the healthy
+        # install for it would only open an offline-breakage window (review
+        # finding on #1923).
+        install_pkg = MagicMock(return_value=True)
+        uninstall = MagicMock()
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_AUTO_UPDATE: False},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEFAULT_PIP_SPEC},
+        )
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.13.0")
+        monkeypatch.setattr(
+            es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
+        )
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        uninstall.assert_not_called()
+        install_pkg.assert_called_once()
+        assert install_pkg.call_args.args[0] == f"{DIST_NAME_STABLE}==7.13.0"
 
     async def test_cleared_override_uninstalls_replaced_source(
         self, tmp_path, monkeypatch
@@ -1141,6 +1173,31 @@ class TestPendingInstallMarker:
         await mgr._async_ensure_package()
 
         assert mgr._pip_spec == "ha-mcp==7.10.0"
+
+    async def test_marker_survives_deferred_bringup(self, tmp_path, monkeypatch):
+        # A deferred bring-up runs no install, so it must not consume the
+        # Install click: the marker stays in entry.data for the next
+        # undeferred reload, and the spec is not pinned to the requested
+        # version this round (review finding on #1923 — losing the marker
+        # with auto-update off silently re-pins to the OLD version).
+        mgr, _hass, entry = _manager(
+            tmp_path,
+            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.12.1"},
+        )
+        monkeypatch.setattr(
+            es, "_installed_ha_mcp_version", lambda preferred_dist=None: "7.13.0"
+        )
+        fast = AsyncMock()
+        force = AsyncMock()
+        monkeypatch.setattr(mgr, "_async_process_requirements_fast", fast)
+        monkeypatch.setattr(mgr, "_async_force_install", force)
+
+        await mgr._async_ensure_package(defer_mutations=True)
+
+        fast.assert_not_awaited()
+        force.assert_not_awaited()
+        assert entry.data[DATA_PENDING_INSTALL_VERSION] == "7.12.1"
+        assert mgr._pip_spec == DIST_NAME_STABLE
 
     async def test_marker_cleared_after_successful_install(self, tmp_path, monkeypatch):
         mgr, _hass, entry = _manager(
