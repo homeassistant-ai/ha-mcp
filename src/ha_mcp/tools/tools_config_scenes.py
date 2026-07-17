@@ -534,7 +534,7 @@ class ConfigSceneTools:
         BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
         """
-        Create or update a Home Assistant scene. MUST call ha_get_skill_guide first.
+        Create or update a Home Assistant scene. MUST call ha_get_skill_guide OR refer to your locally installed skills first.
 
         Supports two modes: full config replacement (``config``) or
         Python transformation of an existing scene (``python_transform``).

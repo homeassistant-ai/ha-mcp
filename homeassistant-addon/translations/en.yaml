@@ -61,10 +61,10 @@ configuration:
       also exposes a per-call `MandatoryBPS` parameter the agent can
       set to false on subsequent calls once it has the content. When
       this master switch is off, NO skill_content goes out regardless
-      of the per-call parameter or BP warnings. Leave on if your LLM
-      benefits from inline guidance; turn off to minimise tokens when
-      using an LLM that has the best-practice files indexed via skills
-      or another retrieval path. Requires restart to take effect.
+      of the per-call parameter or BP warnings. Recommended ON as the
+      first choice; disable only for models with very small context
+      windows. Turning this off may degrade write accuracy. Requires
+      restart to take effect.
   enable_strict_mandatory_bps:
     name: Strict best-practices mode
     description: >-
