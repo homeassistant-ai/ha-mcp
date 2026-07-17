@@ -31,9 +31,15 @@ send one frame, invalidate on ``unknown_command``, fall back to the legacy path
 on any component error — lives in one place (the pattern ``component_devices``
 established for the ``device_get`` / ``device_list`` capabilities). Both helpers
 return ``None`` to mean "component unavailable — use the legacy path"; a component
-that answers returns its payload. A ``HomeAssistantConnectionError`` (WS down) is
-not caught here, so it propagates to the caller's own error handling — the legacy
-path shares the same socket and would fail identically.
+that answers returns its payload. Per the uniform transport-fallback taxonomy, a
+``HomeAssistantConnectionError`` (pooled-WS drop) and the plain ``Exception``
+``get_websocket_client()`` raises on a failed (re)connect are caught and mapped to
+``None`` so the legacy path runs: the consumers' legacy reads (the whole-registry
+``config/entity_registry/list`` dump and the per-id ``config/entity_registry/get``
+retry loop) ride the swallowing ``send_websocket_message`` bridge, which returns
+``{"success": False}`` rather than raising — so they do NOT die identically on a
+pooled-WS drop, and letting a transport failure escape would skip the
+``resolve_entities_via_component`` consumer's legacy retry loop entirely.
 """
 
 from __future__ import annotations
@@ -88,6 +94,14 @@ async def fetch_entities_for_config_entry_via_component(
                 "%s failed; fell back to legacy: %r", WS_REGISTRY_LOOKUP, exc
             )
         return None
+    except Exception as exc:
+        # HomeAssistantConnectionError / plain establish Exception → legacy (the
+        # legacy entity_registry/list dump rides the swallowing bridge; see module
+        # docstring). Never propagate a transport failure out of the read.
+        logger.warning(
+            "%s connection error; falling back to legacy: %r", WS_REGISTRY_LOOKUP, exc
+        )
+        return None
     result = raw.get("result")
     entities = result.get("entities") if isinstance(result, dict) else None
     if not isinstance(entities, list):
@@ -127,6 +141,14 @@ async def resolve_entities_via_component(
             logger.warning(
                 "%s failed; fell back to legacy: %r", WS_REGISTRY_LOOKUP, exc
             )
+        return None
+    except Exception as exc:
+        # HomeAssistantConnectionError / plain establish Exception → legacy. The
+        # simple-delete consumer's legacy per-id retry loop only runs when this
+        # returns None, so an escaping transport failure would skip it entirely.
+        logger.warning(
+            "%s connection error; falling back to legacy: %r", WS_REGISTRY_LOOKUP, exc
+        )
         return None
     result = raw.get("result")
     if not isinstance(result, dict) or not isinstance(result.get("entities"), list):

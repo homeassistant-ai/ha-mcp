@@ -758,6 +758,30 @@ def _safe(fn: Any, hass: HomeAssistant) -> Any:
         return None
 
 
+def _substrate_unavailable(name: str) -> Exception:
+    """Build a ``HomeAssistantError`` for a drifted / unavailable core substrate.
+
+    A core registry / service / state accessor that RAISED or was renamed comes
+    back as ``None`` (registries, via ``_safe``) or a non-``Mapping``
+    (services / descriptions) from the guarded readers. For the reads whose WHOLE
+    answer is that substrate — ``entity_lookup``, ``registries``,
+    ``reference_data``, ``services_list`` — returning a well-formed EMPTY would let
+    the server trust an authoritative-negative it should instead fall back to legacy
+    for (mistaking core DRIFT for "no such entry" / "empty catalog"). Raising routes
+    the server's command-error path to its legacy WS/REST read, mirroring
+    :func:`_backup_unavailable` / :func:`_registries_missing_category_scopes`. A
+    genuinely-EMPTY-but-present substrate (a real empty registry) is NOT drift and
+    keeps returning its empty result — the guards below key off unavailability
+    (``None`` / non-``Mapping``), never off an empty-but-valid collection.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    return HomeAssistantError(
+        f"ha_mcp_tools: the {name} is unavailable (core drift); the server should "
+        "fall back to its legacy read"
+    )
+
+
 def _do_search(
     hass: HomeAssistant,
     params: dict[str, Any],
@@ -3434,11 +3458,19 @@ def _do_entity_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, 
     ``dict(entry.categories)``; ``disabled_by`` / ``hidden_by`` are unwrapped to
     their wire strings. In-process, so the read is authoritative immediately (no
     registry-write settle retry).
+
+    A drifted entity registry (``er.async_get`` raised / renamed → ``None``) RAISES
+    ``HomeAssistantError`` (→ server command-error fallback to the legacy scan)
+    rather than returning ``{matches: []}`` — a well-formed empty the server can't
+    tell from a genuine "no entry with that unique_id". A present-but-empty registry
+    still returns ``{matches: []}`` (correct: no match).
     """
     unique_id = params.get("unique_id")
     domain = params.get("domain")
     platform = params.get("platform")
     view = _resolve_registries(hass)
+    if view.entity is None:
+        raise _substrate_unavailable("entity registry")
     matches: list[dict[str, Any]] = []
     for entry in _all_entity_entries(view):
         if getattr(entry, "unique_id", None) != unique_id:
@@ -3603,11 +3635,22 @@ def _do_registries(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
 
     view = _resolve_registries(hass)
     result: dict[str, Any] = {}
+    # A requested registry whose accessor drifted (raised / renamed → ``None`` via
+    # ``_safe``) RAISES → server command-error fallback to the legacy WS list,
+    # rather than serving a well-formed empty list the capture pipeline would read
+    # as "this entity does not exist" and silently skip. A present-but-empty
+    # registry serves its empty list (correct).
     if "area" in requested:
+        if view.area is None:
+            raise _substrate_unavailable("area registry")
         result["areas"] = [_area_row(a) for a in _all_area_entries(view)]
     if "floor" in requested:
+        if view.floor is None:
+            raise _substrate_unavailable("floor registry")
         result["floors"] = [_floor_row(f) for f in _all_floor_entries(view)]
     if "label" in requested:
+        if view.label is None:
+            raise _substrate_unavailable("label registry")
         result["labels"] = [_label_row(x) for x in _all_label_entries(view)]
     if "category" in requested:
         result["categories"] = _category_rows(hass, category_scopes)
@@ -3683,8 +3726,16 @@ def _label_row(label: Any) -> dict[str, Any]:
 
 
 def _category_rows(hass: HomeAssistant, scopes: list[str]) -> dict[str, Any]:
-    """``{scope: [category rows]}`` for each requested scope (categories are scoped)."""
+    """``{scope: [category rows]}`` for each requested scope (categories are scoped).
+
+    A drifted / absent category registry (``None`` — ``cr.async_get`` raised /
+    renamed, or the module is missing on an old core) RAISES rather than serving
+    ``{scope: []}`` for every scope, so the server falls back to the legacy
+    ``config/category_registry/list`` instead of trusting an empty map.
+    """
     registry = _category_registry(hass)
+    if registry is None:
+        raise _substrate_unavailable("category registry")
     return {
         scope: [_category_row(c) for c in _list_categories(registry, scope)]
         for scope in scopes
@@ -4343,11 +4394,20 @@ async def _services_list_prep(
 
 
 async def _fetch_service_descriptions(hass: HomeAssistant) -> Mapping[str, Any]:
-    """core ``async_get_all_descriptions(hass)``; function-local import test seam."""
+    """core ``async_get_all_descriptions(hass)``; function-local import test seam.
+
+    A non-``Mapping`` return is core drift, NOT an empty catalog: RAISE
+    ``HomeAssistantError`` (→ server command-error fallback to the legacy REST
+    ``/api/services`` read) rather than serving a well-formed empty catalog the
+    server would trust as authoritative. A raising ``async_get_all_descriptions``
+    already propagates the same way.
+    """
     from homeassistant.helpers.service import async_get_all_descriptions
 
     result = await async_get_all_descriptions(hass)
-    return result if isinstance(result, Mapping) else {}
+    if not isinstance(result, Mapping):
+        raise _substrate_unavailable("service descriptions")
+    return result
 
 
 async def _fetch_service_translations(
@@ -4406,10 +4466,25 @@ def _do_reference_data(hass: HomeAssistant, params: dict[str, Any]) -> dict[str,
     EMPTY dicts (the index only reads service-name keys). ``entity_ids`` is every
     ``hass.states.async_all()`` id (the ``build_entity_set`` universe). Pure,
     synchronous, no prep — both are in-memory reads.
+
+    A drifted service registry (``hass.services.async_services()`` raised / renamed
+    → non-``Mapping``) or state machine (``hass.states.async_all`` absent / renamed)
+    RAISES ``HomeAssistantError`` (→ server command-error fallback to the legacy
+    REST ``get_services()`` / ``get_states()`` pair) rather than returning empty
+    catalogs — which would make EVERY reference emit a false "not found" warning,
+    where the legacy failure mode is skip-validation. A genuinely-empty (but
+    present) substrate still returns its empty result.
     """
     include_states = params.get("include_states", True)
+    if not isinstance(
+        _call_no_arg(getattr(hass, "services", None), "async_services"), Mapping
+    ):
+        raise _substrate_unavailable("service registry")
     entity_ids: list[str] = []
     if include_states:
+        states_obj = getattr(hass, "states", None)
+        if not callable(getattr(states_obj, "async_all", None)):
+            raise _substrate_unavailable("state machine")
         for state in _iter_states(hass):
             entity_id = getattr(state, "entity_id", None)
             if entity_id:

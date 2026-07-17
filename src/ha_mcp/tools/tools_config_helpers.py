@@ -3906,9 +3906,15 @@ class HelperConfigTools:
           for a storage type, serve the correct result from the legacy WS list,
           append a ``warnings[]`` entry, and ``log.warning``. For a flow type,
           raise the component-required error — no legacy fallback exists.
-        - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
-          propagates; the legacy path depends on the same socket and would
-          fail identically.
+        - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
+          ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
+          for a storage type, served from the legacy ``{helper_type}/list`` body
+          (which rides the never-raising ``send_websocket_message`` bridge, a
+          different transport, so it does not die identically), with a
+          ``warnings[]`` entry + ``log.warning``. For a flow type — which has no
+          legacy body — the transport failure re-raises to the tool's
+          structured-error handler (no working legacy path is being blocked, so the
+          systemic "fall back to legacy" rule does not apply).
 
         On a successful response the type must also be in the component's
         ``covered_types`` (see :func:`_component_covers`): a type the response
@@ -3937,6 +3943,27 @@ class HelperConfigTools:
             )
             logger.warning(
                 "ha_mcp_tools/helpers_list failed; fell back to legacy: %r", exc
+            )
+            return legacy
+        except Exception as exc:
+            # Transport/establishment failure (HomeAssistantConnectionError, or the
+            # plain Exception get_websocket_client() raises when WebSocketManager
+            # can't build the socket). The legacy `{helper_type}/list` body rides
+            # the never-raising send_websocket_message bridge (a different transport
+            # from this pooled-WS read), so a storage type falls back rather than
+            # dying identically. A flow type has NO legacy body, so its transport
+            # failure re-raises to the tool's structured-error handler — no working
+            # legacy path is blocked, so the fall-back-to-legacy rule doesn't apply.
+            if is_flow:
+                raise
+            legacy = await self._legacy_helper_list(helper_type)
+            legacy.setdefault("warnings", []).append(
+                f"component helpers_list connection error ({exc}); "
+                "served via legacy path"
+            )
+            logger.warning(
+                "ha_mcp_tools/helpers_list connection error; fell back to legacy: %r",
+                exc,
             )
             return legacy
         result = raw.get("result") or {}

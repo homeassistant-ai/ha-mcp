@@ -26,6 +26,8 @@ controller reconciles them at the Task 2 + Task 3 merge).
 from __future__ import annotations
 
 import asyncio
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -513,6 +515,24 @@ class TestServicesList:
         res = wsapi._do_services_list(FakeHass(), {"domain": "climate"}, **extra)
         assert {e["domain"] for e in res["services"]} == {"climate"}
 
+    def test_service_descriptions_drift_raises(self, monkeypatch):
+        # Core drift: async_get_all_descriptions returns a non-Mapping. This must
+        # RAISE (→ command-error fallback to the legacy REST /api/services), NOT
+        # serve a well-formed empty catalog the server would trust (review-4 E).
+        async def _bad_desc(hass):
+            return ["not", "a", "mapping"]
+
+        monkeypatch.setitem(
+            sys.modules,
+            "homeassistant.helpers.service",
+            SimpleNamespace(async_get_all_descriptions=_bad_desc),
+        )
+        monkeypatch.setitem(
+            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
+        )
+        with pytest.raises(_base._StubHomeAssistantError):
+            asyncio.run(wsapi._fetch_service_descriptions(FakeHass()))
+
 
 class TestServicesListSchema:
     def _schema(self, monkeypatch):
@@ -582,9 +602,37 @@ class TestReferenceData:
         assert res["entity_ids"] == []
         assert res["services"]  # services still present
 
-    def test_no_services(self):
-        res = wsapi._do_reference_data(FakeHass(), {})
+    def test_no_services_substrate_raises(self, monkeypatch):
+        # Core drift / broken hass: hass.services (the ServiceRegistry, always present
+        # in a running HA) is absent, so async_services() yields no Mapping. This must
+        # RAISE (→ server command-error fallback to the legacy REST get_services),
+        # NOT serve an empty catalog that makes every reference emit a false
+        # "not found" warning where legacy skips validation (review-3 M-1).
+        monkeypatch.setitem(
+            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
+        )
+        with pytest.raises(_base._StubHomeAssistantError):
+            wsapi._do_reference_data(FakeHass(), {})
+
+    def test_no_state_machine_substrate_raises(self, monkeypatch):
+        # Core drift: hass.states.async_all is absent/renamed. With include_states
+        # (the default), this must RAISE rather than serve an empty entity universe.
+        monkeypatch.setitem(
+            sys.modules, "homeassistant.exceptions", _base._exceptions_stub
+        )
+        hass = FakeHass(services=FakeServices({"light": {"turn_on": object()}}))
+        hass.states = None  # no async_all → drifted state machine
+        with pytest.raises(_base._StubHomeAssistantError):
+            wsapi._do_reference_data(hass, {})
+
+    def test_genuinely_empty_services_still_returns_empty(self, monkeypatch):
+        # A PRESENT-but-empty service registry (a real empty Mapping) is NOT drift:
+        # it returns an empty catalog, not a raise. This keeps the drift guard keyed
+        # off unavailability, not off emptiness.
+        hass = FakeHass(states=[FakeState("light.a")], services=FakeServices({}))
+        res = wsapi._do_reference_data(hass, {})
         assert res["services"] == []
+        assert res["entity_ids"] == ["light.a"]
 
 
 class TestReferenceDataSchema:

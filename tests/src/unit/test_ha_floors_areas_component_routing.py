@@ -6,12 +6,16 @@ registry change between the two reads could misclassify an area as
 orphaned/unassigned. When the component advertises ``registries``, both
 registries come from ONE in-process ``ha_mcp_tools/registries`` read (a single
 consistent snapshot), and neither legacy list call is sent. These tests pin
-that: the component-served path skips both legacy calls, every backend
-degradation (no caps, ``unknown_command`` → invalidate + fall back, a
-non-unknown command error) still falls back to the byte-identical legacy
-2-call gather, and a WS connection error propagates rather than silently
-falling back (the legacy path shares the same socket and would fail
-identically).
+that: the component-served path skips both legacy calls, and every backend
+degradation still falls back to the byte-identical legacy 2-call gather — no
+caps, ``unknown_command`` → invalidate + fall back, a non-unknown command
+error, AND a transport failure (both a ``HomeAssistantConnectionError`` off the
+frame and a plain ``Exception`` from ``get_websocket_client()`` failing to
+establish the socket). The registries legacy path does NOT die identically on a
+pooled-WS drop (``ha_list_floors_areas`` rides the swallowing
+``send_websocket_message`` bridge; the auto-backup capture fetchers use a
+dedicated one-shot socket under a best-effort warn-and-skip contract), so a
+transport failure falls back rather than propagating.
 """
 
 from __future__ import annotations
@@ -20,7 +24,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
 from ha_mcp import backup_manager as bm
 from ha_mcp.client.rest_client import (
@@ -31,7 +34,11 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import component_api, component_registries
 from ha_mcp.tools.tools_areas import register_area_tools
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_REGISTRIES = {
     "schema_version": 1,
@@ -249,10 +256,10 @@ async def test_non_unknown_error_falls_back_without_invalidating_caps() -> None:
 
 
 @pytest.mark.asyncio
-async def test_connection_error_propagates_without_legacy_fallback() -> None:
-    """A WS connection error on the component read propagates (surfaced as a
-    structured tool error) rather than silently falling back — the legacy path
-    shares the same socket and would fail identically."""
+async def test_connection_error_falls_back_to_legacy() -> None:
+    """A WS connection error on the component read falls back to the legacy 2-call
+    gather rather than propagating — ``ha_list_floors_areas``' legacy path rides the
+    swallowing bridge, so it does not die identically on a pooled-WS drop."""
     ws = make_ws(
         "ha_mcp_tools/registries",
         info_result=_CAPS_REGISTRIES,
@@ -264,12 +271,38 @@ async def test_connection_error_propagates_without_legacy_fallback() -> None:
     )
     list_floors_areas = _build_list_floors_areas(client)
 
-    with patch_ws(ws, component_registries), pytest.raises(ToolError):
-        await list_floors_areas()
+    with patch_ws(ws, component_registries):
+        resp = await list_floors_areas()
 
-    # The connection error propagated before either legacy list call fired.
-    assert client.area_list_calls == 0
-    assert client.floor_list_calls == 0
+    assert resp["success"] is True
+    assert client.area_list_calls == 1
+    assert client.floor_list_calls == 1
+    # A transient connection error is not a downgrade — caps stay cached.
+    assert client in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_falls_back_to_legacy() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) falls back to the legacy 2-call gather."""
+    caps_ws = make_ws("ha_mcp_tools/registries", info_result=_CAPS_REGISTRIES)
+    client = RoutingClient(
+        areas=[_raw_area("a1", "Office", floor_id="f1")],
+        floors=[_raw_floor("f1", "Ground")],
+    )
+    list_floors_areas = _build_list_floors_areas(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        component_registries,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
+        resp = await list_floors_areas()
+
+    assert resp["success"] is True
+    assert client.area_list_calls == 1
+    assert client.floor_list_calls == 1
+    assert client in component_api._CAPS_CACHE
 
 
 @pytest.mark.asyncio
@@ -483,6 +516,43 @@ class TestBackupCaptureLegacyFallback:
         client = _CredentialedClient()
 
         with patch_ws(ws, component_registries):
+            result = await call_fetch(client)
+
+        assert calls == [legacy_type]
+        assert result == expected
+
+    @pytest.mark.parametrize(
+        "call_fetch, legacy_type, legacy_items, expected", _BACKUP_FETCH_CASES
+    )
+    @pytest.mark.asyncio
+    async def test_ws_establish_failure_falls_back_to_legacy(
+        self,
+        call_fetch: Any,
+        legacy_type: str,
+        legacy_items: list[dict[str, Any]],
+        expected: dict[str, Any],
+        monkeypatch: Any,
+    ) -> None:
+        """A plain establish ``Exception`` from ``get_websocket_client()`` after caps
+        are cached (review-5 I-1) must NOT block the wrapped write: the capture
+        fetcher catches it → legacy list, returning the matching row so the capture
+        proceeds instead of the ``with_auto_backup`` decorator erroring out on a raw
+        exception the transient tuple never covered."""
+        caps_ws = make_ws("ha_mcp_tools/registries", info_result=_CAPS_REGISTRIES)
+        calls: list[str] = []
+
+        async def fake_ws_send(_client: Any, message: dict[str, Any]) -> Any:
+            calls.append(message["type"])
+            return list(legacy_items)
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
+        client = _CredentialedClient()
+
+        with patch_ws_establish_failure(
+            caps_ws,
+            component_registries,
+            Exception("Failed to connect to Home Assistant WebSocket"),
+        ):
             result = await call_fetch(client)
 
         assert calls == [legacy_type]

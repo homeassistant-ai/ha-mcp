@@ -1132,9 +1132,14 @@ class SystemTools:
         different instant. ``unknown_command`` invalidates the cached caps
         (component downgraded mid-session); any other command error/timeout
         just logs and falls back, leaving caps cached. A
-        ``HomeAssistantConnectionError`` (WS down) is not caught here; it
-        propagates — the legacy path shares the same socket and would fail
-        identically.
+        ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
+        ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect
+        is caught here and mapped to ``None``: the consuming sections' legacy
+        fetches run on a DEDICATED health WS client (repairs/zwave/matter) plus
+        REST ``get_states()`` and the never-raising ``send_websocket_message``
+        bridge (dead_entities), NOT this pooled socket — so a wedged pooled
+        socket must degrade per-section (the tool's own never-raises contract)
+        rather than fail the WHOLE ``ha_get_system_health``.
 
         Only the ``include_*`` flags the caller actually needs are requested
         (mirroring which of ``want_repairs`` / ``want_zwave`` / ``want_matter``
@@ -1162,6 +1167,17 @@ class SystemTools:
                 logger.warning(
                     "%s failed; fell back to legacy: %r", WS_SYSTEM_SNAPSHOT, exc
                 )
+            return None
+        except Exception as exc:
+            # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
+            # get_websocket_client() raises on a failed (re)connect. The legacy
+            # sections degrade individually (dedicated health WS + REST + the
+            # never-raising bridge), so fall back rather than fail the whole tool.
+            logger.warning(
+                "%s connection error; falling back to legacy: %r",
+                WS_SYSTEM_SNAPSHOT,
+                exc,
+            )
             return None
         return _build_system_snapshot_slices(raw.get("result") or {})
 

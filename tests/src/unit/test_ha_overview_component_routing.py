@@ -35,7 +35,11 @@ from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _STATES = [
     {
@@ -360,6 +364,36 @@ async def test_command_timeout_falls_back_with_warning(tmp_path, monkeypatch) ->
     assert client.get_states_calls == 1
     assert any(
         "component overview path failed" in w and "served via legacy path" in w
+        for w in resp["warnings"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_falls_back_with_warning(
+    tmp_path, monkeypatch
+) -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) → legacy path AND a ``warnings[]`` entry, not a propagated error.
+
+    The legacy overview reads REST states/services + the swallowing registry
+    bridge, so it does not die identically on a pooled-WS drop."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    _quiet_tail(monkeypatch)
+    caps_ws = make_ws("ha_mcp_tools/overview", info_result=_CAPS_OVERVIEW)
+    client = OverviewRoutingClient()
+    overview = _build_overview_tool(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_search,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
+        resp = await overview(detail_level="standard")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 1
+    assert any(
+        "component overview connection error" in w and "served via legacy path" in w
         for w in resp["warnings"]
     )
 

@@ -35,7 +35,11 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import component_api, tools_zones
 from ha_mcp.tools.tools_zones import register_zone_tools
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 # The single storage zone the legacy ``zone/list`` path can see. Its body is the
 # exact legacy record shape the component supplies as ``config``.
@@ -339,6 +343,28 @@ async def test_command_timeout_falls_back_with_warning() -> None:
     get_zone = _build_get_zone(client)
 
     with patch_ws(ws, tools_zones):
+        resp = await get_zone()
+
+    assert resp["success"] is True
+    assert client.list_calls == 1
+    assert any("served via legacy path" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_falls_back_with_warning() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) → legacy ``zone/list`` AND a ``warnings[]`` entry, not a propagated
+    error. The legacy zone list rides the swallowing bridge, so it does not die
+    identically on a pooled-WS drop."""
+    caps_ws = make_ws("ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS)
+    client = RoutingClient()
+    get_zone = _build_get_zone(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_zones,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
         resp = await get_zone()
 
     assert resp["success"] is True

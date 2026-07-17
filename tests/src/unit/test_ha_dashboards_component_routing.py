@@ -10,7 +10,12 @@ component-served shapes (list keeps YAML metadata rows — matching legacy —, 
 body, search matches), the per-call YAML fallback (a ``yaml_excluded`` get drops
 to legacy), the legacy search walk never reading a YAML dashboard's body, and the
 error-taxonomy fallbacks — capability miss, ``unknown_command`` (invalidate caps +
-legacy), a command error/timeout, and a propagating connection error.
+legacy), a command error/timeout, and a transport failure (both a
+``HomeAssistantConnectionError`` off the frame and a plain ``Exception`` from
+``get_websocket_client()`` failing to establish the socket) → ``None`` (legacy):
+the legacy dashboards path rides the never-raising bridge and the auto-backup
+capture consumer must not be blocked, so a transport failure falls back rather
+than propagating.
 """
 
 from __future__ import annotations
@@ -31,7 +36,11 @@ from ha_mcp.tools.tools_config_dashboards import (
     register_config_dashboard_tools,
 )
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_DASHBOARDS = {
     "schema_version": 1,
@@ -522,12 +531,13 @@ async def test_search_requires_query() -> None:
     assert client.list_calls == 0
 
 
-# --- connection error propagates ---------------------------------------------
+# --- transport failure falls back to legacy ----------------------------------
 @pytest.mark.asyncio
-async def test_connection_error_propagates_from_helper() -> None:
-    """A WS-down error on the dashboards frame is NOT swallowed to a legacy fall
-    back — it propagates (the legacy path shares the socket and would fail
-    identically), matching the Global-Constraint-2 taxonomy."""
+async def test_connection_error_falls_back_to_legacy() -> None:
+    """A WS-down error on the dashboards frame returns ``None`` (legacy fallback),
+    not a raise — the legacy dashboards path rides the never-raising bridge, so it
+    does not die identically, and the auto-backup capture consumer must not be
+    blocked from its write by an escaping transport error."""
     ws = make_ws(
         "ha_mcp_tools/dashboards",
         info_result=_CAPS_DASHBOARDS,
@@ -535,11 +545,30 @@ async def test_connection_error_propagates_from_helper() -> None:
     )
     client = RoutingClient()
 
-    with (
-        patch_ws(ws, tools_config_dashboards),
-        pytest.raises(HomeAssistantConnectionError),
+    with patch_ws(ws, tools_config_dashboards):
+        result = await tools_config_dashboards._dashboards_via_component(client, "list")
+
+    assert result is None
+    # A transient connection error is not a downgrade — caps stay cached.
+    assert client in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_falls_back_to_legacy() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) returns ``None`` (legacy fallback), not a raise."""
+    caps_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_DASHBOARDS)
+    client = RoutingClient()
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_config_dashboards,
+        Exception("Failed to connect to Home Assistant WebSocket"),
     ):
-        await tools_config_dashboards._dashboards_via_component(client, "list")
+        result = await tools_config_dashboards._dashboards_via_component(client, "list")
+
+    assert result is None
+    assert client in component_api._CAPS_CACHE
 
 
 # --- shared existence check (set/delete funnel through fetch_dashboards_list) --

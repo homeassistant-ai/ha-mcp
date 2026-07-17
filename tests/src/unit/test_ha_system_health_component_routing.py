@@ -14,13 +14,18 @@ reach into the radio integration), and its ``entities``/``states``/
 ``config_entries`` slices feed ``_fetch_dead_entities``.
 
 Routing is all-or-nothing per call: a capability miss, a component command
-error/timeout, or a malformed slice falls back to every consuming section's
-own legacy fetch — never a partial hybrid where one section reads the snapshot
-and a sibling reads legacy data from a different instant. These tests pin: the
-snapshot is fetched exactly once for a multi-section call and replaces every
-legacy fetch it covers; a capability miss or snapshot failure degrades ALL
-consuming sections back to legacy; ``unknown_command`` invalidates the cached
-caps while any other command error/timeout leaves them cached; and a
+error/timeout, a malformed slice, OR a transport failure (both a
+``HomeAssistantConnectionError`` off the frame and a plain ``Exception`` from
+``get_websocket_client()`` failing to establish the socket) falls back to every
+consuming section's own legacy fetch — never a partial hybrid where one section
+reads the snapshot and a sibling reads legacy data from a different instant, and
+never a WHOLE-tool failure where legacy would have degraded per-section (the
+legacy sections use a dedicated health WS + REST + the never-raising bridge, not
+the pooled snapshot socket). These tests pin: the snapshot is fetched exactly
+once for a multi-section call and replaces every legacy fetch it covers; a
+capability miss or snapshot failure degrades ALL consuming sections back to
+legacy; ``unknown_command`` invalidates the cached caps while any other command
+error/timeout leaves them cached; and a
 still-real WS failure in a call the snapshot does NOT replace (the zwave_js
 status call) still degrades to a per-section ``{error: ...}`` sub-dict rather
 than raising or breaking sibling sections.
@@ -32,7 +37,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
@@ -42,7 +46,11 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import component_api, tools_system
 from ha_mcp.tools.tools_system import SystemTools
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_SNAPSHOT = {
     "schema_version": 1,
@@ -544,33 +552,46 @@ async def test_section_error_still_degrades_to_error_subdict() -> None:
 
 
 @pytest.mark.asyncio
-async def test_snapshot_connection_error_propagates() -> None:
-    """A ``HomeAssistantConnectionError`` raised while fetching the snapshot
-    is NOT one of the (``HomeAssistantCommandError``, ``HomeAssistantCommandTimeout``)
-    types ``_fetch_system_snapshot`` catches, so it propagates out of
-    ``ha_get_system_health`` as a ``ToolError`` instead of being swallowed into
-    a per-section legacy fallback (the WS is down, so the legacy fetches would
-    fail identically anyway)."""
+async def test_snapshot_connection_error_falls_back_to_legacy() -> None:
+    """A ``HomeAssistantConnectionError`` on the snapshot frame degrades to the
+    per-section legacy fetches rather than failing the WHOLE tool: the legacy
+    sections run on a dedicated health WS + REST + the never-raising bridge, not
+    the pooled snapshot socket, so they still serve their data."""
     ws = make_ws(
         "ha_mcp_tools/system_snapshot",
         info_result=_CAPS_SNAPSHOT,
         cmd_exc=HomeAssistantConnectionError("connection lost"),
     )
-    health_ws = _health_ws(zwave_status={"controller": {"nodes": []}})
+    health_ws = _health_ws(repairs_issues=[_issue("iss-1")])
+    client = RoutingClient()
+
+    with patch_ws(ws, tools_system), _health_baseline(health_ws):
+        resp = await SystemTools(client).ha_get_system_health(include="repairs")
+
+    assert health_ws.repairs_calls == 1
+    assert resp["repairs"]["issues"] == [_issue("iss-1")]
+    # A transient connection error is not a downgrade — caps stay cached.
+    assert client in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_snapshot_ws_establish_failure_falls_back_to_legacy() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` after caps
+    are cached degrades to the per-section legacy fetches, not a whole-tool error."""
+    caps_ws = make_ws("ha_mcp_tools/system_snapshot", info_result=_CAPS_SNAPSHOT)
+    health_ws = _health_ws(repairs_issues=[_issue("iss-1")])
     client = RoutingClient()
 
     with (
-        patch_ws(ws, tools_system),
+        patch_ws_establish_failure(
+            caps_ws,
+            tools_system,
+            Exception("Failed to connect to Home Assistant WebSocket"),
+        ),
         _health_baseline(health_ws),
-        pytest.raises(ToolError),
     ):
-        await SystemTools(client).ha_get_system_health(include=_INCLUDE_ALL)
+        resp = await SystemTools(client).ha_get_system_health(include="repairs")
 
-    # No per-section legacy fallback ran -- the connection error surfaced
-    # instead of degrading.
-    assert health_ws.repairs_calls == 0
-    assert health_ws.config_entries_get_calls == 0
-    assert health_ws.zwave_status_calls == 0
-    assert client.get_states_calls == 0
-    assert client.entity_registry_list_calls == 0
-    assert client.config_entries_get_calls == 0
+    assert health_ws.repairs_calls == 1
+    assert resp["repairs"]["issues"] == [_issue("iss-1")]
+    assert client in component_api._CAPS_CACHE

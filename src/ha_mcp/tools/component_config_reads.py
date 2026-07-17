@@ -32,17 +32,27 @@ returns its payload (an entity_lookup with an EMPTY ``matches`` list is
 authoritative — "no registry entry with that unique_id" — kept distinct from the
 ``None`` miss).
 
-The two helpers diverge on transport failure because their legacy paths differ:
+Both helpers apply the uniform transport-fallback taxonomy: a
+``HomeAssistantConnectionError`` off ``send_command`` — and the plain
+``Exception`` ``get_websocket_client()`` raises when ``WebSocketManager`` cannot
+(re)build the pooled socket — are caught and mapped to ``None`` so the legacy
+path runs, NEVER propagated out of the read. Neither consumer's legacy path dies
+identically on a pooled-WS drop, so propagating would abort work the legacy path
+still completes:
 
-- ``fetch_entity_lookup_via_component``'s legacy path (the resolvers dumping
-  ``config/entity_registry/list`` / ``get_states()``) rides the SAME pooled WS, so
-  a ``HomeAssistantConnectionError`` is NOT caught here — it propagates and the
-  legacy path would fail identically.
+- ``fetch_entity_lookup_via_component``'s consumers degrade gracefully. The scene
+  resolver's ``config/entity_registry/list`` dump rides
+  ``client.send_websocket_message`` — the swallowing bridge that returns
+  ``{"success": False}`` instead of raising, so the resolver walks its retry loop
+  to the naive ``scene.{id}`` fallback — and the automation resolver scans REST
+  ``get_states()`` and additionally catches broadly → ``None``. Its only routed
+  call sites run AFTER a scene/automation upsert commits or BEFORE a REST delete,
+  so an escaping transport error would report a landed write as failed / abort a
+  delete the REST path would have finished.
 - ``fetch_reference_data_via_component``'s legacy path is the REST
-  ``get_services()`` / ``get_states()`` pair, so a connection-establishment failure
-  IS caught (broadly — ``get_websocket_client()`` raises a plain ``Exception``, not
-  ``HomeAssistantConnectionError``, when ``WebSocketManager`` can't build the
-  socket) and mapped to ``None`` so the REST fetch still runs.
+  ``get_services()`` / ``get_states()`` pair; an escaping transport error would
+  make ``validate_config_references`` hit its swallow-all fetch guard and skip
+  EVERY reference warning even when REST is up.
 
 **GET-path invariant:** the automation/script/scene *config-get* tools must never
 route through the component — their in-process ``raw_config`` freshness lags the
@@ -92,8 +102,11 @@ async def fetch_entity_lookup_via_component(
     ``None`` miss (component unavailable → legacy).
 
     ``None`` on capability miss, downgrade (``unknown_command`` → invalidate the
-    cached caps), command error/timeout (logged), or a shape-drift payload (no
-    ``matches`` list). Same error-taxonomy and silent fallback as
+    cached caps), command error/timeout (logged), a connection-establishment
+    failure (logged — see the module docstring: the resolvers' legacy paths ride
+    the swallowing WS bridge / REST, NOT this pooled socket, so a transport
+    failure must fall back rather than abort a landed write), or a shape-drift
+    payload (no ``matches`` list). Same error-taxonomy and silent fallback as
     ``component_devices.fetch_device_via_component``.
     """
     caps = await get_component_caps(client)
@@ -110,6 +123,15 @@ async def fetch_entity_lookup_via_component(
             invalidate_caps(client)
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_ENTITY_LOOKUP, exc)
+        return None
+    except Exception as exc:
+        # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
+        # get_websocket_client() raises when WebSocketManager can't (re)connect.
+        # The resolvers' legacy paths do NOT die identically (see module docstring),
+        # so route to legacy rather than escape.
+        logger.warning(
+            "%s connection error; falling back to legacy: %r", WS_ENTITY_LOOKUP, exc
+        )
         return None
     result = raw.get("result")
     matches = result.get("matches") if isinstance(result, dict) else None
@@ -139,9 +161,9 @@ async def fetch_reference_data_via_component(
     ``entity_ids`` not both lists) — the caller falls back to the legacy REST
     fetches.
 
-    Unlike the pooled-WS entity_lookup helper, the reference validator's legacy
-    path is the REST ``get_services()`` / ``get_states()`` pair, so a transport
-    failure must route to ``None`` (→ legacy REST) rather than escape. The catch is
+    Like every component fetch helper, a transport failure routes to ``None``
+    (→ legacy REST) rather than escaping; the reference validator's legacy path is
+    the REST ``get_services()`` / ``get_states()`` pair. The catch is
     broad because ``get_websocket_client()`` raises a plain ``Exception`` (not
     ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot build the
     socket; letting it escape would make ``validate_config_references`` hit its

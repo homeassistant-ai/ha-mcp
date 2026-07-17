@@ -102,9 +102,12 @@ async def fetch_entity_enrichment_via_component(
     entity": ``ha_get_entity``'s registry read already served the base record, so a
     ``None`` here simply leaves the additive fields off — the enrichment is
     strictly additive, so its absence changes nothing else. A
-    ``HomeAssistantConnectionError`` (WS down) is not caught here, so it propagates
-    to the tool's own error handling. Follows the same caps-gate discipline as
-    ``component_devices.fetch_device_via_component``.
+    ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain ``Exception``
+    ``get_websocket_client()`` raises on a failed (re)connect is caught here and
+    mapped to ``None``: there is no legacy enrichment fetch (the base record is
+    already served), so a transport failure just skips enrichment rather than
+    escaping into and failing the whole ``ha_get_entity``. Follows the same
+    caps-gate discipline as ``component_devices.fetch_device_via_component``.
 
     The ids are split into ``_GET_ENTRIES_CHUNK_SIZE`` chunks (the same bound the
     sibling ``config/entity_registry/get_entries`` read uses) so a large bulk
@@ -139,6 +142,13 @@ async def fetch_entity_enrichment_via_component(
             invalidate_caps(client)
         else:
             logger.warning("%s failed; skipped enrichment: %r", WS_ENTITY_ENRICH, exc)
+        return None
+    except Exception as exc:
+        # HomeAssistantConnectionError / plain establish Exception → skip
+        # enrichment (strictly additive; no legacy fetch dies here).
+        logger.warning(
+            "%s connection error; skipped enrichment: %r", WS_ENTITY_ENRICH, exc
+        )
         return None
     return merged
 

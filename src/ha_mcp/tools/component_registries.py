@@ -96,13 +96,18 @@ async def fetch_registries_via_component(
     pass scopes.
 
     ``None`` on capability miss, downgrade (``unknown_command`` → invalidate
-    the cached caps), command error/timeout (logged), or a malformed
-    response — the outer ``result`` isn't a dict, or a requested slice isn't
-    its expected list/dict shape (logged; see ``_has_valid_shape``) — the
-    caller falls back to its legacy WS list call(s) in every case. A
-    ``HomeAssistantConnectionError`` (WS down) is not caught here, so it
-    propagates to the caller's own error handling — the legacy path shares
-    the same socket and would fail identically.
+    the cached caps), command error/timeout (logged), a connection-establishment
+    failure (logged), or a malformed response — the outer ``result`` isn't a
+    dict, or a requested slice isn't its expected list/dict shape (logged; see
+    ``_has_valid_shape``) — the caller falls back to its legacy WS list call(s)
+    in every case. A ``HomeAssistantConnectionError`` (pooled-WS drop) or the
+    plain ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect
+    is caught here and mapped to ``None``: the auto-backup capture fetchers'
+    legacy ``_ws_send`` builds a DEDICATED one-shot WS client (which can succeed
+    while the pooled socket is wedged) under a best-effort contract that requires
+    warn-and-skip, never a blocked write; ``ha_list_floors_areas``' legacy rides
+    the swallowing ``send_websocket_message`` bridge. Neither dies identically on
+    a pooled-WS drop, so a transport failure must fall back rather than escape.
     """
     caps = await get_component_caps(client)
     if not component_supports(caps, "registries"):
@@ -118,6 +123,15 @@ async def fetch_registries_via_component(
             invalidate_caps(client)
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_REGISTRIES, exc)
+        return None
+    except Exception as exc:
+        # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
+        # get_websocket_client() raises on a failed (re)connect. The capture
+        # fetchers use a dedicated one-shot socket and forbid a blocked write, so
+        # this must fall back to legacy rather than escape into the write path.
+        logger.warning(
+            "%s connection error; falling back to legacy: %r", WS_REGISTRIES, exc
+        )
         return None
     result = raw.get("result")
     if not isinstance(result, dict):

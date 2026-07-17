@@ -10,8 +10,10 @@ exactly one options flow — for that entry — is opened for the caller to
 submit or abort. These tests pin: the component path opens exactly one flow
 and never probes/aborts a wrong candidate; a capability miss falls back to
 the legacy per-candidate probe loop unchanged; and the full component error
-taxonomy (unknown_command / command error / connection error) behaves like
-every other component consumer.
+taxonomy (unknown_command / command error / a transport failure — both a
+connection error off the frame and a plain establish ``Exception`` — falling back
+to the legacy probe, which rides the swallowing bridge and so does not die
+identically) behaves like every other component consumer.
 """
 
 from __future__ import annotations
@@ -29,7 +31,11 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import component_api, tools_dev
 from ha_mcp.tools.tools_dev import find_server_config_entry
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_SERVER_ENTRY = {
     "schema_version": 1,
@@ -221,18 +227,47 @@ async def test_command_error_falls_back_without_invalidating_caps() -> None:
 
 
 @pytest.mark.asyncio
-async def test_connection_error_propagates() -> None:
-    """A WS connection error is not caught by the component fetch — it
-    propagates rather than being silently swallowed into a legacy fallback."""
+async def test_connection_error_falls_back_to_legacy() -> None:
+    """A WS connection error on the server_entry frame falls back to the legacy
+    per-candidate probe rather than propagating — the legacy probe rides the
+    swallowing bridge, so it does not die identically."""
     ws = make_ws(
         "ha_mcp_tools/server_entry",
         info_result=_CAPS_SERVER_ENTRY,
         cmd_exc=HomeAssistantConnectionError("ws down"),
     )
-    client = RoutingClient()
+    client = RoutingClient(entries=[{"entry_id": "server-1"}])
+    client.set_flow("server-1", _flow("server-1", _SERVER_SCHEMA))
 
-    with patch_ws(ws, tools_dev), pytest.raises(HomeAssistantConnectionError):
-        await find_server_config_entry(client)
+    with patch_ws(ws, tools_dev):
+        found = await find_server_config_entry(client)
+
+    assert found is not None
+    assert found[0] == "server-1"
+    assert client.config_entries_get_calls == 1
+    # A transient connection error is not a downgrade — caps stay cached.
+    assert client in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_falls_back_to_legacy() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) falls back to the legacy per-candidate probe."""
+    caps_ws = make_ws("ha_mcp_tools/server_entry", info_result=_CAPS_SERVER_ENTRY)
+    client = RoutingClient(entries=[{"entry_id": "server-1"}])
+    client.set_flow("server-1", _flow("server-1", _SERVER_SCHEMA))
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_dev,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
+        found = await find_server_config_entry(client)
+
+    assert found is not None
+    assert found[0] == "server-1"
+    assert client.config_entries_get_calls == 1
+    assert client in component_api._CAPS_CACHE
 
 
 @pytest.mark.asyncio

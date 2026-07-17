@@ -19,13 +19,17 @@ advertises the capability:
 
 These pin, per consumer, the standard component-routing taxonomy: component
 preferred, capability-miss -> legacy, ``unknown_command`` -> invalidate caps +
-legacy, non-unknown command error -> legacy WITHOUT invalidating. Transport
-failure diverges by legacy path: a ``HomeAssistantConnectionError`` PROPAGATES for
-the resolvers (their legacy list/state scan rides the same pooled WS), but the
-validator's legacy path is REST, so it falls back to the REST
-``get_services()``/``get_states()`` fetch on BOTH a ``HomeAssistantConnectionError``
-off the frame AND a plain ``Exception`` from ``get_websocket_client()`` failing to
-establish the socket. Plus the GET-path invariant: with ``allow_component`` unset
+legacy, non-unknown command error -> legacy WITHOUT invalidating, AND — uniform
+across every consumer — a transport failure -> legacy: both a
+``HomeAssistantConnectionError`` off the frame AND a plain ``Exception`` from
+``get_websocket_client()`` failing to establish the socket fall back rather than
+propagate. None of the legacy paths dies identically on a pooled-WS drop: the
+scene resolver's legacy scan rides the swallowing ``send_websocket_message`` bridge
+(with a naive ``scene.{id}`` fallback), the automation resolver scans REST
+``get_states()``, and the validator's legacy path is the REST
+``get_services()``/``get_states()`` pair — so an escaping error would abort a
+landed write / a delete the legacy path would have completed. Plus the GET-path
+invariant: with ``allow_component`` unset
 (the config-get default) the resolvers never touch the component even with the
 capability advertised, and a component HIT takes NO ``asyncio.sleep`` (only an
 empty scene result pays the one lag-absorbing recheck sleep).
@@ -356,24 +360,62 @@ class TestSceneResolverRouting:
         assert client in component_api._CAPS_CACHE
 
     @pytest.mark.asyncio
-    async def test_connection_error_propagates(self) -> None:
-        """A WS-down error on the entity_lookup frame propagates (the legacy path
-        shares the socket and would fail identically) — not caught here."""
+    async def test_connection_error_falls_back_to_legacy(self) -> None:
+        """A WS-down error on the entity_lookup frame falls back to the legacy list.
+
+        The resolver's legacy path rides the swallowing ``send_websocket_message``
+        bridge (and, on an empty scan, the naive ``scene.{id}`` fallback), so it does
+        NOT die identically on a pooled-WS drop. ``fetch_entity_lookup_via_component``
+        catches the error and returns ``None`` so the legacy scan runs — an escaping
+        error would report a landed scene write as failed.
+        """
         ws = make_ws(
             "ha_mcp_tools/entity_lookup",
             info_result=_CAPS_ENTITY_LOOKUP,
             cmd_exc=HomeAssistantConnectionError("ws down"),
         )
-        client = RoutingClient()
-        with (
-            patch_ws(ws, component_config_reads),
-            pytest.raises(HomeAssistantConnectionError),
-        ):
-            await ConfigSceneTools(client)._resolve_scene_entity_id(
+        client = RoutingClient(
+            registry_list=[
+                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
+            ]
+        )
+        with patch_ws(ws, component_config_reads):
+            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
                 "movie_night", allow_component=True
             )
-        # The legacy dump was never reached.
-        assert client.ws_types["config/entity_registry/list"] == 0
+        assert entity_id == "scene.movie_night"
+        assert client.ws_types["config/entity_registry/list"] == 1
+        # A transient connection error is not a downgrade — caps stay cached.
+        assert client in component_api._CAPS_CACHE
+
+    @pytest.mark.asyncio
+    async def test_ws_establish_failure_falls_back_to_legacy(self) -> None:
+        """A plain establish ``Exception`` from ``get_websocket_client()`` → legacy.
+
+        After caps are cached, ``WebSocketManager`` can raise a plain ``Exception``
+        (not ``HomeAssistantConnectionError``) when it cannot (re)establish the
+        pooled socket for the read. The helper catches it broadly → ``None`` so the
+        resolver's legacy scan runs.
+        """
+        caps_ws = make_ws(
+            "ha_mcp_tools/entity_lookup", info_result=_CAPS_ENTITY_LOOKUP
+        )
+        client = RoutingClient(
+            registry_list=[
+                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
+            ]
+        )
+        with patch_ws_establish_failure(
+            caps_ws,
+            component_config_reads,
+            Exception("Failed to connect to Home Assistant WebSocket"),
+        ):
+            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
+                "movie_night", allow_component=True
+            )
+        assert entity_id == "scene.movie_night"
+        assert client.ws_types["config/entity_registry/list"] == 1
+        assert client in component_api._CAPS_CACHE
 
 
 # =============================================================================
@@ -500,21 +542,44 @@ class TestAutomationResolverRouting:
         assert client in component_api._CAPS_CACHE
 
     @pytest.mark.asyncio
-    async def test_connection_error_propagates(self) -> None:
+    async def test_connection_error_falls_back_to_legacy(self) -> None:
+        """A WS-down error on the entity_lookup frame falls back to the legacy
+        ``get_states()`` scan (REST, plus the resolver's own broad catch), so it does
+        NOT die identically; an escaping error would abort a delete the legacy path
+        would have completed."""
         ws = make_ws(
             "ha_mcp_tools/entity_lookup",
             info_result=_CAPS_ENTITY_LOOKUP,
             cmd_exc=HomeAssistantConnectionError("ws down"),
         )
         client = RoutingClient(states=self._states())
-        with (
-            patch_ws(ws, component_config_reads),
-            pytest.raises(HomeAssistantConnectionError),
+        with patch_ws(ws, component_config_reads):
+            entity_id = await AutomationConfigTools(
+                client
+            )._resolve_automation_entity_id("uid-1", allow_component=True)
+        assert entity_id == "automation.morning"
+        assert client.get_states.await_count == 1
+        assert client in component_api._CAPS_CACHE
+
+    @pytest.mark.asyncio
+    async def test_ws_establish_failure_falls_back_to_legacy(self) -> None:
+        """A plain establish ``Exception`` from ``get_websocket_client()`` → legacy
+        ``get_states()`` scan."""
+        caps_ws = make_ws(
+            "ha_mcp_tools/entity_lookup", info_result=_CAPS_ENTITY_LOOKUP
+        )
+        client = RoutingClient(states=self._states())
+        with patch_ws_establish_failure(
+            caps_ws,
+            component_config_reads,
+            Exception("Failed to connect to Home Assistant WebSocket"),
         ):
-            await AutomationConfigTools(client)._resolve_automation_entity_id(
-                "uid-1", allow_component=True
-            )
-        assert client.get_states.await_count == 0
+            entity_id = await AutomationConfigTools(
+                client
+            )._resolve_automation_entity_id("uid-1", allow_component=True)
+        assert entity_id == "automation.morning"
+        assert client.get_states.await_count == 1
+        assert client in component_api._CAPS_CACHE
 
 
 # =============================================================================

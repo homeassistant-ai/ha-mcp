@@ -33,7 +33,11 @@ from ha_mcp.tools import component_api, tools_search
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import register_search_tools
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_STATES = {
     "schema_version": 1,
@@ -323,3 +327,24 @@ async def test_ws_connection_error_falls_back_to_legacy_rest() -> None:
     assert "warnings" not in resp["data"]
     # The component was tried exactly once before falling back.
     assert len(_states_calls(ws)) == 1
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_falls_back_to_legacy_rest() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (the case the
+    ``HomeAssistantConnectionError`` tuple does NOT cover) also falls back to the
+    REST legacy path instead of surfacing a spurious connection error."""
+    caps_ws = make_ws("ha_mcp_tools/states", info_result=_CAPS_STATES)
+    client = RoutingClient()
+    get_state = _build_get_state(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_search,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
+        resp = await get_state(["light.a", "sensor.b"])
+
+    assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
+    assert client.get_state_calls == 2
+    assert "warnings" not in resp["data"]

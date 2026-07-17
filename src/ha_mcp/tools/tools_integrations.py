@@ -255,9 +255,9 @@ async def _fetch_entries_via_component(
     cached caps), or command error/timeout (logged) — the caller falls back to
     its legacy path.
 
-    DEVIATION from the uniform component-fetch taxonomy: a connection-establishment
-    failure IS caught here and mapped to ``None`` (legacy fallback). Unlike the
-    pooled-WS consumers, the callers' legacy paths are NOT the shared pooled WS —
+    Per the uniform transport-fallback taxonomy, a connection-establishment
+    failure IS caught here and mapped to ``None`` (legacy fallback), like every
+    component fetch helper. The callers' legacy paths are NOT the shared pooled WS —
     ``ha_get_integration`` reads pure REST (``get_config_entry`` /
     ``GET /config/config_entries`` + the REST OptionsFlow probe) and radio's
     ``resolve_entry_id`` uses the REST client's ``send_websocket_message`` bridge

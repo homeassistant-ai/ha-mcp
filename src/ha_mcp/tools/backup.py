@@ -243,10 +243,13 @@ async def _backup_prep_via_component(
     in-process read. ``None`` on capability miss, downgrade (``unknown_command``
     → invalidate the cached caps), or command error/timeout (logged) — the
     caller falls back to the legacy sequential calls. A
-    ``HomeAssistantConnectionError`` (WS down) is not caught here; it
-    propagates, since the legacy path shares the same socket and would fail
-    identically. Same caps-gate discipline as
-    ``component_devices.fetch_device_via_component``.
+    ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain ``Exception``
+    ``get_websocket_client()`` raises on a failed (re)connect is caught here and
+    mapped to ``None``: the legacy probes (``_get_local_backup_agent_id`` /
+    ``_get_backup_password``) run on a DEDICATED ``get_connected_ws_client`` socket
+    already connected before this read, NOT this pooled one — so a wedged pooled
+    socket must fall back to the legacy calls rather than fail create/restore.
+    Same caps-gate discipline as ``component_devices.fetch_device_via_component``.
     """
     caps = await get_component_caps(client)
     if not component_supports(caps, "backup_prep"):
@@ -259,6 +262,15 @@ async def _backup_prep_via_component(
             invalidate_caps(client)
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_BACKUP_PREP, exc)
+        return None
+    except Exception as exc:
+        # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
+        # get_websocket_client() raises on a failed (re)connect. The legacy probes
+        # ride a dedicated already-connected socket, so fall back rather than fail
+        # create/restore on a wedged pooled socket.
+        logger.warning(
+            "%s connection error; falling back to legacy: %r", WS_BACKUP_PREP, exc
+        )
         return None
     result = raw.get("result")
     if not isinstance(result, dict) or "local_agent_id" not in result:

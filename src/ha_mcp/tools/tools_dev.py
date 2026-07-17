@@ -147,8 +147,11 @@ async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | Non
     (a malformed reply shape — not the component's real "no entry" signal,
     which is ``None`` — so it is not trusted as authoritative either) — same
     taxonomy as ``component_devices.fetch_device_via_component``. A
-    ``HomeAssistantConnectionError`` is not caught here; it propagates, since
-    the legacy path shares the same socket and would fail identically.
+    ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain ``Exception``
+    ``get_websocket_client()`` raises on a failed (re)connect is caught here and
+    mapped to ``None``: the legacy probe (``find_server_config_entry``) rides the
+    swallowing ``send_websocket_message`` bridge, NOT this pooled socket — so a
+    transport failure must fall back rather than escape.
     """
     caps = await get_component_caps(client)
     if not component_supports(caps, "server_entry"):
@@ -161,6 +164,13 @@ async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | Non
             invalidate_caps(client)
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_SERVER_ENTRY, exc)
+        return None
+    except Exception as exc:
+        # HomeAssistantConnectionError / plain establish Exception → legacy probe
+        # (which rides the swallowing send_websocket_message bridge).
+        logger.warning(
+            "%s connection error; falling back to legacy: %r", WS_SERVER_ENTRY, exc
+        )
         return None
     result = raw.get("result")
     if not isinstance(result, dict) or "entry_id" not in result:

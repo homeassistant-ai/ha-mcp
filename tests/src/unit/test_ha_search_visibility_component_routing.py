@@ -14,8 +14,11 @@ still take the fast path. These tests pin the four-way gate:
 - unloadable config → fail-closed to legacy (never route unfiltered)
 - ``unknown_command`` on the visibility search → invalidate caps + silent legacy
   fallback
-- ``HomeAssistantConnectionError`` on the visibility search → propagates, not
-  swallowed
+- a transport failure on the visibility search (both a
+  ``HomeAssistantConnectionError`` off the frame and a plain ``Exception`` from
+  ``get_websocket_client()`` failing to establish the socket) → legacy fallback
+  with a ``served via legacy path`` warning (the legacy path reads ``/api/states``
+  over REST + the swallowing registry bridge, so it does not die identically)
 
 The parity of what the component then DOES with that param lives in
 ``test_component_search_visibility_contract.py``; here the component WS is a
@@ -38,7 +41,11 @@ from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import VISIBILITY_FILENAME, save_visibility_config
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 from .test_ha_search_component_routing import (
     RoutingClient,
     _build_ha_search,
@@ -238,12 +245,12 @@ async def test_unknown_command_falls_back_silently_and_invalidates(
 
 
 @pytest.mark.asyncio
-async def test_connection_error_on_visibility_path_propagates(
+async def test_connection_error_on_visibility_path_falls_back_to_legacy(
     tmp_path, monkeypatch
 ) -> None:
-    """A WS-down error on the visibility search frame is NOT swallowed to a legacy
-    fallback — it propagates (the legacy path shares the socket and would fail
-    identically), matching the Global-Constraint-2 taxonomy."""
+    """A WS-down error on the visibility search frame falls back to legacy (with a
+    warning), still honouring the filter — the legacy path reads REST states + the
+    swallowing registry bridge, so it does not die identically."""
     _write_active_deny(tmp_path, monkeypatch)
     ws = make_ws(
         "ha_mcp_tools/search",
@@ -253,11 +260,42 @@ async def test_connection_error_on_visibility_path_propagates(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with (
-        patch_ws(ws, tools_search),
-        pytest.raises(HomeAssistantConnectionError),
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 1
+    assert any("served via legacy path" in w for w in resp["warnings"])
+    entity_ids = {e["entity_id"] for e in resp["entities"]}
+    assert "light.kitchen" not in entity_ids
+    # A transient connection error is not a downgrade — caps stay cached.
+    assert client in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_on_visibility_path_falls_back_to_legacy(
+    tmp_path, monkeypatch
+) -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) falls back to legacy with a warning, filter still applied."""
+    _write_active_deny(tmp_path, monkeypatch)
+    caps_ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH_VIS)
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_search,
+        Exception("Failed to connect to Home Assistant WebSocket"),
     ):
-        await ha_search(query="kitchen")
+        resp = await ha_search(query="kitchen")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 1
+    assert any("served via legacy path" in w for w in resp["warnings"])
+    entity_ids = {e["entity_id"] for e in resp["entities"]}
+    assert "light.kitchen" not in entity_ids
+    assert client in component_api._CAPS_CACHE
 
 
 @pytest.mark.asyncio

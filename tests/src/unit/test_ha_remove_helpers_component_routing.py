@@ -16,9 +16,13 @@ Two helper paths resolve entities from the registry today:
 
 These pin that: the component-served resolves never dump the registry NOR run the
 retry-loop sleeps, and every backend degradation (no caps, ``unknown_command`` →
-invalidate + fall back, a non-unknown command error, a malformed reply) still
-produces the byte-identical legacy result. A ``HomeAssistantConnectionError``
-propagates from the SIMPLE resolve (the legacy path shares the socket).
+invalidate + fall back, a non-unknown command error, a malformed reply, AND a
+transport failure — both a ``HomeAssistantConnectionError`` off the frame and a
+plain ``Exception`` from ``get_websocket_client()`` failing to establish the
+socket) still produces the byte-identical legacy result. The registry_lookup
+consumers' legacy reads ride the swallowing ``send_websocket_message`` bridge, so a
+transport failure falls back rather than propagating — and, crucially, letting it
+escape the SIMPLE resolve would skip its legacy retry loop entirely.
 """
 
 from __future__ import annotations
@@ -42,7 +46,11 @@ from ha_mcp.tools.tools_config_helpers import (
 )
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_REGISTRY = {
     "schema_version": 1,
@@ -288,29 +296,62 @@ async def test_simple_delete_command_error_falls_back_keeps_caps() -> None:
 
 
 @pytest.mark.asyncio
-async def test_simple_delete_connection_error_propagates() -> None:
-    """A HomeAssistantConnectionError from the component resolve is NOT swallowed
-    into ENTITY_NOT_FOUND — it reaches the outer handler as CONNECTION_FAILED
-    (the legacy path shares the socket and would fail identically)."""
+async def test_simple_delete_connection_error_falls_back_to_legacy() -> None:
+    """A HomeAssistantConnectionError from the component resolve falls back to the
+    legacy retry loop (which rides the swallowing bridge, so it does not die
+    identically) rather than propagating — an escaping error would SKIP the legacy
+    resolve entirely."""
     ws = make_ws(
         "ha_mcp_tools/registry_lookup",
         info_result=_CAPS_REGISTRY,
         cmd_exc=HomeAssistantConnectionError("socket down"),
     )
-    client = RoutingClient()
+    client = RoutingClient(
+        entities=[_row("input_button.my_button", unique_id="uid-legacy")]
+    )
     tools = IntegrationTools(client)
 
-    with patch_ws(ws, component_registry_lookup), pytest.raises(ToolError) as excinfo:
-        await tools.ha_remove_helpers_integrations(
+    with patch_ws(ws, component_registry_lookup):
+        resp = await tools.ha_remove_helpers_integrations(
             target="my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
         )
 
-    err = json.loads(str(excinfo.value))
-    assert err["error"]["code"] == "CONNECTION_FAILED"
-    assert err["error"]["code"] != "ENTITY_NOT_FOUND"
+    assert resp["success"] is True
+    assert resp["unique_id"] == "uid-legacy"
+    assert client.entity_get_calls == 1
+    # A transient connection error is not a downgrade — caps stay cached.
+    assert client in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_simple_delete_ws_establish_failure_falls_back_to_legacy() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) falls back to the legacy retry loop, not a propagated error."""
+    caps_ws = make_ws("ha_mcp_tools/registry_lookup", info_result=_CAPS_REGISTRY)
+    client = RoutingClient(
+        entities=[_row("input_button.my_button", unique_id="uid-legacy")]
+    )
+    tools = IntegrationTools(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        component_registry_lookup,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
+        resp = await tools.ha_remove_helpers_integrations(
+            target="my_button",
+            helper_type="input_button",
+            confirm=True,
+            wait=False,
+        )
+
+    assert resp["success"] is True
+    assert resp["unique_id"] == "uid-legacy"
+    assert client.entity_get_calls == 1
+    assert client in component_api._CAPS_CACHE
 
 
 @pytest.mark.parametrize("falsy_unique_id", ["", None])
@@ -607,19 +648,39 @@ async def test_resolve_entities_malformed_shape_falls_back() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_entities_connection_error_propagates() -> None:
-    """The seam does NOT catch a connection error — it propagates so the caller's
-    legacy path (sharing the socket) surfaces the transport failure."""
+async def test_resolve_entities_connection_error_falls_back() -> None:
+    """The seam catches a connection error and returns ``None`` (legacy fallback)
+    so the caller's legacy per-id resolve runs — the legacy read rides the
+    swallowing bridge, so it does not die identically."""
     ws = make_ws(
         "ha_mcp_tools/registry_lookup",
         info_result=_CAPS_REGISTRY,
         cmd_exc=HomeAssistantConnectionError("socket down"),
     )
     client = RoutingClient()
-    with (
-        patch_ws(ws, component_registry_lookup),
-        pytest.raises(HomeAssistantConnectionError),
+    with patch_ws(ws, component_registry_lookup):
+        assert (
+            await component_registry_lookup.resolve_entities_via_component(
+                client, ["input_button.x"]
+            )
+            is None
+        )
+
+
+@pytest.mark.asyncio
+async def test_resolve_entities_ws_establish_failure_falls_back() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) returns ``None`` (legacy fallback)."""
+    caps_ws = make_ws("ha_mcp_tools/registry_lookup", info_result=_CAPS_REGISTRY)
+    client = RoutingClient()
+    with patch_ws_establish_failure(
+        caps_ws,
+        component_registry_lookup,
+        Exception("Failed to connect to Home Assistant WebSocket"),
     ):
-        await component_registry_lookup.resolve_entities_via_component(
-            client, ["input_button.x"]
+        assert (
+            await component_registry_lookup.resolve_entities_via_component(
+                client, ["input_button.x"]
+            )
+            is None
         )

@@ -273,10 +273,10 @@ async def _fetch_services_list_via_component(
     command error/timeout (logged) — the caller falls back to the legacy REST +
     WS translations fetch.
 
-    DEVIATION from the uniform component-fetch taxonomy: a connection-establishment
-    failure IS caught here and mapped to ``None`` (legacy fallback). Unlike the
-    pooled-WS consumers, this tool's legacy path is the REST ``get_services()`` + a
-    per-request WS bridge for translations, NOT the shared pooled WS — so a WS
+    Per the uniform transport-fallback taxonomy, a connection-establishment
+    failure IS caught here and mapped to ``None`` (legacy fallback), like every
+    component fetch helper. This tool's legacy path is the REST ``get_services()`` +
+    a per-request WS bridge for translations, NOT the shared pooled WS — so a WS
     outage must not kill the tool when REST can still serve the catalog. The catch
     is broad because ``get_websocket_client()`` raises a plain ``Exception`` (not
     ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot establish the

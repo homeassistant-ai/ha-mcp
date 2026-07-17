@@ -7,7 +7,11 @@ and the default password via two sequential legacy WS calls
 advertises ``backup_prep``, ONE ``ha_mcp_tools/backup_prep`` read supplies
 both fields in a single frame — these tests pin that the sequential legacy
 probes are skipped when the component serves the read, restored on every
-degradation (capability miss, ``unknown_command``, non-unknown command error),
+degradation (capability miss, ``unknown_command``, non-unknown command error,
+AND a transport failure — both a ``HomeAssistantConnectionError`` off the frame
+and a plain ``Exception`` from ``get_websocket_client()`` failing to establish
+the socket — because the legacy probes run on a DEDICATED already-connected
+socket, not the pooled one, and so can succeed while it is wedged),
 and that a ``local_agent_id: None`` component payload produces the SAME "no
 local agent" failure the legacy path raises, while a missing
 ``default_password`` diverges exactly the way the legacy helpers already
@@ -31,7 +35,11 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import backup as backup_module
 from ha_mcp.tools import component_api
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_BACKUP_PREP = {
     "schema_version": 1,
@@ -290,7 +298,10 @@ class TestCreateBackupRouting:
         assert client in component_api._CAPS_CACHE
 
     @pytest.mark.asyncio
-    async def test_connection_error_propagates_without_legacy_fallback(self) -> None:
+    async def test_connection_error_falls_back_to_legacy(self) -> None:
+        """A WS-down error on the backup_prep frame falls back to the legacy probes
+        rather than propagating: those probes run on a DEDICATED already-connected
+        socket (not the pooled one), so create/restore succeed instead of failing."""
         legacy_ws = _legacy_ws()
         component_ws = make_ws(
             backup_module.WS_BACKUP_PREP,
@@ -309,14 +320,47 @@ class TestCreateBackupRouting:
                 "ha_mcp.tools.backup._poll_backup_completion",
                 new=AsyncMock(return_value={"success": True, "backup_id": "b1"}),
             ),
-            pytest.raises(ToolError),
         ):
-            await backup_module.create_backup(client, name="n")
+            result = await backup_module.create_backup(client, name="n")
 
-        # The connection error propagated instead of silently trying the
-        # legacy probes (which share the same unreachable host).
+        assert result["success"] is True
         legacy_calls = [c.args[0] for c in legacy_ws.send_command.call_args_list]
-        assert "backup/agents/info" not in legacy_calls
+        assert "backup/agents/info" in legacy_calls
+        assert "backup/config/info" in legacy_calls
+        # A transient connection error is not a downgrade — caps stay cached.
+        assert client in component_api._CAPS_CACHE
+
+    @pytest.mark.asyncio
+    async def test_ws_establish_failure_falls_back_to_legacy(self) -> None:
+        """A plain establish ``Exception`` from ``get_websocket_client()`` after caps
+        are cached (review-4 Finding B) falls back to the legacy probes rather than
+        failing create/restore — the dedicated legacy socket connected fine."""
+        legacy_ws = _legacy_ws()
+        caps_ws = make_ws(backup_module.WS_BACKUP_PREP, info_result=_CAPS_BACKUP_PREP)
+        client = _client()
+
+        with (
+            patch_ws_establish_failure(
+                caps_ws,
+                backup_module,
+                Exception("Failed to connect to Home Assistant WebSocket"),
+            ),
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(legacy_ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(return_value={"success": True, "backup_id": "b1"}),
+            ),
+        ):
+            result = await backup_module.create_backup(client, name="n")
+
+        assert result["success"] is True
+        legacy_calls = [c.args[0] for c in legacy_ws.send_command.call_args_list]
+        assert "backup/agents/info" in legacy_calls
+        assert "backup/config/info" in legacy_calls
+        assert client in component_api._CAPS_CACHE
 
     @pytest.mark.asyncio
     async def test_component_no_local_agent_raises_same_error_as_legacy(self) -> None:

@@ -3828,6 +3828,18 @@ class TestEntityLookup:
             "matches": []
         }
 
+    def test_drifted_entity_registry_raises(self, monkeypatch):
+        # Core drift: er.async_get raised/renamed → _resolve_registries yields a
+        # None entity registry. This must RAISE (→ server command-error fallback to
+        # the legacy scan), NOT return {matches: []} — a well-formed empty the server
+        # can't tell from a genuine "no entry with that unique_id" (review-3 M-1).
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: wsapi._RegistryView()
+        )
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_entity_lookup(FakeHass(), {"unique_id": "x"})
+
 
 # =============================================================================
 # backup_prep — agents + local-agent preference + password; manager-absent raises
@@ -4119,3 +4131,27 @@ class TestRegistries:
         row = wsapi._do_registries(FakeHass(), {"registries": ["area"]})["areas"][0]
         assert isinstance(row["created_at"], float)
         assert isinstance(row["modified_at"], float)
+
+    def test_drifted_list_registry_raises(self, monkeypatch):
+        # Core drift: a requested registry's accessor yields None. This must RAISE
+        # (→ server command-error fallback to the legacy WS list), NOT serve
+        # {areas: []} the auto-backup capture pipeline reads as "entity missing" and
+        # silently skips (review-5 M-6).
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: wsapi._RegistryView()
+        )
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_registries(FakeHass(), {"registries": ["area"]})
+
+    def test_drifted_category_registry_raises(self, monkeypatch):
+        # Core drift / old core: the category registry is unavailable (None). A
+        # scoped category request must RAISE, not serve {scope: []} per scope.
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
+        monkeypatch.setattr(wsapi, "_category_registry", lambda h: None)
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_registries(
+                FakeHass(),
+                {"registries": ["category"], "category_scopes": ["automation"]},
+            )
