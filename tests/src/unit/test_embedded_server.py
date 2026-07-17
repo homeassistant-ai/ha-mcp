@@ -1494,7 +1494,7 @@ class TestReadinessProbe:
             k: os.environ.get(k) for k in ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
         }
 
-        def _restore_env():
+        def _restore_env() -> None:
             for k, v in _saved.items():
                 if v is None:
                     os.environ.pop(k, None)
@@ -1586,7 +1586,7 @@ class TestReadinessProbe:
             k: os.environ.get(k) for k in ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
         }
 
-        def _restore_env():
+        def _restore_env() -> None:
             for k, v in _saved.items():
                 if v is None:
                     os.environ.pop(k, None)
@@ -2144,7 +2144,12 @@ class TestPurgeSkippedWhileOrphanAlive:
     bring-up never came up.
     """
 
-    def _start_kwargs(self, mgr, monkeypatch, purges):
+    def _start_kwargs(
+        self,
+        mgr: es.EmbeddedServerManager,
+        monkeypatch: pytest.MonkeyPatch,
+        purges: list[bool],
+    ) -> None:
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
         monkeypatch.setattr(
             mgr, "_async_provision_token", AsyncMock(return_value="tok")
@@ -2201,7 +2206,13 @@ class TestPurgeSkippedOnWarmCache:
     could never recover.
     """
 
-    def _start_kwargs(self, mgr, monkeypatch, purges, ready_version):
+    def _start_kwargs(
+        self,
+        mgr: es.EmbeddedServerManager,
+        monkeypatch: pytest.MonkeyPatch,
+        purges: list[bool],
+        ready_version: str | None,
+    ) -> None:
         monkeypatch.setattr(
             mgr, "_async_ensure_package", AsyncMock(return_value=ready_version)
         )
