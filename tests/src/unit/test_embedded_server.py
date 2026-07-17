@@ -766,6 +766,39 @@ class TestEnsurePackage:
         uninstall.assert_not_called()
         install_pkg.assert_called_once()
 
+    async def test_pin_to_different_version_after_tarball_skips_uninstall(
+        self, tmp_path, monkeypatch
+    ):
+        # Moving from a tarball to a pin on a DIFFERENT version than what is
+        # installed: the pin cannot be satisfied by the installed build, so
+        # the forced install is provably real without an uninstall — and the
+        # working build stays in place as the fallback if the install fails
+        # (review finding on #1923).
+        tarball = (
+            "https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/"
+            "1234/head.tar.gz"
+        )
+        install_pkg = MagicMock(return_value=True)
+        uninstall = MagicMock()
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_PIP_SPEC: "ha-mcp==7.14.0"},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: tarball},
+        )
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
+        monkeypatch.setattr(
+            es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
+        )
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        uninstall.assert_not_called()
+        install_pkg.assert_called_once()
+        assert install_pkg.call_args.args[0] == "ha-mcp==7.14.0"
+
     async def test_unchanged_channel_spec_does_not_uninstall(
         self, tmp_path, monkeypatch
     ):

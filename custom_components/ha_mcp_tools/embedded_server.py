@@ -897,12 +897,15 @@ class EmbeddedServerManager:
         uninstall would churn — and briefly break — a healthy install on
         every restart), when the new spec is a direct URL (always installs
         for real), when the named distribution is not installed (e.g. a
-        cross-channel switch already removed it), or when the stored spec is
+        cross-channel switch already removed it), when the stored spec is
         an index requirement on the SAME distribution (a repin — e.g.
         toggling auto-update rewrites bare ``ha-mcp`` to ``ha-mcp==X`` —
         draws from the same index either way, so version resolution is
         faithful and uninstalling a healthy install on a preference toggle
-        would only add an offline-breakage window).
+        would only add an offline-breakage window), or when the new spec is
+        an exact pin on a version provably different from the installed one
+        (the install cannot no-op, so the working build stays in place as
+        the fallback if it fails).
 
         Unlike the other pre-install uninstalls this one is NOT best-effort:
         if the distribution survives a failed uninstall, the forced install
@@ -923,6 +926,18 @@ class EmbeddedServerManager:
             # code on disk came from the index too, so "already satisfied by
             # version" is the truth, not the #1914 lie.
             return
+        pinned = _exact_pinned_version(self._pip_spec)
+        if pinned is not None:
+            try:
+                version_moves = Version(pinned) != Version(installed_version)
+            except InvalidVersion:
+                version_moves = False  # unprovable — keep the uninstall
+            if version_moves:
+                # The new pin cannot be satisfied by the installed version, so
+                # the forced install is guaranteed to be real without any
+                # uninstall — and keeping the working build in place preserves
+                # it as the fallback if that install fails (e.g. offline).
+                return
         if not await self._hass.async_add_executor_job(_dist_installed, replaced_dist):
             return
         _LOGGER.info(
@@ -1698,6 +1713,27 @@ def _uninstall_distribution(dist_name: str, *, target: str | None = None) -> boo
         )
         return False
     return True
+
+
+def _exact_pinned_version(spec: str) -> str | None:
+    """Return the version of an exact ``==``/``===`` single-clause pin, or None.
+
+    Anything else — URL specs, bare names, ranges, multi-clause specifiers —
+    returns None: only an exact pin lets the caller prove, without asking the
+    resolver, whether the installed version could satisfy the spec. A
+    wildcard pin (``==7.13.*``) is returned as-is; the caller's ``Version``
+    parse rejects it, which conservatively keeps the uninstall.
+    """
+    try:
+        req = Requirement(spec)
+    except InvalidRequirement:
+        return None
+    if req.url:
+        return None
+    clauses = list(req.specifier)
+    if len(clauses) != 1 or clauses[0].operator not in ("==", "==="):
+        return None
+    return clauses[0].version
 
 
 def _spec_is_index_requirement_on(spec: str, dist_name: str) -> bool:
