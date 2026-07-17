@@ -1670,6 +1670,36 @@ class TestReadinessProbe:
         assert "exited during startup" in str(mgr._thread_exc)
         assert "address already in use" in str(mgr._thread_exc)
 
+    def test_thread_main_wraps_bare_systemexit(self, tmp_path, monkeypatch):
+        # A SystemExit with no chained exception (bare sys.exit) must still
+        # land in _thread_exc as an EmbeddedServerError naming the exit -
+        # not escape the worker, and not read as an empty failure message.
+        _saved = {
+            k: os.environ.get(k) for k in ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        }
+
+        def _restore_env() -> None:
+            for k, v in _saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        mgr, _hass, _entry = _manager(tmp_path)
+
+        async def _exit_now(access_token, stop_event):
+            raise SystemExit(3)
+
+        monkeypatch.setattr(mgr, "_serve", _exit_now)
+        try:
+            mgr._thread_main("tok")
+        finally:
+            _restore_env()
+
+        assert isinstance(mgr._thread_exc, es.EmbeddedServerError)
+        assert "exited during startup" in str(mgr._thread_exc)
+        assert "SystemExit(3)" in str(mgr._thread_exc)
+
     async def test_wait_ready_stall_stops_thread_and_raises(
         self, tmp_path, monkeypatch
     ):
@@ -1730,6 +1760,20 @@ class TestReadinessProbe:
         with pytest.raises(es.EmbeddedServerError, match="within 600s"):
             await mgr._async_wait_until_ready()
         stop.assert_awaited_once()
+
+    def test_progress_signature_tracks_modules_and_phase(self, tmp_path, monkeypatch):
+        # The production progress source itself (review gap): module-count
+        # growth and phase advances must each change the signature - this is
+        # the mechanism that keeps a slow cold import alive (#1904).
+        mgr, _hass, _entry = _manager(tmp_path)
+        base = mgr._progress_signature()
+        monkeypatch.setitem(
+            sys.modules, "_pr1908_progress_probe", ModuleType("_pr1908_progress_probe")
+        )
+        after_import = mgr._progress_signature()
+        assert after_import != base
+        mgr._startup_phase = "further along"
+        assert mgr._progress_signature() != after_import
 
 
 # ---------------------------------------------------------------------------
@@ -2250,6 +2294,22 @@ class TestPurgeSkippedOnWarmCache:
 
         assert purges == [True]
 
+    async def test_purge_runs_under_pip_spec_override_despite_match(
+        self, tmp_path, monkeypatch
+    ):
+        # A pip-spec override can re-point to different code under the SAME
+        # version string, so the warm-cache skip must never fire for it.
+        mgr, _hass, _entry = _manager(tmp_path, options={OPT_PIP_SPEC: "ha-mcp==1.2.3"})
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges, "1.2.3")
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", "1.2.3")
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == [True]
+
     async def test_purge_runs_when_cache_unknown(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path)
         purges: list[bool] = []
@@ -2261,6 +2321,65 @@ class TestPurgeSkippedOnWarmCache:
             mgr._thread.join(timeout=2)
 
         assert purges == [True]
+
+
+class TestWarmCacheVersionAgreement:
+    """The two sides of the warm-cache comparison must agree for a plain
+    install, or the purge skip could never fire in production: async_start
+    keys on _async_ensure_package's return while the worker records
+    _running_ha_mcp_version into _CACHED_IMPORT_VERSION (review gap)."""
+
+    def _stub_install_surface(
+        self, monkeypatch: pytest.MonkeyPatch, versions: dict[str, str]
+    ) -> None:
+        def installed_version(preferred_dist: str | None = None) -> str | None:
+            if preferred_dist is not None:
+                return versions.get(preferred_dist)
+            return versions.get(DIST_NAME_STABLE) or versions.get(DIST_NAME_DEV)
+
+        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
+        monkeypatch.setattr(es, "_installed_dist_version", versions.get)
+        monkeypatch.setattr(es, "_dist_installed", lambda name: False)
+        monkeypatch.setattr(
+            es, "_uninstall_distribution", MagicMock(return_value=False)
+        )
+
+    async def test_dev_channel_sides_agree_despite_stale_stable_metadata(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEV_PIP_SPEC},
+        )
+        versions = {DIST_NAME_STABLE: "6.2.0", DIST_NAME_DEV: "7.12.1.dev5"}
+        self._stub_install_surface(monkeypatch, versions)
+        fake = ModuleType("ha_mcp")
+        fake.__version__ = versions[DIST_NAME_STABLE]  # stale stable metadata
+        monkeypatch.setitem(sys.modules, "ha_mcp", fake)
+
+        ready_version = await mgr._async_ensure_package()
+
+        assert ready_version == versions[DIST_NAME_DEV]
+        assert es._running_ha_mcp_version(CHANNEL_DEV) == ready_version
+
+    async def test_stable_channel_sides_agree(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEFAULT_PIP_SPEC},
+        )
+        versions = {DIST_NAME_STABLE: "7.13.0"}
+        self._stub_install_surface(monkeypatch, versions)
+        fake = ModuleType("ha_mcp")
+        fake.__version__ = versions[DIST_NAME_STABLE]
+        monkeypatch.setitem(sys.modules, "ha_mcp", fake)
+
+        ready_version = await mgr._async_ensure_package()
+
+        assert ready_version == versions[DIST_NAME_STABLE]
+        assert es._running_ha_mcp_version(CHANNEL_STABLE) == ready_version
 
 
 class TestServeRunningVersionCapture:
@@ -2304,6 +2423,9 @@ class TestServeRunningVersionCapture:
         assert mgr._running_version == "9.8.7"
         # The warm-cache purge skip keys on this recording (issue #1904).
         assert es._CACHED_IMPORT_VERSION == "9.8.7"
+        # _serve advanced through its phase markers before http_app raised -
+        # a dropped or mislabeled _note_startup_phase call surfaces here.
+        assert mgr._startup_phase == "registering web routes"
         assert isinstance(mgr._thread_exc, _StopServe)
 
     def test_serve_prefers_configured_dev_metadata(self, tmp_path, monkeypatch):

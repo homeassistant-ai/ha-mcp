@@ -92,15 +92,16 @@ _LOGGER = logging.getLogger(__name__)
 # from the same refresh token on every start regardless.
 _ACCESS_TOKEN_TTL = timedelta(days=3650)
 
-# Readiness probe: fail the bring-up only when the worker shows no observable
-# startup progress (no new modules landing in sys.modules, no phase advance)
-# for this long. The previous flat 90s deadline assumed real hardware imports
-# the server tree in seconds — issue #1904 (HA Green) showed a cold import
-# alone can take minutes there, and killing the still-importing worker at the
+# Readiness probe: fail the bring-up only when there is no observable startup
+# progress (no new modules landing in sys.modules, no phase advance) for this
+# long. The previous flat 90s deadline assumed real hardware imports the
+# server tree in seconds — issue #1904 (HA Green) showed a cold import alone
+# can take minutes there, and killing the still-importing worker at the
 # deadline is what created the orphaned-thread/port-collision cascade: the
 # worker cannot be joined mid-import, lingered as a zombie, and later bound
-# the port out from under the retry. A genuinely wedged worker still fails
-# after one stall budget.
+# the port out from under the retry. The module count is process-wide (see
+# _progress_signature), so a wedged worker trips the stall budget on a quiet
+# instance and the absolute cap below at the latest.
 _READY_STALL_TIMEOUT_SECONDS = 90.0
 # Absolute ceiling on one bring-up regardless of apparent progress, matching
 # the HAOS e2e lane's own 600s readiness deadline.
@@ -247,8 +248,9 @@ class EmbeddedServerManager:
         # Compared against the installed distribution after start to detect a
         # stale-code worker (see _purge_ha_mcp_modules).
         self._running_version: str | None = None
-        # Startup phase published by the worker (plain attribute write, read
-        # by the readiness poll for progress detection and error messages).
+        # Startup phase marker (plain attribute writes: init markers from the
+        # main thread, _note_startup_phase transitions from the worker). Read
+        # by the readiness poll for progress detection and error messages.
         self._startup_phase: str = "not started"
 
     @property
@@ -317,10 +319,11 @@ class EmbeddedServerManager:
         # Also skipped when the cached modules already ARE the generation on
         # disk (issue #1904): purging on every attempt made each retry pay
         # the full cold import again, so slow hardware that missed the
-        # readiness window once could never recover. A reinstall that keeps
-        # the same version string (same-version tarball override) is the
-        # accepted blind spot; the post-start staleness check still reports
-        # the running/installed pair.
+        # readiness window once could never recover. Never skipped under a
+        # pip-spec override — that is the one workflow where a reinstall can
+        # change the code without changing the version string (re-pointed
+        # tarball/pin), which a version-keyed skip would serve stale; channel
+        # installs mint a distinct version per build.
         orphan = self._orphaned_thread
         if orphan is not None and not orphan.is_alive():
             self._orphaned_thread = orphan = None
@@ -331,7 +334,8 @@ class EmbeddedServerManager:
                 "previously imported code until Home Assistant restarts."
             )
         elif (
-            ready_version is not None
+            not self._pip_spec_override
+            and ready_version is not None
             and _CACHED_IMPORT_VERSION is not None
             and ready_version == _CACHED_IMPORT_VERSION
         ):
@@ -588,6 +592,7 @@ class EmbeddedServerManager:
             await self._async_remove_legacy_target(target_dist, installed_version)
             await self._async_force_install()
 
+        version: str | None
         if not self._pip_spec_override and self._channel == CHANNEL_DEV:
             version = await self._hass.async_add_executor_job(
                 _installed_ha_mcp_version, target_dist
@@ -845,12 +850,20 @@ class EmbeddedServerManager:
             # misses — live issue #1904 saw the real bind error surface only
             # in HA's generic task-exception log while the component reported
             # a bare readiness timeout. Unwrap the original error so the
-            # repair issue names the actual cause.
-            cause: BaseException = err.__context__ or err.__cause__ or err
+            # repair issue names the actual cause; a bare SystemExit (no
+            # chained exception) is reported by repr so an empty/zero exit
+            # code still reads as what it is. The phase names where in
+            # _serve the exit happened instead of hardcoding a bind failure.
+            cause = err.__context__ or err.__cause__
+            detail = str(cause) if cause is not None else repr(err)
             self._thread_exc = EmbeddedServerError(
-                f"the server's HTTP listener exited during startup: {cause}"
+                f"the server exited during startup ({self._startup_phase}): {detail}"
             )
-            _LOGGER.error("HA-MCP in-process server exited during startup: %s", cause)
+            _LOGGER.error(
+                "HA-MCP in-process server exited during startup (%s): %s",
+                self._startup_phase,
+                detail,
+            )
         except Exception as err:
             self._thread_exc = err
             _LOGGER.exception("HA-MCP in-process server thread crashed")
@@ -1064,18 +1077,24 @@ class EmbeddedServerManager:
         ``len(sys.modules)`` moves continuously while the worker grinds
         through a cold import (the single longest startup step — minutes on
         slow hardware, issue #1904), and the published phase moves between
-        steps. Any change in the pair counts as progress.
+        steps. Any change in the pair counts as progress. The module count is
+        PROCESS-wide — an approximation: nothing finer-grained is observable
+        from outside a thread stuck inside one ``import`` statement, and any
+        other HA thread importing concurrently also refreshes the stall
+        budget. Erring toward patience is the point; the absolute cap bounds
+        the wait regardless.
         """
         return (len(sys.modules), self._startup_phase)
 
     async def _async_wait_until_ready(self) -> None:
         """Poll a loopback TCP connect until the server accepts, or fail.
 
-        Patience is progress-based: the wait only gives up when the worker
-        shows no observable progress for ``_READY_STALL_TIMEOUT_SECONDS`` (or
-        blows the absolute ``_READY_TOTAL_CAP_SECONDS`` ceiling). A slow cold
-        import keeps the wait alive; a wedged worker still fails after one
-        stall budget. On failure stops the thread and raises
+        Patience is progress-based: the wait only gives up when there is no
+        observable progress for ``_READY_STALL_TIMEOUT_SECONDS`` (or the
+        absolute ``_READY_TOTAL_CAP_SECONDS`` ceiling is hit). A slow cold
+        import keeps the wait alive; a wedged worker is caught by the stall
+        budget on a quiet instance, by the cap at the latest (the progress
+        signal is process-wide). On failure stops the thread and raises
         :class:`EmbeddedServerError` so the caller leaves the webhook
         unregistered and files a repair issue.
         """
@@ -1113,8 +1132,8 @@ class EmbeddedServerManager:
             if now - last_progress >= _READY_STALL_TIMEOUT_SECONDS:
                 failure = (
                     f"HA-MCP in-process server did not become reachable on "
-                    f"port {self._port}: no startup progress for "
-                    f"{_READY_STALL_TIMEOUT_SECONDS:.0f}s (stalled at: "
+                    f"port {self._port}: no startup progress observed for "
+                    f"{_READY_STALL_TIMEOUT_SECONDS:.0f}s (last phase: "
                     f"{self._startup_phase}; {now - start:.0f}s since start)."
                 )
                 break
@@ -1145,7 +1164,7 @@ class EmbeddedServerManager:
 
 
 # Version of the ha_mcp generation currently cached in sys.modules — set by
-# the worker right after its imports land, cleared by the purge. Process-wide
+# the worker right after its first import lands, cleared by the purge. Process-wide
 # (the module cache it describes is process-wide too). Lets a retry with an
 # unchanged install keep the warm cache instead of paying the full cold import
 # again (issue #1904).
