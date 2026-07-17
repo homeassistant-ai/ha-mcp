@@ -256,11 +256,11 @@ async def test_unknown_command_invalidates_and_falls_back() -> None:
 
 @pytest.mark.asyncio
 async def test_command_error_falls_back_to_legacy() -> None:
-    """A non-unknown command error/timeout on the batch → legacy dispatch."""
+    """A non-unknown command-ERROR response on the batch (pre-dispatch) → legacy."""
     ws = make_ws(
         "ha_mcp_tools/bulk_call_service",
         info_result=_CAPS_BULK,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
+        cmd_exc=HomeAssistantCommandError("boom"),
     )
     client = BulkRoutingClient()
     tools = DeviceControlTools(client)
@@ -307,6 +307,120 @@ async def test_unresolvable_op_aborts_whole_batch_to_legacy() -> None:
     assert not _bulk_frames(ws)
     assert resp["failed_commands"] == 1
     assert resp["successful_commands"] == 0
+
+
+@pytest.mark.asyncio
+async def test_validate_first_nonexistent_entity_maps_to_not_found() -> None:
+    """I3: a component op whose captured pre-state is null (nonexistent entity) maps
+    to a per-op ENTITY_NOT_FOUND failure when validate_first (default) is set — not a
+    phantom successful command counted in successful_commands."""
+    ghost_op = {
+        "domain": "light",
+        "service": "turn_on",
+        "entity_ids": ["light.ghost"],
+        "dispatched": True,
+        "confirmed": False,
+        "partial": True,
+        "transitions": [
+            {
+                "entity_id": "light.ghost",
+                "old_state": None,  # entity did not exist at pre-state capture
+                "new_state": None,
+                "changed": False,
+                "attributes_changed": [],
+            }
+        ],
+    }
+    ws = make_ws(
+        "ha_mcp_tools/bulk_call_service",
+        info_result=_CAPS_BULK,
+        cmd_result=_bulk_result([_op_result("light", "turn_on", "light.a"), ghost_op]),
+    )
+    client = BulkRoutingClient()
+    tools = DeviceControlTools(client)
+
+    with patch_ws(ws, device_control):
+        resp = await tools.bulk_device_control(
+            operations=[
+                {"entity_id": "light.a", "action": "on"},
+                {"entity_id": "light.ghost", "action": "on"},
+            ],
+            parallel=True,
+        )
+
+    assert resp["successful_commands"] == 1
+    assert resp["failed_commands"] == 1
+    good, ghost = resp["results"]
+    assert good["command_sent"] is True
+    # The nonexistent entity is a structured ENTITY_NOT_FOUND failure, not a success.
+    assert ghost.get("command_sent") is not True
+    assert ghost["error"]["code"] == "ENTITY_NOT_FOUND"
+    # And it is NOT re-dispatched via legacy (the batch already fired).
+    assert client.call_service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_validate_first_false_allows_null_prestate_op() -> None:
+    """With validate_first False, a null pre-state op is NOT forced to ENTITY_NOT_FOUND
+    — it maps as a normal dispatched (partial) op, mirroring the legacy skip."""
+    ghost_op = {
+        "domain": "light",
+        "service": "turn_on",
+        "entity_ids": ["light.ghost"],
+        "dispatched": True,
+        "confirmed": False,
+        "partial": True,
+        "transitions": [
+            {
+                "entity_id": "light.ghost",
+                "old_state": None,
+                "new_state": None,
+                "changed": False,
+                "attributes_changed": [],
+            }
+        ],
+    }
+    ws = make_ws(
+        "ha_mcp_tools/bulk_call_service",
+        info_result=_CAPS_BULK,
+        cmd_result=_bulk_result([ghost_op]),
+    )
+    client = BulkRoutingClient()
+    tools = DeviceControlTools(client)
+
+    with patch_ws(ws, device_control):
+        resp = await tools.bulk_device_control(
+            operations=[
+                {"entity_id": "light.ghost", "action": "on", "validate_first": False}
+            ],
+            parallel=True,
+        )
+
+    # validate_first False → the op is not forced to ENTITY_NOT_FOUND.
+    assert resp["successful_commands"] == 1
+    assert resp["failed_commands"] == 0
+    assert resp["results"][0]["command_sent"] is True
+    assert resp["results"][0]["partial"] is True
+
+
+@pytest.mark.asyncio
+async def test_malformed_envelope_length_drift_falls_back_to_legacy() -> None:
+    """A batch response whose op count drifts from the rows sent is no usable result
+    → legacy dispatch (a mismatched batch is never reconciled)."""
+    ws = make_ws(
+        "ha_mcp_tools/bulk_call_service",
+        info_result=_CAPS_BULK,
+        # One op result for a two-row batch → length drift.
+        cmd_result=_bulk_result([_op_result("light", "turn_on", "light.a")]),
+    )
+    client = BulkRoutingClient()
+    tools = DeviceControlTools(client)
+
+    with patch_ws(ws, device_control):
+        await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
+
+    # Drift → None → legacy re-dispatch of both ops.
+    assert len(client.call_service_calls) == 2
 
 
 class TestD9AtMostOnce:
@@ -394,3 +508,31 @@ class TestD9AtMostOnce:
 
         assert len(client.call_service_calls) == 2
         assert not _bulk_frames(ws)
+
+    @pytest.mark.asyncio
+    async def test_post_send_timeout_is_ambiguous_no_re_dispatch(self) -> None:
+        """A response-wait timeout on the SENT batch frame is ambiguous for the whole
+        batch: some/all ops may have landed, so the consumer reports a partial batch
+        (every op dispatched-but-unconfirmed) and NEVER re-dispatches via legacy —
+        re-dispatch would double-fire every landed op."""
+        ws = make_ws(
+            "ha_mcp_tools/bulk_call_service",
+            info_result=_CAPS_BULK,
+            cmd_exc=HomeAssistantCommandTimeout("timeout"),
+        )
+        client = BulkRoutingClient()
+        tools = DeviceControlTools(client)
+
+        with patch_ws(ws, device_control):
+            resp = await tools.bulk_device_control(
+                operations=list(_TWO_OPS), parallel=True
+            )
+
+        # The batch is reported partial with every op dispatched-but-unconfirmed...
+        assert resp["partial"] is True
+        assert resp["total_operations"] == 2
+        for op_result in resp["results"]:
+            assert op_result["partial"] is True
+            assert op_result["status"] == "dispatched_unconfirmed"
+        # ...and — THE D9 assertion — ZERO legacy re-dispatch despite the timeout.
+        assert client.call_service_calls == []

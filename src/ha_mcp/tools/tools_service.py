@@ -15,7 +15,6 @@ from pydantic import Field
 
 from ..client.rest_client import (
     HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
@@ -53,6 +52,19 @@ from .util_helpers import (
 # REST POST + hardcoded ``_SERVICE_TO_STATE`` guess + WS-subscribe verification.
 # Named once so the routing helper and its tests agree on the wire string.
 WS_CALL_SERVICE = "ha_mcp_tools/call_service"
+
+
+class _AmbiguousDispatch:
+    """Sentinel type for a post-send-ambiguous component write (see below)."""
+
+
+# Returned by ``_call_service_via_component`` when the component frame was SENT but
+# its response/confirmation never arrived (a response-wait timeout or a post-send
+# transport drop): the write MAY have landed, so the caller reports it as ``partial``
+# and MUST NOT re-POST via the legacy path (D9 at-most-once — an ambiguous post-send
+# outcome is never retried). Distinct from ``None`` (the component provably never
+# dispatched → a safe legacy first fire).
+_COMPONENT_DISPATCH_AMBIGUOUS = _AmbiguousDispatch()
 
 
 def _parse_json_dict_param(
@@ -641,41 +653,80 @@ class ServiceTools:
         wait: bool,
         timeout: float,
         return_response: bool,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any] | _AmbiguousDispatch | None:
         """Route one service call through the component ``call_service`` capability.
 
-        Returns the component's frozen result envelope — ``{domain, service,
-        dispatched, confirmed, partial, transitions, service_response?}`` — when the
-        component advertises ``call_service`` and the frame lands, else ``None`` so
-        the caller runs its legacy REST POST. Verb resolution stays server-side
-        (D6): the fully-formed ``domain`` / ``service`` / ``service_data`` /
-        ``entity_ids`` are handed to the component, which fires exactly what it is
-        given and never guesses a service name.
+        Returns one of three outcomes:
 
-        **D9 — at-most-once (correctness-critical).** A ``None`` return routes to the
-        legacy REST POST; a returned result dict does NOT (the write already
-        landed). The clean cases: a capability miss / ``unknown_command`` / a
-        connection-establishment failure means the component provably never
-        dispatched (safe first fire); the component's one post-dispatch outcome — a
-        confirmation that lapsed — comes back as a normal result dict with
-        ``partial=True`` / ``dispatched=True`` (never re-raised), so the caller uses
-        it and MUST NOT re-POST. The one residual: a command error raised BY
-        ``async_call`` itself is treated as pre-dispatch and re-POSTed, which is
-        correct for the overwhelming majority (the D1 domain block and
-        ``ServiceNotFound`` raise before any state change, and HA service handlers
-        validate before acting) but is the documented at-most-once limit — a service
-        that mutates state and THEN raises could double-apply on the legacy re-POST.
-        Per the approved Phase 3 design this is accepted rather than solved with an
-        idempotency token (there is none anywhere in the write path today); a token
-        design is deferred. There is deliberately no other retry.
+        * the component's frozen result envelope — ``{domain, service, dispatched,
+          confirmed, partial, transitions, service_response?}`` — when the component
+          advertises ``call_service``, the frame lands, and its response arrives (the
+          caller maps it and does NOT re-POST, even for a ``partial`` confirmation);
+        * ``None`` when the component provably never dispatched, so the caller runs
+          its legacy REST POST as a safe first fire;
+        * ``_COMPONENT_DISPATCH_AMBIGUOUS`` when the frame WAS sent but its
+          response/confirmation never arrived — the caller reports ``partial`` and
+          does NOT re-POST.
+
+        Verb resolution stays server-side (D6): the fully-formed ``domain`` /
+        ``service`` / ``service_data`` / ``entity_ids`` are handed to the component,
+        which fires exactly what it is given and never guesses a service name.
+
+        **D9 — at-most-once (correctness-critical).** The boundary is PRE-SEND vs
+        POST-SEND, NOT "error vs success":
+
+        * PRE-SEND → ``None`` (safe legacy first fire): a capability miss, an
+          ``unknown_command``, or a connection-ESTABLISHMENT failure
+          (``get_websocket_client`` raising before the frame is sent) all mean the
+          component never dispatched. A command-ERROR RESPONSE is also ``None``: it is
+          pre-dispatch for the component's own guards (the D1 domain block and
+          ``ServiceNotFound`` raise before any ``async_call``), and for a non-unknown
+          command error it is the ONE documented residual — an ``async_call`` that
+          mutated state and THEN raised could double-apply on the legacy re-POST
+          (accepted per the approved design; no idempotency token exists anywhere in
+          the write path).
+        * POST-SEND → never retried: a confirmation that lapsed comes back as a
+          normal result dict (``partial=True`` / ``dispatched=True``). A response-wait
+          TIMEOUT (``HomeAssistantCommandTimeout`` — the frame was sent) or any
+          post-send transport drop is AMBIGUOUS-dispatched: the component's
+          ``@async_response`` handler is a background HA task, so the client
+          abandoning the message id does NOT cancel the write, and
+          ``async_call(blocking=True)`` is itself unbounded (a long ``update.install``
+          / script legitimately outlives the 30s response-wait). These return the
+          sentinel so the caller reports ``partial`` and MUST NOT re-POST — re-POSTing
+          here is the double-fire this split exists to prevent.
+
+        **Security (layered defense-in-depth).** The server-side reserved-domain guard
+        (``_validate_service_call_params``) gates BOTH this component route AND the
+        legacy REST fallback, refusing ``ha_mcp_tools`` before either runs — it is the
+        authoritative single-call gate. The component's own D1 block is the
+        authoritative refusal AT the component for any future consumer that reaches it
+        directly; here a component D1 refusal would surface as a command-error
+        response → ``None`` → legacy REST, and that REST POST is itself gated by the
+        same server guard, so no ``ha_mcp_tools`` invocation can reach REST.
         """
         caps = await get_component_caps(self._client)
         if not component_supports(caps, "call_service"):
             return None
+        # PRE-SEND: an establishment failure means the frame provably never reached
+        # the component. Split into its own try so a POST-SEND failure below is never
+        # misclassified as pre-send → a safe legacy first fire.
         try:
             ws = await get_websocket_client(
                 url=self._client.base_url, token=self._client.token
             )
+        except Exception as exc:
+            logger.warning(
+                "%s establishment failed; falling back to legacy: %r",
+                WS_CALL_SERVICE,
+                exc,
+            )
+            return None
+        # The frame is now sent. Distinguish a command-ERROR response (pre-dispatch by
+        # the component's guards / the documented mutate-then-raise residual → legacy)
+        # from a response-wait TIMEOUT or any post-send transport drop (AMBIGUOUS →
+        # partial, never retried).
+        try:
             raw = await ws.send_command(
                 WS_CALL_SERVICE,
                 domain=domain,
@@ -686,31 +737,30 @@ class ServiceTools:
                 timeout=timeout,
                 return_response=return_response,
             )
-        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-            # A raised command error is treated as pre-dispatch → legacy re-POST.
-            # This is exact for the component's own guards (D1 domain block /
-            # ServiceNotFound raise before any state change) and correct for the
-            # overwhelming majority of async_call validation errors; the residual
-            # double-apply risk is the documented at-most-once limit (see docstring
-            # D9). unknown_command means the command vanished: invalidate the cached
-            # caps so the next call re-probes.
+        except HomeAssistantCommandError as exc:
+            # unknown_command means the command vanished: invalidate the cached caps so
+            # the next call re-probes. Any other command error → legacy re-POST (the
+            # documented at-most-once residual, see D9 above).
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
             else:
                 logger.warning(
-                    "%s failed; fell back to legacy: %r", WS_CALL_SERVICE, exc
+                    "%s command error; falling back to legacy: %r",
+                    WS_CALL_SERVICE,
+                    exc,
                 )
             return None
         except Exception as exc:
-            # HomeAssistantConnectionError (pooled-WS drop) / the plain Exception
-            # get_websocket_client() raises on a failed (re)connect: the frame never
-            # reached the component, so nothing dispatched → safe legacy fallback.
+            # HomeAssistantCommandTimeout (response-wait expired — the frame WAS sent)
+            # or any post-send transport drop (e.g. a pooled-WS drop after send). The
+            # component may still be lawfully mid-write, so this is ambiguous-
+            # dispatched: report partial, NEVER re-POST (D9 at-most-once).
             logger.warning(
-                "%s connection error; falling back to legacy: %r",
+                "%s post-send timeout/drop; reporting partial (not retried): %r",
                 WS_CALL_SERVICE,
                 exc,
             )
-            return None
+            return _COMPONENT_DISPATCH_AMBIGUOUS
         result = raw.get("result")
         # ``dispatched`` is the frozen sentinel key every ``_do_call_service`` envelope
         # carries; its absence means no usable component response (treated as
@@ -808,6 +858,66 @@ class ServiceTools:
                 if verified_state is not None:
                     response["verified_state"] = verified_state
         return response
+
+    async def _maybe_component_call_service(
+        self,
+        *,
+        domain: str,
+        service: str,
+        service_data: dict[str, Any],
+        entity_id: str | None,
+        data: str | dict[str, Any] | None,
+        should_wait: bool,
+        return_response: bool,
+        verbose: bool,
+        fields: list[str] | None,
+        attribute_keys: list[str] | None,
+    ) -> dict[str, Any] | None:
+        """Route a confirmable single call through the component; ``None`` → do legacy.
+
+        The component route is taken ONLY when confirming a single entity
+        (``should_wait``). The capability's entire value is the real confirmed
+        pre->post transition; for a non-confirmed call (``wait=False``, no / multi
+        entity, or a non-state-changing domain) the component returns
+        ``transitions=[]`` → ``result:[]``, silently dropping the changed-states body
+        the legacy REST POST returns (e.g. a scene's member states). For those the
+        legacy single POST costs the same one round-trip and is strictly richer, so
+        this returns ``None`` and the caller stays on legacy.
+
+        Returns a FINAL ``ha_call_service`` response when the component served the
+        call: the mapped transition, or — on a post-send timeout / transport drop
+        (the ambiguous sentinel) — the same dispatched-but-unconfirmed ``partial`` the
+        legacy timeout path builds, NEVER re-POSTed (D9 at-most-once). Returns ``None``
+        when the component was not used or provably never dispatched, so the caller
+        runs the legacy REST path as a safe first fire.
+        """
+        if not should_wait:
+            return None
+        component_result = await self._call_service_via_component(
+            domain=domain,
+            service=service,
+            service_data=service_data,
+            entity_ids=[entity_id] if entity_id else [],
+            wait=True,
+            timeout=10.0,
+            return_response=return_response,
+        )
+        if isinstance(component_result, _AmbiguousDispatch):
+            return self._build_timeout_response(domain, service, entity_id, data)
+        if component_result is None:
+            return None
+        return self._build_component_call_response(
+            component_result,
+            domain=domain,
+            service=service,
+            entity_id=entity_id,
+            data=data,
+            should_wait=should_wait,
+            return_response=return_response,
+            verbose=verbose,
+            fields=fields,
+            attribute_keys=attribute_keys,
+        )
 
     @tool(
         name="ha_call_service",
@@ -977,32 +1087,23 @@ class ServiceTools:
                 and domain not in _NON_STATE_CHANGING_DOMAINS
             )
 
-            # Route through the component's call_service capability when advertised
-            # (D8). The component fires exactly one async_call and returns the REAL
-            # pre->post transition; a None return means it never dispatched, so the
-            # legacy REST POST below is a safe first fire (D9 at-most-once).
-            component_result = await self._call_service_via_component(
+            # Route a confirmable single call through the component capability (D8);
+            # a returned response means it served the call, None means fall through to
+            # the legacy REST path below (a safe first fire, D9 at-most-once).
+            component_response = await self._maybe_component_call_service(
                 domain=domain,
                 service=service,
                 service_data=service_data,
-                entity_ids=[entity_id] if should_wait and entity_id else [],
-                wait=bool(should_wait),
-                timeout=10.0,
+                entity_id=entity_id,
+                data=data,
+                should_wait=should_wait,
                 return_response=return_response_bool,
+                verbose=verbose_bool,
+                fields=parsed_result_fields,
+                attribute_keys=parsed_result_attribute_keys,
             )
-            if component_result is not None:
-                return self._build_component_call_response(
-                    component_result,
-                    domain=domain,
-                    service=service,
-                    entity_id=entity_id,
-                    data=data,
-                    should_wait=should_wait,
-                    return_response=return_response_bool,
-                    verbose=verbose_bool,
-                    fields=parsed_result_fields,
-                    attribute_keys=parsed_result_attribute_keys,
-                )
+            if component_response is not None:
+                return component_response
 
             # Legacy REST path (component absent, or it never dispatched): capture
             # initial state before the call for the WS-subscribe verification.

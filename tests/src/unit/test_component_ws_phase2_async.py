@@ -1480,6 +1480,24 @@ def _run_call_service(hass, msg):
     return wsapi._do_call_service(hass, msg, **extra)
 
 
+# Case/whitespace/unicode variants that MUST all fold to the reserved
+# ``ha_mcp_tools`` domain and be refused by ``_guard_call_service_target`` (which
+# normalizes ``str(domain).strip().lower()``). Driven against BOTH preps directly so a
+# refactor dropping the ``.strip().lower()`` from the AUTHORITATIVE component guard
+# fails here — the server-side variant tests exercise a different function and would
+# stay green. NBSP (U+00A0) is stripped by ``str.strip()`` too, so a NBSP-padded form
+# folds; HA core's ``domain.lower()`` (no strip) would NOT resolve it, so the guard
+# over-refuses in the safe direction.
+_HA_MCP_TOOLS_DOMAIN_VARIANTS = [
+    "ha_mcp_tools",
+    "HA_MCP_TOOLS",
+    " ha_mcp_tools ",
+    "ha_mcp_tools\n",
+    "\tha_mcp_tools",
+    "\u00a0ha_mcp_tools\u00a0",  # NBSP-padded (U+00A0)
+]
+
+
 class TestCallServiceDomainBlock:
     """D1 — the authoritative, component-side ``ha_mcp_tools`` domain block.
 
@@ -1490,7 +1508,7 @@ class TestCallServiceDomainBlock:
     reached — even when the service would otherwise exist.
     """
 
-    @pytest.mark.parametrize("domain", ["ha_mcp_tools", " HA_MCP_TOOLS "])
+    @pytest.mark.parametrize("domain", _HA_MCP_TOOLS_DOMAIN_VARIANTS)
     def test_domain_block_never_dispatches(self, monkeypatch, domain):
         monkeypatch.setitem(
             sys.modules, "homeassistant.exceptions", _base._exceptions_stub
@@ -1745,6 +1763,71 @@ class TestCallServiceUnsub:
         assert services.call_count == 1
 
 
+class TestCallServiceListenerJobType:
+    """The confirmation listener must be a HA callback (loop-thread), not executor.
+
+    A plain (non-callback) listener is ``HassJobType.Executor`` on real HA: every
+    instance-wide ``state_changed`` gets dispatched to the thread pool and
+    ``asyncio.Event.set()`` runs cross-thread on a non-thread-safe Event (delayed /
+    spurious ``partial`` + an ``InvalidStateError`` race). HA's ``is_callback`` reads
+    exactly ``getattr(func, "_hass_callback", False)``, so the fix pins that attribute
+    — proven here without needing real HA job-type inference.
+    """
+
+    def test_single_call_listener_is_marked_callback(self):
+        bus = _FakeBus()
+        services = _FakeCallServices(known={("light", "turn_on")})
+        hass = _call_hass([FakeState("light.a", state="off")], services, bus)
+        asyncio.run(
+            wsapi._call_service_prep(
+                hass,
+                {
+                    "type": wsapi.WS_CALL_SERVICE,
+                    "domain": "light",
+                    "service": "turn_on",
+                    "entity_ids": ["light.a"],
+                    "timeout": 0.01,
+                },
+            )
+        )
+        (registered,) = bus.listeners
+        _event_type, listener = registered
+        assert getattr(listener, "_hass_callback", False) is True
+
+    def test_bulk_listeners_are_marked_callback(self):
+        bus = _FakeBus()
+        services = _FakeBulkServices(known={("light", "turn_on"), ("lock", "lock")})
+        hass = _call_hass(
+            [FakeState("light.a", state="off"), FakeState("lock.front", state="off")],
+            services,
+            bus,
+        )
+        asyncio.run(
+            wsapi._bulk_call_service_prep(
+                hass,
+                {
+                    "type": wsapi.WS_BULK_CALL_SERVICE,
+                    "operations": [
+                        {
+                            "domain": "light",
+                            "service": "turn_on",
+                            "entity_ids": ["light.a"],
+                        },
+                        {
+                            "domain": "lock",
+                            "service": "lock",
+                            "entity_ids": ["lock.front"],
+                        },
+                    ],
+                    "timeout": 0.01,
+                },
+            )
+        )
+        assert len(bus.listeners) == 2
+        for _event_type, listener in bus.listeners:
+            assert getattr(listener, "_hass_callback", False) is True
+
+
 class TestCallServiceSchema:
     def _schema(self, monkeypatch):
         monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
@@ -1865,7 +1948,7 @@ class TestBulkCallServiceDomainBlock:
     of it is never dispatched either.
     """
 
-    @pytest.mark.parametrize("bad_domain", ["ha_mcp_tools", " HA_MCP_TOOLS "])
+    @pytest.mark.parametrize("bad_domain", _HA_MCP_TOOLS_DOMAIN_VARIANTS)
     def test_one_ha_mcp_tools_op_dispatches_nothing(self, monkeypatch, bad_domain):
         monkeypatch.setitem(
             sys.modules, "homeassistant.exceptions", _base._exceptions_stub

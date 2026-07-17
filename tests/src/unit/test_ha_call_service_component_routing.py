@@ -225,17 +225,15 @@ async def test_capability_hit_routes_and_maps_shape() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_state_changing_call_passes_no_wait_no_targets() -> None:
-    """A non-state-changing call hands the component wait=False / no entity_ids (D6)."""
-    result = {
-        "domain": "automation",
-        "service": "trigger",
-        "dispatched": True,
-        "confirmed": False,
-        "partial": False,
-        "transitions": [],
-    }
-    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL, cmd_result=result)
+async def test_non_state_changing_call_uses_legacy_not_component() -> None:
+    """A non-confirmed call (should_wait False) stays on the legacy REST path.
+
+    The component route is taken ONLY when confirming a single entity: for a
+    non-state-changing / fire-and-forget call it would return transitions=[] ->
+    result:[], silently dropping HA's changed-states body (I2). So this call must NOT
+    route to the component — it returns the legacy REST changed-states content instead.
+    """
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL)
     client = RoutingClient()
     call_service = _build_call_service(client)
 
@@ -249,10 +247,14 @@ async def test_non_state_changing_call_passes_no_wait_no_targets() -> None:
     assert resp["success"] is True
     assert "verified_state" not in resp
     assert "partial" not in resp
-    kwargs = _call_service_frames(ws)[0].kwargs
-    assert kwargs["wait"] is False
-    assert kwargs["entity_ids"] == []
-    assert client.call_service_calls == []
+    # Legacy REST POST ran once and returned the changed-states body (not the
+    # component's empty []).
+    assert len(client.call_service_calls) == 1
+    assert resp["result"]
+    assert resp["result"][0]["entity_id"] == "automation.morning"
+    assert resp["result"][0]["state"] == "on"
+    # The component was never routed to — no call_service frame at all.
+    assert not _call_service_frames(ws)
 
 
 @pytest.mark.asyncio
@@ -317,11 +319,12 @@ async def test_unknown_command_invalidates_and_falls_back() -> None:
 
 @pytest.mark.asyncio
 async def test_command_error_falls_back_to_legacy() -> None:
-    """A non-unknown command error/timeout → exactly one legacy POST."""
+    """A non-unknown command-ERROR response (pre-dispatch / mutate-then-raise
+    residual) → exactly one legacy POST."""
     ws = make_ws(
         "ha_mcp_tools/call_service",
         info_result=_CAPS_CALL,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
+        cmd_exc=HomeAssistantCommandError("boom"),
     )
     client = RoutingClient()
     call_service = _build_call_service(client)
@@ -347,6 +350,27 @@ async def test_ws_establish_failure_falls_back_to_legacy() -> None:
         tools_service,
         Exception("Failed to connect to Home Assistant WebSocket"),
     ):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert resp["success"] is True
+    assert len(client.call_service_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_malformed_envelope_falls_back_to_legacy() -> None:
+    """A component response missing the frozen 'dispatched' key is no usable result →
+    exactly one legacy REST POST (treated as never-reached, never a dropped write)."""
+    ws = make_ws(
+        "ha_mcp_tools/call_service",
+        info_result=_CAPS_CALL,
+        cmd_result={"domain": "light", "service": "turn_on"},  # no 'dispatched' key
+    )
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
         resp = await call_service(
             domain="light", service="turn_on", entity_id="light.a"
         )
@@ -396,3 +420,47 @@ class TestD9AtMostOnce:
 
         assert len(client.call_service_calls) == 1
         assert not _call_service_frames(ws)
+
+    @pytest.mark.asyncio
+    async def test_post_send_timeout_is_ambiguous_no_re_post(self) -> None:
+        """A response-wait timeout on the SENT frame is ambiguous-dispatched: the
+        component may still be lawfully mid-write (async_call is unbounded), so the
+        consumer reports partial and NEVER re-POSTs — the double-fire guard."""
+        ws = make_ws(
+            "ha_mcp_tools/call_service",
+            info_result=_CAPS_CALL,
+            cmd_exc=HomeAssistantCommandTimeout("timeout"),
+        )
+        client = RoutingClient()
+        call_service = _build_call_service(client)
+
+        with patch_ws(ws, tools_service):
+            resp = await call_service(
+                domain="light", service="turn_on", entity_id="light.a"
+            )
+
+        # Dispatched-but-unconfirmed partial success, and — THE D9 assertion — ZERO
+        # legacy POST despite the timeout (the frame was sent; re-POST would double-fire).
+        assert resp["success"] is True
+        assert resp["partial"] is True
+        assert client.call_service_calls == []
+
+    @pytest.mark.asyncio
+    async def test_establish_failure_falls_to_exactly_one_post(self) -> None:
+        """A pre-send establishment failure (get_websocket_client raises) provably
+        never dispatched → EXACTLY ONE legacy REST POST (a safe first fire)."""
+        caps_ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL)
+        client = RoutingClient()
+        call_service = _build_call_service(client)
+
+        with patch_ws_establish_failure(
+            caps_ws,
+            tools_service,
+            Exception("Failed to connect to Home Assistant WebSocket"),
+        ):
+            resp = await call_service(
+                domain="light", service="turn_on", entity_id="light.a"
+            )
+
+        assert resp["success"] is True
+        assert len(client.call_service_calls) == 1

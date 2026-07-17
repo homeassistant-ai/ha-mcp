@@ -17,7 +17,6 @@ from fastmcp.exceptions import ToolError
 from ..client.rest_client import (
     HomeAssistantClient,
     HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
 )
 from ..client.websocket_client import get_websocket_client
 from ..client.websocket_listener import start_websocket_listener
@@ -771,7 +770,9 @@ class DeviceControlTools:
         by ``_build_bulk_response`` exactly as the legacy dispatch result is; an op
         whose ``async_call`` raised under the batch (``error`` set / not dispatched)
         maps to a structured ``SERVICE_CALL_FAILED`` error and is NOT re-dispatched
-        (D9).
+        (D9). When ``validate_first`` (the default) is set and the target's captured
+        pre-state is null (the entity does not exist), the op maps to a structured
+        ``ENTITY_NOT_FOUND`` failure — parity with the legacy per-op validation.
         """
         service_call = {
             "domain": row["domain"],
@@ -787,6 +788,33 @@ class DeviceControlTools:
             err["service_call"] = service_call
             return err
         transitions = component_op.get("transitions") or []
+        # I3: honor validate_first (default). The component captured each target's
+        # pre-state; a null old_state on a confirmable op means the entity does not
+        # exist (HA no-ops the dispatch, then the wait stalls to partial). The legacy
+        # path returns a structured ENTITY_NOT_FOUND per-op failure — match it from
+        # the pre-state already in the transition (no extra hops), rather than
+        # counting a phantom entity as a successful command.
+        if op.get("validate_first", True) and row.get("entity_ids"):
+            old_state = next(
+                (
+                    t.get("old_state")
+                    for t in transitions
+                    if isinstance(t, dict) and t.get("entity_id") == entity_id
+                ),
+                None,
+            )
+            if old_state is None:
+                err = create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Entity not found: {entity_id}",
+                    suggestions=[
+                        "Use ha_search to find the correct entity",
+                        "Check the entity is not disabled in Home Assistant",
+                    ],
+                    context={"entity_id": entity_id, "action": action},
+                )
+                err["service_call"] = service_call
+                return err
         final_state = next(
             (
                 t["new_state"].get("state")
@@ -814,6 +842,25 @@ class DeviceControlTools:
             ),
         }
 
+    def _resolve_component_rows(
+        self,
+        valid_operations: list[tuple[int, dict[str, Any], str, str]],
+    ) -> list[dict[str, Any]] | None:
+        """Resolve every valid op into a component row (server-side, D6).
+
+        Returns ``None`` — abort the WHOLE batch to legacy BEFORE any dispatch — when
+        any op cannot be resolved (the legacy path then surfaces the proper per-op
+        error, and no partial batch lands) or when nothing resolvable remains (an
+        empty batch; the component's schema rejects it anyway).
+        """
+        rows: list[dict[str, Any]] = []
+        for _idx, op, entity_id, action in valid_operations:
+            row = self._resolve_component_op(entity_id, action, op.get("parameters"))
+            if row is None:
+                return None
+            rows.append(row)
+        return rows or None
+
     async def _bulk_via_component(
         self,
         operations: list[dict[str, Any]],
@@ -829,36 +876,49 @@ class DeviceControlTools:
         advertises ``bulk_call_service`` and the frame lands, else ``None`` so the
         caller runs the unchanged legacy operation-registry path.
 
-        **D9 (at-most-once, per batch).** A ``None`` return means nothing dispatched:
-        a capability miss, an op that could not be resolved server-side, an empty
-        batch, an ``unknown_command`` (caps invalidated), or a command error/timeout /
-        connection-establishment failure — the component either was never reached or
-        fail-closed the WHOLE frame BEFORE any dispatch (its D1 / ServiceNotFound
-        guards all run first, so a raised command error is provably pre-dispatch). A
-        returned result means the batch dispatched: each op's own ``dispatched`` flag
-        is authoritative and NOTHING is re-dispatched, even the ops that failed.
+        **D9 (at-most-once, per batch).** The boundary is PRE-SEND vs POST-SEND:
+
+        * ``None`` (nothing dispatched → safe legacy first fire): a capability miss,
+          an op that could not be resolved server-side, an empty batch, an
+          ``unknown_command`` (caps invalidated), a connection-ESTABLISHMENT failure
+          (the frame never reached the component), or a command-ERROR response — the
+          batch's all-guards-first pass (D1 / ServiceNotFound) raises before ANY
+          ``async_call``, so a command error is provably pre-dispatch.
+        * A returned result means the batch dispatched: each op's own ``dispatched``
+          flag is authoritative and NOTHING is re-dispatched, even the ops that failed.
+        * A response-wait TIMEOUT or any post-send transport drop is AMBIGUOUS for the
+          WHOLE batch frame (some/all ops may have landed; ``async_call`` under the
+          batch is unbounded). It returns a partial batch response — every op reported
+          dispatched-but-unconfirmed — and is NEVER re-dispatched via legacy (a
+          re-dispatch would double-fire every landed op, inverting ``toggle`` ops).
         """
         caps = await get_component_caps(self.client)
         if not component_supports(caps, "bulk_call_service"):
             return None
 
-        rows: list[dict[str, Any]] = []
-        for _idx, op, entity_id, action in valid_operations:
-            row = self._resolve_component_op(entity_id, action, op.get("parameters"))
-            if row is None:
-                # An op the legacy path would per-op error on → abort to legacy
-                # BEFORE any dispatch, so no partial batch lands.
-                return None
-            rows.append(row)
-        if not rows:
-            # Nothing resolvable to send (all ops skipped/invalid) → legacy handles
-            # the skipped set; the component's schema rejects an empty batch anyway.
+        rows = self._resolve_component_rows(valid_operations)
+        if rows is None:
             return None
 
+        # PRE-SEND: an establishment failure means the batch frame provably never
+        # reached the component → legacy is a safe first fire. Split from the send
+        # below so a POST-SEND failure is never misclassified as pre-send.
         try:
             ws = await get_websocket_client(
                 url=self.client.base_url, token=self.client.token
             )
+        except Exception as exc:
+            logger.warning(
+                "%s establishment failed; falling back to legacy: %r",
+                WS_BULK_CALL_SERVICE,
+                exc,
+            )
+            return None
+        # The batch frame is now sent. A command-ERROR response is pre-dispatch (the
+        # all-guards-first D1 / ServiceNotFound pass raises before any async_call), so
+        # legacy is safe. A response-wait TIMEOUT / post-send drop is AMBIGUOUS for the
+        # WHOLE batch → report every op dispatched-but-unconfirmed, NEVER re-dispatch.
+        try:
             raw = await ws.send_command(
                 WS_BULK_CALL_SERVICE,
                 operations=rows,
@@ -866,25 +926,30 @@ class DeviceControlTools:
                 wait=True,
                 timeout=10.0,
             )
-        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-            # A raised command error is pre-dispatch by the component's all-guards-
-            # first design (D1 / ServiceNotFound abort the whole frame before any
-            # async_call), so legacy is a safe first fire. unknown_command →
-            # invalidate the cached caps so the next call re-probes.
+        except HomeAssistantCommandError as exc:
+            # unknown_command → invalidate the cached caps so the next call re-probes;
+            # any other command error → legacy (provably pre-dispatch per D9 above).
             if is_unknown_command(exc):
                 invalidate_caps(self.client)
             else:
                 logger.warning(
-                    "%s failed; fell back to legacy: %r", WS_BULK_CALL_SERVICE, exc
+                    "%s command error; falling back to legacy: %r",
+                    WS_BULK_CALL_SERVICE,
+                    exc,
                 )
             return None
         except Exception as exc:
+            # HomeAssistantCommandTimeout (the response-wait expired — the batch frame
+            # WAS sent) or any post-send transport drop: the batch is ambiguous-
+            # dispatched. Report partial, NEVER re-dispatch (D9 at-most-once).
             logger.warning(
-                "%s connection error; falling back to legacy: %r",
+                "%s post-send timeout/drop; reporting batch partial (not retried): %r",
                 WS_BULK_CALL_SERVICE,
                 exc,
             )
-            return None
+            return self._build_ambiguous_bulk_response(
+                operations, valid_operations, rows, skipped_operations, parallel
+            )
 
         result = raw.get("result")
         if not isinstance(result, dict):
@@ -908,6 +973,60 @@ class DeviceControlTools:
         return self._build_bulk_response(
             operations, results, [], skipped_operations, parallel
         )
+
+    def _build_ambiguous_bulk_response(
+        self,
+        operations: list[dict[str, Any]],
+        valid_operations: list[tuple[int, dict[str, Any], str, str]],
+        rows: list[dict[str, Any]],
+        skipped_operations: list[dict[str, Any]],
+        parallel: bool,
+    ) -> dict[str, Any]:
+        """Partial-success bulk response for a post-send batch-frame timeout/drop.
+
+        The batch frame WAS sent, so some/all ops may have dispatched; the batch
+        response never arrived. Per D9 at-most-once every valid op is reported
+        dispatched-but-unconfirmed (``partial``) and the batch is NEVER re-dispatched
+        via legacy. ``rows`` is aligned 1:1 with ``valid_operations`` (both built in
+        order; an unresolvable op returned to legacy earlier, so no ``None`` rows
+        reach here).
+        """
+        results: list[dict[str, Any]] = [
+            {
+                "entity_id": entity_id,
+                "action": action,
+                "parameters": op.get("parameters") or {},
+                "command_sent": True,
+                "status": "dispatched_unconfirmed",
+                "confirmed": False,
+                "partial": True,
+                "final_state": None,
+                "transitions": [],
+                "service_call": {
+                    "domain": row["domain"],
+                    "service": row["service"],
+                    "data": row["service_data"],
+                },
+                "verification_method": "component_state_change",
+                "message": (
+                    f"{entity_id} {action} dispatched but the batch confirmation did "
+                    "not arrive within the timeout; not retried"
+                ),
+            }
+            for (_idx, op, entity_id, action), row in zip(
+                valid_operations, rows, strict=True
+            )
+        ]
+        response = self._build_bulk_response(
+            operations, results, [], skipped_operations, parallel
+        )
+        response["partial"] = True
+        response.setdefault("warnings", []).append(
+            "The bulk operation was dispatched but Home Assistant did not confirm "
+            "within the timeout. Operations were NOT retried (at-most-once). Use "
+            "ha_get_state to verify the affected entities."
+        )
+        return response
 
     @staticmethod
     def _tool_error_to_dict(e: ToolError) -> dict[str, Any]:

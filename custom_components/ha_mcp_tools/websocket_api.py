@@ -5101,10 +5101,13 @@ async def _call_service_prep(
     6. Bounded wait for the target transitions (D4); expiry is ``partial``.
     7. Diff pre→post into the real transition(s).
 
-    Pre-dispatch problems (D1, ``ServiceNotFound``, and any ``async_call`` /
-    ``return_response`` validation error) PROPAGATE — the WS handler turns a raised
-    exception into a command error the server maps (D7). A confirmation timeout is
-    caught and reported as ``partial`` (never re-raised): the call already landed.
+    Raised exceptions PROPAGATE — the WS handler turns them into a command error the
+    server maps (D7). Two distinct classes propagate: the D1 domain block and
+    ``ServiceNotFound`` are PRE-dispatch (they raise before ``async_call``, so nothing
+    landed); an ``async_call`` / ``return_response`` validation error is MID-dispatch
+    (the handler may mutate state and THEN raise — the documented D9 at-most-once
+    residual, NOT pre-dispatch). A confirmation timeout is caught and reported as
+    ``partial`` (never re-raised): the call already landed.
     """
     import asyncio
 
@@ -5214,10 +5217,6 @@ def _register_transition_waiter(
     evt = asyncio.Event()
     captured: dict[str, Any] = {}
 
-    # A PLAIN nested function — NOT ``@callback`` decorated: the unit-test harness
-    # MagicMock-stubs homeassistant.core, so a ``callback`` decorator would be a
-    # MagicMock and break the listener. A plain callable is a valid
-    # ``hass.bus.async_listen`` handler.
     def _on_change(event: Any) -> None:
         data = getattr(event, "data", None) or {}
         eid = data.get("entity_id")
@@ -5225,6 +5224,20 @@ def _register_transition_waiter(
             captured[eid] = data.get("new_state")
             if target_set <= set(captured):
                 evt.set()
+
+    # Mark the listener a HA callback so ``EventBus.async_listen`` classifies its
+    # ``HassJob`` as ``HassJobType.Callback`` and runs it INLINE on the event loop
+    # (``is_callback`` reads exactly ``getattr(func, "_hass_callback", False)``).
+    # Without this a plain function is ``HassJobType.Executor``: every instance-wide
+    # ``state_changed`` gets thrown at the thread pool, and ``evt.set()`` then runs
+    # cross-thread on a non-thread-safe ``asyncio.Event`` → delayed/spurious
+    # ``partial`` confirmations and an ``InvalidStateError`` race with the
+    # timeout-cancel. We set the attribute directly rather than using ``@callback``:
+    # the unit-test harness MagicMock-stubs ``homeassistant.core``, so the decorator
+    # would be a MagicMock and break the listener, whereas the plain attribute set is
+    # exactly what ``callback`` does (``func.__dict__["_hass_callback"] = True``) and
+    # is inert under the stub.
+    _on_change._hass_callback = True  # type: ignore[attr-defined]
 
     unsub = hass.bus.async_listen(EVENT_STATE_CHANGED, _on_change)
     return evt, captured, unsub
@@ -5451,16 +5464,25 @@ def _bulk_register_all(hass: HomeAssistant, ops: list[dict[str, Any]]) -> list[A
     arrive before its listener exists. Each confirmable op is handed its own ``evt``
     / ``captured`` (mutating the op record); the returned ``unsub`` list is torn down
     in the prep's ``finally``. Non-confirmable ops register nothing.
+
+    If ``async_listen`` raises mid-sweep (near-impossible in practice), every listener
+    already registered in this pass is unsubbed before re-raising — the prep's
+    ``try/finally`` has not been entered yet, so those would otherwise leak on the bus.
     """
     unsubs: list[Any] = []
-    for op in ops:
-        if op["should_confirm"]:
-            evt, captured, unsub = _register_transition_waiter(
-                hass, set(op["entity_ids"])
-            )
-            op["evt"] = evt
-            op["captured"] = captured
-            unsubs.append(unsub)
+    try:
+        for op in ops:
+            if op["should_confirm"]:
+                evt, captured, unsub = _register_transition_waiter(
+                    hass, set(op["entity_ids"])
+                )
+                op["evt"] = evt
+                op["captured"] = captured
+                unsubs.append(unsub)
+    except Exception:
+        for unsub in unsubs:
+            unsub()
+        raise
     return unsubs
 
 
