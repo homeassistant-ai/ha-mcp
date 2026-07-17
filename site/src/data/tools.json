@@ -687,11 +687,11 @@
           "default": false
         },
         "theme": {
-          "type": "Annotated[str | None, Field(description='Installed Home Assistant frontend theme name. Puppet persists this selection on the frontend profile used by its token.')]",
+          "type": "Annotated[str | None, Field(description=\"Installed Home Assistant frontend theme name, applied to this render. The engine user's saved theme preference is restored after the capture (best effort).\")]",
           "default": null
         },
         "dark_mode": {
-          "type": "Annotated[bool, Field(description='Render the requested theme in dark mode. Puppet may persist the theme/dark preference on the profile used by its token.')]",
+          "type": "Annotated[bool, Field(description=\"Render the requested theme in dark mode, applied to this render. The engine user's saved theme preference is restored after the capture (best effort).\")]",
           "default": false
         },
         "language": {
