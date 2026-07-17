@@ -336,14 +336,23 @@ class EmbeddedServerManager:
         # The process-global registry survives manager turnover.
         with _IMPORTING_WORKERS_LOCK:
             _IMPORTING_WORKERS.difference_update(
-                [t for t in list(_IMPORTING_WORKERS) if not t.is_alive()]
+                [t for t in _IMPORTING_WORKERS if not t.is_alive()]
             )
             importing_busy = bool(_IMPORTING_WORKERS)
-        if orphan is not None or importing_busy:
+        if orphan is not None:
             _LOGGER.warning(
                 "Skipping the ha_mcp module purge: a previous worker thread "
                 "is still shutting down. The new worker may serve the "
                 "previously imported code until Home Assistant restarts."
+            )
+        elif importing_busy:
+            # Distinct from the orphan message: this worker is still STARTING
+            # (mid cold-import, the #1904 incident shape), not shutting down —
+            # naming the actual state matters when reading logs during one.
+            _LOGGER.warning(
+                "Skipping the ha_mcp module purge: a previous bring-up's "
+                "worker thread is still importing. The new worker may serve "
+                "the previously imported code until Home Assistant restarts."
             )
         elif (
             not self._pip_spec_override
@@ -1058,10 +1067,13 @@ class EmbeddedServerManager:
         else:
             ensure_host_origin_guard_default_off()
 
-        # All ha_mcp/uvicorn imports are done — leave the importing-workers
-        # registry so a later bring-up's purge is no longer a hazard to this
-        # thread (removal from sys.modules cannot unload already-bound
-        # modules; only in-flight imports are corruptible).
+        # The cold import — the multi-minute window that crashed in #1904 —
+        # is complete: every explicit ha_mcp import in _serve precedes this
+        # line. Leave the registry so a long-running healthy server never
+        # blocks later bring-ups' purges (removal from sys.modules cannot
+        # unload already-bound modules; only in-flight imports are
+        # corruptible, and any later lazy import is outside the window this
+        # registry protects).
         with _IMPORTING_WORKERS_LOCK:
             _IMPORTING_WORKERS.discard(threading.current_thread())
 
@@ -1201,6 +1213,11 @@ class EmbeddedServerManager:
 # goes through the lock: CPython's GIL would make the individual set ops
 # atomic, but the purge gate's prune-then-check is a composite read and the
 # lock keeps its correctness independent of GIL scheduling arguments.
+# Deliberate tradeoff: a worker wedged forever inside its import stays
+# registered and blocks every later purge until an HA core restart — evicting
+# a live importer on a timer would reintroduce the very corruption this
+# registry prevents, and the skip warning plus the post-start staleness check
+# surface the condition.
 _IMPORTING_WORKERS_LOCK = threading.Lock()
 _IMPORTING_WORKERS: set[threading.Thread] = set()
 
@@ -1219,10 +1236,12 @@ def _purge_ha_mcp_modules() -> None:
     Python resolves imports from the process-wide ``sys.modules`` cache — so
     after a pip install the next worker would silently reuse the OLD code
     unless the cache is purged first. Safe here because ``ha_mcp`` is pure
-    Python and is only ever imported inside the (currently stopped) worker
-    thread; third-party dependencies are deliberately NOT purged (they are
-    shared with the rest of Home Assistant), so a dependency-version change
-    still needs an HA core restart.
+    Python and is only ever imported inside worker threads, and the caller's
+    gate guarantees no registered worker is mid-import when this runs (a
+    worker past its imports keeps its already-bound modules regardless);
+    third-party dependencies are deliberately NOT purged (they are shared
+    with the rest of Home Assistant), so a dependency-version change still
+    needs an HA core restart.
     """
     global _CACHED_IMPORT_VERSION
     _CACHED_IMPORT_VERSION = None
