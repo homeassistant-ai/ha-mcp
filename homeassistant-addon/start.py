@@ -47,9 +47,16 @@ def widen_fastmcp_log_console(width: int = 200) -> None:
 
     from rich.logging import RichHandler
 
+    widened = 0
     for handler in logging.getLogger("fastmcp").handlers:
         if isinstance(handler, RichHandler):
             handler.console.width = width
+            widened += 1
+    if not widened:
+        log_warning(
+            "No rich handlers found on the fastmcp logger — "
+            "the MCP URL may wrap across log lines"
+        )
 
 
 def generate_secret_path() -> str:
@@ -762,7 +769,11 @@ def main() -> int:
 
     # Importing ha_mcp pulled in fastmcp, which attached its rich log
     # handlers — widen them before any URL-bearing line is logged (#1918).
-    widen_fastmcp_log_console()
+    # Wrapped because log cosmetics must never block addon startup.
+    try:
+        widen_fastmcp_log_console()
+    except Exception as e:
+        log_warning(f"Could not widen fastmcp log console: {e!r}; continuing")
 
     # Log the ha-mcp version + a self-update banner when a newer release is
     # available. In the add-on that comes from the Supervisor add-on store, not
@@ -830,6 +841,9 @@ def main() -> int:
         log_info("Starting MCP server...")
         if bind_host != "0.0.0.0":
             log_info(f"Bind host overridden via MCP_HOST: {bind_host}")
+        # Do not pass log_level here: fastmcp's temporary_log_level would
+        # rebuild its rich log handlers at the default 80-column width,
+        # undoing widen_fastmcp_log_console (#1918).
         mcp.run(
             transport="http",
             host=bind_host,

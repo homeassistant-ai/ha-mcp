@@ -455,6 +455,11 @@ class TestWidenFastmcpLogConsole:
         # Explicit width=80 mirrors rich's non-TTY default in the container.
         handler = RichHandler(console=Console(file=stream, width=80))
         logger = logging.getLogger("fastmcp")
+        # Detach any real fastmcp handlers so the widen only touches the
+        # test's handler (and the fake URL line stays out of stderr).
+        saved = logger.handlers[:]
+        for pre_existing in saved:
+            logger.removeHandler(pre_existing)
         logger.addHandler(handler)
         old_level = logger.level
         logger.setLevel(logging.INFO)
@@ -468,18 +473,61 @@ class TestWidenFastmcpLogConsole:
             assert url in stream.getvalue()
         finally:
             logger.removeHandler(handler)
+            for pre_existing in saved:
+                logger.addHandler(pre_existing)
             logger.setLevel(old_level)
 
     def test_non_rich_handlers_untouched(self):
+        import io
         import logging
+
+        from rich.console import Console
+        from rich.logging import RichHandler
 
         logger = logging.getLogger("fastmcp")
         plain = logging.StreamHandler()
+        rich_handler = RichHandler(console=Console(file=io.StringIO(), width=80))
+        saved = logger.handlers[:]
+        for pre_existing in saved:
+            logger.removeHandler(pre_existing)
         logger.addHandler(plain)
+        logger.addHandler(rich_handler)
+        try:
+            # Must not raise on the console-less StreamHandler, and must
+            # still widen the rich handler sitting next to it.
+            self.addon.widen_fastmcp_log_console()
+            assert rich_handler.console.width == 200
+            assert not hasattr(plain, "console")
+        finally:
+            logger.removeHandler(plain)
+            logger.removeHandler(rich_handler)
+            for pre_existing in saved:
+                logger.addHandler(pre_existing)
+
+    def test_warns_when_no_rich_handlers(self, capfd):
+        """Going inert must leave a signal — support can't otherwise tell
+        whether the widening took effect (same rationale as the DEBUG
+        canary in main())."""
+        import logging
+
+        logger = logging.getLogger("fastmcp")
+        saved = logger.handlers[:]
+        for handler in saved:
+            logger.removeHandler(handler)
         try:
             self.addon.widen_fastmcp_log_console()
         finally:
-            logger.removeHandler(plain)
+            for handler in saved:
+                logger.addHandler(handler)
+        assert "No rich handlers" in capfd.readouterr().err
+
+    def test_main_calls_widen_at_startup(self):
+        """The fix only works if main() actually invokes it after the
+        ha_mcp import attaches fastmcp's handlers — guard the call site."""
+        content = (
+            Path(__file__).parents[2] / "homeassistant-addon" / "start.py"
+        ).read_text(encoding="utf-8")
+        assert "widen_fastmcp_log_console()" in content
 
 
 class TestCleanupStaleMigrationMarker:
