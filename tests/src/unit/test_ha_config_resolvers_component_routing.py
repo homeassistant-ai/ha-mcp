@@ -397,9 +397,7 @@ class TestSceneResolverRouting:
         pooled socket for the read. The helper catches it broadly → ``None`` so the
         resolver's legacy scan runs.
         """
-        caps_ws = make_ws(
-            "ha_mcp_tools/entity_lookup", info_result=_CAPS_ENTITY_LOOKUP
-        )
+        caps_ws = make_ws("ha_mcp_tools/entity_lookup", info_result=_CAPS_ENTITY_LOOKUP)
         client = RoutingClient(
             registry_list=[
                 {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
@@ -565,9 +563,7 @@ class TestAutomationResolverRouting:
     async def test_ws_establish_failure_falls_back_to_legacy(self) -> None:
         """A plain establish ``Exception`` from ``get_websocket_client()`` → legacy
         ``get_states()`` scan."""
-        caps_ws = make_ws(
-            "ha_mcp_tools/entity_lookup", info_result=_CAPS_ENTITY_LOOKUP
-        )
+        caps_ws = make_ws("ha_mcp_tools/entity_lookup", info_result=_CAPS_ENTITY_LOOKUP)
         client = RoutingClient(states=self._states())
         with patch_ws_establish_failure(
             caps_ws,

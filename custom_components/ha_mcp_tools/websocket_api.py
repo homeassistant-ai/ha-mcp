@@ -776,10 +776,11 @@ def _substrate_unavailable(name: str) -> Exception:
     """
     from homeassistant.exceptions import HomeAssistantError
 
-    return HomeAssistantError(
+    err: Exception = HomeAssistantError(
         f"ha_mcp_tools: the {name} is unavailable (core drift); the server should "
         "fall back to its legacy read"
     )
+    return err
 
 
 def _do_search(
