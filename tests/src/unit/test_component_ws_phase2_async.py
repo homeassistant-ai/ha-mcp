@@ -685,6 +685,76 @@ class TestVisibilityHiddenSet:
         )
         assert hidden == set()
 
+    def test_allow_labels_restrict_mode(self):
+        # allow_labels restrict mode: kept only when the entity carries an
+        # allowed label directly, OR inherits it from its device; an entity
+        # with an unrelated label is hidden like anything else unmatched.
+        view = make_view(
+            entity={
+                "light.keep": FakeRegEntry("light.keep", labels=["important"]),
+                "light.viadev": FakeRegEntry("light.viadev", device_id="d1"),
+                "light.drop": FakeRegEntry("light.drop", labels=["other"]),
+            },
+            devices=[FakeDevice("d1", labels={"important"})],
+        )
+        states = [
+            FakeState("light.keep"),
+            FakeState("light.viadev"),
+            FakeState("light.drop"),
+        ]
+        hidden = wsapi._visibility_hidden_set(
+            view, states, {"allow_labels": ["important"]}, _always_expose
+        )
+        assert hidden == {"light.drop"}
+
+    def test_deny_wins_over_allow(self):
+        # An entity matching an active allow dimension is still hidden if it
+        # is also in deny_entity_ids: deny seeds ``hidden`` up front and the
+        # allow/assist loop skips anything already hidden, so allow can never
+        # rescue a denied entity (mirrors resolver.hidden_entity_ids).
+        view = make_view(
+            entity={
+                "light.both": FakeRegEntry("light.both", area_id="office"),
+                "light.keep": FakeRegEntry("light.keep", area_id="office"),
+            }
+        )
+        states = [FakeState("light.both"), FakeState("light.keep")]
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            states,
+            {"deny_entity_ids": ["light.both"], "allow_areas": ["office"]},
+            _always_expose,
+        )
+        assert hidden == {"light.both"}
+
+    def test_allow_device_inherited_area_and_label(self):
+        # allow_areas/allow_labels restrict mode must also resolve device
+        # inheritance: an entity with no direct area_id/labels is kept when
+        # its device's area or label matches, and dropped when neither does.
+        view = make_view(
+            entity={
+                "light.viadev_area": FakeRegEntry("light.viadev_area", device_id="d1"),
+                "light.viadev_label": FakeRegEntry("light.viadev_label", device_id="d2"),
+                "light.drop": FakeRegEntry("light.drop"),
+            },
+            devices=[
+                FakeDevice("d1", area_id="office"),
+                FakeDevice("d2", labels={"important"}),
+            ],
+        )
+        states = [
+            FakeState("light.viadev_area"),
+            FakeState("light.viadev_label"),
+            FakeState("light.drop"),
+        ]
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            states,
+            {"allow_areas": ["office"], "allow_labels": ["important"]},
+            _always_expose,
+        )
+        assert hidden == {"light.drop"}
+
     def test_assist_dimension_via_injected_fake(self):
         view = make_view(
             entity={
