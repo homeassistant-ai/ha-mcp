@@ -39,7 +39,9 @@ secrecy and are designed for loopback HTTP or LAN HTTP with a high-entropy
 `MCP_SECRET_PATH`. Any peer that can reach the configured path is treated as
 trusted — securing the local network is outside ha-mcp's scope.
 
-For internet-facing deployments use the OAuth entrypoint (`ha-mcp-oauth`)
+For internet-facing deployments use the OAuth entrypoint (`ha-mcp-oauth`) or,
+for gating access behind an external identity provider instead of per-user HA
+tokens, the OIDC entrypoint (`ha-mcp-oidc`; see [docs/oidc.md](docs/oidc.md)),
 behind a TLS-terminating reverse proxy (see
 [OAuth Mode](#oauth-mode--beta-warning) below). Deployment guidance:
 [AGENTS.md → Docker](AGENTS.md#docker).
@@ -53,21 +55,23 @@ other machines on the LAN. To restrict to the local machine, set
 fastmcp ships a Host/Origin guard — a DNS-rebinding defense that only accepts
 loopback `Host` headers and same-origin/loopback `Origin`s. ha-mcp defaults it
 off (`FASTMCP_HTTP_HOST_ORIGIN_PROTECTION=false`) across its Streamable-HTTP
-entry points (`ha-mcp-web`, `ha-mcp-oauth`, the add-on, and the in-process
-component server). The supported
+entry points (`ha-mcp-web`, `ha-mcp-oauth`, `ha-mcp-oidc`, the add-on, and the
+in-process component server). The supported
 deployment model — reverse proxies, tunnels (Cloudflare, Nabu Casa), and direct
 LAN access — presents `Host` headers ha-mcp cannot enumerate, and the guard
 would otherwise reject them with `421`/`403` (including the plain browser landing
 page, a no-`Origin` navigation that still trips the `Host` check).
 
 This does not change the boundary defined above. URL-path secrecy (standard
-mode) and the OAuth / Home Assistant session gates (OAuth and in-process modes)
-remain the authentication boundary, and the local network is already the trusted
-zone — so the DNS-rebinding class this guard addresses is out of scope
-regardless. A DNS-rebinding attacker's browser still cannot reach the secret MCP
-path — only the public OAuth discovery documents at fixed well-known paths (the
-landing page shares the secret path) — and the loopback settings sidecar enforces
-its own Host/Origin allow-list independent of this setting.
+mode), the OAuth / Home Assistant session gates (OAuth and in-process modes),
+and the external identity provider gate (OIDC mode) remain the authentication
+boundary, and the local network is already the trusted zone — so the
+DNS-rebinding class this guard addresses is out of scope regardless. A
+DNS-rebinding attacker's browser still cannot reach the secret MCP path — only
+the public OAuth/OIDC discovery documents at fixed well-known paths (in
+standard/OAuth HTTP modes, the landing page shares the secret path) — and the
+loopback settings sidecar enforces its own Host/Origin allow-list independent
+of this setting.
 
 Operators who front ha-mcp differently can re-enable the guard by setting
 `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION=true` and pinning
@@ -212,7 +216,7 @@ the proxy returns 503 whenever the server is not running.
 
 **In scope** — please report these:
 
-- Authentication bypass in standard (LLAT) or OAuth mode
+- Authentication bypass in standard (LLAT), OAuth, or OIDC mode
 - OAuth mode: XSS, SSRF, open redirect, or credential exfiltration via the
   consent form or token endpoint (i.e. an unauthenticated party obtaining a
   token or extracting credentials without completing the consent flow)
@@ -267,6 +271,17 @@ and carries a larger attack surface than the standard LLAT setup.
 
 If you choose to run OAuth mode, restrict the consent endpoint to trusted
 networks and place it behind a TLS-terminating reverse proxy.
+
+### OIDC Mode
+
+The OIDC entrypoint (`ha-mcp-oidc`) is also **new**. It proxies
+authentication to your external identity provider via FastMCP's
+`OAuthProxy` — unlike OAuth mode's self-contained authorization server —
+and, like OAuth mode, exposes dynamic client registration (DCR) to any
+client that can reach the discovery endpoints. The same TLS/reverse-proxy
+recommendations apply, and
+`OIDC_ALLOWED_CLIENT_REDIRECT_URIS` should be set for internet-facing
+deployments (see [docs/oidc.md](docs/oidc.md)).
 
 ## Reporting a Vulnerability
 
