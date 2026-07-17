@@ -277,7 +277,7 @@ def _raise_no_local_backup_agent_error(agent_ids: list[Any] | None) -> NoReturn:
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             "No local backup agent found",
-            context={"available_agents": [str(a) for a in (agent_ids or [])]},
+            context={"available_agents": [a for a in (agent_ids or []) if a]},
             suggestions=[
                 "Backup creation requires a local agent (hassio.local on "
                 "Supervised, backup.local on Core); none is registered",
