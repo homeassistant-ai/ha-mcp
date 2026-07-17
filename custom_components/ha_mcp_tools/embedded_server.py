@@ -1384,7 +1384,11 @@ def _prune_and_check_importing_workers() -> bool:
 # previous bring-up before setting up, and every dispatch site sits behind
 # _async_wait_for_pending_install. A second concurrent dispatcher would
 # overwrite the slot and silently lose the older live job — keep any new
-# package-mutating call site behind the wait gate.
+# package-mutating call site behind the wait gate. The slot tracking wraps
+# the DIRECT-pip sites (force install, uninstalls); the fast path goes
+# through HA's requirements manager, which is behind the gate but untracked —
+# it only dispatches pip when the package is missing outright, which cannot
+# co-occur with a live orphaned job worth waiting on.
 _PENDING_INSTALL_LOCK = threading.Lock()
 _PENDING_INSTALL_DONE: threading.Event | None = None
 

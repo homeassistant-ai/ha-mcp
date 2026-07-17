@@ -266,9 +266,14 @@ jobs:
           # itself a visible signal; swallowing the failure would defeat
           # the alert's entire purpose.
           if [ "${{ needs.gate.outputs.failopen }}" = "true" ]; then
+            # --body-file (not --body): keeps $VER out of an unquoted
+            # argument interpolation entirely (review note).
+            cat > /tmp/oob_alert.md <<EOF
+          The mirror sync's fail-open gate cut stable tag v${VER} on ha-mcp-integration without a confirmed release behind it (triggering run: ${{ github.event.workflow_run.html_url }}; this sync run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Treat v${VER} as published: bump the component manifest version in the next PR that touches the component instead of adding changes onto v${VER}.
+          EOF
             gh issue create --repo "${{ github.repository }}" \
               --title "Out-of-cycle stable mirror tag v${VER} was cut - bump the component version" \
-              --body "The mirror sync's fail-open gate cut stable tag v${VER} on ha-mcp-integration without a confirmed release behind it (triggering run: ${{ github.event.workflow_run.html_url }}; this sync run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Treat v${VER} as published: bump the component manifest version in the next PR that touches the component instead of adding changes onto v${VER}." \
+              --body-file /tmp/oob_alert.md \
               || { echo "::error::stable tag v${VER} was cut on a fail-open run but the alert issue could not be filed - bump the component version manually."; exit 1; }
           fi
 
