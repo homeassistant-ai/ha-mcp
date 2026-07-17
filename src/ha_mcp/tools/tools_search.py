@@ -28,8 +28,7 @@ from ..utils.fuzzy_search import apply_hidden_penalty
 from ..visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
-    load_visibility_wire,
-    visibility_filter_active,
+    visibility_state_and_wire,
 )
 from .component_api import (
     component_supports,
@@ -1915,18 +1914,17 @@ class SearchTools:
         - filter active without the capability, or the config could not be loaded
           → ``(False, None)``: the legacy path applies the filter server-side
           before the counts/pagination (fail-closed to legacy on a bad config,
-          matching ``visibility_filter_active``).
+          matching ``visibility_state_and_wire``'s fail-closed pairing).
 
-        ``visibility_filter_active`` then ``load_visibility_wire`` both hit the
-        memoized config read, so the capability branch re-stats the file rather
-        than re-parsing it.
+        ``visibility_state_and_wire`` loads the config once for both the active
+        gate and its wire form, instead of the active check and the wire fetch
+        each hitting the (memoized) config read separately.
         """
-        if not await visibility_filter_active():
+        active, visibility = await visibility_state_and_wire()
+        if not active:
             return True, None
-        if component_supports(caps, "search_visibility"):
-            visibility = await load_visibility_wire()
-            if visibility is not None:
-                return True, visibility
+        if component_supports(caps, "search_visibility") and visibility is not None:
+            return True, visibility
         return False, None
 
     async def _ha_search_via_component(

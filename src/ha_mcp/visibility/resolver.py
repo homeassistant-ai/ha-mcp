@@ -556,6 +556,24 @@ async def load_visibility_wire() -> dict[str, Any] | None:
     return config.to_wire()
 
 
+async def visibility_state_and_wire() -> tuple[bool, dict[str, Any] | None]:
+    """Load the visibility config once and report both ``(active, wire)``.
+
+    Single-load counterpart to calling ``visibility_filter_active`` and
+    ``load_visibility_wire`` back to back for the same gate — the config is
+    memoized, so the pair only costs an extra ``os.stat``, but the component
+    ``search_visibility`` gate is the one caller that always needs both, so
+    this collapses it to one load. Fails **closed** to ``(True, None)`` on a
+    load error, mirroring ``visibility_filter_active``'s fail-closed-to-legacy
+    policy: keep the legacy path, and there is no config to serialize.
+    """
+    try:
+        config = await asyncio.to_thread(load_visibility_config, get_data_dir())
+    except Exception:
+        return True, None
+    return config_has_active_hide_dimensions(config), config.to_wire()
+
+
 async def device_registry_needed_for_visibility() -> bool:
     """Load the visibility config off-loop and report whether the device-registry
     fetch is needed by any active area/label dimension.
