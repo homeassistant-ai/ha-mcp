@@ -82,6 +82,14 @@ class _Scenario:
     states_only: tuple[str, ...] = ()
     include_hidden: bool = True
     exposed: frozenset[str] | None = None
+    # Assist exposure availability. False simulates the resolver's expose-list fetch
+    # failing (legacy: the expose WS reads return failure) and the component's
+    # exposed_entities store being unavailable (component: _assist_exposure_available
+    # → False) — the Assist dimension is skipped and the degradation warning fires on
+    # both paths.
+    assist_available: bool = True
+    # Visibility degradation warnings both paths must emit for this config.
+    expected_warnings: frozenset[str] = frozenset()
 
 
 def _cfg(**kw: Any) -> VisibilityConfig:
@@ -235,6 +243,12 @@ async def _run_component(
     monkeypatch.setattr(
         wsapi, "_resolve_registries", lambda hass: _component_view(scenario)
     )
+    # Align the component's Assist availability probe with the scenario (True in
+    # every existing scenario, so the injected fake is consulted as before); a
+    # degraded scenario sets it False to skip the dimension and warn.
+    monkeypatch.setattr(
+        wsapi, "_assist_exposure_available", lambda hass: scenario.assist_available
+    )
     if scenario.exposed is not None:
         exposed = set(scenario.exposed)
         monkeypatch.setattr(
@@ -296,6 +310,7 @@ class _LegacyClient:
             ],
         }
         self._exposed = set(scenario.exposed or ())
+        self._assist_available = scenario.assist_available
 
     async def get_states(self) -> list[dict[str, Any]]:
         self.get_states_calls += 1
@@ -314,6 +329,10 @@ class _LegacyClient:
         if msg_type == "config/entity_registry/get_entries":
             return {"success": True, "result": {}}
         if msg_type == "homeassistant/expose_entity/list":
+            if not self._assist_available:
+                # Simulate the expose-list fetch failing wholesale: the resolver
+                # sees assist_overrides is None → skips the Assist dimension + warns.
+                return {"success": False}
             return {
                 "success": True,
                 "result": {
@@ -323,6 +342,8 @@ class _LegacyClient:
                 },
             }
         if msg_type == "homeassistant/expose_new_entities/get":
+            if not self._assist_available:
+                return {"success": False}
             # expose_new OFF: only the explicit expose-list is exposed, so the
             # server's reconstruction reduces to "eid in exposed" — the set the
             # component's injected fake is aligned to.
@@ -383,3 +404,95 @@ async def test_component_visibility_matches_legacy(
     # server never re-fetched the state machine or re-applied the filter on top.
     assert comp_client.get_states_calls == 0
     assert comp_client.ws_types == Counter()
+
+
+# --- degradation-warning parity ----------------------------------------------
+# Each config degrades one hide dimension (fails open); BOTH paths must surface
+# the SAME operator-facing warning — the component via its ``visibility_warnings``
+# key, the server via ``load_hidden_set``. Modeled on the surviving-set contract
+# above: one shared fixture, driven through the real ha_search on both paths.
+_WARNING_SCENARIOS = [
+    _Scenario(
+        id="unknown_category_warns",
+        ents=(_Ent("light.vismark_a"), _Ent("light.vismark_b")),
+        # exclude_hidden is an ACTIVE dimension (so the routing gate passes the
+        # visibility param to the component) but hides nothing here (no hidden_by
+        # entity); the unknown ``exclude_categories`` value is what triggers the
+        # warning. A config with ONLY an unknown category reads as inactive
+        # (config_has_active_hide_dimensions ignores unknown categories), so the
+        # component search would run without the visibility param at all.
+        config=VisibilityConfig(
+            enabled=True, exclude_categories=["bogus"], exclude_hidden=True
+        ),
+        expected=frozenset({"light.vismark_a", "light.vismark_b"}),
+        expected_warnings=frozenset({wsapi._unknown_categories_warning({"bogus"})}),
+    ),
+    _Scenario(
+        id="empty_registry_allowlist_warns",
+        ents=(),
+        states_only=("light.vismark_g1", "light.vismark_g2"),
+        config=_cfg(allow_areas=["office"]),
+        expected=frozenset({"light.vismark_g1", "light.vismark_g2"}),
+        expected_warnings=frozenset({resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING}),
+    ),
+    _Scenario(
+        id="assist_unavailable_warns",
+        ents=(_Ent("light.vismark_a"), _Ent("light.vismark_b")),
+        config=_cfg(respect_assist_exposure=True),
+        assist_available=False,
+        expected=frozenset({"light.vismark_a", "light.vismark_b"}),
+        expected_warnings=frozenset({resolver._ASSIST_UNAVAILABLE_WARNING}),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "scenario", _WARNING_SCENARIOS, ids=[s.id for s in _WARNING_SCENARIOS]
+)
+@pytest.mark.asyncio
+async def test_component_warnings_match_legacy(
+    scenario: _Scenario, tmp_path: Any, monkeypatch: Any
+) -> None:
+    """A degraded dimension surfaces the SAME warning on the component + legacy paths."""
+    save_visibility_config(tmp_path, scenario.config)
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+    comp_resp, _comp_client = await _run_component(scenario, monkeypatch)
+    legacy_resp = await _run_legacy(scenario)
+
+    comp_warnings = set(comp_resp.get("warnings", []))
+    legacy_warnings = set(legacy_resp.get("warnings", []))
+
+    # The expected degradation warning is present on BOTH paths...
+    assert scenario.expected_warnings <= comp_warnings, (
+        f"component missing warning for {scenario.id}: {comp_warnings}"
+    )
+    assert scenario.expected_warnings <= legacy_warnings
+    # ...and the two paths' warning sets are identical (byte-for-byte parity, the
+    # whole point — no drift between the duplicated component strings and the
+    # resolver's).
+    assert comp_warnings == legacy_warnings, (
+        f"warning drift for {scenario.id}: {comp_warnings} != {legacy_warnings}"
+    )
+    # Where the registry is non-empty the surviving sets must still match (the
+    # empty-registry allowlist scenario only pins warning parity — the point of
+    # its degradation is that filtering was skipped).
+    if scenario.ents:
+        comp_ids = {e["entity_id"] for e in comp_resp["entities"]}
+        legacy_ids = {e["entity_id"] for e in legacy_resp["entities"]}
+        assert comp_ids == legacy_ids == set(scenario.expected)
+
+
+def test_component_warning_constants_match_resolver() -> None:
+    """The component's duplicated warning strings equal the server resolver's.
+
+    The component ships over HACS and cannot import the server package, so the two
+    degradation strings are duplicated in ``websocket_api.py``; this pins them equal
+    to ``visibility.resolver`` so a future edit to one side fails here instead of
+    silently drifting the cross-path warning text.
+    """
+    assert wsapi._ASSIST_UNAVAILABLE_WARNING == resolver._ASSIST_UNAVAILABLE_WARNING
+    assert (
+        wsapi._ALLOWLIST_REGISTRY_EMPTY_WARNING
+        == resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING
+    )

@@ -30,9 +30,19 @@ consumer (the pattern ``component_devices`` established for the ``device_get`` /
 unavailable — use the legacy path"; a component that answers authoritatively
 returns its payload (an entity_lookup with an EMPTY ``matches`` list is
 authoritative — "no registry entry with that unique_id" — kept distinct from the
-``None`` miss). A ``HomeAssistantConnectionError`` (WS down) is not caught here;
-it propagates and the legacy path, sharing the same socket, would fail
-identically.
+``None`` miss).
+
+The two helpers diverge on transport failure because their legacy paths differ:
+
+- ``fetch_entity_lookup_via_component``'s legacy path (the resolvers dumping
+  ``config/entity_registry/list`` / ``get_states()``) rides the SAME pooled WS, so
+  a ``HomeAssistantConnectionError`` is NOT caught here — it propagates and the
+  legacy path would fail identically.
+- ``fetch_reference_data_via_component``'s legacy path is the REST
+  ``get_services()`` / ``get_states()`` pair, so a connection-establishment failure
+  IS caught (broadly — ``get_websocket_client()`` raises a plain ``Exception``, not
+  ``HomeAssistantConnectionError``, when ``WebSocketManager`` can't build the
+  socket) and mapped to ``None`` so the REST fetch still runs.
 
 **GET-path invariant:** the automation/script/scene *config-get* tools must never
 route through the component — their in-process ``raw_config`` freshness lags the
@@ -122,9 +132,19 @@ async def fetch_reference_data_via_component(
     ``include_states=False`` suppresses the entity-id half (services only).
 
     ``None`` on capability miss, downgrade (``unknown_command`` → invalidate the
-    cached caps), command error/timeout (logged), or a shape-drift payload
-    (``services`` / ``entity_ids`` not both lists) — the caller falls back to the
-    legacy REST fetches.
+    cached caps), command error/timeout (logged), a connection-establishment
+    failure (logged — see below), or a shape-drift payload (``services`` /
+    ``entity_ids`` not both lists) — the caller falls back to the legacy REST
+    fetches.
+
+    Unlike the pooled-WS entity_lookup helper, the reference validator's legacy
+    path is the REST ``get_services()`` / ``get_states()`` pair, so a transport
+    failure must route to ``None`` (→ legacy REST) rather than escape. The catch is
+    broad because ``get_websocket_client()`` raises a plain ``Exception`` (not
+    ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot build the
+    socket; letting it escape would make ``validate_config_references`` hit its
+    swallow-all fetch guard and skip ALL reference warnings even when REST is up.
+    Mirrors ``get_component_caps``' own broad-catch precedent.
     """
     caps = await get_component_caps(client)
     if not component_supports(caps, "reference_data"):
@@ -140,6 +160,18 @@ async def fetch_reference_data_via_component(
             invalidate_caps(client)
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_REFERENCE_DATA, exc)
+        return None
+    except Exception as exc:
+        # Legacy is REST (get_services/get_states), NOT the pooled WS, so a
+        # pooled-WS drop (HomeAssistantConnectionError) OR get_websocket_client()
+        # raising a plain Exception when WebSocketManager can't (re)connect must
+        # route to the REST fetch rather than escape into the validator's
+        # swallow-all guard (which would skip every reference warning).
+        logger.warning(
+            "%s connection error; falling back to REST legacy: %r",
+            WS_REFERENCE_DATA,
+            exc,
+        )
         return None
     result = raw.get("result")
     if (

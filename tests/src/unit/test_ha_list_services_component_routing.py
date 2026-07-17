@@ -29,7 +29,11 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import component_api, tools_services
 from ha_mcp.tools.tools_services import register_services_tools
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_SERVICES_LIST = {
     "schema_version": 1,
@@ -274,4 +278,33 @@ async def test_connection_error_falls_back_to_legacy() -> None:
     assert client.legacy_rest_calls == 1
     assert client.legacy_ws_calls == 1
     # A transient connection error keeps the (positive) caps entry cached.
+    assert client in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_falls_back_to_legacy() -> None:
+    """``get_websocket_client()`` raising a plain ``Exception`` falls back to REST.
+
+    After caps are cached, ``WebSocketManager`` can raise a plain ``Exception`` (not
+    ``HomeAssistantConnectionError``) when it cannot (re)establish the pooled socket
+    for the read command. ``_fetch_services_list_via_component`` catches it broadly
+    and returns ``None`` so the REST catalog + WS translations legacy fetch serves
+    the result rather than the tool erroring out.
+    """
+    caps_ws = make_ws("ha_mcp_tools/services_list", info_result=_CAPS_SERVICES_LIST)
+    client = RoutingClient()
+    list_services = _build_list_services(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_services,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
+        resp = await list_services()
+
+    assert resp["success"] is True
+    assert "light.turn_on" in resp["services"]
+    assert client.legacy_rest_calls == 1
+    assert client.legacy_ws_calls == 1
+    # A transient establish failure is not a downgrade — caps stay cached.
     assert client in component_api._CAPS_CACHE

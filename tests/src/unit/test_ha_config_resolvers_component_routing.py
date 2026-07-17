@@ -19,10 +19,14 @@ advertises the capability:
 
 These pin, per consumer, the standard component-routing taxonomy: component
 preferred, capability-miss -> legacy, ``unknown_command`` -> invalidate caps +
-legacy, non-unknown command error -> legacy WITHOUT invalidating,
-``HomeAssistantConnectionError`` -> propagates (resolvers) / is swallowed
-(validator). Plus the GET-path invariant: with ``allow_component`` unset (the
-config-get default) the resolvers never touch the component even with the
+legacy, non-unknown command error -> legacy WITHOUT invalidating. Transport
+failure diverges by legacy path: a ``HomeAssistantConnectionError`` PROPAGATES for
+the resolvers (their legacy list/state scan rides the same pooled WS), but the
+validator's legacy path is REST, so it falls back to the REST
+``get_services()``/``get_states()`` fetch on BOTH a ``HomeAssistantConnectionError``
+off the frame AND a plain ``Exception`` from ``get_websocket_client()`` failing to
+establish the socket. Plus the GET-path invariant: with ``allow_component`` unset
+(the config-get default) the resolvers never touch the component even with the
 capability advertised, and a component HIT takes NO ``asyncio.sleep`` (only an
 empty scene result pays the one lag-absorbing recheck sleep).
 
@@ -49,7 +53,11 @@ from ha_mcp.tools.reference_validator import validate_config_references
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_ENTITY_LOOKUP = {
     "schema_version": 1,
@@ -604,19 +612,62 @@ class TestReferenceDataRouting:
         assert client in component_api._CAPS_CACHE
 
     @pytest.mark.asyncio
-    async def test_connection_error_swallowed(self) -> None:
-        """A WS-down error on the reference_data frame is swallowed (validation
-        never breaks the calling set tool) — the legacy path also swallows all
-        registry-fetch failures, so the net behavior is identical: empty warnings,
-        no exception out of ``validate_config_references``."""
+    async def test_connection_error_falls_back_to_rest(self) -> None:
+        """A WS-down error on the reference_data frame falls back to REST.
+
+        Unlike the pooled-WS resolvers, the validator's legacy path is the REST
+        ``get_services()`` / ``get_states()`` pair, so a
+        ``HomeAssistantConnectionError`` on the component frame must NOT escape into
+        the validator's swallow-all guard (which would skip every reference
+        warning). ``fetch_reference_data_via_component`` catches it and returns
+        ``None``, so the REST fetch runs and the expected two warnings still surface.
+        """
         ws = make_ws(
             "ha_mcp_tools/reference_data",
             info_result=_CAPS_REFERENCE_DATA,
             cmd_exc=HomeAssistantConnectionError("ws down"),
         )
-        client = RoutingClient()
+        client = RoutingClient(
+            services=_SERVICES, states=[{"entity_id": e} for e in _ENTITY_IDS]
+        )
         with patch_ws(ws, component_config_reads):
             result = await validate_config_references(client, _CONFIG)
-        assert result["warnings"] == []
-        # The connection error short-circuited before any legacy REST fetch.
-        assert client.get_services.await_count == 0
+        assert _warning_set(result) == {
+            ("light.bogus", "service"),
+            ("light.ghost", "entity"),
+        }
+        # The REST legacy fetch served both indexes.
+        assert client.get_services.await_count == 1
+        assert client.get_states.await_count == 1
+        # A transient connection error is not a downgrade — caps stay cached.
+        assert client in component_api._CAPS_CACHE
+
+    @pytest.mark.asyncio
+    async def test_ws_establish_failure_falls_back_to_rest(self) -> None:
+        """``get_websocket_client()`` raising a plain ``Exception`` falls back to REST.
+
+        After caps are cached, ``WebSocketManager`` can raise a plain ``Exception``
+        (not ``HomeAssistantConnectionError``) when it cannot (re)establish the
+        pooled socket. ``fetch_reference_data_via_component`` catches it broadly and
+        returns ``None`` so the validator's REST legacy fetch still produces the
+        reference warnings.
+        """
+        caps_ws = make_ws(
+            "ha_mcp_tools/reference_data", info_result=_CAPS_REFERENCE_DATA
+        )
+        client = RoutingClient(
+            services=_SERVICES, states=[{"entity_id": e} for e in _ENTITY_IDS]
+        )
+        with patch_ws_establish_failure(
+            caps_ws,
+            component_config_reads,
+            Exception("Failed to connect to Home Assistant WebSocket"),
+        ):
+            result = await validate_config_references(client, _CONFIG)
+        assert _warning_set(result) == {
+            ("light.bogus", "service"),
+            ("light.ghost", "entity"),
+        }
+        assert client.get_services.await_count == 1
+        assert client.get_states.await_count == 1
+        assert client in component_api._CAPS_CACHE

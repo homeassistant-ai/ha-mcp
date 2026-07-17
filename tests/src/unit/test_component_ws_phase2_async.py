@@ -807,6 +807,120 @@ class TestVisibilityHiddenSet:
         assert calls == []  # respect_assist_exposure not set
         assert hidden == {"x"}
 
+    def test_assist_unavailable_skips_dimension(self):
+        # respect_assist_exposure set, but assist_available=False: the Assist check
+        # must be skipped (nothing hidden by Assist), mirroring the resolver's
+        # "skip the dimension when its data is unavailable" fail-open. should_expose_fn
+        # (which would otherwise hide light.a) is never consulted.
+        view = make_view(
+            entity={
+                "light.a": FakeRegEntry("light.a"),
+                "light.b": FakeRegEntry("light.b"),
+            }
+        )
+        calls = []
+
+        def _spy(eid):
+            calls.append(eid)
+            return eid != "light.a"
+
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            [FakeState("light.a"), FakeState("light.b")],
+            {"respect_assist_exposure": True},
+            _spy,
+            assist_available=False,
+        )
+        assert hidden == set()
+        assert calls == []
+
+
+class TestVisibilityWarnings:
+    """Per-dimension degradation warnings, mirroring the server resolver."""
+
+    def test_empty_config_no_warnings(self):
+        view = make_view(entity={"light.a": FakeRegEntry("light.a")})
+        assert wsapi._visibility_warnings(view, [FakeState("light.a")], {}) == []
+
+    def test_unknown_category_warns(self):
+        view = make_view(entity={"sensor.x": FakeRegEntry("sensor.x")})
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("sensor.x")],
+            {"exclude_categories": ["bogus", "diagnostic"]},
+        )
+        assert warnings == [wsapi._unknown_categories_warning({"bogus"})]
+
+    def test_known_categories_only_no_warning(self):
+        view = make_view(entity={"sensor.x": FakeRegEntry("sensor.x")})
+        warnings = wsapi._visibility_warnings(
+            view, [FakeState("sensor.x")], {"exclude_categories": ["diagnostic"]}
+        )
+        assert warnings == []
+
+    def test_empty_registry_allowlist_warns(self):
+        # Area/label allowlist with an empty registry but states-only candidates
+        # would blank everything; the guard fires and warns.
+        view = make_view()
+        warnings = wsapi._visibility_warnings(
+            view, [FakeState("light.a")], {"allow_areas": ["office"]}
+        )
+        assert warnings == [wsapi._ALLOWLIST_REGISTRY_EMPTY_WARNING]
+
+    def test_allowlist_with_registry_no_warning(self):
+        view = make_view(entity={"light.a": FakeRegEntry("light.a", area_id="office")})
+        warnings = wsapi._visibility_warnings(
+            view, [FakeState("light.a")], {"allow_areas": ["office"]}
+        )
+        assert warnings == []
+
+    def test_allow_entity_ids_only_no_empty_registry_warning(self):
+        # An allow_entity_ids list needs no registry data, so the empty-registry
+        # guard does not fire for it.
+        view = make_view()
+        warnings = wsapi._visibility_warnings(
+            view, [FakeState("light.a")], {"allow_entity_ids": ["light.a"]}
+        )
+        assert warnings == []
+
+    def test_assist_unavailable_warns(self):
+        view = make_view(entity={"light.a": FakeRegEntry("light.a")})
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("light.a")],
+            {"respect_assist_exposure": True},
+            assist_available=False,
+        )
+        assert warnings == [wsapi._ASSIST_UNAVAILABLE_WARNING]
+
+    def test_assist_available_no_warning(self):
+        view = make_view(entity={"light.a": FakeRegEntry("light.a")})
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("light.a")],
+            {"respect_assist_exposure": True},
+            assist_available=True,
+        )
+        assert warnings == []
+
+    def test_multiple_degradations_all_surface(self):
+        view = make_view()
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("light.a")],
+            {
+                "exclude_categories": ["bogus"],
+                "allow_areas": ["office"],
+                "respect_assist_exposure": True,
+            },
+            assist_available=False,
+        )
+        assert set(warnings) == {
+            wsapi._unknown_categories_warning({"bogus"}),
+            wsapi._ALLOWLIST_REGISTRY_EMPTY_WARNING,
+            wsapi._ASSIST_UNAVAILABLE_WARNING,
+        }
+
 
 # =============================================================================
 # search_visibility — hard-exclude placement in _do_search
@@ -846,6 +960,9 @@ class TestSearchVisibilityPlacement:
 
     def test_assist_seam_wired_in_do_search(self, monkeypatch):
         h = self._hass_and_view(monkeypatch)
+        # Assist available (its store is set up) so the dimension runs and consults
+        # the injected should_expose seam.
+        monkeypatch.setattr(wsapi, "_assist_exposure_available", lambda hass: True)
         monkeypatch.setattr(
             wsapi, "_assist_should_expose", lambda hass, eid: eid != "light.a"
         )
@@ -853,6 +970,21 @@ class TestSearchVisibilityPlacement:
             h, {"query": "", "visibility": {"respect_assist_exposure": True}}
         )
         assert {e["entity_id"] for e in res["entities"]} == {"light.b"}
+
+    def test_assist_unavailable_skips_dimension_and_warns(self, monkeypatch):
+        # Assist requested but its store is unavailable: the dimension is skipped
+        # (nothing hidden) and the response carries the degradation warning.
+        h = self._hass_and_view(monkeypatch)
+        monkeypatch.setattr(wsapi, "_assist_exposure_available", lambda hass: False)
+        # Would hide light.a if consulted — but it must NOT be consulted.
+        monkeypatch.setattr(
+            wsapi, "_assist_should_expose", lambda hass, eid: eid != "light.a"
+        )
+        res = wsapi._do_search(
+            h, {"query": "", "visibility": {"respect_assist_exposure": True}}
+        )
+        assert {e["entity_id"] for e in res["entities"]} == {"light.a", "light.b"}
+        assert res["visibility_warnings"] == [wsapi._ASSIST_UNAVAILABLE_WARNING]
 
 
 class TestSearchVisibilitySchema:

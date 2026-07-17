@@ -107,7 +107,11 @@ and ``info`` itself carries no capability entry):
   the server's opt-in hidden entities before counts/pagination (the pure
   :func:`_visibility_hidden_set` mirrors the server's ``hidden_entity_ids``, with
   the Assist dimension delegated to core's ``async_should_expose``), so
-  ``ha_search`` can route through the component even with an active filter.
+  ``ha_search`` can route through the component even with an active filter. A
+  degraded dimension (unknown ``exclude_category`` / empty-registry allowlist /
+  unavailable Assist) fails open, and :func:`_visibility_warnings` returns the
+  resolver-parity ``visibility_warnings`` the response carries so the filtering is
+  not silently incomplete.
 * ``ha_mcp_tools/server_entry`` — the component locates its OWN server config
   entry (``entry.data[CONF_ENTRY_TYPE] == server``, the one marker key it reads
   from ``entry.data``) and returns ``{entry_id, channel, pip_spec}`` (channel /
@@ -749,6 +753,11 @@ def _do_search(
     view = _resolve_registries(hass)
     diagnostics: dict[str, int] = {}
     partial_reasons: list[str] = []
+    # Visibility degradation warnings (unknown category / empty-registry allowlist /
+    # Assist unavailable), collected in the entity block below when a visibility
+    # filter is applied. Surfaced additively so the fast path isn't silent about
+    # incomplete filtering (parity with the server's load_hidden_set warnings).
+    visibility_warnings: list[str] = []
 
     # ``secret_values`` (loaded off-loop by _search_prep) scrubs resolved-!secret
     # plaintext from the config-body match corpus: a YAML-loaded automation/script/
@@ -778,11 +787,24 @@ def _do_search(
         # which the ``_search_entities`` join already applied). See
         # :func:`_visibility_hidden_set`.
         if isinstance(visibility, Mapping) and visibility:
+            states_list = _iter_states(hass)
+            # Probe Assist availability once (only when the config asks for it) so a
+            # requested-but-unavailable Assist dimension both skips its hiding and
+            # surfaces the resolver-parity degradation warning.
+            assist_available = (
+                _assist_exposure_available(hass)
+                if visibility.get("respect_assist_exposure")
+                else True
+            )
             hidden = _visibility_hidden_set(
                 view,
-                _iter_states(hass),
+                states_list,
                 visibility,
                 lambda eid: _assist_should_expose(hass, eid),
+                assist_available=assist_available,
+            )
+            visibility_warnings = _visibility_warnings(
+                view, states_list, visibility, assist_available=assist_available
             )
             if hidden:
                 scored_entities = [
@@ -862,6 +884,10 @@ def _do_search(
     }
     if diagnostics:
         result["diagnostics"] = diagnostics
+    # Additive (present only when non-empty, no schema_version bump): the server's
+    # ha_search consumer merges these into the response's top-level warnings.
+    if visibility_warnings:
+        result["visibility_warnings"] = visibility_warnings
     return result
 
 
@@ -4089,12 +4115,39 @@ def _do_reference_data(hass: HomeAssistant, params: dict[str, Any]) -> dict[str,
 # resolver's KNOWN_ENTITY_CATEGORIES so an unknown exclude_category hides nothing.
 _KNOWN_ENTITY_CATEGORIES = frozenset({"config", "diagnostic"})
 
+# Degradation warnings surfaced when a visibility dimension fails open (mirrors the
+# server resolver so the two paths emit byte-identical text — pinned by the
+# cross-seam warnings contract test). The component cannot import the server
+# package (it ships over HACS independently), so these strings are duplicated here
+# and the contract test asserts they stay equal to ``visibility.resolver``'s.
+_ASSIST_UNAVAILABLE_WARNING = (
+    "Entity visibility filter is enabled with respect_assist_exposure but the "
+    "Assist exposure data was unavailable; that dimension is skipped for this "
+    "request (other dimensions still apply)."
+)
+_ALLOWLIST_REGISTRY_EMPTY_WARNING = (
+    "Entity visibility filter is enabled with an area/label allowlist but the "
+    "entity registry returned no entries; those allow dimensions are skipped for "
+    "this request (an allow_entity_ids list, if set, still applies) so the filter "
+    "does not blank every entity."
+)
+
+
+def _unknown_categories_warning(unknown_categories: set[str]) -> str:
+    """The resolver's unknown-``exclude_categories`` warning text (byte-identical)."""
+    return (
+        "Entity visibility: ignoring unknown exclude_categories "
+        f"{sorted(unknown_categories)} (valid: config, diagnostic)."
+    )
+
 
 def _visibility_hidden_set(
     view: _RegistryView,
     states: Any,
     visibility: Mapping[str, Any],
     should_expose_fn: Any,
+    *,
+    assist_available: bool = True,
 ) -> set[str]:
     """Compute the opt-in hidden entity_id set, mirroring the server's resolver.
 
@@ -4110,8 +4163,13 @@ def _visibility_hidden_set(
     authoritative computation, and the injection point the cross-seam contract test
     aligns with the server's own Assist result.
 
-    ``should_expose_fn`` is consulted only when ``respect_assist_exposure`` is set.
-    Kept a standalone pure function so it is unit-testable without the full search
+    ``should_expose_fn`` is consulted only when ``respect_assist_exposure`` is set
+    AND ``assist_available`` is True. When the config requests the Assist dimension
+    but the exposure machinery is unavailable (``assist_available=False``), the
+    dimension is SKIPPED — hiding nothing by Assist — mirroring the resolver's
+    "skip the dimension when its data is unavailable" fail-open (the paired
+    degradation warning is surfaced by :func:`_visibility_warnings`). Kept a
+    standalone pure function so it is unit-testable without the full search
     pipeline.
     """
     exclude_categories = set(visibility.get("exclude_categories") or [])
@@ -4124,6 +4182,11 @@ def _visibility_hidden_set(
     allow_areas = set(visibility.get("allow_areas") or [])
     allow_labels = set(visibility.get("allow_labels") or [])
     respect_assist = bool(visibility.get("respect_assist_exposure"))
+    # Mirror the resolver: the Assist SUB-check is gated on data availability
+    # (``assist_active``), but the allow/assist loop still runs whenever the config
+    # requests Assist (to apply any allowlist), so ``respect_assist`` — not
+    # ``assist_active`` — guards the outer loop below.
+    assist_active = respect_assist and assist_available
     allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
 
     registry_by_id = _registry_index_by_id(view)
@@ -4161,11 +4224,59 @@ def _visibility_hidden_set(
             allow_entity_ids,
             allow_areas,
             allow_labels,
-            respect_assist,
+            assist_active,
             should_expose_fn,
             hidden,
         )
     return hidden
+
+
+def _visibility_warnings(
+    view: _RegistryView,
+    states: Any,
+    visibility: Mapping[str, Any],
+    *,
+    assist_available: bool = True,
+) -> list[str]:
+    """Degradation warnings for a visibility computation, mirroring the resolver.
+
+    Companion to :func:`_visibility_hidden_set`: the hidden-set function silently
+    fails open on a degraded dimension (an unknown ``exclude_category``, an
+    area/label allowlist against an empty registry, or a requested-but-unavailable
+    Assist dimension), so this returns the operator-facing warnings the server's
+    ``load_hidden_set`` would emit for the same config. The ha_search consumer
+    merges them into the response so the component fast path is no longer silent
+    about incomplete filtering. Byte-identical to ``visibility.resolver``'s warning
+    text (pinned by the cross-seam contract test). Kept a standalone pure function
+    so each degraded dimension is unit-testable.
+
+    The resolver's registry-unavailable warning has no analog here: the component
+    reads HA's live in-process registry, which is never the failed-WS payload the
+    server can receive.
+    """
+    warnings: list[str] = []
+
+    exclude_categories = set(visibility.get("exclude_categories") or [])
+    unknown = exclude_categories - _KNOWN_ENTITY_CATEGORIES
+    if unknown:
+        warnings.append(_unknown_categories_warning(unknown))
+
+    allow_areas = set(visibility.get("allow_areas") or [])
+    allow_labels = set(visibility.get("allow_labels") or [])
+    registry_by_id = _registry_index_by_id(view)
+    state_ids = {
+        eid for eid in (getattr(s, "entity_id", None) for s in states or []) if eid
+    }
+    # Empty-registry allowlist fail-open: same guard as _visibility_hidden_set —
+    # only fires when there are states-only candidates the restrict mode would
+    # otherwise blank.
+    if (allow_areas or allow_labels) and not registry_by_id and state_ids:
+        warnings.append(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
+
+    if bool(visibility.get("respect_assist_exposure")) and not assist_available:
+        warnings.append(_ASSIST_UNAVAILABLE_WARNING)
+
+    return warnings
 
 
 def _registry_index_by_id(view: _RegistryView) -> dict[str, Any]:
@@ -4218,14 +4329,17 @@ def _apply_visibility_allow_assist(
     allow_entity_ids: set[str],
     allow_areas: set[str],
     allow_labels: set[str],
-    respect_assist: bool,
+    assist_active: bool,
     should_expose_fn: Any,
     hidden: set[str],
 ) -> None:
     """Add allow-restrict + Assist hits to ``hidden`` over registry + states.
 
     These conjunctive filters must reach states-only entities, so they iterate the
-    full candidate universe. Mirrors the resolver's allow/assist loop.
+    full candidate universe. Mirrors the resolver's allow/assist loop. ``should_expose_fn``
+    is consulted only when ``assist_active`` (Assist requested AND its data
+    available); an unavailable-Assist request degrades to no Assist hiding here,
+    with the warning surfaced separately.
     """
     for eid in registry_by_id.keys() | state_ids:
         if eid in hidden:
@@ -4236,7 +4350,7 @@ def _apply_visibility_allow_assist(
         ):
             hidden.add(eid)
             continue
-        if respect_assist and not should_expose_fn(eid):
+        if assist_active and not should_expose_fn(eid):
             hidden.add(eid)
 
 
@@ -4298,6 +4412,28 @@ def _assist_should_expose(hass: HomeAssistant, entity_id: str) -> bool:
         return bool(async_should_expose(hass, "conversation", entity_id))
     except Exception:  # fail open (do not hide) on any error, mirroring the resolver
         return True
+
+
+def _assist_exposure_available(hass: HomeAssistant) -> bool:
+    """Whether core's Assist exposure machinery can be consulted for this request.
+
+    The resolver emits ``_ASSIST_UNAVAILABLE_WARNING`` when its expose-list fetch
+    fails wholesale; the component's analog is core's ``async_should_expose`` being
+    unavailable — it reads ``hass.data[DATA_EXPOSED_ENTITIES]`` and raises when the
+    exposed_entities store isn't set up (``_assist_should_expose`` then fails open
+    per entity, hiding nothing but warning about nothing either). Probing the store
+    once lets the caller skip the Assist dimension AND surface the resolver-parity
+    degradation warning instead of degrading silently. Imported lazily and a test
+    seam (monkeypatched alongside ``_assist_should_expose``).
+    """
+    try:
+        from homeassistant.components.homeassistant.exposed_entities import (
+            DATA_EXPOSED_ENTITIES,
+        )
+    except Exception:
+        return False
+    data = getattr(hass, "data", None)
+    return isinstance(data, Mapping) and DATA_EXPOSED_ENTITIES in data
 
 
 # =============================================================================

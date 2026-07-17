@@ -950,6 +950,24 @@ def _build_component_search_request(req: _ResolvedSearch) -> dict[str, Any]:
     return request
 
 
+def _merge_component_visibility_warnings(
+    response: dict[str, Any], component_result: dict[str, Any]
+) -> None:
+    """Fold the component's ``visibility_warnings`` into the response warnings.
+
+    The component emits these when a hide dimension fails open (unknown category /
+    empty-registry allowlist / Assist unavailable). Merged into the same top-level
+    warnings surface the legacy path fills via ``merge_visibility_warnings``, so the
+    fast path is no longer silent about incomplete filtering.
+    """
+    component_visibility_warnings = component_result.get("visibility_warnings")
+    if isinstance(component_visibility_warnings, list):
+        merge_visibility_warnings(
+            response,
+            [w for w in component_visibility_warnings if isinstance(w, str)],
+        )
+
+
 def _shape_component_search_response(
     req: _ResolvedSearch, component_result: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1045,6 +1063,8 @@ def _shape_component_search_response(
         if diag_reason:
             response["partial"] = True
             _merge_partial_reason(response, diag_reason)
+
+    _merge_component_visibility_warnings(response, component_result)
 
     response["count"] = len(response["entities"]) + sum(
         len(response.get(bucket, [])) for bucket in _CONFIG_BUCKETS

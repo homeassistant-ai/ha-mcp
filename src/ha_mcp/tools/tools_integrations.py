@@ -251,13 +251,18 @@ async def _fetch_entries_via_component(
     cached caps), or command error/timeout (logged) — the caller falls back to
     the legacy REST list + OptionsFlow probe.
 
-    DEVIATION from the uniform component-fetch taxonomy: a
-    ``HomeAssistantConnectionError`` (WS down) IS caught here and mapped to
-    ``None`` (legacy fallback). Unlike the pooled-WS consumers, this tool's legacy
-    path is a pure REST read (``get_config_entry`` / ``GET /config/config_entries``
-    + the REST OptionsFlow probe), NOT the shared pooled WS — so a WS outage must
-    not kill the tool when REST can still serve the entry. Otherwise the same
-    caps-gate discipline as ``component_devices.fetch_device_via_component``.
+    DEVIATION from the uniform component-fetch taxonomy: a connection-establishment
+    failure IS caught here and mapped to ``None`` (legacy fallback). Unlike the
+    pooled-WS consumers, this tool's legacy path is a pure REST read
+    (``get_config_entry`` / ``GET /config/config_entries`` + the REST OptionsFlow
+    probe), NOT the shared pooled WS — so a WS outage must not kill the tool when
+    REST can still serve the entry. The catch is broad because
+    ``get_websocket_client()`` raises a plain ``Exception`` (not
+    ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot establish the
+    socket, so a narrow catch would let that escape and kill the tool; routing any
+    non-command component failure back to the REST fetch is safe here (mirrors
+    ``get_component_caps``' own broad-catch precedent). Otherwise the same caps-gate
+    discipline as ``component_devices.fetch_device_via_component``.
     """
     caps = await get_component_caps(client)
     if not component_supports(caps, "config_entries"):
@@ -270,20 +275,22 @@ async def _fetch_entries_via_component(
     try:
         ws = await get_websocket_client(url=client.base_url, token=client.token)
         raw = await ws.send_command(WS_CONFIG_ENTRIES, **kwargs)
-    except HomeAssistantConnectionError as exc:
-        # DEVIATION (see docstring): the legacy path is pure REST, NOT the shared
-        # pooled WS, so a WS outage must not kill the tool.
-        logger.warning(
-            "%s connection error; falling back to REST legacy: %r",
-            WS_CONFIG_ENTRIES,
-            exc,
-        )
-        return None
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_CONFIG_ENTRIES, exc)
+        return None
+    except Exception as exc:
+        # DEVIATION (see docstring): the legacy path is pure REST, NOT the shared
+        # pooled WS. A pooled-WS drop (HomeAssistantConnectionError) OR
+        # get_websocket_client() raising a plain Exception when WebSocketManager
+        # can't (re)connect must fall back to REST rather than kill the tool.
+        logger.warning(
+            "%s connection error; falling back to REST legacy: %r",
+            WS_CONFIG_ENTRIES,
+            exc,
+        )
         return None
     result = raw.get("result")
     if not isinstance(result, dict):

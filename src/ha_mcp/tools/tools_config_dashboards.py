@@ -830,12 +830,17 @@ def _should_lazy_resolve(error_msg: str) -> bool:
 # ``component_devices.WS_DEVICE_GET``).
 WS_DASHBOARDS = "ha_mcp_tools/dashboards"
 
-# ``LovelaceConfig.mode`` wire string for a YAML-mode dashboard. The component
-# tags every runtime ``list`` row with its mode; a YAML dashboard's BODY may carry
-# resolved ``!secret`` plaintext, so the cross-dashboard ``search`` walk skips
-# rows tagged with this mode (the same exclusion the component applies in-process)
-# — while ``list`` still surfaces YAML rows, since listing metadata is safe.
+# ``LovelaceConfig.mode`` wire strings. The ha_mcp_tools component tags every
+# runtime ``list`` row with its mode; the legacy ``lovelace/dashboards/list`` does
+# NOT (its rows are the raw ``DashboardsCollection`` items, which carry no ``mode``
+# — verified against home-assistant/core ``lovelace/dashboard.py``
+# ``DashboardsCollectionWebSocket.ws_list_item``). A YAML dashboard's BODY may
+# carry resolved ``!secret`` plaintext, so the cross-dashboard ``search`` walk
+# reads a row's body ONLY when it is EXPLICITLY tagged ``storage`` — every other
+# value, including the untagged legacy rows, is skipped (fail-closed). ``list``
+# still surfaces YAML rows, since listing metadata is safe.
 _DASHBOARD_YAML_MODE = "yaml"
+_DASHBOARD_STORAGE_MODE = "storage"
 
 # Cross-dashboard ``search`` match cap — mirrors the component's
 # ``_DASHBOARD_MATCH_CAP`` so the component-less legacy walk truncates identically
@@ -901,9 +906,9 @@ async def _component_dashboard_rows(client: Any) -> list[dict[str, Any]] | None:
     component was installed). Listing metadata is safe: only a dashboard's BODY can
     carry resolved ``!secret`` plaintext, and the body-serving paths still exclude
     YAML — ``get`` via the component's ``yaml_excluded`` status and ``search`` by
-    skipping ``mode == "yaml"`` rows. The additive ``mode`` tag is preserved on
-    every row so those exclusions can key off it. ``None`` (component unavailable /
-    malformed) routes the caller to the legacy list read.
+    reading only ``mode == "storage"`` rows. The additive ``mode`` tag is preserved
+    on every row so those exclusions can key off it. ``None`` (component unavailable
+    / malformed) routes the caller to the legacy list read.
     """
     result = await _dashboards_via_component(client, "list")
     if result is None:
@@ -2114,13 +2119,16 @@ class DashboardConfigTools:
         """Storage-dashboard ``{url_path, title, config}`` docs for the legacy walk.
 
         One ``lovelace/config`` read per STORAGE dashboard from
-        ``fetch_dashboards_list``. YAML dashboards (``mode == "yaml"``) are
-        skipped WITHOUT reading their config — the same exclusion the component's
-        in-process walk applies — because HA resolves ``!secret`` when it loads a
-        YAML Lovelace config, so fetching one here could leak resolved secrets into
-        a match. A per-dashboard read failure is skipped (fail-soft, mirroring the
-        component's per-dashboard skip) so one broken dashboard doesn't fail the
-        whole search.
+        ``fetch_dashboards_list``. A body is read ONLY when its row is EXPLICITLY
+        tagged ``mode == "storage"`` — fail-closed. HA resolves ``!secret`` when it
+        loads a YAML Lovelace config, so reading a YAML (or unknown-mode) body could
+        leak resolved secrets into a match. Only the ha_mcp_tools component tags
+        ``mode`` on its ``list`` rows; the legacy ``lovelace/dashboards/list`` tags
+        nothing, so on a component-less install every row is untagged and skipped —
+        the cross-dashboard walk yields no matches there rather than risk a leak
+        (the component is the supported way to search dashboard bodies safely). A
+        per-dashboard read failure is skipped (fail-soft, mirroring the component's
+        per-dashboard skip) so one broken dashboard doesn't fail the whole search.
         """
         rows = await fetch_dashboards_list(self._client) or []
         docs: list[dict[str, Any]] = []
@@ -2128,8 +2136,10 @@ class DashboardConfigTools:
             url_path = row.get("url_path")
             if not url_path:
                 continue
-            if row.get("mode") == _DASHBOARD_YAML_MODE:
-                # YAML bodies are never searched (resolved-!secret leak risk).
+            if row.get("mode") != _DASHBOARD_STORAGE_MODE:
+                # Fail-closed: only an explicit storage tag is safe to read. A YAML
+                # body may carry resolved !secret plaintext, and an untagged row
+                # (every row on a component-less install) is not provably storage.
                 continue
             config = await self._fetch_dashboard_config_fail_soft(url_path)
             if config is None:
@@ -2177,12 +2187,21 @@ class DashboardConfigTools:
         maps to the component's ``None`` url_path); ``None`` falls back to the
         unchanged legacy ``lovelace/config`` read, which also covers YAML bodies
         (never served in-process) and internal-id lazy-resolve.
+
+        ``force_reload`` bypasses the component fast path entirely: the component
+        ``get`` carries no force semantic, so a forced read must go straight to the
+        legacy ``lovelace/config`` request below (which threads ``force=True``) to
+        actually bust HA's Lovelace cache. (The optimistic-lock re-read in
+        ``_verify_config_unchanged`` deliberately keeps the no-force component read
+        — it wants the same in-memory object core serves.)
         """
         component_url_path = (
             None if (not url_path or url_path == "default") else url_path
         )
-        component_config = await _component_dashboard_config(
-            self._client, component_url_path
+        component_config = (
+            None
+            if force_reload
+            else await _component_dashboard_config(self._client, component_url_path)
         )
         if component_config is not None:
             # The component matches an exact url_path (or the default), so no

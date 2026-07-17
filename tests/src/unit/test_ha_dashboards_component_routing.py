@@ -336,6 +336,52 @@ async def test_get_not_found_falls_back_to_legacy() -> None:
     assert client.config_calls == ["ghost"]
 
 
+class _ForceCapturingClient(RoutingClient):
+    """Records the ``force`` flag on each ``lovelace/config`` read."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.config_force_flags: list[Any] = []
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        if msg.get("type") == "lovelace/config":
+            self.config_force_flags.append(msg.get("force"))
+        return await super().send_websocket_message(msg)
+
+
+@pytest.mark.asyncio
+async def test_get_force_reload_bypasses_component() -> None:
+    """``force_reload=True`` skips the component ``get`` fast path entirely.
+
+    The component ``get`` carries no force semantic, so a forced read must go
+    straight to the legacy ``lovelace/config`` request with ``force=True`` to bust
+    HA's Lovelace cache. Even though the component WOULD serve the body, it is never
+    consulted (no dashboards frame at all — not even the caps probe).
+    """
+    ws = make_ws(
+        "ha_mcp_tools/dashboards",
+        info_result=_CAPS_DASHBOARDS,
+        cmd_result={
+            "mode": "get",
+            "available": True,
+            "status": "ok",
+            "url_path": "home",
+            "config": _HOME_BODY,  # component would serve this if consulted
+        },
+    )
+    client = _ForceCapturingClient(configs={"home": _HOME_BODY})
+    get_dashboard = _build_get_dashboard(client)
+
+    with patch_ws(ws, tools_config_dashboards):
+        resp = await get_dashboard(url_path="home", force_reload=True)
+
+    assert resp["config"] == _HOME_BODY
+    # The component was bypassed entirely; the legacy forced read served it.
+    assert not _dash_calls(ws)
+    assert client.config_calls == ["home"]
+    assert client.config_force_flags == [True]
+
+
 # --- cross-dashboard search ---------------------------------------------------
 @pytest.mark.asyncio
 async def test_search_served_via_component() -> None:
@@ -430,6 +476,35 @@ async def test_legacy_search_walk_skips_yaml_body() -> None:
     # Only the storage dashboard's body was read; the YAML row was skipped.
     assert client.config_calls == ["home"]
     assert "yaml-dash" not in client.config_calls
+
+
+@pytest.mark.asyncio
+async def test_legacy_search_walk_skips_untagged_row() -> None:
+    """Fail-closed: a legacy row with NO ``mode`` key is skipped WITHOUT a body read.
+
+    The real ``lovelace/dashboards/list`` never tags ``mode`` (only the ha_mcp_tools
+    component does — verified against home-assistant/core
+    ``DashboardsCollectionWebSocket.ws_list_item``), so on a component-less install
+    every row is untagged. An untagged row is not provably storage, and reading a
+    YAML body resolves ``!secret`` to plaintext, so the walk reads a body ONLY when
+    the row is EXPLICITLY tagged ``mode == "storage"`` — the untagged row's
+    ``lovelace/config`` is never requested.
+    """
+    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    untagged_row = {k: v for k, v in _STORAGE_ROW.items() if k != "mode"}
+    client = RoutingClient(
+        dashboards_list=[untagged_row],
+        configs={"home": _HOME_BODY},  # a body the walk must NOT reach
+    )
+    get_dashboard = _build_get_dashboard(client)
+
+    with patch_ws(ws, tools_config_dashboards):
+        resp = await get_dashboard(mode="search", query="light.kitchen")
+
+    assert resp["action"] == "search_all"
+    assert resp["match_count"] == 0
+    # The untagged row's body was NEVER requested (fail-closed).
+    assert client.config_calls == []
 
 
 @pytest.mark.asyncio

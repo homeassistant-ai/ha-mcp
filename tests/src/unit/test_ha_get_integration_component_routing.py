@@ -37,7 +37,11 @@ from ha_mcp.tools.tools_integrations import (
     register_integration_tools,
 )
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 WS_CONFIG_ENTRIES = "ha_mcp_tools/config_entries"
 
@@ -545,6 +549,26 @@ async def test_fetch_connection_error_falls_back_to_none() -> None:
     with patch_ws(ws, tools_integrations):
         assert await _fetch_entries_via_component(client) is None
     # A transient connection error is not a downgrade — caps stay cached.
+    assert client in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_fetch_ws_establish_failure_falls_back_to_none() -> None:
+    """``get_websocket_client()`` raising a plain ``Exception`` returns None → legacy.
+
+    After caps are cached, ``WebSocketManager`` can raise a plain ``Exception`` (not
+    ``HomeAssistantConnectionError``) when it cannot (re)establish the pooled socket.
+    ``_fetch_entries_via_component`` catches it broadly and returns ``None`` so the
+    legacy pure-REST get serves the entry, keeping the (still-advertised) caps.
+    """
+    caps_ws = make_ws(WS_CONFIG_ENTRIES, info_result=_CAPS_CONFIG_ENTRIES)
+    client = RoutingClient()
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_integrations,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
+        assert await _fetch_entries_via_component(client) is None
     assert client in component_api._CAPS_CACHE
 
 
