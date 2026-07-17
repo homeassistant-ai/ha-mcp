@@ -26,6 +26,13 @@ let toolStates = {};
 // Populated from data.env_pinned in loadTools(); read by render() to
 // lock rows and show the env-var name banner.
 let toolEnvPinned = {};
+// Tools locked enabled while strict best-practices mode
+// (enable_mandatory_bps + enable_strict_mandatory_bps) is on (#1886).
+// Populated from data.bps_locked_tools in loadTools(); rendered like
+// mandatory tools plus a note naming the toggle to turn off first.
+// Server-side saves reject the conflict too — this lock is the
+// courteous UI half.
+let bpsLockedTools = new Set();
 // Conversation-agent LLM API exposure (#1745). toolLlm mirrors the
 // server-computed EFFECTIVE value per tool (user override, else the
 // deny-by-default for beta/dev/restart tools); toolLlmOverrides holds
@@ -173,6 +180,7 @@ async function loadTools() {
   toolData = data.tools || [];
   toolStates = data.states || {};
   toolEnvPinned = data.env_pinned || {};
+  bpsLockedTools = new Set(data.bps_locked_tools || []);
   toolLlm = data.llm_api || {};
   toolLlmOverrides = data.llm_api_overrides || {};
   llmApiAvailable = !!data.llm_api_available;
@@ -595,14 +603,16 @@ function render() {
     // tool is enabled. Tools forced off by Read Only Mode are excluded so the
     // group master switch can't fight the mode.
     const toggleable = tools.filter(t =>
-      !MANDATORY.includes(t.name) && !t.disabled_by && !toolEnvPinned[t.name] &&
+      !MANDATORY.includes(t.name) && !bpsLockedTools.has(t.name) &&
+      !t.disabled_by && !toolEnvPinned[t.name] &&
       !isReadOnlyForcedOff(t));
     const anyEnabled = toggleable.some(t => getState(t.name) !== 'disabled');
     const groupEnabled = tools.filter(t => {
       if (isReadOnlyForcedOff(t)) return false;
       if (toolEnvPinned[t.name]) return toolEnvPinned[t.name] !== 'disabled';
       const s = getState(t.name);
-      return MANDATORY.includes(t.name) || (!t.disabled_by && s !== 'disabled');
+      return MANDATORY.includes(t.name) || bpsLockedTools.has(t.name) ||
+        (!t.disabled_by && s !== 'disabled');
     }).length;
 
     // Master-switch checked state. Normally it mirrors "any toggleable tool
@@ -669,7 +679,10 @@ function render() {
 
     tools.forEach(t => {
       const state = getState(t.name);
-      const isMandatory = MANDATORY.includes(t.name);
+      // BPS-locked tools render with the mandatory lock plus a note
+      // naming the toggle to turn off first (#1886).
+      const isBpsLocked = bpsLockedTools.has(t.name);
+      const isMandatory = MANDATORY.includes(t.name) || isBpsLocked;
       const disabledBy = t.disabled_by || null;
       const isFeatureGated = disabledBy !== null;
       // env_pinned: "disabled" | "pinned" | undefined — operator-level lock
@@ -732,6 +745,9 @@ function render() {
       const envPinnedNote = isEnvPinned
         ? `<div class="feature-locked-note">env-pinned via <code>${envPinVar}</code>. Unset the env var to edit here.</div>`
         : '';
+      const bpsLockedNote = isBpsLocked
+        ? '<div class="feature-locked-note">Locked while "Strict best-practices mode" is on (Server Settings tab) — strict mode publishes its acknowledgment key through this tool. Turn that off first to disable this tool.</div>'
+        : '';
       const readOnlyNote = roForcedOff
         ? '<div class="disabled-by-note">Off. Read Only Mode is on; write tools are disabled.</div>'
         : (roExemptActive
@@ -757,6 +773,7 @@ function render() {
         (desc ? `<div class="tool-desc">${escapeHtml(desc)}</div>` : '') +
         gatedNote +
         envPinnedNote +
+        bpsLockedNote +
         readOnlyNote +
         `</div>` +
         `<div class="tool-toggles">` +
@@ -1592,7 +1609,7 @@ const FEATURE_META = {
   },
   enable_strict_mandatory_bps: {
     label: "Strict best-practices mode",
-    help: "Strict mode: prevents the client from using the tool until it can prove that it read the best practices. While on, the six best-practice write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked and return an error directing the client to read the best-practices skill via ha_get_skill_guide and pass back the acknowledgment key it obtains there. Nested under \"Attach best-practice skills on writes\" above and inert while that parent toggle is off. Requires restart to take effect (applies live in standalone HTTP mode).",
+    help: "Strict mode: prevents the client from using the tool until it can prove that it read the best practices. While on, the six best-practice write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked and return an error directing the client to read the best-practices skill via ha_get_skill_guide and pass back the acknowledgment key it obtains there. While on, the ha_get_skill_guide tool is locked enabled — it is the only publisher of the acknowledgment key. Nested under \"Attach best-practice skills on writes\" above and inert while that parent toggle is off. Requires restart to take effect (applies live in standalone HTTP mode).",
   },
   // Master beta toggle — gates the 5 sub-flags below at runtime
   // (see config.py:_apply_feature_flag_overrides master gate). UI

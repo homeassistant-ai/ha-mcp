@@ -63,17 +63,48 @@ MANDATORY_TOOLS: set[str] = {
     "ha_get_overview",
     "ha_get_state",
     "ha_report_issue",
-    # Skill guide carries the bundled best-practices trigger conditions
-    # in its description — tool-only clients (claude.ai, etc.) rely on
-    # seeing it in the catalog. Disabling it would silently break the
-    # "consult skill before writing config" workflow.
-    "ha_get_skill_guide",
     # Backups are operational essentials — needed as the pre-change safety
     # net before config edits and as the recovery path after them. Kept
     # always-on so users who aggressively disable everything keep a
     # working backup tool.
     "ha_manage_backup",
 }
+
+# Tools that are mandatory ONLY while strict best-practices mode is on —
+# both ``enable_mandatory_bps`` (parent) and ``enable_strict_mandatory_bps``
+# (child) true (#1886). The strict gate publishes the BestPracticeKey
+# exclusively through ha_get_skill_guide, so disabling the tool in strict
+# mode would permanently lock out every gated write. Regular
+# (non-strict) mandatory BPS does NOT need the tool: it attaches skill
+# content server-side straight from the skills-vendor (util_helpers.
+# build_skill_content), so users who consume the skills through a local
+# install (``npx skills add homeassistant-ai/skills``) may disable the
+# tool whenever strict mode is off. Enforced in three places: here at
+# apply time (authoritative, covers env seeds and hand-edited config),
+# and in the two settings-UI save handlers (_save_tools /
+# _save_feature_flags) so each direction of the conflict gets an
+# actionable error.
+BPS_MANDATORY_TOOLS: set[str] = {
+    "ha_get_skill_guide",
+}
+
+
+def effective_mandatory_tools(settings: Settings) -> set[str]:
+    """Return the mandatory-tool set under the given settings.
+
+    ``MANDATORY_TOOLS`` unconditionally, plus ``BPS_MANDATORY_TOOLS``
+    while strict best-practices mode is configured on — both
+    ``enable_mandatory_bps`` AND ``enable_strict_mandatory_bps``, the
+    same flag pair ``strict_bps.strict_bps_effective`` gates on. The raw
+    flags are checked (not ``strict_bps_effective()``) so the lock
+    doesn't flap with runtime degrades like a missing skills-vendor
+    submodule; a locked-but-inert tool is harmless, the reverse is not.
+    """
+    if getattr(settings, "enable_mandatory_bps", True) and getattr(
+        settings, "enable_strict_mandatory_bps", True
+    ):
+        return MANDATORY_TOOLS | BPS_MANDATORY_TOOLS
+    return set(MANDATORY_TOOLS)
 
 # Tools created by FastMCP transforms (not registered through
 # local_provider). No transform-generated tools are currently in use —
@@ -314,13 +345,27 @@ def apply_tool_visibility(
     if not settings.enable_yaml_config_editing:
         disabled_names.add("ha_config_set_yaml")
 
-    disabled_names -= MANDATORY_TOOLS
+    mandatory = effective_mandatory_tools(settings)
+    stripped_bps = disabled_names & mandatory & BPS_MANDATORY_TOOLS
+    if stripped_bps:
+        # The save handlers reject this combination, but env seeds and
+        # hand-edited tool_config.json bypass them — keep the tool on and
+        # say why, rather than silently locking out every strict-gated
+        # write (the acknowledgment key is published only through it).
+        logger.warning(
+            "Keeping %s enabled despite a disable entry: strict "
+            "best-practices mode (enable_strict_mandatory_bps) is on and "
+            "publishes its acknowledgment key only through it. Turn "
+            "strict mode off first to disable the tool.",
+            ", ".join(sorted(stripped_bps)),
+        )
+    disabled_names -= mandatory
 
     if disabled_names:
         mcp.disable(names=disabled_names)
         logger.info("Disabled tools: %s", ", ".join(sorted(disabled_names)))
 
-    mcp.enable(names=MANDATORY_TOOLS)
+    mcp.enable(names=mandatory)
 
     assert pinned_names.isdisjoint(enabled_names), (
         "pinned and enabled overrides must be disjoint by construction"

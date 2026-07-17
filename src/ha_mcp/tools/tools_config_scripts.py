@@ -480,7 +480,9 @@ class ConfigScriptTools:
         BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
         """
-        Create or update a Home Assistant script. MUST call ha_get_skill_guide OR refer to your locally installed skills first.
+        Create or update a Home Assistant script.
+
+        MUST call ha_get_skill_guide OR refer to your locally installed skills first.
 
         PREFER NATIVE ACTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
         Native actions are validated at config load, fail loudly, and do not bypass HA's

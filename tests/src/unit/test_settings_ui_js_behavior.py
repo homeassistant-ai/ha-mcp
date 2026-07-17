@@ -1112,6 +1112,83 @@ class TestGroupMasterToggle:
             f"got: {tag_html}"
         )
 
+    def test_bps_locked_tool_row_renders_locked_with_note(
+        self, settings_script: str
+    ) -> None:
+        """#1886: a tool named in ``bps_locked_tools`` renders like a
+        mandatory tool — enabled checkbox checked AND disabled — plus a
+        note naming strict best-practices mode as the lock to lift."""
+        tools = [
+            {
+                "name": "ha_get_skill_guide",
+                "title": "Skill Guide",
+                "primary_tag": "Docs",
+                "tags": ["Docs"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            }
+        ]
+        fetch_map = self._tools_fetch(tools, {})
+        fetch_map["/api/settings/tools"]["json"]["bps_locked_tools"] = [
+            "ha_get_skill_guide"
+        ]
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetch_map,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        m = re.search(
+            r'<input[^>]*name="tool:ha_get_skill_guide:enabled"[^>]*>',
+            result.dom,
+        )
+        assert m is not None, f"skill-guide row not rendered; dom tail: {result.dom[-2000:]}"
+        assert "checked" in m.group(0), (
+            f"bps-locked tool must render enabled; got: {m.group(0)}"
+        )
+        assert " disabled" in m.group(0), (
+            f"bps-locked tool's enabled toggle must be locked; got: {m.group(0)}"
+        )
+        assert "Strict best-practices mode" in result.dom, (
+            "bps-locked row must carry the note naming strict mode"
+        )
+
+    def test_bps_unlocked_tool_row_stays_editable(
+        self, settings_script: str
+    ) -> None:
+        """With ``bps_locked_tools`` empty (strict mode off), the skill
+        guide renders as a normal editable row — no lock, no note."""
+        tools = [
+            {
+                "name": "ha_get_skill_guide",
+                "title": "Skill Guide",
+                "primary_tag": "Docs",
+                "tags": ["Docs"],
+                "description": "d",
+                "annotations": {"readOnlyHint": True},
+            }
+        ]
+        fetch_map = self._tools_fetch(tools, {})
+        fetch_map["/api/settings/tools"]["json"]["bps_locked_tools"] = []
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetch_map,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        m = re.search(
+            r'<input[^>]*name="tool:ha_get_skill_guide:enabled"[^>]*>',
+            result.dom,
+        )
+        assert m is not None
+        assert " disabled" not in m.group(0), (
+            f"skill guide must be editable when strict mode is off; "
+            f"got: {m.group(0)}"
+        )
+        assert "Strict best-practices mode" not in result.dom
+
     def test_all_env_pinned_enabled_group_master_is_checked_and_disabled(
         self, settings_script: str
     ) -> None:

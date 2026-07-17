@@ -525,7 +525,9 @@ class AutomationConfigTools:
         BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
         """
-        Create or update a Home Assistant automation. MUST call ha_get_skill_guide OR refer to your locally installed skills first.
+        Create or update a Home Assistant automation.
+
+        MUST call ha_get_skill_guide OR refer to your locally installed skills first.
 
         PREFER NATIVE SOLUTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
         Native triggers/conditions/actions are validated at config load, fail loudly, and

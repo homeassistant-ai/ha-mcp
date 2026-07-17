@@ -57,6 +57,7 @@ from ._supervisor import (
 )
 from ._theme import _load_theme_prefs, _sanitize_theme_prefs
 from ._tools_meta import (
+    BPS_MANDATORY_TOOLS,
     FEATURE_GATED_TOOLS,
     MANDATORY_TOOLS,
     TRANSFORM_GENERATED_TOOLS,
@@ -64,6 +65,7 @@ from ._tools_meta import (
     UserToolStateOverrides,
     _get_tool_metadata,
     apply_tool_visibility,
+    effective_mandatory_tools,
 )
 
 if TYPE_CHECKING:

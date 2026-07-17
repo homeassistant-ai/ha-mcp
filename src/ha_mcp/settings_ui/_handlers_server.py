@@ -91,6 +91,59 @@ def _reject_child_flags_without_parent(
     return None
 
 
+def _reject_strict_bps_without_skill_tool(
+    raw_flags: dict[str, Any],
+) -> JSONResponse | None:
+    """Strict-BPS ⇒ skill-guide dependency (#1886).
+
+    A save that leaves strict best-practices mode configured on (parent
+    AND child flags, post-merge like _reject_child_flags_without_parent)
+    while ha_get_skill_guide is disabled in the Tools tab would silently
+    re-lock a tool the user explicitly turned off — strict mode publishes
+    its acknowledgment key only through it. Reject with the fix instead.
+    Gated on the pair actually appearing in this payload so unrelated
+    feature-flag saves can't trip over a pre-existing (hand-edited)
+    conflict, which apply_tool_visibility already strips-and-warns at
+    startup. The other direction (disabling the tool while strict mode is
+    on) is rejected in _handlers_tools._save_tools.
+    """
+    if (
+        "enable_mandatory_bps" not in raw_flags
+        and "enable_strict_mandatory_bps" not in raw_flags
+    ):
+        return None
+    live = get_global_settings()
+    parent_on = bool(raw_flags.get("enable_mandatory_bps", live.enable_mandatory_bps))
+    strict_on = bool(
+        raw_flags.get("enable_strict_mandatory_bps", live.enable_strict_mandatory_bps)
+    )
+    if not (parent_on and strict_on):
+        return None
+    from ._tools_meta import BPS_MANDATORY_TOOLS
+
+    tool_states = _persistence.effective_tool_config().get("tools", {})
+    bps_blocked = sorted(
+        name for name in BPS_MANDATORY_TOOLS if tool_states.get(name) == "disabled"
+    )
+    if not bps_blocked:
+        return None
+    return JSONResponse(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            "Cannot turn on strict best-practices mode while "
+            f"{', '.join(bps_blocked)} is disabled in the Tools tab — "
+            "strict mode publishes its acknowledgment key only through "
+            "that tool.",
+            suggestions=[
+                f"Re-enable {', '.join(bps_blocked)} in the Tools tab "
+                "first, then turn strict mode on.",
+            ],
+            context={"rejected": bps_blocked},
+        ),
+        status_code=409,
+    )
+
+
 # ---- Restart ----
 
 
@@ -706,6 +759,10 @@ async def _save_feature_flags(
     )
     if strict_rejection is not None:
         return strict_rejection
+
+    bps_tool_rejection = _reject_strict_bps_without_skill_tool(raw_flags)
+    if bps_tool_rejection is not None:
+        return bps_tool_rejection
 
     new_overrides, addon_writes, file_or_default_writes, err = (
         _validate_feature_flag_batch(raw_flags)

@@ -389,7 +389,9 @@ class YamlConfigTools:
         # here — see strict_bps.py for the declaration contract.
         BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
-        """Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT). MUST call ha_get_skill_guide OR refer to your locally installed skills first.
+        """Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT).
+
+        MUST call ha_get_skill_guide OR refer to your locally installed skills first.
 
         **WARNING:** Destructive, disabled by default. Dedicated tools exist for
         almost every use case and should be preferred:

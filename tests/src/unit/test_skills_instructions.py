@@ -462,11 +462,33 @@ class TestSkillToolMandatoryPinning:
 
         assert SKILL_TOOL_NAME in DEFAULT_PINNED_TOOLS
 
-    def test_mandatory_tools_includes_skill_guide(self):
+    def test_skill_guide_mandatory_tracks_strict_bps(self):
+        """#1886: the skill guide is locked enabled only while strict
+        best-practices mode is configured on (parent AND child flags) —
+        it is the sole publisher of the strict-mode acknowledgment key.
+        With strict mode off, local-skills users may disable the tool."""
         from ha_mcp.server import SKILL_TOOL_NAME
-        from ha_mcp.settings_ui import MANDATORY_TOOLS
+        from ha_mcp.settings_ui import (
+            BPS_MANDATORY_TOOLS,
+            MANDATORY_TOOLS,
+            effective_mandatory_tools,
+        )
 
-        assert SKILL_TOOL_NAME in MANDATORY_TOOLS
+        assert SKILL_TOOL_NAME in BPS_MANDATORY_TOOLS
+        assert SKILL_TOOL_NAME not in MANDATORY_TOOLS
+
+        strict = MagicMock(
+            enable_mandatory_bps=True, enable_strict_mandatory_bps=True
+        )
+        non_strict = MagicMock(
+            enable_mandatory_bps=True, enable_strict_mandatory_bps=False
+        )
+        parent_off = MagicMock(
+            enable_mandatory_bps=False, enable_strict_mandatory_bps=True
+        )
+        assert SKILL_TOOL_NAME in effective_mandatory_tools(strict)
+        assert SKILL_TOOL_NAME not in effective_mandatory_tools(non_strict)
+        assert SKILL_TOOL_NAME not in effective_mandatory_tools(parent_off)
 
     def test_tool_name_fits_cloudflare_cap(self):
         """#1121: Cloudflare MCP portal rejects tool names > 40 chars."""

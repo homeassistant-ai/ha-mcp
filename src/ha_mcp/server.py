@@ -618,7 +618,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "ha_config_get_automation). Omit `identifier` to create a "
             "new automation.\n\n"
             "For schema details, examples, and native-vs-template "
-            "guidance, see ha_get_skill_guide."
+            "guidance, see ha_get_skill_guide or your locally "
+            "installed skills."
         ),
         "ha_config_get_script": (
             "Get a Home Assistant script configuration by "
@@ -635,7 +636,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "`config_hash` from ha_config_get_script). `script_id` names "
             "the script in both modes.\n\n"
             "For schema details and examples, see "
-            "ha_get_skill_guide."
+            "ha_get_skill_guide or your locally installed skills."
         ),
         "ha_config_get_scene": (
             "Get a Home Assistant scene configuration by "
@@ -651,7 +652,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "`python_transform` on an existing scene (requires "
             "`config_hash`). `scene_id` names the scene in both modes.\n\n"
             "For schema details and examples, see "
-            "ha_get_skill_guide."
+            "ha_get_skill_guide or your locally installed skills."
         ),
         "ha_config_list_helpers": (
             "List Home Assistant helpers of a given type, one page per "
@@ -676,7 +677,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "Field set is delivered as `data_schema` on the first "
             "validation error — submit once and self-correct. For "
             "decision matrix and worked examples (which helper type "
-            "for which use case), see ha_get_skill_guide."
+            "for which use case), see ha_get_skill_guide or your "
+            "locally installed skills."
         ),
         "ha_config_get_dashboard": (
             "Get Home Assistant dashboard info (list mode, search "
@@ -705,7 +707,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "to target the built-in dashboard.\n\n"
             "For card types, layout patterns, and python_transform "
             "security rules, see "
-            "ha_get_skill_guide."
+            "ha_get_skill_guide or your locally installed skills."
         ),
         "ha_call_service": (
             "Execute a Home Assistant service to control entities or "
@@ -733,7 +735,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "full HA restart; template, mqtt, and group support "
             "reload.\n\n"
             "For routing guidance and the full allowlist, see "
-            "ha_get_skill_guide."
+            "ha_get_skill_guide or your locally installed skills."
         ),
         "ha_search": (
             "Search Home Assistant for entities (by name, domain, or area) AND "
