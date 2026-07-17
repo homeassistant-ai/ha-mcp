@@ -2,7 +2,7 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. It registers twenty commands (twenty capabilities — the
+capability gate. It registers twenty-one commands (twenty-one capabilities — the
 ``search_visibility`` capability is a flag on the existing ``search`` command,
 and ``info`` itself carries no capability entry):
 
@@ -118,6 +118,20 @@ and ``info`` itself carries no capability entry):
   from ``entry.data``) and returns ``{entry_id, channel, pip_spec}`` (channel /
   pip_spec from ``entry.options``), so ``ha_dev_manage_server`` need not probe
   every ``ha_mcp_tools``-domain entry's options-flow schema from the outside.
+* ``ha_mcp_tools/call_service`` — the FIRST write capability. Fires exactly one
+  ``hass.services.async_call`` in-process and returns the REAL pre→post state
+  transition for the target ``entity_ids`` — event-confirmed via an
+  ``EVENT_STATE_CHANGED`` listener registered BEFORE the dispatch (closing the
+  fast-entity race), not a hardcoded service→state guess. All awaiting work (the
+  dispatch, the bounded confirmation wait) runs in :func:`_call_service_prep`;
+  :func:`_do_call_service` is a pure formatter. An AUTHORITATIVE component-side
+  domain block refuses ``domain == "ha_mcp_tools"`` (case/whitespace-normalized)
+  BEFORE any ``has_service``/dispatch, independent of (and in addition to) the
+  server-side guard — so this second write path can NEVER be turned into an
+  in-process invoker of the admin-gated ``ha_mcp_tools.*`` services
+  (``get_caller_token`` → arbitrary config-dir file/YAML writes). A confirmation
+  timeout is reported as ``partial`` (``success`` still holds); a failure BEFORE
+  the dispatch raises, a failure AFTER it does not (the call already landed).
 
 * ``ha_mcp_tools/config_entries`` — config entries as the ``config_entries/get``
   WS shape (``created_at`` / ``modified_at`` / ``entry_id`` / ``domain`` /
@@ -273,6 +287,7 @@ WS_DASHBOARDS = f"{WS_API_PREFIX}/dashboards"
 WS_SERVICES_LIST = f"{WS_API_PREFIX}/services_list"
 WS_REFERENCE_DATA = f"{WS_API_PREFIX}/reference_data"
 WS_SERVER_ENTRY = f"{WS_API_PREFIX}/server_entry"
+WS_CALL_SERVICE = f"{WS_API_PREFIX}/call_service"
 
 # Wire-format generation of the request/response envelopes. Bumped only on an
 # *incompatible* shape change to an existing command; additive fields do not
@@ -308,6 +323,10 @@ CAPABILITIES: list[str] = [
     # routing; the CAPABILITIES flag is what the server gates on).
     "search_visibility",
     "server_entry",
+    # The first WRITE capability (Phase 3). The server gates its ``ha_call_service``
+    # component route on this; an old component that lacks it is never sent a
+    # component write and stays on the legacy REST path.
+    "call_service",
 ]
 
 # The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates
@@ -326,6 +345,15 @@ MAX_BODY_BYTES = 1_000_000
 LIMITS = {"max_results": MAX_RESULTS, "max_body_bytes": MAX_BODY_BYTES}
 
 DEFAULT_LIMIT = 10
+
+# ``call_service`` confirmation-wait bounds. The default mirrors the legacy
+# ``ha_call_service`` 10s subscribe-and-sample window; the cap bounds a
+# caller-supplied ``timeout`` (schema ``vol.Range``) so a single write frame can
+# never park the WS connection for longer than this. ``blocking=True`` only means
+# HA finished DISPATCHING — a mesh device (Zigbee/Z-Wave) may still be settling —
+# so the wait is bounded and its expiry is ``partial``, never a failure (D4).
+CALL_SERVICE_DEFAULT_TIMEOUT = 10.0
+CALL_SERVICE_MAX_TIMEOUT = 60.0
 
 # Fuzzy floor + hidden penalty, mirrored from the server so the two scorers do
 # not drift (guarded by the golden parity test).
@@ -472,6 +500,10 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_services_list_schema(), _do_services_list, _services_list_prep),
         (_reference_data_schema(), _do_reference_data, None),
         (_server_entry_schema(), _do_server_entry, None),
+        # The first WRITE command: the dispatch + the bounded confirmation wait are
+        # inherently async, so ALL of the work lives in the ``_call_service_prep``
+        # async pre-step and ``_do_call_service`` is a pure response formatter.
+        (_call_service_schema(), _do_call_service, _call_service_prep),
     ]
 
 
@@ -695,6 +727,27 @@ def _reference_data_schema() -> dict[Any, Any]:
 
 def _server_entry_schema() -> dict[Any, Any]:
     return {vol.Required("type"): WS_SERVER_ENTRY}
+
+
+def _call_service_schema() -> dict[Any, Any]:
+    # ``entity_ids`` is the set of targets to CONFIRM (the pre/post transition is
+    # built for these), not the service target itself — a caller may pass an empty
+    # list for a non-entity service (``automation.trigger`` etc.) and still get the
+    # dispatch result. ``timeout`` is capped at ``CALL_SERVICE_MAX_TIMEOUT`` so a
+    # single write frame cannot park the connection. Mutable defaults use the
+    # callable form so each validation produces a fresh ``{}`` / ``[]``.
+    return {
+        vol.Required("type"): WS_CALL_SERVICE,
+        vol.Required("domain"): str,
+        vol.Required("service"): str,
+        vol.Optional("service_data", default=dict): dict,
+        vol.Optional("entity_ids", default=list): [str],
+        vol.Optional("wait", default=True): bool,
+        vol.Optional("timeout", default=CALL_SERVICE_DEFAULT_TIMEOUT): vol.All(
+            vol.Any(int, float), vol.Range(min=0, max=CALL_SERVICE_MAX_TIMEOUT)
+        ),
+        vol.Optional("return_response", default=False): bool,
+    }
 
 
 # =============================================================================
@@ -4947,3 +5000,267 @@ def _entry_marker_type(entry: Any) -> Any:
     if isinstance(data, Mapping):
         return data.get(CONF_ENTRY_TYPE)
     return None
+
+
+# =============================================================================
+# ha_mcp_tools/call_service  (the first WRITE capability — Phase 3, issue #1813)
+# =============================================================================
+def _do_call_service(
+    hass: HomeAssistant, params: dict[str, Any], *, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Pure sync formatter for ``call_service``.
+
+    ALL of the work — the authoritative domain block, the ``ServiceNotFound``
+    check, the pre-state capture, the register-before-fire listener, the single
+    ``async_call`` dispatch, and the bounded confirmation wait — happens in the
+    async :func:`_call_service_prep`, which hands the finished result dict in as
+    ``result``. This function only returns that envelope (mirroring every other
+    ``_do_*``: the WS wrapper's ``send_result`` adds the outer success frame), so
+    no awaiting / blocking work ever runs in a ``_do_*`` step (D2).
+    """
+    return result
+
+
+async def _call_service_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Do all of ``call_service``'s async work; return ``{"result": <envelope>}``.
+
+    The order is load-bearing:
+
+    1. **D1 — authoritative domain block (security-critical).** Refuse
+       ``domain == "ha_mcp_tools"`` (case/whitespace-normalized) BEFORE any
+       ``has_service`` / dispatch. This is enforced HERE, in the component that
+       fires the call, independent of (and in addition to) the server-side guard:
+       a component ``call_service`` that skipped it would let a caller invoke the
+       admin-gated ``ha_mcp_tools.get_caller_token`` in-process (the server IS
+       admin) and then every file/YAML service. The block keys off the RESOLVED
+       domain, so it holds no matter which path reaches this function.
+    2. **ServiceNotFound** before dispatch, so an unknown service is a clean
+       ``SERVICE_NOT_FOUND`` and never a landed-but-unreported write.
+    3. Pre-state capture for each ``entity_id`` (a synchronous in-memory read).
+    4. Register the ``EVENT_STATE_CHANGED`` listener BEFORE the dispatch (D5) so a
+       fast entity's event can't arrive before the listener exists.
+    5. Fire exactly ONE ``async_call`` (``blocking=True``); flip ``dispatched``
+       immediately after so a post-dispatch problem is never retried as a failed
+       call (D3/D9).
+    6. Bounded wait for the target transitions (D4); expiry is ``partial``.
+    7. Diff pre→post into the real transition(s).
+
+    Pre-dispatch problems (D1, ``ServiceNotFound``, and any ``async_call`` /
+    ``return_response`` validation error) PROPAGATE — the WS handler turns a raised
+    exception into a command error the server maps (D7). A confirmation timeout is
+    caught and reported as ``partial`` (never re-raised): the call already landed.
+    """
+    import asyncio
+
+    domain = msg["domain"]
+    service = msg["service"]
+
+    # 1./2. Pre-dispatch guards (D1 domain block + ServiceNotFound) — both raise
+    # BEFORE any listener registration or dispatch, so a refused call is never a
+    # landed-but-unreported write and ``async_call`` is provably never reached.
+    _guard_call_service_target(hass, domain, service)
+
+    service_data = msg.get("service_data") or {}
+    entity_ids = list(msg.get("entity_ids") or [])
+    wait = msg.get("wait", True)
+    timeout = msg.get("timeout", CALL_SERVICE_DEFAULT_TIMEOUT)
+    return_response = msg.get("return_response", False)
+    should_confirm = bool(wait and entity_ids)
+
+    # 3. Pre-state capture (synchronous in-memory reads, guarded against drift).
+    pre = {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids}
+
+    # 4. Register-before-fire (D5): only when there is something to confirm.
+    evt: Any = None
+    captured: dict[str, Any] = {}
+    unsub: Any = None
+    if should_confirm:
+        evt, captured, unsub = _register_transition_waiter(hass, set(entity_ids))
+
+    # 5. Dispatch exactly once; 6. bounded confirmation wait. ``unsub`` always runs.
+    response: Any = None
+    dispatched = False
+    try:
+        response = await hass.services.async_call(
+            domain,
+            service,
+            dict(service_data),
+            blocking=True,
+            return_response=return_response,
+        )
+        dispatched = True
+        if should_confirm:
+            try:
+                await asyncio.wait_for(evt.wait(), timeout)
+            except TimeoutError:
+                pass  # partial confirmation, not a failure (D4)
+    finally:
+        if unsub is not None:
+            unsub()
+
+    # 7. Post-state + real pre→post diff, assembled into the response envelope.
+    result = _build_call_service_result(
+        hass,
+        domain,
+        service,
+        entity_ids,
+        pre,
+        captured,
+        should_confirm=should_confirm,
+        dispatched=dispatched,
+        return_response=return_response,
+        response=response,
+    )
+    return {"result": result}
+
+
+def _guard_call_service_target(hass: HomeAssistant, domain: str, service: str) -> None:
+    """Pre-dispatch refusals for ``call_service`` — raise BEFORE any dispatch.
+
+    * **D1 (security-critical)** — refuse ``domain == "ha_mcp_tools"``
+      (case/whitespace-normalized). Enforced HERE, in the component that fires the
+      call, independent of (and in addition to) the server-side guard: a component
+      ``call_service`` that skipped it would let a caller invoke the admin-gated
+      ``ha_mcp_tools.get_caller_token`` in-process (the server IS admin) and then
+      every file/YAML service. The block keys off the RESOLVED domain, so it holds
+      no matter which path reaches this function.
+    * **ServiceNotFound** — an unknown service is a clean ``SERVICE_NOT_FOUND``, not
+      a phantom write. Both raises propagate to the WS handler (D7).
+    """
+    if str(domain).strip().lower() == DOMAIN:
+        from homeassistant.exceptions import HomeAssistantError
+
+        raise HomeAssistantError(
+            "the ha_mcp_tools domain is not callable through call_service; "
+            "use the dedicated ha_* tools"
+        )
+    if not hass.services.has_service(domain, service):
+        from homeassistant.exceptions import ServiceNotFound
+
+        raise ServiceNotFound(domain, service)
+
+
+def _register_transition_waiter(
+    hass: HomeAssistant, target_set: set[str]
+) -> tuple[Any, dict[str, Any], Any]:
+    """Register the ``EVENT_STATE_CHANGED`` listener BEFORE the dispatch (D5).
+
+    Returns ``(evt, captured, unsub)``: ``evt`` is set once every id in
+    ``target_set`` has reported a ``new_state``; ``captured`` maps each id to its
+    raw new_state; ``unsub`` tears the listener down. Registering before the
+    dispatch closes the race where a fast entity's event arrives before the
+    listener exists.
+    """
+    import asyncio
+
+    from homeassistant.const import EVENT_STATE_CHANGED
+
+    evt = asyncio.Event()
+    captured: dict[str, Any] = {}
+
+    # A PLAIN nested function — NOT ``@callback`` decorated: the unit-test harness
+    # MagicMock-stubs homeassistant.core, so a ``callback`` decorator would be a
+    # MagicMock and break the listener. A plain callable is a valid
+    # ``hass.bus.async_listen`` handler.
+    def _on_change(event: Any) -> None:
+        data = getattr(event, "data", None) or {}
+        eid = data.get("entity_id")
+        if eid in target_set:
+            captured[eid] = data.get("new_state")
+            if target_set <= set(captured):
+                evt.set()
+
+    unsub = hass.bus.async_listen(EVENT_STATE_CHANGED, _on_change)
+    return evt, captured, unsub
+
+
+def _build_call_service_result(
+    hass: HomeAssistant,
+    domain: str,
+    service: str,
+    entity_ids: list[str],
+    pre: Mapping[str, Any],
+    captured: Mapping[str, Any],
+    *,
+    should_confirm: bool,
+    dispatched: bool,
+    return_response: bool,
+    response: Any,
+) -> dict[str, Any]:
+    """Assemble the ``call_service`` response envelope from the captured transition.
+
+    ``confirmed`` is True only when every target reported within the wait;
+    ``partial`` is a confirmation that lapsed (never a failure). ``dispatched`` is
+    only ever ``True`` here (a pre-dispatch problem raised out of the prep);
+    reporting the flag rather than a literal keeps the D9 at-most-once boundary —
+    "reached this shape ⇒ the single async_call fired" — explicit for the server,
+    which never retries a dispatched write. ``service_response`` is present only
+    when it was both requested AND non-``None``.
+    """
+    transitions = [
+        _call_service_transition(eid, pre.get(eid), _post_state(hass, eid, captured))
+        for eid in entity_ids
+    ]
+    confirmed = bool(should_confirm and set(entity_ids) <= set(captured))
+    result: dict[str, Any] = {
+        "domain": domain,
+        "service": service,
+        "dispatched": dispatched,
+        "confirmed": confirmed,
+        "partial": bool(should_confirm and not confirmed),
+        "transitions": transitions,
+    }
+    if return_response and response is not None:
+        result["service_response"] = response
+    return result
+
+
+def _post_state(
+    hass: HomeAssistant, entity_id: str, captured: Mapping[str, Any]
+) -> Any:
+    """The post-dispatch state for ``entity_id`` as a plain dict (or ``None``).
+
+    Prefers the listener-captured ``new_state`` (the event that confirmed the
+    transition, normalized through the shared :func:`_state_as_dict`); falls back
+    to a fresh guarded ``hass.states`` re-read when the target did not report within
+    the wait (the ``partial`` case), so a transition row is still populated with the
+    best-available current state. Both ``None`` (a vanished/stateless entity) and
+    core drift degrade to ``None`` rather than raising.
+    """
+    if entity_id in captured:
+        as_dict = _state_as_dict(captured[entity_id])
+        if as_dict is not None:
+            return as_dict
+    return _state_as_dict(_state_get(hass, entity_id))
+
+
+def _call_service_transition(
+    entity_id: str,
+    old_state: dict[str, Any] | None,
+    new_state: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """The real pre→post transition for one target entity.
+
+    ``changed`` compares the top-level ``state``; ``attributes_changed`` lists the
+    attribute keys whose values differ (added/removed keys included). Both sides
+    may be ``None`` (a stateless or vanished entity), which the ``or {}`` guards
+    fold into an all-``None`` comparison rather than raising.
+    """
+    old = old_state or {}
+    new = new_state or {}
+    old_attrs = old.get("attributes") or {}
+    new_attrs = new.get("attributes") or {}
+    attributes_changed = sorted(
+        key
+        for key in set(old_attrs) | set(new_attrs)
+        if old_attrs.get(key) != new_attrs.get(key)
+    )
+    return {
+        "entity_id": entity_id,
+        "old_state": old_state,
+        "new_state": new_state,
+        "changed": old.get("state") != new.get("state"),
+        "attributes_changed": attributes_changed,
+    }
