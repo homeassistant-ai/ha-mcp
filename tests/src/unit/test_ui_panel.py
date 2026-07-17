@@ -345,6 +345,44 @@ class TestProxyForwarding:
         assert "host" not in fwd
         assert "accept" in fwd  # innocuous headers pass through
 
+    async def test_forwards_only_allowlisted_locale_cookie(self):
+        session = FakeSession(upstream=FakeUpstream(body=b"{}"))
+        hass = _running_hass(session)
+        cookies = {
+            **_valid_cookie(hass),
+            ui_panel._LOCALE_COOKIE_NAME: "ru-RU",
+            "other_browser_cookie": "must-not-leak",
+        }
+        request = _make_request(
+            hass=hass,
+            cookies=cookies,
+            headers={
+                "Cookie": (
+                    "ha_mcp_tools_ui_session=secret; ha_mcp_locale=ru-RU; "
+                    "other_browser_cookie=must-not-leak"
+                )
+            },
+        )
+
+        await ui_panel._ProxyView().get(request, "settings")
+
+        forwarded = session.calls[0]["headers"]
+        assert forwarded["Cookie"] == "ha_mcp_locale=ru-RU"
+        assert "ha_mcp_tools_ui_session" not in forwarded["Cookie"]
+        assert "other_browser_cookie" not in forwarded["Cookie"]
+
+    @pytest.mark.parametrize("locale", ["ru; admin=true", "x" * 65])
+    async def test_rejects_unsafe_locale_cookie(self, locale: str):
+        session = FakeSession(upstream=FakeUpstream(body=b"{}"))
+        hass = _running_hass(session)
+        cookies = {**_valid_cookie(hass), ui_panel._LOCALE_COOKIE_NAME: locale}
+        request = _make_request(hass=hass, cookies=cookies)
+
+        await ui_panel._ProxyView().get(request, "settings")
+
+        forwarded = {key.lower() for key in session.calls[0]["headers"]}
+        assert "cookie" not in forwarded
+
     async def test_post_body_is_forwarded(self):
         session = FakeSession(upstream=FakeUpstream(body=b"{}"))
         hass = _running_hass(session)
@@ -402,9 +440,12 @@ class TestBootView:
         resp = await ui_panel._BootView().get(_make_request(hass=_make_hass()))
         assert resp.content_type == "text/html"
         assert ui_panel._SESSION_URL.encode() in resp.body
-        # The script builds APP_URL as _APP_PREFIX + "settings", so only the
+        # The script builds APP_BASE_URL as _APP_PREFIX + "settings", so only the
         # prefix appears literally in the served body.
         assert ui_panel._APP_PREFIX.encode() in resp.body
+        assert b"root.hass.language" in resp.body
+        assert b"?ha_lang=" in resp.body
+        assert b"encodeURIComponent(language)" in resp.body
         assert b"<iframe" in resp.body
 
     def test_view_auth_model_is_pinned(self):

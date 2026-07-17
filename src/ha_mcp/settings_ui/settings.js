@@ -1,3 +1,113 @@
+// The server embeds exactly one merged locale catalog in the page. English
+// values are already merged as fallback, so an incomplete translation remains
+// usable and adding a language requires only a new locales/<code>.json file.
+const I18N_PAYLOAD = (() => {
+  const el = document.getElementById('ha-mcp-i18n');
+  if (!el) return {locale: 'en', dir: 'ltr', messages: {}, tool_groups: {}, tools: {}, languages: []};
+  try {
+    return JSON.parse(el.textContent || '{}');
+  } catch (err) {
+    console.warn('[ha-mcp] invalid embedded translation catalog', err);
+    return {locale: 'en', dir: 'ltr', messages: {}, tool_groups: {}, tools: {}, languages: []};
+  }
+})();
+const LOCALE_COOKIE = 'ha_mcp_locale';
+
+function t(key, params = {}, fallback = key) {
+  let value = Object.prototype.hasOwnProperty.call(I18N_PAYLOAD.messages || {}, key)
+    ? I18N_PAYLOAD.messages[key]
+    : fallback;
+  Object.keys(params).forEach(name => {
+    value = value.replaceAll(`{${name}}`, String(params[name]));
+  });
+  return value;
+}
+
+function localizeMeta(section, field, meta) {
+  return {
+    ...meta,
+    label: t(`${section}.${field}.label`, {}, meta.label || field),
+    help: t(`${section}.${field}.help`, {}, meta.help || ''),
+  };
+}
+
+function localizedToolGroup(group) {
+  return (I18N_PAYLOAD.tool_groups || {})[group] || group;
+}
+
+function localizedToolCopy(tool, description) {
+  const translated = (I18N_PAYLOAD.tools || {})[tool.name] || {};
+  return {
+    title: translated.title || tool.title || tool.name,
+    description: translated.description || description,
+  };
+}
+
+function applyStaticTranslations(root = document) {
+  root.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n, {}, el.textContent);
+  });
+  root.querySelectorAll('[data-i18n-html]').forEach(el => {
+    el.innerHTML = t(el.dataset.i18nHtml, {}, el.innerHTML);
+  });
+  for (const attribute of ['placeholder', 'title', 'aria-label']) {
+    const dataName = `i18n${attribute.split('-').map(part => part[0].toUpperCase() + part.slice(1)).join('')}`;
+    root.querySelectorAll(`[data-i18n-${attribute}]`).forEach(el => {
+      const key = el.dataset[dataName];
+      el.setAttribute(attribute, t(key, {}, el.getAttribute(attribute) || ''));
+    });
+  }
+}
+
+function _readLocaleCookie() {
+  const prefix = `${LOCALE_COOKIE}=`;
+  const entry = document.cookie.split(';').map(value => value.trim()).find(value => value.startsWith(prefix));
+  if (!entry) return '';
+  try {
+    return decodeURIComponent(entry.slice(prefix.length));
+  } catch (err) {
+    console.warn('[ha-mcp] ignoring malformed locale cookie', err);
+    return '';
+  }
+}
+
+function _writeLocaleCookie(locale) {
+  if (locale === 'auto') {
+    document.cookie = `${LOCALE_COOKIE}=; Max-Age=0; Path=/; SameSite=Lax`;
+    return;
+  }
+  document.cookie = `${LOCALE_COOKIE}=${encodeURIComponent(locale)}; Max-Age=31536000; Path=/; SameSite=Lax`;
+}
+
+function initializeLanguageControl() {
+  document.documentElement.lang = I18N_PAYLOAD.locale || 'en';
+  document.documentElement.dir = I18N_PAYLOAD.dir || 'ltr';
+  applyStaticTranslations();
+
+  const select = document.getElementById('languageToggle');
+  if (!select) return;
+  select.innerHTML = '';
+  const auto = document.createElement('option');
+  auto.value = 'auto';
+  auto.textContent = t('language.auto', {}, 'Auto');
+  select.appendChild(auto);
+  (I18N_PAYLOAD.languages || []).forEach(language => {
+    const option = document.createElement('option');
+    option.value = language.code;
+    option.textContent = language.native_name;
+    select.appendChild(option);
+  });
+  const saved = _readLocaleCookie();
+  select.value = Array.from(select.options).some(option => option.value === saved)
+    ? saved
+    : 'auto';
+  select.addEventListener('change', () => {
+    _writeLocaleCookie(select.value);
+    window.location.reload();
+  });
+}
+
+initializeLanguageControl();
 
 // Catch top-level / async script errors and write them into the #status
 // ARIA live region (now visually hidden — see settings.css). This still
@@ -11,13 +121,18 @@ window.addEventListener('error', (e) => {
   if (!el) return;
   const where = e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : 'inline';
   setStatusAlert(el, true);
-  el.textContent = `JS error: ${e.message} @ ${where}`;
+  el.textContent = t(
+    'errors.javascript',
+    {message: e.message, where},
+    `JS error: ${e.message} @ ${where}`
+  );
 });
 window.addEventListener('unhandledrejection', (e) => {
   const el = document.getElementById('status');
   if (!el) return;
   setStatusAlert(el, true);
-  el.textContent = `Async error: ${e.reason && e.reason.message ? e.reason.message : String(e.reason)}`;
+  const message = e.reason && e.reason.message ? e.reason.message : String(e.reason);
+  el.textContent = t('errors.async', {message}, `Async error: ${message}`);
 });
 
 let toolData = [];
@@ -137,15 +252,22 @@ async function policyPut(policy, opLabel) {
     body: JSON.stringify(policy),
   });
   if (w.status === 409) {
-    throw new Error(opLabel + ' failed: policy was modified in another tab/session. Reload the page, then re-apply your changes.');
+    throw new Error(t(
+      'policies.errors.conflict',
+      {operation: opLabel},
+      opLabel + ' failed: policy was modified in another tab/session. Reload the page, then re-apply your changes.'
+    ));
   }
-  if (!w.ok) throw new Error(opLabel + ' failed: ' + w.status + ' ' + await w.text());
+  if (!w.ok) {
+    const detail = w.status + ' ' + await w.text();
+    throw new Error(t('common.operation_failed', {operation: opLabel, detail}, opLabel + ' failed: ' + detail));
+  }
   return await w.json();
 }
 
 async function syncPolicyRule(toolName, gated) {
   const r = await fetch('./api/policy/config');
-  if (!r.ok) throw new Error('Could not load policy: ' + r.status);
+  if (!r.ok) throw new Error(t('policies.errors.load', {status: r.status}, 'Could not load policy: ' + r.status));
   const policy = await r.json();
   policy.rules = policy.rules || [];
   if (gated) {
@@ -155,7 +277,7 @@ async function syncPolicyRule(toolName, gated) {
   } else {
     policy.rules = policy.rules.filter(rule => rule.tool_name !== toolName);
   }
-  await policyPut(policy, 'Sync gated toggle');
+  await policyPut(policy, t('policies.operations.sync_gated', {}, 'Sync gated toggle'));
 }
 
 async function loadTools() {
@@ -163,18 +285,30 @@ async function loadTools() {
   try {
     resp = await fetch('./api/settings/tools');
   } catch (e) {
-    updateStatus('Network error reaching /api/settings/tools: ' + e.message, false, true);
+    updateStatus(t(
+      'errors.network_endpoint',
+      {endpoint: '/api/settings/tools', message: e.message},
+      'Network error reaching /api/settings/tools: ' + e.message
+    ), false, true);
     return;
   }
   if (!resp.ok) {
-    updateStatus(`/api/settings/tools returned HTTP ${resp.status} ${resp.statusText}`, false, true);
+    updateStatus(t(
+      'errors.http_endpoint',
+      {endpoint: '/api/settings/tools', status: resp.status, detail: resp.statusText},
+      `/api/settings/tools returned HTTP ${resp.status} ${resp.statusText}`
+    ), false, true);
     return;
   }
   let data;
   try {
     data = await resp.json();
   } catch (e) {
-    updateStatus('Failed to parse /api/settings/tools response as JSON: ' + e.message, false, true);
+    updateStatus(t(
+      'errors.json_endpoint',
+      {endpoint: '/api/settings/tools', message: e.message},
+      'Failed to parse /api/settings/tools response as JSON: ' + e.message
+    ), false, true);
     return;
   }
   toolData = data.tools || [];
@@ -200,8 +334,12 @@ async function loadTools() {
     // parent stdio process couldn't dump the metadata cache. Tell
     // the user where to look instead of leaving them on "Loading".
     updateStatus(
-      'No tools found. The sidecar reads ~/.ha-mcp/tool_metadata.json. ' +
-      'If it is missing or empty, restart your MCP client. See ~/.ha-mcp/sidecar.log for details.',
+      t(
+        'tools.empty',
+        {},
+        'No tools found. The sidecar reads ~/.ha-mcp/tool_metadata.json. ' +
+        'If it is missing or empty, restart your MCP client. See ~/.ha-mcp/sidecar.log for details.'
+      ),
       false, true
     );
     return;
@@ -209,10 +347,14 @@ async function loadTools() {
   try {
     render();
   } catch (e) {
-    updateStatus('Render failed: ' + e.message + ' (open browser devtools for the stack)', false, true);
+    updateStatus(t(
+      'errors.render',
+      {message: e.message},
+      'Render failed: ' + e.message + ' (open browser devtools for the stack)'
+    ), false, true);
     throw e;
   }
-  updateStatus('Loaded');
+  updateStatus(t('status.loaded', {}, 'Loaded'));
 }
 
 async function applyInfoChrome() {
@@ -232,14 +374,11 @@ async function applyInfoChrome() {
     if (info.is_addon) {
       document.getElementById('restartBtn').style.display = '';
       if (noticeEl) {
-        noticeEl.textContent =
-          '⚠ Changes saved. Click "Restart App (add-on)" for them to take ' +
-          'effect. Disabled tools will be fully removed from the MCP ' +
-          'tool list on next startup. Then refresh the tool list in your ' +
-          'AI client — e.g. refresh tool list on claude.ai, re-add or ' +
-          'refresh the connector in ChatGPT, or close and reopen Claude ' +
-          'Desktop. Restarting the App (add-on) alone does not refresh your ' +
-          'client\'s cached tool list.';
+        noticeEl.textContent = t(
+          'notice.restart.addon',
+          {},
+          '⚠ Changes saved. Click "Restart App (add-on)" for them to take effect. Then refresh the MCP tool list in your AI client.'
+        );
       }
     } else if (info.deployment_mode === 'embedded') {
       // In-process (custom component) server: the restart endpoint reloads
@@ -247,39 +386,32 @@ async function applyInfoChrome() {
       // worker onto the freshly installed code.
       const rbtn = document.getElementById('restartBtn');
       rbtn.style.display = '';
-      rbtn.textContent = 'Restart HA-MCP Server';
+      rbtn.textContent = t('actions.restart_server', {}, 'Restart HA-MCP Server');
       if (noticeEl) {
-        noticeEl.textContent =
-          '⚠ Changes saved. Click "Restart HA-MCP Server" (reloads the ' +
-          'in-process server integration) for them to take effect. ' +
-          'Disabled tools will be fully removed from the MCP tool list on ' +
-          'next startup. Then refresh the tool list in your AI client — ' +
-          'e.g. refresh tool list on claude.ai, re-add or refresh the ' +
-          'connector in ChatGPT, or close and reopen Claude Desktop.';
+        noticeEl.textContent = t(
+          'notice.restart.embedded',
+          {},
+          '⚠ Changes saved. Click "Restart HA-MCP Server" for them to take effect. Then refresh the MCP tool list in your AI client.'
+        );
       }
     } else if (info.is_sidecar) {
       if (noticeEl) {
-        noticeEl.textContent =
-          '⚠ Changes saved. Fully quit and reopen your MCP client ' +
-          '(Claude Desktop: right-click the tray icon → Quit, then ' +
-          'relaunch; Claude Code: close the terminal session) for them ' +
-          'to take effect. Disabled tools will be fully removed from the ' +
-          'MCP tool list on next startup.';
+        noticeEl.textContent = t(
+          'notice.restart.sidecar',
+          {},
+          '⚠ Changes saved. Fully quit and reopen your MCP client for them to take effect.'
+        );
       }
       document.getElementById('sidecarStopRow').style.display = '';
     } else if (noticeEl) {
       // HTTP / Docker / standalone — no button we can wire to a restart,
       // so describe the action in process terms, then the client-refresh
       // step (remote connectors cache the tool list, same as add-on mode).
-      noticeEl.textContent =
-        '⚠ Changes saved. Restart your ha-mcp process (Docker ' +
-        'container, systemd service, or however you launch it) for them ' +
-        'to take effect. Disabled tools will be fully removed from the ' +
-        'MCP tool list on next startup. Then refresh the tool list in ' +
-        'your AI client — e.g. refresh tool list on claude.ai, re-add or ' +
-        'refresh the connector in ChatGPT, or close and reopen Claude ' +
-        'Desktop. Restarting ha-mcp alone does not refresh your client\'s ' +
-        'cached tool list.';
+      noticeEl.textContent = t(
+        'notice.restart.standalone',
+        {},
+        '⚠ Changes saved. Restart the ha-mcp process, then refresh the MCP tool list in your AI client.'
+      );
     }
     // Version footer — show the running ha-mcp build at the bottom
     // of every page. ``info.version`` is whatever
@@ -307,29 +439,22 @@ async function stopSidecar() {
   // is right-aligned near the top of a list of toggle controls, so
   // accidental clicks are easy; the dialog needs to read like a
   // commitment, not a soft prompt.
-  if (!confirm(
+  if (!confirm(t('server.sidecar.confirm_disable', {},
     '⚠ PERMANENTLY disable the settings server?\n\n' +
-    'This stops the running server AND writes a disable marker so it ' +
-    'will NOT respawn on future ha-mcp launches. Every restart of ' +
-    'Claude Desktop / Docker / however you launch HA-MCP will continue ' +
-    'to skip it until you manually re-enable.\n\n' +
-    'To restore access later you must:\n' +
-    '  1. Delete  ~/.ha-mcp/settings_ui_disabled  (the marker file), AND\n' +
-    '  2. Unset  HA_MCP_DISABLE_SETTINGS_UI  if that env var was set.\n\n' +
-    'You will lose the in-browser tool-configuration UI until both ' +
-    'conditions are met. Continue?'
-  )) return;
+    'This stops the running server AND writes a disable marker so it will NOT respawn on future ha-mcp launches.\n\n' +
+    'To restore access later, delete ~/.ha-mcp/settings_ui_disabled and unset HA_MCP_DISABLE_SETTINGS_UI. Continue?'
+  ))) return;
   btn.disabled = true;
-  btn.textContent = 'Stopping...';
+  btn.textContent = t('status.stopping', {}, 'Stopping...');
   try {
     const resp = await fetch('./api/settings/shutdown', {method: 'POST'});
     if (resp.ok) {
-      btn.textContent = 'Stopped. This page will go offline';
+      btn.textContent = t('status.stopped_offline', {}, 'Stopped. This page will go offline');
     } else {
-      let msg = 'Stop failed';
+      let msg = t('errors.stop_failed', {}, 'Stop failed');
       try {
         const err = await resp.json();
-        if (err.error && err.error.message) msg = 'Failed: ' + err.error.message;
+        if (err.error && err.error.message) msg = t('errors.failed_detail', {detail: err.error.message}, 'Failed: ' + err.error.message);
       } catch (_e) {}
       btn.textContent = msg;
       btn.disabled = false;
@@ -337,7 +462,7 @@ async function stopSidecar() {
     }
   } catch (_e) {
     // Connection drop is expected — the sidecar process is exiting.
-    btn.textContent = 'Stopped (connection dropped)';
+    btn.textContent = t('status.stopped_connection', {}, 'Stopped (connection dropped)');
   }
 }
 
@@ -434,9 +559,9 @@ async function _runRestartReloadCycle(previousInstanceId) {
   // Initial grace lets supervisor actually kill the addon before we
   // start probing — otherwise the first probe may hit the OLD
   // instance and we reload before the new one is up.
-  btn.textContent = 'Restarting…';
+  btn.textContent = t('status.restarting', {}, 'Restarting…');
   await new Promise(r => setTimeout(r, RESTART_PROBE_INITIAL_GRACE_MS));
-  btn.textContent = 'Waiting for App (add-on) to come back online…';
+  btn.textContent = t('status.waiting_addon', {}, 'Waiting for App (add-on) to come back online…');
   const restarted = await _probeAddonRestarted(previousInstanceId);
   if (restarted) {
     window.location.reload();
@@ -445,7 +570,7 @@ async function _runRestartReloadCycle(previousInstanceId) {
     // never actually fired (silent supervisor failure → instance_id
     // never flipped) OR supervisor is genuinely slower than the cap.
     // Surface a clear next-step instead of silently doing nothing.
-    btn.textContent = 'App (add-on) did not come back online. Reload manually';
+    btn.textContent = t('errors.addon_not_back', {}, 'App (add-on) did not come back online. Reload manually');
     btn.disabled = false;
     restartInProgress = false;
   }
@@ -454,10 +579,10 @@ async function _runRestartReloadCycle(previousInstanceId) {
 async function restartAddon() {
   if (restartInProgress) return;
   const btn = document.getElementById('restartBtn');
-  if (!confirm('Restart HA-MCP now? The page will reload automatically once it is back online.')) return;
+  if (!confirm(t('actions.restart_confirm', {}, 'Restart HA-MCP now? The page will reload automatically once it is back online.'))) return;
   restartInProgress = true;
   btn.disabled = true;
-  btn.textContent = 'Restarting…';
+  btn.textContent = t('status.restarting', {}, 'Restarting…');
   // Capture the current process's ``instance_id`` BEFORE firing the
   // restart so the poll cycle has a baseline to compare against.
   // null is fine — the probe degrades to the old "any 200 means up"
@@ -472,10 +597,10 @@ async function restartAddon() {
       // user fix the underlying cause. Keep button enabled so they
       // can retry once the issue is resolved. Don't broadcast (other
       // tabs would only see a misleading "restart in progress").
-      let msg = 'Restart failed';
+      let msg = t('errors.restart_failed', {}, 'Restart failed');
       try {
         const err = await resp.json();
-        if (err?.error?.message) msg = 'Failed: ' + err.error.message;
+        if (err?.error?.message) msg = t('errors.failed_detail', {detail: err.error.message}, 'Failed: ' + err.error.message);
       } catch (_e) { /* leave default msg */ }
       btn.textContent = msg;
       btn.disabled = false;
@@ -582,6 +707,7 @@ function escapeHtml(s) {
 }
 
 function render() {
+  const tr = t;
   const groups = {};
   toolData.forEach(t => {
     const tag = t.primary_tag || (t.tags && t.tags[0]) || 'Other';
@@ -596,6 +722,7 @@ function render() {
 
   Object.keys(groups).sort().forEach(tag => {
     const tools = groups[tag];
+    const groupLabel = localizedToolGroup(tag);
     const group = document.createElement('div');
     group.className = 'group';
 
@@ -632,10 +759,18 @@ function render() {
     header.className = 'group-header';
     header.innerHTML = `<div class="group-header-left">` +
       `<span class="group-chevron">&#9654;</span>` +
-      `<span class="group-name">${escapeHtml(tag)}</span>` +
-      `<span class="group-count">${groupEnabled}/${tools.length} enabled</span>` +
+      `<span class="group-name">${escapeHtml(groupLabel)}</span>` +
+      `<span class="group-count">${escapeHtml(tr(
+        'tools.group_count',
+        {enabled: groupEnabled, total: tools.length},
+        `${groupEnabled}/${tools.length} enabled`
+      ))}</span>` +
       `</div>` +
-      `<label class="switch group-master" title="Enable/disable all tools in this group">` +
+      `<label class="switch group-master" title="${escapeHtml(tr(
+        'tools.group_toggle_title',
+        {},
+        'Enable/disable all tools in this group'
+      ))}">` +
         `<input type="checkbox" name="tool-group:${escapeHtml(tag)}" ${masterChecked ? 'checked' : ''} ${toggleable.length === 0 ? 'disabled' : ''}>` +
         `<span class="slider"></span>` +
       `</label>`;
@@ -723,47 +858,72 @@ function render() {
       const lockEnabled = roForcedOff || isEnvPinned || isMandatory || isFeatureGated;
       const lockPinned = roForcedOff || isEnvPinned || isMandatory || isFeatureGated || !isEnabled;
 
+      const sourceDesc = (t.description || '').split('\n')[0].slice(0, 120);
+      const toolCopy = localizedToolCopy(t, sourceDesc);
+      const title = toolCopy.title;
+      const desc = toolCopy.description;
+
       const div = document.createElement('div');
       div.className = isEnvPinned ? 'tool env-pinned' : 'tool';
       div.dataset.name = t.name.toLowerCase();
-      div.dataset.title = (t.title || '').toLowerCase();
+      // Search the same localized title the user sees while retaining the
+      // source title as a secondary alias for bilingual/admin workflows.
+      div.dataset.title = [title, t.title].filter(Boolean).join(' ').toLowerCase();
 
       let badges = '';
-      if (isMandatory) badges += '<span class="badge mandatory">mandatory</span>';
-      if (category === 'read') badges += '<span class="badge readonly">read-only</span>';
-      else if (category === 'write') badges += '<span class="badge write">writes</span>';
-      else if (category === 'delete') badges += '<span class="badge destructive">deletes</span>';
+      if (isMandatory) badges += `<span class="badge mandatory">${escapeHtml(tr('tools.badges.mandatory', {}, 'mandatory'))}</span>`;
+      if (category === 'read') badges += `<span class="badge readonly">${escapeHtml(tr('tools.badges.read_only', {}, 'read-only'))}</span>`;
+      else if (category === 'write') badges += `<span class="badge write">${escapeHtml(tr('tools.badges.writes', {}, 'writes'))}</span>`;
+      else if (category === 'delete') badges += `<span class="badge destructive">${escapeHtml(tr('tools.badges.deletes', {}, 'deletes'))}</span>`;
       // A missing/unknown category must still render a visible badge — a
       // destructive tool showing no tier badge would understate its risk.
       else badges += `<span class="badge unknown">${escapeHtml(category) || '?'}</span>`;
 
-      const title = t.title || t.name;
-      const desc = (t.description || '').split('\n')[0].slice(0, 120);
       const gatedNote = disabledBy
-        ? `<div class="disabled-by-note">Beta. Set <code>${escapeHtml(disabledBy)}</code> in the dev App (add-on) config or the matching env var (see docs/beta.md).</div>`
+        ? `<div class="disabled-by-note">${tr(
+            'tools.notes.beta_disabled',
+            {setting: `<code>${escapeHtml(disabledBy)}</code>`},
+            `Beta. Set <code>${escapeHtml(disabledBy)}</code> in the dev App (add-on) config or the matching env var (see docs/beta.md).`
+          )}</div>`
         : '';
       const envPinnedNote = isEnvPinned
-        ? `<div class="feature-locked-note">env-pinned via <code>${envPinVar}</code>. Unset the env var to edit here.</div>`
+        ? `<div class="feature-locked-note">${tr(
+            'tools.notes.env_pinned',
+            {variable: `<code>${escapeHtml(envPinVar)}</code>`},
+            `env-pinned via <code>${envPinVar}</code>. Unset the env var to edit here.`
+          )}</div>`
         : '';
       const bpsLockedNote = isBpsLocked
-        ? '<div class="feature-locked-note">Locked while "Strict best-practices mode" is on (Server Settings tab) — strict mode publishes its acknowledgment key through this tool. Turn that off first to disable this tool.</div>'
+        ? `<div class="feature-locked-note">${escapeHtml(tr(
+            'tools.notes.bps_locked',
+            {},
+            'Locked while "Strict best-practices mode" is on (Server Settings tab) — strict mode publishes its acknowledgment key through this tool. Turn that off first to disable this tool.'
+          ))}</div>`
         : '';
       const readOnlyNote = roForcedOff
-        ? '<div class="disabled-by-note">Off. Read Only Mode is on; write tools are disabled.</div>'
+        ? `<div class="disabled-by-note">${escapeHtml(tr(
+            'tools.notes.read_only_off',
+            {},
+            'Off. Read Only Mode is on; write tools are disabled.'
+          ))}</div>`
         : (roExemptActive
-          ? '<div class="feature-locked-note">Read Only Mode: write operations of this tool are blocked; read operations stay available.</div>'
+          ? `<div class="feature-locked-note">${escapeHtml(tr(
+              'tools.notes.read_only_partial',
+              {},
+              'Read Only Mode: write operations of this tool are blocked; read operations stay available.'
+            ))}</div>`
           : '');
       // LLM API exposure column — rendered only on the embedded custom-component
       // server (see llmApiAvailable); dropped elsewhere rather than shown as a
       // no-op. Built here as a fragment, matching the *Note consts above.
       const llmToggleHtml = llmApiAvailable
         ? `<div class="toggle-group ${isEnabled ? '' : 'disabled-toggle'}" ` +
-             `title="Offer this tool to Home Assistant conversation agents through the LLM API. Applies on the agent's next message - no restart. A tool disabled above is unavailable to agents regardless.">` +
+             `title="${escapeHtml(tr('tools.llm_api.help', {}, "Offer this tool to Home Assistant conversation agents through the LLM API. Applies on the agent's next message - no restart. A tool disabled above is unavailable to agents regardless."))}">` +
           `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:llm" data-tool="${escapeHtml(t.name)}" data-field="llm" ` +
-            `aria-label="${escapeHtml(title)} exposed to the conversation-agent LLM API" ` +
+            `aria-label="${escapeHtml(tr('tools.aria.llm_api', {title}, `${title} exposed to the conversation-agent LLM API`))}" ` +
             `${(toolLlm[t.name] !== false) ? 'checked' : ''} ${isEnabled ? '' : 'disabled'}>` +
             `<span class="slider"></span></label>` +
-          `<span>LLM API</span>` +
+          `<span>${escapeHtml(tr('tools.llm_api.label', {}, 'LLM API'))}</span>` +
         `</div>`
         : '';
 
@@ -779,26 +939,26 @@ function render() {
         `<div class="tool-toggles">` +
           `<div class="toggle-group">` +
             `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:enabled" data-tool="${escapeHtml(t.name)}" data-field="enabled" ` +
-              `aria-label="${escapeHtml(title)} enabled" ` +
+              `aria-label="${escapeHtml(tr('tools.aria.enabled', {title}, `${title} enabled`))}" ` +
               `${isEnabled ? 'checked' : ''} ${lockEnabled ? 'disabled' : ''}>` +
               `<span class="slider"></span></label>` +
-            `<span>enabled</span>` +
+            `<span>${escapeHtml(tr('tools.states.enabled', {}, 'enabled'))}</span>` +
           `</div>` +
           `<div class="toggle-group ${!isEnabled ? 'disabled-toggle' : ''}">` +
             `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:pinned" data-tool="${escapeHtml(t.name)}" data-field="pinned" ` +
-              `aria-label="${escapeHtml(title)} pinned" ` +
+              `aria-label="${escapeHtml(tr('tools.aria.pinned', {title}, `${title} pinned`))}" ` +
               `${isPinned ? 'checked' : ''} ${lockPinned ? 'disabled' : ''}>` +
               `<span class="slider"></span></label>` +
-            `<span>pinned</span>` +
+            `<span>${escapeHtml(tr('tools.states.pinned', {}, 'pinned'))}</span>` +
           `</div>` +
           `<div class="toggle-group ${(policyState.enabled && isEnabled) ? '' : 'disabled-toggle'}" ` +
-               `title="${policyState.enabled ? '' : 'Enable Tool Security Policies in App (add-on) config first.'}">` +
+               `title="${policyState.enabled ? '' : escapeHtml(tr('tools.security.enable_first', {}, 'Enable Tool Security Policies in App (add-on) config first.'))}">` +
             `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:gated" data-tool="${escapeHtml(t.name)}" data-field="gated" ` +
-              `aria-label="${escapeHtml(title)} security gated" ` +
+              `aria-label="${escapeHtml(tr('tools.aria.security_gated', {title}, `${title} security gated`))}" ` +
               `${policyState.gatedTools.has(t.name) ? 'checked' : ''} ` +
               `${(policyState.enabled && isEnabled) ? '' : 'disabled'}>` +
               `<span class="slider"></span></label>` +
-            `<span>security gated</span>` +
+            `<span>${escapeHtml(tr('tools.states.security_gated', {}, 'security gated'))}</span>` +
           `</div>` +
           llmToggleHtml +
         `</div>`;
@@ -821,7 +981,11 @@ function render() {
               if (wasGated) policyState.gatedTools.add(t.name);
               else policyState.gatedTools.delete(t.name);
               e.target.checked = wasGated;
-              alert('Failed to update tool security policy: ' + err.message);
+              alert(tr(
+                'policies.errors.update_tool',
+                {message: err.message},
+                'Failed to update tool security policy: ' + err.message
+              ));
             }
             render();
             return;
@@ -858,10 +1022,10 @@ function render() {
   });
 
   document.getElementById('summary').innerHTML =
-    `<span>${total} total</span>` +
-    `<span style="color:var(--success)">${enabledCount} enabled</span>` +
-    `<span style="color:var(--accent)">${pinnedCount} pinned</span>` +
-    `<span style="color:var(--danger)">${disabledCount} disabled</span>`;
+    `<span>${escapeHtml(tr('tools.summary.total', {count: total}, `${total} total`))}</span>` +
+    `<span style="color:var(--success)">${escapeHtml(tr('tools.summary.enabled', {count: enabledCount}, `${enabledCount} enabled`))}</span>` +
+    `<span style="color:var(--accent)">${escapeHtml(tr('tools.summary.pinned', {count: pinnedCount}, `${pinnedCount} pinned`))}</span>` +
+    `<span style="color:var(--danger)">${escapeHtml(tr('tools.summary.disabled', {count: disabledCount}, `${disabledCount} disabled`))}</span>`;
 
   // ``render()`` rebuilds the entire ``.tool`` DOM, so any
   // ``hidden`` class previously applied by ``applyToolSearch`` is
@@ -875,12 +1039,12 @@ function render() {
 
 function scheduleSave() {
   clearTimeout(saveTimer);
-  updateStatus('Unsaved changes...');
+  updateStatus(t('status.unsaved', {}, 'Unsaved changes...'));
   saveTimer = setTimeout(saveConfig, 800);
 }
 
 async function saveConfig() {
-  updateStatus('Saving...');
+  updateStatus(t('status.saving', {}, 'Saving...'));
   let resp;
   try {
     resp = await fetch('./api/settings/tools', {
@@ -892,7 +1056,7 @@ async function saveConfig() {
     // Auto-save is fire-and-forget (scheduleSave -> setTimeout); without
     // this catch a network rejection would be unhandled and only reach the
     // visually-hidden #status region, leaving a sighted user with no signal.
-    updateStatus('Save failed: ' + e.message, false, true);
+    updateStatus(t('errors.save_failed_detail', {message: e.message}, 'Save failed: ' + e.message), false, true);
     return;
   }
   if (resp.ok) {
@@ -905,19 +1069,23 @@ async function saveConfig() {
       restartRequired = saved.restart_required !== false;
     } catch (e) { /* keep the conservative default */ }
     if (restartRequired) {
-      updateStatus('Saved. Restart required.', true);
+      updateStatus(t('status.saved_restart', {}, 'Saved. Restart required.'), true);
       markRestartRequired();
     } else {
-      updateStatus('Saved. LLM API exposure applies on the next agent message.', true);
+      updateStatus(t(
+        'status.saved_llm_api',
+        {},
+        'Saved. LLM API exposure applies on the next agent message.'
+      ), true);
     }
   } else {
     // Surface the server's structured error when present (mirrors
     // saveAdvancedSettings / saveFeatureFlag) instead of a generic
     // "Save failed!" that hides why the write was rejected.
-    let msg = 'Save failed!';
+    let msg = t('errors.save_failed', {}, 'Save failed!');
     try {
       const data = await resp.json();
-      if (data?.error?.message) msg = 'Save failed: ' + data.error.message;
+      if (data?.error?.message) msg = t('errors.save_failed_detail', {message: data.error.message}, 'Save failed: ' + data.error.message);
     } catch (_e) { /* non-JSON body — keep the generic message */ }
     updateStatus(msg, false, true);
   }
@@ -1001,7 +1169,7 @@ function showToast(message, opts) {
   if (isError && !dismiss) {
     dismiss = document.createElement('button');
     dismiss.className = 'ha-toast-dismiss';
-    dismiss.setAttribute('aria-label', 'Dismiss');
+    dismiss.setAttribute('aria-label', t('actions.dismiss', {}, 'Dismiss'));
     dismiss.textContent = '×';
     dismiss.addEventListener('click', () => _removeToast(toast));
     toast.appendChild(dismiss);
@@ -1081,10 +1249,10 @@ const BACKUP_FIELD_LABELS = {
 };
 
 const BACKUP_ORIGIN_LABELS = {
-  addon: 'Synced to Supervisor. Restart required after save.',
+  addon: t('backup.origins.addon', {}, 'Synced to Supervisor. Restart required after save.'),
   env: null,  // banner generated dynamically with the env var name
-  file: 'Persisted locally; takes effect immediately.',
-  default: 'Using default; first save creates a local override file.',
+  file: t('backup.origins.file', {}, 'Persisted locally; takes effect immediately.'),
+  default: t('backup.origins.default', {}, 'Using default; first save creates a local override file.'),
 };
 
 async function loadBackupConfig() {
@@ -1093,7 +1261,7 @@ async function loadBackupConfig() {
   try {
     const resp = await fetch('./api/settings/backup-config');
     if (!resp.ok) {
-      formEl.innerHTML = '<div class="backup-empty">Could not load backup settings.</div>';
+      formEl.innerHTML = `<div class="backup-empty">${escapeHtml(t('backup.errors.load_settings', {}, 'Could not load backup settings.'))}</div>`;
       actionsEl.style.display = 'none';
       return;
     }
@@ -1103,7 +1271,7 @@ async function loadBackupConfig() {
       IS_ADDON_MODE = data.is_addon;
     }
   } catch (_e) {
-    formEl.innerHTML = '<div class="backup-empty">Backup settings unavailable.</div>';
+    formEl.innerHTML = `<div class="backup-empty">${escapeHtml(t('backup.errors.unavailable', {}, 'Backup settings unavailable.'))}</div>`;
     actionsEl.style.display = 'none';
     return;
   }
@@ -1115,7 +1283,11 @@ function renderBackupConfig() {
   const formEl = document.getElementById('backupConfigForm');
   formEl.innerHTML = '';
   backupConfigFields.forEach(f => {
-    const meta = BACKUP_FIELD_LABELS[f.field] || { label: f.field, help: '' };
+    const meta = localizeMeta(
+      'backup.fields',
+      f.field,
+      BACKUP_FIELD_LABELS[f.field] || { label: f.field, help: '' }
+    );
     const row = document.createElement('div');
     row.className = 'backup-field';
     let controlHtml;
@@ -1138,12 +1310,13 @@ function renderBackupConfig() {
     } else {
       originMsg = BACKUP_ORIGIN_LABELS[f.origin] || '';
     }
-    const lockedBadge = f.editable ? '' : `<span class="backup-field-locked">env-locked</span>`;
+    const lockedBadge = f.editable ? '' : `<span class="backup-field-locked">${escapeHtml(t('common.env_locked', {}, 'env-locked'))}</span>`;
+    const originSeparator = meta.help && !/[.!?…]$/.test(meta.help.trim()) ? '. ' : ' ';
     row.innerHTML =
       `<span class="backup-field-label" id="label-backup-${escapeHtml(f.field)}">${escapeHtml(meta.label)}</span>` +
       `<span class="backup-field-control">${controlHtml}</span>` +
       lockedBadge +
-      `<span class="backup-field-help">${escapeHtml(meta.help)}${originMsg ? '. ' + originMsg : ''}</span>`;
+      `<span class="backup-field-help">${escapeHtml(meta.help)}${originMsg ? originSeparator + originMsg : ''}</span>`;
     formEl.appendChild(row);
   });
 }
@@ -1166,12 +1339,12 @@ async function saveBackupConfig() {
     }
   });
   if (Object.keys(payload).length === 0) {
-    statusEl.textContent = 'Nothing editable.';
+    statusEl.textContent = t('status.nothing_editable', {}, 'Nothing editable.');
     return;
   }
   btn.disabled = true;
   setStatusAlert(statusEl, false);
-  statusEl.textContent = 'Saving…';
+  statusEl.textContent = t('status.saving', {}, 'Saving…');
   try {
     const resp = await fetch('./api/settings/backup-config', {
       method: 'POST',
@@ -1181,7 +1354,7 @@ async function saveBackupConfig() {
     const data = await resp.json();
     if (!resp.ok) {
       btn.disabled = false;
-      let msg = 'Save failed';
+      let msg = t('errors.save_failed', {}, 'Save failed');
       if (data && data.error) {
         if (typeof data.error === 'string') msg = data.error;
         else if (data.error.message) msg = data.error.message;
@@ -1204,12 +1377,12 @@ async function saveBackupConfig() {
       // would snap the form back to old values, look like the save
       // reverted, and clobber any further edits the user wanted to
       // bundle before clicking Restart.
-      statusEl.textContent = 'Saved. Restart required.';
-      showToast('Saved. Restart required.');
+      statusEl.textContent = t('status.saved_restart', {}, 'Saved. Restart required.');
+      showToast(t('status.saved_restart', {}, 'Saved. Restart required.'));
       markRestartRequired();
     } else {
-      statusEl.textContent = 'Saved.';
-      showToast('Saved.');
+      statusEl.textContent = t('status.saved', {}, 'Saved.');
+      showToast(t('status.saved', {}, 'Saved.'));
       // Refresh display so origins update (default → file, etc.).
       loadBackupConfig();
       loadBackups();
@@ -1217,8 +1390,9 @@ async function saveBackupConfig() {
   } catch (err) {
     btn.disabled = false;
     setStatusAlert(statusEl, true);
-    statusEl.textContent = 'Network error: ' + String(err);
-    showToast('Network error: ' + String(err), {isError: true});
+    const message = t('errors.network', {message: String(err)}, 'Network error: ' + String(err));
+    statusEl.textContent = message;
+    showToast(message, {isError: true});
   }
 }
 
@@ -1247,7 +1421,7 @@ async function loadFsCustomPaths() {
   } catch (err) {
     _fsCustomPathsData = {
       available: false,
-      reason: 'Network error: ' + String(err),
+      reason: t('errors.network', {message: String(err)}, 'Network error: ' + String(err)),
       paths: [],
       deny_floor: [],
     };
@@ -1273,9 +1447,9 @@ function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
       ? d.deny_floor.join(', ')
       : '.storage, secrets.yaml';
   info.innerHTML =
-    `<div class="feature-name">Custom filesystem directories (advanced)</div>` +
-    `<div class="feature-help">Extra directories (one per line) that the file tools may READ and WRITE, either relative to your config dir (e.g. <code>pyscript</code>, <code>python_scripts</code>) or an absolute HAOS sibling volume <code>/share</code>, <code>/media</code>, <code>/ssl</code>, <code>/backup</code> (or a subdirectory of one). Each entry grants both read and write. Applies immediately; no restart needed.</div>` +
-    `<div class="feature-help">Always blocked (cannot be added): <code>${escapeHtml(denyList)}</code>, path traversal (<code>..</code>), and any absolute path outside the HAOS sibling volumes.</div>`;
+    `<div class="feature-name">${escapeHtml(t('filesystem.custom.title', {}, 'Custom filesystem directories (advanced)'))}</div>` +
+    `<div class="feature-help">${t('filesystem.custom.help', {}, 'Extra directories (one per line) that the file tools may READ and WRITE, either relative to your config dir or an absolute allowed HAOS sibling volume. Each entry grants both read and write. Applies immediately; no restart needed.')}</div>` +
+    `<div class="feature-help">${t('filesystem.custom.blocked', {paths: `<code>${escapeHtml(denyList)}</code>`}, `Always blocked (cannot be added): <code>${escapeHtml(denyList)}</code>, path traversal (<code>..</code>), and any absolute path outside the HAOS sibling volumes.`)}</div>`;
 
   const control = document.createElement('div');
   control.className = 'feature-control';
@@ -1283,19 +1457,18 @@ function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
   if (lockedByGate) {
     const note = document.createElement('div');
     note.className = 'feature-locked-note';
-    note.textContent =
-      'Enable beta features and filesystem tools above to edit.';
+    note.textContent = t('filesystem.custom.enable_first', {}, 'Enable beta features and filesystem tools above to edit.');
     control.appendChild(note);
   } else if (!d) {
     const note = document.createElement('div');
     note.className = 'feature-help';
-    note.textContent = 'Loading…';
+    note.textContent = t('status.loading_ellipsis', {}, 'Loading…');
     control.appendChild(note);
   } else if (!d.available) {
     const note = document.createElement('div');
     note.className = 'feature-locked-note';
     note.textContent =
-      d.reason || 'Custom directories are currently unavailable.';
+      d.reason || t('filesystem.custom.unavailable', {}, 'Custom directories are currently unavailable.');
     control.appendChild(note);
   } else {
     const ta = document.createElement('textarea');
@@ -1305,7 +1478,7 @@ function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
     const btn = document.createElement('button');
     btn.id = 'fsCustomPathsSave';
     btn.className = 'adv-save-btn';
-    btn.textContent = 'Save directories';
+    btn.textContent = t('filesystem.custom.save', {}, 'Save directories');
     btn.addEventListener('click', saveFsCustomPaths);
     const status = document.createElement('div');
     status.id = 'fsCustomPathsStatus';
@@ -1333,7 +1506,7 @@ async function saveFsCustomPaths() {
     .filter(s => s.length);
   btn.disabled = true;
   setStatusAlert(statusEl, false);
-  statusEl.textContent = 'Saving…';
+  statusEl.textContent = t('status.saving', {}, 'Saving…');
   try {
     const resp = await fetch('./api/settings/fs-custom-paths', {
       method: 'POST',
@@ -1343,7 +1516,7 @@ async function saveFsCustomPaths() {
     const data = await resp.json();
     btn.disabled = false;
     if (!resp.ok || !data.success) {
-      let msg = 'Save failed';
+      let msg = t('errors.save_failed', {}, 'Save failed');
       if (data && data.error) {
         if (typeof data.error === 'string') msg = data.error;
         else if (data.error.message) msg = data.error.message;
@@ -1361,12 +1534,16 @@ async function saveFsCustomPaths() {
     ta.value = (data.paths || []).join('\n');
     const rejected = data.rejected || [];
     statusEl.textContent = rejected.length
-      ? `Saved. Rejected (blocked or invalid): ${rejected.join(', ')}`
-      : 'Saved.';
+      ? t(
+          'filesystem.custom.saved_rejected',
+          {paths: rejected.join(', ')},
+          `Saved. Rejected (blocked or invalid): ${rejected.join(', ')}`
+        )
+      : t('status.saved', {}, 'Saved.');
   } catch (err) {
     btn.disabled = false;
     setStatusAlert(statusEl, true);
-    statusEl.textContent = 'Network error: ' + String(err);
+    statusEl.textContent = t('errors.network', {message: String(err)}, 'Network error: ' + String(err));
   }
 }
 
@@ -1382,20 +1559,20 @@ async function loadBackups() {
     const resp = await fetch('./api/settings/backups?' + params.toString());
     const data = await resp.json();
     if (!resp.ok || !data.success) {
-      stateEl.innerHTML = '<span class="diff-rem">Error loading backups</span>';
+      stateEl.innerHTML = `<span class="diff-rem">${escapeHtml(t('backup.errors.load_list', {}, 'Error loading backups'))}</span>`;
       listEl.innerHTML = '';
       return;
     }
     backupEntries = data.backups || [];
     stateEl.innerHTML =
-      `<span>Status: <strong>${data.enabled ? 'enabled' : 'disabled'}</strong></span>` +
-      `<span>Throttle: <strong>${data.throttle_minutes} min</strong></span>` +
-      `<span>Retain per entity: <strong>${data.retain_per_entity}</strong></span>` +
-      `<span>Directory: <strong>${escapeHtml(data.backup_dir)}</strong></span>` +
-      `<span>Total: <strong>${data.count}</strong></span>`;
+      `<span>${escapeHtml(t('backup.state.status', {}, 'Status'))}: <strong>${escapeHtml(data.enabled ? t('common.enabled', {}, 'enabled') : t('common.disabled', {}, 'disabled'))}</strong></span>` +
+      `<span>${escapeHtml(t('backup.state.throttle', {}, 'Throttle'))}: <strong>${escapeHtml(t('common.minutes_short', {count: data.throttle_minutes}, `${data.throttle_minutes} min`))}</strong></span>` +
+      `<span>${escapeHtml(t('backup.state.retain', {}, 'Retain per entity'))}: <strong>${data.retain_per_entity}</strong></span>` +
+      `<span>${escapeHtml(t('backup.state.directory', {}, 'Directory'))}: <strong>${escapeHtml(data.backup_dir)}</strong></span>` +
+      `<span>${escapeHtml(t('backup.state.total', {}, 'Total'))}: <strong>${data.count}</strong></span>`;
     renderBackups();
   } catch (err) {
-    stateEl.innerHTML = '<span class="diff-rem">Network error: ' + escapeHtml(String(err)) + '</span>';
+    stateEl.innerHTML = `<span class="diff-rem">${escapeHtml(t('errors.network', {message: String(err)}, 'Network error: ' + String(err)))}</span>`;
     listEl.innerHTML = '';
   }
 }
@@ -1403,7 +1580,7 @@ async function loadBackups() {
 function renderBackups() {
   const listEl = document.getElementById('backupList');
   if (!backupEntries.length) {
-    listEl.innerHTML = '<div class="backup-empty">No backups yet. Enable auto-backup in the App (add-on) config and edit an entity to create one.</div>';
+    listEl.innerHTML = `<div class="backup-empty">${escapeHtml(t('backup.empty', {}, 'No backups yet. Enable auto-backup in the App (add-on) config and edit an entity to create one.'))}</div>`;
     return;
   }
   listEl.innerHTML = '';
@@ -1419,14 +1596,14 @@ function renderBackups() {
         `<div class="backup-row-name">${escapeHtml(b.name)}</div>` +
         `<div class="backup-row-meta">` +
           `<strong>${escapeHtml(b.domain)}</strong> · ` +
-          `${escapeHtml(b.entity_id)} · ${tsFmt} · ${b.size} bytes` +
+          `${escapeHtml(b.entity_id)} · ${tsFmt} · ${escapeHtml(t('common.bytes', {count: b.size}, `${b.size} bytes`))}` +
         `</div>` +
       `</div>` +
       `<div class="backup-row-actions">` +
-        `<button data-act="view">View</button>` +
-        `<button data-act="diff" class="secondary">Diff</button>` +
-        `<button data-act="restore">Restore</button>` +
-        `<button data-act="delete" class="danger">Delete</button>` +
+        `<button data-act="view">${escapeHtml(t('actions.view', {}, 'View'))}</button>` +
+        `<button data-act="diff" class="secondary">${escapeHtml(t('actions.diff', {}, 'Diff'))}</button>` +
+        `<button data-act="restore">${escapeHtml(t('actions.restore', {}, 'Restore'))}</button>` +
+        `<button data-act="delete" class="danger">${escapeHtml(t('actions.delete', {}, 'Delete'))}</button>` +
       `</div>`;
     row.querySelectorAll('button[data-act]').forEach(btn => {
       btn.addEventListener('click', () => backupAction(btn.dataset.act, b.name));
@@ -1445,45 +1622,46 @@ async function backupAction(act, name) {
       const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name));
       const data = await resp.json();
       if (!resp.ok) { alert(JSON.stringify(data)); return; }
-      showModal('View: ' + name, '<pre>' + escapeHtml(yamlStringify(data.data)) + '</pre>');
+      showModal(t('backup.modal.view', {name}, 'View: ' + name), '<pre>' + escapeHtml(yamlStringify(data.data)) + '</pre>');
     } catch (err) {
-      showToast('Could not load backup "' + name + '": ' + String(err), {isError: true});
+      showToast(t('backup.errors.load_one', {name, message: String(err)}, 'Could not load backup "' + name + '": ' + String(err)), {isError: true});
     }
   } else if (act === 'diff') {
     try {
       const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name) + '/diff');
       const data = await resp.json();
       if (!resp.ok) { alert(JSON.stringify(data)); return; }
-      const html = (data.diff || '(identical)').split('\n').map(line => {
+      const html = (data.diff || t('backup.identical', {}, '(identical)')).split('\n').map(line => {
         let cls = '';
         if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) cls = 'diff-hdr';
         else if (line.startsWith('+')) cls = 'diff-add';
         else if (line.startsWith('-')) cls = 'diff-rem';
         return `<span class="${cls}">${escapeHtml(line)}</span>`;
       }).join('\n');
-      showModal('Diff: ' + name, '<pre>' + html + '</pre>');
+      showModal(t('backup.modal.diff', {name}, 'Diff: ' + name), '<pre>' + html + '</pre>');
     } catch (err) {
-      showToast('Could not diff backup "' + name + '": ' + String(err), {isError: true});
+      showToast(t('backup.errors.diff', {name, message: String(err)}, 'Could not diff backup "' + name + '": ' + String(err)), {isError: true});
     }
   } else if (act === 'restore') {
-    if (!confirm('Restore ' + name + '?\n\nThis will overwrite the current entity state. A safety backup of the current state is taken first.')) return;
+    if (!confirm(t('backup.confirm.restore', {name}, 'Restore ' + name + '?\n\nThis will overwrite the current entity state. A safety backup of the current state is taken first.'))) return;
     try {
       const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name) + '/restore', {method: 'POST'});
       const data = await resp.json();
-      if (!resp.ok) { alert('Restore failed: ' + JSON.stringify(data)); return; }
-      alert('Restored. Safety backup: ' + (data.data && data.data.safety_backup ? data.data.safety_backup : '(none)'));
+      if (!resp.ok) { alert(t('backup.errors.restore_detail', {detail: JSON.stringify(data)}, 'Restore failed: ' + JSON.stringify(data))); return; }
+      const safetyBackup = data.data && data.data.safety_backup ? data.data.safety_backup : t('common.none', {}, '(none)');
+      alert(t('backup.restored', {name: safetyBackup}, 'Restored. Safety backup: ' + safetyBackup));
       loadBackups();
     } catch (err) {
-      showToast('Restore of "' + name + '" failed: ' + String(err), {isError: true});
+      showToast(t('backup.errors.restore', {name, message: String(err)}, 'Restore of "' + name + '" failed: ' + String(err)), {isError: true});
     }
   } else if (act === 'delete') {
-    if (!confirm('Delete ' + name + '? This cannot be undone.')) return;
+    if (!confirm(t('backup.confirm.delete', {name}, 'Delete ' + name + '? This cannot be undone.'))) return;
     try {
       const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name), {method: 'DELETE'});
-      if (!resp.ok) { const d = await resp.json(); alert('Delete failed: ' + JSON.stringify(d)); return; }
+      if (!resp.ok) { const d = await resp.json(); alert(t('backup.errors.delete_detail', {detail: JSON.stringify(d)}, 'Delete failed: ' + JSON.stringify(d))); return; }
       loadBackups();
     } catch (err) {
-      showToast('Delete of "' + name + '" failed: ' + String(err), {isError: true});
+      showToast(t('backup.errors.delete', {name, message: String(err)}, 'Delete of "' + name + '" failed: ' + String(err)), {isError: true});
     }
   }
 }
@@ -1491,17 +1669,17 @@ async function backupAction(act, name) {
 async function bulkDeleteBackups() {
   const d = document.getElementById('backupDomain').value.trim();
   const e = document.getElementById('backupEntity').value.trim();
-  const days = prompt('Delete backups older than N days (leave blank to use current filters only):', '');
+  const days = prompt(t('backup.bulk.prompt_days', {}, 'Delete backups older than N days (leave blank to use current filters only):'), '');
   const params = new URLSearchParams();
   if (d) params.set('domain', d);
   if (e) params.set('entity_id', e);
   if (days) params.set('older_than_days', days);
-  if (!params.toString()) { alert('Set at least one filter (Domain, Entity, or age in days).'); return; }
-  if (!confirm('Delete all backups matching: ' + params.toString() + '?')) return;
+  if (!params.toString()) { alert(t('backup.bulk.filter_required', {}, 'Set at least one filter (Domain, Entity, or age in days).')); return; }
+  if (!confirm(t('backup.bulk.confirm', {filters: params.toString()}, 'Delete all backups matching: ' + params.toString() + '?'))) return;
   const resp = await fetch('./api/settings/backups?' + params.toString(), {method: 'DELETE'});
   const data = await resp.json();
-  if (!resp.ok) { alert('Bulk delete failed: ' + JSON.stringify(data)); return; }
-  alert('Deleted ' + (data.count || 0) + ' backup(s)');
+  if (!resp.ok) { alert(t('backup.errors.bulk_delete', {detail: JSON.stringify(data)}, 'Bulk delete failed: ' + JSON.stringify(data))); return; }
+  alert(t('backup.bulk.deleted', {count: data.count || 0}, 'Deleted ' + (data.count || 0) + ' backup(s)'));
   loadBackups();
 }
 
@@ -1693,14 +1871,14 @@ const MANDATORY_BPS_SUB_FLAGS = [
 let IS_ADDON_MODE = false;
 
 const ORIGIN_LOCKED_NOTE = {
-  env: 'Set via environment variable; unset it to edit here.',
+  env: t('origins.env_locked', {}, 'Set via environment variable; unset it to edit here.'),
   // addon-origin fields are editable: save POSTs through Supervisor
   // /addons/self/options and triggers a restart so both surfaces stay
   // in sync. No locked note needed.
 };
 
 const ORIGIN_INFO_NOTE = {
-  addon: 'Synced to the App (add-on) Configuration tab. Restart required after save.',
+  addon: t('origins.addon_synced', {}, 'Synced to the App (add-on) Configuration tab. Restart required after save.'),
 };
 
 // Compose the env-locked banner text for one field. Addon-mode copy
@@ -1716,19 +1894,19 @@ const ORIGIN_INFO_NOTE = {
 function envLockedNoteHtml(envVar, fieldName) {
   const envVarTag = `<code>${escapeHtml(envVar)}</code>`;
   if (!IS_ADDON_MODE) {
-    return `Set via env var ${envVarTag}; unset it to edit here.`;
+    return t('origins.env_var_unset', {variable: envVarTag}, `Set via env var ${envVarTag}; unset it to edit here.`);
   }
   if (fieldName === 'enable_beta_features') {
-    return (
-      `Auto-enabled in App (add-on) mode (legacy bridge; your options.json ` +
-      `predates the master toggle schema entry). Set ` +
-      `<code>enable_beta_features</code> explicitly in the App (add-on) ` +
-      `Configuration tab to take direct control. (env: ${envVarTag})`
+    return t(
+      'origins.beta_legacy_bridge',
+      {variable: envVarTag},
+      `Auto-enabled in App (add-on) mode (legacy bridge; your options.json predates the master toggle schema entry). Set <code>enable_beta_features</code> explicitly in the App (add-on) Configuration tab to take direct control. (env: ${envVarTag})`
     );
   }
-  return (
-    `Set by the App (add-on) runtime environment, managed by Home Assistant ` +
-    `Supervisor; cannot be changed from this web UI. (env: ${envVarTag})`
+  return t(
+    'origins.addon_runtime',
+    {variable: envVarTag},
+    `Set by the App (add-on) runtime environment, managed by Home Assistant Supervisor; cannot be changed from this web UI. (env: ${envVarTag})`
   );
 }
 
@@ -1743,14 +1921,14 @@ async function loadFeatureFlags() {
     // do not care about feature flags right now.
     document.getElementById('featuresBody').innerHTML =
       '<div class="feature-row"><div class="feature-help">' +
-      'Feature flags unavailable (network error reaching ' +
-      '/api/settings/features).</div></div>';
+      escapeHtml(t('features.errors.network', {}, 'Feature flags unavailable (network error reaching /api/settings/features).')) +
+      '</div></div>';
     return;
   }
   if (!resp.ok) {
     document.getElementById('featuresBody').innerHTML =
       `<div class="feature-row"><div class="feature-help">` +
-      `Feature flags unavailable (HTTP ${resp.status}).</div></div>`;
+      `${escapeHtml(t('features.errors.http', {status: resp.status}, `Feature flags unavailable (HTTP ${resp.status}).`))}</div></div>`;
     return;
   }
   let data;
@@ -1760,7 +1938,7 @@ async function loadFeatureFlags() {
     console.error('loadFeatureFlags JSON parse failed:', err);
     document.getElementById('featuresBody').innerHTML =
       '<div class="feature-row"><div class="feature-help">' +
-      'Feature flags response was not valid JSON.</div></div>';
+      escapeHtml(t('features.errors.json', {}, 'Feature flags response was not valid JSON.')) + '</div></div>';
     return;
   }
   if (Array.isArray(data.beta_sub_flags)) {
@@ -1801,7 +1979,7 @@ function renderFeatureFlags(flags) {
     // Same for the strict-mode sub-row — rendered by
     // renderSubFlagRows right after its enable_mandatory_bps parent.
     if (MANDATORY_BPS_SUB_FLAGS.includes(fieldName)) return;
-    const meta = FEATURE_META[fieldName];
+    const meta = localizeMeta('features', fieldName, FEATURE_META[fieldName]);
     const isMaster = fieldName === 'enable_beta_features';
     const isBetaSub = BETA_SUB_FLAGS.has(fieldName);
     // Beta rows render into the dedicated bottom-of-panel betaBody
@@ -1981,7 +2159,11 @@ function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByG
   subFieldNames.forEach(fieldName => {
     const f = flags[fieldName];
     if (!f) return;
-    const meta = FEATURE_META[fieldName] || { label: fieldName, help: '' };
+    const meta = localizeMeta(
+      'features',
+      fieldName,
+      FEATURE_META[fieldName] || { label: fieldName, help: '' }
+    );
     const row = document.createElement('div');
     row.className = 'feature-row ' + cssClass + (lockedByGate ? ' dimmed' : '');
 
@@ -2041,7 +2223,11 @@ function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByG
 function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
   const cmRows = (_advancedFields || []).filter(x => x.section === 'beta_codemode');
   cmRows.forEach(f => {
-    const meta = ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' };
+    const meta = localizeMeta(
+      'advanced',
+      f.field,
+      ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' }
+    );
     const row = document.createElement('div');
     const lockedByGate = !masterOn || !codeModeOn;
     const dimmed = lockedByGate;
@@ -2061,19 +2247,20 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
     let lockedNote = '';
     if (f.field === 'code_mode_saved_tools_path') {
       if (IS_ADDON_MODE) {
-        lockedNote =
-          '<div class="feature-locked-note">Hardcoded to ' +
-          '<code>/data/saved_tools.json</code> in App (add-on) mode and cannot ' +
-          'be changed (fixed here so saved tools survive App (add-on) updates).' +
-          '</div>';
+        lockedNote = `<div class="feature-locked-note">${t(
+          'advanced.code_mode_saved_tools_path.addon_locked',
+          {},
+          'Hardcoded to <code>/data/saved_tools.json</code> in App (add-on) mode and cannot be changed (fixed here so saved tools survive App (add-on) updates).'
+        )}</div>`;
       } else if (f.origin === 'env') {
         lockedNote =
           `<div class="feature-locked-note">${envLockedNoteHtml(f.env_var, f.field)}</div>`;
       } else if (!f.value) {
-        lockedNote =
-          '<div class="feature-locked-note">If blank, custom tools are kept ' +
-          'in memory only and lost on restart. Set a path on persistent ' +
-          'storage to keep them.</div>';
+        lockedNote = `<div class="feature-locked-note">${escapeHtml(t(
+          'advanced.code_mode_saved_tools_path.blank_warning',
+          {},
+          'If blank, custom tools are kept in memory only and lost on restart. Set a path on persistent storage to keep them.'
+        ))}</div>`;
       }
     } else if (f.origin === 'env') {
       lockedNote =
@@ -2124,7 +2311,7 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
 // failed save (the toggle handlers) branch on this; the additive return
 // doesn't affect callers that ignore it.
 async function saveFeatureFlag(fieldName, value) {
-  updateStatus('Saving server setting...');
+  updateStatus(t('status.saving_server_setting', {}, 'Saving server setting...'));
   let resp;
   try {
     resp = await fetch('./api/settings/features', {
@@ -2133,7 +2320,7 @@ async function saveFeatureFlag(fieldName, value) {
       body: JSON.stringify({flags: {[fieldName]: value}}),
     });
   } catch (e) {
-    updateStatus('Save failed: ' + e.message, false, true);
+    updateStatus(t('errors.save_failed_detail', {message: e.message}, 'Save failed: ' + e.message), false, true);
     return false;
   }
   let data = null;
@@ -2146,8 +2333,8 @@ async function saveFeatureFlag(fieldName, value) {
     if (resp.ok) data = {restart_required: true};
   }
   if (!resp.ok) {
-    let msg = `Save failed (HTTP ${resp.status})`;
-    if (data?.error?.message) msg = 'Save failed: ' + data.error.message;
+    let msg = t('errors.save_failed_http', {status: resp.status}, `Save failed (HTTP ${resp.status})`);
+    if (data?.error?.message) msg = t('errors.save_failed_detail', {message: data.error.message}, 'Save failed: ' + data.error.message);
     updateStatus(msg, false, true);
     return false;
   }
@@ -2157,7 +2344,7 @@ async function saveFeatureFlag(fieldName, value) {
   // banner. Same UX as the Tools tab. In standalone modes the restart
   // button is hidden (no supervisor to drive it) but the banner still
   // surfaces "restart required" as guidance.
-  updateStatus('Saved. Restart required.', true);
+  updateStatus(t('status.saved_restart', {}, 'Saved. Restart required.'), true);
   if (data?.restart_required) {
     markRestartRequired();
   }
@@ -2197,7 +2384,7 @@ async function policyLoadConfig() {
   try {
     resp = await fetch('./api/policy/config');
   } catch (e) {
-    showPolicyLoadError('Could not reach the server: ' + e.message);
+    showPolicyLoadError(t('policies.errors.reach_server', {message: e.message}, 'Could not reach the server: ' + e.message));
     return;
   }
   if (!resp.ok) {
@@ -2211,16 +2398,20 @@ async function policyLoadConfig() {
       bodyParsed = true;
       if (body && body.error) detail = body.error;
       if (body && body.policy_file_corrupt) {
-        detail += ' (tool_policy.json appears corrupt; edit or delete it on the App (add-on) /data volume)';
+        detail += t(
+          'policies.errors.corrupt_suffix',
+          {},
+          ' (tool_policy.json appears corrupt; edit or delete it on the App (add-on) /data volume)'
+        );
       }
     } catch (_e) { /* keep the HTTP-status fallback */ }
     if (!bodyParsed) {
       // E.g. an HTML error page from a misrouted sidecar — give the
       // operator a hint that the body itself was unparseable, not
       // just the status code.
-      detail += ' (response body unparseable)';
+      detail += t('errors.unparseable_suffix', {}, ' (response body unparseable)');
     }
-    showPolicyLoadError('Failed to load policy: ' + detail);
+    showPolicyLoadError(t('policies.errors.load_detail', {detail}, 'Failed to load policy: ' + detail));
     return;
   }
   const p = await resp.json();
@@ -2267,10 +2458,10 @@ function renderPolicyCards(policy) {
 }
 
 function displayPredicate(p) {
-  if (!p || !p.path) return '(invalid)';
-  if (p.op === 'exists') return p.path + ' exists';
+  if (!p || !p.path) return t('policies.predicate.invalid', {}, '(invalid)');
+  if (p.op === 'exists') return p.path + ' ' + t('policies.operators.exists', {}, 'exists');
   const val = (p.value === undefined) ? 'null' : JSON.stringify(p.value);
-  return p.path + ' ' + p.op + ' ' + val;
+  return p.path + ' ' + t(`policies.operators.${p.op}`, {}, p.op) + ' ' + val;
 }
 
 function renderPolicyCard(toolName, rule) {
@@ -2281,64 +2472,64 @@ function renderPolicyCard(toolName, rule) {
   const predicateRows = rule.when.map((p, i) => (
     '<li class="policy-predicate-row" data-idx="' + i + '">' +
       '<code>' + escapeHtml(displayPredicate(p)) + '</code>' +
-      '<button class="policy-edit-predicate" data-idx="' + i + '">edit</button>' +
-      '<button class="policy-remove-predicate" data-idx="' + i + '">×</button>' +
+      '<button class="policy-edit-predicate" data-idx="' + i + '">' + escapeHtml(t('actions.edit', {}, 'edit')) + '</button>' +
+      '<button class="policy-remove-predicate" data-idx="' + i + '" aria-label="' + escapeHtml(t('actions.remove', {}, 'Remove')) + '">×</button>' +
     '</li>'
   )).join('');
   const emptyHint = rule.when.length === 0
     ? '<li class="policy-predicate-row"><em style="color:var(--text-secondary);font-size:0.8rem">' +
-      '(no conditions, rule matches every call to this tool)</em></li>'
+      escapeHtml(t('policies.card.no_conditions', {}, '(no conditions, rule matches every call to this tool)')) + '</em></li>'
     : '';
   card.innerHTML =
     '<div class="policy-rule-header">' +
       '<strong>' + escapeHtml(toolName) + '</strong>' +
-      '<button class="policy-rule-remove" title="Remove from policy">×</button>' +
+      '<button class="policy-rule-remove" title="' + escapeHtml(t('policies.card.remove_title', {}, 'Remove from policy')) + '">×</button>' +
     '</div>' +
     '<div class="policy-rule-predicates">' +
       '<label class="features-sub" style="display:block;margin-bottom:4px">' +
-        'Require approval when ALL of these conditions match (no conditions = always require approval):' +
+        escapeHtml(t('policies.card.conditions_intro', {}, 'Require approval when ALL of these conditions match (no conditions = always require approval):')) +
       '</label>' +
       '<ul class="policy-predicate-list">' + emptyHint + predicateRows + '</ul>' +
-      '<button class="policy-add-predicate">+ Add condition</button>' +
+      '<button class="policy-add-predicate">' + escapeHtml(t('policies.card.add_condition', {}, '+ Add condition')) + '</button>' +
       '<div class="policy-predicate-form" style="display:none;">' +
         '<div class="policy-form-row">' +
-          '<label class="policy-form-label">Argument:</label>' +
+          '<label class="policy-form-label">' + escapeHtml(t('policies.card.argument', {}, 'Argument:')) + '</label>' +
           '<select name="policy:predicate-path" class="policy-predicate-path-select">' +
-            '<option value="">(loading...)</option>' +
+            '<option value="">' + escapeHtml(t('status.loading_parentheses', {}, '(loading...)')) + '</option>' +
           '</select>' +
           '<input type="text" name="policy:predicate-path-custom" class="policy-predicate-path-custom" ' +
-            'placeholder="e.g. args.color_temp" style="display:none">' +
+            'placeholder="' + escapeHtml(t('policies.card.argument_placeholder', {}, 'e.g. args.color_temp')) + '" style="display:none">' +
         '</div>' +
         '<div class="policy-form-row">' +
-          '<label class="policy-form-label">Match when:</label>' +
+          '<label class="policy-form-label">' + escapeHtml(t('policies.card.match_when', {}, 'Match when:')) + '</label>' +
           '<select name="policy:predicate-op" class="policy-predicate-op">' +
-            '<option value="exists">is present (any value)</option>' +
-            '<option value="eq">equals</option>' +
-            '<option value="neq">does NOT equal</option>' +
-            '<option value="in">is one of</option>' +
-            '<option value="not_in">is NOT one of</option>' +
-            '<option value="contains">contains</option>' +
-            '<option value="regex">matches regex</option>' +
-            '<option value="gt">is greater than</option>' +
-            '<option value="lt">is less than</option>' +
+            '<option value="exists">' + escapeHtml(t('policies.operators.exists_long', {}, 'is present (any value)')) + '</option>' +
+            '<option value="eq">' + escapeHtml(t('policies.operators.eq', {}, 'equals')) + '</option>' +
+            '<option value="neq">' + escapeHtml(t('policies.operators.neq', {}, 'does NOT equal')) + '</option>' +
+            '<option value="in">' + escapeHtml(t('policies.operators.in', {}, 'is one of')) + '</option>' +
+            '<option value="not_in">' + escapeHtml(t('policies.operators.not_in', {}, 'is NOT one of')) + '</option>' +
+            '<option value="contains">' + escapeHtml(t('policies.operators.contains', {}, 'contains')) + '</option>' +
+            '<option value="regex">' + escapeHtml(t('policies.operators.regex', {}, 'matches regex')) + '</option>' +
+            '<option value="gt">' + escapeHtml(t('policies.operators.gt', {}, 'is greater than')) + '</option>' +
+            '<option value="lt">' + escapeHtml(t('policies.operators.lt', {}, 'is less than')) + '</option>' +
           '</select>' +
         '</div>' +
         '<div class="policy-form-row policy-value-row">' +
-          '<label class="policy-form-label">Value:</label>' +
+          '<label class="policy-form-label">' + escapeHtml(t('policies.card.value', {}, 'Value:')) + '</label>' +
           '<span class="policy-predicate-value-slot"></span>' +
         '</div>' +
         '<div class="policy-form-row">' +
-          '<button class="policy-predicate-form-save">Save condition</button>' +
-          '<button class="policy-predicate-form-cancel">Cancel</button>' +
+          '<button class="policy-predicate-form-save">' + escapeHtml(t('policies.card.save_condition', {}, 'Save condition')) + '</button>' +
+          '<button class="policy-predicate-form-cancel">' + escapeHtml(t('actions.cancel', {}, 'Cancel')) + '</button>' +
         '</div>' +
         '<div class="policy-predicate-form-error" style="display:none;"></div>' +
       '</div>' +
     '</div>' +
     '<div class="policy-rule-lifetime">' +
-      '<label>Remember approval for:' +
+      '<label>' + escapeHtml(t('policies.card.remember_for', {}, 'Remember approval for:')) +
         '<input type="number" name="policy:remember-minutes" min="0" max="1440" class="policy-remember-minutes" ' +
           'value="' + (rule.remember_minutes || 0) + '">' +
-        'minutes (0 = single-shot)' +
+        escapeHtml(t('policies.card.minutes_single', {}, 'minutes (0 = single-shot)')) +
       '</label>' +
     '</div>' +
     '<span class="policy-save-status" style="font-size:0.78rem;color:var(--text-secondary)"></span>';
@@ -2350,14 +2541,14 @@ function renderPolicyCard(toolName, rule) {
   const autoSave = async () => {
     const status = card.querySelector('.policy-save-status');
     const mySeq = ++autoSaveSeq;
-    status.textContent = 'Saving…';
+    status.textContent = t('status.saving', {}, 'Saving…');
     try {
       await savePolicyRule(toolName, rule);
       // Skip the success label if a newer save started (rapid edits)
-      if (mySeq === autoSaveSeq) status.textContent = 'Saved.';
+      if (mySeq === autoSaveSeq) status.textContent = t('status.saved', {}, 'Saved.');
     } catch (err) {
       if (mySeq === autoSaveSeq) {
-        status.textContent = 'Save failed: ' + err.message;
+        status.textContent = t('errors.save_failed_detail', {message: err.message}, 'Save failed: ' + err.message);
       }
     }
   };
@@ -2370,7 +2561,7 @@ function renderPolicyCard(toolName, rule) {
   };
 
   card.querySelector('.policy-rule-remove').addEventListener('click', async () => {
-    if (!confirm('Remove "' + toolName + '" from the security policy?')) return;
+    if (!confirm(t('policies.card.confirm_remove', {tool: toolName}, 'Remove "' + toolName + '" from the security policy?'))) return;
     try {
       await removePolicyRule(toolName);
       delete policyRuleEdits[toolName];
@@ -2379,7 +2570,7 @@ function renderPolicyCard(toolName, rule) {
       // Tools-tab gated state on next visit via loadPolicyState).
       await policyLoadConfig();
     } catch (err) {
-      alert('Failed to remove rule: ' + err.message);
+      alert(t('policies.errors.remove_rule', {message: err.message}, 'Failed to remove rule: ' + err.message));
     }
   });
 
@@ -2421,8 +2612,8 @@ function renderPolicyCard(toolName, rule) {
     // the box and users never hit "argument is required" by saving an
     // empty placeholder.
     html += '<option value="args.*" ' +
-      'title="Match against every argument of the call. Combine with op=equals/is one of to gate on any arg having a given value.">' +
-      '(any argument)</option>';
+      'title="' + escapeHtml(t('policies.editor.any_argument_title', {}, 'Match against every argument of the call. Combine with equals/is one of to gate on any argument having a given value.')) + '">' +
+      escapeHtml(t('policies.editor.any_argument', {}, '(any argument)')) + '</option>';
     for (const p of paths) {
       const tip = p.description ? ' title="' + escapeHtml(p.description) + '"' : '';
       html += '<option value="' + escapeHtml(p.path) + '"' + tip + '>' +
@@ -2431,7 +2622,7 @@ function renderPolicyCard(toolName, rule) {
         (p.type ? ' (' + escapeHtml(p.type) + ')' : '') +
         '</option>';
     }
-    html += '<option value="' + FREE_TEXT_OPT + '">(other, type a path)</option>';
+    html += '<option value="' + FREE_TEXT_OPT + '">' + escapeHtml(t('policies.editor.other_path', {}, '(other, type a path)')) + '</option>';
     pathSelectEl.innerHTML = html;
 
     // If the existing condition uses a path the schema doesn't know
@@ -2473,7 +2664,11 @@ function renderPolicyCard(toolName, rule) {
       const r = await fetch('./api/policy/value-source?source=' +
         encodeURIComponent(sourceKey));
       if (!r.ok) {
-        lastValueSourceError = 'value-source fetch failed (HTTP ' + r.status + '); falling back to free-text';
+        lastValueSourceError = t(
+          'policies.editor.value_source_http',
+          {status: r.status},
+          'value-source fetch failed (HTTP ' + r.status + '); falling back to free-text'
+        );
         return null;
       }
       const data = await r.json();
@@ -2482,7 +2677,11 @@ function renderPolicyCard(toolName, rule) {
       lastValueSourceError = null;
       return values;
     } catch (e) {
-      lastValueSourceError = 'value-source fetch failed (' + e.message + '); falling back to free-text';
+      lastValueSourceError = t(
+        'policies.editor.value_source_error',
+        {message: e.message},
+        'value-source fetch failed (' + e.message + '); falling back to free-text'
+      );
       return null;
     }
   };
@@ -2496,21 +2695,21 @@ function renderPolicyCard(toolName, rule) {
 
   const hintForOp = (op) => {
     if (op === 'exists') {
-      return 'Leave blank. This op gates on the argument being present at all, regardless of value.';
+      return t('policies.editor.hint.exists', {}, 'Leave blank. This op gates on the argument being present at all, regardless of value.');
     }
     if (op === 'in' || op === 'not_in') {
-      return 'Pick one or more values, or type a JSON list. Leave blank to gate on any value.';
+      return t('policies.editor.hint.list', {}, 'Pick one or more values, or type a JSON list. Leave blank to gate on any value.');
     }
     if (op === 'regex') {
-      return 'A regular expression to match the argument against.';
+      return t('policies.editor.hint.regex', {}, 'A regular expression to match the argument against.');
     }
     if (op === 'contains') {
-      return 'A substring (for strings) or item (for lists). Leave blank to gate on any value.';
+      return t('policies.editor.hint.contains', {}, 'A substring (for strings) or item (for lists). Leave blank to gate on any value.');
     }
     if (op === 'gt' || op === 'lt') {
-      return 'A number to compare against.';
+      return t('policies.editor.hint.number', {}, 'A number to compare against.');
     }
-    return 'The value the argument must equal. Leave blank to gate on any value.';
+    return t('policies.editor.hint.equals', {}, 'The value the argument must equal. Leave blank to gate on any value.');
   };
 
   // Sequence number for renderValueControl — rapid path/op edits can
@@ -2540,7 +2739,7 @@ function renderPolicyCard(toolName, rule) {
     if (sourceKey && choosable) {
       if (mySeq !== renderSeq) return;
       valueSlotEl.innerHTML = '<em style="color:var(--text-secondary);font-size:0.78rem">' +
-        'Loading choices…</em>';
+        escapeHtml(t('policies.editor.loading_choices', {}, 'Loading choices…')) + '</em>';
       const choices = await loadValueChoices(sourceKey);
       if (mySeq !== renderSeq) return;  // newer render in flight; discard.
       if (choices) {
@@ -2574,7 +2773,7 @@ function renderPolicyCard(toolName, rule) {
       (isMulti ? ' multiple size="6" style="min-width:220px"' : '') +
       '>';
     if (!isMulti) {
-      html += '<option value="">(pick a value)</option>';
+      html += '<option value="">' + escapeHtml(t('policies.editor.pick_value', {}, '(pick a value)')) + '</option>';
     }
     for (const c of choices) {
       const selected = existingArr.includes(c) ? ' selected' : '';
@@ -2589,7 +2788,7 @@ function renderPolicyCard(toolName, rule) {
     const op = opEl.value;
     let placeholder;
     if (op === 'exists') {
-      placeholder = 'usually left blank';
+      placeholder = t('policies.editor.placeholder.blank', {}, 'usually left blank');
     } else if (op === 'in' || op === 'not_in') {
       placeholder = '["lock","alarm_control_panel"]';
     } else if (op === 'regex') {
@@ -2634,20 +2833,20 @@ function renderPolicyCard(toolName, rule) {
         const picked = Array.from(ctrl.selectedOptions).map(o => o.value);
         if (picked.length === 0) {
           if (VALUE_OPTIONAL_OPS.has(op)) return {ok: true, value: undefined};
-          return {ok: false, error: 'pick at least one value'};
+          return {ok: false, error: t('policies.editor.validation.pick_one_or_more', {}, 'pick at least one value')};
         }
         return {ok: true, value: picked};
       }
       if (!ctrl.value) {
         if (VALUE_OPTIONAL_OPS.has(op)) return {ok: true, value: undefined};
-        return {ok: false, error: 'pick a value'};
+        return {ok: false, error: t('policies.editor.validation.pick_value', {}, 'pick a value')};
       }
       return {ok: true, value: ctrl.value};
     }
     const raw = ctrl.value.trim();
     if (!raw) {
       if (VALUE_OPTIONAL_OPS.has(op)) return {ok: true, value: undefined};
-      return {ok: false, error: 'value is required for op=' + op};
+      return {ok: false, error: t('policies.editor.validation.value_required', {operator: op}, 'value is required for op=' + op)};
     }
     // First try raw JSON. If that fails, fall back to smart-coercion
     // so users can type "lock" or "lock,alarm" without remembering the
@@ -2674,7 +2873,7 @@ function renderPolicyCard(toolName, rule) {
       if (raw.indexOf(',') !== -1) {
         const items = raw.split(',').map(s => s.trim()).filter(Boolean);
         if (items.length === 0) {
-          return {ok: false, error: 'empty list for op=' + op};
+          return {ok: false, error: t('policies.editor.validation.empty_list', {operator: op}, 'empty list for op=' + op)};
         }
         return {ok: true, value: items.map(coerceScalar)};
       }
@@ -2705,13 +2904,19 @@ function renderPolicyCard(toolName, rule) {
         // text. Surface the failure through lastValueSourceError so
         // renderHint shows the user why their dropdown is gone.
         toolSchema = {paths: [], value_sources: {}};
-        lastValueSourceError = 'tool-schema fetch failed (HTTP ' + r.status +
-          '); falling back to free-text';
+        lastValueSourceError = t(
+          'policies.editor.schema_http',
+          {status: r.status},
+          'tool-schema fetch failed (HTTP ' + r.status + '); falling back to free-text'
+        );
       }
     } catch (e) {
       toolSchema = {paths: [], value_sources: {}};
-      lastValueSourceError = 'tool-schema fetch failed (' + e.message +
-        '); falling back to free-text';
+      lastValueSourceError = t(
+        'policies.editor.schema_error',
+        {message: e.message},
+        'tool-schema fetch failed (' + e.message + '); falling back to free-text'
+      );
     }
     return toolSchema;
   };
@@ -2765,7 +2970,7 @@ function renderPolicyCard(toolName, rule) {
     let op = opEl.value;
     const path = currentPath();
     if (!path) {
-      errorEl.textContent = 'argument is required';
+      errorEl.textContent = t('policies.editor.validation.argument_required', {}, 'argument is required');
       errorEl.style.display = '';
       return;
     }
@@ -2806,7 +3011,7 @@ function renderPolicyCard(toolName, rule) {
 
 async function savePolicyRule(toolName, ruleObj) {
   const r = await fetch('./api/policy/config');
-  if (!r.ok) throw new Error('Could not load policy: ' + r.status);
+  if (!r.ok) throw new Error(t('policies.errors.load', {status: r.status}, 'Could not load policy: ' + r.status));
   const policy = await r.json();
   policy.rules = policy.rules || [];
   const idx = policy.rules.findIndex(rule => rule.tool_name === toolName);
@@ -2818,7 +3023,7 @@ async function savePolicyRule(toolName, ruleObj) {
     // and save). Append rather than silently drop the edit.
     policy.rules.push(ruleObj);
   }
-  await policyPut(policy, 'Save rule');
+  await policyPut(policy, t('policies.operations.save_rule', {}, 'Save rule'));
 }
 
 async function removePolicyRule(toolName) {
@@ -2831,29 +3036,31 @@ async function removePolicyRule(toolName) {
 async function saveGlobalSettings() {
   const statusEl = document.getElementById('policy-global-save-status');
   setStatusAlert(statusEl, false);
-  statusEl.textContent = 'Saving...';
+  statusEl.textContent = t('status.saving', {}, 'Saving...');
   let resp;
   try {
     resp = await fetch('./api/policy/config');
   } catch (e) {
     setStatusAlert(statusEl, true);
-    statusEl.textContent = 'Network error: ' + e.message;
-    showToast('Network error: ' + e.message, {isError: true});
+    const message = t('errors.network', {message: e.message}, 'Network error: ' + e.message);
+    statusEl.textContent = message;
+    showToast(message, {isError: true});
     return;
   }
   if (!resp.ok) {
     setStatusAlert(statusEl, true);
-    statusEl.textContent = 'Load failed: ' + resp.status;
-    showToast('Load failed: ' + resp.status, {isError: true});
+    const message = t('errors.load_failed', {status: resp.status}, 'Load failed: ' + resp.status);
+    statusEl.textContent = message;
+    showToast(message, {isError: true});
     return;
   }
   const policy = await resp.json();
   policy.wait_seconds = parseInt(document.getElementById('policy-wait-seconds').value, 10);
   policy.approval_ttl_minutes = parseInt(document.getElementById('policy-ttl-minutes').value, 10);
   try {
-    await policyPut(policy, 'Save global settings');
-    statusEl.textContent = 'Saved.';
-    showToast('Saved.');
+    await policyPut(policy, t('policies.operations.save_global', {}, 'Save global settings'));
+    statusEl.textContent = t('status.saved', {}, 'Saved.');
+    showToast(t('status.saved', {}, 'Saved.'));
   } catch (e) {
     setStatusAlert(statusEl, true);
     statusEl.textContent = e.message;
@@ -2869,7 +3076,11 @@ async function policyLoadPending() {
   } catch (e) {
     // Surface the failure inline — silent return leaves the pending
     // list visibly frozen with no signal that polling broke.
-    list.innerHTML = '<em style="color:var(--text-secondary)">Lost contact with server (' + escapeHtml(e.message) + '). Retrying.</em>';
+    list.innerHTML = '<em style="color:var(--text-secondary)">' + escapeHtml(t(
+      'policies.pending.offline',
+      {message: e.message},
+      'Lost contact with server (' + e.message + '). Retrying.'
+    )) + '</em>';
     return;
   }
   if (resp.status === 503) {
@@ -2879,11 +3090,19 @@ async function policyLoadPending() {
     // the server's 503 message rather than misleadingly claiming the
     // user disabled the feature.
     if (policyState.enabledKnown && !policyState.enabled) {
-      list.innerHTML = '<em>Tool Security Policies is turned off. Toggle it on (top of this tab or in Server Settings) and restart the App (add-on) to enable gating.</em>';
+      list.innerHTML = '<em>' + escapeHtml(t(
+        'policies.pending.disabled',
+        {},
+        'Tool Security Policies is turned off. Toggle it on (top of this tab or in Server Settings) and restart the App (add-on) to enable gating.'
+      )) + '</em>';
     } else {
       // Feature is on (or unknown) but the queue isn't reachable —
       // sidecar mode, startup ImportError, or transient outage.
-      let msg = 'Live approvals unavailable. Check the App (add-on) log for ImportError / RuntimeError details.';
+      let msg = t(
+        'policies.pending.unavailable',
+        {},
+        'Live approvals unavailable. Check the App (add-on) log for ImportError / RuntimeError details.'
+      );
       try {
         const body = await resp.json();
         if (body && body.error) msg = body.error;
@@ -2896,7 +3115,7 @@ async function policyLoadPending() {
   const data = await resp.json();
   const pending = data.pending || [];
   if (pending.length === 0) {
-    list.textContent = 'No pending approvals.';
+    list.textContent = t('policies.pending.empty', {}, 'No pending approvals.');
     return;
   }
   list.innerHTML = pending.map(p => (
@@ -2904,10 +3123,10 @@ async function policyLoadPending() {
     '<strong>' + escapeHtml(p.tool_name) + '</strong>' +
     '<pre style="white-space:pre-wrap; background:var(--bg); padding:8px; margin:6px 0; border-radius:6px; font-size:0.8rem">' +
     escapeHtml(JSON.stringify(p.args, null, 2)) + '</pre>' +
-    '<small style="color:var(--text-secondary)">Expires: ' + escapeHtml(p.expires_at) + '</small><br>' +
+    '<small style="color:var(--text-secondary)">' + escapeHtml(t('policies.pending.expires', {time: p.expires_at}, 'Expires: ' + p.expires_at)) + '</small><br>' +
     '<div style="margin-top:8px; display:flex; gap:8px">' +
-    '<button class="restart-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="approve">Approve</button>' +
-    '<button class="danger-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="deny">Deny</button>' +
+    '<button class="restart-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="approve">' + escapeHtml(t('actions.approve', {}, 'Approve')) + '</button>' +
+    '<button class="danger-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="deny">' + escapeHtml(t('actions.deny', {}, 'Deny')) + '</button>' +
     '</div></div>'
   )).join('');
   // Re-bind decision buttons each render (no event delegation needed —
@@ -2928,19 +3147,23 @@ async function policyDecide(token, action) {
       body: JSON.stringify({token: token}),
     });
   } catch (e) {
-    alert('Network error: ' + e.message);
+    alert(t('errors.network', {message: e.message}, 'Network error: ' + e.message));
     return;
   }
   if (!resp.ok) {
     let body;
     try { body = await resp.json(); } catch (_) { body = {error: 'HTTP ' + resp.status}; }
     if (resp.status === 409 && body.current_decision) {
-      alert("This approval was already " + body.current_decision +
-            ", possibly by another tab or session.");
+      alert(t(
+        'policies.pending.already_decided',
+        {decision: body.current_decision},
+        'This approval was already ' + body.current_decision + ', possibly by another tab or session.'
+      ));
     } else if (resp.status === 404) {
-      alert("This approval token is no longer valid (already consumed or expired).");
+      alert(t('policies.pending.invalid_token', {}, 'This approval token is no longer valid (already consumed or expired).'));
     } else {
-      alert('Approval action failed: ' + (body.error || resp.statusText));
+      const detail = body.error || resp.statusText;
+      alert(t('policies.pending.action_failed', {detail}, 'Approval action failed: ' + detail));
     }
   }
   policyLoadPending();
@@ -2959,7 +3182,11 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
     // Revert the checkbox and surface the failure (set the status AFTER
     // the revert so it isn't clobbered).
     e.target.checked = previous;
-    updateStatus('Tool Security Policies change did not save. The server still has the previous value', false, true);
+    updateStatus(t(
+      'policies.errors.master_save',
+      {},
+      'Tool Security Policies change did not save. The server still has the previous value'
+    ), false, true);
     return;
   }
   // Re-read the truth from the server and sync the checkbox back to
@@ -2986,7 +3213,11 @@ document.getElementById('read-only-mode-toggle').addEventListener('change', asyn
     // so the revert's render/sync can't clobber the message.
     e.target.checked = previous;
     render();
-    updateStatus('Read Only Mode change did not save. The server still has the previous value', false, true);
+    updateStatus(t(
+      'tools.read_only.save_failed',
+      {},
+      'Read Only Mode change did not save. The server still has the previous value'
+    ), false, true);
     return;
   }
   // Re-read the truth from the server and sync the checkbox back to it.
@@ -3159,14 +3390,14 @@ async function loadAdvancedSettings() {
     console.error('loadAdvancedSettings fetch failed:', err);
     if (errSlot) errSlot.innerHTML =
       '<div class="adv-row"><div class="adv-help">' +
-      'Advanced settings unavailable (network error reaching ' +
-      '/api/settings/advanced).</div></div>';
+      escapeHtml(t('advanced.errors.network', {}, 'Advanced settings unavailable (network error reaching /api/settings/advanced).')) +
+      '</div></div>';
     return;
   }
   if (!resp.ok) {
     if (errSlot) errSlot.innerHTML =
       `<div class="adv-row"><div class="adv-help">` +
-      `Advanced settings unavailable (HTTP ${resp.status}).</div></div>`;
+      `${escapeHtml(t('advanced.errors.http', {status: resp.status}, `Advanced settings unavailable (HTTP ${resp.status}).`))}</div></div>`;
     return;
   }
   let data;
@@ -3176,7 +3407,7 @@ async function loadAdvancedSettings() {
     console.error('loadAdvancedSettings JSON parse failed:', err);
     if (errSlot) errSlot.innerHTML =
       '<div class="adv-row"><div class="adv-help">' +
-      'Advanced settings response was not valid JSON.</div></div>';
+      escapeHtml(t('advanced.errors.json', {}, 'Advanced settings response was not valid JSON.')) + '</div></div>';
     return;
   }
   _advancedFields = data.fields || [];
@@ -3247,9 +3478,11 @@ function applySidecarAvailability(isStdio) {
   const note = document.createElement('div');
   note.id = 'advSidecarNote';
   note.className = 'adv-section-note';
-  note.textContent =
-    'Available in stdio mode only. This server runs over HTTP, which has '
-    + 'no settings-UI sidecar to pin.';
+  note.textContent = t(
+    'advanced.sidecar.stdio_only',
+    {},
+    'Available in stdio mode only. This server runs over HTTP, which has no settings-UI sidecar to pin.'
+  );
   section.parentNode.insertBefore(note, section);
 }
 
@@ -3260,12 +3493,16 @@ function renderAdvancedSection(containerId, fields) {
   fields.forEach(f => {
     const row = document.createElement('div');
     row.className = 'adv-row' + (f.editable ? '' : ' locked');
-    const meta = ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' };
+    const meta = localizeMeta(
+      'advanced',
+      f.field,
+      ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' }
+    );
     let controlHtml;
     if (f.choices) {
       controlHtml = `<select name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-labelledby="label-adv-${escapeHtml(f.field)}" ${f.editable ? '' : 'disabled'}>` +
         f.choices.map(c =>
-          `<option value="${escapeHtml(c)}" ${String(f.value) === c ? 'selected' : ''}>${escapeHtml(c)}</option>`
+          `<option value="${escapeHtml(c)}" ${String(f.value) === c ? 'selected' : ''}>${escapeHtml(t(`advanced.${f.field}.choices.${c}`, {}, c))}</option>`
         ).join('') +
         '</select>';
     } else if (f.type === 'bool') {
@@ -3284,7 +3521,7 @@ function renderAdvancedSection(containerId, fields) {
     if (f.origin === 'env') {
       originMsg = envLockedNoteHtml(f.env_var, f.field);
     } else if (!f.editable) {
-      originMsg = 'Display only. Modify via env var or App (add-on) settings.';
+      originMsg = escapeHtml(t('origins.display_only', {}, 'Display only. Modify via env var or App (add-on) settings.'));
     }
     row.innerHTML =
       `<div class="adv-info">` +
@@ -3308,11 +3545,11 @@ function renderAdvancedSection(containerId, fields) {
       // the running server version — confirm before enabling, matching
       // the stopSidecar / restart danger-action convention.
       if (fname === 'enable_dev_mode' && input.checked && !confirm(
-        '⚠ Enable developer mode?\n\n'
-        + 'After the next restart, hidden developer tools are exposed to '
-        + 'connected AI agents. They can change server settings and '
-        + 'replace the running server version. Only enable this for '
-        + 'development and testing.'
+        t(
+          'advanced.enable_dev_mode.confirm',
+          {},
+          '⚠ Enable developer mode?\n\nAfter the next restart, hidden developer tools are exposed to connected AI agents. They can change server settings and replace the running server version. Only enable this for development and testing.'
+        )
       )) {
         input.checked = false;
         return;
@@ -3399,12 +3636,16 @@ async function saveAdvancedSettings() {
         if (resp.ok) {
           data = {restart_required: true};
         } else {
-          showToast(`Save failed (HTTP ${resp.status}, non-JSON body)`, {isError: true});
+          showToast(t(
+            'errors.save_failed_non_json',
+            {status: resp.status},
+            `Save failed (HTTP ${resp.status}, non-JSON body)`
+          ), {isError: true});
           return;
         }
       }
       if (!resp.ok) {
-        let msg = 'Save failed';
+        let msg = t('errors.save_failed', {}, 'Save failed');
         if (data && data.error) {
           if (typeof data.error === 'string') msg = data.error;
           else if (data.error.message) msg = data.error.message;
@@ -3419,7 +3660,9 @@ async function saveAdvancedSettings() {
     const needsRestart = restartFields.some(
       f => ADVANCED_RESTART_REQUIRED.has(f)
     );
-    showToast(needsRestart ? 'Saved. Restart required.' : 'Saved.');
+    showToast(needsRestart
+      ? t('status.saved_restart', {}, 'Saved. Restart required.')
+      : t('status.saved', {}, 'Saved.'));
     if (needsRestart) {
       markRestartRequired();
     }
@@ -3445,11 +3688,11 @@ async function saveAdvancedSettings() {
         await loadAdvancedSettings();
       } catch (reloadErr) {
         console.error('post-save reload failed:', reloadErr);
-        showToast('Saved (reload failed; refresh to verify).');
+        showToast(t('status.saved_reload_failed', {}, 'Saved (reload failed; refresh to verify).'));
       }
     }
   } catch (err) {
-    showToast('Network error: ' + String(err), {isError: true});
+    showToast(t('errors.network', {message: String(err)}, 'Network error: ' + String(err)), {isError: true});
   }
   } finally {
     _advSaving = false;
@@ -3783,7 +4026,7 @@ async function visibilityLoadConfig() {
   try {
     resp = await fetch('./api/visibility/config');
   } catch (e) {
-    _visibilityShowLoadError('Could not reach the server: ' + e.message);
+    _visibilityShowLoadError(t('visibility.errors.reach_server', {message: e.message}, 'Could not reach the server: ' + e.message));
     return;
   }
   if (!resp.ok) {
@@ -3792,10 +4035,14 @@ async function visibilityLoadConfig() {
       const body = await resp.json();
       if (body && body.error) detail = body.error;
       if (body && body.visibility_file_corrupt) {
-        detail += ' (entity_visibility.json appears corrupt; edit or delete it on the App (add-on) /data volume)';
+        detail += t(
+          'visibility.errors.corrupt_suffix',
+          {},
+          ' (entity_visibility.json appears corrupt; edit or delete it on the App (add-on) /data volume)'
+        );
       }
     } catch (_e) { /* keep the HTTP-status fallback */ }
-    _visibilityShowLoadError('Failed to load visibility config: ' + detail);
+    _visibilityShowLoadError(t('visibility.errors.load_detail', {detail}, 'Failed to load visibility config: ' + detail));
     return;
   }
   const c = await resp.json();
@@ -3833,7 +4080,7 @@ async function visibilitySaveConfig() {
     respect_assist_exposure: document.getElementById('visibility-respect-assist').checked,
   };
   setStatusAlert(statusEl, false);
-  statusEl.textContent = 'Saving...';
+  statusEl.textContent = t('status.saving', {}, 'Saving...');
   let resp;
   try {
     resp = await fetch('./api/visibility/config', {
@@ -3843,7 +4090,7 @@ async function visibilitySaveConfig() {
     });
   } catch (e) {
     setStatusAlert(statusEl, true);
-    statusEl.textContent = 'Save failed: ' + e.message;
+    statusEl.textContent = t('errors.save_failed_detail', {message: e.message}, 'Save failed: ' + e.message);
     return;
   }
   if (resp.status === 409) {
@@ -3852,22 +4099,24 @@ async function visibilitySaveConfig() {
     // form, surface the conflict, and let the user reload deliberately — mirrors
     // the policy tab's optimistic-lock message.
     setStatusAlert(statusEl, true);
-    statusEl.textContent =
-      'Config was changed in another tab or session. Reload the page to see the '
-      + 'latest, then re-apply your changes.';
+    statusEl.textContent = t(
+      'visibility.errors.conflict',
+      {},
+      'Config was changed in another tab or session. Reload the page to see the latest, then re-apply your changes.'
+    );
     return;
   }
   if (!resp.ok) {
     let detail = 'HTTP ' + resp.status;
     try { const b = await resp.json(); if (b && b.error) detail = b.error; } catch (_e) { /* fallback */ }
     setStatusAlert(statusEl, true);
-    statusEl.textContent = 'Save failed: ' + detail;
+    statusEl.textContent = t('errors.save_failed_detail', {message: detail}, 'Save failed: ' + detail);
     return;
   }
   const body = await resp.json();
   visibilityVersion = body.version ?? (visibilityVersion + 1);
   setStatusAlert(statusEl, false);
-  statusEl.textContent = 'Saved.';
+  statusEl.textContent = t('status.saved', {}, 'Saved.');
 }
 
 (function wireVisibilitySave() {
