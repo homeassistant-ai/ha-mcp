@@ -24,6 +24,7 @@ def _write_catalog(
     *,
     native_name: str,
     messages: dict[str, str],
+    tools: dict[str, dict[str, str]] | None = None,
 ) -> None:
     (directory / f"{locale}.json").write_text(
         json.dumps(
@@ -31,7 +32,7 @@ def _write_catalog(
                 "meta": {"native_name": native_name, "dir": "ltr"},
                 "messages": messages,
                 "tool_groups": {},
-                "tools": {},
+                "tools": tools or {},
             }
         ),
         encoding="utf-8",
@@ -112,6 +113,28 @@ def test_placeholder_mismatch_is_rejected(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="placeholders"):
+        load_catalogs(tmp_path)
+
+
+def test_tool_placeholder_mismatch_is_rejected(tmp_path: Path) -> None:
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={},
+        tools={"ha_example": {"description": "Run for {entity}"}},
+    )
+    _write_catalog(
+        tmp_path,
+        "ru",
+        native_name="Русский",
+        messages={},
+        tools={"ha_example": {"description": "Выполнить"}},
+    )
+
+    with pytest.raises(
+        ValueError, match=r"tool 'ha_example'.*description.*placeholders"
+    ):
         load_catalogs(tmp_path)
 
 

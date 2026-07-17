@@ -117,12 +117,13 @@ def load_catalogs(directory: Path = LOCALES_DIR) -> dict[str, dict[str, Any]]:
 
 def _validate_placeholder_parity(catalogs: dict[str, dict[str, Any]]) -> None:
     """Reject translations that drop or invent ``{name}`` placeholders."""
-    english = catalogs[DEFAULT_LOCALE]["messages"]
+    english_messages = catalogs[DEFAULT_LOCALE]["messages"]
+    english_tools = catalogs[DEFAULT_LOCALE]["tools"]
     for locale, catalog in catalogs.items():
         if locale == DEFAULT_LOCALE:
             continue
         for key, translated in catalog["messages"].items():
-            source = english.get(key)
+            source = english_messages.get(key)
             if source is None:
                 continue
             source_fields = set(_PLACEHOLDER_RE.findall(source))
@@ -132,6 +133,20 @@ def _validate_placeholder_parity(catalogs: dict[str, dict[str, Any]]) -> None:
                     f"Locale {locale} message {key!r} has placeholders "
                     f"{sorted(translated_fields)}, expected {sorted(source_fields)}"
                 )
+        for tool_name, translated_tool in catalog["tools"].items():
+            source_tool = english_tools.get(tool_name, {})
+            for field, translated in translated_tool.items():
+                source = source_tool.get(field)
+                if source is None:
+                    continue
+                source_fields = set(_PLACEHOLDER_RE.findall(source))
+                translated_fields = set(_PLACEHOLDER_RE.findall(translated))
+                if source_fields != translated_fields:
+                    raise ValueError(
+                        f"Locale {locale} tool {tool_name!r} field {field!r} "
+                        f"has placeholders {sorted(translated_fields)}, expected "
+                        f"{sorted(source_fields)}"
+                    )
 
 
 CATALOGS = load_catalogs()
