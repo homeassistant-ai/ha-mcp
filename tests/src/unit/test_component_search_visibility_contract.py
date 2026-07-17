@@ -496,3 +496,17 @@ def test_component_warning_constants_match_resolver() -> None:
         wsapi._ALLOWLIST_REGISTRY_EMPTY_WARNING
         == resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING
     )
+    # The known-entity-category set is duplicated for the same HACS reason; pin it
+    # equal to the resolver's so an unknown-category divergence can't creep in.
+    assert wsapi._KNOWN_ENTITY_CATEGORIES == resolver.KNOWN_ENTITY_CATEGORIES
+
+
+def test_component_visibility_schema_keys_match_server_to_wire() -> None:
+    """The component's enumerated ``visibility`` schema keys equal the server's wire set.
+
+    The component now rejects unknown ``visibility`` keys (enumerated schema), so its
+    known-key set must stay in lockstep with ``VisibilityConfig.to_wire`` — otherwise
+    a dimension the server sends would be rejected, or a dropped dimension would be
+    silently accepted. Pins both sides of the "new dimension ⇒ new capability" rule.
+    """
+    assert set(VisibilityConfig().to_wire()) == wsapi._VISIBILITY_WIRE_KEYS

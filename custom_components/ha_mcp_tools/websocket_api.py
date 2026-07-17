@@ -87,16 +87,17 @@ and ``info`` itself carries no capability entry):
   (``await store.async_load`` in the async prep) with a structured
   ``yaml_excluded`` status for YAML-mode dashboards (the server falls back to
   legacy for those — a YAML body may carry resolved ``!secret`` plaintext);
-  ``search`` walks every STORAGE dashboard's views/cards/sections for a query
-  substring (capped at 200 with a ``truncated`` flag). YAML-dashboard bodies are
-  never emitted — storage-only. All Store loads run in :func:`_dashboards_prep`.
+  ``search`` walks every STORAGE dashboard's views/cards/sections (plus view-level
+  badges and sections-view header cards) for a query substring (capped at 200 with a
+  ``truncated`` flag). YAML-dashboard bodies are never emitted — storage-only. All
+  Store loads run in :func:`_dashboards_prep`.
 * ``ha_mcp_tools/services_list`` — the REST ``/api/services`` service catalog
   (``async_get_all_descriptions``) joined with the ``services`` backend
-  translations (``async_get_translations``), both loaded in the async prep. The
-  component coarse-filters by ``domain`` (exact) / ``query`` (a SUPERSET of the
-  server's own filter — kept if the query is a substring of the domain, any
-  service name, or any string in the service's description or translations) so the
-  server re-runs its exact filter + pagination over a reduced payload.
+  translations (``async_get_translations``), both loaded in the async prep.
+  Filtered by ``domain`` (exact) only; the server re-runs its exact query filter +
+  pagination over the payload. No ``query`` coarse-filter (a per-service superset of
+  the server's concatenation-based filter cannot be built cheaply, and no consumer
+  forwards ``query``).
 * ``ha_mcp_tools/reference_data`` — the service index + entity-id universe the
   config-reference validator consumes: ``{services: [{domain, services:{name:{}}}],
   entity_ids: [...]}``. The ``services`` shape is the REST ``/api/services`` list
@@ -119,9 +120,11 @@ and ``info`` itself carries no capability entry):
   every ``ha_mcp_tools``-domain entry's options-flow schema from the outside.
 
 * ``ha_mcp_tools/config_entries`` — config entries as the ``config_entries/get``
-  WS shape (``entry_id`` / ``domain`` / ``title`` / ``state`` / ``source`` /
-  ``supports_*`` / ``pref_disable_*`` / ``disabled_by`` / ``reason`` /
-  ``options`` / ``subentries``), filtered by ``domain`` or fetched by
+  WS shape (``created_at`` / ``modified_at`` / ``entry_id`` / ``domain`` /
+  ``title`` / ``state`` / ``source`` / ``supports_*`` / ``supported_subentry_types``
+  / ``pref_disable_*`` / ``disabled_by`` / ``reason`` / ``options`` /
+  ``subentries`` — the full ``as_json_fragment`` field set), filtered by ``domain``
+  or fetched by
   ``entry_id``. ``state`` is serialized as ``ConfigEntryState.value`` (mirroring
   core's ``as_json_fragment``). ``entry.data`` (integration credentials) is
   NEVER read; ``options`` is passed through a resolved-``!secret`` scrub (an
@@ -452,7 +455,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_info_schema(), lambda hass, msg: _do_info(hass), None),
         (_search_schema(), _do_search, _search_prep),
         (_overview_schema(), _do_overview, None),
-        (_helpers_list_schema(), _do_helpers_list, None),
+        (_helpers_list_schema(), _do_helpers_list, _helpers_list_prep),
         (_states_schema(), _do_states, None),
         (_blueprint_get_schema(), _do_blueprint_get, _blueprint_get_prep),
         (_device_get_schema(), _do_device_get, None),
@@ -495,6 +498,40 @@ def _info_schema() -> dict[Any, Any]:
     return {vol.Required("type"): WS_INFO}
 
 
+# The nine hide dimensions ``VisibilityConfig.to_wire`` emits, split by wire type
+# (seven id/name lists, two bool flags). Kept in lockstep with the server's
+# ``to_wire`` and :func:`_visibility_hidden_set`; a new dimension is a new component
+# capability, added on BOTH sides (see :func:`_visibility_param_schema`). The union
+# is pinned equal to the server resolver's key set by the cross-seam contract test.
+_VISIBILITY_LIST_KEYS = (
+    "exclude_categories",
+    "deny_entity_ids",
+    "exclude_areas",
+    "exclude_labels",
+    "allow_entity_ids",
+    "allow_areas",
+    "allow_labels",
+)
+_VISIBILITY_BOOL_KEYS = ("exclude_hidden", "respect_assist_exposure")
+_VISIBILITY_WIRE_KEYS = frozenset(_VISIBILITY_LIST_KEYS + _VISIBILITY_BOOL_KEYS)
+
+
+def _visibility_param_schema() -> Any:
+    """Voluptuous schema for the ``search`` ``visibility`` dict — exactly the nine keys.
+
+    Enumerating the known dimensions (PREVENT_EXTRA is voluptuous' default for a
+    nested ``Schema``) makes an unknown key a loud ``invalid_format`` command error
+    rather than a silent drop. If a newer server emits a tenth dimension to this
+    1.2.0 component, the server's error taxonomy converts that into a legacy fallback
+    with the filter STILL correctly applied — structural fail-closed for free —
+    instead of partial, unwarned filtering. Built at call time so it honors the
+    monkeypatched ``vol`` in the unit suite.
+    """
+    schema: dict[Any, Any] = {vol.Optional(key): [str] for key in _VISIBILITY_LIST_KEYS}
+    schema.update({vol.Optional(key): bool for key in _VISIBILITY_BOOL_KEYS})
+    return vol.Schema(schema)
+
+
 def _search_schema() -> dict[Any, Any]:
     return {
         vol.Required("type"): WS_SEARCH,
@@ -515,8 +552,11 @@ def _search_schema() -> dict[Any, Any]:
         # non-empty, hidden entities are excluded from the entity results before
         # counts/pagination, mirroring the legacy ``load_hidden_set`` hard-exclude
         # so ``ha_search`` can drop its "filter active -> legacy only" gate. Gated
-        # by the CAPABILITIES flag, so an old component never receives it.
-        vol.Optional("visibility"): dict,
+        # by the CAPABILITIES flag, so an old component never receives it. The nine
+        # known keys are enumerated so an unknown dimension fails loudly (the server
+        # then falls back to legacy with the filter applied) — see
+        # :func:`_visibility_param_schema`.
+        vol.Optional("visibility"): _visibility_param_schema(),
     }
 
 
@@ -643,7 +683,6 @@ def _services_list_schema() -> dict[Any, Any]:
     return {
         vol.Required("type"): WS_SERVICES_LIST,
         vol.Optional("domain"): vol.Any(str, None),
-        vol.Optional("query"): vol.Any(str, None),
         vol.Optional("language", default="en"): str,
     }
 
@@ -913,53 +952,91 @@ async def _search_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, An
     return {"secret_values": values}
 
 
-def _load_secret_values(hass: HomeAssistant) -> frozenset[str]:
-    """Load the string values from the instance's ``secrets.yaml``.
+def _load_secret_scrub(hass: HomeAssistant) -> tuple[frozenset[str], bool]:
+    """Load the ``secrets.yaml`` scrub values, plus a ``degraded`` flag.
 
-    These scrub resolved ``!secret`` plaintext out of the config-body match
-    corpus: a YAML-loaded automation/script/scene body (or a flow-helper's
-    options) can carry a secret already resolved to its plaintext value, and
-    matching inside it would turn ``ha_search`` into a probe oracle — a query
-    equal to a suspected secret confirmed via ``match_in_config``. Any body leaf
-    that exactly equals one of these values is dropped before scoring.
+    Returns ``(values, degraded)``. ``values`` are the plaintext string forms of the
+    instance's ``secrets.yaml`` scalars; they scrub resolved ``!secret`` plaintext
+    out of two surfaces: the config-body match corpus (so ``ha_search`` cannot be a
+    probe oracle — a query equal to a suspected secret confirmed via
+    ``match_in_config``) and the ``options`` emitted by ``config_entries`` /
+    ``helpers_list`` (so a resolved secret never leaves the component).
 
-    Defensive by design: an absent ``secrets.yaml`` (``FileNotFoundError`` — the
-    common case) yields an empty set silently; a present-but-unreadable or
-    malformed file logs one warning and also degrades to an empty set (the scrub
-    turns OFF but never raises). Only string values are collected — a secret can
-    be any YAML scalar, but a non-string can't be a plaintext-leak leaf and is
-    skipped. Loaded off the event loop by :func:`_search_prep` once per search,
-    never cached across calls, so an edited ``secrets.yaml`` applies on the next
-    search. ``secrets.yaml`` is a flat ``key: value`` mapping with no custom
-    tags, so the plain ``yaml.safe_load`` (not HA's ``!secret``/``!include``
-    loader) reads it correctly.
+    Both string AND numeric scalars are collected as their ``str()`` form: an
+    unquoted ``alarm_code: 1234`` is a YAML int, and a config-entry option can carry
+    that secret back as an int leaf, so the scrub must be able to match it whether it
+    arrives as ``1234`` or ``"1234"``. bool scalars are excluded ("True"/"False" are
+    never credentials and would over-redact).
+
+    ``degraded`` is True ONLY when a ``secrets.yaml`` is PRESENT but could not be
+    read/parsed: the scrub then silently turns OFF, and a caller emitting options can
+    surface ``degraded`` so an unredacted response is not mistaken for a cleanly
+    scrubbed one. An ABSENT ``secrets.yaml`` (the common case) is NOT degraded —
+    there is simply nothing to scrub.
+
+    Defensive by design — never raises into the WS handler. Loaded off the event loop
+    by the async preps once per call, never cached, so an edited ``secrets.yaml``
+    applies on the next call. ``secrets.yaml`` is a flat ``key: value`` mapping with
+    no custom tags, so the plain ``yaml.safe_load`` (not HA's ``!secret``/
+    ``!include`` loader) reads it correctly.
     """
     config = getattr(hass, "config", None)
     path_fn = getattr(config, "path", None)
     if not callable(path_fn):
-        return frozenset()
+        return frozenset(), False
     try:
         path = path_fn("secrets.yaml")
         if not path:
-            return frozenset()
+            return frozenset(), False
         with open(path, encoding="utf-8") as handle:
             raw = yaml.safe_load(handle)
     except FileNotFoundError:
         # Expected: many instances have no secrets.yaml — nothing to scrub.
-        return frozenset()
+        return frozenset(), False
     except Exception:
-        # Present-but-unreadable / malformed / permission error: unexpected, so
-        # warn once (this runs once per search) to surface a broken scrub, then
-        # degrade OFF (empty set) rather than raising into the WS handler.
+        # Present-but-unreadable / malformed / permission error: unexpected, so warn
+        # once (this runs once per call) AND report degraded so the emission callers
+        # can signal that options were NOT redacted, rather than raising into the WS
+        # handler.
         _LOGGER.warning(
-            "Could not read secrets.yaml for the search secret-scrub; "
-            "continuing without it",
+            "Could not read secrets.yaml for the secret-scrub; continuing WITHOUT "
+            "redaction (emitted options may be unredacted)",
             exc_info=True,
         )
-        return frozenset()
+        return frozenset(), True
     if not isinstance(raw, dict):
-        return frozenset()
-    return frozenset(v for v in raw.values() if isinstance(v, str) and v)
+        return frozenset(), False
+    return _collect_secret_strings(raw), False
+
+
+def _collect_secret_strings(raw: dict[Any, Any]) -> frozenset[str]:
+    """Plaintext ``str()`` forms of ``secrets.yaml`` scalars (str/int/float).
+
+    bool scalars are excluded ("True"/"False" are never credentials and would
+    over-redact); empty strings are dropped. See :func:`_load_secret_scrub`.
+    """
+    values: set[str] = set()
+    for v in raw.values():
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, str):
+            if v:
+                values.add(v)
+        elif isinstance(v, (int, float)):
+            values.add(str(v))
+    return frozenset(values)
+
+
+def _load_secret_values(hass: HomeAssistant) -> frozenset[str]:
+    """The ``secrets.yaml`` scrub set (see :func:`_load_secret_scrub`); degraded dropped.
+
+    The ``search`` corpus scrub is best-effort and does not surface the degraded
+    signal (its filtering degrading open is the pre-PR behaviour); the
+    ``config_entries`` / ``helpers_list`` emission preps call
+    :func:`_load_secret_scrub` directly so they can surface it.
+    """
+    values, _degraded = _load_secret_scrub(hass)
+    return values
 
 
 # --- Entity join + scoring ---------------------------------------------------
@@ -1356,8 +1433,14 @@ def _scene_match_corpus(scene_config: Any) -> dict[str, Any] | None:
 
 
 def _plainify(value: Any) -> Any:
-    """Best-effort conversion of registry/state objects to plain JSON-able data."""
-    if isinstance(value, dict):
+    """Best-effort conversion of registry/state objects to plain JSON-able data.
+
+    Recurses on any ``Mapping`` (not just ``dict``): a nested ``MappingProxyType``
+    (common in ``ConfigEntry.options``) must be walked into a plain dict, NOT
+    stringified — otherwise a secret buried inside it survives embedded in the repr
+    string, past the equality scrub that runs on the result.
+    """
+    if isinstance(value, Mapping):
         return {str(k): _plainify(v) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [_plainify(v) for v in value]
@@ -1966,17 +2049,28 @@ def _current_friendly_name(
 # =============================================================================
 # ha_mcp_tools/helpers_list
 # =============================================================================
-def _do_helpers_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+def _do_helpers_list(
+    hass: HomeAssistant,
+    params: dict[str, Any],
+    *,
+    secret_values: frozenset[str] = frozenset(),
+    secret_scrub_degraded: bool = False,
+) -> dict[str, Any]:
     """List collection helpers (live state bodies) + flow helpers (config-entry options).
 
     Flow-helper ``options`` come straight from ``ConfigEntry.options`` — no
     OptionsFlow start/abort dance, and NEVER ``entry.data`` (integration
     credentials). Every record carries the CURRENT entity_id + display name from
     the entity registry so a renamed helper shows current values (issue #1794),
-    not the stale storage-collection name. No secret scrub: collection bodies come
-    from the storage collection (or live state attributes) and flow options are
-    storage-backed — neither is YAML-derived, so no resolved ``!secret`` plaintext
-    can appear.
+    not the stale storage-collection name.
+
+    Flow-helper ``options`` share the credential-bearing exposure class of
+    ``config_entries``'s ``options`` (a flow helper IS a config entry), so they pass
+    through the SAME best-effort resolved-``!secret`` scrub for uniformity — a
+    present-but-unreadable ``secrets.yaml`` degrades the scrub to a no-op and sets
+    ``secret_scrub_degraded: true`` (present ONLY when degraded). Collection-helper
+    bodies (storage collection / live state attributes) are not scrubbed — they carry
+    no YAML-resolved secret.
 
     ``covered_types`` names exactly the helper_type values this command can
     enumerate (the state-machine collection domains + the flow domains, minus the
@@ -1994,13 +2088,33 @@ def _do_helpers_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, A
     helpers = _collection_helpers_list(hass, view, type_filter)
     covered = set(HELPERS_LIST_COLLECTION_DOMAINS)
     if include_flow:
-        helpers.extend(_flow_helpers_list(hass, view, type_filter))
+        helpers.extend(_flow_helpers_list(hass, view, type_filter, secret_values))
         covered |= FLOW_HELPER_DOMAINS
-    return {
+    result: dict[str, Any] = {
         "helpers": helpers,
         "count": len(helpers),
         "covered_types": sorted(covered),
     }
+    if include_flow and secret_scrub_degraded:
+        result["secret_scrub_degraded"] = True
+    return result
+
+
+async def _helpers_list_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Async pre-step for ``helpers_list``: load the secret-scrub set off the loop.
+
+    Only the flow-helper ``options`` are scrubbed, so the blocking ``secrets.yaml``
+    read is skipped entirely when ``include_flow_helpers`` is false (perf gate,
+    mirroring ``search``'s entity-only skip). The read runs in the executor via
+    :meth:`hass.async_add_executor_job`, keeping :func:`_do_helpers_list` a pure
+    in-memory read. See :func:`_load_secret_scrub`.
+    """
+    if not msg.get("include_flow_helpers", True):
+        return {"secret_values": frozenset(), "secret_scrub_degraded": False}
+    values, degraded = await hass.async_add_executor_job(_load_secret_scrub, hass)
+    return {"secret_values": values, "secret_scrub_degraded": degraded}
 
 
 def _collection_helpers_list(
@@ -2053,9 +2167,17 @@ def _collection_helpers_list(
 
 
 def _flow_helpers_list(
-    hass: HomeAssistant, view: _RegistryView, type_filter: frozenset[str] | None
+    hass: HomeAssistant,
+    view: _RegistryView,
+    type_filter: frozenset[str] | None,
+    secret_values: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
-    """Flow (config-entry-backed) helpers — options + title + entry_id, never data."""
+    """Flow (config-entry-backed) helpers — options + title + entry_id, never data.
+
+    ``options`` is passed through the same resolved-``!secret`` scrub
+    ``config_entries`` applies (a flow helper is a config entry, so its ``options``
+    share the same exposure class); an empty ``secret_values`` is a no-op.
+    """
     out: list[dict[str, Any]] = []
     entity_by_entry = _entities_by_config_entry(view)
     for entry in _iter_config_entries(hass):
@@ -2068,7 +2190,9 @@ def _flow_helpers_list(
         title = getattr(entry, "title", None) or ""
         raw_options = getattr(entry, "options", None)
         options = (
-            _plainify(dict(raw_options)) if isinstance(raw_options, Mapping) else {}
+            _scrub_secret_values(_plainify(dict(raw_options)), secret_values)
+            if isinstance(raw_options, Mapping)
+            else {}
         )
         reg = entity_by_entry.get(entry_id)
         entity_id = getattr(reg, "entity_id", None) if reg is not None else None
@@ -2949,14 +3073,19 @@ def _do_config_entries(
     params: dict[str, Any],
     *,
     secret_values: frozenset[str] = frozenset(),
+    secret_scrub_degraded: bool = False,
 ) -> dict[str, Any]:
     """Return config entries in the ``config_entries/get`` WS shape.
 
-    ``{entries: [{entry_id, domain, title, state, source, supports_options,
-    supports_remove_device, supports_unload, supports_reconfigure,
-    pref_disable_new_entities, pref_disable_polling, disabled_by, reason,
-    error_reason_translation_key, error_reason_translation_placeholders,
-    num_subentries, options, subentries}]}``. Filtered by ``domain`` when
+    ``{entries: [{created_at, modified_at, entry_id, domain, title, state, source,
+    supports_options, supports_remove_device, supports_unload, supports_reconfigure,
+    supported_subentry_types, pref_disable_new_entities, pref_disable_polling,
+    disabled_by, reason, error_reason_translation_key,
+    error_reason_translation_placeholders, num_subentries, options, subentries}]}``.
+    The FULL ``as_json_fragment`` field set (``created_at`` / ``modified_at`` as
+    ``.timestamp()`` floats, ``supported_subentry_types`` as core emits it), so the
+    component row carries the same fields the legacy REST row does — no field is
+    dropped on the component path. Filtered by ``domain`` when
     given, or the single entry by ``entry_id``
     (``hass.config_entries.async_get_entry`` — an id that matches nothing,
     including an empty string, yields an empty list). Only a WHOLLY ABSENT
@@ -2973,12 +3102,18 @@ def _do_config_entries(
 
     Data minimization: ``entry.data`` (integration credentials) is NEVER read.
     ``options`` is the only credential-bearing surface emitted, so it is passed
-    through the resolved-``!secret`` scrub — an options leaf (dict value, list
-    item, or scalar) that exactly equals a ``secrets.yaml`` value becomes
-    ``"**redacted**"`` (``secret_values`` loaded off the loop by
+    through a BEST-EFFORT resolved-``!secret`` scrub — an options leaf (dict value,
+    list item, or scalar whose ``str()`` form) that exactly equals a ``secrets.yaml``
+    value becomes ``"**redacted**"`` (``secret_values`` loaded off the loop by
     :func:`_config_entries_prep`). ``subentries`` carries identity fields only
     (``subentry_id`` / ``subentry_type`` / ``title`` / ``unique_id``) — never a
     subentry's ``data``; a core version without subentries degrades to ``[]``.
+
+    The scrub is BEST-EFFORT: a present-but-unreadable ``secrets.yaml`` degrades it
+    to a no-op (options emitted unredacted). That degradation is signalled to the
+    caller as ``secret_scrub_degraded: true`` (present ONLY when degraded), so an
+    agent echoing ``options`` onward can tell an unscrubbed response from a clean
+    one rather than trusting redaction that did not run.
 
     Pure over ``hass``: the blocking ``secrets.yaml`` read is offloaded by the
     async prep, so this stays a synchronous in-memory read.
@@ -2995,7 +3130,12 @@ def _do_config_entries(
         entries = _iter_config_entries(hass)
         if domain:
             entries = [e for e in entries if getattr(e, "domain", None) == domain]
-    return {"entries": [_config_entry_row(e, secret_values) for e in entries]}
+    result: dict[str, Any] = {
+        "entries": [_config_entry_row(e, secret_values) for e in entries]
+    }
+    if secret_scrub_degraded:
+        result["secret_scrub_degraded"] = True
+    return result
 
 
 async def _config_entries_prep(
@@ -3007,10 +3147,12 @@ async def _config_entries_prep(
     ``config_entries`` ALWAYS emits ``options``, so the ``secrets.yaml`` read is
     unconditional. The blocking ``open()`` + ``yaml.safe_load`` runs in the
     executor via :meth:`hass.async_add_executor_job`, keeping
-    :func:`_do_config_entries` a pure in-memory read. See :func:`_load_secret_values`.
+    :func:`_do_config_entries` a pure in-memory read. The ``degraded`` flag (a
+    present-but-unreadable ``secrets.yaml``) rides through so the response can signal
+    that ``options`` may be unredacted. See :func:`_load_secret_scrub`.
     """
-    values = await hass.async_add_executor_job(_load_secret_values, hass)
-    return {"secret_values": values}
+    values, degraded = await hass.async_add_executor_job(_load_secret_scrub, hass)
+    return {"secret_values": values, "secret_scrub_degraded": degraded}
 
 
 def _config_entry_by_id(hass: HomeAssistant, entry_id: str) -> Any:
@@ -3035,6 +3177,12 @@ def _config_entry_row(entry: Any, secret_values: frozenset[str]) -> dict[str, An
     options = _plainify(dict(raw_options)) if isinstance(raw_options, Mapping) else {}
     options = _scrub_secret_values(options, secret_values)
     return {
+        # Timestamps as floats via ``.timestamp()``, mirroring core's
+        # as_json_fragment (``self.created_at.timestamp()``). Absent on a core old
+        # enough to predate them -> None (this row is read-only, never restored, so a
+        # None key is harmless here — unlike the area-registry rows).
+        "created_at": _timestamp(getattr(entry, "created_at", None)),
+        "modified_at": _timestamp(getattr(entry, "modified_at", None)),
         "entry_id": getattr(entry, "entry_id", None),
         "domain": getattr(entry, "domain", None),
         "title": getattr(entry, "title", None),
@@ -3048,6 +3196,11 @@ def _config_entry_row(entry: Any, secret_values: frozenset[str]) -> dict[str, An
         "supports_remove_device": _safe_prop(entry, "supports_remove_device") or False,
         "supports_unload": _safe_prop(entry, "supports_unload") or False,
         "supports_reconfigure": bool(_safe_prop(entry, "supports_reconfigure")),
+        # supported_subentry_types is a computed property (it touches the flow
+        # handler, same hazard class as supports_*) — _safe_prop-guarded, defaulting
+        # to {} like core's ``self._supported_subentry_types or {}``.
+        "supported_subentry_types": _safe_prop(entry, "supported_subentry_types", {})
+        or {},
         "pref_disable_new_entities": bool(
             getattr(entry, "pref_disable_new_entities", False)
         ),
@@ -3084,20 +3237,27 @@ def _config_subentries(entry: Any) -> list[dict[str, Any]]:
 
 
 def _scrub_secret_values(value: Any, secret_values: frozenset[str]) -> Any:
-    """Recursively replace any string equal to a known secret with ``"**redacted**"``.
+    """Recursively replace any leaf equal to a known secret with ``"**redacted**"``.
 
-    Walks dict values, list items, and scalars of the (already ``_plainify``'d)
-    options structure. A leaf string that exactly equals a ``secrets.yaml`` value
-    is redacted so a resolved ``!secret`` never leaves the component; every other
-    value passes through. An empty ``secret_values`` is a no-op (fast path).
+    Walks ``Mapping`` values, list/tuple items, and scalar leaves of the (already
+    ``_plainify``'d) options structure. A scalar leaf whose plaintext form
+    (``str(leaf)``) exactly equals a ``secrets.yaml`` value is redacted, so a
+    resolved ``!secret`` never leaves the component whether an integration persists
+    it as a string OR as the original scalar (an int ``alarm_code`` leaves as an int
+    leaf). ``bool`` leaves are never secrets and pass through unchanged (their
+    ``"True"``/``"False"`` form would over-redact). An empty ``secret_values`` is a
+    no-op (fast path). Handles ``Mapping``/``tuple`` directly so it is correct even
+    if applied to a structure that skipped :func:`_plainify`.
     """
     if not secret_values:
         return value
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {k: _scrub_secret_values(v, secret_values) for k, v in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [_scrub_secret_values(v, secret_values) for v in value]
-    if isinstance(value, str) and value in secret_values:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (str, int, float)) and str(value) in secret_values:
         return "**redacted**"
     return value
 
@@ -3135,9 +3295,10 @@ def _do_registry_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str
       id with no registry entry lands in ``missing`` rather than being dropped.
 
     Pure O(n)/O(id) in-memory registry reads. Exactly one of the two params is
-    meaningful — the schema rejects both being present; NEITHER present raises
-    ``HomeAssistantError`` (see :func:`_registry_lookup_missing_target`) rather
-    than silently returning an empty result the caller could mistake for "no
+    meaningful — the schema rejects both being present; neither present (or only an
+    empty-string ``config_entry_id`` / empty ``entity_ids`` list — no usable target)
+    raises ``HomeAssistantError`` (see :func:`_registry_lookup_missing_target`)
+    rather than silently returning an empty result the caller could mistake for "no
     matches".
     """
     config_entry_id = params.get("config_entry_id")
@@ -3170,15 +3331,19 @@ def _registry_lookup_missing_target() -> Exception:
     """Build a ``HomeAssistantError`` for a target-less ``registry_lookup`` request.
 
     Mirrors :func:`_backup_unavailable`: imported function-locally (test-stubbable)
-    so a request with neither ``entity_ids`` nor ``config_entry_id`` raises instead
-    of returning ``{entities: [], missing: []}`` — a shape indistinguishable from a
-    genuine "nothing matched" result — letting the server's command-error fallback
-    fire for the degenerate case.
+    so a request with no usable target — neither ``entity_ids`` nor
+    ``config_entry_id``, OR only an empty-string / empty-list one — raises instead of
+    returning ``{entities: [], missing: []}``, a shape indistinguishable from a
+    genuine "nothing matched" result, letting the server's command-error fallback
+    fire for the degenerate case. (This is a deliberate divergence from
+    ``config_entries``, whose empty-string ``entry_id`` is an authoritative empty
+    result mirroring ``async_get_entry("")`` — a different, intentional semantic.)
     """
     from homeassistant.exceptions import HomeAssistantError
 
     err: Exception = HomeAssistantError(
-        "ha_mcp_tools/registry_lookup requires entity_ids or config_entry_id"
+        "ha_mcp_tools/registry_lookup requires a non-empty entity_ids or "
+        "config_entry_id"
     )
     return err
 
@@ -3317,8 +3482,16 @@ def _do_backup_prep(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, An
     raises ``HomeAssistantError`` so the server's command-error path falls back to
     its legacy WS reads — NOT a silent empty result the server could mistake for
     "no agents". The password is sensitive, but the legacy ``backup/config/info``
-    already serves it to the same admin connection (parity, not new exposure). All
-    reads are getattr-guarded against core drift.
+    already serves it to the same admin connection (parity, not new exposure).
+
+    STRUCTURAL core drift raises for the same reason, rather than degrading to a
+    well-formed authoritative negative: a non-Mapping ``manager.backup_agents``
+    (below) or a broken config→data→create_backup chain
+    (:func:`_backup_default_password`) would otherwise produce a "no agents" / "no
+    password" answer the server trusts and hard-fails on (or, for the password,
+    silently drops the restore safety backup) with no fallback. Value-level reads
+    (an id string, a genuinely-``None`` password on an intact chain) stay
+    getattr-guarded and pass through.
     """
     try:
         from homeassistant.components.backup import DATA_MANAGER
@@ -3328,9 +3501,10 @@ def _do_backup_prep(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, An
     if manager is None:
         raise _backup_unavailable("backup manager is not initialized")
     agents = getattr(manager, "backup_agents", None)
-    agent_ids = list(agents) if isinstance(agents, Mapping) else []
+    if not isinstance(agents, Mapping):
+        raise _backup_unavailable("backup manager exposes no agent mapping")
     return {
-        "agent_ids": [str(a) for a in agent_ids],
+        "agent_ids": [str(a) for a in agents],
         "local_agent_id": _preferred_local_agent_id(agents),
         "default_password": _backup_default_password(manager),
     }
@@ -3377,10 +3551,20 @@ def _preferred_local_agent_id(agents: Any) -> str | None:
 
 
 def _backup_default_password(manager: Any) -> str | None:
-    """``manager.config.data.create_backup.password`` (getattr-chained; ``str``/None)."""
+    """``manager.config.data.create_backup.password`` (getattr-chained; ``str``/None).
+
+    A STRUCTURALLY broken chain (a missing ``config`` / ``data`` / ``create_backup``
+    link — core drift) RAISES ``HomeAssistantError`` so the server falls back to its
+    legacy ``backup/config/info`` read, rather than returning ``None`` the server
+    reads as "no default password configured" — which on restore silently drops the
+    safety backup while telling the user the password is unset. Only a genuine
+    ``None`` ``password`` on an INTACT chain is the authoritative "not configured".
+    """
     config = getattr(manager, "config", None)
     data = getattr(config, "data", None)
     create_backup = getattr(data, "create_backup", None)
+    if config is None or data is None or create_backup is None:
+        raise _backup_unavailable("backup manager config chain is unavailable")
     password = getattr(create_backup, "password", None)
     return password if isinstance(password, str) else None
 
@@ -3394,9 +3578,11 @@ def _do_registries(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
     ``{areas: [...], floors: [...], labels: [...], categories: {scope: [...]}}`` —
     only the requested ``registries`` keys are present. Each row is byte-compatible
     with the legacy WS list response the consumers parse (verified against core's
-    registry serializers): area = aliases / area_id / floor_id /
-    humidity_entity_id / icon / labels / name / picture / temperature_entity_id /
-    created_at / modified_at; floor = aliases / created_at / floor_id / icon /
+    registry serializers): area = aliases / area_id / floor_id / icon / labels /
+    name / picture / created_at / modified_at, plus humidity_entity_id /
+    temperature_entity_id ONLY on core >= 2024.12 (emitted conditionally so an older
+    core's restore does not get None-valued keys it rejects — see
+    :func:`_area_row`); floor = aliases / created_at / floor_id / icon /
     level / name / modified_at (floor rows carry NO ``labels`` — core omits it);
     label = color / created_at / description / icon / label_id / name /
     modified_at; category = category_id / created_at / icon / modified_at / name.
@@ -3447,19 +3633,27 @@ def _registries_missing_category_scopes() -> Exception:
 
 def _area_row(area: Any) -> dict[str, Any]:
     """One area as core's ``AreaEntry.json_fragment`` shape (id renamed to area_id)."""
-    return {
+    row: dict[str, Any] = {
         "aliases": sorted(str(a) for a in (getattr(area, "aliases", None) or [])),
         "area_id": getattr(area, "id", None) or getattr(area, "area_id", None),
         "floor_id": getattr(area, "floor_id", None),
-        "humidity_entity_id": getattr(area, "humidity_entity_id", None),
         "icon": getattr(area, "icon", None),
         "labels": sorted(str(x) for x in (getattr(area, "labels", None) or [])),
         "name": getattr(area, "name", None),
         "picture": getattr(area, "picture", None),
-        "temperature_entity_id": getattr(area, "temperature_entity_id", None),
         "created_at": _timestamp(getattr(area, "created_at", None)),
         "modified_at": _timestamp(getattr(area, "modified_at", None)),
     }
+    # humidity_entity_id / temperature_entity_id were added to AreaEntry in core
+    # 2024.12. Emit each ONLY when the running core's AreaEntry actually has the
+    # attribute — a pre-2024.12 core would otherwise get a None-valued key injected
+    # here that the restore path's config/area_registry/update schema rejects
+    # ("extra keys not allowed"). ``hasattr`` (not ``getattr(..., None)``)
+    # distinguishes "core has the field, value is None" from "core has no field".
+    for attr in ("humidity_entity_id", "temperature_entity_id"):
+        if hasattr(area, attr):
+            row[attr] = getattr(area, attr, None)
+    return row
 
 
 def _floor_row(floor: Any) -> dict[str, Any]:
@@ -3801,7 +3995,15 @@ def _search_dashboard_docs(
 def _collect_dashboard_matches(
     doc: dict[str, Any], query_lower: str, matches: list[dict[str, Any]]
 ) -> None:
-    """Append every ``query_lower`` hit in one dashboard config to ``matches``."""
+    """Append every ``query_lower`` hit in one dashboard config to ``matches``.
+
+    Walks each view's card containers (``cards`` + sections-view ``sections.cards``,
+    nested cards recursed), plus the two view-level containers the card walk never
+    visits: ``badges`` and a sections-view ``header.card``. This matches what the
+    single-dashboard (MODE 2) search covers, so a query answered "no match" here is
+    a real absence, not a blind spot for entities referenced only as a badge or in a
+    header card.
+    """
     config = doc.get("config")
     if not isinstance(config, dict):
         return
@@ -3825,6 +4027,12 @@ def _collect_dashboard_matches(
                 query_lower,
                 matches,
             )
+        _collect_badge_matches(
+            view, view_index, url_path, dash_title, view_title, query_lower, matches
+        )
+        _collect_header_card_matches(
+            view, view_index, url_path, dash_title, view_title, query_lower, matches
+        )
 
 
 def _view_card_containers(
@@ -3842,6 +4050,33 @@ def _view_card_containers(
                     (section["cards"], f"views[{view_index}].sections[{si}].cards")
                 )
     return containers
+
+
+def _dashboard_match(
+    url_path: Any,
+    dash_title: Any,
+    view_index: int,
+    view_title: Any,
+    card_path: str,
+    card_type: Any,
+    matched_field: str,
+    matched_value: str,
+) -> dict[str, Any]:
+    """One MODE 4 cross-dashboard search match record (shared, fixed shape).
+
+    Every match site — cards, badges, header cards — builds its record here so the
+    wire shape stays identical (the server-side legacy walk mirrors it for parity).
+    """
+    return {
+        "url_path": url_path,
+        "title": dash_title,
+        "view_index": view_index,
+        "view_title": view_title,
+        "card_path": card_path,
+        "card_type": card_type,
+        "matched_field": matched_field,
+        "matched_value": matched_value,
+    }
 
 
 def _collect_card_matches(
@@ -3867,34 +4102,147 @@ def _collect_card_matches(
     for card_index, card in enumerate(cards):
         if not isinstance(card, dict):
             continue
-        card_path = f"{base_path}[{card_index}]"
-        card_type = card.get("type")
-        for field, value in _card_string_leaves(card):
-            if query_lower in value.lower():
-                matches.append(
-                    {
-                        "url_path": url_path,
-                        "title": dash_title,
-                        "view_index": view_index,
-                        "view_title": view_title,
-                        "card_path": card_path,
-                        "card_type": card_type,
-                        "matched_field": field,
-                        "matched_value": value,
-                    }
+        _collect_one_card_matches(
+            card,
+            f"{base_path}[{card_index}]",
+            url_path,
+            dash_title,
+            view_index,
+            view_title,
+            query_lower,
+            matches,
+        )
+
+
+def _collect_one_card_matches(
+    card: dict[str, Any],
+    card_path: str,
+    url_path: Any,
+    dash_title: Any,
+    view_index: int,
+    view_title: Any,
+    query_lower: str,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Record matches for a SINGLE card at ``card_path`` and recurse its nested cards.
+
+    Shared by :func:`_collect_card_matches` (list-indexed cards) and
+    :func:`_collect_header_card_matches` (a header card is a single card, not
+    list-indexed).
+    """
+    card_type = card.get("type")
+    for field, value in _card_string_leaves(card):
+        if query_lower in value.lower():
+            matches.append(
+                _dashboard_match(
+                    url_path,
+                    dash_title,
+                    view_index,
+                    view_title,
+                    card_path,
+                    card_type,
+                    field,
+                    value,
                 )
-        nested = card.get("cards")
-        if isinstance(nested, list):
-            _collect_card_matches(
-                nested,
-                f"{card_path}.cards",
-                url_path,
-                dash_title,
-                view_index,
-                view_title,
-                query_lower,
-                matches,
             )
+    nested = card.get("cards")
+    if isinstance(nested, list):
+        _collect_card_matches(
+            nested,
+            f"{card_path}.cards",
+            url_path,
+            dash_title,
+            view_index,
+            view_title,
+            query_lower,
+            matches,
+        )
+
+
+def _collect_badge_matches(
+    view: dict[str, Any],
+    view_index: int,
+    url_path: Any,
+    dash_title: Any,
+    view_title: Any,
+    query_lower: str,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Record query hits in a view's ``badges`` — entity refs the card walk misses.
+
+    View-level badges are entity references by construction: a bare string
+    (``sensor.x``) or a dict (``{type: entity, entity: sensor.x}``). A bare-string
+    badge is recorded as a ``badges`` leaf; a dict badge's string leaves are walked
+    like a card's. Mirrors the single-dashboard (MODE 2) badge coverage.
+    """
+    badges = view.get("badges")
+    if not isinstance(badges, list):
+        return
+    for badge_index, badge in enumerate(badges):
+        badge_path = f"views[{view_index}].badges[{badge_index}]"
+        if isinstance(badge, str):
+            if badge and query_lower in badge.lower():
+                matches.append(
+                    _dashboard_match(
+                        url_path,
+                        dash_title,
+                        view_index,
+                        view_title,
+                        badge_path,
+                        "badge",
+                        "badges",
+                        badge,
+                    )
+                )
+        elif isinstance(badge, dict):
+            badge_type = badge.get("type") or "badge"
+            for field, value in _card_string_leaves(badge):
+                if query_lower in value.lower():
+                    matches.append(
+                        _dashboard_match(
+                            url_path,
+                            dash_title,
+                            view_index,
+                            view_title,
+                            badge_path,
+                            badge_type,
+                            field,
+                            value,
+                        )
+                    )
+
+
+def _collect_header_card_matches(
+    view: dict[str, Any],
+    view_index: int,
+    url_path: Any,
+    dash_title: Any,
+    view_title: Any,
+    query_lower: str,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Record query hits in a sections-view header card (``views[n].header.card``).
+
+    The header accepts a card (typically Markdown) that can carry entity refs; the
+    card walk never visits it. Mirrors the single-dashboard (MODE 2) header-card
+    coverage.
+    """
+    header = view.get("header")
+    if not isinstance(header, dict):
+        return
+    header_card = header.get("card")
+    if not isinstance(header_card, dict):
+        return
+    _collect_one_card_matches(
+        header_card,
+        f"views[{view_index}].header.card",
+        url_path,
+        dash_title,
+        view_index,
+        view_title,
+        query_lower,
+        matches,
+    )
 
 
 def _card_string_leaves(card: dict[str, Any]) -> list[tuple[str, str]]:
@@ -3940,25 +4288,26 @@ def _do_services_list(
     descriptions: Mapping[str, Any] | None = None,
     translations: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Reshape the service catalog to the REST ``/api/services`` list, coarse-filtered.
+    """Reshape the service catalog to the REST ``/api/services`` list, ``domain``-filtered.
 
     ``descriptions`` (``async_get_all_descriptions`` — ``{domain: {service:
     desc}}``) and ``translations`` (``async_get_translations`` for the ``services``
     category) are loaded off the loop by :func:`_services_list_prep`.
 
-    Coarse-filter contract — parity-by-construction: the kept set is a SUPERSET of
-    what the server's own filter matches. ``domain`` is an exact match (same
-    semantics); ``query`` keeps a whole domain entry if the lowercase query is a
-    substring of the domain, ANY service name, or ANY string in that service's
-    description or its translations (broader than the server's check is safe;
-    narrower would be a bug). The server re-runs its exact filter + pagination over
-    the reduced payload. Translations are filtered to the kept domains' key
-    prefixes.
+    ``domain`` is the only filter — an exact match, same semantics both paths.
+    There is deliberately NO ``query`` coarse-filter: the server's exact filter
+    matches against the CONCATENATION ``f"{domain}.{service} {name} {description}"``
+    (with a title-cased ``service.replace("_"," ").title()`` name fallback), and a
+    cheap per-field component pass is NOT a superset of that — it misses queries
+    spanning the ``domain.service`` / name / description boundaries and the
+    title-cased fallback, so forwarding ``query`` would silently drop matching
+    services. No consumer forwards ``query`` (the server re-runs its exact filter +
+    pagination over the full payload), so the component simply doesn't accept it.
+    Translations are scoped to the kept domains' key prefixes.
     """
     descriptions = descriptions or {}
     translations = translations or {}
     domain_filter = params.get("domain")
-    query = (params.get("query") or "").strip().lower()
 
     services: list[dict[str, Any]] = []
     kept_domains: set[str] = set()
@@ -3968,10 +4317,6 @@ def _do_services_list(
         services_map = (
             dict(domain_services) if isinstance(domain_services, Mapping) else {}
         )
-        if query and not _service_domain_matches(
-            str(domain), services_map, translations, query
-        ):
-            continue
         services.append({"domain": domain, "services": services_map})
         kept_domains.add(str(domain))
 
@@ -4025,42 +4370,6 @@ async def _fetch_service_translations(
         )
         return {}
     return result if isinstance(result, Mapping) else {}
-
-
-def _service_domain_matches(
-    domain: str,
-    services_map: Mapping[str, Any],
-    translations: Mapping[str, Any],
-    query: str,
-) -> bool:
-    """Whether a domain's coarse match keeps it (a SUPERSET of the server's filter)."""
-    if query in domain.lower():
-        return True
-    for name in services_map:
-        if query in str(name).lower():
-            return True
-    for desc in services_map.values():
-        if _contains_query_string(desc, query):
-            return True
-    for key, value in translations.items():
-        if (
-            isinstance(value, str)
-            and _translation_key_domain(key) == domain
-            and query in value.lower()
-        ):
-            return True
-    return False
-
-
-def _contains_query_string(value: Any, query: str) -> bool:
-    """Whether any string leaf of ``value`` (nested dict/list) contains ``query``."""
-    if isinstance(value, str):
-        return query in value.lower()
-    if isinstance(value, Mapping):
-        return any(_contains_query_string(v, query) for v in value.values())
-    if isinstance(value, (list, tuple)):
-        return any(_contains_query_string(item, query) for item in value)
-    return False
 
 
 def _filter_service_translations(
@@ -4156,12 +4465,14 @@ def _visibility_hidden_set(
     payloads the server passes): a conjunction of independent hide dimensions —
     the deny list, the category / hidden / area / label excludes (area/labels are
     device-inherited), the allow-list restrict mode, and the Assist dimension. The
-    ONLY divergence from the resolver is the Assist dimension: instead of
-    reconstructing ``async_should_expose`` from expose-list + expose_new + domain
-    defaults, it delegates to the injectable ``should_expose_fn(entity_id) -> bool``
-    (core's real ``async_should_expose`` in production; a fake in tests) — the
-    authoritative computation, and the injection point the cross-seam contract test
-    aligns with the server's own Assist result.
+    Assist dimension delegates to the injectable ``should_expose_fn(entity_id) ->
+    bool`` (:func:`_assist_should_expose` in production — a READ-ONLY reconstruction
+    of core's ``async_should_expose`` from the explicit exposure map + expose_new +
+    domain defaults, matching the resolver; a fake in tests), the injection point the
+    cross-seam contract test aligns with the server's own Assist result. The
+    production seam is read-only by design: core's own ``async_should_expose`` writes
+    computed defaults back, which this fast path must not do (see
+    :func:`_assist_should_expose`).
 
     ``should_expose_fn`` is consulted only when ``respect_assist_exposure`` is set
     AND ``assist_available`` is True. When the config requests the Assist dimension
@@ -4182,10 +4493,12 @@ def _visibility_hidden_set(
     allow_areas = set(visibility.get("allow_areas") or [])
     allow_labels = set(visibility.get("allow_labels") or [])
     respect_assist = bool(visibility.get("respect_assist_exposure"))
-    # Mirror the resolver: the Assist SUB-check is gated on data availability
-    # (``assist_active``), but the allow/assist loop still runs whenever the config
-    # requests Assist (to apply any allowlist), so ``respect_assist`` — not
-    # ``assist_active`` — guards the outer loop below.
+    # ``assist_active`` gates the per-entity Assist should_expose sub-check (skipped
+    # when the config asks for Assist but its data is unavailable). The allow/assist
+    # loop below is guarded by ``allow_active or respect_assist`` — a structural
+    # mirror of the resolver's guard, not a functional requirement: when Assist is
+    # requested-but-unavailable and no allowlist is set, the loop runs but hides
+    # nothing (both sub-checks are inert). Kept identical so the two paths match.
     assist_active = respect_assist and assist_available
     allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
 
@@ -4397,21 +4710,109 @@ def _effective_labels_for_entry(view: _RegistryView, entry: Any) -> set[str]:
 
 
 def _assist_should_expose(hass: HomeAssistant, entity_id: str) -> bool:
-    """core ``async_should_expose(hass, "conversation", entity_id)``; test seam.
+    """Whether ``entity_id`` is exposed to the ``conversation`` assistant — READ-ONLY.
 
-    A sync ``@callback`` despite the ``async_`` name. Imported lazily so the
-    fake-hass unit suite can monkeypatch this whole function. Fails OPEN (returns
-    ``True`` — do not hide) on any error, matching the resolver's "skip the Assist
-    dimension when its data is unavailable" behaviour.
+    A read-only replication of core's ``async_should_expose`` for the conversation
+    assistant. core's real function is NOT called because it has a WRITE side effect:
+    for an entity with no explicit stored exposure it computes the default and
+    persists it back (``entity_registry.async_update_entity_options`` for a registry
+    entity, or the exposed-entities store for a legacy one — see core
+    ``exposed_entities.py``). Consulting it once per candidate entity from a
+    ``readOnlyHint`` search would stamp exposure onto the whole entity universe and
+    pin those defaults, which violates this module's pure-read contract. So this
+    reconstructs the SAME precedence (matching the server resolver's
+    ``_is_assist_exposed``) with no write: an explicit per-entity ``should_expose``
+    wins; otherwise the "expose new entities" flag gates the default-exposure check.
+
+    Composed from three read-only, individually monkeypatchable seams. Fails OPEN
+    (returns ``True`` — do not hide) on any error, matching the resolver's "skip the
+    Assist dimension when its data is unavailable" behaviour.
     """
     try:
-        from homeassistant.components.homeassistant.exposed_entities import (
-            async_should_expose,
-        )
-
-        return bool(async_should_expose(hass, "conversation", entity_id))
+        explicit = _explicit_assist_exposure(hass, entity_id)
+        if explicit is not None:
+            return explicit
+        if not _assist_expose_new_entities(hass):
+            return False
+        return _assist_default_exposed(hass, entity_id)
     except Exception:  # fail open (do not hide) on any error, mirroring the resolver
         return True
+
+
+def _explicit_assist_exposure(hass: HomeAssistant, entity_id: str) -> bool | None:
+    """The entity's explicit ``conversation`` ``should_expose`` (True/False), else None.
+
+    Reads the SAME read-only surface :func:`_do_exposure`'s list mode mirrors — core's
+    ``async_get_entity_settings`` (registry ``options`` for a registry entity, else
+    the legacy exposed-entities store), which never writes. Returns ``None`` when there
+    is no explicit override (an id in neither the registry nor the store, or no
+    ``conversation.should_expose`` key), so the caller falls through to the
+    expose-new default. A non-``Unknown entity`` raise propagates (fails open upstream).
+    """
+    try:
+        settings = _async_get_entity_settings(hass, entity_id)
+    except Exception as exc:
+        if _is_unknown_entity_error(exc):
+            return None
+        raise
+    conv = settings.get("conversation") if isinstance(settings, Mapping) else None
+    if isinstance(conv, Mapping) and "should_expose" in conv:
+        return bool(conv["should_expose"])
+    return None
+
+
+def _assist_expose_new_entities(hass: HomeAssistant) -> bool:
+    """core's ``ExposedEntities.async_get_expose_new_entities("conversation")`` — read-only.
+
+    Function-local import + a standalone seam so the fake-hass suite can monkeypatch
+    it. A ``@callback`` that only reads the assistant preferences (no store write).
+    """
+    from homeassistant.components.homeassistant.exposed_entities import (
+        DATA_EXPOSED_ENTITIES,
+    )
+
+    exposed = hass.data[DATA_EXPOSED_ENTITIES]
+    return bool(exposed.async_get_expose_new_entities("conversation"))
+
+
+def _assist_default_exposed(hass: HomeAssistant, entity_id: str) -> bool:
+    """Read-only mirror of ``ExposedEntities._is_default_exposed`` for ``conversation``.
+
+    core's ``async_should_expose`` calls the private ``_is_default_exposed`` and then
+    WRITES the result back; this recomputes it WITHOUT the write. Imports core's own
+    default-exposure constants (no drift — the running core defines them) and uses
+    core's ``get_device_class``, so the domain / device-class verdict matches core
+    exactly. entity_category / hidden_by entities are never a default exposure. A
+    standalone seam so the fake-hass suite can monkeypatch it.
+    """
+    from homeassistant.components.homeassistant.exposed_entities import (
+        DEFAULT_EXPOSED_BINARY_SENSOR_DEVICE_CLASSES,
+        DEFAULT_EXPOSED_DOMAINS,
+        DEFAULT_EXPOSED_SENSOR_DEVICE_CLASSES,
+    )
+    from homeassistant.helpers import entity_registry as er
+
+    entry = er.async_get(hass).async_get(entity_id)
+    if entry is not None and (
+        getattr(entry, "entity_category", None) is not None
+        or getattr(entry, "hidden_by", None) is not None
+    ):
+        return False
+    domain = entity_id.split(".")[0] if "." in entity_id else entity_id
+    if domain in DEFAULT_EXPOSED_DOMAINS:
+        return True
+    from homeassistant.exceptions import HomeAssistantError
+    from homeassistant.helpers.entity import get_device_class
+
+    try:
+        device_class = get_device_class(hass, entity_id)
+    except HomeAssistantError:  # the entity no longer exists — matches core
+        return False
+    if domain == "binary_sensor":
+        return device_class in DEFAULT_EXPOSED_BINARY_SENSOR_DEVICE_CLASSES
+    if domain == "sensor":
+        return device_class in DEFAULT_EXPOSED_SENSOR_DEVICE_CLASSES
+    return False
 
 
 def _assist_exposure_available(hass: HomeAssistant) -> bool:

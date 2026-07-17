@@ -8,8 +8,8 @@ edits in parallel) so the two task branches merge cleanly; the Fake* fixtures an
   loaded off the loop in ``_dashboards_prep``: legacy-parity list rows + additive
   ``mode``; the default dashboard (url_path=None) resolved in ``get``; a YAML-mode
   dashboard never emits a body (``yaml_excluded``); search-match truncation.
-* ``services_list`` — REST ``/api/services`` reshape with the coarse SUPERSET
-  filter and domain-scoped translation filtering.
+* ``services_list`` — REST ``/api/services`` reshape with the ``domain`` exact
+  filter and domain-scoped translation filtering (no ``query`` coarse-filter).
 * ``reference_data`` — the service index + entity-id universe the reference
   validator's ``build_service_index`` / ``build_entity_set`` consume.
 * ``search`` ``visibility`` param — the pure ``_visibility_hidden_set`` mirroring
@@ -311,6 +311,64 @@ class TestDashboardsSearch:
         sec = next(m for m in res["matches"] if m["matched_field"] == "content")
         assert sec["card_path"] == "views[0].sections[0].cards[0]"
 
+    def test_search_matches_view_badges(self, patch_dashboards):
+        # View-level badges (bare-string AND dict form) are entity refs the card
+        # walk never visits — MODE 4 must cover them (mirrors MODE 2).
+        body = {
+            "title": "Home",
+            "views": [
+                {
+                    "title": "Living",
+                    "badges": [
+                        "sensor.badge_temp",  # bare-string badge
+                        {"type": "entity", "entity": "sensor.badge_hum"},  # dict badge
+                    ],
+                    "cards": [],
+                }
+            ],
+        }
+        patch_dashboards({"home": _storage_dash("home", "Home", body=body)})
+        res = _run_dashboards(
+            FakeHass(), {"mode": "search", "query": "sensor.badge_temp"}
+        )
+        m = next(m for m in res["matches"] if m["matched_value"] == "sensor.badge_temp")
+        assert m["card_type"] == "badge"
+        assert m["matched_field"] == "badges"
+        assert m["card_path"] == "views[0].badges[0]"
+        assert m["view_title"] == "Living"
+        # The dict badge's entity leaf is matched and attributed to badges[1].
+        res2 = _run_dashboards(
+            FakeHass(), {"mode": "search", "query": "sensor.badge_hum"}
+        )
+        m2 = next(
+            m for m in res2["matches"] if m["matched_value"] == "sensor.badge_hum"
+        )
+        assert m2["card_path"] == "views[0].badges[1]"
+        assert m2["matched_field"] == "entity"
+
+    def test_search_matches_header_card(self, patch_dashboards):
+        # A sections-view header card (views[n].header.card) is walked as a single
+        # card — the card walk never visits it otherwise (mirrors MODE 2).
+        body = {
+            "title": "Home",
+            "views": [
+                {
+                    "type": "sections",
+                    "title": "Overview",
+                    "header": {
+                        "card": {"type": "markdown", "content": "welcome home banner"}
+                    },
+                    "sections": [],
+                }
+            ],
+        }
+        patch_dashboards({"home": _storage_dash("home", "Home", body=body)})
+        res = _run_dashboards(FakeHass(), {"mode": "search", "query": "welcome home"})
+        m = next(m for m in res["matches"] if m["matched_field"] == "content")
+        assert m["card_type"] == "markdown"
+        assert m["card_path"] == "views[0].header.card"
+        assert m["view_index"] == 0
+
     def test_search_empty_query_matches_nothing(self, patch_dashboards):
         patch_dashboards(self._dmap())
         res = _run_dashboards(FakeHass(), {"mode": "search", "query": ""})
@@ -384,7 +442,7 @@ class TestDashboardsSchema:
 
 
 # =============================================================================
-# services_list — reshape + coarse superset filter
+# services_list — reshape + domain filter (no query coarse-filter)
 # =============================================================================
 _DESCRIPTIONS = {
     "light": {
@@ -426,35 +484,18 @@ class TestServicesList:
         res = self._do({"domain": "climate"})
         assert [e["domain"] for e in res["services"]] == ["climate"]
 
-    def test_query_matches_domain(self):
-        res = self._do({"query": "climate"})
-        assert {e["domain"] for e in res["services"]} == {"climate"}
-
-    def test_query_matches_service_name(self):
-        res = self._do({"query": "turn_on"})
-        assert {e["domain"] for e in res["services"]} == {"light"}
-
-    def test_query_matches_description_string(self):
-        res = self._do({"query": "target temperature"})
-        assert {e["domain"] for e in res["services"]} == {"climate"}
-
-    def test_query_matches_translation_string(self):
-        # "Switch a light on" only appears in the translations, not the description.
-        res = self._do({"query": "switch a light"})
-        assert {e["domain"] for e in res["services"]} == {"light"}
-
-    def test_superset_keeps_a_server_matching_service(self):
-        # A query the server's own filter would keep (a service-name substring) is
-        # never dropped by the coarse filter (superset property).
-        res = self._do({"query": "turn"})
-        assert "light" in {e["domain"] for e in res["services"]}
-
     def test_translations_filtered_to_kept_domains(self):
-        res = self._do({"query": "turn_on"})  # keeps light only
+        res = self._do({"domain": "light"})  # keeps light only
         assert all(key.split(".")[1] == "light" for key in res["translations"])
         assert (
             "component.climate.services.set_temperature.name" not in res["translations"]
         )
+
+    def test_query_not_accepted_by_do(self):
+        # No coarse ``query`` filter: an (unschema'd) query param is inert — the full
+        # domain-scoped catalog is returned unchanged for the server to filter.
+        res = self._do({"query": "climate"})
+        assert {e["domain"] for e in res["services"]} == {"light", "climate"}
 
     def test_prep_feeds_do(self, monkeypatch):
         async def _fake_desc(hass):
@@ -469,7 +510,7 @@ class TestServicesList:
         extra = asyncio.run(
             wsapi._services_list_prep(FakeHass(), {"type": wsapi.WS_SERVICES_LIST})
         )
-        res = wsapi._do_services_list(FakeHass(), {"query": "climate"}, **extra)
+        res = wsapi._do_services_list(FakeHass(), {"domain": "climate"}, **extra)
         assert {e["domain"] for e in res["services"]} == {"climate"}
 
 
@@ -481,6 +522,14 @@ class TestServicesListSchema:
     def test_language_default(self, monkeypatch):
         out = self._schema(monkeypatch)({"type": wsapi.WS_SERVICES_LIST})
         assert out["language"] == "en"
+
+    def test_query_param_rejected(self, monkeypatch):
+        # ``query`` is no longer a wire param — a coarse component filter cannot be a
+        # superset of the server's concatenation-based filter, so it is not accepted.
+        with pytest.raises(_REAL_VOL.Invalid):
+            self._schema(monkeypatch)(
+                {"type": wsapi.WS_SERVICES_LIST, "query": "light"}
+            )
 
     @pytest.mark.parametrize(
         "bad",
@@ -998,9 +1047,127 @@ class TestSearchVisibilitySchema:
         )
         assert out["visibility"] == {"exclude_hidden": True}
 
+    def test_accepts_all_nine_known_keys(self, monkeypatch):
+        visibility = {
+            "exclude_categories": ["config"],
+            "deny_entity_ids": ["light.a"],
+            "exclude_areas": ["office"],
+            "exclude_labels": ["lb"],
+            "allow_entity_ids": ["light.b"],
+            "allow_areas": ["kitchen"],
+            "allow_labels": ["lb2"],
+            "exclude_hidden": True,
+            "respect_assist_exposure": True,
+        }
+        assert set(visibility) == wsapi._VISIBILITY_WIRE_KEYS
+        out = self._schema(monkeypatch)(
+            {"type": wsapi.WS_SEARCH, "visibility": visibility}
+        )
+        assert out["visibility"] == visibility
+
+    def test_rejects_unknown_visibility_key(self, monkeypatch):
+        # A typo'd / newer-server dimension is rejected loudly (the server then falls
+        # back to legacy with the filter applied) rather than silently ignored.
+        with pytest.raises(_REAL_VOL.Invalid):
+            self._schema(monkeypatch)(
+                {"type": wsapi.WS_SEARCH, "visibility": {"exclude_area": ["x"]}}
+            )
+
     def test_rejects_non_dict_visibility(self, monkeypatch):
         with pytest.raises(_REAL_VOL.Invalid):
             self._schema(monkeypatch)({"type": wsapi.WS_SEARCH, "visibility": "nope"})
+
+
+# =============================================================================
+# _assist_should_expose — READ-ONLY reconstruction of core's async_should_expose
+# =============================================================================
+class _NamedHomeAssistantError(Exception):
+    """Exception whose __name__ is ``HomeAssistantError`` (what _is_unknown_entity_error
+    keys off, since the fake suite stubs the real class)."""
+
+
+# _is_unknown_entity_error matches on the type NAME, so alias to the exact name.
+_NamedHomeAssistantError.__name__ = "HomeAssistantError"
+
+
+def _boom(*_a, **_k):
+    raise AssertionError("must not be consulted")
+
+
+class TestAssistShouldExposeReadOnly:
+    """``_assist_should_expose`` reconstructs core's ``async_should_expose`` WITHOUT
+    the write side effect: an explicit per-entity override wins; else ``expose_new``
+    gates the default-exposure check. It must never call core's ``async_should_expose``
+    (which persists computed defaults back onto unstamped entities)."""
+
+    def test_explicit_override_true_wins(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi,
+            "_async_get_entity_settings",
+            lambda hass, eid: {"conversation": {"should_expose": True}},
+        )
+        # expose_new / default must NOT be consulted when an override exists.
+        monkeypatch.setattr(wsapi, "_assist_expose_new_entities", _boom)
+        assert wsapi._assist_should_expose(FakeHass(), "light.a") is True
+
+    def test_explicit_override_false_wins(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi,
+            "_async_get_entity_settings",
+            lambda hass, eid: {"conversation": {"should_expose": False}},
+        )
+        monkeypatch.setattr(wsapi, "_assist_expose_new_entities", _boom)
+        assert wsapi._assist_should_expose(FakeHass(), "light.a") is False
+
+    def test_no_override_expose_new_off_is_false(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_async_get_entity_settings", lambda hass, eid: {})
+        monkeypatch.setattr(wsapi, "_assist_expose_new_entities", lambda hass: False)
+        monkeypatch.setattr(wsapi, "_assist_default_exposed", _boom)
+        assert wsapi._assist_should_expose(FakeHass(), "light.a") is False
+
+    @pytest.mark.parametrize("default_exposed", [True, False])
+    def test_no_override_expose_new_on_uses_default(self, monkeypatch, default_exposed):
+        monkeypatch.setattr(wsapi, "_async_get_entity_settings", lambda hass, eid: {})
+        monkeypatch.setattr(wsapi, "_assist_expose_new_entities", lambda hass: True)
+        monkeypatch.setattr(
+            wsapi, "_assist_default_exposed", lambda hass, eid: default_exposed
+        )
+        assert wsapi._assist_should_expose(FakeHass(), "light.a") is default_exposed
+
+    def test_unknown_entity_falls_to_default(self, monkeypatch):
+        # An id in neither the registry nor the store raises "Unknown entity" from the
+        # settings read; that is NOT an explicit override — fall to the default.
+        def _raise(hass, eid):
+            raise _NamedHomeAssistantError("Unknown entity")
+
+        monkeypatch.setattr(wsapi, "_async_get_entity_settings", _raise)
+        monkeypatch.setattr(wsapi, "_assist_expose_new_entities", lambda hass: True)
+        monkeypatch.setattr(wsapi, "_assist_default_exposed", lambda hass, eid: True)
+        assert wsapi._assist_should_expose(FakeHass(), "sensor.states_only") is True
+
+    def test_fails_open_on_error(self, monkeypatch):
+        def _raise(hass):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(wsapi, "_async_get_entity_settings", lambda hass, eid: {})
+        monkeypatch.setattr(wsapi, "_assist_expose_new_entities", _raise)
+        # Any error means "do not hide" (fail open) — mirrors the resolver.
+        assert wsapi._assist_should_expose(FakeHass(), "light.a") is True
+
+    def test_never_calls_core_writing_should_expose(self):
+        # The read-only guarantee is structural: the recomposition never CALLS core's
+        # writing async_should_expose (the call form ``async_should_expose(`` — the
+        # docstrings reference it in prose, without parens, to explain why). A
+        # regression that reintroduces the call fails here.
+        import inspect
+
+        for fn in (
+            wsapi._assist_should_expose,
+            wsapi._explicit_assist_exposure,
+            wsapi._assist_expose_new_entities,
+            wsapi._assist_default_exposed,
+        ):
+            assert "async_should_expose(" not in inspect.getsource(fn)
 
 
 # =============================================================================

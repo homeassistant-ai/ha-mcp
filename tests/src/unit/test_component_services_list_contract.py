@@ -9,18 +9,18 @@ underneath a mocked WS transport and then invokes the REAL
 consumer mis-shapes.
 
 Parity pin: the consumer threads ``domain`` to the component (an exact match,
-identical on both sides) but deliberately does NOT thread ``query`` — the
-component's own ``query`` filter is a coarse SUPERSET that can drop a domain
-from the payload ENTIRELY when nothing under it matches anywhere (name/
-description/translation, including translation leaves the server's own exact
-filter never inspects, e.g. a field-level string). ``_process_services``'s
-``domains`` field is populated purely from ``domain_filter`` though,
-independent of ``query_filter`` — so a query-trimmed component payload would
-silently list fewer domains than legacy. This file's fixture constructs
-exactly that would-be asymmetry (a domain that a coarse query pass would drop,
-via a field-level translation hit) and asserts the ACTUAL (query-not-forwarded)
-implementation still produces byte-identical output to the legacy REST + WS
-translations fetch, ``domains`` included.
+identical on both sides) but deliberately does NOT thread ``query`` — and the
+component no longer ACCEPTS a ``query`` param at all. A cheap per-field component
+pass cannot be a superset of the server's concatenation-based exact filter
+(``f"{domain}.{service} {name} {description}"`` with a title-cased name fallback),
+so forwarding ``query`` would silently drop matching services (and whole domains).
+``_process_services``'s ``domains`` field is populated purely from ``domain_filter``
+though — so any query-trimmed component payload would silently list fewer domains
+than legacy. This file's fixture constructs exactly that would-be asymmetry (a
+domain the server's filter keeps only via its concatenation/title-case fallback)
+and asserts the ACTUAL (query-not-forwarded) implementation still produces
+byte-identical output to the legacy REST + WS translations fetch, ``domains``
+included.
 """
 
 from __future__ import annotations

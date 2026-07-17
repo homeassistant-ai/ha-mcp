@@ -575,6 +575,9 @@ class FakeConfigEntry:
         error_reason_translation_key=None,
         error_reason_translation_placeholders=None,
         subentries=None,
+        created_at=None,
+        modified_at=None,
+        supported_subentry_types=None,
     ):
         self.domain = domain
         self.title = title
@@ -599,6 +602,16 @@ class FakeConfigEntry:
         )
         # Modern core stores subentries as a MappingProxyType keyed by subentry_id.
         self.subentries = dict(subentries or {})
+        # created_at/modified_at are datetimes core serializes via .timestamp();
+        # supported_subentry_types is a computed property. Set only when provided so
+        # a fixture can omit them (getattr -> None / _safe_prop default {}), modeling
+        # a core old enough to predate them.
+        if created_at is not None:
+            self.created_at = created_at
+        if modified_at is not None:
+            self.modified_at = modified_at
+        if supported_subentry_types is not None:
+            self.supported_subentry_types = supported_subentry_types
 
 
 class FakeSubentry:
@@ -1392,7 +1405,8 @@ class TestSecretLoader:
     """``_load_secret_values`` reads ``secrets.yaml`` (run in the executor by
     ``_search_prep``) and degrades safely: an ABSENT file is silent (the common
     case), a present-but-unreadable/malformed file logs ONE warning; both yield
-    an empty set. Only string values are collected."""
+    an empty set. String AND numeric scalars are collected (as their ``str()`` form,
+    so an int secret matches whether emitted as int or string); bools are excluded."""
 
     _SECRET = "s3cr3tprobevaluexyz"
     _LOGGER_NAME = "custom_components.ha_mcp_tools.websocket_api"
@@ -1427,14 +1441,16 @@ class TestSecretLoader:
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1, "a malformed secrets.yaml must warn exactly once"
 
-    def test_non_string_values_ignored(self, tmp_path):
-        # A numeric scalar is not a plaintext-leak leaf; only strings are collected
-        # and the load must not choke on the non-string.
+    def test_numeric_values_collected_as_strings(self, tmp_path):
+        # An unquoted numeric scalar (a YAML int) IS collected as its str() form: a
+        # config-entry option can carry that secret back as an int leaf, so the scrub
+        # must be able to match it. A bool scalar is excluded (never a credential).
         (tmp_path / "secrets.yaml").write_text(
-            f"port: 8123\napi_password: {self._SECRET}\n", encoding="utf-8"
+            f"port: 8123\napi_password: {self._SECRET}\nflag: true\n",
+            encoding="utf-8",
         )
         assert wsapi._load_secret_values(self._hass(tmp_path)) == frozenset(
-            {self._SECRET}
+            {self._SECRET, "8123"}
         )
 
     def test_no_usable_config_path_degrades(self):
@@ -2510,6 +2526,81 @@ class TestHelpersList:
         assert "DATA_SECRET_XYZ" not in serialized
         assert "api_key" not in serialized
 
+    def test_flow_helper_options_secret_scrubbed(self, empty_view):
+        # Flow-helper options share config_entries' exposure class, so they pass
+        # through the SAME secret scrub — a resolved !secret is redacted here too.
+        secret = "s3cr3thelperopt"
+        entry = FakeConfigEntry(
+            "template",
+            title="Tmpl",
+            options={"token": secret, "keep": "kept"},
+            entry_id="e1",
+        )
+        res = wsapi._do_helpers_list(
+            FakeHass(config_entries=[entry]), {}, secret_values=frozenset({secret})
+        )
+        rec = next(h for h in res["helpers"] if h["kind"] == "flow")
+        assert rec["options"] == {"token": "**redacted**", "keep": "kept"}
+        assert secret not in json.dumps(res)
+
+    def test_flow_helper_scrub_off_by_default(self, empty_view):
+        # No secret_values (default) is a no-op — options pass through verbatim.
+        entry = FakeConfigEntry(
+            "template", title="Tmpl", options={"token": "plain"}, entry_id="e1"
+        )
+        res = wsapi._do_helpers_list(FakeHass(config_entries=[entry]), {})
+        rec = next(h for h in res["helpers"] if h["kind"] == "flow")
+        assert rec["options"] == {"token": "plain"}
+        assert "secret_scrub_degraded" not in res
+
+    def test_helpers_list_degraded_signalled_when_flow_included(self, empty_view):
+        entry = FakeConfigEntry(
+            "template", title="Tmpl", options={"token": "x"}, entry_id="e1"
+        )
+        res = wsapi._do_helpers_list(
+            FakeHass(config_entries=[entry]), {}, secret_scrub_degraded=True
+        )
+        assert res["secret_scrub_degraded"] is True
+
+    def test_helpers_list_no_degraded_signal_when_flow_excluded(self, empty_view):
+        # The signal only rides the flow path; it is suppressed when flow helpers
+        # are excluded (the scrubbed surface isn't emitted).
+        res = wsapi._do_helpers_list(
+            FakeHass(),
+            {"include_flow_helpers": False},
+            secret_scrub_degraded=True,
+        )
+        assert "secret_scrub_degraded" not in res
+
+    @pytest.mark.asyncio
+    async def test_helpers_list_prep_skips_read_without_flow(
+        self, monkeypatch, tmp_path
+    ):
+        # Perf gate: no secrets.yaml read when flow helpers are excluded.
+        calls = {"n": 0}
+
+        async def _spy(func, *args):
+            calls["n"] += 1
+            return func(*args)
+
+        h = FakeHass()
+        h.config = FakeConfig(tmp_path)
+        monkeypatch.setattr(h, "async_add_executor_job", _spy)
+        extra = await wsapi._helpers_list_prep(h, {"include_flow_helpers": False})
+        assert extra == {"secret_values": frozenset(), "secret_scrub_degraded": False}
+        assert calls["n"] == 0
+
+    @pytest.mark.asyncio
+    async def test_helpers_list_prep_loads_secrets_with_flow(self, tmp_path):
+        (tmp_path / "secrets.yaml").write_text(
+            "api_password: sekret\n", encoding="utf-8"
+        )
+        h = FakeHass()
+        h.config = FakeConfig(tmp_path)
+        extra = await wsapi._helpers_list_prep(h, {"type": wsapi.WS_HELPERS_LIST})
+        assert extra["secret_values"] == frozenset({"sekret"})
+        assert extra["secret_scrub_degraded"] is False
+
     def test_flow_helper_without_registered_entity(self, empty_view):
         entry = FakeConfigEntry(
             "group", title="Living Room Group", options={"entities": []}, entry_id="e9"
@@ -3198,12 +3289,18 @@ class TestConfigEntries:
     """``ha_mcp_tools/config_entries`` — the config_entries/get row shape, the
     resolved-``!secret`` options scrub, and the ``entry.data`` withholding."""
 
+    _CREATED_AT = datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
+    _MODIFIED_AT = datetime(2024, 3, 4, 5, 6, 7, tzinfo=UTC)
+
     def _entry(self, domain="mqtt", entry_id="cfg1", **kw):
         defaults = {
             "title": "Mosquitto",
             "options": {"discovery": True},
             "data": {"password": "DATA_SECRET_XYZ"},
             "entry_id": entry_id,
+            "created_at": self._CREATED_AT,
+            "modified_at": self._MODIFIED_AT,
+            "supported_subentry_types": {"device": {"supports_reconfigure": True}},
             "state": _FakeEnum("loaded"),
             "source": "user",
             "supports_options": True,
@@ -3231,6 +3328,8 @@ class TestConfigEntries:
         )
         assert res["entries"] == [
             {
+                "created_at": self._CREATED_AT.timestamp(),  # float, like core
+                "modified_at": self._MODIFIED_AT.timestamp(),
                 "entry_id": "cfg1",
                 "domain": "mqtt",
                 "title": "Mosquitto",
@@ -3240,6 +3339,7 @@ class TestConfigEntries:
                 "supports_remove_device": False,  # None coerced to False
                 "supports_unload": True,
                 "supports_reconfigure": False,
+                "supported_subentry_types": {"device": {"supports_reconfigure": True}},
                 "pref_disable_new_entities": False,
                 "pref_disable_polling": True,
                 "disabled_by": None,
@@ -3258,6 +3358,62 @@ class TestConfigEntries:
                 ],
             }
         ]
+
+    # Every key core's ConfigEntry.as_json_fragment emits (the config_entries/get +
+    # REST /api/config/config_entries row). The component row must be a SUPERSET —
+    # dropping any of these silently degrades a consumer depending which read path
+    # won. Pinned so a future core field addition (or a component drop) is caught.
+    _CORE_JSON_FRAGMENT_KEYS = frozenset(
+        {
+            "created_at",
+            "modified_at",
+            "entry_id",
+            "domain",
+            "title",
+            "source",
+            "state",
+            "supports_options",
+            "supports_remove_device",
+            "supports_unload",
+            "supports_reconfigure",
+            "supported_subentry_types",
+            "pref_disable_new_entities",
+            "pref_disable_polling",
+            "disabled_by",
+            "reason",
+            "error_reason_translation_key",
+            "error_reason_translation_placeholders",
+            "num_subentries",
+        }
+    )
+
+    def test_row_is_superset_of_core_json_fragment(self):
+        res = wsapi._do_config_entries(
+            FakeHass(config_entries=[self._entry()]), {"domain": "mqtt"}
+        )
+        row_keys = set(res["entries"][0])
+        missing = self._CORE_JSON_FRAGMENT_KEYS - row_keys
+        assert not missing, f"component row dropped core json_fragment keys: {missing}"
+
+    def test_old_core_missing_fields_degrade(self):
+        # A core predating created_at/modified_at/supported_subentry_types: the
+        # attributes are absent, so timestamps degrade to None and
+        # supported_subentry_types to {} (not a crash, not a dropped key). The row is
+        # read-only (never restored), so a None-valued timestamp key is harmless.
+        entry = FakeConfigEntry(
+            "mqtt",
+            title="Old",
+            options={},
+            entry_id="old1",
+            state=_FakeEnum("loaded"),
+        )
+        assert not hasattr(entry, "created_at")
+        row = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})["entries"][
+            0
+        ]
+        assert row["created_at"] is None
+        assert row["modified_at"] is None
+        assert row["supported_subentry_types"] == {}
 
     def test_entry_data_never_read(self):
         # entry.data (credentials) must never surface — neither the value nor the
@@ -3370,6 +3526,48 @@ class TestConfigEntries:
         res = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})
         assert res["entries"][0]["options"] == {"discovery": True}
 
+    def test_options_scrub_non_string_secret_value(self):
+        # An unquoted secrets.yaml int (`alarm_code: 1234`) is collected as "1234";
+        # an options leaf carrying it back as an INT must still redact (str(1234)).
+        entry = self._entry(options={"alarm_code": 1234, "port": 8123})
+        res = wsapi._do_config_entries(
+            FakeHass(config_entries=[entry]), {}, secret_values=frozenset({"1234"})
+        )
+        options = res["entries"][0]["options"]
+        assert options == {"alarm_code": "**redacted**", "port": 8123}
+
+    def test_options_scrub_nested_mappingproxy(self):
+        # A nested MappingProxyType inside options must be recursed into (not
+        # stringified past the scrub), so a secret buried in it is redacted.
+        from types import MappingProxyType
+
+        secret = "s3cr3tnested"
+        entry = self._entry(options={"discovery": True})
+        entry.options = MappingProxyType(
+            {"outer": MappingProxyType({"token": secret, "keep": "kept"})}
+        )
+        res = wsapi._do_config_entries(
+            FakeHass(config_entries=[entry]), {}, secret_values=frozenset({secret})
+        )
+        assert res["entries"][0]["options"] == {
+            "outer": {"token": "**redacted**", "keep": "kept"}
+        }
+        assert secret not in json.dumps(res)
+
+    def test_secret_scrub_degraded_signalled(self):
+        # A present-but-unreadable secrets.yaml degrades the scrub OFF; the response
+        # carries secret_scrub_degraded so options aren't mistaken for redacted.
+        entry = self._entry(options={"token": "unredacted"})
+        res = wsapi._do_config_entries(
+            FakeHass(config_entries=[entry]), {}, secret_scrub_degraded=True
+        )
+        assert res["secret_scrub_degraded"] is True
+
+    def test_no_degraded_signal_when_scrub_clean(self):
+        # The signal key is ABSENT on a clean read (common case unchanged).
+        res = wsapi._do_config_entries(FakeHass(config_entries=[self._entry()]), {})
+        assert "secret_scrub_degraded" not in res
+
     @pytest.mark.asyncio
     async def test_prep_loads_secret_values_off_loop(self, tmp_path):
         (tmp_path / "secrets.yaml").write_text(
@@ -3381,6 +3579,19 @@ class TestConfigEntries:
             hass, {"type": wsapi.WS_CONFIG_ENTRIES}
         )
         assert extra["secret_values"] == frozenset({"sekret"})
+        assert extra["secret_scrub_degraded"] is False
+
+    @pytest.mark.asyncio
+    async def test_prep_signals_degraded_on_unreadable_secrets(self, tmp_path):
+        # A malformed secrets.yaml: the prep loads an empty set AND flags degraded.
+        (tmp_path / "secrets.yaml").write_text("{bad: yaml: [", encoding="utf-8")
+        hass = FakeHass()
+        hass.config = FakeConfig(tmp_path)
+        extra = await wsapi._config_entries_prep(
+            hass, {"type": wsapi.WS_CONFIG_ENTRIES}
+        )
+        assert extra["secret_values"] == frozenset()
+        assert extra["secret_scrub_degraded"] is True
 
 
 # =============================================================================
@@ -3680,6 +3891,32 @@ class TestBackupPrep:
         with pytest.raises(_StubHomeAssistantError):
             wsapi._do_backup_prep(self._hass(), {})
 
+    def test_non_mapping_agents_raises(self, monkeypatch):
+        # Core drift: manager.backup_agents is not a Mapping. This must RAISE (so the
+        # server falls back to legacy), not return a well-formed "no agents" the
+        # server would hard-fail create/restore on.
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
+        manager = SimpleNamespace(
+            backup_agents=["not", "a", "mapping"],
+            config=SimpleNamespace(
+                data=SimpleNamespace(create_backup=SimpleNamespace(password="pw"))
+            ),
+        )
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_backup_prep(FakeHass(data={"backup": manager}), {})
+
+    def test_broken_password_chain_raises(self, monkeypatch):
+        # Core drift: a structurally broken config chain (config.data is None) must
+        # RAISE, not return a None password the server reads as "not configured"
+        # (which silently drops the restore safety backup).
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
+        manager = SimpleNamespace(
+            backup_agents={"backup.local": _fake_backup_agent("local")},
+            config=SimpleNamespace(data=None),
+        )
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_backup_prep(FakeHass(data={"backup": manager}), {})
+
 
 # =============================================================================
 # registries — FULL-FIELD area/floor/label/category rows (core parity)
@@ -3727,6 +3964,33 @@ class TestRegistries:
                 "modified_at": _REG_MODIFIED.timestamp(),
             }
         ]
+
+    def test_area_old_core_omits_humidity_temperature_keys(self, monkeypatch):
+        # A core predating humidity_entity_id / temperature_entity_id (< 2024.12):
+        # the AreaEntry has no such attribute, so the row must OMIT those keys
+        # entirely — emitting them as None would inject keys the restore path's
+        # config/area_registry/update schema rejects ("extra keys not allowed").
+        old_area = SimpleNamespace(
+            id="a1",
+            name="Office",
+            floor_id="f1",
+            aliases={"studio"},
+            icon="mdi:home",
+            picture="/pic.png",
+            labels={"lb1"},
+            created_at=_REG_CREATED,
+            modified_at=_REG_MODIFIED,
+        )
+        assert not hasattr(old_area, "humidity_entity_id")
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(areas=[old_area])
+        )
+        row = wsapi._do_registries(FakeHass(), {"registries": ["area"]})["areas"][0]
+        assert "humidity_entity_id" not in row
+        assert "temperature_entity_id" not in row
+        # The pre-existing fields are still present.
+        assert row["area_id"] == "a1"
+        assert row["created_at"] == _REG_CREATED.timestamp()
 
     def test_floor_full_field_row_has_no_labels(self, monkeypatch):
         floor = FakeFloor(
