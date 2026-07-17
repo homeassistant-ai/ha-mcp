@@ -7,11 +7,15 @@ fetch to answer a single question:
   ``_resolve_automation_entity_id``) map a storage id (a scene's ``unique_id``,
   an automation's config id) to its live ``entity_id`` — the scene resolver by
   dumping the ENTIRE ``config/entity_registry/list`` (with a 0.2 s sleep + retry
-  to absorb post-upsert index lag), the automation resolver by scanning the WHOLE
-  ``get_states()`` state machine. When the component advertises ``entity_lookup``,
-  a single ``ha_mcp_tools/entity_lookup(unique_id=, domain=)`` frame returns just
-  the matching registry entries — and, being an in-process read, it is
-  authoritative the instant it returns, so the sleep + retry are dropped.
+  to absorb post-upsert registration lag), the automation resolver by scanning
+  the WHOLE ``get_states()`` state machine. When the component advertises
+  ``entity_lookup``, a single ``ha_mcp_tools/entity_lookup(unique_id=, domain=)``
+  frame returns just the matching registry entries — a hit is authoritative the
+  instant it returns (no settle). An in-process read removes the network latency
+  but NOT HA's async entity-registration lag, so the scene resolver still
+  rechecks an EMPTY result ONCE after the same short delay before its naive
+  fallback (the automation resolver has no post-upsert lag exposure — its only
+  routed call site resolves an already-registered entity before a delete).
 - The reference validator (``validate_config_references``) fetches BOTH
   ``client.get_services()`` and ``client.get_states()`` on every automation/script
   write purely to build a name index. When the component advertises
@@ -66,17 +70,16 @@ async def fetch_entity_lookup_via_component(
     unique_id: str,
     *,
     domain: str | None = None,
-    platform: str | None = None,
 ) -> list[dict[str, Any]] | None:
     """One ``ha_mcp_tools/entity_lookup`` read; ``None`` ⇒ use the legacy path.
 
     Returns the component's ``matches`` list — every entity-registry entry whose
     ``unique_id`` equals ``unique_id`` (each ``{entity_id, unique_id, platform,
     domain, config_entry_id, categories, disabled_by, hidden_by}``), optionally
-    narrowed by the entity's own ``domain`` and the owning ``platform``. Multiple
-    matches across platforms are all returned — the caller picks. An
-    AUTHORITATIVE empty list (no registry entry with that unique_id) is kept
-    distinct from the ``None`` miss (component unavailable → legacy).
+    narrowed by the entity's own ``domain``. Multiple matches (one ``unique_id``
+    across platforms) are all returned — the caller picks. An AUTHORITATIVE empty
+    list (no registry entry with that unique_id) is kept distinct from the
+    ``None`` miss (component unavailable → legacy).
 
     ``None`` on capability miss, downgrade (``unknown_command`` → invalidate the
     cached caps), command error/timeout (logged), or a shape-drift payload (no
@@ -89,8 +92,6 @@ async def fetch_entity_lookup_via_component(
     kwargs: dict[str, Any] = {"unique_id": unique_id}
     if domain is not None:
         kwargs["domain"] = domain
-    if platform is not None:
-        kwargs["platform"] = platform
     try:
         ws = await get_websocket_client(url=client.base_url, token=client.token)
         raw = await ws.send_command(WS_ENTITY_LOOKUP, **kwargs)

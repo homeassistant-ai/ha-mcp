@@ -75,6 +75,15 @@ class ConfigSceneTools:
     # in suite runs.
     _RESOLVE_RETRY_DELAY = 0.2
 
+    @staticmethod
+    def _first_scene_entity_id(matches: list[dict[str, Any]]) -> str | None:
+        """First ``scene.``-domain ``entity_id`` in a component match list, else None."""
+        for match in matches:
+            entity_id = match.get("entity_id") or ""
+            if entity_id.startswith("scene."):
+                return entity_id
+        return None
+
     async def _resolve_scene_entity_id(
         self, scene_id: str, *, allow_component: bool = False
     ) -> str:
@@ -105,10 +114,15 @@ class ConfigSceneTools:
         ``component_config_reads`` and ``TestConfigGetSeam``) AND the component
         advertises ``entity_lookup``, one in-process
         ``entity_lookup(unique_id=scene_id, domain="scene")`` frame replaces the
-        whole-registry dump — authoritative on return, so NO sleep and NO retry.
-        A miss (empty matches) still lands on the naive ``scene.{scene_id}``
-        fallback. The component unavailable / errored ⇒ the legacy list+retry
-        path below runs unchanged (issue #1813 Phase 2).
+        whole-registry dump. A hit returns immediately — the in-process read
+        needs no settle. But an EMPTY result right after an upsert can be HA's
+        async entity-registration lag (#1168) rather than a true absence: the
+        in-process read removes the network latency, not the registration lag
+        (the upsert and this resolve are separate round-trips). So an empty
+        result is rechecked ONCE after ``_RESOLVE_RETRY_DELAY`` — the same delay
+        the legacy path uses — before the naive ``scene.{scene_id}`` fallback.
+        The component unavailable / errored ⇒ the legacy list+retry path below
+        runs unchanged (issue #1813 Phase 2).
 
         Accepts a bare ``scene_id`` ("movie_night") or a fully-qualified
         ``entity_id`` ("scene.movie_night") — the leading ``scene.`` is
@@ -121,11 +135,21 @@ class ConfigSceneTools:
                 self._client, scene_id, domain="scene"
             )
             if matches is not None:
-                # In-process read: authoritative on return (no settle retry).
-                for match in matches:
-                    entity_id = match.get("entity_id") or ""
-                    if entity_id.startswith("scene."):
-                        return entity_id
+                # Component answered authoritatively. A hit returns at once — the
+                # in-process registry read needs no settle. An EMPTY result right
+                # after an upsert can be HA's async entity-registration lag
+                # (#1168), not a true absence, so recheck ONCE after the same
+                # short delay the legacy path uses before the naive fallback.
+                entity_id = self._first_scene_entity_id(matches)
+                if entity_id is not None:
+                    return entity_id
+                await asyncio.sleep(self._RESOLVE_RETRY_DELAY)
+                recheck = await fetch_entity_lookup_via_component(
+                    self._client, scene_id, domain="scene"
+                )
+                entity_id = self._first_scene_entity_id(recheck or [])
+                if entity_id is not None:
+                    return entity_id
                 return f"scene.{scene_id}"
         retried = False
         for attempt in range(2):

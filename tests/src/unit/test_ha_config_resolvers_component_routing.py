@@ -6,7 +6,9 @@ advertises the capability:
 
 - ``ConfigSceneTools._resolve_scene_entity_id`` (unique_id -> entity_id) dumps the
   ENTIRE entity registry with a 0.2 s sleep + retry; the component path is one
-  ``entity_lookup`` frame, no sleep, no retry.
+  ``entity_lookup`` frame on a hit, and ONE recheck frame after a single sleep on
+  an empty result (post-upsert registration lag still applies to an in-process
+  read) before the naive fallback.
 - ``AutomationConfigTools._resolve_automation_entity_id`` (config id -> entity_id)
   scans the whole ``get_states()`` machine; the component path is one
   ``entity_lookup`` frame.
@@ -19,7 +21,8 @@ legacy, non-unknown command error -> legacy WITHOUT invalidating,
 ``HomeAssistantConnectionError`` -> propagates (resolvers) / is swallowed
 (validator). Plus the GET-path invariant: with ``allow_component`` unset (the
 config-get default) the resolvers never touch the component even with the
-capability advertised, and the component path takes NO ``asyncio.sleep``.
+capability advertised, and a component HIT takes NO ``asyncio.sleep`` (only an
+empty scene result pays the one lag-absorbing recheck sleep).
 
 The WS client is the shared ``make_ws`` dispatcher; the HA client is a spy that
 tallies every legacy fetch so "the legacy dump never ran" is a real assertion.
@@ -110,6 +113,30 @@ def _lookup_calls(ws: Any) -> list[Any]:
     ]
 
 
+def _lookup_seq_ws(match_seq: list[list[dict[str, Any]]]) -> AsyncMock:
+    """WS serving the caps ``info`` probe + a scripted ``entity_lookup`` sequence.
+
+    The i-th ``entity_lookup`` frame returns ``{"matches": match_seq[i]}`` (the
+    last element repeats if more frames arrive), so a lag scenario — first frame
+    empty, recheck frame populated — can be pinned. ``make_ws`` serves a single
+    fixed result and cannot express that.
+    """
+    ws = AsyncMock()
+    idx = {"n": 0}
+
+    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+        if command_type == "ha_mcp_tools/info":
+            return {"success": True, "result": _CAPS_ENTITY_LOOKUP}
+        if command_type == "ha_mcp_tools/entity_lookup":
+            i = min(idx["n"], len(match_seq) - 1)
+            idx["n"] += 1
+            return {"success": True, "result": {"matches": match_seq[i]}}
+        raise AssertionError(f"unexpected command {command_type!r}")
+
+    ws.send_command = AsyncMock(side_effect=_send)
+    return ws
+
+
 # =============================================================================
 # Scene resolver — _resolve_scene_entity_id
 # =============================================================================
@@ -146,9 +173,32 @@ class TestSceneResolverRouting:
         assert sleep_mock.await_count == 0
 
     @pytest.mark.asyncio
-    async def test_component_miss_falls_back_to_naive(self, monkeypatch) -> None:
-        """An authoritative empty ``matches`` (no registry row) lands on the naive
-        ``scene.{scene_id}`` fallback — still no legacy dump, no sleep."""
+    async def test_component_empty_then_populated_rechecks_once(
+        self, monkeypatch
+    ) -> None:
+        """Post-upsert registration lag (#1168): the first entity_lookup is empty,
+        the recheck after ONE ``_RESOLVE_RETRY_DELAY`` sleep sees the freshly
+        registered scene → the real entity_id, not the naive fallback. Two frames,
+        exactly one sleep, no legacy dump."""
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+        ws = _lookup_seq_ws([[], [{"entity_id": "scene.led_desk_strip_night_light"}]])
+        client = RoutingClient()
+        with patch_ws(ws, component_config_reads):
+            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
+                "night_light_led_desk_strip", allow_component=True
+            )
+        assert entity_id == "scene.led_desk_strip_night_light"
+        assert len(_lookup_calls(ws)) == 2
+        assert sleep_mock.await_count == 1
+        assert sleep_mock.await_args.args == (ConfigSceneTools._RESOLVE_RETRY_DELAY,)
+        assert client.ws_types["config/entity_registry/list"] == 0
+
+    @pytest.mark.asyncio
+    async def test_component_empty_twice_falls_back_to_naive(self, monkeypatch) -> None:
+        """Empty on BOTH the first lookup and the recheck ⇒ the authoritative
+        naive ``scene.{scene_id}`` fallback, after exactly one recheck sleep and
+        still no legacy registry dump."""
         sleep_mock = AsyncMock()
         monkeypatch.setattr(asyncio, "sleep", sleep_mock)
         ws = make_ws(
@@ -163,7 +213,8 @@ class TestSceneResolverRouting:
             )
         assert entity_id == "scene.movie_night"
         assert client.ws_types["config/entity_registry/list"] == 0
-        assert sleep_mock.await_count == 0
+        assert len(_lookup_calls(ws)) == 2
+        assert sleep_mock.await_count == 1
 
     @pytest.mark.asyncio
     async def test_get_path_never_touches_component(self) -> None:

@@ -11,10 +11,12 @@ runtime. The two seams verified:
   a scene and a light sharing one ``unique_id`` — pins that the resolver's
   ``domain="scene"`` narrowing picks the SCENE entity, not the colliding light.
 - ``_do_entity_lookup`` under ``AutomationConfigTools._resolve_automation_entity_id``
-  pins the load-bearing equivalence the automation routing relies on: an
+  exercises the load-bearing premise the automation routing relies on: an
   automation's registry ``unique_id`` IS its config ``id`` (the same value the
-  legacy ``get_states()`` scan matches against ``attributes["id"]``), so the
-  component path and the legacy path resolve the SAME entity_id.
+  legacy ``get_states()`` scan matches against ``attributes["id"]``). That
+  equivalence is an HA-core behaviour the test pins BY CONSTRUCTION rather than
+  derives; given it, the component path and the legacy path resolve the SAME
+  entity_id.
 - ``_do_reference_data`` under ``validate_config_references`` pins that the
   component-served service index + entity universe produce warnings BYTE-IDENTICAL
   to the legacy ``get_services()`` + ``get_states()`` path over the same fixture.
@@ -182,11 +184,15 @@ class TestAutomationResolverContract:
     async def test_unique_id_equals_config_id_component_and_legacy_agree(
         self, monkeypatch
     ) -> None:
-        """The load-bearing equivalence for the automation routing: an
-        automation's registry ``unique_id`` IS its config ``id``. The component
-        path (matching ``unique_id``) and the legacy ``get_states()`` scan
-        (matching ``attributes["id"]``) resolve the SAME entity_id from the same
-        underlying automation."""
+        """Both resolvers agree GIVEN the automation routing's load-bearing
+        premise — that an automation's registry ``unique_id`` IS its config
+        ``id``. That equivalence is an HA-core behaviour, NOT something this test
+        derives: the fixture pins it BY CONSTRUCTION (``unique_id`` on the
+        registry entry and ``attributes["id"]`` on the state are both set to
+        ``config_id``). Given that, this confirms the component path (matching
+        ``unique_id``) and the legacy ``get_states()`` scan (matching
+        ``attributes["id"]``) resolve the SAME entity_id. If the invariant ever
+        broke in real HA, the two paths would diverge in the field, not here."""
         config_id = "1699000000000"
         # Registry entry: unique_id == config id (the component's match key).
         view = make_view(
