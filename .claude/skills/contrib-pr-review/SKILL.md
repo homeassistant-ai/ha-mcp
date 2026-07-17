@@ -183,7 +183,10 @@ gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json closingIssuesReferen
 
 ### 6. Code Quality Overview
 
-**Note:** Codex provides automated code review on all PRs. This step focuses on what Codex cannot assess:
+**Note:** Codex provides automated code review on all PRs but posts only its
+highest-priority findings. Assess code quality against `.gemini/styleguide.md`
+yourself (medium-priority correctness, test coverage, repo conventions), with
+particular attention to what no bot assesses:
 
 - **Architecture alignment**: Does it fit the project structure? (service layer usage, etc.)
 - **Breaking changes**: Does it remove functionality without replacement? (Tool consolidation/refactoring is NOT breaking)
@@ -292,5 +295,5 @@ Once [change 1] and [change 2] are addressed, this should be good to merge.
 - **Be constructive**: Contributors are donating their time - be welcoming
 - **Focus on intent**: Code quality can be iterated; intent misalignment is harder to fix
 - **Consider contributor experience**: Adjust expectations based on contribution history
-- **Codex already reviewed code**: Don't duplicate detailed code review
+- **Codex posts only its highest-priority findings**: don't re-litigate what Codex specifically flagged, but DO cover medium-priority correctness, test-coverage, and repo-convention issues yourself per `.gemini/styleguide.md` — Gemini surfaced MEDIUM+ automatically and that coverage now falls to this skill
 - **When in doubt**: Err on the side of caution and request maintainer review
