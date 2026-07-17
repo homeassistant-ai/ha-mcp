@@ -35,11 +35,38 @@ function localizedToolGroup(group) {
   return (I18N_PAYLOAD.tool_groups || {})[group] || group;
 }
 
+function _placeholderNames(value) {
+  return Array.from(new Set(Array.from(
+    String(value || '').matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g),
+    match => match[1]
+  ))).sort();
+}
+
+function _translatedToolField(tool, field, expectedSource, fallback = expectedSource) {
+  const translated = ((I18N_PAYLOAD.tools || {})[tool.name] || {})[field];
+  if (!translated) return fallback;
+  const sourceFields = _placeholderNames(expectedSource);
+  const translatedFields = _placeholderNames(translated);
+  if (sourceFields.join('\0') !== translatedFields.join('\0')) {
+    console.warn(
+      `[ha-mcp] ignoring ${field} translation for ${tool.name}: placeholder mismatch`,
+      {source: sourceFields, translated: translatedFields}
+    );
+    return fallback;
+  }
+  return translated;
+}
+
 function localizedToolCopy(tool, description) {
-  const translated = (I18N_PAYLOAD.tools || {})[tool.name] || {};
+  const sourceTitle = tool.title || tool.name;
   return {
-    title: translated.title || tool.title || tool.name,
-    description: translated.description || description,
+    title: _translatedToolField(tool, 'title', sourceTitle),
+    description: _translatedToolField(
+      tool,
+      'description',
+      tool.description || '',
+      description
+    ),
   };
 }
 
