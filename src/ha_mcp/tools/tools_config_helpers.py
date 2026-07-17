@@ -4491,7 +4491,9 @@ class HelperConfigTools:
     ) -> dict[str, Any]:
         """
         Create or update Home Assistant helper entities and config subentries
-        (28 types, unified interface). MUST call ha_get_skill_guide first.
+        (28 types, unified interface).
+
+        MUST call ha_get_skill_guide OR refer to your locally installed skills first.
 
         SIMPLE/FLOW helper create requires `name`; SIMPLE/FLOW helper update
         requires `helper_id`. Config subentry create requires `entry_id` and

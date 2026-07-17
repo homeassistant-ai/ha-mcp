@@ -186,6 +186,59 @@ class TestBuildSkillsInstructions:
         assert "ha_list_resources" not in result
         assert "ha_read_resource" not in result
 
+    def test_hidden_skill_tool_swaps_fallback_to_local_skills(self, server, tmp_path):
+        """#1886: when ha_get_skill_guide is disabled (possible only
+        outside strict-BPS mode), the access-method fallback must not
+        direct clients to the hidden tool — it points at locally
+        installed skills instead."""
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        skill_dir = tmp_path / "my-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: my-skill\n"
+            "description: |\n"
+            "  Best practices for my-skill tasks.\n"
+            "---\n# Body\n"
+        )
+
+        with (
+            patch.object(server, "_get_skills_dir", return_value=tmp_path),
+            patch.object(server, "_skill_tool_hidden", return_value=True),
+        ):
+            result = server._build_skills_instructions()
+
+        assert result is not None
+        assert "locally installed copy" in result
+        assert f"use the {SKILL_TOOL_NAME} tool as a fallback" not in result
+
+    def test_skill_tool_hidden_logic(self, server):
+        """_skill_tool_hidden: true only when the tool is configured
+        disabled AND the strict-BPS lock doesn't override it."""
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        server.settings.enable_mandatory_bps = True
+        server.settings.enable_strict_mandatory_bps = False
+        with patch(
+            "ha_mcp.settings_ui._persistence.effective_tool_config",
+            return_value={"tools": {SKILL_TOOL_NAME: "disabled"}},
+        ):
+            assert server._skill_tool_hidden() is True
+
+        server.settings.enable_strict_mandatory_bps = True
+        with patch(
+            "ha_mcp.settings_ui._persistence.effective_tool_config",
+            return_value={"tools": {SKILL_TOOL_NAME: "disabled"}},
+        ):
+            assert server._skill_tool_hidden() is False
+
+        server.settings.enable_strict_mandatory_bps = False
+        with patch(
+            "ha_mcp.settings_ui._persistence.effective_tool_config",
+            return_value={"tools": {}},
+        ):
+            assert server._skill_tool_hidden() is False
+
     def test_empty_skills_dir(self, server, tmp_path):
         """Empty skills directory returns None."""
         with patch.object(server, "_get_skills_dir", return_value=tmp_path):
@@ -462,11 +515,31 @@ class TestSkillToolMandatoryPinning:
 
         assert SKILL_TOOL_NAME in DEFAULT_PINNED_TOOLS
 
-    def test_mandatory_tools_includes_skill_guide(self):
+    def test_skill_guide_mandatory_tracks_strict_bps(self):
+        """#1886: the skill guide is locked enabled only while strict
+        best-practices mode is configured on (parent AND child flags) —
+        it is the sole publisher of the strict-mode acknowledgment key.
+        With strict mode off, local-skills users may disable the tool."""
         from ha_mcp.server import SKILL_TOOL_NAME
-        from ha_mcp.settings_ui import MANDATORY_TOOLS
+        from ha_mcp.settings_ui import (
+            BPS_MANDATORY_TOOLS,
+            MANDATORY_TOOLS,
+            effective_mandatory_tools,
+        )
 
-        assert SKILL_TOOL_NAME in MANDATORY_TOOLS
+        assert SKILL_TOOL_NAME in BPS_MANDATORY_TOOLS
+        assert SKILL_TOOL_NAME not in MANDATORY_TOOLS
+
+        strict = MagicMock(enable_mandatory_bps=True, enable_strict_mandatory_bps=True)
+        non_strict = MagicMock(
+            enable_mandatory_bps=True, enable_strict_mandatory_bps=False
+        )
+        parent_off = MagicMock(
+            enable_mandatory_bps=False, enable_strict_mandatory_bps=True
+        )
+        assert SKILL_TOOL_NAME in effective_mandatory_tools(strict)
+        assert SKILL_TOOL_NAME not in effective_mandatory_tools(non_strict)
+        assert SKILL_TOOL_NAME not in effective_mandatory_tools(parent_off)
 
     def test_tool_name_fits_cloudflare_cap(self):
         """#1121: Cloudflare MCP portal rejects tool names > 40 chars."""

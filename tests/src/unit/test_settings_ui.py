@@ -124,6 +124,34 @@ class TestApplyToolVisibility:
             for name in MANDATORY_TOOLS:
                 assert name not in disabled_names
 
+    def test_skill_guide_disable_honored_when_strict_bps_off(self):
+        """#1886: with strict best-practices mode off, a user disable of
+        ha_get_skill_guide is applied and the tool is NOT force-enabled."""
+        mcp = MagicMock()
+        settings = MagicMock()
+        settings.enable_yaml_config_editing = True
+        settings.enable_mandatory_bps = True
+        settings.enable_strict_mandatory_bps = False
+        config = {"tools": {"ha_get_skill_guide": "disabled"}}
+        apply_tool_visibility(mcp, config, settings)
+        assert "ha_get_skill_guide" in mcp.disable.call_args[1]["names"]
+        assert "ha_get_skill_guide" not in mcp.enable.call_args[1]["names"]
+
+    def test_skill_guide_disable_stripped_when_strict_bps_on(self):
+        """#1886: with strict mode configured on, a disable entry for
+        ha_get_skill_guide is stripped and the tool stays force-enabled —
+        the strict gate publishes its acknowledgment key only through it."""
+        mcp = MagicMock()
+        settings = MagicMock()
+        settings.enable_yaml_config_editing = True
+        settings.enable_mandatory_bps = True
+        settings.enable_strict_mandatory_bps = True
+        config = {"tools": {"ha_get_skill_guide": "disabled"}}
+        apply_tool_visibility(mcp, config, settings)
+        if mcp.disable.called:
+            assert "ha_get_skill_guide" not in mcp.disable.call_args[1]["names"]
+        assert "ha_get_skill_guide" in mcp.enable.call_args[1]["names"]
+
     def test_yaml_editing_off_disables_tool(self):
         mcp = MagicMock()
         settings = MagicMock()
@@ -4576,3 +4604,206 @@ class TestFsCustomPathsEndpoints:
         assert json.loads(resp.body)["available"] is True
         assert seen["client"] is fake_client
         fake_client.close.assert_awaited_once()
+
+
+class TestBpsSkillGuideDependency:
+    """#1886: ha_get_skill_guide may be disabled only while strict
+    best-practices mode is off — the strict gate publishes its
+    acknowledgment key exclusively through that tool. Both save handlers
+    reject whichever direction introduces the conflict."""
+
+    def _handlers(self, monkeypatch, tmp_path, *, strict_on: bool, extra_flags=None):
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.delenv("DISABLED_TOOLS", raising=False)
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # File-origin flags, NOT env vars: an env-set flag is env-pinned
+        # and _save_feature_flags rejects UI writes to it, which would
+        # shadow the dependency guard these tests exercise.
+        monkeypatch.delenv("ENABLE_MANDATORY_BPS", raising=False)
+        monkeypatch.delenv("ENABLE_STRICT_MANDATORY_BPS", raising=False)
+        flags = {"enable_strict_mandatory_bps": strict_on}
+        flags.update(extra_flags or {})
+        (tmp_path / "feature_flags.json").write_text(json.dumps(flags))
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        _reset_global_settings()
+        return build_settings_handlers(server=None)
+
+    @staticmethod
+    def _teardown():
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_tools_rejects_skill_guide_disable_in_strict_mode(
+        self, monkeypatch, tmp_path
+    ):
+        handlers = self._handlers(monkeypatch, tmp_path, strict_on=True)
+        request = MagicMock()
+        request.json = AsyncMock(
+            return_value={"states": {"ha_get_skill_guide": "disabled"}}
+        )
+        resp = await handlers["save_tools"](request)
+        assert resp.status_code == 409
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert "ha_get_skill_guide" in str(body)
+        self._teardown()
+
+    @pytest.mark.asyncio
+    async def test_save_tools_allows_skill_guide_disable_without_strict(
+        self, monkeypatch, tmp_path
+    ):
+        handlers = self._handlers(monkeypatch, tmp_path, strict_on=False)
+        request = MagicMock()
+        request.json = AsyncMock(
+            return_value={"states": {"ha_get_skill_guide": "disabled"}}
+        )
+        resp = await handlers["save_tools"](request)
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        saved = json.loads((tmp_path / "tool_config.json").read_text())
+        assert saved["tools"]["ha_get_skill_guide"] == "disabled"
+        self._teardown()
+
+    @pytest.mark.asyncio
+    async def test_save_tools_allows_echo_of_persisted_disabled(
+        self, monkeypatch, tmp_path
+    ):
+        """A payload echoing an already-persisted disabled state saves even
+        in strict mode (reachable via hand-edited tool_config.json) —
+        apply_tool_visibility's strip-and-warn handles it at startup."""
+        (tmp_path / "tool_config.json").write_text(
+            json.dumps({"tools": {"ha_get_skill_guide": "disabled"}})
+        )
+        handlers = self._handlers(monkeypatch, tmp_path, strict_on=True)
+        request = MagicMock()
+        request.json = AsyncMock(
+            return_value={"states": {"ha_get_skill_guide": "disabled"}}
+        )
+        resp = await handlers["save_tools"](request)
+        assert json.loads(resp.body)["success"] is True
+        self._teardown()
+
+    @pytest.mark.asyncio
+    async def test_save_features_rejects_strict_on_with_tool_disabled(
+        self, monkeypatch, tmp_path
+    ):
+        (tmp_path / "tool_config.json").write_text(
+            json.dumps({"tools": {"ha_get_skill_guide": "disabled"}})
+        )
+        handlers = self._handlers(monkeypatch, tmp_path, strict_on=False)
+        request = MagicMock()
+        request.json = AsyncMock(
+            return_value={"flags": {"enable_strict_mandatory_bps": True}}
+        )
+        resp = await handlers["save_feature_flags"](request)
+        assert resp.status_code == 409
+        body = json.loads(resp.body)
+        assert "ha_get_skill_guide" in str(body)
+        self._teardown()
+
+    @pytest.mark.asyncio
+    async def test_save_features_allows_strict_on_when_tool_enabled(
+        self, monkeypatch, tmp_path
+    ):
+        handlers = self._handlers(monkeypatch, tmp_path, strict_on=False)
+        request = MagicMock()
+        request.json = AsyncMock(
+            return_value={"flags": {"enable_strict_mandatory_bps": True}}
+        )
+        resp = await handlers["save_feature_flags"](request)
+        assert json.loads(resp.body)["success"] is True
+        self._teardown()
+
+    @pytest.mark.asyncio
+    async def test_save_features_ignores_env_pinned_skill_guide_disable(
+        self, monkeypatch, tmp_path
+    ):
+        """An env-pinned (DISABLED_TOOLS) skill-guide disable must NOT
+        block enabling strict mode: it can't be lifted from the Tools
+        tab, and apply_tool_visibility turns it into the documented
+        stays-on no-op once strict mode is on. Only a user-set (file)
+        disable rejects."""
+        handlers = self._handlers(monkeypatch, tmp_path, strict_on=False)
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_get_skill_guide")
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+        request = MagicMock()
+        request.json = AsyncMock(
+            return_value={"flags": {"enable_strict_mandatory_bps": True}}
+        )
+        resp = await handlers["save_feature_flags"](request)
+        assert json.loads(resp.body)["success"] is True
+        self._teardown()
+
+    @pytest.mark.asyncio
+    async def test_get_tools_reports_bps_locked_tools(self, monkeypatch, tmp_path):
+        handlers = self._handlers(monkeypatch, tmp_path, strict_on=True)
+        resp = await handlers["get_tools"](MagicMock())
+        assert json.loads(resp.body)["bps_locked_tools"] == ["ha_get_skill_guide"]
+        self._teardown()
+
+        handlers = self._handlers(monkeypatch, tmp_path, strict_on=False)
+        resp = await handlers["get_tools"](MagicMock())
+        assert json.loads(resp.body)["bps_locked_tools"] == []
+        self._teardown()
+
+    def test_apply_strips_skill_guide_disable_in_strict_mode(self):
+        """apply_tool_visibility is the authoritative enforcement — env
+        seeds and hand-edited tool_config.json bypass the save handlers."""
+        mcp = MagicMock()
+        settings = MagicMock()
+        settings.enable_yaml_config_editing = True
+        settings.enable_mandatory_bps = True
+        settings.enable_strict_mandatory_bps = True
+        apply_tool_visibility(
+            mcp, {"tools": {"ha_get_skill_guide": "disabled"}}, settings
+        )
+        if mcp.disable.called:
+            assert "ha_get_skill_guide" not in mcp.disable.call_args[1]["names"]
+        assert "ha_get_skill_guide" in mcp.enable.call_args[1]["names"]
+
+    def test_apply_honors_skill_guide_disable_without_strict(self):
+        mcp = MagicMock()
+        settings = MagicMock()
+        settings.enable_yaml_config_editing = True
+        settings.enable_mandatory_bps = True
+        settings.enable_strict_mandatory_bps = False
+        apply_tool_visibility(
+            mcp, {"tools": {"ha_get_skill_guide": "disabled"}}, settings
+        )
+        assert "ha_get_skill_guide" in mcp.disable.call_args[1]["names"]
+        assert "ha_get_skill_guide" not in mcp.enable.call_args[1]["names"]
+
+    @pytest.mark.asyncio
+    async def test_save_features_rejects_parent_on_with_tool_disabled(
+        self, monkeypatch, tmp_path
+    ):
+        """The parent-enable direction: child stays on, parent persisted
+        off, tool disabled — enabling the parent leaves strict configured
+        on post-merge, so it is rejected too."""
+        (tmp_path / "tool_config.json").write_text(
+            json.dumps({"tools": {"ha_get_skill_guide": "disabled"}})
+        )
+        handlers = self._handlers(
+            monkeypatch,
+            tmp_path,
+            strict_on=True,
+            extra_flags={"enable_mandatory_bps": False},
+        )
+        request = MagicMock()
+        request.json = AsyncMock(return_value={"flags": {"enable_mandatory_bps": True}})
+        resp = await handlers["save_feature_flags"](request)
+        assert resp.status_code == 409
+        assert "ha_get_skill_guide" in str(json.loads(resp.body))
+        self._teardown()

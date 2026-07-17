@@ -201,10 +201,10 @@ configuration:
       also exposes a per-call `MandatoryBPS` parameter the agent can
       set to false on subsequent calls once it has the content. When
       this master switch is off, NO skill_content goes out regardless
-      of the per-call parameter or BP warnings. Leave on if your LLM
-      benefits from inline guidance; turn off to minimise tokens when
-      using an LLM that has the best-practice files indexed via skills
-      or another retrieval path. Requires restart to take effect.
+      of the per-call parameter or BP warnings. Recommended ON as the
+      first choice; disable only for models with very small context
+      windows. Turning this off may degrade write accuracy. Requires
+      restart to take effect.
   enable_strict_mandatory_bps:
     name: Strict best-practices mode
     description: >-
@@ -213,7 +213,9 @@ configuration:
       best-practice write tools (automations, scripts, scenes, helpers,
       dashboards, raw YAML) are blocked and return an error directing the
       client to read the best-practices skill via ha_get_skill_guide and
-      pass back the acknowledgment key it obtains there. Child of the
+      pass back the acknowledgment key it obtains there. While on, the
+      ha_get_skill_guide tool is locked enabled — it is the only
+      publisher of the acknowledgment key. Child of the
       "Attach best-practice skills on writes" option above and inert
       while that parent is off. Requires restart to take effect.
   enable_filesystem_tools:
@@ -256,10 +258,12 @@ configuration:
     description: >-
       Tools listed here are forced off and locked in the web Settings UI
       (Tools tab) — they cannot be re-enabled there without unsetting this
-      option first. A small set of mandatory tools (ha_search_entities,
-      ha_get_overview, ha_get_state, ha_report_issue, ha_get_skill_guide,
-      ha_manage_backup) cannot be disabled and keep running even if listed
-      here. Comma-separated tool names (e.g. ha_call_event,ha_eval_template).
+      option first. A small set of mandatory tools (ha_search,
+      ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      cannot be disabled and keep running even if listed here.
+      ha_get_skill_guide can be disabled only while strict best-practices
+      mode (enable_strict_mandatory_bps) is off. Comma-separated
+      tool names (e.g. ha_call_event,ha_eval_template).
   pinned_tools:
     name: Pinned tools (comma-separated)
     description: >-

@@ -1916,7 +1916,9 @@ class DashboardConfigTools:
         ] = None,
     ) -> "dict[str, Any] | ToolResult":
         """
-        Create or update a Home Assistant dashboard. MUST call ha_get_skill_guide first.
+        Create or update a Home Assistant dashboard.
+
+        MUST call ha_get_skill_guide OR refer to your locally installed skills first.
 
         Creates a new dashboard or updates an existing one with the provided configuration.
         Supports two modes: full config replacement OR Python transformation.

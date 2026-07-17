@@ -375,7 +375,7 @@ Features:
 - **Pin tools** — keep tools always visible when `enable_tool_search` is on
 - **Per-group master toggle** — enable/disable all tools in a group (HACS, System, etc.) with one click
 - **Search** — filter tools by name or title
-- **Mandatory tools** — `ha_search_entities`, `ha_get_overview`, `ha_get_state`, `ha_report_issue`, `ha_get_skill_guide`, and `ha_manage_backup` are always enabled and cannot be disabled (listing one in `disabled_tools` is a silent no-op — it keeps running)
+- **Mandatory tools** — `ha_search`, `ha_get_overview`, `ha_get_state`, `ha_report_issue`, and `ha_manage_backup` are always enabled and cannot be disabled (listing one in `disabled_tools` is a silent no-op — it keeps running). `ha_get_skill_guide` is additionally locked enabled while strict best-practices mode (`enable_strict_mandatory_bps`) is on — strict mode publishes its acknowledgment key only through that tool; turn strict mode off first to disable it
 - **Tool Security Policies tab** — when `enable_tool_security_policies` is on, approve held tool calls and manage per-tool rules here
 - **Advanced settings** — an advanced panel with a beta master toggle (plus per-feature sub-toggles) for opting into beta tools such as raw YAML editing, filesystem tools, and code mode. See [Beta Features](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md)
 - **In-UI restart** — a "Restart Add-on" button appears after saving to apply changes with one click

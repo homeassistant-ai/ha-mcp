@@ -19,7 +19,7 @@ from ..errors import ErrorCode, create_error_response
 from ..llm_exposure import LLM_API_CONFIG_KEY
 from ..transforms import DEFAULT_PINNED_TOOLS
 from . import _persistence
-from ._tools_meta import _VALID_STATES, _get_tool_metadata
+from ._tools_meta import _VALID_STATES, BPS_MANDATORY_TOOLS, _get_tool_metadata
 
 if TYPE_CHECKING:
     from ..server import HomeAssistantSmartMCPServer
@@ -59,6 +59,35 @@ def _padded_pins(tool_states: dict[str, str]) -> dict[str, str]:
     for name in DEFAULT_PINNED_TOOLS:
         padded.setdefault(name, "pinned")
     return padded
+
+
+def _bps_locked_tools() -> list[str]:
+    """BPS-dependent tools currently locked enabled (#1886).
+
+    ``ha_get_skill_guide`` may only be disabled while strict
+    best-practices mode is off — the strict gate publishes its
+    acknowledgment key exclusively through that tool, so disabling it in
+    strict mode would lock out every gated write. Regular (non-strict)
+    mandatory BPS attaches skill content server-side and does not need
+    the tool. A settings load failure locks rather than unlocks: a
+    wrongly locked row costs an explanatory note, while a wrongly
+    unlocked one lets a save through that ``apply_tool_visibility``
+    would strip at startup anyway.
+    """
+    from ..config import get_global_settings
+
+    try:
+        settings = get_global_settings()
+        if not (settings.enable_mandatory_bps and settings.enable_strict_mandatory_bps):
+            return []
+    except Exception:
+        logger.warning(
+            "settings lookup failed while computing BPS-locked tools; "
+            "locking %s conservatively",
+            ", ".join(sorted(BPS_MANDATORY_TOOLS)),
+            exc_info=True,
+        )
+    return sorted(BPS_MANDATORY_TOOLS)
 
 
 def _env_pinned_conflicts(
@@ -143,6 +172,9 @@ async def _get_tools(
             # hides the per-tool "LLM API" toggle rather than showing a
             # no-op control.
             "llm_api_available": is_embedded(),
+            # BPS-dependent tools whose rows the UI must lock enabled
+            # while strict best-practices mode is on (#1886).
+            "bps_locked_tools": _bps_locked_tools(),
         }
     )
 
@@ -233,6 +265,36 @@ async def _save_tools(
     llm_api_overrides = _coerce_llm_overrides(raw_llm_api)
 
     config = _persistence.load_tool_config()
+
+    # BPS-dependency guard (#1886): reject disabling a BPS-locked tool
+    # while strict best-practices mode is on. Mirrors the env-pinned
+    # semantics above — only a *change to* "disabled" is rejected, so a
+    # payload echoing an already-persisted disabled state (reachable via
+    # a hand-edited tool_config.json) still saves and is handled by
+    # apply_tool_visibility's strip-and-warn at startup.
+    prior_states = config.get("tools", {})
+    bps_conflicts = sorted(
+        name
+        for name in _bps_locked_tools()
+        if states.get(name) == "disabled" and prior_states.get(name) != "disabled"
+    )
+    if bps_conflicts:
+        return JSONResponse(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Refusing to disable {', '.join(bps_conflicts)} while "
+                "strict best-practices mode "
+                "(enable_strict_mandatory_bps) is on — strict mode "
+                "publishes its acknowledgment key only through that "
+                "tool, so disabling it would block every gated write.",
+                suggestions=[
+                    "Turn off 'Strict best-practices mode' in the Server "
+                    "Settings tab first, then disable the tool.",
+                ],
+                context={"rejected": bps_conflicts},
+            ),
+            status_code=409,
+        )
 
     # The enable/disable/pin half still needs a restart to apply
     # (visibility is wired at server build); the LLM-API exposure half
