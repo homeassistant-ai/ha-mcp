@@ -2490,6 +2490,93 @@ class TestImportingWorkerRegistry:
         assert isinstance(mgr._thread_exc, _StopServe)
 
 
+class TestPendingInstallTracking:
+    """Package-mutating executor jobs must be waitable across bring-ups.
+
+    asyncio cancellation of a bring-up detaches the awaiter but the executor
+    pip job runs to completion; untracked, an orphaned pip could swap the
+    package files under the next bring-up's install or its worker's cold
+    import (review finding on the #1904 fixes).
+    """
+
+    async def test_tracked_job_registers_and_clears(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", None)
+        observed: list[bool] = []
+
+        def _job() -> str:
+            with es._PENDING_INSTALL_LOCK:
+                observed.append(es._PENDING_INSTALL_DONE is not None)
+            return "done"
+
+        result = await mgr._async_run_tracked_install_job(_job)
+
+        assert result == "done"
+        assert observed == [True]
+        with es._PENDING_INSTALL_LOCK:
+            assert es._PENDING_INSTALL_DONE is None
+
+    async def test_tracked_job_clears_even_when_the_job_raises(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", None)
+
+        def _job() -> None:
+            raise RuntimeError("pip exploded")
+
+        with pytest.raises(RuntimeError, match="pip exploded"):
+            await mgr._async_run_tracked_install_job(_job)
+
+        with es._PENDING_INSTALL_LOCK:
+            assert es._PENDING_INSTALL_DONE is None
+
+    async def test_wait_returns_once_orphan_finishes(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        pending = threading.Event()
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", pending)
+        threading.Timer(0.2, pending.set).start()
+
+        with caplog.at_level("WARNING"):
+            await mgr._async_wait_for_pending_install()  # must not raise
+
+        assert "install job is still running on the executor" in caplog.text
+
+    async def test_wait_raises_when_orphan_never_finishes(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", threading.Event())
+        monkeypatch.setattr(es, "_PENDING_INSTALL_WAIT_SECONDS", 0.1)
+
+        with pytest.raises(
+            es.EmbeddedServerError, match="refusing to modify"
+        ) as excinfo:
+            await mgr._async_wait_for_pending_install()
+        assert excinfo.value.kind == "package"
+
+    async def test_wait_noop_when_nothing_pending(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", None)
+        await mgr._async_wait_for_pending_install()  # must not raise or block
+
+    async def test_ensure_package_waits_before_touching_anything(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+
+        class _Sentinel(Exception):
+            pass
+
+        monkeypatch.setattr(
+            mgr,
+            "_async_wait_for_pending_install",
+            AsyncMock(side_effect=_Sentinel),
+        )
+        with pytest.raises(_Sentinel):
+            await mgr._async_ensure_package()
+
+
 class TestImporterAwareBringUp:
     """async_start must register its worker itself and defer package
     mutations while a previous worker is still importing (review findings:

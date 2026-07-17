@@ -95,6 +95,25 @@ jobs:
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # A pull_request-event run of the release workflows is the
+          # every-PR validation shell, and an all-skipped run reports an
+          # EMPTY job list — which fell into the job-absent fail-open below
+          # and cut a stable mirror tag with no release behind it (live:
+          # v1.1.1 went stable off a skipped pull_request Hotfix Release
+          # run the first time an untagged manifest version existed).
+          # Neither shape can ever have published a release, so both fail
+          # CLOSED here; the rename fail-open below stays for genuine
+          # release-shaped runs (dispatch/schedule/push, non-skipped).
+          if [ "${{ github.event.workflow_run.event }}" = "pull_request" ]; then
+            echo "Triggering run is a pull_request-event shell - skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${{ github.event.workflow_run.conclusion }}" = "skipped" ]; then
+            echo "Triggering run concluded skipped - nothing was released; skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Fail OPEN on an API error and on a missing job: the snapshot and
           # tag steps are idempotent, so a spurious proceed is harmless, while
           # a suppressed one strands HACS on the old component tag (the bug
