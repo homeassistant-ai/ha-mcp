@@ -43,6 +43,38 @@ logger = logging.getLogger(__name__)
 
 WS_REGISTRIES = "ha_mcp_tools/registries"
 
+_LIST_SLICES = {"area": "areas", "floor": "floors", "label": "labels"}
+
+
+def _has_valid_shape(
+    result: dict[str, Any],
+    registries: list[str],
+    category_scopes: list[str] | None,
+) -> bool:
+    """True if every requested slice in ``result`` is its expected list/dict shape.
+
+    Mirrors the legacy path's ``_require_list``-style guard
+    (``backup_manager.py``) but never raises — an unexpected shape here just
+    means "don't trust this component response", so the caller falls back to
+    the legacy WS list(s) instead of surfacing a malformed dump as a
+    confident tool result. A requested slice missing from ``result``
+    entirely counts as a mismatch too: the contract is that a requested kind
+    is always present (empty list, never absent) when the component answers.
+    """
+    for kind in registries:
+        if kind == "category":
+            categories = result.get("categories")
+            if not isinstance(categories, dict):
+                return False
+            for scope in category_scopes or ():
+                if not isinstance(categories.get(scope), list):
+                    return False
+            continue
+        key = _LIST_SLICES.get(kind)
+        if key is not None and not isinstance(result.get(key), list):
+            return False
+    return True
+
 
 async def fetch_registries_via_component(
     client: Any,
@@ -60,11 +92,13 @@ async def fetch_registries_via_component(
     are scoped; an omitted/empty list yields ``{"categories": {}}``).
 
     ``None`` on capability miss, downgrade (``unknown_command`` → invalidate
-    the cached caps), or command error/timeout (logged) — the caller falls
-    back to its legacy WS list call(s). A ``HomeAssistantConnectionError`` (WS
-    down) is not caught here, so it propagates to the caller's own error
-    handling — the legacy path shares the same socket and would fail
-    identically.
+    the cached caps), command error/timeout (logged), or a malformed
+    response — the outer ``result`` isn't a dict, or a requested slice isn't
+    its expected list/dict shape (logged; see ``_has_valid_shape``) — the
+    caller falls back to its legacy WS list call(s) in every case. A
+    ``HomeAssistantConnectionError`` (WS down) is not caught here, so it
+    propagates to the caller's own error handling — the legacy path shares
+    the same socket and would fail identically.
     """
     caps = await get_component_caps(client)
     if not component_supports(caps, "registries"):
@@ -83,5 +117,10 @@ async def fetch_registries_via_component(
         return None
     result = raw.get("result")
     if not isinstance(result, dict):
+        return None
+    if not _has_valid_shape(result, registries, category_scopes):
+        logger.warning(
+            "%s returned an unexpected shape; fell back to legacy", WS_REGISTRIES
+        )
         return None
     return result

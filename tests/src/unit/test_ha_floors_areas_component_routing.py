@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp import backup_manager as bm
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
@@ -269,3 +270,220 @@ async def test_connection_error_propagates_without_legacy_fallback() -> None:
     # The connection error propagated before either legacy list call fired.
     assert client.area_list_calls == 0
     assert client.floor_list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_malformed_areas_shape_falls_back_to_legacy() -> None:
+    """A component response whose ``areas`` slice isn't a list (a malformed
+    dump — e.g. a version-mismatched or buggy component) must not be
+    trusted: ``fetch_registries_via_component`` returns ``None`` and
+    ``ha_list_floors_areas`` falls back to the legacy 2-call gather instead
+    of crashing on the bad shape or silently misreporting counts."""
+    ws = make_ws(
+        "ha_mcp_tools/registries",
+        info_result=_CAPS_REGISTRIES,
+        cmd_result={"areas": "not-a-list", "floors": []},
+    )
+    client = RoutingClient(
+        areas=[_raw_area("a1", "Office", floor_id="f1")],
+        floors=[_raw_floor("f1", "Ground")],
+    )
+    list_floors_areas = _build_list_floors_areas(client)
+
+    with patch_ws(ws, component_registries):
+        resp = await list_floors_areas()
+
+    assert resp["success"] is True
+    assert client.area_list_calls == 1
+    assert client.floor_list_calls == 1
+
+
+@pytest.mark.parametrize(
+    "cmd_result",
+    [
+        pytest.param({"areas": "not-a-list", "floors": []}, id="area-not-list"),
+        pytest.param({"areas": [], "floors": {"oops": 1}}, id="floor-not-list"),
+        pytest.param({"floors": []}, id="area-key-missing"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_area_floor_shape_mismatch_returns_none(
+    cmd_result: dict[str, Any],
+) -> None:
+    """Direct unit coverage of ``fetch_registries_via_component``'s shape
+    guard for the ``area``/``floor`` slices: a non-list value, or a
+    requested slice missing outright, both return ``None`` (never raise)."""
+    ws = make_ws(
+        "ha_mcp_tools/registries", info_result=_CAPS_REGISTRIES, cmd_result=cmd_result
+    )
+    client = RoutingClient()
+
+    with patch_ws(ws, component_registries):
+        result = await component_registries.fetch_registries_via_component(
+            client, ["area", "floor"]
+        )
+
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    "cmd_result",
+    [
+        pytest.param({"categories": "not-a-dict"}, id="categories-not-dict"),
+        pytest.param({"categories": {"automation": "not-a-list"}}, id="scope-not-list"),
+        pytest.param({"categories": {}}, id="scope-missing"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_category_shape_mismatch_returns_none(cmd_result: dict[str, Any]) -> None:
+    """Same shape guard for the scoped ``categories`` mapping: the outer
+    value must be a dict AND the requested scope's value must be a list."""
+    ws = make_ws(
+        "ha_mcp_tools/registries", info_result=_CAPS_REGISTRIES, cmd_result=cmd_result
+    )
+    client = RoutingClient()
+
+    with patch_ws(ws, component_registries):
+        result = await component_registries.fetch_registries_via_component(
+            client, ["category"], category_scopes=["automation"]
+        )
+
+    assert result is None
+
+
+class _CredentialedClient:
+    """Bare credentialed double: enough for ``get_component_caps`` to probe
+    (truthy ``base_url``/``token``). No ``send_websocket_message`` — the
+    legacy path for the auto-backup fetchers below routes through
+    ``backup_manager._ws_send``, monkeypatched separately per test."""
+
+    def __init__(self) -> None:
+        self.base_url = "http://ha.local:8123"
+        self.token = "tok"
+        self.verify_ssl = False
+
+
+async def _call_fetch_label(client: Any) -> Any:
+    return await bm._fetch_label(client, "lb1")
+
+
+async def _call_fetch_category(client: Any) -> Any:
+    return await bm._fetch_category(client, "automation:cat1")
+
+
+async def _call_fetch_area(client: Any) -> Any:
+    return await bm._fetch_area_or_floor(client, "area:a1")
+
+
+async def _call_fetch_floor(client: Any) -> Any:
+    return await bm._fetch_area_or_floor(client, "floor:f1")
+
+
+_LEGACY_LABEL_ITEM = {"label_id": "lb1", "name": "Favorites"}
+_LEGACY_CATEGORY_ITEM = {"category_id": "cat1", "name": "Lights"}
+_LEGACY_AREA_ITEM = _raw_area("a1", "Office")
+_LEGACY_FLOOR_ITEM = _raw_floor("f1", "Ground")
+
+_BACKUP_FETCH_CASES = [
+    pytest.param(
+        _call_fetch_label,
+        "config/label_registry/list",
+        [_LEGACY_LABEL_ITEM],
+        dict(_LEGACY_LABEL_ITEM),
+        id="label",
+    ),
+    pytest.param(
+        _call_fetch_category,
+        "config/category_registry/list",
+        [_LEGACY_CATEGORY_ITEM],
+        {"scope": "automation", **_LEGACY_CATEGORY_ITEM},
+        id="category",
+    ),
+    pytest.param(
+        _call_fetch_area,
+        "config/area_registry/list",
+        [_LEGACY_AREA_ITEM],
+        {"kind": "area", **_LEGACY_AREA_ITEM},
+        id="area",
+    ),
+    pytest.param(
+        _call_fetch_floor,
+        "config/floor_registry/list",
+        [_LEGACY_FLOOR_ITEM],
+        {"kind": "floor", **_LEGACY_FLOOR_ITEM},
+        id="floor",
+    ),
+]
+
+
+class TestBackupCaptureLegacyFallback:
+    """The auto-backup capture fetchers (``_fetch_label`` / ``_fetch_category``
+    / ``_fetch_area_or_floor``) fall back to the legacy per-registry WS list
+    call under both component-unavailable modes: caps absent (old component,
+    ``info`` itself is ``unknown_command``) and a component command error
+    (the ``registries`` frame times out despite caps being advertised).
+    Neither degradation is allowed to surface as a missing entity — the
+    legacy fetch must still run and return the matching row."""
+
+    @pytest.mark.parametrize(
+        "call_fetch, legacy_type, legacy_items, expected", _BACKUP_FETCH_CASES
+    )
+    @pytest.mark.asyncio
+    async def test_caps_absent_falls_back_to_legacy(
+        self,
+        call_fetch: Any,
+        legacy_type: str,
+        legacy_items: list[dict[str, Any]],
+        expected: dict[str, Any],
+        monkeypatch: Any,
+    ) -> None:
+        ws = make_ws(
+            "ha_mcp_tools/registries",
+            info_exc=HomeAssistantCommandError("no info", "unknown_command"),
+        )
+        calls: list[str] = []
+
+        async def fake_ws_send(_client: Any, message: dict[str, Any]) -> Any:
+            calls.append(message["type"])
+            return list(legacy_items)
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
+        client = _CredentialedClient()
+
+        with patch_ws(ws, component_registries):
+            result = await call_fetch(client)
+
+        assert calls == [legacy_type]
+        assert result == expected
+
+    @pytest.mark.parametrize(
+        "call_fetch, legacy_type, legacy_items, expected", _BACKUP_FETCH_CASES
+    )
+    @pytest.mark.asyncio
+    async def test_component_error_falls_back_to_legacy(
+        self,
+        call_fetch: Any,
+        legacy_type: str,
+        legacy_items: list[dict[str, Any]],
+        expected: dict[str, Any],
+        monkeypatch: Any,
+    ) -> None:
+        ws = make_ws(
+            "ha_mcp_tools/registries",
+            info_result=_CAPS_REGISTRIES,
+            cmd_exc=HomeAssistantCommandTimeout("timeout"),
+        )
+        calls: list[str] = []
+
+        async def fake_ws_send(_client: Any, message: dict[str, Any]) -> Any:
+            calls.append(message["type"])
+            return list(legacy_items)
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
+        client = _CredentialedClient()
+
+        with patch_ws(ws, component_registries):
+            result = await call_fetch(client)
+
+        assert calls == [legacy_type]
+        assert result == expected
