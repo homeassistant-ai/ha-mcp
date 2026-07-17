@@ -120,9 +120,15 @@ class ConfigSceneTools:
         in-process read removes the network latency, not the registration lag
         (the upsert and this resolve are separate round-trips). So an empty
         result is rechecked ONCE after ``_RESOLVE_RETRY_DELAY`` — the same delay
-        the legacy path uses — before the naive ``scene.{scene_id}`` fallback.
+        the legacy path uses — before the naive ``scene.{scene_id}`` fallback. If the recheck answers
+        AUTHORITATIVELY (component still available) its verdict is final: a hit is
+        returned, a genuine empty falls to the naive guess. But if the recheck
+        itself returns ``None`` (component went unavailable / errored / downgraded
+        mid-retry) the first empty read is NOT authoritative, so resolution drops
+        to the legacy list+retry path below (its own retry absorbs the same lag)
+        rather than trusting the empty and guessing.
         The component unavailable / errored ⇒ the legacy list+retry path below
-        runs unchanged (issue #1813 Phase 2).
+        runs unchanged; that is the FIRST-read case (issue #1813 Phase 2).
 
         Accepts a bare ``scene_id`` ("movie_night") or a fully-qualified
         ``entity_id`` ("scene.movie_night") — the leading ``scene.`` is
@@ -147,10 +153,17 @@ class ConfigSceneTools:
                 recheck = await fetch_entity_lookup_via_component(
                     self._client, scene_id, domain="scene"
                 )
-                entity_id = self._first_scene_entity_id(recheck or [])
-                if entity_id is not None:
-                    return entity_id
-                return f"scene.{scene_id}"
+                if recheck is not None:
+                    # Authoritative recheck: a hit is returned; a genuine empty
+                    # (still absent after the settle) falls to the naive guess.
+                    entity_id = self._first_scene_entity_id(recheck)
+                    if entity_id is not None:
+                        return entity_id
+                    return f"scene.{scene_id}"
+                # recheck is None: the component went unavailable/errored/downgraded
+                # mid-retry, so the first empty read is NOT authoritative. Fall
+                # through to the legacy list+retry path below (its own retry
+                # absorbs the same registration lag) instead of guessing.
         retried = False
         for attempt in range(2):
             try:

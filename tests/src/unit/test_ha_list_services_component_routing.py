@@ -8,8 +8,10 @@ single round-trip; the server still runs its own ``_process_services`` filter
 + pagination unchanged over that payload. These tests pin: the
 component-preferred path (both legacy calls skipped), capability miss falls
 back, ``unknown_command`` invalidates caps and falls back, a command
-error/timeout falls back, and a connection error propagates (shared socket —
-the legacy path would fail identically).
+error/timeout falls back, and a connection error ALSO falls back to the REST
+legacy — a deliberate deviation from the uniform taxonomy, because this tool's
+legacy path is REST + a per-request WS bridge, NOT the shared pooled WS, so a WS
+outage must not kill the tool.
 """
 
 from __future__ import annotations
@@ -18,7 +20,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
@@ -247,15 +248,14 @@ async def test_command_error_falls_back_to_legacy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_connection_error_propagates() -> None:
-    """A connection error is not swallowed into a silent legacy fallback.
+async def test_connection_error_falls_back_to_legacy() -> None:
+    """A WS-down error on the component frame falls back to the REST legacy.
 
-    ``_fetch_services_list_via_component`` does not catch
-    ``HomeAssistantConnectionError`` — the legacy translations fetch shares the
-    same WS socket and would fail identically — so it propagates up through the
-    tool's own exception handling (which reshapes it into a ``ToolError``,
-    per this project's error-handling contract) rather than triggering a legacy
-    retry.
+    DEVIATION from the uniform taxonomy: this tool's legacy path is the REST
+    ``get_services()`` catalog + a per-request WS bridge for translations, NOT the
+    shared pooled WS, so ``_fetch_services_list_via_component`` catches
+    ``HomeAssistantConnectionError`` and returns ``None`` — the REST fallback then
+    serves the catalog rather than the tool erroring out.
     """
     ws = make_ws(
         "ha_mcp_tools/services_list",
@@ -265,8 +265,13 @@ async def test_connection_error_propagates() -> None:
     client = RoutingClient()
     list_services = _build_list_services(client)
 
-    with patch_ws(ws, tools_services), pytest.raises(ToolError):
-        await list_services()
+    with patch_ws(ws, tools_services):
+        resp = await list_services()
 
-    assert client.legacy_rest_calls == 0
-    assert client.legacy_ws_calls == 0
+    assert resp["success"] is True
+    assert "light.turn_on" in resp["services"]
+    # The REST catalog + WS translations legacy fetch served the result.
+    assert client.legacy_rest_calls == 1
+    assert client.legacy_ws_calls == 1
+    # A transient connection error keeps the (positive) caps entry cached.
+    assert client in component_api._CAPS_CACHE

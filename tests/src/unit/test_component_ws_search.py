@@ -3291,6 +3291,18 @@ class TestConfigEntries:
         hass = FakeHass(config_entries=[self._entry(entry_id="c1")])
         assert wsapi._do_config_entries(hass, {"entry_id": "ghost"}) == {"entries": []}
 
+    def test_empty_entry_id_is_single_lookup_not_list(self):
+        # An empty-string entry_id is a single-entry lookup for a nonexistent id
+        # (``async_get_entry("")`` misses) — it must NOT fall through to list mode
+        # and return the first entry. Only a wholly absent entry_id lists.
+        hass = FakeHass(
+            config_entries=[
+                self._entry(entry_id="c1"),
+                self._entry(domain="hue", entry_id="c2"),
+            ]
+        )
+        assert wsapi._do_config_entries(hass, {"entry_id": ""}) == {"entries": []}
+
     def test_no_filter_lists_all(self):
         hass = FakeHass(
             config_entries=[

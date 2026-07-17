@@ -8,7 +8,9 @@ advertises the capability:
   ENTIRE entity registry with a 0.2 s sleep + retry; the component path is one
   ``entity_lookup`` frame on a hit, and ONE recheck frame after a single sleep on
   an empty result (post-upsert registration lag still applies to an in-process
-  read) before the naive fallback.
+  read). An AUTHORITATIVE empty recheck falls to the naive fallback; a recheck
+  that itself returns ``None`` (component went unavailable mid-retry) drops to the
+  legacy registry list+retry instead of trusting the empty and guessing.
 - ``AutomationConfigTools._resolve_automation_entity_id`` (config id -> entity_id)
   scans the whole ``get_states()`` machine; the component path is one
   ``entity_lookup`` frame.
@@ -213,6 +215,50 @@ class TestSceneResolverRouting:
             )
         assert entity_id == "scene.movie_night"
         assert client.ws_types["config/entity_registry/list"] == 0
+        assert len(_lookup_calls(ws)) == 2
+        assert sleep_mock.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_component_empty_then_recheck_none_falls_back_to_legacy(
+        self, monkeypatch
+    ) -> None:
+        """First lookup empty, then the recheck itself comes back unavailable
+        (``None`` — the component errored/downgraded mid-retry) ⇒ the first empty
+        is NOT authoritative, so resolution drops to the legacy registry list+retry
+        (which resolves the scene) rather than the naive ``scene.{scene_id}``
+        guess. Two component frames, one recheck sleep, and the legacy dump runs."""
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+
+        idx = {"n": 0}
+
+        async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+            if command_type == "ha_mcp_tools/info":
+                return {"success": True, "result": _CAPS_ENTITY_LOOKUP}
+            if command_type == "ha_mcp_tools/entity_lookup":
+                idx["n"] += 1
+                if idx["n"] == 1:
+                    return {"success": True, "result": {"matches": []}}
+                # The recheck frame fails — component went unavailable mid-retry,
+                # so fetch_entity_lookup_via_component returns None.
+                raise HomeAssistantCommandTimeout("recheck timeout")
+            raise AssertionError(f"unexpected command {command_type!r}")
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(side_effect=_send)
+
+        client = RoutingClient(
+            registry_list=[
+                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
+            ]
+        )
+        with patch_ws(ws, component_config_reads):
+            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
+                "movie_night", allow_component=True
+            )
+        # Resolved from the legacy registry dump, not the naive guess.
+        assert entity_id == "scene.movie_night"
+        assert client.ws_types["config/entity_registry/list"] == 1
         assert len(_lookup_calls(ws)) == 2
         assert sleep_mock.await_count == 1
 

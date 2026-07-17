@@ -12,7 +12,11 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from .component_api import (
@@ -268,9 +272,14 @@ async def _fetch_services_list_via_component(
     just when a query happens not to trigger the drop. ``None`` on capability
     miss, downgrade (``unknown_command`` → invalidate the cached caps), or
     command error/timeout (logged) — the caller falls back to the legacy REST +
-    WS translations fetch. A ``HomeAssistantConnectionError`` (WS down) is not
-    caught here; it propagates — the legacy path shares the same socket and
-    would fail identically.
+    WS translations fetch.
+
+    DEVIATION from the uniform component-fetch taxonomy: a
+    ``HomeAssistantConnectionError`` (WS down) IS caught here and mapped to
+    ``None`` (legacy fallback). Unlike the pooled-WS consumers, this tool's legacy
+    path is the REST ``get_services()`` + a per-request WS bridge for
+    translations, NOT the shared pooled WS — so a WS outage must not kill the
+    tool when REST can still serve the catalog.
     """
     caps = await get_component_caps(client)
     if not component_supports(caps, "services_list"):
@@ -281,6 +290,15 @@ async def _fetch_services_list_via_component(
     try:
         ws = await get_websocket_client(url=client.base_url, token=client.token)
         raw = await ws.send_command(WS_SERVICES_LIST, **kwargs)
+    except HomeAssistantConnectionError as exc:
+        # DEVIATION (see docstring): the legacy path is REST + a per-request WS
+        # bridge, NOT the shared pooled WS, so a WS outage must not kill the tool.
+        logger.warning(
+            "%s connection error; falling back to REST legacy: %r",
+            WS_SERVICES_LIST,
+            exc,
+        )
+        return None
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)

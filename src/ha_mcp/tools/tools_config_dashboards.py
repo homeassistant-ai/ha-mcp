@@ -830,11 +830,12 @@ def _should_lazy_resolve(error_msg: str) -> bool:
 # ``component_devices.WS_DEVICE_GET``).
 WS_DASHBOARDS = "ha_mcp_tools/dashboards"
 
-# ``LovelaceConfig.mode`` wire string for a storage (UI-managed) dashboard. The
-# component tags every runtime dashboard with its mode; the legacy
-# ``lovelace/dashboards/list`` is storage-only, so the server filters the
-# component rows to this mode to keep the two paths' row sets identical.
-_DASHBOARD_STORAGE_MODE = "storage"
+# ``LovelaceConfig.mode`` wire string for a YAML-mode dashboard. The component
+# tags every runtime ``list`` row with its mode; a YAML dashboard's BODY may carry
+# resolved ``!secret`` plaintext, so the cross-dashboard ``search`` walk skips
+# rows tagged with this mode (the same exclusion the component applies in-process)
+# — while ``list`` still surfaces YAML rows, since listing metadata is safe.
+_DASHBOARD_YAML_MODE = "yaml"
 
 # Cross-dashboard ``search`` match cap — mirrors the component's
 # ``_DASHBOARD_MATCH_CAP`` so the component-less legacy walk truncates identically
@@ -891,11 +892,17 @@ async def _dashboards_via_component(
 
 
 async def _component_dashboard_rows(client: Any) -> list[dict[str, Any]] | None:
-    """Storage-only dashboard rows via the component ``list``; ``None`` ⇒ legacy.
+    """All dashboard metadata rows via the component ``list``; ``None`` ⇒ legacy.
 
-    The component tags every runtime dashboard with an additive ``mode``; the
-    legacy ``lovelace/dashboards/list`` is storage-only, so YAML rows are filtered
-    out to keep the row set identical to legacy. ``None`` (component unavailable /
+    The legacy ``lovelace/dashboards/list`` returns a metadata row for every
+    dashboard that has a config — YAML dashboards included — so the component
+    ``list`` is passed through with YAML rows KEPT. Dropping them diverged the two
+    paths (a YAML dashboard vanished from ``list_only`` output only when the
+    component was installed). Listing metadata is safe: only a dashboard's BODY can
+    carry resolved ``!secret`` plaintext, and the body-serving paths still exclude
+    YAML — ``get`` via the component's ``yaml_excluded`` status and ``search`` by
+    skipping ``mode == "yaml"`` rows. The additive ``mode`` tag is preserved on
+    every row so those exclusions can key off it. ``None`` (component unavailable /
     malformed) routes the caller to the legacy list read.
     """
     result = await _dashboards_via_component(client, "list")
@@ -904,11 +911,7 @@ async def _component_dashboard_rows(client: Any) -> list[dict[str, Any]] | None:
     rows = result.get("dashboards")
     if not isinstance(rows, list):
         return None
-    return [
-        row
-        for row in rows
-        if isinstance(row, dict) and row.get("mode") == _DASHBOARD_STORAGE_MODE
-    ]
+    return [row for row in rows if isinstance(row, dict)]
 
 
 async def _component_dashboard_config(
@@ -1640,7 +1643,8 @@ class DashboardConfigTools:
         Get dashboard info - list all dashboards, get config, or search for cards.
 
         MODE 1 — List: list_only=True
-          Lists all storage-mode dashboards with metadata (url_path, title, icon).
+          Lists every dashboard's metadata (url_path, title, icon), storage and
+          YAML alike (metadata only — bodies are never included here).
 
         MODE 2 — Search: any of entity_id / card_type / heading provided
           Finds cards, badges, and header cards matching the criteria, including
@@ -1669,9 +1673,12 @@ class DashboardConfigTools:
           Each match names the url_path, view, card_path, card_type, and the
           matched field/value. Takes precedence over the other modes (list_only /
           entity_id / card_type / heading are ignored when mode="search").
-          YAML-mode dashboards are not searched. On installs without the
-          ha_mcp_tools component, the default (unnamed) dashboard is also not
-          searched — only dashboards with a url_path are.
+          YAML-mode dashboards are never searched on either path — the component
+          walk skips them in-process and the component-less legacy walk skips any
+          row tagged mode="yaml" — because HA resolves `!secret` when loading a
+          YAML Lovelace config, so searching one could surface resolved secrets.
+          On installs without the ha_mcp_tools component, the default (unnamed)
+          dashboard is also not searched — only dashboards with a url_path are.
 
         Return a stable `config_hash` (Get and Search modes only; not present in list_only mode) across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
@@ -1802,7 +1809,12 @@ class DashboardConfigTools:
         include_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
     ) -> dict[str, Any]:
-        """``list_only=True`` mode: list all storage-mode dashboards."""
+        """``list_only=True`` mode: list every dashboard's metadata row.
+
+        Storage and YAML dashboards alike (metadata only — no bodies — so a
+        YAML dashboard's resolved ``!secret`` never surfaces here), matching the
+        legacy ``lovelace/dashboards/list`` row set.
+        """
         dashboards = await fetch_dashboards_list(self._client) or []
         list_result: dict[str, Any] = {
             "success": True,
@@ -2101,16 +2113,23 @@ class DashboardConfigTools:
     async def _collect_legacy_search_docs(self) -> list[dict[str, Any]]:
         """Storage-dashboard ``{url_path, title, config}`` docs for the legacy walk.
 
-        One ``lovelace/config`` read per storage dashboard from
-        ``fetch_dashboards_list``. A per-dashboard read failure is skipped
-        (fail-soft, mirroring the component's per-dashboard skip) so one broken
-        dashboard doesn't fail the whole search.
+        One ``lovelace/config`` read per STORAGE dashboard from
+        ``fetch_dashboards_list``. YAML dashboards (``mode == "yaml"``) are
+        skipped WITHOUT reading their config — the same exclusion the component's
+        in-process walk applies — because HA resolves ``!secret`` when it loads a
+        YAML Lovelace config, so fetching one here could leak resolved secrets into
+        a match. A per-dashboard read failure is skipped (fail-soft, mirroring the
+        component's per-dashboard skip) so one broken dashboard doesn't fail the
+        whole search.
         """
         rows = await fetch_dashboards_list(self._client) or []
         docs: list[dict[str, Any]] = []
         for row in rows:
             url_path = row.get("url_path")
             if not url_path:
+                continue
+            if row.get("mode") == _DASHBOARD_YAML_MODE:
+                # YAML bodies are never searched (resolved-!secret leak risk).
                 continue
             config = await self._fetch_dashboard_config_fail_soft(url_path)
             if config is None:

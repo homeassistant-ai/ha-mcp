@@ -7,10 +7,11 @@ mocked WS transport, then the REAL dashboard tools consume the result — so a
 vocabulary/shape drift on either side of the seam fails here rather than shipping
 a mis-shaped response.
 
-Covered seams: ``list`` parity (component storage-only rows == the legacy
-``lovelace/dashboards/list`` shape), ``get`` parity (storage body + the default
-dashboard via ``url_path=None``), a YAML dashboard's per-call fall back to the
-legacy read, cross-dashboard ``search`` parity (the component's in-process walk
+Covered seams: ``list`` parity (component rows == the legacy
+``lovelace/dashboards/list`` shape, YAML metadata rows KEPT on both paths),
+``get`` parity (storage body + the default dashboard via ``url_path=None``), a
+YAML dashboard's per-call fall back to the legacy read (its body is never served
+in-process), cross-dashboard ``search`` parity (the component's in-process walk
 vs the server-side legacy walk over identical fixture configs), the set tool's
 existence check, and the auto-backup capture read.
 """
@@ -54,6 +55,21 @@ _HOME_ROW = {
     "show_in_sidebar": True,
     "require_admin": False,
     "mode": "storage",
+}
+
+# A YAML dashboard's metadata row. The component ``list`` keeps it (listing
+# metadata is safe — only the BODY carries resolved ``!secret``), and the legacy
+# ``lovelace/dashboards/list`` includes YAML rows too, so the two paths' row sets
+# stay identical. The matching component-side FakeDashboard config below produces
+# exactly this row.
+_YAML_ROW = {
+    "id": "id-yaml",
+    "url_path": "yaml-dash",
+    "title": "YAML",
+    "icon": "mdi:file",
+    "show_in_sidebar": True,
+    "require_admin": False,
+    "mode": "yaml",
 }
 
 _HOME_BODY = {
@@ -123,13 +139,28 @@ def _clear_caps_cache() -> Any:
 
 # --- list parity --------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_list_parity_storage_only() -> None:
-    """Component list (storage rows only, YAML filtered) == the legacy list shape."""
+async def test_list_parity_includes_yaml() -> None:
+    """A YAML dashboard appears in list output IDENTICALLY on both paths.
+
+    Listing metadata is safe (only a dashboard's BODY carries resolved
+    ``!secret``), and the legacy ``lovelace/dashboards/list`` returns YAML rows,
+    so the component ``list`` keeps them too — a YAML dashboard must not vanish
+    from ``list_only`` output just because the component is installed.
+    """
     hass = _component_hass(
         {
             "home": _storage_dash("home", "Home"),
             "yaml-dash": FakeDashboard(
-                "yaml-dash", "yaml", config={"url_path": "yaml-dash", "title": "Y"}
+                "yaml-dash",
+                "yaml",
+                config={
+                    "id": "id-yaml",
+                    "url_path": "yaml-dash",
+                    "title": "YAML",
+                    "icon": "mdi:file",
+                    "show_in_sidebar": True,
+                    "require_admin": False,
+                },
             ),
         }
     )
@@ -138,14 +169,20 @@ async def test_list_parity_storage_only() -> None:
     with patch_ws(ws, tools_config_dashboards):
         comp_resp = await _build_get_dashboard(comp_client)(list_only=True)
 
-    # Legacy path: the component is absent, so the storage-only legacy list runs.
+    # Legacy path: the component is absent; the legacy list also carries the YAML
+    # row (real HA returns it), so the two paths' row sets stay identical.
     legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    legacy_client = RoutingClient(dashboards_list=[_HOME_ROW])
+    legacy_client = RoutingClient(dashboards_list=[_HOME_ROW, _YAML_ROW])
     with patch_ws(legacy_ws, tools_config_dashboards):
         legacy_resp = await _build_get_dashboard(legacy_client)(list_only=True)
 
-    assert comp_resp["dashboards"] == [_HOME_ROW]
+    assert comp_resp["dashboards"] == [_HOME_ROW, _YAML_ROW]
     assert comp_resp["dashboards"] == legacy_resp["dashboards"]
+    # The YAML dashboard is present (as a metadata row) on BOTH paths.
+    assert any(
+        r["url_path"] == "yaml-dash" and r["mode"] == "yaml"
+        for r in comp_resp["dashboards"]
+    )
     assert comp_client.list_calls == 0  # served in-process
     assert legacy_client.list_calls == 1
 
@@ -439,7 +476,16 @@ async def test_set_existence_check_via_real_component() -> None:
         {
             "home": _storage_dash("home", "Home"),
             "yaml-dash": FakeDashboard(
-                "yaml-dash", "yaml", config={"url_path": "yaml-dash"}
+                "yaml-dash",
+                "yaml",
+                config={
+                    "id": "id-yaml",
+                    "url_path": "yaml-dash",
+                    "title": "YAML",
+                    "icon": "mdi:file",
+                    "show_in_sidebar": True,
+                    "require_admin": False,
+                },
             ),
         }
     )
@@ -451,7 +497,8 @@ async def test_set_existence_check_via_real_component() -> None:
         builtin, _ = await tools._lookup_existing_dashboards("lovelace", None)
 
     assert exists_home is True
-    assert rows == [_HOME_ROW]  # YAML filtered before the existence scan
+    # YAML rows are kept in the list (metadata), matching the legacy row set.
+    assert rows == [_HOME_ROW, _YAML_ROW]
     assert missing is False
     assert builtin is True  # the built-in default is special-cased
 

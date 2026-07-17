@@ -10,7 +10,11 @@ subentries WS call. These tests pin that: the component-served single lookup and
 list send ZERO ``start_options_flow`` calls (the key no-dance assertion), schema
 requests still open the legacy live flow while KEEPING the component's options,
 and every backend degradation (no caps, ``unknown_command`` → invalidate + fall
-back, a command error, a connection error) behaves per the routing taxonomy.
+back, a command error) behaves per the routing taxonomy. A connection error is a
+deliberate DEVIATION: this tool's legacy path is pure REST, not the shared pooled
+WS, so a WS-down error ALSO falls back (returns None → legacy REST get) rather
+than propagating. An empty-string ``entry_id`` is a single-entry lookup for a
+nonexistent id (not-found, never the first entry).
 """
 
 from __future__ import annotations
@@ -524,15 +528,72 @@ async def test_fetch_malformed_shape_falls_back() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_connection_error_propagates() -> None:
-    """A WS-down ConnectionError on the command is NOT swallowed into a silent
-    fallback — it propagates (the legacy path shares the socket and would fail
-    identically)."""
+async def test_fetch_connection_error_falls_back_to_none() -> None:
+    """A WS-down ConnectionError on the command returns None → legacy REST.
+
+    DEVIATION from the uniform taxonomy: this tool's legacy path is a pure REST
+    read (not the shared pooled WS), so ``_fetch_entries_via_component`` catches
+    ``HomeAssistantConnectionError`` and returns ``None`` instead of propagating,
+    keeping the (still-advertised) capability cached.
+    """
     ws = make_ws(
         WS_CONFIG_ENTRIES,
         info_result=_CAPS_CONFIG_ENTRIES,
         cmd_exc=HomeAssistantConnectionError("ws down"),
     )
     client = RoutingClient()
-    with patch_ws(ws, tools_integrations), pytest.raises(HomeAssistantConnectionError):
-        await _fetch_entries_via_component(client)
+    with patch_ws(ws, tools_integrations):
+        assert await _fetch_entries_via_component(client) is None
+    # A transient connection error is not a downgrade — caps stay cached.
+    assert client in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_single_entry_connection_error_falls_back_to_rest() -> None:
+    """End-to-end: a WS-down component read falls back to the legacy REST get.
+
+    The component ``config_entries`` frame raises ``HomeAssistantConnectionError``
+    mid-call, but the legacy REST ``get_config_entry`` still serves the entry, so
+    the tool returns a result instead of erroring out.
+    """
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_exc=HomeAssistantConnectionError("ws down"),
+    )
+    client = RoutingClient(single_entry=_rest_entry("cfg1", supports_options=False))
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, tools_integrations):
+        resp = await get_integration(entry_id="cfg1")
+
+    assert resp["entry"]["entry_id"] == "cfg1"
+    # The REST get served the fallback; the component frame was attempted once.
+    assert client.get_config_entry_calls == 1
+    assert len(_ce_calls(ws)) == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_entry_id_is_not_found_never_first_entry() -> None:
+    """An empty-string ``entry_id`` routes as a single-entry (nonexistent) lookup.
+
+    The server forwards ``entry_id=""`` to the component as a single-entry frame
+    (kwargs ``{"entry_id": ""}``), and an empty ``entries`` reply is authoritative
+    not-found — the tool must raise, never fall through to list mode and return
+    the first entry.
+    """
+    ws = make_ws(
+        WS_CONFIG_ENTRIES,
+        info_result=_CAPS_CONFIG_ENTRIES,
+        cmd_result={"entries": []},  # component: async_get_entry("") missed
+    )
+    client = RoutingClient()
+    get_integration = _build_get_integration(client)
+
+    with patch_ws(ws, tools_integrations), pytest.raises(ToolError):
+        await get_integration(entry_id="")
+
+    # Routed as a single-entry lookup for the empty id, not list mode.
+    assert len(_ce_calls(ws)) == 1
+    assert _ce_calls(ws)[0].kwargs == {"entry_id": ""}
+    assert client.get_config_entry_calls == 0

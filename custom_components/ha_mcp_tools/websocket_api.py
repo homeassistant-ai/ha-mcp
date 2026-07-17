@@ -2932,8 +2932,13 @@ def _do_config_entries(
     error_reason_translation_key, error_reason_translation_placeholders,
     num_subentries, options, subentries}]}``. Filtered by ``domain`` when
     given, or the single entry by ``entry_id``
-    (``hass.config_entries.async_get_entry`` — absent id yields an empty
-    list). ``state`` is serialized as ``ConfigEntryState.value`` (mirroring
+    (``hass.config_entries.async_get_entry`` — an id that matches nothing,
+    including an empty string, yields an empty list). Only a WHOLLY ABSENT
+    ``entry_id`` key (``None``) selects list mode; an empty-string ``entry_id`` is
+    a single-entry lookup for a nonexistent id, so it returns ``entries: []``
+    (mirroring ``async_get_entry("")``) rather than falling through to list mode
+    and returning the first entry. ``state`` is serialized as
+    ``ConfigEntryState.value`` (mirroring
     how core's ``config_entries/get`` emits it via ``as_json_fragment``, whose
     ``json_repr`` in ``homeassistant/config_entries.py`` is this row's source
     of truth for every field above except ``options``/``subentries``, which
@@ -2954,7 +2959,10 @@ def _do_config_entries(
     """
     entry_id = params.get("entry_id")
     domain = params.get("domain")
-    if entry_id:
+    if entry_id is not None:
+        # Single-entry mode. An empty string is a valid (nonexistent) id — it
+        # must NOT fall through to list mode, where a truthiness check would
+        # return the first entry for a bogus id.
         entry = _config_entry_by_id(hass, entry_id)
         entries: list[Any] = [entry] if entry is not None else []
     else:

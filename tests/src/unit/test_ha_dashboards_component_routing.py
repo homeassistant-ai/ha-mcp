@@ -6,11 +6,11 @@ existence-checks funnel through) prefer a single in-process
 ``ha_mcp_tools/dashboards`` frame when the component advertises the
 ``dashboards`` capability, and otherwise fall back to the legacy
 ``lovelace/dashboards/list`` / ``lovelace/config`` WS reads. These tests pin the
-component-served shapes (list filtered to storage-only, get body, search
-matches), the per-call YAML fallback (a ``yaml_excluded`` get drops to legacy),
-and the error-taxonomy fallbacks — capability miss, ``unknown_command``
-(invalidate caps + legacy), a command error/timeout, and a propagating
-connection error.
+component-served shapes (list keeps YAML metadata rows — matching legacy —, get
+body, search matches), the per-call YAML fallback (a ``yaml_excluded`` get drops
+to legacy), the legacy search walk never reading a YAML dashboard's body, and the
+error-taxonomy fallbacks — capability miss, ``unknown_command`` (invalidate caps +
+legacy), a command error/timeout, and a propagating connection error.
 """
 
 from __future__ import annotations
@@ -150,8 +150,13 @@ def _dash_calls(ws: Any) -> list[Any]:
 
 # --- list ---------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_list_served_via_component_filters_yaml() -> None:
-    """list_only served from the component ``list`` frame, YAML rows filtered."""
+async def test_list_served_via_component_keeps_yaml() -> None:
+    """list_only served from the component ``list`` frame keeps YAML metadata rows.
+
+    Listing metadata is safe (only bodies carry resolved ``!secret``), and the
+    legacy ``lovelace/dashboards/list`` includes YAML rows too — dropping them
+    here diverged the two paths.
+    """
     ws = make_ws(
         "ha_mcp_tools/dashboards",
         info_result=_CAPS_DASHBOARDS,
@@ -167,8 +172,8 @@ async def test_list_served_via_component_filters_yaml() -> None:
     with patch_ws(ws, tools_config_dashboards):
         resp = await get_dashboard(list_only=True)
 
-    assert resp["dashboards"] == [_STORAGE_ROW]
-    assert resp["count"] == 1
+    assert resp["dashboards"] == [_STORAGE_ROW, _YAML_ROW]
+    assert resp["count"] == 2
     assert client.list_calls == 0
     assert _dash_calls(ws)[0].kwargs == {"mode": "list"}
 
@@ -401,6 +406,33 @@ async def test_search_capability_miss_uses_legacy_walk() -> None:
 
 
 @pytest.mark.asyncio
+async def test_legacy_search_walk_skips_yaml_body() -> None:
+    """The component-less search walk never reads a YAML dashboard's config body.
+
+    HA resolves ``!secret`` when it loads a YAML Lovelace config, so fetching one
+    for the walk could surface resolved secrets in a match. The walk must skip any
+    row tagged ``mode == "yaml"`` WITHOUT a ``lovelace/config`` read (the same
+    exclusion the component applies in-process).
+    """
+    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    client = RoutingClient(
+        dashboards_list=[_STORAGE_ROW, _YAML_ROW],
+        configs={"home": _HOME_BODY},  # deliberately no body for the YAML dash
+    )
+    get_dashboard = _build_get_dashboard(client)
+
+    with patch_ws(ws, tools_config_dashboards):
+        resp = await get_dashboard(mode="search", query="light.kitchen")
+
+    assert resp["action"] == "search_all"
+    assert resp["match_count"] == 1
+    assert resp["matches"][0]["url_path"] == "home"
+    # Only the storage dashboard's body was read; the YAML row was skipped.
+    assert client.config_calls == ["home"]
+    assert "yaml-dash" not in client.config_calls
+
+
+@pytest.mark.asyncio
 async def test_search_requires_query() -> None:
     """mode='search' with no query is a structured validation error (no WS)."""
     from fastmcp.exceptions import ToolError
@@ -458,7 +490,8 @@ async def test_existence_check_uses_component_list() -> None:
         builtin, _ = await tools._lookup_existing_dashboards("lovelace", None)
 
     assert exists_home is True
-    assert rows == [_STORAGE_ROW]  # YAML filtered before the existence scan
+    # YAML rows are kept in the list (metadata), matching the legacy row set.
+    assert rows == [_STORAGE_ROW, _YAML_ROW]
     assert missing is False
     assert builtin is True
     assert client.list_calls == 0
