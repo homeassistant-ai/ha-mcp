@@ -178,16 +178,18 @@ async def test_component_path_matches_legacy_no_filter(
 async def test_query_that_would_coarse_drop_a_domain_still_parities(
     _fake_descriptions_and_translations: None,
 ) -> None:
-    """A query matching only a field-level translation under "cover" would make
-    the component's OWN coarse filter drop "cover" entirely if ``query`` were
-    forwarded to it (its per-domain scan reads every translation value,
-    including field-level ones the exact filter never inspects) — which would
-    silently narrow ``domains`` versus legacy. Since the consumer never
-    forwards ``query`` to the component, the full (domain-scoped-only) catalog
-    reaches ``_process_services`` either way, so ``domains`` — and every other
-    key — stays byte-identical to the legacy fetch: both trim "cover"'s
-    services to zero (its own name/description/top-level translation never
-    mentions "warm") while still listing it in ``domains``.
+    """"warm" here matches only a field-level translation under "cover". If
+    ``query`` were forwarded to the component, its coarse per-domain scan
+    (which reads every translation value, field-level included) would KEEP
+    "cover" — but drop "light" entirely (zero matches anywhere in it), while
+    legacy's ``domains`` key lists every domain passing ``domain_filter``
+    regardless of query. Forwarding would therefore silently narrow
+    ``domains`` versus legacy. Since the consumer never forwards ``query``,
+    the full (domain-scoped-only) catalog reaches ``_process_services`` either
+    way, so ``domains`` — and every other key — stays byte-identical to the
+    legacy fetch: both trim "cover"'s services to zero (its name/description/
+    top-level translation never mention "warm") while still listing both
+    "light" and "cover" in ``domains``.
     """
     ws = _real_services_list_ws(FakeHass())
     component_client = RoutingClient()
