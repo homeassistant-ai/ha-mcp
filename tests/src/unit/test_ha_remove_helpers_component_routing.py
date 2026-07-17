@@ -113,6 +113,19 @@ class RoutingClient:
         raise AssertionError(f"unexpected ws message {msg_type!r}")
 
 
+class DeleteFailsRoutingClient(RoutingClient):
+    """Like ``RoutingClient``, but every ``*/delete`` fails — drives the
+    exhausted-fallback branch (direct-id delete also fails, entity still
+    present in state) instead of the happy-path direct-id success."""
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        msg_type = msg.get("type")
+        if isinstance(msg_type, str) and msg_type.endswith("/delete"):
+            self.delete_calls.append(msg)
+            return {"success": False, "error": "not found"}
+        return await super().send_websocket_message(msg)
+
+
 @pytest.fixture(autouse=True)
 def _clear_caps_cache() -> Any:
     component_api._CAPS_CACHE.clear()
@@ -286,6 +299,51 @@ async def test_simple_delete_connection_error_propagates() -> None:
     err = json.loads(str(excinfo.value))
     assert err["error"]["code"] == "CONNECTION_FAILED"
     assert err["error"]["code"] != "ENTITY_NOT_FOUND"
+
+
+@pytest.mark.parametrize("falsy_unique_id", ["", None])
+@pytest.mark.asyncio
+async def test_simple_delete_falsy_unique_id_degrades_like_missing(
+    falsy_unique_id: str | None,
+) -> None:
+    """A component-served row where the entity IS registered but ``unique_id``
+    is falsy (empty string or None) must degrade EXACTLY like the missing-entity
+    case: no usable id is resolved, so the direct-id fallback runs, and when
+    that also fails with the entity still present in state, the SAME
+    ENTITY_NOT_FOUND classification as the legacy exhausted-fallback path
+    (test_simple_path_all_fallbacks_exhausted) is raised — with path-accurate
+    wording naming the component lookup rather than "3 attempts"."""
+    row = {
+        "entity_id": "input_button.my_button",
+        "unique_id": falsy_unique_id,
+        "config_entry_id": None,
+    }
+    ws = make_ws(
+        "ha_mcp_tools/registry_lookup",
+        info_result=_CAPS_REGISTRY,
+        cmd_result={"entities": [row], "missing": []},
+    )
+    client = DeleteFailsRoutingClient()
+    tools = IntegrationTools(client)
+
+    with patch_ws(ws, component_registry), pytest.raises(ToolError) as excinfo:
+        await tools.ha_remove_helpers_integrations(
+            target="my_button",
+            helper_type="input_button",
+            confirm=True,
+            wait=False,
+        )
+
+    err = json.loads(str(excinfo.value))
+    assert err["error"]["code"] == "ENTITY_NOT_FOUND"
+    message = err["error"]["message"]
+    assert "Component registry lookup" in message
+    # The direct-id fallback ran (using the bare id, no unique_id resolved).
+    assert client.delete_calls[0]["input_button_id"] == "my_button"
+    # Path-accurate: never claims a 3-attempt retry loop that never ran.
+    assert "3 attempts" not in message
+    # The component row served the resolve; no legacy per-id get ran.
+    assert client.entity_get_calls == 0
 
 
 # --- FLOW-helper delete: registry_lookup(config_entry_id=...) sub-entities -------

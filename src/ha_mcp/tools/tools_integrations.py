@@ -2540,13 +2540,23 @@ class IntegrationTools:
                     if registry_result
                     else "No registry response"
                 )
+                # The component path resolves via ONE authoritative in-process
+                # lookup (no retry loop), so the detail text must not claim
+                # "3 attempts" there. The legacy branch's wording is unchanged.
+                if component is not None:
+                    not_found_detail = (
+                        f"Component registry lookup found no unique_id for "
+                        f"{entity_id}: {err_detail}"
+                    )
+                else:
+                    not_found_detail = (
+                        f"Helper not found in entity registry after "
+                        f"{max_retries} attempts: {err_detail}"
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.ENTITY_NOT_FOUND,
-                        (
-                            f"Helper not found in entity registry after "
-                            f"{max_retries} attempts: {err_detail}"
-                        ),
+                        not_found_detail,
                         suggestions=[
                             "Helper may not be properly registered or was "
                             "already deleted. Use ha_search() to "
