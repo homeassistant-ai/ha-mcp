@@ -5,10 +5,11 @@ Mirrors the established component-test pattern (``test_caller_token_auth.py`` /
 stubbed with ``MagicMock`` and the pure ``_do_*`` functions are exercised with
 fake hass / registry objects injected through the ``_resolve_registries`` seam.
 
-Covers all five v1.1.0 commands (info / search / config_get / overview /
-helpers_list). Highlights:
+Covers the v1.1.1 command surface (info / search / overview / helpers_list /
+states / blueprint_get / device_get / device_list / entity_enrich / exposure;
+config_get was withdrawn pre-release). Highlights:
 * ``_do_info`` handshake shape + manifest/const version parity (drift guard);
-  ``info`` advertising all four capabilities.
+  ``info`` advertising every shipped capability.
 * search: entity joins (name / alias / area / floor / label / domain / device);
   YAML config body indexed but NEVER emitted; storage body only under
   ``include_config``; flow-helper ``options`` indexed while ``entry.data`` never
@@ -72,20 +73,48 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # Fakes
 # =============================================================================
 class FakeState:
-    def __init__(self, entity_id, state="on", friendly_name=None, **attrs):
+    def __init__(
+        self,
+        entity_id,
+        state="on",
+        friendly_name=None,
+        last_changed="2026-07-16T00:00:00+00:00",
+        last_updated="2026-07-16T00:00:00+00:00",
+        **attrs,
+    ):
         self.entity_id = entity_id
         self.state = state
         self.attributes = dict(attrs)
         if friendly_name is not None:
             self.attributes["friendly_name"] = friendly_name
+        self.last_changed = last_changed
+        self.last_updated = last_updated
+
+    def as_dict(self):
+        # Mirrors core ``State.as_dict()`` / the REST ``/api/states/<id>`` shape.
+        # Timestamps are already ISO strings here — the real WS transport encodes
+        # core's datetimes to the same isoformat, so the server sees plain JSON
+        # either way (see websocket_api._do_states byte-parity note).
+        return {
+            "entity_id": self.entity_id,
+            "state": self.state,
+            "attributes": dict(self.attributes),
+            "last_changed": self.last_changed,
+            "last_updated": self.last_updated,
+            "context": {"id": "01ABC", "parent_id": None, "user_id": None},
+        }
 
 
 class FakeStates:
     def __init__(self, states):
         self._states = list(states)
+        self._by_id = {getattr(s, "entity_id", None): s for s in self._states}
 
     def async_all(self):
         return list(self._states)
+
+    def get(self, entity_id):
+        return self._by_id.get(entity_id)
 
 
 class FakeConfigEntries:
@@ -158,6 +187,36 @@ class FakeRegEntry:
         self.platform = platform
         self.disabled_by = disabled_by
 
+    @property
+    def as_partial_dict(self):
+        # Mirrors core ``RegistryEntry.as_partial_dict`` (one
+        # ``config/entity_registry/list`` element): the shape device_get's
+        # include_entities join returns VERBATIM. Sets rendered to lists as core
+        # does; timestamps fixed floats (value irrelevant to the consumers).
+        return {
+            "area_id": self.area_id,
+            "categories": dict(self.categories),
+            "config_entry_id": self.config_entry_id,
+            "config_subentry_id": None,
+            "created_at": 0.0,
+            "device_id": self.device_id,
+            "disabled_by": self.disabled_by,
+            "entity_category": self.entity_category,
+            "entity_id": self.entity_id,
+            "has_entity_name": False,
+            "hidden_by": self.hidden_by,
+            "icon": None,
+            "id": self.unique_id,
+            "labels": sorted(self.labels),
+            "modified_at": 0.0,
+            "name": self.name,
+            "options": {},
+            "original_name": self.original_name,
+            "platform": self.platform,
+            "translation_key": None,
+            "unique_id": self.unique_id,
+        }
+
 
 class FakeEntityReg:
     def __init__(self, entries):
@@ -168,6 +227,27 @@ class FakeEntityReg:
 
     def async_get(self, entity_id):
         return self._entries.get(entity_id)
+
+
+class FakeErModule:
+    """Faithful stand-in for the ``entity_registry`` module's device index.
+
+    ``_do_device_get(include_entities)`` calls ``er.async_entries_for_device``;
+    the real ``er`` is MagicMock-stubbed at import, so tests monkeypatch
+    ``wsapi.er`` with this. Mirrors core's filter — disabled entities are excluded
+    unless ``include_disabled_entities`` (the component passes True, matching
+    ``config/entity_registry/list``)."""
+
+    @staticmethod
+    def async_entries_for_device(registry, device_id, include_disabled_entities=False):
+        out = []
+        for entry in registry.entities.values():
+            if getattr(entry, "device_id", None) != device_id:
+                continue
+            if not include_disabled_entities and getattr(entry, "disabled_by", None):
+                continue
+            out.append(entry)
+        return out
 
 
 class FakeArea:
@@ -226,6 +306,18 @@ class FakeDevice:
         labels=(),
         manufacturer=None,
         model=None,
+        identifiers=(),
+        connections=(),
+        config_entries=(),
+        disabled_by=None,
+        sw_version=None,
+        hw_version=None,
+        serial_number=None,
+        via_device_id=None,
+        model_id=None,
+        configuration_url=None,
+        entry_type=None,
+        primary_config_entry=None,
     ):
         self.id = device_id
         self.name = name
@@ -234,6 +326,51 @@ class FakeDevice:
         self.labels = set(labels)
         self.manufacturer = manufacturer
         self.model = model
+        # DeviceEntry stores identifiers/connections/config_entries as sets of
+        # tuples/strings; the caller passes tuples so they stay hashable.
+        self.identifiers = set(identifiers)
+        self.connections = set(connections)
+        self.config_entries = set(config_entries)
+        self.disabled_by = disabled_by
+        self.sw_version = sw_version
+        self.hw_version = hw_version
+        self.serial_number = serial_number
+        self.via_device_id = via_device_id
+        self.model_id = model_id
+        self.configuration_url = configuration_url
+        self.entry_type = entry_type
+        self.primary_config_entry = primary_config_entry
+
+    @property
+    def dict_repr(self):
+        # Mirrors core ``DeviceEntry.dict_repr`` (one ``config/device_registry/
+        # list`` element): the key set + order the device_get/device_list commands
+        # return VERBATIM. Sets are rendered to lists here as core does; timestamps
+        # are fixed floats (their exact value is irrelevant to the consumers).
+        return {
+            "area_id": self.area_id,
+            "configuration_url": self.configuration_url,
+            "config_entries": list(self.config_entries),
+            "config_entries_subentries": {},
+            "connections": list(self.connections),
+            "created_at": 0.0,
+            "disabled_by": self.disabled_by,
+            "entry_type": self.entry_type,
+            "hw_version": self.hw_version,
+            "id": self.id,
+            "identifiers": list(self.identifiers),
+            "labels": list(self.labels),
+            "manufacturer": self.manufacturer,
+            "model": self.model,
+            "model_id": self.model_id,
+            "modified_at": 0.0,
+            "name_by_user": self.name_by_user,
+            "name": self.name,
+            "primary_config_entry": self.primary_config_entry,
+            "serial_number": self.serial_number,
+            "sw_version": self.sw_version,
+            "via_device_id": self.via_device_id,
+        }
 
 
 class FakeDeviceReg:
@@ -389,6 +526,12 @@ class TestInfo:
             "search",
             "overview",
             "helpers_list",
+            "states",
+            "blueprint_get",
+            "device_get",
+            "device_list",
+            "entity_enrich",
+            "exposure",
         ]
         # config_get was withdrawn before release (raw_config freshness lags the
         # config file between write and reload) — it must not be advertised.
@@ -402,7 +545,7 @@ class TestInfo:
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "1.1.0"
+        assert manifest["version"] == COMPONENT_VERSION == "1.1.1"
 
 
 # =============================================================================
@@ -1410,13 +1553,26 @@ _ALL_COMMANDS = [
     "ha_mcp_tools/search",
     "ha_mcp_tools/overview",
     "ha_mcp_tools/helpers_list",
+    "ha_mcp_tools/states",
+    "ha_mcp_tools/blueprint_get",
+    "ha_mcp_tools/device_get",
+    "ha_mcp_tools/device_list",
+    "ha_mcp_tools/entity_enrich",
+    "ha_mcp_tools/exposure",
 ]
 
 # Minimal well-formed message body per command (Required fields) so the admin
-# gate / async_response wrappers reach the pure handler. Empty now that
-# config_get (which required domain + item_id) is withdrawn — every remaining
-# command has no Required field beyond ``type``.
-_CMD_MSG_EXTRA: dict[str, dict[str, object]] = {}
+# gate / async_response wrappers reach the pure handler. ``states`` requires
+# ``entity_ids``; ``blueprint_get`` requires ``domain`` + ``path``; ``device_get``
+# requires ``device_id``.
+_CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
+    "ha_mcp_tools/states": {"entity_ids": []},
+    "ha_mcp_tools/blueprint_get": {"domain": "automation", "path": "x.yaml"},
+    "ha_mcp_tools/device_get": {"device_id": "d1"},
+    "ha_mcp_tools/entity_enrich": {"entity_ids": []},
+    # exposure: no entity_id (list mode) — the registries resolve empty here so
+    # no per-entity settings lookup runs, keeping the admin-gate probe pure.
+}
 
 
 class TestRegistrationAndAdminGate:
@@ -1426,6 +1582,12 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_SEARCH,
             wsapi.WS_OVERVIEW,
             wsapi.WS_HELPERS_LIST,
+            wsapi.WS_STATES,
+            wsapi.WS_BLUEPRINT_GET,
+            wsapi.WS_DEVICE_GET,
+            wsapi.WS_DEVICE_LIST,
+            wsapi.WS_ENTITY_ENRICH,
+            wsapi.WS_EXPOSURE,
         }
         # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
@@ -1518,6 +1680,275 @@ class TestNewCommandSchemas:
         schema = self._schema(monkeypatch, wsapi._helpers_list_schema)
         with pytest.raises(_REAL_VOL.Invalid):
             schema(bad)
+
+    def test_states_requires_entity_ids_list(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._states_schema)
+        out = schema({"type": wsapi.WS_STATES, "entity_ids": ["light.a", "light.b"]})
+        assert out["entity_ids"] == ["light.a", "light.b"]
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/states"},  # entity_ids required
+            {"type": "ha_mcp_tools/states", "entity_ids": "light.a"},  # not a list
+            {"type": "ha_mcp_tools/states", "entity_ids": [1, 2]},  # not strings
+        ],
+    )
+    def test_states_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._states_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
+
+    def test_blueprint_get_valid(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._blueprint_get_schema)
+        out = schema(
+            {
+                "type": wsapi.WS_BLUEPRINT_GET,
+                "domain": "script",
+                "path": "user/x.yaml",
+            }
+        )
+        assert out["domain"] == "script"
+        assert out["path"] == "user/x.yaml"
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/blueprint_get", "path": "x.yaml"},  # domain required
+            {"type": "ha_mcp_tools/blueprint_get", "domain": "automation"},  # path req
+            # domain must be one of the blueprint domains
+            {"type": "ha_mcp_tools/blueprint_get", "domain": "scene", "path": "x.yaml"},
+        ],
+    )
+    def test_blueprint_get_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._blueprint_get_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
+
+    def test_device_get_requires_device_id(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._device_get_schema)
+        out = schema({"type": wsapi.WS_DEVICE_GET, "device_id": "d1"})
+        assert out["device_id"] == "d1"
+        # include_entities defaults False (device-only reads stay minimal).
+        assert out["include_entities"] is False
+
+    def test_device_get_accepts_include_entities(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._device_get_schema)
+        out = schema(
+            {"type": wsapi.WS_DEVICE_GET, "device_id": "d1", "include_entities": True}
+        )
+        assert out["include_entities"] is True
+
+    def test_device_get_include_entities_must_be_bool(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._device_get_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(
+                {
+                    "type": wsapi.WS_DEVICE_GET,
+                    "device_id": "d1",
+                    "include_entities": "yes",
+                }
+            )
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"type": "ha_mcp_tools/device_get"},  # device_id required
+            {"type": "ha_mcp_tools/device_get", "device_id": 5},  # not a string
+        ],
+    )
+    def test_device_get_malformed_rejected(self, monkeypatch, bad):
+        schema = self._schema(monkeypatch, wsapi._device_get_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(bad)
+
+    def test_device_list_valid(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._device_list_schema)
+        out = schema({"type": wsapi.WS_DEVICE_LIST})
+        assert out["type"] == wsapi.WS_DEVICE_LIST
+
+    def test_device_list_rejects_extra_keys(self, monkeypatch):
+        schema = self._schema(monkeypatch, wsapi._device_list_schema)
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema({"type": wsapi.WS_DEVICE_LIST, "area_id": "x"})
+
+
+# =============================================================================
+# states — bulk State.as_dict() read + missing list
+# =============================================================================
+class TestStates:
+    def test_found_and_missing_split(self):
+        hass = FakeHass(
+            states=[
+                FakeState("light.a", "on", friendly_name="A"),
+                FakeState("sensor.b", "21", friendly_name="B"),
+            ]
+        )
+        res = wsapi._do_states(
+            hass, {"entity_ids": ["light.a", "sensor.b", "light.ghost"]}
+        )
+        assert set(res["states"]) == {"light.a", "sensor.b"}
+        assert res["missing"] == ["light.ghost"]
+
+    def test_body_is_state_as_dict_verbatim(self):
+        """The per-id body is core ``State.as_dict()`` unmodified (REST parity)."""
+        state = FakeState("light.a", "on", friendly_name="A", brightness=128)
+        res = wsapi._do_states(FakeHass(states=[state]), {"entity_ids": ["light.a"]})
+        assert res["states"]["light.a"] == state.as_dict()
+        # Timestamps pass through untouched (no _plainify str() mangling).
+        assert res["states"]["light.a"]["last_changed"] == "2026-07-16T00:00:00+00:00"
+
+    def test_empty_request(self):
+        res = wsapi._do_states(FakeHass(states=[FakeState("light.a")]), {})
+        assert res == {"states": {}, "missing": []}
+
+    def test_all_missing_when_no_state_machine(self):
+        # A hass with no usable states.get degrades every id to missing, never raises.
+        res = wsapi._do_states(FakeHass(states=[]), {"entity_ids": ["light.a"]})
+        assert res == {"states": {}, "missing": ["light.a"]}
+
+    def test_duplicate_ids_map_once(self):
+        res = wsapi._do_states(
+            FakeHass(states=[FakeState("light.a")]),
+            {"entity_ids": ["light.a", "light.a"]},
+        )
+        assert list(res["states"]) == ["light.a"]
+        assert res["missing"] == []
+
+    def test_unserializable_state_goes_to_missing(self):
+        """A live state whose ``as_dict()`` returns None (core drift) is routed to
+        ``missing`` rather than emitting a null state indistinguishable from a real
+        value (issue #1813 F5)."""
+
+        class _NullState:
+            entity_id = "sensor.x"
+
+            def as_dict(self):
+                return None
+
+        res = wsapi._do_states(
+            FakeHass(states=[_NullState()]), {"entity_ids": ["sensor.x"]}
+        )
+        assert res == {"states": {}, "missing": ["sensor.x"]}
+
+
+# =============================================================================
+# blueprint_get — jailed file read, !input preserved, !secret neutralized
+# =============================================================================
+class TestBlueprintGet:
+    _MOTION_LIGHT = (
+        "blueprint:\n"
+        "  name: Motion Light\n"
+        "  description: Turn on a light on motion.\n"
+        "  domain: automation\n"
+        "  input:\n"
+        "    motion_sensor:\n"
+        "      name: Motion Sensor\n"
+        "      selector:\n"
+        "        entity:\n"
+        "          domain: binary_sensor\n"
+        "trigger:\n"
+        "  - platform: state\n"
+        "    entity_id: !input motion_sensor\n"
+        "    to: 'on'\n"
+        "action:\n"
+        "  - service: light.turn_on\n"
+        "    entity_id: !input target_light\n"
+    )
+
+    def _write_blueprint(self, tmp_path, domain, rel_path, text):
+        target = tmp_path / "blueprints" / domain / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        return target
+
+    def _hass(self, tmp_path):
+        return FakeHass(config=FakeConfig(base_dir=tmp_path))
+
+    def test_reads_full_body_metadata_and_config(self, tmp_path):
+        self._write_blueprint(
+            tmp_path, "automation", "user/motion.yaml", self._MOTION_LIGHT
+        )
+        body = wsapi._read_blueprint_file(
+            self._hass(tmp_path), "automation", "user/motion.yaml"
+        )
+        res = wsapi._do_blueprint_get(
+            self._hass(tmp_path), {"domain": "automation"}, body=body
+        )
+        assert res["metadata"]["name"] == "Motion Light"
+        assert res["config"]["blueprint"]["domain"] == "automation"
+        # The body (triggers/actions) core's blueprint/list never returns.
+        assert res["config"]["trigger"][0]["platform"] == "state"
+        assert res["config"]["action"][0]["service"] == "light.turn_on"
+
+    def test_input_tag_preserved_as_marker(self, tmp_path):
+        self._write_blueprint(
+            tmp_path, "automation", "user/motion.yaml", self._MOTION_LIGHT
+        )
+        body = wsapi._read_blueprint_file(
+            self._hass(tmp_path), "automation", "user/motion.yaml"
+        )
+        assert body["trigger"][0]["entity_id"] == {"__input__": "motion_sensor"}
+        assert body["action"][0]["entity_id"] == {"__input__": "target_light"}
+
+    def test_secret_tag_neutralized_never_resolved(self, tmp_path):
+        text = (
+            "blueprint:\n"
+            "  name: Has Secret\n"
+            "  domain: automation\n"
+            "action:\n"
+            "  - service: notify.notify\n"
+            "    data:\n"
+            "      token: !secret my_api_token\n"
+        )
+        self._write_blueprint(tmp_path, "automation", "sneaky.yaml", text)
+        body = wsapi._read_blueprint_file(
+            self._hass(tmp_path), "automation", "sneaky.yaml"
+        )
+        # The !secret leaf is None — never a resolved plaintext value.
+        assert body["action"][0]["data"] == {"token": None}
+        assert "my_api_token" not in json.dumps(body)
+
+    @pytest.mark.parametrize(
+        "evil",
+        [
+            "../../secrets.yaml",
+            "../../../etc/passwd",
+            "/etc/passwd",
+            "user/../../escape.yaml",
+        ],
+    )
+    def test_path_traversal_rejected(self, tmp_path, evil):
+        # Even if the target exists outside the jail, it must never be read.
+        (tmp_path / "secrets.yaml").write_text("db_pw: hunter2\n", encoding="utf-8")
+        body = wsapi._read_blueprint_file(self._hass(tmp_path), "automation", evil)
+        assert body is None
+
+    def test_missing_file_returns_none(self, tmp_path):
+        assert (
+            wsapi._read_blueprint_file(self._hass(tmp_path), "automation", "nope.yaml")
+            is None
+        )
+
+    def test_do_blueprint_get_without_body(self):
+        res = wsapi._do_blueprint_get(FakeHass(), {"domain": "automation"}, body=None)
+        assert res == {"metadata": None, "config": None}
+
+    @pytest.mark.asyncio
+    async def test_prep_offloads_read_and_feeds_do(self, tmp_path):
+        self._write_blueprint(
+            tmp_path,
+            "script",
+            "user/s.yaml",
+            "blueprint:\n  name: S\n  domain: script\nsequence:\n  - delay: 1\n",
+        )
+        hass = self._hass(tmp_path)
+        extra = await wsapi._blueprint_get_prep(
+            hass, {"domain": "script", "path": "user/s.yaml"}
+        )
+        res = wsapi._do_blueprint_get(hass, {"domain": "script"}, **extra)
+        assert res["metadata"]["name"] == "S"
+        assert res["config"]["sequence"] == [{"delay": 1}]
 
 
 # =============================================================================
@@ -1976,3 +2407,407 @@ class TestOverview:
         assert "entity_registry" in res["slice_errors"]
         assert res["entity_registry"] == []
         assert res["states"], "an unrelated slice must still be populated"
+
+
+# =============================================================================
+# device_get + device_list — raw DeviceEntry.dict_repr reads
+# =============================================================================
+def _zha_device():
+    """A DeviceEntry-ish fake carrying the fields the server transforms read."""
+    return FakeDevice(
+        "dev-1",
+        name="Kitchen Sensor",
+        name_by_user="Kitchen",
+        area_id="a1",
+        labels=("important",),
+        manufacturer="Aqara",
+        model="T1",
+        identifiers=(("zha", "00:11:22:33:44:55:66:77"),),
+        connections=(("zigbee", "00:11:22:33:44:55:66:77"),),
+        config_entries=("cfg-1",),
+        disabled_by=None,
+        sw_version="1.2.3",
+        via_device_id="coordinator-1",
+    )
+
+
+class TestDeviceGet:
+    def test_found_returns_dict_repr_verbatim(self, monkeypatch):
+        dev = _zha_device()
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[dev])
+        )
+        res = wsapi._do_device_get(FakeHass(), {"device_id": "dev-1"})
+        # The body is DeviceEntry.dict_repr UNMODIFIED — the byte-parity contract
+        # with one config/device_registry/list element.
+        assert res["device"] == dev.dict_repr
+        assert res["device"]["id"] == "dev-1"
+        assert res["device"]["name_by_user"] == "Kitchen"
+        assert res["device"]["config_entries"] == ["cfg-1"]
+        assert res["device"]["identifiers"] == [("zha", "00:11:22:33:44:55:66:77")]
+
+    def test_missing_device_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[_zha_device()])
+        )
+        res = wsapi._do_device_get(FakeHass(), {"device_id": "ghost"})
+        assert res == {"device": None}
+
+    def test_absent_device_id_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[_zha_device()])
+        )
+        res = wsapi._do_device_get(FakeHass(), {})
+        assert res == {"device": None}
+
+    def test_unserializable_dict_repr_degrades_to_none(self, monkeypatch):
+        class _BadDevice:
+            id = "dev-x"
+
+            @property
+            def dict_repr(self):
+                raise RuntimeError("core drift")
+
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[_BadDevice()])
+        )
+        res = wsapi._do_device_get(FakeHass(), {"device_id": "dev-x"})
+        assert res == {"device": None}
+
+
+class TestDeviceList:
+    def test_lists_all_dict_reprs(self, monkeypatch):
+        d1 = FakeDevice("d1", name="One")
+        d2 = FakeDevice("d2", name="Two", area_id="a2")
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: make_view(devices=[d1, d2])
+        )
+        res = wsapi._do_device_list(FakeHass(), {})
+        by_id = {d["id"]: d for d in res["devices"]}
+        assert set(by_id) == {"d1", "d2"}
+        assert by_id["d1"] == d1.dict_repr
+        assert by_id["d2"]["area_id"] == "a2"
+
+    def test_empty_registry(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
+        assert wsapi._do_device_list(FakeHass(), {}) == {"devices": []}
+
+    def test_skips_unserializable_entry(self, monkeypatch, caplog):
+        class _BadDevice:
+            id = "bad"
+
+            @property
+            def dict_repr(self):
+                raise RuntimeError("core drift")
+
+        good = FakeDevice("good", name="Good")
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(devices=[_BadDevice(), good]),
+        )
+        with caplog.at_level(logging.WARNING):
+            res = wsapi._do_device_list(FakeHass(), {})
+        assert [d["id"] for d in res["devices"]] == ["good"]
+        # The skip is logged (with the offending id), not silent (issue #1813 F5).
+        assert any(
+            "skipping device" in r.getMessage() and "bad" in r.getMessage()
+            for r in caplog.records
+        )
+
+
+# =============================================================================
+# device_get include_entities — the per-device entity join
+# =============================================================================
+class TestDeviceGetEntities:
+    def _view_with_entities(self):
+        return make_view(
+            devices=[FakeDevice("dev-1", name="D1")],
+            entity={
+                "sensor.a": FakeRegEntry(
+                    "sensor.a", device_id="dev-1", platform="zha", name="A"
+                ),
+                "update.a": FakeRegEntry("update.a", device_id="dev-1", platform="zha"),
+                "sensor.disabled": FakeRegEntry(
+                    "sensor.disabled", device_id="dev-1", disabled_by="user"
+                ),
+                "sensor.other": FakeRegEntry("sensor.other", device_id="dev-2"),
+            },
+        )
+
+    def test_include_entities_joins_device_rows(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: self._view_with_entities()
+        )
+        monkeypatch.setattr(wsapi, "er", FakeErModule())
+        res = wsapi._do_device_get(
+            FakeHass(), {"device_id": "dev-1", "include_entities": True}
+        )
+        assert res["device"]["id"] == "dev-1"
+        ids = {e["entity_id"] for e in res["entities"]}
+        # dev-1's entities (incl. the disabled one); dev-2's is excluded.
+        assert ids == {"sensor.a", "update.a", "sensor.disabled"}
+        # Rows are the raw as_partial_dict shape (config/entity_registry/list parity).
+        row = next(e for e in res["entities"] if e["entity_id"] == "sensor.a")
+        assert row["device_id"] == "dev-1"
+        assert row["platform"] == "zha"
+        assert row["name"] == "A"
+
+    def test_disabled_entities_included(self, monkeypatch):
+        # include_disabled_entities=True is what the component passes — matching
+        # config/entity_registry/list, which lists disabled entities too.
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: self._view_with_entities()
+        )
+        monkeypatch.setattr(wsapi, "er", FakeErModule())
+        res = wsapi._do_device_get(
+            FakeHass(), {"device_id": "dev-1", "include_entities": True}
+        )
+        assert any(
+            e["entity_id"] == "sensor.disabled" and e["disabled_by"] == "user"
+            for e in res["entities"]
+        )
+
+    def test_entities_omitted_when_not_requested(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: self._view_with_entities()
+        )
+        monkeypatch.setattr(wsapi, "er", FakeErModule())
+        res = wsapi._do_device_get(FakeHass(), {"device_id": "dev-1"})
+        assert "entities" not in res
+
+    def test_entities_empty_for_unknown_device(self, monkeypatch):
+        monkeypatch.setattr(
+            wsapi, "_resolve_registries", lambda h: self._view_with_entities()
+        )
+        monkeypatch.setattr(wsapi, "er", FakeErModule())
+        res = wsapi._do_device_get(
+            FakeHass(), {"device_id": "ghost", "include_entities": True}
+        )
+        assert res["device"] is None
+        assert res["entities"] == []
+
+
+# A stand-in for core's ``HomeAssistantError`` whose type NAME matches, so the
+# ``exposure`` guardrail (``_is_unknown_entity_error`` keys off the name, not an
+# isinstance against the MagicMock-stubbed ``homeassistant.exceptions``) fires.
+class _UnknownEntityError(Exception):
+    pass
+
+
+_UnknownEntityError.__name__ = "HomeAssistantError"
+
+
+class TestIsUnknownEntityError:
+    """``_is_unknown_entity_error`` matches ONLY core's 'Unknown entity' raise: the
+    type name alone is too wide, so a same-type store-read failure is not swallowed
+    (issue #1813 F4)."""
+
+    def test_matches_unknown_entity_message(self):
+        assert wsapi._is_unknown_entity_error(_UnknownEntityError("Unknown entity"))
+        # Case-insensitive, substring anywhere in the message.
+        assert wsapi._is_unknown_entity_error(
+            _UnknownEntityError("unknown entity light.x")
+        )
+
+    def test_rejects_same_type_other_message(self):
+        # Right type name, unrelated fault → NOT a match (must propagate).
+        assert not wsapi._is_unknown_entity_error(
+            _UnknownEntityError("settings store read failed")
+        )
+
+    def test_rejects_other_type_same_message(self):
+        assert not wsapi._is_unknown_entity_error(ValueError("Unknown entity"))
+
+
+# =============================================================================
+# entity_enrich
+# =============================================================================
+class TestEntityEnrich:
+    """``ha_mcp_tools/entity_enrich`` — the shared registry join for a set of ids."""
+
+    def _view(self):
+        return make_view(
+            entity={
+                "light.lamp": FakeRegEntry(
+                    "light.lamp",
+                    aliases={"reading light"},
+                    area_id="a1",
+                    labels={"lb1"},
+                ),
+                # No own area/labels — must inherit both from device d1.
+                "switch.plug": FakeRegEntry("switch.plug", device_id="d1"),
+            },
+            areas=[
+                FakeArea("a1", "Office", floor_id="f1"),
+                FakeArea("a9", "Garage", floor_id="f2"),
+            ],
+            floors=[FakeFloor("f1", "Upstairs"), FakeFloor("f2", "Downstairs")],
+            labels=[FakeLabel("lb1", "Favorites"), FakeLabel("lb2", "Auto")],
+            devices=[FakeDevice("d1", area_id="a9", labels={"lb2"})],
+        )
+
+    def test_resolves_names_for_each_id(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_entity_enrich(FakeHass(), {"entity_ids": ["light.lamp"]})
+        rec = res["entities"]["light.lamp"]
+        assert rec == {
+            "area": "Office",
+            "floor": "Upstairs",
+            "labels": ["Favorites"],
+            "aliases": ["reading light"],
+        }
+
+    def test_device_inherited_area_and_labels(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_entity_enrich(FakeHass(), {"entity_ids": ["switch.plug"]})
+        rec = res["entities"]["switch.plug"]
+        assert rec["area"] == "Garage"  # inherited from device d1
+        assert rec["floor"] == "Downstairs"
+        assert rec["labels"] == ["Auto"]  # inherited from device d1
+        assert rec["aliases"] == []
+
+    def test_unknown_id_kept_with_empty_fields(self, monkeypatch):
+        """A registry-less id is not dropped — the caller keys the result back."""
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        res = wsapi._do_entity_enrich(FakeHass(), {"entity_ids": ["light.ghost"]})
+        assert res["entities"]["light.ghost"] == {
+            "area": None,
+            "floor": None,
+            "labels": [],
+            "aliases": [],
+        }
+
+    def test_empty_id_list(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        assert wsapi._do_entity_enrich(FakeHass(), {"entity_ids": []}) == {
+            "entities": {}
+        }
+
+    def test_reuses_the_search_join(self, monkeypatch):
+        """entity_enrich and the search record derive from the same join, so their
+        area/floor/labels/aliases agree for the same entity (no drift)."""
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        enrich = wsapi._do_entity_enrich(FakeHass(), {"entity_ids": ["light.lamp"]})[
+            "entities"
+        ]["light.lamp"]
+        record = wsapi._entity_record(
+            FakeState("light.lamp", "on", "Lamp"), self._view()
+        )
+        for key in ("area", "floor", "labels", "aliases"):
+            assert enrich[key] == record[key]
+
+
+# =============================================================================
+# exposure
+# =============================================================================
+class TestExposure:
+    """``ha_mcp_tools/exposure`` — list + single mode with the enrichment join."""
+
+    def _view(self):
+        return make_view(
+            entity={
+                "light.kitchen": FakeRegEntry("light.kitchen", area_id="a1"),
+                "light.attic": FakeRegEntry("light.attic", area_id="a1"),
+            },
+            areas=[FakeArea("a1", "Kitchen", floor_id="f1")],
+            floors=[FakeFloor("f1", "Main")],
+        )
+
+    def _patch(self, monkeypatch, settings_map, legacy_ids=()):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+
+        def fake_settings(hass, entity_id):
+            if entity_id not in settings_map:
+                raise _UnknownEntityError("Unknown entity")
+            return settings_map[entity_id]
+
+        monkeypatch.setattr(wsapi, "_async_get_entity_settings", fake_settings)
+        monkeypatch.setattr(
+            wsapi, "_legacy_exposed_entity_ids", lambda h: list(legacy_ids)
+        )
+
+    def test_single_should_expose_filter(self, monkeypatch):
+        """Guardrail 1: only should_expose-true assistants are reported (the raw
+        helper returns every assistant that has any stored option)."""
+        self._patch(
+            monkeypatch,
+            {
+                "light.kitchen": {
+                    "conversation": {"should_expose": True},
+                    "cloud.alexa": {"should_expose": False},
+                    "cloud.google_assistant": {"some_other_option": "x"},
+                }
+            },
+        )
+        states = [FakeState("light.kitchen", "on", "Kitchen Light")]
+        res = wsapi._do_exposure(
+            FakeHass(states=states), {"entity_id": "light.kitchen"}
+        )
+        assert res["exposed_entities"] == {"light.kitchen": {"conversation": True}}
+        info = res["entity_info"]["light.kitchen"]
+        assert info["friendly_name"] == "Kitchen Light"
+        assert info["domain"] == "light"
+        assert info["area"] == "Kitchen"
+        assert info["floor"] == "Main"
+        assert info["state"] == "on"
+
+    def test_unknown_entity_degrades_to_not_exposed(self, monkeypatch):
+        """Guardrail 2: HomeAssistantError('Unknown entity') → not-exposed default,
+        never a raise (the legacy path never raises on a junk id)."""
+        self._patch(monkeypatch, {})  # every id is "unknown"
+        states = [FakeState("light.ghost", "on", "Ghost")]
+        res = wsapi._do_exposure(FakeHass(states=states), {"entity_id": "light.ghost"})
+        assert res["exposed_entities"] == {}
+        # Enrichment is still provided for the requested id.
+        assert res["entity_info"]["light.ghost"]["domain"] == "light"
+
+    def test_missing_state_omits_live_fields(self, monkeypatch):
+        """Guardrail 3: no hass.states.get → friendly_name/state omitted, not a crash."""
+        self._patch(
+            monkeypatch, {"light.attic": {"conversation": {"should_expose": True}}}
+        )
+        res = wsapi._do_exposure(FakeHass(states=[]), {"entity_id": "light.attic"})
+        info = res["entity_info"]["light.attic"]
+        assert "friendly_name" not in info
+        assert "state" not in info
+        assert info["domain"] == "light"
+        assert info["area"] == "Kitchen"
+
+    def test_non_unknown_ha_error_propagates(self, monkeypatch):
+        """A same-typed HomeAssistantError whose message is NOT 'unknown entity'
+        (e.g. a settings-store read failure) propagates instead of being silently
+        reported as not-exposed (issue #1813 F4)."""
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+
+        def boom(hass, entity_id):
+            raise _UnknownEntityError("settings store read failed")
+
+        monkeypatch.setattr(wsapi, "_async_get_entity_settings", boom)
+        with pytest.raises(_UnknownEntityError):
+            wsapi._do_exposure(FakeHass(states=[]), {"entity_id": "light.kitchen"})
+
+    def test_list_mode_mirrors_ws_list(self, monkeypatch):
+        """List mode walks the registry, keeps only exposed ids, enriches each."""
+        self._patch(
+            monkeypatch,
+            {
+                "light.kitchen": {"conversation": {"should_expose": True}},
+                "light.attic": {"cloud.alexa": {"should_expose": False}},
+            },
+        )
+        states = [FakeState("light.kitchen", "on", "Kitchen Light")]
+        res = wsapi._do_exposure(FakeHass(states=states), {})
+        assert res["exposed_entities"] == {"light.kitchen": {"conversation": True}}
+        assert set(res["entity_info"]) == {"light.kitchen"}
+
+    def test_list_mode_includes_legacy_store_ids(self, monkeypatch):
+        """An exposed entity present only in the legacy store (no registry entry)
+        is still enumerated — the union of store ids and registry ids."""
+        self._patch(
+            monkeypatch,
+            {"scene.movie": {"conversation": {"should_expose": True}}},
+            legacy_ids=["scene.movie"],
+        )
+        res = wsapi._do_exposure(FakeHass(states=[]), {})
+        assert res["exposed_entities"] == {"scene.movie": {"conversation": True}}

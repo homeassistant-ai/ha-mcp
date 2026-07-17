@@ -35,9 +35,14 @@ from ha_mcp.tools.tools_search import (
 )
 
 from .test_component_ws_search import (
+    FakeArea,
     FakeConfigEntries,
+    FakeFloor,
     FakeHass,
+    FakeLabel,
+    FakeRegEntry,
     FakeState,
+    make_view,
     wsapi,
 )
 
@@ -311,6 +316,89 @@ def test_include_config_false_strips_config_keys(monkeypatch) -> None:
 
     # entry.data must never surface anywhere, with or without include_config.
     assert "should-never-appear" not in repr(shaped)
+
+
+def _resolved_result_fields(result_fields) -> _ResolvedSearch:
+    """An entity-only resolved search with a given ``result_fields`` request."""
+    return _ResolvedSearch(
+        query="enrichmarker",
+        query_text="enrichmarker",
+        domain_filter=None,
+        area_filter=None,
+        state_filter=None,
+        parsed_search_types=None,
+        parsed_fields=None,
+        result_fields=result_fields,
+        limit=10,
+        offset=0,
+        exact_match=True,
+        include_hidden=True,
+        include_config=False,
+        group_by_domain=False,
+        per_domain_limit=None,
+        config_time_budget=None,
+        registry_eligible=True,
+        body_eligible=False,
+        body_skipped_by_intent_gate=False,
+    )
+
+
+def _enrichment_component_result(monkeypatch):
+    """Real ``_do_search`` output for one entity carrying a full registry join."""
+    view = make_view(
+        entity={
+            "light.enrichmarker": FakeRegEntry(
+                "light.enrichmarker",
+                aliases={"desk"},
+                area_id="a1",
+                labels={"lb1"},
+            )
+        },
+        areas=[FakeArea("a1", "Office", floor_id="f1")],
+        floors=[FakeFloor("f1", "Upstairs")],
+        labels=[FakeLabel("lb1", "Favorites")],
+    )
+    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+    hass = FakeHass(
+        states=[FakeState("light.enrichmarker", "on", friendly_name="Enrichmarker")]
+    )
+    return wsapi._do_search(
+        hass,
+        {
+            "query": "enrichmarker",
+            "search_types": ["entity"],
+            "exact": True,
+            "include_hidden": True,
+            "include_config": False,
+            "limit": 10,
+            "offset": 0,
+        },
+    )
+
+
+def test_result_fields_default_shape_unchanged(monkeypatch) -> None:
+    """No result_fields → the shaped entity record is exactly the six base keys,
+    even though the real component record already carries the enrichment join."""
+    result = _enrichment_component_result(monkeypatch)
+    shaped = _shape_component_search_response(_resolved_result_fields(None), result)
+    assert set(shaped["entities"][0]) == ENTITY_KEYS
+
+
+def test_result_fields_enrichment_additive(monkeypatch) -> None:
+    """Requested enrichment keys survive the projection with the real join values;
+    the additive fields appear ONLY because result_fields named them."""
+    result = _enrichment_component_result(monkeypatch)
+    shaped = _shape_component_search_response(
+        _resolved_result_fields(["entity_id", "area", "floor", "labels", "aliases"]),
+        result,
+    )
+    assert shaped["entities"][0] == {
+        "entity_id": "light.enrichmarker",
+        "area": "Office",
+        "floor": "Upstairs",
+        "labels": ["Favorites"],
+        "aliases": ["desk"],
+    }
 
 
 def test_envelope_matches_legacy_keys(monkeypatch) -> None:

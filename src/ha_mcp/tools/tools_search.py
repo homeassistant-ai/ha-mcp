@@ -15,8 +15,10 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
 from ..config import get_global_settings
@@ -717,6 +719,149 @@ _ENTITY_RECORD_KEYS = (
     "match_type",
 )
 
+# Opt-in enrichment fields result_fields= can request on top of the base record
+# (issue #1813 C1). Emitted per entity ONLY when named in result_fields — the
+# default record shape stays the six _ENTITY_RECORD_KEYS. The component search
+# already computes these per hit (its area/floor/labels/aliases registry join);
+# the legacy path joins them from the registries on demand
+# (SearchTools._fetch_entity_enrichment). Ordered so a projected record lists them
+# consistently regardless of the caller's result_fields order.
+_ENRICHMENT_FIELDS: tuple[str, ...] = ("area", "floor", "labels", "aliases")
+
+# Every field name result_fields= accepts — base record keys plus the opt-in
+# enrichment keys. A requested name outside this set is rejected up front with the
+# standard validation error rather than silently projecting to empty records.
+_ALLOWED_RESULT_FIELDS: frozenset[str] = frozenset(_ENTITY_RECORD_KEYS) | frozenset(
+    _ENRICHMENT_FIELDS
+)
+
+
+def _validate_result_field_names(parsed: list[str] | None) -> None:
+    """Reject unknown ``result_fields`` names with the standard validation error.
+
+    ``result_fields`` now drives area/floor/labels/aliases enrichment (issue #1813
+    C1), so an unrecognised name is a hard error rather than a silently-empty
+    projection: the server must know which fields to compute. Empty is rejected too
+    (omit the parameter for full records). Called once in ``ha_search`` so both the
+    component and legacy serving paths share one contract.
+    """
+    if parsed is None:
+        return
+    if not parsed:
+        raise_tool_error(
+            create_validation_error(
+                "result_fields must contain at least one key; omit the parameter "
+                "for full records.",
+                parameter="result_fields",
+            )
+        )
+    unknown = [f for f in parsed if f not in _ALLOWED_RESULT_FIELDS]
+    if unknown:
+        raise_tool_error(
+            create_validation_error(
+                f"Unknown result_fields: {unknown}. "
+                f"Valid keys: {sorted(_ALLOWED_RESULT_FIELDS)}.",
+                parameter="result_fields",
+            )
+        )
+
+
+def _requested_enrichment(parsed_result_fields: list[str] | None) -> tuple[str, ...]:
+    """The enrichment fields named in ``result_fields``, in canonical order.
+
+    Empty when ``result_fields`` is unset or names only base record keys — the
+    signal that no enrichment work (component key retention or a legacy registry
+    join) is needed, keeping the default search path cost-free.
+    """
+    if not parsed_result_fields:
+        return ()
+    requested = set(parsed_result_fields)
+    return tuple(f for f in _ENRICHMENT_FIELDS if f in requested)
+
+
+def _ws_result_map(resp: Any) -> dict[str, dict[str, Any]]:
+    """The ``{entity_id: entry}`` map from a ``config/entity_registry/get_entries`` reply."""
+    if isinstance(resp, dict) and resp.get("success"):
+        result = resp.get("result")
+        if isinstance(result, dict):
+            return {k: v for k, v in result.items() if isinstance(v, dict)}
+    return {}
+
+
+def _ws_registry_index(resp: Any, key: str) -> dict[str, dict[str, Any]]:
+    """Index a ``config/*_registry/list`` reply by its id field (area_id/floor_id/…).
+
+    A failed / malformed reply (the ``return_exceptions=True`` gather may hand back
+    an exception) yields an empty index so the enrichment degrades that field to
+    empty rather than raising.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    if isinstance(resp, dict) and resp.get("success"):
+        for item in resp.get("result") or []:
+            if isinstance(item, dict) and item.get(key):
+                out[item[key]] = item
+    return out
+
+
+def _ws_read_failed(resp: Any) -> bool:
+    """True when a gathered registry read raised or returned a non-success reply.
+
+    Mirrors the guard inside :func:`_ws_result_map` / :func:`_ws_registry_index`
+    (which quietly degrade a bad reply to an empty map). Surfacing the same
+    condition lets the enrichment join report the degradation instead of emitting
+    present-but-null area/floor/labels/aliases indistinguishable from a genuinely
+    unassigned entity.
+    """
+    return not (isinstance(resp, dict) and resp.get("success"))
+
+
+def _entity_enrichment_fields(
+    entry: dict[str, Any],
+    areas: dict[str, dict[str, Any]],
+    floors: dict[str, dict[str, Any]],
+    labels: dict[str, dict[str, Any]],
+    devices: dict[str, dict[str, Any]],
+    requested: tuple[str, ...],
+) -> dict[str, Any]:
+    """Compute the requested enrichment fields for one entity from registry data.
+
+    Mirrors the component's ``_registry_enrichment`` so the legacy and
+    component-served ``result_fields`` values agree: device-inherited area/labels
+    (the entity's own value wins, else the device's), area→floor resolution, and
+    label id→name (falling back to the id when a label has no name). ``aliases``
+    pass through from the registry entry. Only the requested keys are returned.
+
+    String aliases only: HA core's aliases can carry the COMPUTED_NAME sentinel,
+    which serializes as ``null`` over the WS registry read; a blind ``str()`` would
+    publish it as the literal alias ``"None"``. The component's join filters the
+    same way, so dropping non-strings keeps the two paths byte-identical (the name
+    the sentinel stands for is already matched via the friendly name).
+    """
+    aliases = sorted(a for a in (entry.get("aliases") or []) if isinstance(a, str))
+    area_id = entry.get("area_id")
+    label_ids = set(entry.get("labels") or [])
+    device_id = entry.get("device_id")
+    device = devices.get(device_id) if device_id else None
+    if device:
+        if area_id is None:
+            area_id = device.get("area_id")
+        label_ids |= set(device.get("labels") or [])
+    area = areas.get(area_id) if area_id else None
+    area_name = area.get("name") if area else None
+    floor_id = area.get("floor_id") if area else None
+    floor = floors.get(floor_id) if floor_id else None
+    floor_name = floor.get("name") if floor else None
+    label_names = [
+        (labels.get(lid) or {}).get("name") or lid for lid in sorted(label_ids)
+    ]
+    full: dict[str, Any] = {
+        "area": area_name,
+        "floor": floor_name,
+        "labels": label_names,
+        "aliases": aliases,
+    }
+    return {k: full[k] for k in requested}
+
 
 def _normalize_component_config_record(
     bucket: str, rec: dict[str, Any], include_config: bool
@@ -823,13 +968,18 @@ def _shape_component_search_response(
 
     if req.registry_eligible:
         parsed_result_fields = _parse_component_result_fields(req.result_fields)
-        # Normalize to the documented entity-record key set (the same six keys
-        # the legacy paths emit and result_fields= advertises). The component
-        # enriches records with area/floor/labels/aliases joins — dropped here
-        # for shape parity with the legacy path; adding enrichment to BOTH
-        # paths together is a separate change.
+        # Base record is the six documented keys. result_fields may additionally
+        # request enrichment fields (area/floor/labels/aliases) that the component
+        # already computed per hit via its registry join — retain exactly those
+        # requested keys before the result_fields projection so the enrichment
+        # survives it, while a search that requests none still emits the default
+        # six-key shape (parity with the legacy path).
+        record_keys = (
+            *_ENTITY_RECORD_KEYS,
+            *_requested_enrichment(parsed_result_fields),
+        )
         entities = [
-            {key: rec.get(key) for key in _ENTITY_RECORD_KEYS}
+            {key: rec.get(key) for key in record_keys}
             for rec in _as_record_list(component_result.get("entities"))
         ]
         entity_has_more = bool(component_result.get("entity_has_more", False))
@@ -1116,6 +1266,20 @@ def _validate_entity_search_params(
             )
         )
     return query, domain_filter, area_filter, parsed_result_fields
+
+
+def _missing_entity_exc(entity_id: str) -> HomeAssistantAPIError:
+    """A synthetic 404 for an id the component's ``states`` read reports absent.
+
+    Classifying a component-reported miss through the same
+    ``exception_to_structured_error`` path the legacy per-id REST 404 uses makes
+    the missing-id error byte-identical on both backends (ENTITY_NOT_FOUND with
+    the entity_id context; the response-level ``ha_search()`` suggestion still
+    fires), without the server issuing a REST call it just avoided.
+    """
+    return HomeAssistantAPIError(
+        f"API error: 404 - Entity {entity_id} not found", status_code=404
+    )
 
 
 def _accumulate_state_results(
@@ -1518,7 +1682,10 @@ class SearchTools:
                 default=None,
                 description=(
                     "Project each entity-registry record to only the specified "
-                    'keys (e.g. ["entity_id", "state"]). None = full records.'
+                    'keys (e.g. ["entity_id", "state"]). None = full records. '
+                    "Base keys: entity_id, friendly_name, domain, state, score, "
+                    "match_type. Opt-in enrichment keys (joined on request): "
+                    "area, floor, labels, aliases. An unknown key is rejected."
                 ),
             ),
         ] = None,
@@ -1625,6 +1792,19 @@ class SearchTools:
             parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
         except ValueError as exc:
             raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+
+        # Validate result_fields once up front so BOTH serving paths reject an
+        # unknown enrichment key identically (the sub-paths re-parse the same raw
+        # value for their own projection).
+        try:
+            parsed_result_fields = parse_string_list_param(
+                result_fields, "result_fields", allow_csv=True
+            )
+        except ValueError as exc:
+            raise_tool_error(
+                create_validation_error(str(exc), parameter="result_fields")
+            )
+        _validate_result_field_names(parsed_result_fields)
 
         # Normalise the caller-input strings once; the eligibility helper
         # below is purely a function of normalized inputs so it stays
@@ -1962,9 +2142,10 @@ class SearchTools:
                 description=(
                     "Project each entity record in results[] to only the specified keys. "
                     'E.g. ["entity_id", "state"] returns slim entity records. '
-                    "None = full records (default). Unknown keys yield empty records; "
-                    "omit result_fields to see all available keys. "
-                    "Available keys: entity_id, friendly_name, domain, state, score, match_type."
+                    "None = full records (default). "
+                    "Base keys: entity_id, friendly_name, domain, state, score, match_type. "
+                    "Opt-in enrichment keys (joined on request): area, floor, labels, aliases. "
+                    "An unknown key is rejected."
                 ),
             ),
         ] = None,
@@ -2109,14 +2290,164 @@ class SearchTools:
             )
             return None  # unreachable: error helpers above always raise
 
-    async def _fetch_area_entity_aliases(
+    async def _fetch_entity_enrichment(
+        self,
+        entity_ids: list[str],
+        requested: tuple[str, ...],
+        prefetched_entries: dict[str, dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, dict[str, Any]], list[str]]:
+        """Join area/floor/label NAMES + aliases for entity_ids (legacy enrichment).
+
+        Generalises the area-mode alias join (:meth:`_fetch_area_entity_entries`):
+        one ``config/entity_registry/get_entries`` gives each id's aliases + area_id
+        + label ids + device_id, and the area/floor/label registry lists resolve
+        those ids to NAMES (the device registry supplies device-inherited
+        area/labels, matching the component's ``_registry_enrichment``). Only the
+        registries a requested field actually needs are fetched — an aliases-only
+        request skips the four ``*_registry/list`` reads, and a caller that already
+        holds the registry entries (the area-mode haystack fetch) passes them as
+        ``prefetched_entries`` so no second ``get_entries`` round-trip is made.
+        Each fetch is fault-tolerant (``return_exceptions=True`` + the ``_ws_*``
+        guards degrade a failed list to an empty index), so a registry hiccup drops
+        that field to empty rather than failing the search — but a failed read is no
+        longer silent: it is logged and reported so the join does not emit
+        present-but-null fields indistinguishable from a genuinely unassigned
+        entity. Returns ``({entity_id: {requested field: value}}, warnings)`` where
+        ``warnings`` is non-empty only when a needed read failed.
+        """
+        if not entity_ids or not requested:
+            return {}, []
+        need_names = bool(set(requested) & {"area", "floor", "labels"})
+        coros: list[Any] = []
+        if prefetched_entries is None:
+            coros.append(
+                self._client.send_websocket_message(
+                    {
+                        "type": "config/entity_registry/get_entries",
+                        "entity_ids": entity_ids,
+                    }
+                )
+            )
+        if need_names:
+            coros.extend(
+                self._client.send_websocket_message({"type": command})
+                for command in (
+                    "config/area_registry/list",
+                    "config/floor_registry/list",
+                    "config/label_registry/list",
+                    "config/device_registry/list",
+                )
+            )
+        fetched = await asyncio.gather(*coros, return_exceptions=True)
+        for item in fetched:
+            # A cancelled read must propagate, not degrade to an empty field.
+            if isinstance(item, asyncio.CancelledError):
+                raise item
+        failed_reads: list[str] = []
+        if prefetched_entries is None:
+            if _ws_read_failed(fetched[0]):
+                failed_reads.append("entity registry entries")
+            entries = _ws_result_map(fetched[0])
+            names = fetched[1:]
+        else:
+            entries = prefetched_entries
+            names = fetched
+        if need_names:
+            failed_reads.extend(
+                label
+                for label, resp in zip(
+                    (
+                        "area registry",
+                        "floor registry",
+                        "label registry",
+                        "device registry",
+                    ),
+                    names,
+                    strict=True,
+                )
+                if _ws_read_failed(resp)
+            )
+        areas = _ws_registry_index(names[0], "area_id") if need_names else {}
+        floors = _ws_registry_index(names[1], "floor_id") if need_names else {}
+        labels = _ws_registry_index(names[2], "label_id") if need_names else {}
+        devices = _ws_registry_index(names[3], "id") if need_names else {}
+        enrichment = {
+            eid: _entity_enrichment_fields(
+                entries.get(eid) or {}, areas, floors, labels, devices, requested
+            )
+            for eid in entity_ids
+        }
+        warnings: list[str] = []
+        if failed_reads:
+            logger.warning(
+                "result_fields_enrichment_failed: %d registry read(s) failed (%s) "
+                "for %d entities; area/floor/labels/aliases may be incomplete",
+                len(failed_reads),
+                ", ".join(failed_reads),
+                len(entity_ids),
+            )
+            warnings.append(
+                "result_fields enrichment incomplete: one or more registry reads "
+                "failed, so area/floor/labels/aliases may be missing or empty for "
+                "some entities"
+            )
+        return enrichment, warnings
+
+    async def _maybe_enrich_entity_records(
+        self,
+        records: list[dict[str, Any]],
+        parsed_result_fields: list[str] | None,
+        prefetched_entries: dict[str, dict[str, Any]] | None = None,
+    ) -> list[str]:
+        """Add requested area/floor/labels/aliases to entity records in place (opt-in).
+
+        A no-op unless ``result_fields`` names an enrichment field, so the default
+        search pays nothing. Records are mutated in place, so a ``by_domain`` view
+        built from the same dicts before projection is enriched too. Applied before
+        the ``result_fields`` projection so the requested enrichment keys survive
+        it. Never withholds results: a failed registry read leaves the enrichment
+        fields empty and returns a warning (which the caller surfaces at the top
+        level) rather than silently emitting null fields. ``prefetched_entries``
+        lets a caller that already fetched the registry entries (area mode's
+        haystack fetch) avoid a duplicate ``get_entries`` round-trip. Returns any
+        degraded-enrichment warnings (empty on the happy path or when enrichment is
+        not requested).
+        """
+        requested = _requested_enrichment(parsed_result_fields)
+        if not requested or not records:
+            return []
+        entity_ids: list[str] = [
+            r["entity_id"] for r in records if isinstance(r.get("entity_id"), str)
+        ]
+        enrichment, warnings = await self._fetch_entity_enrichment(
+            entity_ids, requested, prefetched_entries
+        )
+        for record in records:
+            eid = record.get("entity_id")
+            if isinstance(eid, str):
+                fields = enrichment.get(eid)
+                if fields:
+                    record.update(fields)
+        return warnings
+
+    async def _fetch_area_entity_entries(
         self,
         area_entity_ids: list[str],
-    ) -> dict[str, list[str]]:
-        """Fetch entity registry aliases for a list of entity IDs in one WS call."""
-        aliases_map: dict[str, list[str]] = {}
+    ) -> dict[str, dict[str, Any]] | None:
+        """Fetch entity registry entries for a list of entity IDs in one WS call.
+
+        Returns the full ``get_entries`` result map so the caller can derive the
+        alias haystack AND reuse the same entries for opt-in enrichment without a
+        second round-trip. ``None`` (NOT an empty map) signals a FAILED read — a
+        non-success reply or a malformed payload — so the caller can tell a genuine
+        empty-but-successful prefetch (which correctly enriches to empty with no
+        warning) from a read failure, and let the enrichment re-fetch and report the
+        degradation instead of silently trusting the empty map. An empty ``{}`` is
+        returned only for an empty input list.
+        """
+        entries_map: dict[str, dict[str, Any]] = {}
         if not area_entity_ids:
-            return aliases_map
+            return entries_map
         try:
             entries_resp = await self._client.send_websocket_message(
                 {
@@ -2125,23 +2456,24 @@ class SearchTools:
                 }
             )
             if isinstance(entries_resp, dict) and entries_resp.get("success"):
-                for eid, entry in (entries_resp.get("result", {}) or {}).items():
-                    if isinstance(entry, dict):
-                        aliases_map[eid] = entry.get("aliases", []) or []
-            else:
-                logger.warning(
-                    "alias_enrichment_failed: get_entries returned non-success "
-                    "for %d area entities (resp=%r)",
-                    len(area_entity_ids),
-                    entries_resp,
-                )
+                return {
+                    eid: entry
+                    for eid, entry in (entries_resp.get("result", {}) or {}).items()
+                    if isinstance(entry, dict)
+                }
+            logger.warning(
+                "alias_enrichment_failed: get_entries returned non-success "
+                "for %d area entities (resp=%r)",
+                len(area_entity_ids),
+                entries_resp,
+            )
         except (KeyError, TypeError, AttributeError) as alias_err:
             logger.warning(
                 "alias_enrichment_failed: malformed payload for %d area entities (err=%r)",
                 len(area_entity_ids),
                 alias_err,
             )
-        return aliases_map
+        return None
 
     async def _search_area_with_query(
         self,
@@ -2175,7 +2507,15 @@ class SearchTools:
         area_entity_ids = sorted(
             e.get("entity_id", "") for e in all_area_entities if e.get("entity_id")
         )
-        aliases_map = await self._fetch_area_entity_aliases(area_entity_ids)
+        # ``None`` = the prefetch read FAILED (vs an empty-but-successful map). On
+        # failure the haystack loses alias tokens (as before), and passing ``None``
+        # as ``prefetched_entries`` below lets the enrichment re-fetch and report the
+        # degradation instead of silently trusting an empty map as authoritative.
+        entries_map = await self._fetch_area_entity_entries(area_entity_ids)
+        aliases_map = {
+            eid: (entry.get("aliases") or [])
+            for eid, entry in (entries_map or {}).items()
+        }
 
         from ..utils.fuzzy_search import create_fuzzy_searcher
 
@@ -2235,6 +2575,9 @@ class SearchTools:
                 "fuzzy-search dataset and may yield empty pages"
             )
 
+        enrich_warnings = await self._maybe_enrich_entity_records(
+            results, parsed_result_fields, prefetched_entries=entries_map
+        )
         _apply_by_domain_grouping(
             search_data,
             results,
@@ -2243,6 +2586,7 @@ class SearchTools:
             parsed_result_fields,
         )
         _apply_result_fields_to_response(search_data, parsed_result_fields)
+        merge_visibility_warnings(search_data, enrich_warnings)
 
         # No add_timezone_metadata: entity records carry no timestamp fields, so
         # the enrichment converted nothing and its /api/config fetch was pure
@@ -2313,6 +2657,9 @@ class SearchTools:
                 f"No {domain_filter} entities found in area: {area_filter}"
             )
 
+        enrich_warnings = await self._maybe_enrich_entity_records(
+            paginated, parsed_result_fields
+        )
         _apply_by_domain_grouping(
             area_search_data,
             paginated,
@@ -2321,6 +2668,7 @@ class SearchTools:
             parsed_result_fields,
         )
         _apply_result_fields_to_response(area_search_data, parsed_result_fields)
+        merge_visibility_warnings(area_search_data, enrich_warnings)
 
         # No add_timezone_metadata — see _search_area_with_query.
         return area_search_data
@@ -2475,6 +2823,9 @@ class SearchTools:
         if state_filter is not None:
             domain_list_data["state_filter"] = state_filter
 
+        enrich_warnings = await self._maybe_enrich_entity_records(
+            results, parsed_result_fields
+        )
         _apply_result_fields_to_response(domain_list_data, parsed_result_fields)
         if group_by_domain_bool:
             domain_list_data["by_domain"] = _build_domain_only_by_domain(
@@ -2482,7 +2833,9 @@ class SearchTools:
             )
 
         # No add_timezone_metadata — see _search_area_with_query.
-        return merge_visibility_warnings(domain_list_data, visibility_warnings)
+        return merge_visibility_warnings(
+            domain_list_data, [*visibility_warnings, *enrich_warnings]
+        )
 
     async def _search_regular(
         self,
@@ -2581,6 +2934,9 @@ class SearchTools:
                 "fuzzy-search dataset and may yield empty pages"
             )
 
+        enrich_warnings = await self._maybe_enrich_entity_records(
+            result.get("results", []), parsed_result_fields
+        )
         _apply_by_domain_grouping(
             result,
             result.get("results", []),
@@ -2597,6 +2953,7 @@ class SearchTools:
             result["partial"] = True
 
         _apply_result_fields_to_response(result, parsed_result_fields)
+        merge_visibility_warnings(result, enrich_warnings)
 
         # No add_timezone_metadata — see _search_area_with_query.
         return result
@@ -3424,7 +3781,7 @@ class SearchTools:
     ) -> dict[str, Any]:
         """Fetch and return state for a single entity ID."""
         try:
-            result = await self._client.get_entity_state(entity_id)
+            result = await self._get_one_state(entity_id)
             entity_record, attr_warn = _project_entity(
                 result, parsed_fields, parsed_attribute_keys
             )
@@ -3501,11 +3858,9 @@ class SearchTools:
             )
 
         try:
-            results = await asyncio.gather(
-                *(self._fetch_single_state(eid) for eid in unique_ids)
-            )
+            results = await self._resolve_bulk_state_results(unique_ids)
             states, errors, attr_warns = _accumulate_state_results(
-                unique_ids, list(results), parsed_fields, parsed_attribute_keys
+                unique_ids, results, parsed_fields, parsed_attribute_keys
             )
             response = _build_bulk_states_response(
                 states, errors, attr_warns, attribute_keys_no_effect
@@ -3535,6 +3890,113 @@ class SearchTools:
                 context={"entity_id": eid},
                 raise_error=False,
             )
+
+    async def _get_one_state(self, entity_id: str) -> dict[str, Any]:
+        """Return one entity's raw state dict — component bulk-read or legacy REST.
+
+        The same fetch primitive the bulk path uses, so single- and bulk-mode
+        ``ha_get_state`` share one code path. When the component serves it, an id
+        it authoritatively reports absent raises the same 404 the legacy REST read
+        would, so the caller's exception handler produces the identical
+        single-entity ENTITY_NOT_FOUND (with its ``ha_search()`` suggestion).
+        """
+        component = await self._fetch_states_via_component([entity_id])
+        if component is None:
+            legacy_state: dict[str, Any] = await self._client.get_entity_state(
+                entity_id
+            )
+            return legacy_state
+        states = component.get("states") or {}
+        if entity_id in states:
+            record: dict[str, Any] = states[entity_id]
+            return record
+        raise _missing_entity_exc(entity_id)
+
+    async def _resolve_bulk_state_results(
+        self, unique_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Per-id fetch results for a bulk read — component bulk-read or legacy REST.
+
+        Returns one entry per id in ``_fetch_single_state`` shape (a hit dict or a
+        structured error). The component path resolves every id in ONE
+        ``ha_mcp_tools/states`` frame instead of up to 100 REST GETs; a missing id
+        is mapped to the same 404-classified error the legacy per-id path yields,
+        so ``_accumulate_state_results`` and the response-level ``ha_search()``
+        suggestion behave identically on both backends.
+        """
+        component = await self._fetch_states_via_component(unique_ids)
+        if component is None:
+            return list(
+                await asyncio.gather(
+                    *(self._fetch_single_state(eid) for eid in unique_ids)
+                )
+            )
+        states = component.get("states") or {}
+        return [self._component_state_result(eid, states) for eid in unique_ids]
+
+    def _component_state_result(
+        self, entity_id: str, states: dict[str, Any]
+    ) -> dict[str, Any]:
+        """One found/missing per-id result from the component's ``states`` map."""
+        if entity_id in states:
+            return {"success": True, "entity_id": entity_id, "state": states[entity_id]}
+        # ast-grep-ignore — batch item failure, mapped to the legacy 404 shape
+        return exception_to_structured_error(
+            _missing_entity_exc(entity_id),
+            context={"entity_id": entity_id},
+            raise_error=False,
+        )
+
+    async def _fetch_states_via_component(
+        self, entity_ids: list[str]
+    ) -> dict[str, Any] | None:
+        """One ``ha_mcp_tools/states`` bulk read; ``None`` ⇒ use the legacy REST path.
+
+        Returns the component's ``{states, missing}`` payload (found ids mapped to
+        their ``State.as_dict()`` body) or ``None`` when the component lacks the
+        ``states`` capability, was downgraded (``unknown_command`` → invalidate the
+        cached caps), or errored (logged). Falls back **silently** — unlike
+        ``ha_search`` / ``ha_get_zone`` which append a ``warnings[]`` entry —
+        because ``ha_get_state``'s single- and bulk-mode responses do not share one
+        warnings channel; the ``log.warning`` preserves operator visibility and the
+        legacy REST path returns the byte-identical correct data either way. Unlike
+        ``ha_search`` / ``ha_get_overview`` (whose legacy paths also read the
+        WebSocket registry, so a connection failure fails both backends identically
+        and is left to propagate), ``ha_get_state``'s legacy path is a REST
+        ``get_entity_state`` read on a SEPARATE transport, so a WS transport/connect
+        failure (``HomeAssistantConnectionError``) is caught here and falls back to
+        REST — an install whose REST API still works keeps getting its state instead
+        of a spurious connection error. If REST is also down, the legacy path raises
+        the same connection error itself.
+        """
+        caps = await get_component_caps(self._client)
+        if not component_supports(caps, "states"):
+            return None
+        try:
+            raw = await self._send_component_states(entity_ids)
+        except (
+            HomeAssistantCommandError,
+            HomeAssistantCommandTimeout,
+            HomeAssistantConnectionError,
+        ) as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+            else:
+                logger.warning(
+                    "ha_mcp_tools/states failed; fell back to legacy: %r", exc
+                )
+            return None
+        result = raw.get("result") or {}
+        if not isinstance(result.get("states"), dict):
+            return None
+        return result
+
+    async def _send_component_states(self, entity_ids: list[str]) -> dict[str, Any]:
+        """Send one ``ha_mcp_tools/states`` command over the per-client WebSocket."""
+        ws = await get_websocket_client(
+            url=self._client.base_url, token=self._client.token
+        )
+        return await ws.send_command("ha_mcp_tools/states", entity_ids=entity_ids)
 
 
 def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

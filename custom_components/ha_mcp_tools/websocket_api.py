@@ -2,7 +2,7 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. v1.1.0 ships four commands (three capabilities):
+capability gate. v1.1.1 ships ten commands (nine capabilities):
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
   + ``component_version`` + advisory ``limits``. One cached probe tells the
@@ -23,6 +23,59 @@ capability gate. v1.1.0 ships four commands (three capabilities):
   enumerated, so the server falls back to its legacy ``<type>/list`` path for an
   uncovered type (e.g. ``tag``, which has no state entity) instead of trusting an
   empty result.
+* ``ha_mcp_tools/states`` — a bulk state read: ``State.as_dict()`` for each
+  requested entity_id (a pure ``hass.states.get`` in-memory read) plus the list
+  of ids with no state, so the server's ``ha_get_state`` serves a 100-entity
+  bulk call from one in-process frame instead of up to 100 REST GETs. The body
+  is byte-identical to the REST ``/api/states/<id>`` serialization by
+  construction; the server maps found/missing onto its per-id error contract.
+* ``ha_mcp_tools/blueprint_get`` — the full body of one installed blueprint
+  (``{metadata, config}``), which core's ``blueprint/list`` never returns (it
+  serves only ``{metadata}``). The path is jailed under
+  ``<config>/blueprints/<domain>/`` (symlink-safe containment, mirroring the
+  file-tool jail) and the file read + parse run off the event loop in the async
+  prep. ``!input`` markers are preserved; every other custom tag (``!secret`` /
+  ``!include`` / …) is neutralized to ``None`` at load time, so no resolved
+  secret plaintext can ever reach the body.
+* ``ha_mcp_tools/device_get`` — one device registry entry by id
+  (``{device: <DeviceEntry.dict_repr> | None}``), so a single-device lookup no
+  longer pulls the entire device registry. The body is core's
+  ``DeviceEntry.dict_repr`` returned VERBATIM — byte-identical to one element of
+  ``config/device_registry/list`` (which sends ``json_bytes(entry.dict_repr)``)
+  by construction, since this command's ``connection.send_result`` runs the same
+  JSON encoder over the same dict. Consumers keep their own transforms over the
+  raw shape; ``device`` is ``None`` when no such device exists. With
+  ``include_entities`` set, a sibling ``entities`` key carries the device's
+  entity-registry rows (``RegistryEntry.as_partial_dict``, the
+  ``config/entity_registry/list`` shape, disabled entities included) so listing a
+  device's entities no longer pulls the whole entity registry either — the raw
+  DeviceEntry stays untouched; the join is a sibling.
+* ``ha_mcp_tools/device_list`` — every device registry entry as that same raw
+  ``DeviceEntry.dict_repr`` shape (``{devices: [...]}``): the in-process
+  equivalent of ``config/device_registry/list`` served through the component
+  seam, so ``ha_get_device`` list mode need not mix a legacy WS read with the
+  component path.
+* ``ha_mcp_tools/entity_enrich`` — the area/floor/labels/aliases join for a set
+  of entity_ids (``{entities: {id: {area, floor, labels, aliases}}}``), computed
+  by the SAME ``_entity_record``/``_RegistryView`` registry join the search path
+  uses (device-inherited area/labels included). Lets ``ha_get_entity`` add the
+  resolved-name enrichment fields the raw registry entry lacks (it carries
+  ``area_id`` / label *ids*, not resolved names) without the caller fanning out
+  its own area/floor/label registry reads. Registry-only entities (no state) are
+  enriched too — the join keys off the registry, not the state machine.
+* ``ha_mcp_tools/exposure`` — voice-assistant exposure with names/areas attached.
+  List mode mirrors core's ``ws_list_exposed_entities`` (``{exposed_entities:
+  {id: {assistant: True}}}`` — byte-identical to ``homeassistant/expose_entity/
+  list``); single-entity mode reads core's module-level
+  ``async_get_entity_settings``. Both add a sibling ``entity_info`` map enriching
+  each id through the same registry join (friendly_name/domain/area/floor/labels),
+  so the server no longer needs a second search + manual correlation to name an
+  exposed entity. Three parity guardrails hold: only ``should_expose``-true
+  assistants are reported (the raw helper is not pre-filtered like the legacy
+  shape); core's ``HomeAssistantError("Unknown entity")`` on a junk id degrades to
+  the not-exposed default (the legacy path never raises on junk); and a missing
+  ``hass.states.get(id)`` omits the live-state fields (friendly_name/state) rather
+  than crashing.
 
 ``ha_mcp_tools/config_get`` was withdrawn before release: it served an entity's
 ``raw_config``, whose freshness lags the config file between a write and the next
@@ -69,6 +122,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -104,6 +158,12 @@ WS_INFO = f"{WS_API_PREFIX}/info"
 WS_SEARCH = f"{WS_API_PREFIX}/search"
 WS_OVERVIEW = f"{WS_API_PREFIX}/overview"
 WS_HELPERS_LIST = f"{WS_API_PREFIX}/helpers_list"
+WS_STATES = f"{WS_API_PREFIX}/states"
+WS_BLUEPRINT_GET = f"{WS_API_PREFIX}/blueprint_get"
+WS_DEVICE_GET = f"{WS_API_PREFIX}/device_get"
+WS_DEVICE_LIST = f"{WS_API_PREFIX}/device_list"
+WS_ENTITY_ENRICH = f"{WS_API_PREFIX}/entity_enrich"
+WS_EXPOSURE = f"{WS_API_PREFIX}/exposure"
 
 # Wire-format generation of the request/response envelopes. Bumped only on an
 # *incompatible* shape change to an existing command; additive fields do not
@@ -112,9 +172,24 @@ SCHEMA_VERSION = 1
 
 # Which commands exist. Grows one entry per shipped command; the server gates
 # each consumer on ``capability in caps.capabilities``. Never remove an entry
-# without a major bump. (``info`` is always present in 1.1.0, so it carries no
+# without a major bump. (``info`` is always present in 1.1.0+, so it carries no
 # capability key of its own.)
-CAPABILITIES: list[str] = ["search", "overview", "helpers_list"]
+CAPABILITIES: list[str] = [
+    "search",
+    "overview",
+    "helpers_list",
+    "states",
+    "blueprint_get",
+    "device_get",
+    "device_list",
+    "entity_enrich",
+    "exposure",
+]
+
+# Blueprint domains this component will read a body for. Mirrors core's blueprint
+# domains; the WS schema gates on it so an out-of-range domain never reaches the
+# path jail. Kept next to the blueprint command it governs.
+BLUEPRINT_DOMAINS = ("automation", "script")
 
 # Advisory caps advertised in ``info.limits`` so no single WS frame balloons.
 MAX_RESULTS = 500
@@ -252,6 +327,12 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_search_schema(), _do_search, _search_prep),
         (_overview_schema(), _do_overview, None),
         (_helpers_list_schema(), _do_helpers_list, None),
+        (_states_schema(), _do_states, None),
+        (_blueprint_get_schema(), _do_blueprint_get, _blueprint_get_prep),
+        (_device_get_schema(), _do_device_get, None),
+        (_device_list_schema(), _do_device_list, None),
+        (_entity_enrich_schema(), _do_entity_enrich, None),
+        (_exposure_schema(), _do_exposure, None),
     ]
 
 
@@ -309,6 +390,47 @@ def _helpers_list_schema() -> dict[Any, Any]:
         vol.Required("type"): WS_HELPERS_LIST,
         vol.Optional("helper_types"): [str],
         vol.Optional("include_flow_helpers", default=True): bool,
+    }
+
+
+def _states_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_STATES,
+        vol.Required("entity_ids"): [str],
+    }
+
+
+def _blueprint_get_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_BLUEPRINT_GET,
+        vol.Required("domain"): vol.In(BLUEPRINT_DOMAINS),
+        vol.Required("path"): str,
+    }
+
+
+def _device_get_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_DEVICE_GET,
+        vol.Required("device_id"): str,
+        vol.Optional("include_entities", default=False): bool,
+    }
+
+
+def _device_list_schema() -> dict[Any, Any]:
+    return {vol.Required("type"): WS_DEVICE_LIST}
+
+
+def _entity_enrich_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_ENTITY_ENRICH,
+        vol.Required("entity_ids"): [str],
+    }
+
+
+def _exposure_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_EXPOSURE,
+        vol.Optional("entity_id"): vol.Any(str, None),
     }
 
 
@@ -684,13 +806,18 @@ def _get_match_type_tier(
     return "fuzzy_match"
 
 
-def _entity_record(state: Any, view: _RegistryView) -> dict[str, Any]:
-    """Join a state with the entity/device/area/floor/label registries."""
-    entity_id = getattr(state, "entity_id", "") or ""
-    domain = entity_id.split(".")[0] if "." in entity_id else ""
-    attrs = getattr(state, "attributes", None) or {}
-    friendly = attrs.get("friendly_name", entity_id)
+def _registry_enrichment(view: _RegistryView, entity_id: str) -> dict[str, Any]:
+    """Join one entity_id with the entity/device/area/floor/label registries.
 
+    The shared registry read behind BOTH the search record (:func:`_entity_record`)
+    and the ``entity_enrich`` / ``exposure`` commands, so the area/floor/label-name
+    resolution lives in exactly one place. Resolves the entity's aliases plus its
+    area / floor / label NAMES (device-inherited when the entity itself carries
+    none), keyed off the entity registry — no ``State`` object required, so a
+    registry-only (stateless) entity is enriched too. Returns the public
+    enrichment fields (``area`` / ``floor`` / ``labels`` / ``aliases``) alongside
+    the internal ``_area_id`` / ``_hidden`` / ``_dev_texts`` the scorer consumes.
+    """
     reg = _reg_entity(view, entity_id)
     # String entries only: HA core's aliases can carry the COMPUTED_NAME
     # sentinel (entity_registry.ComputedNameType._singleton, "the computed
@@ -719,16 +846,36 @@ def _entity_record(state: Any, view: _RegistryView) -> dict[str, Any]:
             if val:
                 dev_texts.append(str(val))
 
-    area_name = _area_name(view, area_id)
-    floor_name = _floor_name_for_area(view, area_id)
-    label_names = _label_names(view, labels)
+    return {
+        "area": _area_name(view, area_id),
+        "floor": _floor_name_for_area(view, area_id),
+        "labels": _label_names(view, labels),
+        "aliases": aliases,
+        "_area_id": area_id,
+        "_hidden": hidden,
+        "_dev_texts": dev_texts,
+    }
+
+
+def _entity_record(state: Any, view: _RegistryView) -> dict[str, Any]:
+    """Join a state with the entity/device/area/floor/label registries."""
+    entity_id = getattr(state, "entity_id", "") or ""
+    domain = entity_id.split(".")[0] if "." in entity_id else ""
+    attrs = getattr(state, "attributes", None) or {}
+    friendly = attrs.get("friendly_name", entity_id)
+
+    join = _registry_enrichment(view, entity_id)
+    area_name = join["area"]
+    floor_name = join["floor"]
+    label_names = join["labels"]
+    aliases = join["aliases"]
 
     # Scored texts extend the server's id + friendly-name pair with the specific
     # joined identifiers (alias / area / floor / label / device). The bare domain
     # is deliberately excluded: matching it would score every entity of a domain
     # at the exact tier (a "light" query flooding all lights), which the server
     # does not do — domain is a filter dimension, not a scored text.
-    match_texts = [entity_id, friendly, *aliases, *label_names, *dev_texts]
+    match_texts = [entity_id, friendly, *aliases, *label_names, *join["_dev_texts"]]
     if area_name:
         match_texts.append(area_name)
     if floor_name:
@@ -743,8 +890,8 @@ def _entity_record(state: Any, view: _RegistryView) -> dict[str, Any]:
         "floor": floor_name,
         "labels": label_names,
         "aliases": aliases,
-        "_hidden": hidden,
-        "_area_id": area_id,
+        "_hidden": join["_hidden"],
+        "_area_id": join["_area_id"],
         "_match_texts": match_texts,
     }
 
@@ -1950,3 +2097,543 @@ def _overview_repairs(hass: HomeAssistant) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+# =============================================================================
+# ha_mcp_tools/states
+# =============================================================================
+def _do_states(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return ``State.as_dict()`` for each requested entity_id + a ``missing`` list.
+
+    ``hass.states.get(id)`` is a pure O(1) in-memory dict read, and core's
+    ``State.as_dict()`` is exactly the serialization the REST ``/api/states/<id>``
+    endpoint emits — so a component-served record is byte-identical to the legacy
+    per-id REST fetch by construction (the WS transport JSON-encodes the same
+    datetimes to the same ISO strings the REST layer does). The body is returned
+    UNMODIFIED — never ``_plainify``'d — precisely so that byte-parity holds:
+    ``_plainify``'s ``str()`` would render a datetime with a space separator where
+    both REST and WS use ``isoformat``'s ``T``. No freshness or secrets concern:
+    state bodies are always live and carry no ``!secret`` plaintext. The server
+    enforces its own ``MAX_ENTITIES`` cap before calling, so no per-frame guard is
+    needed here (100 full states is well within one frame — ``overview`` already
+    returns every state in one call).
+    """
+    entity_ids = params.get("entity_ids") or []
+    states: dict[str, Any] = {}
+    missing: list[str] = []
+    for entity_id in entity_ids:
+        state = _state_get(hass, entity_id)
+        if state is None:
+            missing.append(entity_id)
+            continue
+        as_dict = _state_as_dict(state)
+        if as_dict is None:
+            # A live state that could not be serialized (core drift) goes to
+            # ``missing`` rather than emitting a null state indistinguishable from
+            # a real value — the server maps ``missing`` onto its per-id contract.
+            missing.append(entity_id)
+            continue
+        states[entity_id] = as_dict
+    return {"states": states, "missing": missing}
+
+
+def _state_get(hass: HomeAssistant, entity_id: str) -> Any:
+    """``hass.states.get(entity_id)`` guarded against core drift (``None`` if absent)."""
+    states = getattr(hass, "states", None)
+    getter = getattr(states, "get", None) if states is not None else None
+    if getter is None:
+        return None
+    try:
+        return getter(entity_id)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _state_as_dict(state: Any) -> Any:
+    """core ``State.as_dict()`` verbatim — the REST ``/api/states/<id>`` shape.
+
+    Returned unmodified so the WS transport encodes its datetimes with the same
+    ``isoformat`` the REST layer uses (byte-parity — see :func:`_do_states`).
+    """
+    as_dict = getattr(state, "as_dict", None)
+    if callable(as_dict):
+        try:
+            return as_dict()
+        except Exception:  # pragma: no cover - defensive
+            return None
+    return None
+
+
+# =============================================================================
+# ha_mcp_tools/blueprint_get
+# =============================================================================
+def _do_blueprint_get(
+    hass: HomeAssistant,
+    params: dict[str, Any],
+    *,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return one installed blueprint's full body as ``{metadata, config}``.
+
+    core's ``blueprint/list`` returns only ``{metadata}`` (no triggers /
+    conditions / actions / sequence), so the server can otherwise serve metadata
+    only. This reads the on-disk blueprint file and returns the parsed body:
+    ``config`` is the full file (the server merges it additively over the
+    ``blueprint/list`` metadata) and ``metadata`` is its ``blueprint:`` section.
+    When the file is missing, unparseable, or the requested path escapes the jail,
+    both come back ``None`` (the server keeps metadata-only) — see
+    :func:`_read_blueprint_file`.
+
+    Pure: the blocking jail-resolve + file read + YAML parse run in the executor
+    via :func:`_blueprint_get_prep`, which passes the parsed ``body`` in.
+    """
+    if not isinstance(body, dict):
+        return {"metadata": None, "config": None}
+    metadata = body.get("blueprint")
+    return {
+        "metadata": _plainify(metadata) if isinstance(metadata, dict) else None,
+        "config": _plainify(body),
+    }
+
+
+async def _blueprint_get_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Async pre-step for ``blueprint_get``: jail + read + parse off the loop.
+
+    The path jail (symlink-safe ``Path.resolve`` containment), the ``open()`` and
+    the YAML parse are all blocking filesystem work, so they run in the executor
+    via :meth:`hass.async_add_executor_job` — keeping :func:`_do_blueprint_get` a
+    pure assembler over the parsed ``body`` this returns (``None`` on any failure).
+    """
+    domain = msg["domain"]
+    path = msg["path"]
+    body = await hass.async_add_executor_job(_read_blueprint_file, hass, domain, path)
+    return {"body": body}
+
+
+def _read_blueprint_file(
+    hass: HomeAssistant, domain: str, path: str
+) -> dict[str, Any] | None:
+    """Resolve + jail + read + parse one blueprint YAML file. ``None`` on failure.
+
+    Blueprint files live under ``<config>/blueprints/<domain>/``. The requested
+    ``path`` is joined under that root and resolved symlink-safe (mirrors the
+    file-tool jail's ``_resolves_within`` — resolve the RAW input, following
+    symlinks, THEN check containment, so ``<root>/<symlink>/..`` cannot escape). A
+    path escaping the root — via ``..``, an absolute path, or a symlink — yields
+    ``None`` (rejected, never opened). A missing file, a non-file target, a read
+    error, or a YAML parse error also yields ``None``. Only a valid, contained,
+    parseable blueprint returns its full parsed body.
+
+    Parsed with :class:`_BlueprintLoader`: ``!input`` markers are preserved and
+    every other custom tag (``!secret`` / ``!include`` / …) is neutralized to
+    ``None``, so no resolved secret plaintext can ever enter the returned body
+    (defense in depth — blueprints use ``!input``, not ``!secret``).
+    """
+    config = getattr(hass, "config", None)
+    path_fn = getattr(config, "path", None)
+    if not callable(path_fn):
+        return None
+    try:
+        base = Path(path_fn("blueprints", domain))
+        candidate = Path(path) if path.startswith("/") else base / path
+        real = candidate.resolve()
+        base_real = base.resolve()
+    except (OSError, ValueError):
+        return None
+    if not (real == base_real or real.is_relative_to(base_real)):
+        return None
+    try:
+        with open(real, encoding="utf-8") as handle:
+            # Instance form (not yaml.load) mirrors the component's existing
+            # _PackagesDirLoader usage; _BlueprintLoader is a SafeLoader subclass,
+            # so no !!python/object can construct arbitrary types.
+            loader = _BlueprintLoader(handle)
+            try:
+                parsed = loader.get_single_data()
+            finally:
+                loader.dispose()
+    except (OSError, ValueError, yaml.YAMLError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _construct_blueprint_input(loader: Any, node: Any) -> dict[str, str]:
+    """Represent ``!input <name>`` as ``{"__input__": <name>}``.
+
+    A JSON-safe, unambiguous marker of a blueprint input substitution point (the
+    body is a display artifact, not a runnable config), so a consumer can see
+    which fields an input fills without the tag crashing a plain safe-load.
+    """
+    return {"__input__": str(getattr(node, "value", ""))}
+
+
+def _drop_blueprint_tag(loader: Any, tag_suffix: Any, node: Any) -> None:
+    """Neutralize every non-``!input`` custom tag to ``None`` (never resolve it).
+
+    ``!secret`` must never resolve to plaintext; ``!include`` / ``!env_var`` /
+    unknown tags are irrelevant to a read-only body view. Mirrors the component's
+    ``_ignore_unknown_tag`` pattern in ``__init__.py``.
+    """
+    return None
+
+
+class _BlueprintLoader(yaml.SafeLoader):
+    """SafeLoader for blueprint files: keep ``!input``, neutralize all other tags."""
+
+
+_BlueprintLoader.add_constructor("!input", _construct_blueprint_input)
+_BlueprintLoader.add_multi_constructor("!", _drop_blueprint_tag)
+
+
+# =============================================================================
+# ha_mcp_tools/device_get + ha_mcp_tools/device_list
+# =============================================================================
+def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return one device registry entry by id, optionally with its entities.
+
+    ``{device: <DeviceEntry.dict_repr> | None}`` — ``registry.async_get(device_id)``
+    is a pure O(1) in-memory dict read, and the emitted body is core's
+    ``DeviceEntry.dict_repr`` returned UNMODIFIED — exactly the shape
+    ``config/device_registry/list`` serializes (it sends
+    ``json_bytes(entry.dict_repr)``), so a component-served record is byte-identical
+    to one legacy list element by construction (the WS transport JSON-encodes the
+    same dict with the same encoder). The body is never ``_plainify``'d: that would
+    ``str()`` the ``disabled_by`` / ``entry_type`` enums to their repr instead of the
+    wire value core's encoder emits, breaking parity. ``device`` is ``None`` when no
+    such device exists — the server maps that onto its own not-found contract.
+
+    When ``include_entities`` is set, a SIBLING ``entities`` key carries the device's
+    entity-registry rows (``[<RegistryEntry.as_partial_dict>, ...]`` — the same shape
+    and serialization ``config/entity_registry/list`` emits), so a single-device
+    lookup no longer pulls the WHOLE entity registry to list one device's entities.
+    ``er.async_entries_for_device`` is called with ``include_disabled_entities=True``
+    to match what ``config/entity_registry/list`` returns (it lists disabled entities
+    too). The DeviceEntry dict itself stays exactly the raw shape — the join is a
+    sibling, so consumers keep their own transforms. The ``entities`` key is present
+    only when requested.
+    """
+    device_id = params.get("device_id")
+    include_entities = params.get("include_entities", False)
+    view = _resolve_registries(hass)
+    entry = _device(view, device_id) if device_id else None
+    result: dict[str, Any] = {
+        "device": _device_dict_repr(entry) if entry is not None else None
+    }
+    if include_entities:
+        result["entities"] = _device_entities(view, device_id) if device_id else []
+    return result
+
+
+def _do_device_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return every device registry entry as ``{devices: [dict_repr, ...]}``.
+
+    The in-process equivalent of ``config/device_registry/list``: each element is
+    core's ``DeviceEntry.dict_repr`` returned VERBATIM (same byte-parity rationale
+    as :func:`_do_device_get`), so the server's existing device transforms consume
+    it unchanged. An entry whose ``dict_repr`` is unavailable is skipped rather
+    than emitted as a partial record.
+    """
+    view = _resolve_registries(hass)
+    reg = view.device
+    devices = getattr(reg, "devices", None) if reg is not None else None
+    out: list[dict[str, Any]] = []
+    for dev in _mapping_values(devices):
+        repr_dict = _device_dict_repr(dev)
+        if repr_dict is not None:
+            out.append(repr_dict)
+        else:
+            _LOGGER.warning(
+                "device_list: skipping device %r with unavailable dict_repr",
+                getattr(dev, "id", None),
+            )
+    return {"devices": out}
+
+
+def _device_dict_repr(entry: Any) -> dict[str, Any] | None:
+    """core ``DeviceEntry.dict_repr`` verbatim — the ``config/device_registry/list`` shape.
+
+    Returned UNMODIFIED so the WS transport encodes it with the same JSON
+    serializer ``config/device_registry/list`` uses (byte-parity — see
+    :func:`_do_device_get`). Guarded against core drift: a missing/raising
+    ``dict_repr`` yields ``None`` rather than propagating.
+    """
+    try:
+        repr_dict = entry.dict_repr
+    except Exception:  # pragma: no cover - defensive; core drift
+        return None
+    return repr_dict if isinstance(repr_dict, dict) else None
+
+
+def _device_entities(view: _RegistryView, device_id: str) -> list[dict[str, Any]]:
+    """The device's entity-registry rows as ``config/entity_registry/list`` elements.
+
+    Each row is core's ``RegistryEntry.as_partial_dict`` returned VERBATIM (the same
+    shape + serialization ``config/entity_registry/list`` emits — it sends
+    ``json_bytes(entry.partial_json_repr)`` over ``as_partial_dict``), so the
+    server's device<->entity map builds identically off the join or the legacy list.
+    A row whose ``as_partial_dict`` is unavailable is skipped.
+    """
+    out: list[dict[str, Any]] = []
+    for entry in _entries_for_device(view, device_id):
+        partial = _entity_partial_dict(entry)
+        if partial is not None:
+            out.append(partial)
+    return out
+
+
+def _entries_for_device(view: _RegistryView, device_id: str) -> list[Any]:
+    """Entity-registry entries bound to ``device_id``, disabled ones INCLUDED.
+
+    Delegates to core's ``er.async_entries_for_device`` (its device_id index) with
+    ``include_disabled_entities=True`` so the result matches what
+    ``config/entity_registry/list`` returns — that command lists disabled entities
+    too, and dropping them would diverge the join from the legacy shape. Guarded
+    against a missing registry / core drift (returns ``[]``).
+    """
+    reg = view.entity
+    if reg is None or not device_id:
+        return []
+    try:
+        entries = er.async_entries_for_device(
+            reg, device_id, include_disabled_entities=True
+        )
+    except Exception:  # pragma: no cover - defensive; core drift
+        return []
+    return list(entries)
+
+
+def _entity_partial_dict(entry: Any) -> dict[str, Any] | None:
+    """core ``RegistryEntry.as_partial_dict`` verbatim — the ``config/entity_registry/list`` shape.
+
+    Returned UNMODIFIED so the WS transport encodes it with the same serializer
+    ``config/entity_registry/list`` uses (byte-parity, mirroring
+    :func:`_device_dict_repr`). Guarded against core drift.
+    """
+    try:
+        partial = entry.as_partial_dict
+    except Exception:  # pragma: no cover - defensive; core drift
+        return None
+    return partial if isinstance(partial, dict) else None
+
+
+# =============================================================================
+# ha_mcp_tools/entity_enrich
+# =============================================================================
+def _do_entity_enrich(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return the area/floor/labels/aliases join for each requested entity_id.
+
+    ``{entities: {id: {area, floor, labels, aliases}}}`` — each id runs through the
+    SAME :func:`_registry_enrichment` join the search path uses (device-inherited
+    area/labels, resolved NAMES), so ``ha_get_entity`` adds the resolved-name
+    fields the raw registry entry lacks without the caller fanning out its own
+    area/floor/label registry reads. Pure O(id) in-memory registry lookups; a
+    registry-only (stateless) entity is enriched too (the join keys off the
+    registry, not the state machine). An id with no registry entry yields empty /
+    ``None`` fields rather than being dropped, so the caller can pair the result
+    back to its request by key.
+    """
+    entity_ids = params.get("entity_ids") or []
+    view = _resolve_registries(hass)
+    entities: dict[str, Any] = {}
+    for entity_id in entity_ids:
+        join = _registry_enrichment(view, entity_id)
+        entities[entity_id] = {
+            "area": join["area"],
+            "floor": join["floor"],
+            "labels": join["labels"],
+            "aliases": join["aliases"],
+        }
+    return {"entities": entities}
+
+
+# =============================================================================
+# ha_mcp_tools/exposure
+# =============================================================================
+def _do_exposure(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Return voice-assistant exposure with names/areas attached.
+
+    ``{exposed_entities: {id: {assistant: True}}, entity_info: {id: {...}}}``.
+    ``exposed_entities`` is byte-identical to core's ``ws_list_exposed_entities``
+    result (``homeassistant/expose_entity/list``): only ``should_expose``-true
+    assistants appear, and an entity with none is omitted from the map — so the
+    server's existing exposure shaping consumes it unchanged. ``entity_info`` is
+    the additive half: each relevant id enriched through :func:`_registry_enrichment`
+    (friendly_name/domain/area/floor/labels), closing the "one call gives a bare
+    ``{id: {assistant: bool}}`` map with no names/areas" gap.
+
+    Modes:
+
+    * single-entity (``entity_id`` set) — reads core's module-level
+      ``async_get_entity_settings`` for that id and enriches it (whether exposed or
+      not — the caller asked about that specific entity).
+    * list (``entity_id`` omitted) — mirrors ``ws_list_exposed_entities``: walks
+      the exposed-entities store ids + the entity registry, keeps the exposed ones,
+      and enriches each.
+
+    Parity guardrails (mirroring the legacy shape, pinned in tests):
+
+    1. only ``should_expose``-true assistants are reported (the raw helper returns
+       every assistant that has *any* stored option, not just exposed ones);
+    2. core's ``HomeAssistantError("Unknown entity")`` on a junk id is caught and
+       degrades to the not-exposed default (the legacy ``expose_entity/list`` never
+       raises on a junk id);
+    3. a missing ``hass.states.get(id)`` omits the live-state fields
+       (friendly_name / state) from ``entity_info`` rather than crashing.
+    """
+    entity_id = params.get("entity_id")
+    view = _resolve_registries(hass)
+
+    if entity_id:
+        exposed_to = _entity_exposed_to(hass, entity_id)
+        return {
+            "exposed_entities": {entity_id: exposed_to} if exposed_to else {},
+            "entity_info": {entity_id: _exposure_enrichment(hass, view, entity_id)},
+        }
+
+    exposed_entities: dict[str, Any] = {}
+    entity_info: dict[str, Any] = {}
+    for eid in _all_exposable_entity_ids(hass, view):
+        exposed_to = _entity_exposed_to(hass, eid)
+        if not exposed_to:
+            continue
+        exposed_entities[eid] = exposed_to
+        entity_info[eid] = _exposure_enrichment(hass, view, eid)
+    return {"exposed_entities": exposed_entities, "entity_info": entity_info}
+
+
+def _entity_exposed_to(hass: HomeAssistant, entity_id: str) -> dict[str, bool]:
+    """``{assistant: True}`` for the entity's ``should_expose``-true assistants.
+
+    Reads core's ``async_get_entity_settings`` (via the local
+    :func:`_async_get_entity_settings` test-seam wrapper) and keeps only assistants
+    whose settings carry a truthy ``should_expose`` (guardrail 1 — the raw helper is
+    not pre-filtered like ``ws_list_exposed_entities``). A junk id whose helper raises
+    ``HomeAssistantError("Unknown entity")`` degrades to ``{}`` (guardrail 2), the
+    same not-exposed default the legacy path returns for an id it never listed.
+    """
+    try:
+        settings = _async_get_entity_settings(hass, entity_id)
+    except Exception as exc:
+        if _is_unknown_entity_error(exc):
+            return {}
+        raise
+    out: dict[str, bool] = {}
+    if isinstance(settings, Mapping):
+        for assistant, opts in settings.items():
+            if isinstance(opts, Mapping) and opts.get("should_expose"):
+                out[str(assistant)] = True
+    return out
+
+
+def _exposure_enrichment(
+    hass: HomeAssistant, view: _RegistryView, entity_id: str
+) -> dict[str, Any]:
+    """area/floor/labels + domain for an id, plus live-state fields when present.
+
+    Runs the id through :func:`_registry_enrichment` for area/floor/labels
+    (device-inherited names). ``domain`` comes from the id itself (no state
+    needed). ``friendly_name`` and ``state`` are LIVE-STATE fields: included only
+    when ``hass.states.get(id)`` exists, omitted otherwise (guardrail 3 — a
+    disabled / legacy-only entity has no state, so those keys are simply absent
+    rather than crashing the join).
+    """
+    join = _registry_enrichment(view, entity_id)
+    domain = entity_id.split(".")[0] if "." in entity_id else ""
+    info: dict[str, Any] = {
+        "domain": domain,
+        "area": join["area"],
+        "floor": join["floor"],
+        "labels": join["labels"],
+    }
+    state = _state_get(hass, entity_id)
+    if state is not None:
+        attrs = getattr(state, "attributes", None) or {}
+        friendly = (
+            attrs.get("friendly_name", entity_id)
+            if isinstance(attrs, Mapping)
+            else entity_id
+        )
+        info["friendly_name"] = str(friendly)
+        info["state"] = getattr(state, "state", "unknown")
+    return info
+
+
+def _all_exposable_entity_ids(hass: HomeAssistant, view: _RegistryView) -> list[str]:
+    """Every id ``ws_list_exposed_entities`` walks: store ids plus registry ids.
+
+    Core iterates ``chain(exposed_entities.entities, entity_registry.entities)`` —
+    the legacy store (entities WITHOUT a unique_id, exposed manually) plus every
+    registry entity. This reproduces that union, de-duplicated with store-first
+    order, so an exposed YAML entity that lives only in the store is not missed.
+    """
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for eid in _legacy_exposed_entity_ids(hass):
+        if eid and eid not in seen:
+            seen.add(eid)
+            ordered.append(eid)
+    for entry in _all_entity_entries(view):
+        entry_eid = getattr(entry, "entity_id", None)
+        if entry_eid and entry_eid not in seen:
+            seen.add(entry_eid)
+            ordered.append(entry_eid)
+    return ordered
+
+
+def _async_get_entity_settings(hass: HomeAssistant, entity_id: str) -> Any:
+    """core's ``async_get_entity_settings(hass, entity_id)``; test seam.
+
+    Imported lazily so the fake-hass unit suite (which MagicMock-stubs
+    ``homeassistant.*`` at import time) can monkeypatch this whole function rather
+    than the deep core module. Returns ``{assistant: settings_mapping}`` and raises
+    ``HomeAssistantError("Unknown entity")`` for an id in neither the registry nor
+    the exposed-entities store — caught by :func:`_entity_exposed_to`.
+    """
+    from homeassistant.components.homeassistant.exposed_entities import (
+        async_get_entity_settings,
+    )
+
+    return async_get_entity_settings(hass, entity_id)
+
+
+def _legacy_exposed_entity_ids(hass: HomeAssistant) -> list[str]:
+    """Entity ids in the exposed-entities store (entities without a unique_id).
+
+    The ``exposed_entities.entities`` half of core's ``ws_list_exposed_entities``
+    iteration. Imported lazily (test seam); a missing store / core drift yields
+    ``[]`` so list mode still enumerates the registry half.
+    """
+    try:
+        from homeassistant.components.homeassistant.const import (
+            DATA_EXPOSED_ENTITIES,
+        )
+
+        data = getattr(hass, "data", None)
+        store = data.get(DATA_EXPOSED_ENTITIES) if isinstance(data, Mapping) else None
+    except Exception:  # pragma: no cover - defensive; core drift
+        return []
+    entities = getattr(store, "entities", None)
+    if isinstance(entities, Mapping):
+        return [str(eid) for eid in entities]
+    return []
+
+
+def _is_unknown_entity_error(exc: Exception) -> bool:
+    """True for core's ``HomeAssistantError('Unknown entity')`` from the settings helper.
+
+    Keyed off the exception type NAME (not an ``isinstance`` against the imported
+    class) so the fake-hass suite — which stubs ``homeassistant.exceptions`` — can
+    raise a stand-in ``HomeAssistantError`` without importing the real class. The
+    type name alone is too wide: core raises a plain ``HomeAssistantError`` for
+    other faults too, so the message is also required to carry ``unknown entity``
+    (case-insensitive). A store-read failure that raises a bare
+    ``HomeAssistantError`` therefore propagates instead of being silently reported
+    as not-exposed; the audit guardrail (junk id → not-exposed default) still
+    matches because that raise carries the ``Unknown entity`` message.
+    """
+    return (
+        type(exc).__name__ == "HomeAssistantError"
+        and "unknown entity" in str(exc).lower()
+    )
