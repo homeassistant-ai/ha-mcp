@@ -104,8 +104,11 @@ def _reject_strict_bps_without_skill_tool(
     Gated on the pair actually appearing in this payload so unrelated
     feature-flag saves can't trip over a pre-existing (hand-edited)
     conflict, which apply_tool_visibility already strips-and-warns at
-    startup. The other direction (disabling the tool while strict mode is
-    on) is rejected in _handlers_tools._save_tools.
+    startup. Env-pinned disables (DISABLED_TOOLS) are deliberately NOT
+    considered: they can't be lifted from the Tools tab, and under strict
+    mode they become the documented stays-on no-op via the same
+    strip-and-warn. The other direction (disabling the tool while strict
+    mode is on) is rejected in _handlers_tools._save_tools.
     """
     if (
         "enable_mandatory_bps" not in raw_flags
@@ -121,7 +124,13 @@ def _reject_strict_bps_without_skill_tool(
         return None
     from ._tools_meta import BPS_MANDATORY_TOOLS
 
-    tool_states = _persistence.effective_tool_config().get("tools", {})
+    # load_tool_config (user-set file state), NOT effective_tool_config
+    # (env-merged): a DISABLED_TOOLS env pin can't be lifted from the
+    # Tools tab, so rejecting on it would strand the user — and the
+    # documented semantics for an env-listed BPS tool under strict mode
+    # are "stays on even if listed": apply_tool_visibility's
+    # strip-and-warn keeps the tool enabled at runtime.
+    tool_states = _persistence.load_tool_config().get("tools", {})
     bps_blocked = sorted(
         name for name in BPS_MANDATORY_TOOLS if tool_states.get(name) == "disabled"
     )

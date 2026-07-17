@@ -282,6 +282,31 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         return get_skills_dir()
 
+    def _skill_tool_hidden(self) -> bool:
+        """True when ha_get_skill_guide will be absent from the catalog.
+
+        The tool is user- or env-disableable only while strict-BPS mode
+        is off (#1886) — apply_tool_visibility strips the disable
+        otherwise. Consulted at instruction-build time so the skills
+        header doesn't direct clients to a tool that is not being
+        served. Fails toward False (mention the tool): a wrong mention
+        costs one unknown-tool error, a wrong omission hides the only
+        non-resource access path.
+        """
+        try:
+            from .settings_ui._persistence import effective_tool_config
+            from .settings_ui._tools_meta import effective_mandatory_tools
+
+            states = effective_tool_config().get("tools", {})
+            return states.get(
+                SKILL_TOOL_NAME
+            ) == "disabled" and SKILL_TOOL_NAME not in effective_mandatory_tools(
+                self.settings
+            )
+        except Exception:
+            logger.debug("skill-tool visibility lookup failed", exc_info=True)
+            return False
+
     def _build_skills_instructions(self) -> str | None:
         """Build server instructions from bundled skill frontmatter.
 
@@ -316,14 +341,29 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         if not skill_blocks:
             return None
 
-        access_method = (
-            "Read the skill via MCP resources (resources/read with the "
-            "skill:// URI) — if you can read these instructions, you "
-            "should be able to access resources as well. If for any "
-            f"reason you cannot access MCP resources, use the {SKILL_TOOL_NAME} "
-            "tool as a fallback. If you can access resources normally, do "
-            "not waste time or tokens on that tool."
-        )
+        if self._skill_tool_hidden():
+            # The user disabled the skill tool (possible only outside
+            # strict-BPS mode, #1886) — directing clients to it would
+            # steer them into a tool that is not in the catalog. Their
+            # stated fallback is a local skills install.
+            access_method = (
+                "Read the skill via MCP resources (resources/read with the "
+                "skill:// URI) — if you can read these instructions, you "
+                "should be able to access resources as well. If for any "
+                "reason you cannot access MCP resources, refer to your "
+                "locally installed copy of these skills instead (the "
+                f"{SKILL_TOOL_NAME} fallback tool is disabled on this "
+                "server)."
+            )
+        else:
+            access_method = (
+                "Read the skill via MCP resources (resources/read with the "
+                "skill:// URI) — if you can read these instructions, you "
+                "should be able to access resources as well. If for any "
+                f"reason you cannot access MCP resources, use the {SKILL_TOOL_NAME} "
+                "tool as a fallback. If you can access resources normally, do "
+                "not waste time or tokens on that tool."
+            )
 
         header = (
             "IMPORTANT: This server provides best-practice skills that MUST "

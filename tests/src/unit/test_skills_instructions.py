@@ -186,6 +186,59 @@ class TestBuildSkillsInstructions:
         assert "ha_list_resources" not in result
         assert "ha_read_resource" not in result
 
+    def test_hidden_skill_tool_swaps_fallback_to_local_skills(self, server, tmp_path):
+        """#1886: when ha_get_skill_guide is disabled (possible only
+        outside strict-BPS mode), the access-method fallback must not
+        direct clients to the hidden tool — it points at locally
+        installed skills instead."""
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        skill_dir = tmp_path / "my-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: my-skill\n"
+            "description: |\n"
+            "  Best practices for my-skill tasks.\n"
+            "---\n# Body\n"
+        )
+
+        with (
+            patch.object(server, "_get_skills_dir", return_value=tmp_path),
+            patch.object(server, "_skill_tool_hidden", return_value=True),
+        ):
+            result = server._build_skills_instructions()
+
+        assert result is not None
+        assert "locally installed copy" in result
+        assert f"use the {SKILL_TOOL_NAME} tool as a fallback" not in result
+
+    def test_skill_tool_hidden_logic(self, server):
+        """_skill_tool_hidden: true only when the tool is configured
+        disabled AND the strict-BPS lock doesn't override it."""
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        server.settings.enable_mandatory_bps = True
+        server.settings.enable_strict_mandatory_bps = False
+        with patch(
+            "ha_mcp.settings_ui._persistence.effective_tool_config",
+            return_value={"tools": {SKILL_TOOL_NAME: "disabled"}},
+        ):
+            assert server._skill_tool_hidden() is True
+
+        server.settings.enable_strict_mandatory_bps = True
+        with patch(
+            "ha_mcp.settings_ui._persistence.effective_tool_config",
+            return_value={"tools": {SKILL_TOOL_NAME: "disabled"}},
+        ):
+            assert server._skill_tool_hidden() is False
+
+        server.settings.enable_strict_mandatory_bps = False
+        with patch(
+            "ha_mcp.settings_ui._persistence.effective_tool_config",
+            return_value={"tools": {}},
+        ):
+            assert server._skill_tool_hidden() is False
+
     def test_empty_skills_dir(self, server, tmp_path):
         """Empty skills directory returns None."""
         with patch.object(server, "_get_skills_dir", return_value=tmp_path):

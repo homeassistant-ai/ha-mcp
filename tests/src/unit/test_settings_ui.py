@@ -4725,6 +4725,28 @@ class TestBpsSkillGuideDependency:
         self._teardown()
 
     @pytest.mark.asyncio
+    async def test_save_features_ignores_env_pinned_skill_guide_disable(
+        self, monkeypatch, tmp_path
+    ):
+        """An env-pinned (DISABLED_TOOLS) skill-guide disable must NOT
+        block enabling strict mode: it can't be lifted from the Tools
+        tab, and apply_tool_visibility turns it into the documented
+        stays-on no-op once strict mode is on. Only a user-set (file)
+        disable rejects."""
+        handlers = self._handlers(monkeypatch, tmp_path, strict_on=False)
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_get_skill_guide")
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+        request = MagicMock()
+        request.json = AsyncMock(
+            return_value={"flags": {"enable_strict_mandatory_bps": True}}
+        )
+        resp = await handlers["save_feature_flags"](request)
+        assert json.loads(resp.body)["success"] is True
+        self._teardown()
+
+    @pytest.mark.asyncio
     async def test_get_tools_reports_bps_locked_tools(self, monkeypatch, tmp_path):
         handlers = self._handlers(monkeypatch, tmp_path, strict_on=True)
         resp = await handlers["get_tools"](MagicMock())
