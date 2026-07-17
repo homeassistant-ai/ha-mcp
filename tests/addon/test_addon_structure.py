@@ -260,40 +260,44 @@ class TestAddonStructure:
     )
     def test_translations_cover_every_schema_key(self, addon_dir):
         """Every key declared in ``config.yaml``'s ``schema:`` must have a
-        matching ``configuration.<key>`` entry in ``translations/en.yaml``
-        with both ``name`` and ``description`` populated. The
-        ``advanced_debug_logging`` schema field was added on stable but
-        the translation was forgotten — the addon Configuration UI
-        then showed an unlabelled checkbox. Lock the parity so the
-        same class of silent gap can't recur.
+        matching ``configuration.<key>`` entry — with both ``name`` and
+        ``description`` populated — in *every* ``translations/*.yaml`` file,
+        not only English. The ``advanced_debug_logging`` schema field was
+        added on stable but the translation was forgotten — the addon
+        Configuration UI then showed an unlabelled checkbox. A missing
+        localized ``name``/``description`` shows the same unlabelled toggle
+        to that language's users, so lock the parity across every shipped
+        locale.
         """
         with open(f"{addon_dir}/config.yaml", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
-        with open(f"{addon_dir}/translations/en.yaml", encoding="utf-8") as f:
-            translations = yaml.safe_load(f)
         schema_keys = set(cfg.get("schema", {}).keys())
         # ``secret_path`` is intentionally undocumented in user-facing
         # translations (it's an advanced/hidden override the wizard
         # handles, not a user-set option).
         schema_keys.discard("secret_path")
-        configuration = translations.get("configuration", {})
-        for key in sorted(schema_keys):
-            entry = configuration.get(key)
-            assert entry is not None, (
-                f"{addon_dir}/translations/en.yaml is missing a "
-                f"`configuration.{key}` entry for the schema field "
-                f"declared in config.yaml"
-            )
-            assert entry.get("name"), (
-                f"{addon_dir}/translations/en.yaml `configuration.{key}` "
-                "needs a non-empty `name` (Supervisor renders it as the "
-                "user-facing toggle label)"
-            )
-            assert entry.get("description"), (
-                f"{addon_dir}/translations/en.yaml `configuration.{key}` "
-                "needs a non-empty `description` (Supervisor renders it "
-                "as the help tooltip under the toggle)"
-            )
+
+        translation_files = sorted(Path(addon_dir, "translations").glob("*.yaml"))
+        assert translation_files, f"{addon_dir}/translations has no *.yaml files"
+        for tf in translation_files:
+            with open(tf, encoding="utf-8") as f:
+                translations = yaml.safe_load(f)
+            configuration = translations.get("configuration", {})
+            for key in sorted(schema_keys):
+                entry = configuration.get(key)
+                assert entry is not None, (
+                    f"{tf} is missing a `configuration.{key}` entry for the "
+                    "schema field declared in config.yaml"
+                )
+                assert entry.get("name"), (
+                    f"{tf} `configuration.{key}` needs a non-empty `name` "
+                    "(Supervisor renders it as the user-facing toggle label)"
+                )
+                assert entry.get("description"), (
+                    f"{tf} `configuration.{key}` needs a non-empty "
+                    "`description` (Supervisor renders it as the help tooltip "
+                    "under the toggle)"
+                )
 
     def test_addon_names_are_backup_filename_safe(self):
         r"""No add-on ``name`` may contain ``/``.

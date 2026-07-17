@@ -10,7 +10,7 @@ configuration:
       LLM-seitigen Prompt-Satz.
 
       Für automatische Snapshots pro Bearbeitung von Automatisierungen / Skripten /
-      Helfern / etc. nutze den separaten **Enable auto-backup of edits**-Schalter
+      Helfern / etc. nutze den separaten **Auto-Backup von Bearbeitungen aktivieren**-Schalter
       unten.
   secret_path:
     name: Secret-Pfad Override
@@ -25,7 +25,7 @@ configuration:
       eingebauten Tool Search / Deferred Tools, der mit unserem kollidiert. Um
       ha-mcps Tool Search mit Claude zu nutzen, deaktiviere zuerst Claudes
       eingebauten Tool Search; ansonsten lass dies aus. Nutze dies nur mit LLMs,
-      die native Deferred Tools fehlen (z.B. Claude Haiku, lokale
+      denen native Deferred Tools fehlen (z.B. Claude Haiku, lokale
       OpenAI-kompatible Modelle) oder mit kleineren Kontextfenstern. Tools werden
       via ha_search_tools gefunden und über kategorisierte Proxies ausgeführt
       (read/write/delete). Erfordert Neustart, um wirksam zu werden.
@@ -143,7 +143,7 @@ configuration:
       HAMCP_BACKUP_DIR) und über den Backups-Tab im Web-Settings-UI oder via
       ha_manage_backup(scope='edits', ...) aufgelistet, wiederhergestellt oder
       gelöscht. Best-Effort – Fehler loggen ein WARNING, blockieren aber nie den
-      zugrunde liegenden Schreibvorgang. Standardmäßig an; abhaken, um
+      zugrunde liegenden Schreibvorgang. Standardmäßig an; Häkchen entfernen, um
       auszusteigen. Erfordert Neustart, um wirksam zu werden.
   auto_backup_throttle_minutes:
     name: Auto-Backup-Drosselung (Minuten)
@@ -163,7 +163,7 @@ configuration:
       Lässt ha_manage_backup vollständige HA-Snapshot-Tarballs löschen
       (scope='snapshot', action='delete'). Standardmäßig aus – ein Snapshot
       könnte der letzte Wiederherstellungspunkt nach einer fehlerhaften Änderung
-      sein, also muss ein Mensch hier opt-in. Auch wenn an, bleiben geplante
+      sein, also muss ein Mensch dies hier aktiv aktivieren. Auch wenn an, bleiben geplante
       Backups, der neueste verbleibende Snapshot und alles jünger als der
       Alters-Floor unten geschützt.
   snapshot_delete_min_age_days:
