@@ -629,11 +629,9 @@ async def test_get_entities_unexpected_seam_error_converted_to_warnings() -> Non
 
     # Patch the CONSUMER module's binding (tools_config_helpers imports the
     # function directly), not the source module's.
-    import ha_mcp.tools.tools_config_helpers as tch
-
-    with patch.object(
-        tch,
-        "fetch_entities_for_config_entry_via_component",
+    with patch(
+        "ha_mcp.tools.tools_config_helpers"
+        ".fetch_entities_for_config_entry_via_component",
         side_effect=RuntimeError("boom"),
     ):
         result = await _get_entities_for_config_entry(client, "um_entry", warnings)

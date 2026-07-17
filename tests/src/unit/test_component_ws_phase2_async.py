@@ -1107,7 +1107,9 @@ class TestSearchVisibilitySchema:
             "exclude_hidden": True,
             "respect_assist_exposure": True,
         }
-        assert set(visibility) == wsapi._VISIBILITY_WIRE_KEYS
+        assert set(visibility) == set(wsapi._VISIBILITY_LIST_KEYS) | set(
+            wsapi._VISIBILITY_BOOL_KEYS
+        )
         out = self._schema(monkeypatch)(
             {"type": wsapi.WS_SEARCH, "visibility": visibility}
         )

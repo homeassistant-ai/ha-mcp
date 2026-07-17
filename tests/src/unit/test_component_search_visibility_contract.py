@@ -536,4 +536,6 @@ def test_component_visibility_schema_keys_match_server_to_wire() -> None:
     a dimension the server sends would be rejected, or a dropped dimension would be
     silently accepted. Pins both sides of the "new dimension ⇒ new capability" rule.
     """
-    assert set(VisibilityConfig().to_wire()) == wsapi._VISIBILITY_WIRE_KEYS
+    assert set(VisibilityConfig().to_wire()) == set(wsapi._VISIBILITY_LIST_KEYS) | set(
+        wsapi._VISIBILITY_BOOL_KEYS
+    )

@@ -513,7 +513,6 @@ _VISIBILITY_LIST_KEYS = (
     "allow_labels",
 )
 _VISIBILITY_BOOL_KEYS = ("exclude_hidden", "respect_assist_exposure")
-_VISIBILITY_WIRE_KEYS = frozenset(_VISIBILITY_LIST_KEYS + _VISIBILITY_BOOL_KEYS)
 
 
 def _visibility_param_schema() -> Any:
