@@ -1867,10 +1867,24 @@ class TestRegistrationAndAdminGate:
             handler(FakeHass(), conn, {"id": 2, "type": command})
 
     @pytest.mark.parametrize("command", _ALL_COMMANDS)
-    def test_admin_call_sends_result(self, functional_ws, command):
+    def test_admin_call_sends_result(self, functional_ws, command, monkeypatch):
         handler = functional_ws.registered[command]
         conn = _FakeConnection(is_admin=True)
         msg = {"id": 9, "type": command, **_CMD_MSG_EXTRA.get(command, {})}
+        if command == wsapi.WS_ENTITY_LOOKUP:
+            # Deterministic stub binding for the function-local import (same
+            # full-suite ordering guard as the other raises-tests).
+            monkeypatch.setitem(
+                sys.modules, "homeassistant.exceptions", _exceptions_stub
+            )
+            # A bare FakeHass resolves no entity registry, and entity_lookup's
+            # whole answer IS that substrate — the drift guard correctly raises
+            # (→ command error → the server's legacy fallback). The admin gate
+            # provably admitted the call because the raise comes from the pure
+            # handler; result-shape coverage lives in TestEntityLookup.
+            with pytest.raises(_StubHomeAssistantError):
+                handler(_admin_gate_hass(command), conn, msg)
+            return
         handler(_admin_gate_hass(command), conn, msg)
         assert 9 in conn.results
         assert isinstance(conn.results[9], dict)

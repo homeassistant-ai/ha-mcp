@@ -586,29 +586,61 @@ async def test_config_entry_lookup_malformed_shape_falls_back() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_entities_component_connection_error_converted_to_warnings() -> None:
-    """The flow consumer swallows a propagating component connection error.
+async def test_get_entities_component_connection_error_falls_back_to_legacy() -> None:
+    """A component transport failure rides the seam's fallback, not the warnings.
 
-    Unlike the seam (which lets ``HomeAssistantConnectionError`` propagate),
-    ``_get_entities_for_config_entry`` catches ALL registry-read failures into
-    ``warnings`` + ``[]`` so a flow-helper delete's REST step can still succeed —
-    and (F8) the warning names the read that actually failed (``registry_lookup``,
-    not ``entity_registry/list``, since the component read raised)."""
+    Under the uniform transport taxonomy the seam maps a
+    ``HomeAssistantConnectionError`` to ``None``, so
+    ``_get_entities_for_config_entry`` reads the legacy
+    ``config/entity_registry/list`` dump (the swallowing bridge) and returns its
+    rows with NO warning — the flow-helper delete proceeds exactly as on a
+    component-less install."""
     ws = make_ws(
         "ha_mcp_tools/registry_lookup",
         info_result=_CAPS_REGISTRY,
         cmd_exc=HomeAssistantConnectionError("socket down"),
     )
-    client = RoutingClient()
+    client = RoutingClient(
+        entities=[
+            {"entity_id": "sensor.um", "config_entry_id": "um_entry"},
+        ]
+    )
     warnings: list[str] = []
 
     with patch_ws(ws, component_registry_lookup):
         result = await _get_entities_for_config_entry(client, "um_entry", warnings)
 
+    assert result == [{"entity_id": "sensor.um", "config_entry_id": "um_entry"}]
+    assert warnings == []
+    assert client.entity_list_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_entities_unexpected_seam_error_converted_to_warnings() -> None:
+    """(F8) A failure that DOES escape the seam is converted, with honest attribution.
+
+    Transport/command failures no longer escape the seam, but a genuinely
+    unexpected error (programming fault) still must not abort the flow-helper
+    delete: ``_get_entities_for_config_entry`` converts it into ``warnings`` +
+    ``[]``, and the warning names the read that actually failed
+    (``registry_lookup``, not ``entity_registry/list``)."""
+    client = RoutingClient()
+    warnings: list[str] = []
+
+    # Patch the CONSUMER module's binding (tools_config_helpers imports the
+    # function directly), not the source module's.
+    import ha_mcp.tools.tools_config_helpers as tch
+
+    with patch.object(
+        tch,
+        "fetch_entities_for_config_entry_via_component",
+        side_effect=RuntimeError("boom"),
+    ):
+        result = await _get_entities_for_config_entry(client, "um_entry", warnings)
+
     assert result == []
     assert len(warnings) == 1
     assert "registry_lookup failed for config_entry_id=um_entry" in warnings[0]
-    # Never touched the legacy entity_registry/list dump.
     assert client.entity_list_calls == 0
 
 

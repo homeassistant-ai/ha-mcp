@@ -1333,10 +1333,22 @@ class TestNewCommandRegistration:
             handler(FakeHass(), conn, {"id": 1, "type": command})
 
     @pytest.mark.parametrize("command", _NEW_COMMANDS)
-    def test_admin_call_sends_result(self, functional_ws, command):
+    def test_admin_call_sends_result(self, functional_ws, command, monkeypatch):
         handler = functional_ws.registered[command]
         conn = _FakeConnection(is_admin=True)
         msg = {"id": 7, "type": command, **_NEW_CMD_MSG_EXTRA.get(command, {})}
+        if command == wsapi.WS_REFERENCE_DATA:
+            # A bare FakeHass serves no services mapping, and reference_data's
+            # whole answer IS that substrate — the drift guard correctly raises
+            # (→ command error → the server's legacy REST fallback). The admin
+            # gate provably admitted the call because the raise comes from the
+            # pure handler; result-shape coverage lives in TestReferenceData.
+            monkeypatch.setitem(
+                sys.modules, "homeassistant.exceptions", _base._exceptions_stub
+            )
+            with pytest.raises(_base._StubHomeAssistantError):
+                handler(FakeHass(), conn, msg)
+            return
         handler(FakeHass(), conn, msg)
         assert 7 in conn.results
         assert isinstance(conn.results[7], dict)
