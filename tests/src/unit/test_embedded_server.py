@@ -11,9 +11,12 @@ these tests never actually run.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.metadata
 import os
 import sys
+import threading
+import time
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1494,7 +1497,7 @@ class TestReadinessProbe:
             k: os.environ.get(k) for k in ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
         }
 
-        def _restore_env():
+        def _restore_env() -> None:
             for k, v in _saved.items():
                 if v is None:
                     os.environ.pop(k, None)
@@ -1575,21 +1578,205 @@ class TestReadinessProbe:
         assert isinstance(mgr._thread_exc, OSError)
         assert "address already in use" in str(mgr._thread_exc)
 
-    async def test_wait_ready_timeout_stops_thread_and_raises(
+    def test_thread_main_unwraps_uvicorn_systemexit(self, tmp_path, monkeypatch):
+        # Real uvicorn does NOT let a bind failure escape as OSError: startup()
+        # catches it and calls sys.exit(STARTUP_FAILURE). SystemExit is a
+        # BaseException, so the worker's `except Exception` missed it and the
+        # component reported a bare readiness timeout while the actual cause
+        # (port in use) only surfaced in HA's generic task-exception log
+        # (issue #1904). The handler must unwrap the original error.
+        _saved = {
+            k: os.environ.get(k) for k in ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        }
+
+        def _restore_env() -> None:
+            for k, v in _saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+        from contextlib import asynccontextmanager
+
+        settings = SimpleNamespace(
+            homeassistant_url="http://127.0.0.1:8123", homeassistant_token="jwt"
+        )
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_mod.__path__ = []
+        cfg = ModuleType("ha_mcp.config")
+        cfg.reset_global_settings = lambda: None
+        cfg.set_embedded_connection = lambda u, t: None
+        cfg.OAUTH_MODE_URL = "__sentinel_url__"
+        cfg.OAUTH_MODE_TOKEN = "__sentinel_token__"
+        cfg.get_global_settings = lambda: settings
+
+        @asynccontextmanager
+        async def _lifespan():
+            yield
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                return object()
+
+            _lifespan_manager = staticmethod(_lifespan)
+
+        server_mod = ModuleType("ha_mcp.server")
+        server_mod.HomeAssistantSmartMCPServer = lambda: SimpleNamespace(mcp=_FakeMcp())
+        ui_mod = ModuleType("ha_mcp.settings_ui")
+        ui_mod.register_settings_routes = lambda *a, **k: None
+
+        class _FakeUvServer:
+            def __init__(self, config):
+                self.should_exit = False
+
+            async def serve(self):
+                # Mirror uvicorn.Server.startup(): the bind error is caught
+                # and converted to sys.exit(STARTUP_FAILURE), leaving the
+                # OSError only as SystemExit.__context__.
+                try:
+                    raise OSError(98, "address already in use")
+                except OSError:
+                    # uvicorn calls bare sys.exit(STARTUP_FAILURE), leaving
+                    # the OSError only in __context__ — no `from` chaining.
+                    raise SystemExit(3)  # noqa: B904
+
+        uvicorn_mod = ModuleType("uvicorn")
+        uvicorn_mod.Config = lambda *a, **k: SimpleNamespace()
+        uvicorn_mod.Server = _FakeUvServer
+
+        for name, mod in (
+            ("ha_mcp", ha_mcp_mod),
+            ("ha_mcp.config", cfg),
+            ("ha_mcp.server", server_mod),
+            ("ha_mcp.settings_ui", ui_mod),
+            ("uvicorn", uvicorn_mod),
+        ):
+            monkeypatch.setitem(sys.modules, name, mod)
+        ha_mcp_mod.config = cfg
+        ha_mcp_mod.server = server_mod
+        ha_mcp_mod.settings_ui = ui_mod
+        monkeypatch.setitem(
+            sys.modules,
+            "ha_mcp.browser_landing",
+            ModuleType("ha_mcp.browser_landing"),
+        )
+
+        try:
+            mgr._thread_main("tok")
+        finally:
+            _restore_env()
+
+        assert isinstance(mgr._thread_exc, es.EmbeddedServerError)
+        assert "exited during startup" in str(mgr._thread_exc)
+        assert "address already in use" in str(mgr._thread_exc)
+
+    def test_thread_main_wraps_bare_systemexit(self, tmp_path, monkeypatch):
+        # A SystemExit with no chained exception (bare sys.exit) must still
+        # land in _thread_exc as an EmbeddedServerError naming the exit -
+        # not escape the worker, and not read as an empty failure message.
+        _saved = {
+            k: os.environ.get(k) for k in ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        }
+
+        def _restore_env() -> None:
+            for k, v in _saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        mgr, _hass, _entry = _manager(tmp_path)
+
+        async def _exit_now(access_token, stop_event):
+            raise SystemExit(3)
+
+        monkeypatch.setattr(mgr, "_serve", _exit_now)
+        try:
+            mgr._thread_main("tok")
+        finally:
+            _restore_env()
+
+        assert isinstance(mgr._thread_exc, es.EmbeddedServerError)
+        assert "exited during startup" in str(mgr._thread_exc)
+        assert "SystemExit(3)" in str(mgr._thread_exc)
+
+    async def test_wait_ready_stall_stops_thread_and_raises(
         self, tmp_path, monkeypatch
     ):
+        # No observable progress (pinned signature) past the stall budget.
         mgr, hass, _entry = _manager(tmp_path)
-        # loop.time advances past the deadline on the second read.
-        hass.loop.time = MagicMock(side_effect=[0.0, 0.0, 9999.0, 9999.0])
+        hass.loop.time = MagicMock(side_effect=[0.0, 100.0])
         mgr._thread = SimpleNamespace(is_alive=lambda: True)
+        mgr._startup_phase = "pinned"
+        monkeypatch.setattr(mgr, "_progress_signature", lambda: (0, "pinned"))
         monkeypatch.setattr(mgr, "_async_probe_port", AsyncMock(return_value=False))
         stop = AsyncMock()
         monkeypatch.setattr(mgr, "async_stop", stop)
         monkeypatch.setattr(es.asyncio, "sleep", AsyncMock())
 
-        with pytest.raises(es.EmbeddedServerError, match="did not become reachable"):
+        with pytest.raises(
+            es.EmbeddedServerError, match="no startup progress"
+        ) as excinfo:
             await mgr._async_wait_until_ready()
         stop.assert_awaited_once()
+        # The failure names the phase the worker was last seen in.
+        assert "pinned" in str(excinfo.value)
+
+    async def test_wait_ready_progress_extends_past_stall_budget(
+        self, tmp_path, monkeypatch
+    ):
+        # 150s elapsed (past the 90s stall budget) but the worker kept
+        # importing (signature moves) - the wait must NOT give up (#1904).
+        mgr, hass, _entry = _manager(tmp_path)
+        hass.loop.time = MagicMock(side_effect=[0.0, 150.0])
+        mgr._thread = SimpleNamespace(is_alive=lambda: True)
+        ticks = iter(range(100))
+        monkeypatch.setattr(
+            mgr, "_progress_signature", lambda: (next(ticks), "importing")
+        )
+        monkeypatch.setattr(
+            mgr, "_async_probe_port", AsyncMock(side_effect=[False, True])
+        )
+        monkeypatch.setattr(es.asyncio, "sleep", AsyncMock())
+
+        await mgr._async_wait_until_ready()  # must not raise
+
+    async def test_wait_ready_total_cap_fires_despite_progress(
+        self, tmp_path, monkeypatch
+    ):
+        # Endless "progress" cannot extend the wait past the absolute cap.
+        mgr, hass, _entry = _manager(tmp_path)
+        hass.loop.time = MagicMock(side_effect=[0.0, 700.0])
+        mgr._thread = SimpleNamespace(is_alive=lambda: True)
+        ticks = iter(range(100))
+        monkeypatch.setattr(
+            mgr, "_progress_signature", lambda: (next(ticks), "importing")
+        )
+        monkeypatch.setattr(mgr, "_async_probe_port", AsyncMock(return_value=False))
+        stop = AsyncMock()
+        monkeypatch.setattr(mgr, "async_stop", stop)
+        monkeypatch.setattr(es.asyncio, "sleep", AsyncMock())
+
+        with pytest.raises(es.EmbeddedServerError, match="within 600s"):
+            await mgr._async_wait_until_ready()
+        stop.assert_awaited_once()
+
+    def test_progress_signature_tracks_modules_and_phase(self, tmp_path, monkeypatch):
+        # The production progress source itself (review gap): module-count
+        # growth and phase advances must each change the signature - this is
+        # the mechanism that keeps a slow cold import alive (#1904).
+        mgr, _hass, _entry = _manager(tmp_path)
+        base = mgr._progress_signature()
+        monkeypatch.setitem(
+            sys.modules, "_pr1908_progress_probe", ModuleType("_pr1908_progress_probe")
+        )
+        after_import = mgr._progress_signature()
+        assert after_import != base
+        mgr._startup_phase = "further along"
+        assert mgr._progress_signature() != after_import
 
 
 # ---------------------------------------------------------------------------
@@ -1726,7 +1913,7 @@ class TestLifecycle:
         monkeypatch.setattr(
             mgr,
             "_async_ensure_package",
-            AsyncMock(side_effect=lambda: calls.append("ensure")),
+            AsyncMock(side_effect=lambda **kwargs: calls.append("ensure")),
         )
         monkeypatch.setattr(
             mgr,
@@ -1888,6 +2075,12 @@ class TestPurgeHaMcpModules:
             sys.modules.pop(name)
         es._purge_ha_mcp_modules()  # must not raise
 
+    def test_purge_clears_cached_import_version(self, monkeypatch):
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", "9.9.9")
+        monkeypatch.setitem(sys.modules, "ha_mcp", ModuleType("ha_mcp"))
+        es._purge_ha_mcp_modules()
+        assert es._CACHED_IMPORT_VERSION is None
+
 
 class TestRunningVersionStalenessWarning:
     async def test_start_prefers_configured_dev_distribution(
@@ -1998,7 +2191,12 @@ class TestPurgeSkippedWhileOrphanAlive:
     bring-up never came up.
     """
 
-    def _start_kwargs(self, mgr, monkeypatch, purges):
+    def _start_kwargs(
+        self,
+        mgr: es.EmbeddedServerManager,
+        monkeypatch: pytest.MonkeyPatch,
+        purges: list[bool],
+    ) -> None:
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
         monkeypatch.setattr(
             mgr, "_async_provision_token", AsyncMock(return_value="tok")
@@ -2046,6 +2244,497 @@ class TestPurgeSkippedWhileOrphanAlive:
         assert purges == [True]
         assert mgr._orphaned_thread is None  # bookkeeping cleared
 
+    async def test_purge_skipped_while_foreign_worker_importing(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # The orphan guard is per-manager, but every bring-up constructs a
+        # FRESH manager - a still-importing worker abandoned by a PREVIOUS
+        # manager must also block the purge (issue #1904: the reload-era
+        # purge crashed the old worker mid-import with KeyError).
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _AliveWorker:
+            def is_alive(self):
+                return True
+
+        foreign = _AliveWorker()
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {foreign})
+
+        with caplog.at_level("WARNING"):
+            await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == []
+        assert "Skipping the ha_mcp module purge" in caplog.text
+        assert foreign in es._IMPORTING_WORKERS  # live entry retained
+
+    async def test_purge_resumes_once_foreign_worker_died(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _DeadWorker:
+            def is_alive(self):
+                return False
+
+        dead = _DeadWorker()
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {dead})
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == [True]
+        assert dead not in es._IMPORTING_WORKERS  # dead entry pruned
+
+    async def test_prune_keeps_live_worker_while_dropping_dead_one(
+        self, tmp_path, monkeypatch
+    ):
+        # The composite prune-then-check must drop only the dead entry and
+        # still block the purge on the surviving live one.
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _AliveWorker:
+            def is_alive(self):
+                return True
+
+        class _DeadWorker:
+            def is_alive(self):
+                return False
+
+        alive = _AliveWorker()
+        dead = _DeadWorker()
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {alive, dead})
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == []
+        assert alive in es._IMPORTING_WORKERS
+        assert dead not in es._IMPORTING_WORKERS
+
+
+class TestImportingWorkerRegistry:
+    """The worker must be registered for exactly its import window."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self):
+        # _thread_main stages HA_MCP_CONFIG_DIR/HA_MCP_EMBEDDED into
+        # os.environ; snapshot + restore so the flags never leak into
+        # unrelated suites on this worker.
+        keys = ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        saved = {k: os.environ.get(k) for k in keys}
+        for key in keys:
+            os.environ.pop(key, None)
+        yield
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_thread_main_always_deregisters_on_exit(self, tmp_path, monkeypatch):
+        # Registration happens in async_start (main thread) before start();
+        # this drives _thread_main with the current thread pre-registered the
+        # same way and proves the finally backstop clears it on exit even
+        # though _serve never reached its own early deregistration point.
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {threading.current_thread()})
+        seen: list[bool] = []
+
+        async def _probe(access_token, stop_event):
+            seen.append(threading.current_thread() in es._IMPORTING_WORKERS)
+            raise SystemExit(3)
+
+        monkeypatch.setattr(mgr, "_serve", _probe)
+        mgr._thread_main("tok")
+
+        assert seen == [True]
+        assert not es._IMPORTING_WORKERS
+
+    def test_thread_main_deregisters_on_plain_exception_crash(
+        self, tmp_path, monkeypatch
+    ):
+        # A worker that dies of an ordinary Exception mid-import (the
+        # abandoned-worker case the registry exists for) must also leave the
+        # registry via the shared finally.
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {threading.current_thread()})
+
+        async def _boom(access_token, stop_event):
+            raise RuntimeError("boom mid-import")
+
+        monkeypatch.setattr(mgr, "_serve", _boom)
+        mgr._thread_main("tok")
+
+        assert isinstance(mgr._thread_exc, RuntimeError)
+        assert not es._IMPORTING_WORKERS
+
+    async def test_live_worker_blocks_a_fresh_managers_purge(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # The literal #1904 race, end to end: worker A registers itself via
+        # the REAL _thread_main path, and a freshly constructed manager B
+        # (a reload builds a new manager every time) must see A in the
+        # process-global registry and skip its purge.
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", set())
+        release = threading.Event()
+
+        mgr_a, _hass_a, _entry_a = _manager(tmp_path)
+
+        async def _hold(access_token, stop_event):
+            # threading.Event so the MAIN thread can release a coroutine
+            # running on worker A's own loop; run_in_executor keeps the
+            # worker loop unblocked while waiting.
+            await asyncio.get_running_loop().run_in_executor(None, release.wait)
+
+        monkeypatch.setattr(mgr_a, "_serve", _hold)
+        worker_a = threading.Thread(target=mgr_a._thread_main, args=("tok",))
+        # Mirror async_start: the SPAWNING thread registers the worker
+        # before start(), the worker only deregisters.
+        with es._IMPORTING_WORKERS_LOCK:
+            es._IMPORTING_WORKERS.add(worker_a)
+        worker_a.start()
+        try:
+
+            def _wait_registered() -> bool:
+                deadline = time.monotonic() + 5
+                while not es._IMPORTING_WORKERS and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                return bool(es._IMPORTING_WORKERS)
+
+            registered = await asyncio.get_running_loop().run_in_executor(
+                None, _wait_registered
+            )
+            assert registered, "worker A never registered"
+
+            mgr_b, _hass_b, _entry_b = _manager(tmp_path)
+            purges: list[bool] = []
+            monkeypatch.setattr(
+                mgr_b, "_async_ensure_package", AsyncMock(return_value="1.2.3")
+            )
+            monkeypatch.setattr(
+                mgr_b, "_async_provision_token", AsyncMock(return_value="tok")
+            )
+            monkeypatch.setattr(mgr_b, "_prepare_config_dir", lambda: None)
+            monkeypatch.setattr(mgr_b, "_async_wait_until_ready", AsyncMock())
+            monkeypatch.setattr(mgr_b, "_thread_main", lambda token: None)
+            monkeypatch.setattr(
+                es, "_purge_ha_mcp_modules", lambda: purges.append(True)
+            )
+
+            with caplog.at_level("WARNING"):
+                await mgr_b.async_start()
+            if mgr_b._thread is not None:
+                mgr_b._thread.join(timeout=2)
+
+            assert purges == []
+            assert "Skipping the ha_mcp module purge" in caplog.text
+        finally:
+            release.set()
+            worker_a.join(timeout=5)
+        assert not worker_a.is_alive()
+        # Worker A deregistered itself on exit; manager B's stubbed worker
+        # (no real _thread_main, so no self-discard) may linger dead.
+        assert worker_a not in es._IMPORTING_WORKERS
+
+    def test_serve_deregisters_before_building_the_app(self, tmp_path, monkeypatch):
+        # Once the import section completes, a concurrent purge is harmless -
+        # the worker must leave the registry BEFORE the listener build so a
+        # long-running healthy server never blocks later bring-ups' purges.
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", set())
+
+        class _StopServe(Exception):
+            pass
+
+        membership: list[bool] = []
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                membership.append(
+                    ("http_app", threading.current_thread() in es._IMPORTING_WORKERS)
+                )
+                raise _StopServe
+
+        _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: None)
+
+        # Recorder on the stubbed settings-routes hook: registration must
+        # still be in effect there (imports not yet complete), making this
+        # test self-contained rather than relying on the sibling test to
+        # prove the add() happened at all.
+        def _routes_probe(*args, **kwargs):
+            membership.append(
+                ("routes", threading.current_thread() in es._IMPORTING_WORKERS)
+            )
+
+        sys.modules["ha_mcp.settings_ui"].register_settings_routes = _routes_probe
+
+        # Pre-register the current thread the way async_start does before
+        # start(); _serve's early discard must clear it before http_app.
+        with es._IMPORTING_WORKERS_LOCK:
+            es._IMPORTING_WORKERS.add(threading.current_thread())
+        mgr._thread_main("tok")
+
+        assert membership == [("routes", True), ("http_app", False)]
+        assert not es._IMPORTING_WORKERS
+        assert isinstance(mgr._thread_exc, _StopServe)
+
+
+class TestImporterAwareBringUp:
+    """async_start must register its worker itself and defer package
+    mutations while a previous worker is still importing (review findings:
+    the worker-side add left a pre-registration window, and ensure-package
+    could replace files on disk under a live importer)."""
+
+    def _stub_bring_up(self, mgr, monkeypatch, ensure: AsyncMock) -> None:
+        monkeypatch.setattr(mgr, "_async_ensure_package", ensure)
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
+
+    async def test_async_start_registers_worker_before_it_runs(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", set())
+        ensure = AsyncMock(return_value="1.2.3")
+        self._stub_bring_up(mgr, monkeypatch, ensure)
+        recorded: list[bool] = []
+
+        def _stub_main(token: str) -> None:
+            recorded.append(threading.current_thread() in es._IMPORTING_WORKERS)
+
+        monkeypatch.setattr(mgr, "_thread_main", _stub_main)
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert recorded == [True]
+
+    async def test_async_start_defers_install_while_importer_busy(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+
+        class _AliveWorker:
+            def is_alive(self):
+                return True
+
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {_AliveWorker()})
+        ensure = AsyncMock(return_value="1.2.3")
+        self._stub_bring_up(mgr, monkeypatch, ensure)
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert ensure.await_args.kwargs == {"defer_mutations": True}
+
+    async def test_async_start_allows_install_when_no_importer(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", set())
+        ensure = AsyncMock(return_value="1.2.3")
+        self._stub_bring_up(mgr, monkeypatch, ensure)
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert ensure.await_args.kwargs == {"defer_mutations": False}
+
+    async def test_ensure_package_defers_force_install(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # An unpinned dev channel would normally take the uninstall +
+        # force-install path; with defer_mutations it must fall back to the
+        # non-mutating fast path and say so.
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEV_PIP_SPEC},
+        )
+
+        def installed_version(preferred_dist: str | None = None) -> str | None:
+            return "7.12.1.dev5"
+
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
+        fast = AsyncMock()
+        force = AsyncMock()
+        remove_conflicting = AsyncMock()
+        remove_legacy = AsyncMock()
+        monkeypatch.setattr(mgr, "_async_process_requirements_fast", fast)
+        monkeypatch.setattr(mgr, "_async_force_install", force)
+        monkeypatch.setattr(mgr, "_async_remove_conflicting_dist", remove_conflicting)
+        monkeypatch.setattr(mgr, "_async_remove_legacy_target", remove_legacy)
+
+        with caplog.at_level("WARNING"):
+            ready = await mgr._async_ensure_package(defer_mutations=True)
+
+        assert ready == "7.12.1.dev5"
+        fast.assert_awaited_once()
+        force.assert_not_awaited()
+        remove_conflicting.assert_not_awaited()
+        remove_legacy.assert_not_awaited()
+        assert "Deferring the ha-mcp install/upgrade" in caplog.text
+
+
+class TestPurgeSkippedOnWarmCache:
+    """A retry with an unchanged install must reuse the warm module cache.
+
+    Issue #1904: purging on every attempt made each retry pay the full cold
+    import again, so slow hardware that missed the readiness window once
+    could never recover.
+    """
+
+    def _start_kwargs(
+        self,
+        mgr: es.EmbeddedServerManager,
+        monkeypatch: pytest.MonkeyPatch,
+        purges: list[bool],
+        ready_version: str | None,
+    ) -> None:
+        monkeypatch.setattr(
+            mgr, "_async_ensure_package", AsyncMock(return_value=ready_version)
+        )
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: purges.append(True))
+
+    async def test_purge_skipped_when_cache_matches_installed(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges, "1.2.3")
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", "1.2.3")
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == []
+
+    async def test_purge_runs_when_cache_differs(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges, "1.2.3")
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", "1.2.2")
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == [True]
+
+    async def test_purge_runs_under_pip_spec_override_despite_match(
+        self, tmp_path, monkeypatch
+    ):
+        # A pip-spec override can re-point to different code under the SAME
+        # version string, so the warm-cache skip must never fire for it.
+        mgr, _hass, _entry = _manager(tmp_path, options={OPT_PIP_SPEC: "ha-mcp==1.2.3"})
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges, "1.2.3")
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", "1.2.3")
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == [True]
+
+    async def test_purge_runs_when_cache_unknown(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges, "1.2.3")
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", None)
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == [True]
+
+
+class TestWarmCacheVersionAgreement:
+    """The two sides of the warm-cache comparison must agree for a plain
+    install, or the purge skip could never fire in production: async_start
+    keys on _async_ensure_package's return while the worker records
+    _running_ha_mcp_version into _CACHED_IMPORT_VERSION (review gap)."""
+
+    def _stub_install_surface(
+        self, monkeypatch: pytest.MonkeyPatch, versions: dict[str, str]
+    ) -> None:
+        def installed_version(preferred_dist: str | None = None) -> str | None:
+            if preferred_dist is not None:
+                return versions.get(preferred_dist)
+            return versions.get(DIST_NAME_STABLE) or versions.get(DIST_NAME_DEV)
+
+        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
+        monkeypatch.setattr(es, "_installed_dist_version", versions.get)
+        monkeypatch.setattr(es, "_dist_installed", lambda name: False)
+        monkeypatch.setattr(
+            es, "_uninstall_distribution", MagicMock(return_value=False)
+        )
+
+    async def test_dev_channel_sides_agree_despite_stale_stable_metadata(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEV_PIP_SPEC},
+        )
+        versions = {DIST_NAME_STABLE: "6.2.0", DIST_NAME_DEV: "7.12.1.dev5"}
+        self._stub_install_surface(monkeypatch, versions)
+        fake = ModuleType("ha_mcp")
+        fake.__version__ = versions[DIST_NAME_STABLE]  # stale stable metadata
+        monkeypatch.setitem(sys.modules, "ha_mcp", fake)
+
+        ready_version = await mgr._async_ensure_package()
+
+        assert ready_version == versions[DIST_NAME_DEV]
+        assert es._running_ha_mcp_version(CHANNEL_DEV) == ready_version
+
+    async def test_stable_channel_sides_agree(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEFAULT_PIP_SPEC},
+        )
+        versions = {DIST_NAME_STABLE: "7.13.0"}
+        self._stub_install_surface(monkeypatch, versions)
+        fake = ModuleType("ha_mcp")
+        fake.__version__ = versions[DIST_NAME_STABLE]
+        monkeypatch.setitem(sys.modules, "ha_mcp", fake)
+
+        ready_version = await mgr._async_ensure_package()
+
+        assert ready_version == versions[DIST_NAME_STABLE]
+        assert es._running_ha_mcp_version(CHANNEL_STABLE) == ready_version
+
 
 class TestServeRunningVersionCapture:
     @pytest.fixture(autouse=True)
@@ -2082,9 +2771,15 @@ class TestServeRunningVersionCapture:
         sys.modules["ha_mcp"].__version__ = "9.8.7"
         monkeypatch.setattr(es, "_installed_dist_version", lambda dist: None)
 
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", None)
         mgr._thread_main("tok")
 
         assert mgr._running_version == "9.8.7"
+        # The warm-cache purge skip keys on this recording (issue #1904).
+        assert es._CACHED_IMPORT_VERSION == "9.8.7"
+        # _serve advanced through its phase markers before http_app raised -
+        # a dropped or mislabeled _note_startup_phase call surfaces here.
+        assert mgr._startup_phase == "registering web routes"
         assert isinstance(mgr._thread_exc, _StopServe)
 
     def test_serve_prefers_configured_dev_metadata(self, tmp_path, monkeypatch):

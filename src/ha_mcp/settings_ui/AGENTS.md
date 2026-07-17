@@ -34,9 +34,10 @@ Any reachable HA instance works for `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN`.
 - **Leaf modules** (no imports from the `settings_ui` package, so handler modules and `__init__` depend on them without cycles): `_persistence.py` (tool-config / metadata-cache / backup-override file I/O + `_atomic_write_json` + the override-file lock), `_supervisor.py` (add-on options merge/post + self-restart), `_theme.py` (theme-prefs load/sanitize + `theme_prefs_path()`), `_tools_meta.py` (`ToolStub` / `MANDATORY_TOOLS` / `FEATURE_GATED_TOOLS` / `_get_tool_metadata` / `apply_tool_visibility`).
 - **Handler-family modules**, each exposing a `build_*_handlers(server, ...)` factory that `build_settings_handlers` merges into the handler dict: `_handlers_theme.py`, `_handlers_tools.py`, `_handlers_backups.py` (snapshots + auto-backup config), `_handlers_server.py` (restart / settings-info / feature flags; also owns the `_PROCESS_*` identity globals), `_handlers_advanced.py`. **The factory sums the C901 complexity of every nested handler**, so handlers are module-level `async def _h(server, request)` functions (each with its own C901 budget) and the factory returns thin request-only wrappers that bind `server`.
 - **Cross-module patch targets:** a helper's single canonical patch site is `ha_mcp.settings_ui._<module>.<name>` (e.g. `_supervisor._supervisor_merge_and_post_options`, `_persistence._get_config_path`, `_theme.get_data_dir`). Cross-module callers reach helpers via `_<module>.<name>` attribute access so one patch reaches every caller; tests and `tools_dev.py` patch/import at that canonical site.
-- `settings.html` — the page markup. Carries three substitution markers: `__HA_MCP_CSS__` and `__HA_MCP_JS__` (filled once at import with the css/js below, inside `<style>`/`<script>`) and `__HA_MCP_THEME_PREFS__` (filled per-request in `_render_settings_html()`). All three are asserted present at import; a renamed marker fails fast.
+- `settings.html` — the page markup. `__HA_MCP_CSS__` and `__HA_MCP_JS__` are filled once at import. `__HA_MCP_THEME_PREFS__`, `__HA_MCP_I18N__`, `__HA_MCP_LANG__`, and `__HA_MCP_DIR__` are filled per request by `_render_settings_html()`.
 - `settings.js` — the client script, injected into `<script>__HA_MCP_JS__</script>`. Not served as a separate asset.
 - `settings.css` — the stylesheet, injected into `<style>__HA_MCP_CSS__</style>`.
+- `_i18n.py` and `locales/*.json` — auto-discovered translation catalogs. English is the fallback; a new language is added by copying `locales/en.json`, translating values, and preserving keys/placeholders. Locale JSON must remain listed in wheel, sdist, and binary packaging declarations.
 
 ## Gotchas (read before editing)
 
@@ -46,6 +47,7 @@ Any reachable HA instance works for `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN`.
 - **Python ↔ JS sentinel sync.** `__init__.py` substitutes `__HA_MCP_DEFAULT_PINNED__` and `__HA_MCP_MANDATORY__` into `settings.js` at load. The presence of both sentinels is asserted at import — a rename in one place that isn't mirrored in the other fails fast (not silently).
 - **Anti-FOUC parity with the docs site (JS logic only, NOT visual design).** The theme/accessibility resolver core in `settings.js` (PREFS / PRESETS / apply functions / custom-color layering) must stay logically identical to `site/src/layouts/Layout.astro`. Enforced by `tests/src/unit/test_anti_fouc_parity.py`. Mirror any change in both, or that test fails. This is about *how a saved theme preference is applied before paint*, not about what the page looks like — the visual target is HA (see "Design goal").
 - **Theme prefs persist server-side** (`theme_prefs.json`) because the stdio sidecar respawns on a random port (a fresh origin with empty `localStorage`). The page seeds only *missing* `localStorage` keys from the server payload; the browser's own latest choice wins.
+- **Locale selection order is explicit cookie → Home Assistant `ha_lang` hint → `Accept-Language` → English.** Keep the selector cookie name synchronized with `_i18n.py`, and preserve English fallback for incomplete community translations.
 - **Callouts use the `ha-alert` style.** Notice bars (`.ha-alert`, `.readonly-notice`, `.pin-notice`, `.restart-notice`) replicate HA's `ha-alert`: full type-tint background, rounded, leading mdi icon (`--icon-info` / `--icon-warning` masks), icon in an absolute left gutter so text flows full-width. Use this for new callouts, not a left-border bar.
 
 ## Tool capability badges
@@ -55,6 +57,7 @@ Each tool row shows a capability tier badge: **read-only → writes → deletes*
 ## Tests
 
 - `tests/src/unit/test_settings_ui.py` — route registration, endpoints, env-pinned tools.
+- `tests/src/unit/test_settings_ui_i18n.py` — catalog validation, fallback, locale priority, and safe inline serialization.
 - `tests/src/unit/test_settings_ui_js_behavior.py` — JS behavior (needs jsdom: `npm install` in `tests/js/`; skipped otherwise, but runs in CI).
 - `tests/src/unit/test_settings_ui_handler_selection.py` — full-server vs sidecar handler dispatch.
 - `tests/src/unit/test_anti_fouc_parity.py`, `test_theme_toggle_behavior.py`, `test_advanced_settings_coverage.py` — read `settings.js` by path; keep them pointed at `settings_ui/settings.js`.

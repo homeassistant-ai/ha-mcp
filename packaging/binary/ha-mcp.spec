@@ -46,6 +46,7 @@ for dir_name in stdlib_dirs:
 _settings_ui_dir = os.path.join(PROJECT_ROOT, 'src', 'ha_mcp', 'settings_ui')
 for _asset in ('settings.html', 'settings.js', 'settings.css'):
     datas.append((os.path.join(_settings_ui_dir, _asset), 'ha_mcp/settings_ui'))
+datas.append((os.path.join(_settings_ui_dir, 'locales'), 'ha_mcp/settings_ui/locales'))
 
 binaries = []
 hiddenimports = []

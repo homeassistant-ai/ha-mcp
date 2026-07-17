@@ -47,6 +47,7 @@ while the server is running and returns 503 otherwise.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import time
 from typing import TYPE_CHECKING, Any
@@ -82,6 +83,10 @@ _PROXY_URL = f"{_UI_BASE}/app/{{path:.*}}"
 # path-scoped to the proxy so it is never sent to the boot/session endpoints.
 _COOKIE_NAME = "ha_mcp_tools_ui_session"
 _COOKIE_PATH = f"{_UI_BASE}/app"
+# Keep in sync with ``ha_mcp.settings_ui._i18n.LOCALE_COOKIE`` without
+# importing the separately installed server package into the HA component.
+_LOCALE_COOKIE_NAME = "ha_mcp_locale"
+_LOCALE_COOKIE_VALUE_RE = re.compile(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*\Z")
 
 # Session lifetime. Short by design; the panel re-mints well within it while open.
 _SESSION_TTL_SECONDS = 8 * 60 * 60
@@ -94,7 +99,9 @@ _SESSIONS_KEY = "ha_mcp_tools_ui_sessions"
 
 # Request headers never forwarded to the loopback server. Hop-by-hop plus the
 # browser's cookie/authorization (the loopback server has no auth on the secret
-# path and must not receive the session cookie or the frontend bearer).
+# path and must not receive the session cookie or the frontend bearer). The
+# locale cookie is reconstructed separately from the parsed cookie jar so no
+# other browser cookie can cross this trust boundary.
 _STRIPPED_REQUEST_HEADERS = frozenset(
     {
         "host",
@@ -119,6 +126,24 @@ _STRIPPED_RESPONSE_HEADERS = frozenset(
         "keep-alive",
     }
 )
+
+
+def _forwarded_locale_cookie(request: web.Request) -> str | None:
+    """Return the single safe locale cookie header allowed upstream.
+
+    The settings app stores a manual language override in ``ha_mcp_locale``.
+    Forwarding the browser's raw Cookie header would also expose Home
+    Assistant's authenticated session cookie to the unauthenticated loopback
+    server, so rebuild a header containing only a short BCP-47-like value.
+    """
+    value = request.cookies.get(_LOCALE_COOKIE_NAME)
+    if (
+        not isinstance(value, str)
+        or len(value) > 64
+        or _LOCALE_COOKIE_VALUE_RE.fullmatch(value) is None
+    ):
+        return None
+    return f"{_LOCALE_COOKIE_NAME}={value}"
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +325,9 @@ class _ProxyView(HomeAssistantView):
             for key, value in request.headers.items()
             if key.lower() not in _STRIPPED_REQUEST_HEADERS
         }
+        locale_cookie = _forwarded_locale_cookie(request)
+        if locale_cookie is not None:
+            forward_headers["Cookie"] = locale_cookie
 
         try:
             async with session.request(
@@ -473,7 +501,7 @@ class _suppress_all:
 
 _BOOT_JS = f"""
 const SESSION_URL = {_SESSION_URL!r};
-const APP_URL = {_APP_PREFIX!r} + "settings";
+const APP_BASE_URL = {_APP_PREFIX!r} + "settings";
 // Re-mint at half the cookie lifetime so an open panel never expires mid-use.
 const REFRESH_MS = {_SESSION_TTL_SECONDS // 2} * 1000;
 // While the frontend is still booting (a cold start straight into this panel),
@@ -494,6 +522,22 @@ let timer = null;
 let busy = false;
 let tokenMisses = 0;
 let authDead = false;
+
+function homeAssistantRoot() {{
+  try {{
+    if (window.parent === window) return null;
+    return window.parent.document.querySelector("home-assistant");
+  }} catch (err) {{
+    return null;
+  }}
+}}
+
+function appUrl() {{
+  const root = homeAssistantRoot();
+  const language = root && root.hass && root.hass.language;
+  if (!language) return APP_BASE_URL;
+  return APP_BASE_URL + "?ha_lang=" + encodeURIComponent(language);
+}}
 
 function showMessage(text, isError) {{
   frame.classList.add("hidden");
@@ -532,8 +576,7 @@ async function token() {{
   // (#1802). A failed refresh means the sign-in itself is dead: mark it
   // terminal rather than looping.
   try {{
-    if (window.parent === window) return null;
-    const root = window.parent.document.querySelector("home-assistant");
+    const root = homeAssistantRoot();
     const auth = root && root.hass && root.hass.auth;
     if (!auth) return null;
     if (auth.expired && typeof auth.refreshAccessToken === "function") {{
@@ -615,9 +658,10 @@ async function mint() {{
 async function showApp() {{
   // Probe the proxy so a not-yet-running server shows a friendly message
   // instead of a raw 503 page inside the iframe.
+  const targetUrl = appUrl();
   let probe;
   try {{
-    probe = await fetchWithTimeout(APP_URL, {{ credentials: "same-origin" }});
+    probe = await fetchWithTimeout(targetUrl, {{ credentials: "same-origin" }});
   }} catch (err) {{
     transientFailure("Could not reach Home Assistant to load the settings UI.");
     return;
@@ -636,8 +680,8 @@ async function showApp() {{
     transientFailure("The settings UI returned HTTP " + probe.status + ".");
     return;
   }}
-  if (frame.getAttribute("src") !== APP_URL) {{
-    frame.setAttribute("src", APP_URL);
+  if (frame.getAttribute("src") !== targetUrl) {{
+    frame.setAttribute("src", targetUrl);
   }}
   msg.classList.add("hidden");
   frame.classList.remove("hidden");

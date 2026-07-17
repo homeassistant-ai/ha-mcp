@@ -184,3 +184,14 @@ class TestPyprojectPackageData:
             assert f"src/ha_mcp/{asset}" in manifest, (
                 f"MANIFEST.in must include src/ha_mcp/{asset} (sdist relies on it)"
             )
+
+        assert '"settings_ui/locales/*.json"' in pyproject, (
+            "pyproject.toml package-data must include settings UI locale catalogs"
+        )
+        assert "src/ha_mcp/settings_ui/locales" in manifest, (
+            "MANIFEST.in must include settings UI locale catalogs"
+        )
+
+        locales = package_dir / "settings_ui" / "locales"
+        assert (locales / "en.json").is_file()
+        assert (locales / "ru.json").is_file()
