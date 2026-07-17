@@ -3428,12 +3428,18 @@ class TestRegistryLookup:
         # raises rather than returning an empty result indistinguishable from
         # "no matches" (issue #1813 M2 tightening).
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        # Pin the stub so the function-local ``from homeassistant.exceptions
+        # import HomeAssistantError`` binds _StubHomeAssistantError even when an
+        # earlier-collected module already replaced sys.modules["homeassistant.
+        # exceptions"] with its own plain MagicMock.
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
         with pytest.raises(_StubHomeAssistantError):
             wsapi._do_registry_lookup(FakeHass(), {})
 
     def test_empty_entity_ids_list_raises(self, monkeypatch):
         # An explicit empty list is likewise "no target", not "zero results".
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
         with pytest.raises(_StubHomeAssistantError):
             wsapi._do_registry_lookup(FakeHass(), {"entity_ids": []})
 
@@ -3639,15 +3645,17 @@ class TestBackupPrep:
         res = wsapi._do_backup_prep(self._hass(agents=agents, password=None), {})
         assert res["default_password"] is None
 
-    def test_manager_absent_raises(self):
+    def test_manager_absent_raises(self, monkeypatch):
         # A hass with no backup manager raises so the server's command-error path
         # falls back (not a silent empty result mistaken for "no agents").
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
         with pytest.raises(_StubHomeAssistantError):
             wsapi._do_backup_prep(FakeHass(), {})
 
     def test_import_error_raises(self, monkeypatch):
         # The backup integration not being importable also raises.
         monkeypatch.setitem(sys.modules, "homeassistant.components.backup", None)
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
         with pytest.raises(_StubHomeAssistantError):
             wsapi._do_backup_prep(self._hass(), {})
 
@@ -3804,6 +3812,7 @@ class TestRegistries:
         monkeypatch.setattr(
             wsapi, "_category_registry", lambda h: FakeCategoryReg({})
         )
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
         with pytest.raises(_StubHomeAssistantError):
             wsapi._do_registries(FakeHass(), {"registries": ["category"]})
 
@@ -3813,6 +3822,7 @@ class TestRegistries:
         monkeypatch.setattr(
             wsapi, "_category_registry", lambda h: FakeCategoryReg({})
         )
+        monkeypatch.setitem(sys.modules, "homeassistant.exceptions", _exceptions_stub)
         with pytest.raises(_StubHomeAssistantError):
             wsapi._do_registries(
                 FakeHass(), {"registries": ["category"], "category_scopes": []}
