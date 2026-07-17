@@ -1575,19 +1575,159 @@ class TestReadinessProbe:
         assert isinstance(mgr._thread_exc, OSError)
         assert "address already in use" in str(mgr._thread_exc)
 
-    async def test_wait_ready_timeout_stops_thread_and_raises(
+    def test_thread_main_unwraps_uvicorn_systemexit(self, tmp_path, monkeypatch):
+        # Real uvicorn does NOT let a bind failure escape as OSError: startup()
+        # catches it and calls sys.exit(STARTUP_FAILURE). SystemExit is a
+        # BaseException, so the worker's `except Exception` missed it and the
+        # component reported a bare readiness timeout while the actual cause
+        # (port in use) only surfaced in HA's generic task-exception log
+        # (issue #1904). The handler must unwrap the original error.
+        _saved = {
+            k: os.environ.get(k) for k in ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        }
+
+        def _restore_env():
+            for k, v in _saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+        from contextlib import asynccontextmanager
+
+        settings = SimpleNamespace(
+            homeassistant_url="http://127.0.0.1:8123", homeassistant_token="jwt"
+        )
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_mod.__path__ = []
+        cfg = ModuleType("ha_mcp.config")
+        cfg.reset_global_settings = lambda: None
+        cfg.set_embedded_connection = lambda u, t: None
+        cfg.OAUTH_MODE_URL = "__sentinel_url__"
+        cfg.OAUTH_MODE_TOKEN = "__sentinel_token__"
+        cfg.get_global_settings = lambda: settings
+
+        @asynccontextmanager
+        async def _lifespan():
+            yield
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                return object()
+
+            _lifespan_manager = staticmethod(_lifespan)
+
+        server_mod = ModuleType("ha_mcp.server")
+        server_mod.HomeAssistantSmartMCPServer = lambda: SimpleNamespace(mcp=_FakeMcp())
+        ui_mod = ModuleType("ha_mcp.settings_ui")
+        ui_mod.register_settings_routes = lambda *a, **k: None
+
+        class _FakeUvServer:
+            def __init__(self, config):
+                self.should_exit = False
+
+            async def serve(self):
+                # Mirror uvicorn.Server.startup(): the bind error is caught
+                # and converted to sys.exit(STARTUP_FAILURE), leaving the
+                # OSError only as SystemExit.__context__.
+                try:
+                    raise OSError(98, "address already in use")
+                except OSError:
+                    # uvicorn calls bare sys.exit(STARTUP_FAILURE), leaving
+                    # the OSError only in __context__ — no `from` chaining.
+                    raise SystemExit(3)  # noqa: B904
+
+        uvicorn_mod = ModuleType("uvicorn")
+        uvicorn_mod.Config = lambda *a, **k: SimpleNamespace()
+        uvicorn_mod.Server = _FakeUvServer
+
+        for name, mod in (
+            ("ha_mcp", ha_mcp_mod),
+            ("ha_mcp.config", cfg),
+            ("ha_mcp.server", server_mod),
+            ("ha_mcp.settings_ui", ui_mod),
+            ("uvicorn", uvicorn_mod),
+        ):
+            monkeypatch.setitem(sys.modules, name, mod)
+        ha_mcp_mod.config = cfg
+        ha_mcp_mod.server = server_mod
+        ha_mcp_mod.settings_ui = ui_mod
+        monkeypatch.setitem(
+            sys.modules,
+            "ha_mcp.browser_landing",
+            ModuleType("ha_mcp.browser_landing"),
+        )
+
+        try:
+            mgr._thread_main("tok")
+        finally:
+            _restore_env()
+
+        assert isinstance(mgr._thread_exc, es.EmbeddedServerError)
+        assert "exited during startup" in str(mgr._thread_exc)
+        assert "address already in use" in str(mgr._thread_exc)
+
+    async def test_wait_ready_stall_stops_thread_and_raises(
         self, tmp_path, monkeypatch
     ):
+        # No observable progress (pinned signature) past the stall budget.
         mgr, hass, _entry = _manager(tmp_path)
-        # loop.time advances past the deadline on the second read.
-        hass.loop.time = MagicMock(side_effect=[0.0, 0.0, 9999.0, 9999.0])
+        hass.loop.time = MagicMock(side_effect=[0.0, 100.0])
         mgr._thread = SimpleNamespace(is_alive=lambda: True)
+        mgr._startup_phase = "pinned"
+        monkeypatch.setattr(mgr, "_progress_signature", lambda: (0, "pinned"))
         monkeypatch.setattr(mgr, "_async_probe_port", AsyncMock(return_value=False))
         stop = AsyncMock()
         monkeypatch.setattr(mgr, "async_stop", stop)
         monkeypatch.setattr(es.asyncio, "sleep", AsyncMock())
 
-        with pytest.raises(es.EmbeddedServerError, match="did not become reachable"):
+        with pytest.raises(
+            es.EmbeddedServerError, match="no startup progress"
+        ) as excinfo:
+            await mgr._async_wait_until_ready()
+        stop.assert_awaited_once()
+        # The failure names the phase the worker was last seen in.
+        assert "pinned" in str(excinfo.value)
+
+    async def test_wait_ready_progress_extends_past_stall_budget(
+        self, tmp_path, monkeypatch
+    ):
+        # 150s elapsed (past the 90s stall budget) but the worker kept
+        # importing (signature moves) - the wait must NOT give up (#1904).
+        mgr, hass, _entry = _manager(tmp_path)
+        hass.loop.time = MagicMock(side_effect=[0.0, 150.0])
+        mgr._thread = SimpleNamespace(is_alive=lambda: True)
+        ticks = iter(range(100))
+        monkeypatch.setattr(
+            mgr, "_progress_signature", lambda: (next(ticks), "importing")
+        )
+        monkeypatch.setattr(
+            mgr, "_async_probe_port", AsyncMock(side_effect=[False, True])
+        )
+        monkeypatch.setattr(es.asyncio, "sleep", AsyncMock())
+
+        await mgr._async_wait_until_ready()  # must not raise
+
+    async def test_wait_ready_total_cap_fires_despite_progress(
+        self, tmp_path, monkeypatch
+    ):
+        # Endless "progress" cannot extend the wait past the absolute cap.
+        mgr, hass, _entry = _manager(tmp_path)
+        hass.loop.time = MagicMock(side_effect=[0.0, 700.0])
+        mgr._thread = SimpleNamespace(is_alive=lambda: True)
+        ticks = iter(range(100))
+        monkeypatch.setattr(
+            mgr, "_progress_signature", lambda: (next(ticks), "importing")
+        )
+        monkeypatch.setattr(mgr, "_async_probe_port", AsyncMock(return_value=False))
+        stop = AsyncMock()
+        monkeypatch.setattr(mgr, "async_stop", stop)
+        monkeypatch.setattr(es.asyncio, "sleep", AsyncMock())
+
+        with pytest.raises(es.EmbeddedServerError, match="within 600s"):
             await mgr._async_wait_until_ready()
         stop.assert_awaited_once()
 
@@ -1888,6 +2028,12 @@ class TestPurgeHaMcpModules:
             sys.modules.pop(name)
         es._purge_ha_mcp_modules()  # must not raise
 
+    def test_purge_clears_cached_import_version(self, monkeypatch):
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", "9.9.9")
+        monkeypatch.setitem(sys.modules, "ha_mcp", ModuleType("ha_mcp"))
+        es._purge_ha_mcp_modules()
+        assert es._CACHED_IMPORT_VERSION is None
+
 
 class TestRunningVersionStalenessWarning:
     async def test_start_prefers_configured_dev_distribution(
@@ -2047,6 +2193,65 @@ class TestPurgeSkippedWhileOrphanAlive:
         assert mgr._orphaned_thread is None  # bookkeeping cleared
 
 
+class TestPurgeSkippedOnWarmCache:
+    """A retry with an unchanged install must reuse the warm module cache.
+
+    Issue #1904: purging on every attempt made each retry pay the full cold
+    import again, so slow hardware that missed the readiness window once
+    could never recover.
+    """
+
+    def _start_kwargs(self, mgr, monkeypatch, purges, ready_version):
+        monkeypatch.setattr(
+            mgr, "_async_ensure_package", AsyncMock(return_value=ready_version)
+        )
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: purges.append(True))
+
+    async def test_purge_skipped_when_cache_matches_installed(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges, "1.2.3")
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", "1.2.3")
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == []
+
+    async def test_purge_runs_when_cache_differs(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges, "1.2.3")
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", "1.2.2")
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == [True]
+
+    async def test_purge_runs_when_cache_unknown(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges, "1.2.3")
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", None)
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == [True]
+
+
 class TestServeRunningVersionCapture:
     @pytest.fixture(autouse=True)
     def _isolate_env(self):
@@ -2082,9 +2287,12 @@ class TestServeRunningVersionCapture:
         sys.modules["ha_mcp"].__version__ = "9.8.7"
         monkeypatch.setattr(es, "_installed_dist_version", lambda dist: None)
 
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", None)
         mgr._thread_main("tok")
 
         assert mgr._running_version == "9.8.7"
+        # The warm-cache purge skip keys on this recording (issue #1904).
+        assert es._CACHED_IMPORT_VERSION == "9.8.7"
         assert isinstance(mgr._thread_exc, _StopServe)
 
     def test_serve_prefers_configured_dev_metadata(self, tmp_path, monkeypatch):

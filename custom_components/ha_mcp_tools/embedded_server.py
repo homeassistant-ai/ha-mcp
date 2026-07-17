@@ -92,13 +92,19 @@ _LOGGER = logging.getLogger(__name__)
 # from the same refresh token on every start regardless.
 _ACCESS_TOKEN_TTL = timedelta(days=3650)
 
-# Readiness probe: how long to wait for the server thread to accept a loopback
-# TCP connection before declaring the start failed. Generous on purpose: a
-# cold import of the fastmcp tree takes 1-3s on real hardware but has been
-# observed to exceed 30s on QEMU-emulated HAOS (the e2e lane), and a single
-# readiness timeout fails the bring-up outright — there is no retry. Real
-# deployments only pay this budget on the failure path.
-_READY_TIMEOUT_SECONDS = 90.0
+# Readiness probe: fail the bring-up only when the worker shows no observable
+# startup progress (no new modules landing in sys.modules, no phase advance)
+# for this long. The previous flat 90s deadline assumed real hardware imports
+# the server tree in seconds — issue #1904 (HA Green) showed a cold import
+# alone can take minutes there, and killing the still-importing worker at the
+# deadline is what created the orphaned-thread/port-collision cascade: the
+# worker cannot be joined mid-import, lingered as a zombie, and later bound
+# the port out from under the retry. A genuinely wedged worker still fails
+# after one stall budget.
+_READY_STALL_TIMEOUT_SECONDS = 90.0
+# Absolute ceiling on one bring-up regardless of apparent progress, matching
+# the HAOS e2e lane's own 600s readiness deadline.
+_READY_TOTAL_CAP_SECONDS = 600.0
 _READY_POLL_INTERVAL_SECONDS = 0.5
 
 # How long to wait for the worker thread to exit on stop before giving up and
@@ -241,6 +247,9 @@ class EmbeddedServerManager:
         # Compared against the installed distribution after start to detect a
         # stale-code worker (see _purge_ha_mcp_modules).
         self._running_version: str | None = None
+        # Startup phase published by the worker (plain attribute write, read
+        # by the readiness poll for progress detection and error messages).
+        self._startup_phase: str = "not started"
 
     @property
     def port(self) -> int:
@@ -285,7 +294,7 @@ class EmbeddedServerManager:
                 kind="package",
             )
 
-        await self._async_ensure_package()
+        ready_version = await self._async_ensure_package()
         access_token = await self._async_provision_token()
         await self._hass.async_add_executor_job(self._prepare_config_dir)
 
@@ -304,19 +313,38 @@ class EmbeddedServerManager:
         # can outlive both the readiness timeout and the stop-join budget).
         # The post-start staleness check below surfaces the consequence
         # (old code possibly serving) instead.
+        #
+        # Also skipped when the cached modules already ARE the generation on
+        # disk (issue #1904): purging on every attempt made each retry pay
+        # the full cold import again, so slow hardware that missed the
+        # readiness window once could never recover. A reinstall that keeps
+        # the same version string (same-version tarball override) is the
+        # accepted blind spot; the post-start staleness check still reports
+        # the running/installed pair.
         orphan = self._orphaned_thread
         if orphan is not None and not orphan.is_alive():
             self._orphaned_thread = orphan = None
-        if orphan is None:
-            _purge_ha_mcp_modules()
-        else:
+        if orphan is not None:
             _LOGGER.warning(
                 "Skipping the ha_mcp module purge: a previous worker thread "
                 "is still shutting down. The new worker may serve the "
                 "previously imported code until Home Assistant restarts."
             )
+        elif (
+            ready_version is not None
+            and _CACHED_IMPORT_VERSION is not None
+            and ready_version == _CACHED_IMPORT_VERSION
+        ):
+            _LOGGER.debug(
+                "Cached ha_mcp modules already match installed version %s; "
+                "skipping the module purge (warm start)",
+                ready_version,
+            )
+        else:
+            _purge_ha_mcp_modules()
 
         self._thread_exc = None
+        self._startup_phase = "waiting for the worker thread"
         self._thread = threading.Thread(
             target=self._thread_main,
             args=(access_token,),
@@ -454,8 +482,11 @@ class EmbeddedServerManager:
             return None
         return DIST_NAME_STABLE if self._channel == CHANNEL_DEV else DIST_NAME_DEV
 
-    async def _async_ensure_package(self) -> None:
+    async def _async_ensure_package(self) -> str | None:
         """Ensure ``ha-mcp`` is importable, installing the pip spec if needed.
+
+        Returns the installed version that the worker is about to run, for the
+        caller's warm-cache purge decision.
 
         With auto-update on (the default) both channels install their
         distribution UNPINNED, so every entry reload / HA restart must pick up
@@ -581,6 +612,7 @@ class EmbeddedServerManager:
         _LOGGER.info("HA-MCP in-process server package ready (version %s)", version)
         if stored_spec != self._pip_spec:
             self._store_installed_spec()
+        return version
 
     async def _async_remove_legacy_target(
         self, target_dist: str, installed_version: str | None
@@ -776,6 +808,15 @@ class EmbeddedServerManager:
 
     # -- worker thread -----------------------------------------------------
 
+    def _note_startup_phase(self, phase: str) -> None:
+        """Publish the worker's startup phase (a plain attribute write).
+
+        Read by the readiness poll: a phase advance counts as progress, and the
+        failure message names the phase the worker was last seen in.
+        """
+        self._startup_phase = phase
+        _LOGGER.debug("HA-MCP in-process server startup: %s", phase)
+
     def _thread_main(self, access_token: str) -> None:
         """Thread entry point: stage non-secret env, then run the server.
 
@@ -798,6 +839,18 @@ class EmbeddedServerManager:
         self._stop_event = stop_event
         try:
             loop.run_until_complete(self._serve(access_token, stop_event))
+        except SystemExit as err:
+            # uvicorn signals a startup failure (e.g. the port is already in
+            # use) with SystemExit(STARTUP_FAILURE), which ``except Exception``
+            # misses — live issue #1904 saw the real bind error surface only
+            # in HA's generic task-exception log while the component reported
+            # a bare readiness timeout. Unwrap the original error so the
+            # repair issue names the actual cause.
+            cause: BaseException = err.__context__ or err.__cause__ or err
+            self._thread_exc = EmbeddedServerError(
+                f"the server's HTTP listener exited during startup: {cause}"
+            )
+            _LOGGER.error("HA-MCP in-process server exited during startup: %s", cause)
         except Exception as err:
             self._thread_exc = err
             _LOGGER.exception("HA-MCP in-process server thread crashed")
@@ -831,6 +884,7 @@ class EmbeddedServerManager:
         # Hand ha-mcp the loopback URL + provisioned admin token in memory, before
         # the server (and its settings singleton) is built. Keeping the token out
         # of os.environ is the whole point of the in-process channel.
+        self._note_startup_phase("importing the server package")
         import ha_mcp.config as _hamcp_config
 
         # Record which code generation this worker imported. Prefer the
@@ -838,6 +892,11 @@ class EmbeddedServerManager:
         # ha_mcp.__version__ itself checks stable first and stale stable
         # metadata can otherwise make a fresh dev worker look outdated.
         self._running_version = _running_ha_mcp_version(self._channel)
+        # The cache in sys.modules now holds this generation — remembered
+        # process-wide so the next start can skip the purge when the install
+        # has not changed (issue #1904).
+        global _CACHED_IMPORT_VERSION
+        _CACHED_IMPORT_VERSION = self._running_version
 
         # Drop any settings singleton cached by a PREVIOUS start in this same
         # Python process: an entry reload must re-read the override files
@@ -883,6 +942,7 @@ class EmbeddedServerManager:
         from ha_mcp.server import HomeAssistantSmartMCPServer
         from ha_mcp.settings_ui import register_settings_routes
 
+        self._note_startup_phase("building the server")
         server = HomeAssistantSmartMCPServer()
 
         # Startup observability (no secrets): confirm the in-memory connection
@@ -921,6 +981,7 @@ class EmbeddedServerManager:
 
         # Parity with the CLI HTTP runner: serve the web settings UI under the
         # same secret path as the MCP endpoint.
+        self._note_startup_phase("registering web routes")
         register_settings_routes(server.mcp, server, secret_path=self._secret_path)
 
         # Parity with the CLI HTTP runner: answer a browser GET on the MCP path
@@ -977,6 +1038,7 @@ class EmbeddedServerManager:
         )
         uv_server = uvicorn.Server(config)
 
+        self._note_startup_phase("starting the HTTP listener")
         stop_task = asyncio.create_task(stop_event.wait())
         async with server.mcp._lifespan_manager():
             serve_task = asyncio.create_task(uv_server.serve())
@@ -996,15 +1058,31 @@ class EmbeddedServerManager:
                 # Surface a server that exited on its own (bind failure, etc.).
                 serve_task.result()
 
+    def _progress_signature(self) -> tuple[int, str]:
+        """Snapshot the observable startup progress of the worker thread.
+
+        ``len(sys.modules)`` moves continuously while the worker grinds
+        through a cold import (the single longest startup step — minutes on
+        slow hardware, issue #1904), and the published phase moves between
+        steps. Any change in the pair counts as progress.
+        """
+        return (len(sys.modules), self._startup_phase)
+
     async def _async_wait_until_ready(self) -> None:
         """Poll a loopback TCP connect until the server accepts, or fail.
 
-        On failure (timeout or an early thread crash) stops the thread and raises
+        Patience is progress-based: the wait only gives up when the worker
+        shows no observable progress for ``_READY_STALL_TIMEOUT_SECONDS`` (or
+        blows the absolute ``_READY_TOTAL_CAP_SECONDS`` ceiling). A slow cold
+        import keeps the wait alive; a wedged worker still fails after one
+        stall budget. On failure stops the thread and raises
         :class:`EmbeddedServerError` so the caller leaves the webhook
         unregistered and files a repair issue.
         """
-        deadline = self._hass.loop.time() + _READY_TIMEOUT_SECONDS
-        while self._hass.loop.time() < deadline:
+        start = self._hass.loop.time()
+        last_progress = start
+        last_signature = self._progress_signature()
+        while True:
             if self._thread_exc is not None:
                 raise EmbeddedServerError(
                     f"HA-MCP in-process server failed to start: {self._thread_exc}"
@@ -1020,15 +1098,32 @@ class EmbeddedServerManager:
                     self._port,
                 )
                 return
+            now = self._hass.loop.time()
+            signature = self._progress_signature()
+            if signature != last_signature:
+                last_signature = signature
+                last_progress = now
+            if now - start >= _READY_TOTAL_CAP_SECONDS:
+                failure = (
+                    f"HA-MCP in-process server did not become reachable on "
+                    f"port {self._port} within {_READY_TOTAL_CAP_SECONDS:.0f}s "
+                    f"(last startup phase: {self._startup_phase})."
+                )
+                break
+            if now - last_progress >= _READY_STALL_TIMEOUT_SECONDS:
+                failure = (
+                    f"HA-MCP in-process server did not become reachable on "
+                    f"port {self._port}: no startup progress for "
+                    f"{_READY_STALL_TIMEOUT_SECONDS:.0f}s (stalled at: "
+                    f"{self._startup_phase}; {now - start:.0f}s since start)."
+                )
+                break
             await asyncio.sleep(_READY_POLL_INTERVAL_SECONDS)
 
-        # Timed out — tear the thread down so we never leave a half-started
+        # Gave up — tear the thread down so we never leave a half-started
         # server behind an unregistered webhook.
         await self.async_stop()
-        raise EmbeddedServerError(
-            f"HA-MCP in-process server did not become reachable on port "
-            f"{self._port} within {_READY_TIMEOUT_SECONDS:.0f}s."
-        )
+        raise EmbeddedServerError(failure)
 
     async def _async_probe_port(self) -> bool:
         """Return True if a loopback TCP connection to the server port succeeds.
@@ -1049,6 +1144,14 @@ class EmbeddedServerManager:
         return True
 
 
+# Version of the ha_mcp generation currently cached in sys.modules — set by
+# the worker right after its imports land, cleared by the purge. Process-wide
+# (the module cache it describes is process-wide too). Lets a retry with an
+# unchanged install keep the warm cache instead of paying the full cold import
+# again (issue #1904).
+_CACHED_IMPORT_VERSION: str | None = None
+
+
 def _purge_ha_mcp_modules() -> None:
     """Drop every cached ``ha_mcp`` module so the next import loads fresh code.
 
@@ -1061,6 +1164,8 @@ def _purge_ha_mcp_modules() -> None:
     shared with the rest of Home Assistant), so a dependency-version change
     still needs an HA core restart.
     """
+    global _CACHED_IMPORT_VERSION
+    _CACHED_IMPORT_VERSION = None
     # Snapshot the keys: sys.modules can be mutated by concurrent imports on
     # other threads mid-iteration (HA core is heavily threaded).
     purged = [
