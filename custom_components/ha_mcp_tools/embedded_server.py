@@ -334,10 +334,12 @@ class EmbeddedServerManager:
         # crashed mid-import with KeyError: 'ha_mcp.config' when its modules
         # were ripped out from under it (issue #1904, live on 1.1.1-dev.107).
         # The process-global registry survives manager turnover.
-        _IMPORTING_WORKERS.difference_update(
-            [t for t in list(_IMPORTING_WORKERS) if not t.is_alive()]
-        )
-        if orphan is not None or _IMPORTING_WORKERS:
+        with _IMPORTING_WORKERS_LOCK:
+            _IMPORTING_WORKERS.difference_update(
+                [t for t in list(_IMPORTING_WORKERS) if not t.is_alive()]
+            )
+            importing_busy = bool(_IMPORTING_WORKERS)
+        if orphan is not None or importing_busy:
             _LOGGER.warning(
                 "Skipping the ha_mcp module purge: a previous worker thread "
                 "is still shutting down. The new worker may serve the "
@@ -857,7 +859,8 @@ class EmbeddedServerManager:
         # per-manager orphan guard cannot cover this (managers are recreated
         # per bring-up). Deregistered in _serve once the import section
         # completes, and here on exit as the backstop.
-        _IMPORTING_WORKERS.add(threading.current_thread())
+        with _IMPORTING_WORKERS_LOCK:
+            _IMPORTING_WORKERS.add(threading.current_thread())
         try:
             loop.run_until_complete(self._serve(access_token, stop_event))
         except SystemExit as err:
@@ -884,7 +887,8 @@ class EmbeddedServerManager:
             self._thread_exc = err
             _LOGGER.exception("HA-MCP in-process server thread crashed")
         finally:
-            _IMPORTING_WORKERS.discard(threading.current_thread())
+            with _IMPORTING_WORKERS_LOCK:
+                _IMPORTING_WORKERS.discard(threading.current_thread())
             # Teardown is best-effort but never SILENT (review finding): a
             # raise here must not mask the primary outcome, yet a recurring
             # cleanup failure (leaking executor threads across reloads) has
@@ -1058,7 +1062,8 @@ class EmbeddedServerManager:
         # registry so a later bring-up's purge is no longer a hazard to this
         # thread (removal from sys.modules cannot unload already-bound
         # modules; only in-flight imports are corruptible).
-        _IMPORTING_WORKERS.discard(threading.current_thread())
+        with _IMPORTING_WORKERS_LOCK:
+            _IMPORTING_WORKERS.discard(threading.current_thread())
 
         app = server.mcp.http_app(path=self._secret_path, stateless_http=True)
         config = uvicorn.Config(
@@ -1192,7 +1197,11 @@ class EmbeddedServerManager:
 # manager is recreated on every bring-up, so per-manager orphan tracking
 # cannot see a previous manager's abandoned worker. Workers register in
 # _thread_main before their first import and deregister once their import
-# section completes (or on thread exit, whichever comes first).
+# section completes (or on thread exit, whichever comes first). All access
+# goes through the lock: CPython's GIL would make the individual set ops
+# atomic, but the purge gate's prune-then-check is a composite read and the
+# lock keeps its correctness independent of GIL scheduling arguments.
+_IMPORTING_WORKERS_LOCK = threading.Lock()
 _IMPORTING_WORKERS: set[threading.Thread] = set()
 
 # Version of the ha_mcp generation currently cached in sys.modules — set by
