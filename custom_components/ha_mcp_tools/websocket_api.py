@@ -130,7 +130,9 @@ and ``info`` itself carries no capability entry):
   a sibling ``missing`` list) or ALL entities bound to a ``config_entry_id``. The
   config-entry scan returns EVERY match — it does not reuse the single-valued
   ``_entities_by_config_entry`` index, so a multi-entity flow helper
-  (utility_meter + its tariffs) does not silently lose its sub-entities.
+  (utility_meter + its tariffs) does not silently lose its sub-entities. Exactly
+  one of the two is required; a request with NEITHER raises
+  ``HomeAssistantError`` rather than silently returning an empty result.
 * ``ha_mcp_tools/system_snapshot`` — one consistent synchronous pass over the
   live objects the health path reads: ``config_entries`` (identity fields only —
   no options/subentries), ``issues`` (the ``_overview_repairs`` slice),
@@ -155,8 +157,10 @@ and ``info`` itself carries no capability entry):
   the FULL-FIELD ``config/<x>_registry/list`` shapes (byte-compatible with the
   legacy WS list responses; timestamps as ``created_at`` / ``modified_at``
   floats via ``.timestamp()``). Only the requested ``registries`` keys are
-  present; ``category`` requires ``category_scopes`` (categories are scoped).
-  ``category_registry`` is imported function-locally (not needed at module top).
+  present; ``category`` REQUIRES a non-empty ``category_scopes`` (categories are
+  scoped) — a ``category`` request without one raises ``HomeAssistantError``
+  rather than silently serving ``{}``. ``category_registry`` is imported
+  function-locally (not needed at module top).
 
 ``ha_mcp_tools/config_get`` was withdrawn before release: it served an entity's
 ``raw_config``, whose freshness lags the config file between a write and the next
@@ -579,8 +583,10 @@ def _config_entries_schema() -> dict[Any, Any]:
 
 def _registry_lookup_schema() -> dict[Any, Any]:
     # Exactly one of entity_ids / config_entry_id is meaningful; ``vol.Exclusive``
-    # rejects a request carrying BOTH (the two share the ``target`` group). Neither
-    # present is a valid-but-empty request (the handler returns no matches).
+    # rejects a request carrying BOTH (the two share the ``target`` group).
+    # Voluptuous has no clean way to express "at least one of" in a flat schema,
+    # so a request with NEITHER present is caught in ``_do_registry_lookup``
+    # instead (raises ``HomeAssistantError`` rather than a silent empty result).
     return {
         vol.Required("type"): WS_REGISTRY_LOOKUP,
         vol.Exclusive("entity_ids", "target"): [str],
@@ -3093,10 +3099,17 @@ def _do_registry_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str
       id with no registry entry lands in ``missing`` rather than being dropped.
 
     Pure O(n)/O(id) in-memory registry reads. Exactly one of the two params is
-    meaningful (the schema rejects both); neither yields an empty result.
+    meaningful — the schema rejects both being present; NEITHER present raises
+    ``HomeAssistantError`` (see :func:`_registry_lookup_missing_target`) rather
+    than silently returning an empty result the caller could mistake for "no
+    matches".
     """
-    view = _resolve_registries(hass)
     config_entry_id = params.get("config_entry_id")
+    entity_ids = params.get("entity_ids") or []
+    if not config_entry_id and not entity_ids:
+        raise _registry_lookup_missing_target()
+
+    view = _resolve_registries(hass)
     if config_entry_id:
         rows = [
             _entity_partial_dict(entry)
@@ -3105,7 +3118,6 @@ def _do_registry_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str
         ]
         return {"entities": [row for row in rows if row is not None]}
 
-    entity_ids = params.get("entity_ids") or []
     found: list[dict[str, Any]] = []
     missing: list[str] = []
     for entity_id in entity_ids:
@@ -3116,6 +3128,22 @@ def _do_registry_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str
         else:
             found.append(row)
     return {"entities": found, "missing": missing}
+
+
+def _registry_lookup_missing_target() -> Exception:
+    """Build a ``HomeAssistantError`` for a target-less ``registry_lookup`` request.
+
+    Mirrors :func:`_backup_unavailable`: imported function-locally (test-stubbable)
+    so a request with neither ``entity_ids`` nor ``config_entry_id`` raises instead
+    of returning ``{entities: [], missing: []}`` — a shape indistinguishable from a
+    genuine "nothing matched" result — letting the server's command-error fallback
+    fire for the degenerate case.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    return HomeAssistantError(
+        "ha_mcp_tools/registry_lookup requires entity_ids or config_entry_id"
+    )
 
 
 # =============================================================================
@@ -3337,10 +3365,18 @@ def _do_registries(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
     Timestamps are floats (``.timestamp()``), matching core.
 
     ``category`` is scoped: ``category_scopes`` names which scopes to list (a
-    ``{scope: [rows]}`` map). The category registry is imported function-locally
-    (not needed at module top). Pure in-memory reads over the resolved registries.
+    ``{scope: [rows]}`` map) and is REQUIRED when ``category`` is requested — a
+    scope-less category request raises ``HomeAssistantError`` (see
+    :func:`_registries_missing_category_scopes`) rather than silently serving
+    ``{}``, a shape indistinguishable from "every requested scope is empty". The
+    category registry is imported function-locally (not needed at module top).
+    Pure in-memory reads over the resolved registries.
     """
     requested = params.get("registries") or []
+    category_scopes = params.get("category_scopes") or []
+    if "category" in requested and not category_scopes:
+        raise _registries_missing_category_scopes()
+
     view = _resolve_registries(hass)
     result: dict[str, Any] = {}
     if "area" in requested:
@@ -3350,10 +3386,24 @@ def _do_registries(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
     if "label" in requested:
         result["labels"] = [_label_row(x) for x in _all_label_entries(view)]
     if "category" in requested:
-        result["categories"] = _category_rows(
-            hass, params.get("category_scopes") or []
-        )
+        result["categories"] = _category_rows(hass, category_scopes)
     return result
+
+
+def _registries_missing_category_scopes() -> Exception:
+    """Build a ``HomeAssistantError`` for a scope-less ``category`` request.
+
+    Mirrors :func:`_backup_unavailable`: imported function-locally (test-stubbable)
+    so a ``registries`` request naming ``category`` without a non-empty
+    ``category_scopes`` raises instead of silently returning ``{}`` (a caller
+    could otherwise mistake that for "no categories in any scope").
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    return HomeAssistantError(
+        "ha_mcp_tools/registries: category_scopes is required when "
+        "'category' is requested"
+    )
 
 
 def _area_row(area: Any) -> dict[str, Any]:

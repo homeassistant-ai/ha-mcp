@@ -1783,7 +1783,10 @@ _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     # no per-entity settings lookup runs, keeping the admin-gate probe pure.
     "ha_mcp_tools/entity_lookup": {"unique_id": "x"},
     "ha_mcp_tools/registries": {"registries": []},
-    # config_entries / registry_lookup / system_snapshot need no required params.
+    # registry_lookup now REQUIRES a target (entity_ids or config_entry_id) —
+    # a neither-present request raises HomeAssistantError (issue #1813 M2).
+    "ha_mcp_tools/registry_lookup": {"entity_ids": ["light.x"]},
+    # config_entries / system_snapshot need no required params.
     # backup_prep needs a hass carrying a backup manager (see _admin_gate_hass).
 }
 
@@ -3420,12 +3423,19 @@ class TestRegistryLookup:
         assert [r["entity_id"] for r in res["entities"]] == ["sensor.meter"]
         assert res["missing"] == ["sensor.ghost"]
 
-    def test_no_target_is_empty(self, monkeypatch):
+    def test_no_target_raises(self, monkeypatch):
+        # Neither entity_ids nor config_entry_id is a degenerate request — it
+        # raises rather than returning an empty result indistinguishable from
+        # "no matches" (issue #1813 M2 tightening).
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
-        assert wsapi._do_registry_lookup(FakeHass(), {}) == {
-            "entities": [],
-            "missing": [],
-        }
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_registry_lookup(FakeHass(), {})
+
+    def test_empty_entity_ids_list_raises(self, monkeypatch):
+        # An explicit empty list is likewise "no target", not "zero results".
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_registry_lookup(FakeHass(), {"entity_ids": []})
 
 
 # =============================================================================
@@ -3786,13 +3796,27 @@ class TestRegistries:
         res = wsapi._do_registries(FakeHass(), {"registries": ["area", "label"]})
         assert set(res) == {"areas", "labels"}
 
-    def test_category_requested_without_scopes_is_empty_map(self, monkeypatch):
+    def test_category_requested_without_scopes_raises(self, monkeypatch):
+        # category_scopes is REQUIRED when "category" is requested — a scope-less
+        # request raises rather than silently serving {} (issue #1813 M1
+        # tightening).
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         monkeypatch.setattr(
             wsapi, "_category_registry", lambda h: FakeCategoryReg({})
         )
-        res = wsapi._do_registries(FakeHass(), {"registries": ["category"]})
-        assert res["categories"] == {}
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_registries(FakeHass(), {"registries": ["category"]})
+
+    def test_category_requested_with_empty_scopes_list_raises(self, monkeypatch):
+        # An explicit empty category_scopes list is likewise rejected.
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
+        monkeypatch.setattr(
+            wsapi, "_category_registry", lambda h: FakeCategoryReg({})
+        )
+        with pytest.raises(_StubHomeAssistantError):
+            wsapi._do_registries(
+                FakeHass(), {"registries": ["category"], "category_scopes": []}
+            )
 
     def test_timestamps_are_floats(self, monkeypatch):
         area = FakeArea("a1", "Office", created_at=_REG_CREATED, modified_at=_REG_MODIFIED)
