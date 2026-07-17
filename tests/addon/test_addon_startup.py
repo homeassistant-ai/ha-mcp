@@ -430,6 +430,58 @@ class TestResolveEffectiveLogLevel:
         assert "resolve_effective_log_level" in content
 
 
+class TestWidenFastmcpLogConsole:
+    """Unit tests for widen_fastmcp_log_console (#1918).
+
+    FastMCP logs its startup line ("Starting MCP server ... on
+    http://0.0.0.0:9583/<secret>") through a rich console that defaults to
+    80 columns when stderr is not a TTY, wrapping the URL mid-secret. A
+    secret split across lines survives the find/replace users do to
+    sanitize logs before sharing them.
+    """
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def test_startup_url_stays_on_one_line(self):
+        import io
+        import logging
+
+        from rich.console import Console
+        from rich.logging import RichHandler
+
+        stream = io.StringIO()
+        # Explicit width=80 mirrors rich's non-TTY default in the container.
+        handler = RichHandler(console=Console(file=stream, width=80))
+        logger = logging.getLogger("fastmcp")
+        logger.addHandler(handler)
+        old_level = logger.level
+        logger.setLevel(logging.INFO)
+        try:
+            self.addon.widen_fastmcp_log_console()
+            url = f"http://0.0.0.0:9583{self.addon.generate_secret_path()}"
+            logger.info(
+                "Starting MCP server 'ha-mcp' with transport 'http' (stateless) on %s",
+                url,
+            )
+            assert url in stream.getvalue()
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+
+    def test_non_rich_handlers_untouched(self):
+        import logging
+
+        logger = logging.getLogger("fastmcp")
+        plain = logging.StreamHandler()
+        logger.addHandler(plain)
+        try:
+            self.addon.widen_fastmcp_log_console()
+        finally:
+            logger.removeHandler(plain)
+
+
 class TestCleanupStaleMigrationMarker:
     """Unit tests for cleanup_stale_migration_marker.
 

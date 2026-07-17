@@ -27,7 +27,8 @@ This is the **development version** of the MCP Server add-on. It receives update
 
 1. Enable "Advanced Mode" in your Home Assistant profile
 2. This add-on will appear in the add-on store (marked as experimental)
-3. Install and configure as normal
+3. **Stop the stable "Home Assistant MCP Server" add-on if you have it installed.** Both add-ons use host networking and bind the same port (9583), so they cannot run at the same time — starting this one while stable is running fails with "address already in use". Changing the port in this add-on's Network configuration does not help: with host networking that setting has no effect.
+4. Install and configure as normal
 
 ## Support
 

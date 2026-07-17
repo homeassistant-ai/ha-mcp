@@ -34,6 +34,24 @@ def log_error(message: str) -> None:
     _log_with_timestamp("ERROR", message, sys.stderr)
 
 
+def widen_fastmcp_log_console(width: int = 200) -> None:
+    """Widen FastMCP's rich log consoles so the MCP URL never wraps.
+
+    Rich defaults to an 80-column console when stderr is not a TTY (as in
+    the add-on container), which wraps FastMCP's own "Starting MCP server
+    ... on http://0.0.0.0:9583/<secret>" line in the middle of the secret
+    path. A secret split across lines survives the find/replace users do
+    to sanitize logs before sharing them (#1918).
+    """
+    import logging
+
+    from rich.logging import RichHandler
+
+    for handler in logging.getLogger("fastmcp").handlers:
+        if isinstance(handler, RichHandler):
+            handler.console.width = width
+
+
 def generate_secret_path() -> str:
     """Generate a secure random path with 128-bit entropy.
 
@@ -741,6 +759,10 @@ def main() -> int:
         register_browser_landing,
     )
     from ha_mcp.settings_ui import register_settings_routes
+
+    # Importing ha_mcp pulled in fastmcp, which attached its rich log
+    # handlers — widen them before any URL-bearing line is logged (#1918).
+    widen_fastmcp_log_console()
 
     # Log the ha-mcp version + a self-update banner when a newer release is
     # available. In the add-on that comes from the Supervisor add-on store, not
