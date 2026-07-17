@@ -218,6 +218,7 @@ ENV_ONLY: dict[str, str] = {
     "OIDC_JWT_SIGNING_KEY": "Optional JWT signing key for persistent OIDC sessions — OIDC mode only",
     "OIDC_ALLOWED_CLIENT_REDIRECT_URIS": "Optional allow-list of dynamically-registered client redirect URIs — OIDC mode only",
     "OIDC_VERIFY_ID_TOKEN": "Opt-in ID-token verification for opaque-access-token OIDC providers — OIDC mode only",
+    "OIDC_AUDIENCE": "Optional expected `aud` claim for IdP-issued access tokens — OIDC mode only",
 }
 
 

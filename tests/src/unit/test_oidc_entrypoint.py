@@ -19,12 +19,13 @@ def _make_mock_oidc_proxy(capture: dict) -> type:
     """Build a MockOIDCProxy class pinned to production's exact kwarg set.
 
     Unlike a ``**kwargs``-catch-all mock, this has an explicit signature with
-    exactly the kwargs ``_run_oidc_server`` passes. An unexpected kwarg (e.g.
-    constructor-kwarg drift from a future FastMCP release) raises TypeError
-    instead of silently passing. ``allowed_client_redirect_uris`` and
-    ``verify_id_token`` are optional in production, so they default to the
-    ``_UNSET`` sentinel here and are only recorded in ``capture`` when
-    actually passed.
+    exactly the kwargs ``_run_oidc_server`` passes. If production ever passes
+    a kwarg not listed here, this raises TypeError instead of silently
+    swallowing it — catching drift in *our own* call, not in FastMCP's
+    constructor (see ``TestOIDCProxySignatureSubset`` for that check).
+    ``allowed_client_redirect_uris``, ``verify_id_token``, and ``audience``
+    are optional in production, so they default to the ``_UNSET`` sentinel
+    here and are only recorded in ``capture`` when actually passed.
     """
 
     class MockOIDCProxy:
@@ -39,6 +40,7 @@ def _make_mock_oidc_proxy(capture: dict) -> type:
             jwt_signing_key,
             allowed_client_redirect_uris=_UNSET,
             verify_id_token=_UNSET,
+            audience=_UNSET,
         ):
             capture["config_url"] = config_url
             capture["client_id"] = client_id
@@ -50,6 +52,8 @@ def _make_mock_oidc_proxy(capture: dict) -> type:
                 capture["allowed_client_redirect_uris"] = allowed_client_redirect_uris
             if verify_id_token is not _UNSET:
                 capture["verify_id_token"] = verify_id_token
+            if audience is not _UNSET:
+                capture["audience"] = audience
 
     return MockOIDCProxy
 
@@ -141,6 +145,43 @@ class TestMainOidcValidation:
             main_module.main_oidc()
 
         assert entrypoint_called, "_run_entrypoint was not called"
+
+    def test_run_oidc_server_args_wired_correctly(self):
+        """main_oidc must bind each env var to the matching _run_oidc_server param.
+
+        Regression test for the call site using seven positional args (four
+        adjacent strings) with nothing asserting they land in the right
+        parameter. Uses four distinct sentinel-like values so a transposition
+        (e.g. client_id/client_secret swapped) would be caught.
+        """
+        import ha_mcp.__main__ as main_module
+
+        env = dict(self._VALID_OIDC_ENV)
+        env["OIDC_CONFIG_URL"] = "https://config-url.example.com/sentinel"
+        env["OIDC_CLIENT_ID"] = "sentinel-client-id"
+        env["OIDC_CLIENT_SECRET"] = "sentinel-client-secret"
+        env["MCP_BASE_URL"] = "https://base-url.example.com/sentinel"
+
+        captured_bound = {}
+
+        def mock_run_entrypoint(coro, label):
+            # Bound parameters are visible on a not-yet-started coroutine's
+            # frame locals; read them before closing (close() clears cr_frame).
+            captured_bound.update(coro.cr_frame.f_locals)
+            coro.close()
+
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(
+                main_module, "_run_entrypoint", side_effect=mock_run_entrypoint
+            ),
+        ):
+            main_module.main_oidc()
+
+        assert captured_bound["config_url"] == "https://config-url.example.com/sentinel"
+        assert captured_bound["client_id"] == "sentinel-client-id"
+        assert captured_bound["client_secret"] == "sentinel-client-secret"
+        assert captured_bound["base_url"] == "https://base-url.example.com/sentinel"
 
 
 class TestMainOidcLogging:
@@ -790,3 +831,411 @@ class TestRunOidcServer:
             )
 
         assert proxy_init_args["jwt_signing_key"] is None
+
+    @pytest.mark.asyncio
+    async def test_verify_id_token_absent_when_falsey(self):
+        """OIDC_VERIFY_ID_TOKEN=false (set but falsey) must not pass the kwarg."""
+        import ha_mcp.__main__ as main_module
+
+        proxy_init_args: dict = {}
+        MockOIDCProxy = _make_mock_oidc_proxy(proxy_init_args)
+
+        mock_server = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.get_tools = AsyncMock(return_value=[])
+
+        async def fake_run_async(**kwargs):
+            pass
+
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
+        mock_server.mcp = mock_mcp
+
+        async def noop_shutdown(coro):
+            coro.close()
+
+        with (
+            patch.dict(os.environ, {"OIDC_VERIFY_ID_TOKEN": "false"}, clear=False),
+            patch(
+                "ha_mcp.__main__.OIDCProxy"
+                if hasattr(main_module, "OIDCProxy")
+                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                MockOIDCProxy,
+            ),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
+
+        assert "verify_id_token" not in proxy_init_args
+
+    @pytest.mark.asyncio
+    async def test_allowed_client_redirect_uris_whitespace_only_treated_as_unset(self):
+        """Separators/whitespace-only value must behave like unset (None / no kwarg)."""
+        import ha_mcp.__main__ as main_module
+
+        proxy_init_args: dict = {}
+        MockOIDCProxy = _make_mock_oidc_proxy(proxy_init_args)
+
+        mock_server = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.get_tools = AsyncMock(return_value=[])
+
+        async def fake_run_async(**kwargs):
+            pass
+
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
+        mock_server.mcp = mock_mcp
+
+        async def noop_shutdown(coro):
+            coro.close()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"OIDC_ALLOWED_CLIENT_REDIRECT_URIS": " , , "},
+                clear=False,
+            ),
+            patch(
+                "ha_mcp.__main__.OIDCProxy"
+                if hasattr(main_module, "OIDCProxy")
+                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                MockOIDCProxy,
+            ),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+        ):
+            assert main_module._oidc_allowed_client_redirect_uris() is None
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
+
+        assert "allowed_client_redirect_uris" not in proxy_init_args
+
+    @pytest.mark.asyncio
+    async def test_allowed_redirect_uris_unset_logs_warning(self, caplog):
+        """OIDC_ALLOWED_CLIENT_REDIRECT_URIS unset must log a warning at startup."""
+        import ha_mcp.__main__ as main_module
+
+        proxy_init_args: dict = {}
+        MockOIDCProxy = _make_mock_oidc_proxy(proxy_init_args)
+
+        mock_server = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.get_tools = AsyncMock(return_value=[])
+
+        async def fake_run_async(**kwargs):
+            pass
+
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
+        mock_server.mcp = mock_mcp
+
+        async def noop_shutdown(coro):
+            coro.close()
+
+        env_without_var = {
+            k: v
+            for k, v in os.environ.items()
+            if k != "OIDC_ALLOWED_CLIENT_REDIRECT_URIS"
+        }
+        with (
+            patch.dict(os.environ, env_without_var, clear=True),
+            patch(
+                "ha_mcp.__main__.OIDCProxy"
+                if hasattr(main_module, "OIDCProxy")
+                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                MockOIDCProxy,
+            ),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+            caplog.at_level("WARNING"),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
+
+        assert any(
+            "OIDC_ALLOWED_CLIENT_REDIRECT_URIS" in record.message
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_allowed_redirect_uris_whitespace_only_also_logs_warning(
+        self, caplog
+    ):
+        """Separators/whitespace-only value must also trigger the unset-warning."""
+        import ha_mcp.__main__ as main_module
+
+        proxy_init_args: dict = {}
+        MockOIDCProxy = _make_mock_oidc_proxy(proxy_init_args)
+
+        mock_server = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.get_tools = AsyncMock(return_value=[])
+
+        async def fake_run_async(**kwargs):
+            pass
+
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
+        mock_server.mcp = mock_mcp
+
+        async def noop_shutdown(coro):
+            coro.close()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"OIDC_ALLOWED_CLIENT_REDIRECT_URIS": " , , "},
+                clear=False,
+            ),
+            patch(
+                "ha_mcp.__main__.OIDCProxy"
+                if hasattr(main_module, "OIDCProxy")
+                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                MockOIDCProxy,
+            ),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+            caplog.at_level("WARNING"),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
+
+        assert any(
+            "OIDC_ALLOWED_CLIENT_REDIRECT_URIS" in record.message
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_allowed_redirect_uris_set_does_not_log_warning(self, caplog):
+        """When OIDC_ALLOWED_CLIENT_REDIRECT_URIS is set, no unset-warning fires."""
+        import ha_mcp.__main__ as main_module
+
+        proxy_init_args: dict = {}
+        MockOIDCProxy = _make_mock_oidc_proxy(proxy_init_args)
+
+        mock_server = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.get_tools = AsyncMock(return_value=[])
+
+        async def fake_run_async(**kwargs):
+            pass
+
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
+        mock_server.mcp = mock_mcp
+
+        async def noop_shutdown(coro):
+            coro.close()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"OIDC_ALLOWED_CLIENT_REDIRECT_URIS": "https://a.example.com/cb"},
+                clear=False,
+            ),
+            patch(
+                "ha_mcp.__main__.OIDCProxy"
+                if hasattr(main_module, "OIDCProxy")
+                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                MockOIDCProxy,
+            ),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+            caplog.at_level("WARNING"),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
+
+        assert not any(
+            "OIDC_ALLOWED_CLIENT_REDIRECT_URIS" in record.message
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_audience_passed_from_env(self):
+        """OIDC_AUDIENCE should be passed through to OIDCProxy when set."""
+        import ha_mcp.__main__ as main_module
+
+        proxy_init_args: dict = {}
+        MockOIDCProxy = _make_mock_oidc_proxy(proxy_init_args)
+
+        mock_server = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.get_tools = AsyncMock(return_value=[])
+
+        async def fake_run_async(**kwargs):
+            pass
+
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
+        mock_server.mcp = mock_mcp
+
+        async def noop_shutdown(coro):
+            coro.close()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"OIDC_AUDIENCE": "https://mcp.example.com/mcp"},
+                clear=False,
+            ),
+            patch(
+                "ha_mcp.__main__.OIDCProxy"
+                if hasattr(main_module, "OIDCProxy")
+                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                MockOIDCProxy,
+            ),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
+
+        assert proxy_init_args["audience"] == "https://mcp.example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_audience_absent_when_unset(self):
+        """OIDC_AUDIENCE unset should not pass the audience kwarg at all."""
+        import ha_mcp.__main__ as main_module
+
+        proxy_init_args: dict = {}
+        MockOIDCProxy = _make_mock_oidc_proxy(proxy_init_args)
+
+        mock_server = MagicMock()
+        mock_mcp = MagicMock()
+        mock_mcp.get_tools = AsyncMock(return_value=[])
+
+        async def fake_run_async(**kwargs):
+            pass
+
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
+        mock_server.mcp = mock_mcp
+
+        async def noop_shutdown(coro):
+            coro.close()
+
+        env_without_var = {k: v for k, v in os.environ.items() if k != "OIDC_AUDIENCE"}
+        with (
+            patch.dict(os.environ, env_without_var, clear=True),
+            patch(
+                "ha_mcp.__main__.OIDCProxy"
+                if hasattr(main_module, "OIDCProxy")
+                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                MockOIDCProxy,
+            ),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
+
+        assert "audience" not in proxy_init_args
+
+
+class TestOIDCProxySignatureSubset:
+    """Offline check that our hand-written kwarg set is accepted by OIDCProxy.
+
+    This can't catch drift in *our* call (that's ``_make_mock_oidc_proxy``'s
+    job, via its pinned signature) — it catches the other direction: a kwarg
+    we pass that FastMCP's real ``OIDCProxy.__init__`` no longer accepts. No
+    instantiation, no network — pure ``inspect.signature`` comparison.
+    """
+
+    def test_run_oidc_server_kwargs_are_subset_of_oidc_proxy_params(self):
+        import inspect
+
+        from fastmcp.server.auth.oidc_proxy import OIDCProxy
+
+        oidc_proxy_params = set(inspect.signature(OIDCProxy.__init__).parameters)
+
+        # Every kwarg name _run_oidc_server can pass to OIDCProxy(**proxy_kwargs).
+        run_oidc_server_kwargs = {
+            "config_url",
+            "client_id",
+            "client_secret",
+            "base_url",
+            "require_authorization_consent",
+            "jwt_signing_key",
+            "allowed_client_redirect_uris",
+            "verify_id_token",
+            "audience",
+        }
+
+        assert run_oidc_server_kwargs.issubset(oidc_proxy_params), (
+            f"_run_oidc_server passes kwargs not accepted by OIDCProxy.__init__: "
+            f"{run_oidc_server_kwargs - oidc_proxy_params}"
+        )

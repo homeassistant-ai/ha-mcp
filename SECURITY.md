@@ -68,9 +68,10 @@ and the external identity provider gate (OIDC mode) remain the authentication
 boundary, and the local network is already the trusted zone — so the
 DNS-rebinding class this guard addresses is out of scope regardless. A
 DNS-rebinding attacker's browser still cannot reach the secret MCP path — only
-the public OAuth/OIDC discovery documents at fixed well-known paths (the
-landing page shares the secret path) — and the loopback settings sidecar enforces
-its own Host/Origin allow-list independent of this setting.
+the public OAuth/OIDC discovery documents at fixed well-known paths (in
+standard/OAuth HTTP modes, the landing page shares the secret path) — and the
+loopback settings sidecar enforces its own Host/Origin allow-list independent
+of this setting.
 
 Operators who front ha-mcp differently can re-enable the guard by setting
 `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION=true` and pinning
@@ -270,6 +271,15 @@ and carries a larger attack surface than the standard LLAT setup.
 
 If you choose to run OAuth mode, restrict the consent endpoint to trusted
 networks and place it behind a TLS-terminating reverse proxy.
+
+### OIDC Mode
+
+The OIDC entrypoint (`ha-mcp-oidc`) is also **new** and builds on the same
+`OAuthProxy` foundation as OAuth mode above. It additionally exposes dynamic
+client registration (DCR) to any client that can reach the discovery
+endpoints. The same TLS/reverse-proxy recommendations apply, and
+`OIDC_ALLOWED_CLIENT_REDIRECT_URIS` should be set for internet-facing
+deployments (see [docs/oidc.md](docs/oidc.md)).
 
 ## Reporting a Vulnerability
 

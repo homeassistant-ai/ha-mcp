@@ -1000,9 +1000,12 @@ def _oidc_allowed_client_redirect_uris() -> list[str] | None:
     """Parse OIDC_ALLOWED_CLIENT_REDIRECT_URIS into a list, or None if unset.
 
     Comma-separated list of redirect URI patterns FastMCP's OIDCProxy will
-    accept from dynamically-registered clients. With open DCR and an
-    allow-all redirect policy, a malicious dynamically-registered client can
-    ride a victim's IdP session; internet-facing deployments should set this.
+    accept from dynamically-registered clients. With no allow-list set,
+    FastMCP still validates a client's redirect URI against that same
+    client's own registered redirect URIs — the exposure is that open DCR
+    lets an attacker register their own client with their own redirect URI;
+    internet-facing deployments should set this to constrain what any
+    dynamically-registered client may register in the first place.
     """
     raw = os.getenv("OIDC_ALLOWED_CLIENT_REDIRECT_URIS", "")
     uris = [uri.strip() for uri in raw.split(",") if uri.strip()]
@@ -1273,13 +1276,20 @@ def main_oidc() -> None:
     - MCP_BASE_URL (required): Public HTTPS URL where this server is accessible
     - HOMEASSISTANT_URL (required): Home Assistant instance URL
     - HOMEASSISTANT_TOKEN (required): Home Assistant long-lived access token or supervisor token
-    - OIDC_JWT_SIGNING_KEY (optional): Secret key for signing FastMCP JWTs. Set this to
-      persist sessions across server restarts. Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    - OIDC_JWT_SIGNING_KEY (optional): Secret key for signing FastMCP JWTs. Sessions
+      persist across restarts by default (the key is derived from OIDC_CLIENT_SECRET);
+      set this to decouple the signing key from the client secret. Generate with:
+      python -c "import secrets; print(secrets.token_urlsafe(32))"
     - OIDC_ALLOWED_CLIENT_REDIRECT_URIS (optional): Comma-separated list of redirect URI
       patterns accepted from dynamically-registered clients. Strongly recommended for
       internet-facing deployments.
     - OIDC_VERIFY_ID_TOKEN (optional, default: false): Set true for providers that issue
       opaque access tokens (e.g. Google, or Auth0 without an API audience).
+    - OIDC_AUDIENCE (optional): Expected `aud` claim for IdP-issued access tokens.
+      Without it (and with OIDC_VERIFY_ID_TOKEN off), FastMCP's JWT verifier checks
+      issuer, signature, and expiry but not audience.
+    - MCP_HOST (optional, default: "0.0.0.0"; set 127.0.0.1 to restrict to loopback
+      behind a same-host reverse proxy)
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     - LOG_LEVEL (optional, default: INFO)
@@ -1332,13 +1342,13 @@ def main_oidc() -> None:
 
     _run_entrypoint(
         _run_oidc_server(
-            oidc_config_url,
-            oidc_client_id,
-            oidc_client_secret,
-            base_url,
-            host,
-            port,
-            path,
+            config_url=oidc_config_url,
+            client_id=oidc_client_id,
+            client_secret=oidc_client_secret,
+            base_url=base_url,
+            host=host,
+            port=port,
+            path=path,
         ),
         "OIDC server",
     )
@@ -1395,9 +1405,19 @@ async def _run_oidc_server(
     allowed_redirect_uris = _oidc_allowed_client_redirect_uris()
     if allowed_redirect_uris:
         proxy_kwargs["allowed_client_redirect_uris"] = allowed_redirect_uris
+    else:
+        logger.warning(
+            "OIDC_ALLOWED_CLIENT_REDIRECT_URIS is not set: any dynamically-registered "
+            "(DCR) client's own redirect URIs are accepted. Internet-facing "
+            "deployments should set it."
+        )
 
     if _oidc_verify_id_token_enabled():
         proxy_kwargs["verify_id_token"] = True
+
+    audience = os.getenv("OIDC_AUDIENCE", "").strip()
+    if audience:
+        proxy_kwargs["audience"] = audience
 
     # Create OIDC auth provider — auto-discovers endpoints from config_url
     auth = OIDCProxy(**proxy_kwargs)
@@ -1409,6 +1429,10 @@ async def _run_oidc_server(
     mcp_instance.auth = auth
 
     logger.info("Server created with OIDC authentication")
+    # Unlike standard/OAuth HTTP modes, OIDC mode intentionally registers no
+    # browser landing page and no settings-UI sidecar: an unauthenticated
+    # browser GET gets a bare 405 rather than a friendly page, and there is
+    # no settings UI surface here.
     if _healthz_enabled():
         _register_healthz_route(mcp_instance)
     logger.info(f"Starting OIDC-enabled MCP server at {base_url}{path}")
