@@ -73,3 +73,27 @@ def patch_ws(ws: AsyncMock, tool_module: Any) -> Any:
                 patch.object(tool_module, "get_websocket_client", factory)
             )
         yield ws
+
+
+@contextlib.contextmanager
+def patch_ws_establish_failure(
+    caps_ws: AsyncMock, tool_module: Any, exc: BaseException
+) -> Any:
+    """Caps probe resolves ``caps_ws`` (``info`` works); the read raises ``exc``.
+
+    Splits the two ``get_websocket_client`` bindings: ``component_api``'s resolves
+    ``caps_ws`` so the caps probe succeeds and caches a positive capability, but the
+    tool module's own ``get_websocket_client`` raises ``exc`` — simulating
+    ``WebSocketManager`` failing to (re)establish the pooled socket for the READ
+    command AFTER caps were cached. This is the plain-``Exception`` connection-
+    establishment failure ``get_websocket_client()`` raises (not a
+    ``HomeAssistantConnectionError`` off ``send_command``), which the REST-legacy
+    helpers must catch broadly and route to their legacy fetch.
+    """
+    good = AsyncMock(return_value=caps_ws)
+    bad = AsyncMock(side_effect=exc)
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch.object(component_api, "get_websocket_client", good))
+        if hasattr(tool_module, "get_websocket_client"):
+            stack.enter_context(patch.object(tool_module, "get_websocket_client", bad))
+        yield

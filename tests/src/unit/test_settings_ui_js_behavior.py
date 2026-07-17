@@ -224,10 +224,17 @@ class TestLocalizationBehavior:
     """Russian catalog application and language-selector behaviour."""
 
     @staticmethod
-    def _localized_dom(locale: str = "ru") -> str:
+    def _localized_dom(
+        locale: str = "ru",
+        *,
+        tools: dict[str, dict[str, str]] | None = None,
+    ) -> str:
         from ha_mcp.settings_ui._i18n import build_payload, serialize_payload
 
-        payload = serialize_payload(build_payload(locale))
+        catalog = build_payload(locale)
+        if tools:
+            catalog["tools"].update(tools)
+        payload = serialize_payload(catalog)
         additions = (
             f'<script id="ha-mcp-i18n" type="application/json">{payload}</script>'
             '<select id="languageToggle"></select>'
@@ -306,6 +313,113 @@ class TestLocalizationBehavior:
         assert not result.errors
         assert 'data-localized-search-match="true"' in result.dom
         assert 'data-source-search-match="true"' in result.dom
+
+    def test_tool_translation_placeholder_mismatch_falls_back_to_source(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_placeholder_example",
+                            "title": "Open {entity}",
+                            "description": "Inspect {entity}",
+                            "primary_tag": "System",
+                            "category": "read",
+                        }
+                    ],
+                    "states": {},
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=self._localized_dom(
+                tools={
+                    "ha_placeholder_example": {
+                        "title": "Открыть",
+                        "description": "Проверить {device}",
+                    }
+                }
+            ),
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const row = document.querySelector(
+                '[data-name="ha_placeholder_example"]'
+              );
+              document.body.dataset.placeholderRow = row ? row.textContent : '';
+            """,
+        )
+
+        assert not result.errors
+        assert "Open {entity}" in result.dom
+        assert "Inspect {entity}" in result.dom
+        row_text = re.search(r'data-placeholder-row="([^"]*)"', result.dom)
+        assert row_text is not None
+        assert "Открыть" not in row_text.group(1)
+        assert "Проверить {device}" not in row_text.group(1)
+        warnings = [
+            str(entry["args"]) for entry in result.console if entry["level"] == "warn"
+        ]
+        assert any("title translation" in warning for warning in warnings)
+        assert any("description translation" in warning for warning in warnings)
+
+    def test_tool_translation_placeholder_set_matches_full_metadata(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_placeholder_valid",
+                            "title": "Open {entity}",
+                            "description": "Inspect entity\nUse {entity} twice: {entity}",
+                            "primary_tag": "System",
+                            "category": "read",
+                        }
+                    ],
+                    "states": {},
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=self._localized_dom(
+                tools={
+                    "ha_placeholder_valid": {
+                        "title": "{entity} открыть",
+                        "description": "Проверить {entity}",
+                    }
+                }
+            ),
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const row = document.querySelector(
+                '[data-name="ha_placeholder_valid"]'
+              );
+              document.body.dataset.placeholderValidRow = row ? row.textContent : '';
+            """,
+        )
+
+        assert not result.errors
+        row_text = re.search(r'data-placeholder-valid-row="([^"]*)"', result.dom)
+        assert row_text is not None
+        assert "{entity} открыть" in row_text.group(1)
+        assert "Проверить {entity}" in row_text.group(1)
+        assert not any(
+            entry["level"] == "warn"
+            and "translation" in str(entry["args"])
+            and "placeholder mismatch" in str(entry["args"])
+            for entry in result.console
+        )
 
     def test_language_selector_sets_cookie_and_reloads(
         self, settings_script: str

@@ -31,6 +31,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .component_registry_lookup import fetch_entities_for_config_entry_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     SUPPORTED_HELPERS,
@@ -1448,7 +1449,9 @@ async def _enrich_helpers_with_current_registry(
     # an unexpected registry shape (e.g. a non-hashable ``id`` breaking the
     # lookup), or a malformed response — flags the result rather than raising
     # out and letting the caller's handler turn a list call into a failure.
-    # Mirrors _get_entities_for_config_entry, which reads the same endpoint.
+    # Mirrors _get_entities_for_config_entry's degrade-open behavior (it now
+    # routes through the component's registry_lookup first, falling back to this
+    # same config/entity_registry/list read).
     # send_websocket_message returns {"success": false, ...} instead of raising,
     # so the malformed-response check below is the branch production takes.
     try:
@@ -1563,16 +1566,36 @@ async def _get_entities_for_config_entry(
 ) -> list[dict[str, Any]]:
     """Return all entity_registry entries linked to the given config_entry_id.
 
-    Uses the config/entity_registry/list WebSocket API and filters client-side
-    by config_entry_id. Multi-entity helpers (e.g. utility_meter with tariffs)
-    are handled naturally — all entities for the same entry are returned.
+    When the component advertises ``registry_lookup`` a single in-process
+    ``registry_lookup(config_entry_id=...)`` read returns the rows already scoped
+    to the entry (byte-identical ``as_partial_dict`` shape), replacing the whole
+    ``config/entity_registry/list`` dump; on capability miss / component error the
+    legacy dump runs. Either way, multi-entity helpers (e.g. utility_meter with
+    tariffs) are handled naturally — all entities for the same entry are returned.
 
     On WebSocket failure (e.g. HA mid-restart, auth lost, connection drop) the
     caller would otherwise see `entity_ids: []` and be told that registry-update
     targets like `area_id` / `labels` were silently dropped. If `warnings` is
     provided, append a concrete message so the caller surfaces the partial
-    failure instead.
+    failure instead. Each read is guarded separately so the warning names the
+    call that actually failed (``registry_lookup`` for the component read vs
+    ``entity_registry/list`` for the legacy dump). This consumer swallows ALL
+    registry-read failures into ``warnings`` and returns ``[]`` (a flow-helper
+    delete's REST step can still succeed), so a propagated
+    ``HomeAssistantConnectionError`` from either read is converted here, not
+    raised.
     """
+    try:
+        rows = await fetch_entities_for_config_entry_via_component(client, entry_id)
+    except Exception as e:
+        if warnings is not None:
+            warnings.append(
+                f"registry_lookup failed for config_entry_id={entry_id}: {e}"
+            )
+        return []
+    if rows is not None:
+        # Component-served rows are ALREADY scoped to the entry.
+        return rows
     try:
         result = await client.send_websocket_message(
             {"type": "config/entity_registry/list"}
@@ -3883,9 +3906,15 @@ class HelperConfigTools:
           for a storage type, serve the correct result from the legacy WS list,
           append a ``warnings[]`` entry, and ``log.warning``. For a flow type,
           raise the component-required error — no legacy fallback exists.
-        - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
-          propagates; the legacy path depends on the same socket and would
-          fail identically.
+        - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
+          ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
+          for a storage type, served from the legacy ``{helper_type}/list`` body
+          (which rides the never-raising ``send_websocket_message`` bridge, a
+          different transport, so it does not die identically), with a
+          ``warnings[]`` entry + ``log.warning``. For a flow type — which has no
+          legacy body — the transport failure re-raises to the tool's
+          structured-error handler (no working legacy path is being blocked, so the
+          systemic "fall back to legacy" rule does not apply).
 
         On a successful response the type must also be in the component's
         ``covered_types`` (see :func:`_component_covers`): a type the response
@@ -3914,6 +3943,27 @@ class HelperConfigTools:
             )
             logger.warning(
                 "ha_mcp_tools/helpers_list failed; fell back to legacy: %r", exc
+            )
+            return legacy
+        except Exception as exc:
+            # Transport/establishment failure (HomeAssistantConnectionError, or the
+            # plain Exception get_websocket_client() raises when WebSocketManager
+            # can't build the socket). The legacy `{helper_type}/list` body rides
+            # the never-raising send_websocket_message bridge (a different transport
+            # from this pooled-WS read), so a storage type falls back rather than
+            # dying identically. A flow type has NO legacy body, so its transport
+            # failure re-raises to the tool's structured-error handler — no working
+            # legacy path is blocked, so the fall-back-to-legacy rule doesn't apply.
+            if is_flow:
+                raise
+            legacy = await self._legacy_helper_list(helper_type)
+            legacy.setdefault("warnings", []).append(
+                f"component helpers_list connection error ({exc}); "
+                "served via legacy path"
+            )
+            logger.warning(
+                "ha_mcp_tools/helpers_list connection error; fell back to legacy: %r",
+                exc,
             )
             return legacy
         result = raw.get("result") or {}

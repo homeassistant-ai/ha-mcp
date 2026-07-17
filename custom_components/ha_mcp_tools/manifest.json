@@ -2,9 +2,11 @@
     "domain": "ha_mcp_tools",
     "name": "HA-MCP Custom Component",
     "after_dependencies": [
-        "http",
+        "backup",
         "cloud",
-        "frontend"
+        "frontend",
+        "http",
+        "lovelace"
     ],
     "codeowners": [
         "@homeassistant-ai"

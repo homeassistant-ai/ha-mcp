@@ -647,6 +647,10 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "heading",
         "include_config",
         "view_path",
+        # Cross-dashboard search selectors: mode='search' + query are pure reads
+        # (walk storage dashboards for a substring), no mutation capability.
+        "mode",
+        "query",
     },
     "ha_manage_backup": {
         # Consumed only under the (scope, action) dispatch the predicate

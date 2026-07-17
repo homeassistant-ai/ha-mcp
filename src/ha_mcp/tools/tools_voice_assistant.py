@@ -619,10 +619,15 @@ class VoiceAssistantTools:
         byte-identical to the legacy ``homeassistant/expose_entity/list`` map so
         the existing ``_get_entity_exposure`` / ``_list_exposures`` shapers consume
         it unchanged. ``None`` on capability miss, downgrade (``unknown_command`` →
-        invalidate the cached caps), or command error/timeout (logged) — the caller
-        falls back to the legacy WS list. A ``HomeAssistantConnectionError`` (WS
-        down) is not caught here; it propagates and the legacy path, sharing the
-        same socket, would fail identically. Same caps-gate discipline as
+        invalidate the cached caps), command error/timeout (logged), or a
+        connection-establishment failure (logged) — the caller falls back to the
+        legacy WS list. A ``HomeAssistantConnectionError`` (pooled-WS drop) or the
+        plain ``Exception`` ``get_websocket_client()`` raises on a failed
+        (re)connect is caught here and mapped to ``None``: the legacy
+        ``homeassistant/expose_entity/list`` read rides the swallowing
+        ``send_websocket_message`` bridge (which returns ``{"success": False}``
+        rather than raising), NOT this pooled socket — so a transport failure must
+        fall back rather than escape. Same caps-gate discipline as
         ``component_devices.fetch_device_via_component``.
         """
         caps = await get_component_caps(self._client)
@@ -641,6 +646,13 @@ class VoiceAssistantTools:
                 invalidate_caps(self._client)
             else:
                 logger.warning("%s failed; fell back to legacy: %r", WS_EXPOSURE, exc)
+            return None
+        except Exception as exc:
+            # HomeAssistantConnectionError / plain establish Exception → legacy (the
+            # legacy expose_entity/list read rides the swallowing bridge).
+            logger.warning(
+                "%s connection error; falling back to legacy: %r", WS_EXPOSURE, exc
+            )
             return None
         result = raw.get("result")
         if not isinstance(result, dict) or "exposed_entities" not in result:

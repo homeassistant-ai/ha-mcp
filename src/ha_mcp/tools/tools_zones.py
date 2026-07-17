@@ -230,9 +230,13 @@ class ZoneTools:
           ``warnings[]`` entry, and ``log.warning``.
         - a response that does not authoritatively enumerate ``zone`` (an older
           component with no ``covered_types``): fall back to legacy silently.
-        - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
-          propagates to the tool's structured-error handler; the legacy path
-          shares the same socket and would fail identically.
+        - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
+          ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
+          served from the legacy ``zone/list`` (which rides the swallowing
+          ``send_websocket_message`` bridge, so a transport failure surfaces there
+          as a structured error rather than dying identically), with a
+          ``warnings[]`` entry + ``log.warning``; a transport failure must not
+          escape.
         """
         try:
             raw = await self._send_component_zone_list()
@@ -246,6 +250,18 @@ class ZoneTools:
             )
             logger.warning(
                 "ha_mcp_tools/helpers_list (zone) failed; fell back to legacy: %r",
+                exc,
+            )
+            return response
+        except Exception as exc:
+            response = _build_zone_result(await self._legacy_zone_rows(), zone_id)
+            response.setdefault("warnings", []).append(
+                f"component zone listing connection error ({exc}); "
+                "served via legacy path"
+            )
+            logger.warning(
+                "ha_mcp_tools/helpers_list (zone) connection error; "
+                "fell back to legacy: %r",
                 exc,
             )
             return response

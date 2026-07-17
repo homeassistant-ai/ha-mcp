@@ -25,7 +25,11 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import component_api, tools_voice_assistant
 from ha_mcp.tools.tools_voice_assistant import register_voice_assistant_tools
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_EXPOSURE = {
     "schema_version": 1,
@@ -238,6 +242,28 @@ async def test_command_error_falls_back_to_legacy() -> None:
     exposure = _build_exposure(client)
 
     with patch_ws(ws, tools_voice_assistant):
+        resp = await exposure()
+
+    assert resp["exposed_entities"] == _LEGACY_MAP
+    assert "entity_info" not in resp
+    assert client.legacy_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_falls_back_to_legacy() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) → legacy ``expose_entity/list``, enrichment absent, not a propagated
+    error. The legacy list rides the swallowing bridge, so it does not die
+    identically on a pooled-WS drop."""
+    caps_ws = make_ws("ha_mcp_tools/exposure", info_result=_CAPS_EXPOSURE)
+    client = RoutingClient(_LEGACY_MAP)
+    exposure = _build_exposure(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_voice_assistant,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
         resp = await exposure()
 
     assert resp["exposed_entities"] == _LEGACY_MAP

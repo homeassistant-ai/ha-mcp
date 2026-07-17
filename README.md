@@ -85,6 +85,7 @@ These run the server outside Home Assistant — useful for **Container** / **Cor
 - **Docker (HTTP server):** run `ghcr.io/homeassistant-ai/ha-mcp` in HTTP mode, pointed at your Home Assistant URL and a long-lived token, and connect your client to its secret URL. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for the full command and per-client config.
 - **PyPI / uvx (HTTP server):** run the published `ha-mcp` package with `uvx ha-mcp@latest` (or pip) as a streamable-HTTP server the same way. Details in the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
 - **Local stdio (not recommended):** runs ha-mcp on your own machine over stdio. The one-command installers in the **Demo server** section below use this path; the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) covers connecting it to your own Home Assistant.
+- **OIDC authentication:** gate remote access behind an external identity provider (Authentik, Keycloak, Auth0, Google, etc.) instead of a secret URL — all authenticated users share the server's Home Assistant credentials. See [OIDC Mode](docs/oidc.md).
 
   > ⚠️ **stdio has known transport issues.** The stdio transport has connection problems that streamable HTTP does not ([#1713](https://github.com/homeassistant-ai/ha-mcp/issues/1713)). It is recommended only for demo/testing tinkering — for a real setup, use the custom component or an HTTP method above.
 

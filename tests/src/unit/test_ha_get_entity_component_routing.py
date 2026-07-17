@@ -31,7 +31,11 @@ from ha_mcp.tools.tools_entities import (
     register_entity_tools,
 )
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_ENRICH = {
     "schema_version": 1,
@@ -254,6 +258,31 @@ async def test_command_error_omits_fields_silently() -> None:
     get_entity = _build_get_entity(client)
 
     with patch_ws(ws, tools_entities):
+        resp = await get_entity("light.a")
+
+    entry = resp["entity_entry"]
+    assert entry["entity_id"] == "light.a"
+    assert "area" not in entry
+    assert "label_names" not in entry
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_omits_fields_silently() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) → enrichment fields absent, base record intact, not a propagated
+    error. Enrichment is strictly additive (no legacy enrichment fetch), so a
+    transport failure just skips it."""
+    caps_ws = make_ws("ha_mcp_tools/entity_enrich", info_result=_CAPS_ENRICH)
+    client = RoutingClient(
+        {"light.a": _raw_entry("light.a", area_id="ar1", labels=["lb1"])}
+    )
+    get_entity = _build_get_entity(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_entities,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
         resp = await get_entity("light.a")
 
     entry = resp["entity_entry"]

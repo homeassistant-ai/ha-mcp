@@ -23,6 +23,11 @@ from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 def mock_client():
     """Mock client that satisfies the upsert / get / reference-validator paths."""
     client = MagicMock()
+    # Credential-less so the entity_lookup / reference_data component gate
+    # short-circuits (get_component_caps returns None): these tests pin the
+    # legacy registry-list / get_services paths, not the component route.
+    client.base_url = None
+    client.token = None
     client.upsert_scene_config = AsyncMock(
         return_value={"success": True, "scene_id": "test_scene"}
     )
@@ -250,7 +255,9 @@ class TestScenePythonTransform:
         seed_hash = compute_config_hash(seed)
 
         # Stub the resolver so we don't depend on registry plumbing here.
-        async def _stub_resolve(scene_id):
+        # ``allow_component`` is accepted (the set path passes it) but ignored —
+        # this stub short-circuits registry resolution entirely.
+        async def _stub_resolve(scene_id, *, allow_component=False):
             return f"scene.{scene_id}"
 
         monkeypatch.setattr(tools, "_resolve_scene_entity_id", _stub_resolve)
