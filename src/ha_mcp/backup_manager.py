@@ -1296,14 +1296,18 @@ async def _restore_scene(client: Any, entity_id: str, config: Any) -> Any:
 async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
     """Fetch a dashboard config via the same helper the get tool uses.
 
-    Delegates to ``tools_config_dashboards._get_dashboard_config_internal``
-    which handles the WS envelope, force-cache-bypass, and structured
-    error wrapping consistently with how the rest of the dashboard surface
-    fetches state. Imported lazily to avoid an import cycle.
+    The identifier is pre-resolved to its canonical url_path via the shared
+    ``_resolve_dashboard`` (component ``list`` when available), then the config is
+    read through the component ``get`` (one in-process frame) with a fall back to
+    the legacy ``lovelace/config`` read (``_get_dashboard_config_internal``, which
+    handles the WS envelope, force-cache-bypass, and structured error wrapping).
+    The component refuses YAML bodies, so those capture through legacy unchanged.
+    Imported lazily to avoid an import cycle.
     """
     from fastmcp.exceptions import ToolError
 
     from .tools.tools_config_dashboards import (
+        _component_dashboard_config,
         _get_dashboard_config_internal,
         _resolve_dashboard,
     )
@@ -1328,6 +1332,12 @@ async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
             entity_id,
             err,
         )
+
+    # Component fast path (freshness-safe in-memory read); None ⇒ legacy below,
+    # which also covers YAML dashboards and not-found (nothing to back up).
+    component_config = await _component_dashboard_config(client, fetch_path)
+    if component_config is not None:
+        return component_config
 
     try:
         config, _config_hash = await _get_dashboard_config_internal(client, fetch_path)
