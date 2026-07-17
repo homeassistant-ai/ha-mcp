@@ -61,12 +61,13 @@ function localizedToolCopy(tool, description) {
   const sourceTitle = tool.title || tool.name;
   return {
     title: _translatedToolField(tool, 'title', sourceTitle),
-    description: _translatedToolField(
-      tool,
-      'description',
-      tool.description || '',
-      description
-    ),
+    // Validate the translated description against the DISPLAYED condensed
+    // text (the same first-line summary shown in the row), not the full
+    // runtime docstring: deeper docstring lines carry API-path tokens like
+    // {slug}/{type} that never appear in the summary, and comparing against
+    // them would wrongly drop an otherwise-valid translation. Mirrors the
+    // title branch, which compares against the displayed sourceTitle.
+    description: _translatedToolField(tool, 'description', description),
   };
 }
 

@@ -368,9 +368,16 @@ class TestLocalizationBehavior:
         assert any("title translation" in warning for warning in warnings)
         assert any("description translation" in warning for warning in warnings)
 
-    def test_tool_translation_placeholder_set_matches_full_metadata(
+    def test_tool_translation_validates_description_against_displayed_text(
         self, settings_script: str
     ) -> None:
+        # The row shows only the first line of a tool description, and the
+        # description placeholder check compares against that DISPLAYED text,
+        # not the full runtime docstring. Here the docstring carries {entity}
+        # only on a deeper line (like the real {slug}/{type} API-path tokens),
+        # so a condensed German translation that omits it must still render
+        # instead of falling back to English. The title still uses set
+        # semantics against the displayed title (reordered placeholder ok).
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/tools": {
@@ -380,7 +387,7 @@ class TestLocalizationBehavior:
                         {
                             "name": "ha_placeholder_valid",
                             "title": "Open {entity}",
-                            "description": "Inspect entity\nUse {entity} twice: {entity}",
+                            "description": "Inspect the entity\nUse {entity} twice: {entity}",
                             "primary_tag": "System",
                             "category": "read",
                         }
@@ -394,8 +401,8 @@ class TestLocalizationBehavior:
             initial_html=self._localized_dom(
                 tools={
                     "ha_placeholder_valid": {
-                        "title": "{entity} открыть",
-                        "description": "Проверить {entity}",
+                        "title": "{entity} öffnen",
+                        "description": "Die Entität inspizieren",
                     }
                 }
             ),
@@ -412,8 +419,11 @@ class TestLocalizationBehavior:
         assert not result.errors
         row_text = re.search(r'data-placeholder-valid-row="([^"]*)"', result.dom)
         assert row_text is not None
-        assert "{entity} открыть" in row_text.group(1)
-        assert "Проверить {entity}" in row_text.group(1)
+        # Title: reordered {entity} accepted (set semantics vs displayed title).
+        assert "{entity} öffnen" in row_text.group(1)
+        # Description: matches the displayed first line (no placeholder there),
+        # so it renders despite the {entity} tokens deeper in the docstring.
+        assert "Die Entität inspizieren" in row_text.group(1)
         assert not any(
             entry["level"] == "warn"
             and "translation" in str(entry["args"])
