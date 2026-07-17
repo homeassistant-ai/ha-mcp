@@ -11,9 +11,12 @@ these tests never actually run.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.metadata
 import os
 import sys
+import threading
+import time
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1910,7 +1913,7 @@ class TestLifecycle:
         monkeypatch.setattr(
             mgr,
             "_async_ensure_package",
-            AsyncMock(side_effect=lambda: calls.append("ensure")),
+            AsyncMock(side_effect=lambda **kwargs: calls.append("ensure")),
         )
         monkeypatch.setattr(
             mgr,
@@ -2240,6 +2243,357 @@ class TestPurgeSkippedWhileOrphanAlive:
 
         assert purges == [True]
         assert mgr._orphaned_thread is None  # bookkeeping cleared
+
+    async def test_purge_skipped_while_foreign_worker_importing(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # The orphan guard is per-manager, but every bring-up constructs a
+        # FRESH manager - a still-importing worker abandoned by a PREVIOUS
+        # manager must also block the purge (issue #1904: the reload-era
+        # purge crashed the old worker mid-import with KeyError).
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _AliveWorker:
+            def is_alive(self):
+                return True
+
+        foreign = _AliveWorker()
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {foreign})
+
+        with caplog.at_level("WARNING"):
+            await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == []
+        assert "Skipping the ha_mcp module purge" in caplog.text
+        assert foreign in es._IMPORTING_WORKERS  # live entry retained
+
+    async def test_purge_resumes_once_foreign_worker_died(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _DeadWorker:
+            def is_alive(self):
+                return False
+
+        dead = _DeadWorker()
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {dead})
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == [True]
+        assert dead not in es._IMPORTING_WORKERS  # dead entry pruned
+
+    async def test_prune_keeps_live_worker_while_dropping_dead_one(
+        self, tmp_path, monkeypatch
+    ):
+        # The composite prune-then-check must drop only the dead entry and
+        # still block the purge on the surviving live one.
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _AliveWorker:
+            def is_alive(self):
+                return True
+
+        class _DeadWorker:
+            def is_alive(self):
+                return False
+
+        alive = _AliveWorker()
+        dead = _DeadWorker()
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {alive, dead})
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == []
+        assert alive in es._IMPORTING_WORKERS
+        assert dead not in es._IMPORTING_WORKERS
+
+
+class TestImportingWorkerRegistry:
+    """The worker must be registered for exactly its import window."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self):
+        # _thread_main stages HA_MCP_CONFIG_DIR/HA_MCP_EMBEDDED into
+        # os.environ; snapshot + restore so the flags never leak into
+        # unrelated suites on this worker.
+        keys = ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        saved = {k: os.environ.get(k) for k in keys}
+        for key in keys:
+            os.environ.pop(key, None)
+        yield
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_thread_main_always_deregisters_on_exit(self, tmp_path, monkeypatch):
+        # Registration happens in async_start (main thread) before start();
+        # this drives _thread_main with the current thread pre-registered the
+        # same way and proves the finally backstop clears it on exit even
+        # though _serve never reached its own early deregistration point.
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {threading.current_thread()})
+        seen: list[bool] = []
+
+        async def _probe(access_token, stop_event):
+            seen.append(threading.current_thread() in es._IMPORTING_WORKERS)
+            raise SystemExit(3)
+
+        monkeypatch.setattr(mgr, "_serve", _probe)
+        mgr._thread_main("tok")
+
+        assert seen == [True]
+        assert not es._IMPORTING_WORKERS
+
+    def test_thread_main_deregisters_on_plain_exception_crash(
+        self, tmp_path, monkeypatch
+    ):
+        # A worker that dies of an ordinary Exception mid-import (the
+        # abandoned-worker case the registry exists for) must also leave the
+        # registry via the shared finally.
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {threading.current_thread()})
+
+        async def _boom(access_token, stop_event):
+            raise RuntimeError("boom mid-import")
+
+        monkeypatch.setattr(mgr, "_serve", _boom)
+        mgr._thread_main("tok")
+
+        assert isinstance(mgr._thread_exc, RuntimeError)
+        assert not es._IMPORTING_WORKERS
+
+    async def test_live_worker_blocks_a_fresh_managers_purge(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # The literal #1904 race, end to end: worker A registers itself via
+        # the REAL _thread_main path, and a freshly constructed manager B
+        # (a reload builds a new manager every time) must see A in the
+        # process-global registry and skip its purge.
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", set())
+        release = threading.Event()
+
+        mgr_a, _hass_a, _entry_a = _manager(tmp_path)
+
+        async def _hold(access_token, stop_event):
+            # threading.Event so the MAIN thread can release a coroutine
+            # running on worker A's own loop; run_in_executor keeps the
+            # worker loop unblocked while waiting.
+            await asyncio.get_running_loop().run_in_executor(None, release.wait)
+
+        monkeypatch.setattr(mgr_a, "_serve", _hold)
+        worker_a = threading.Thread(target=mgr_a._thread_main, args=("tok",))
+        # Mirror async_start: the SPAWNING thread registers the worker
+        # before start(), the worker only deregisters.
+        with es._IMPORTING_WORKERS_LOCK:
+            es._IMPORTING_WORKERS.add(worker_a)
+        worker_a.start()
+        try:
+
+            def _wait_registered() -> bool:
+                deadline = time.monotonic() + 5
+                while not es._IMPORTING_WORKERS and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                return bool(es._IMPORTING_WORKERS)
+
+            registered = await asyncio.get_running_loop().run_in_executor(
+                None, _wait_registered
+            )
+            assert registered, "worker A never registered"
+
+            mgr_b, _hass_b, _entry_b = _manager(tmp_path)
+            purges: list[bool] = []
+            monkeypatch.setattr(
+                mgr_b, "_async_ensure_package", AsyncMock(return_value="1.2.3")
+            )
+            monkeypatch.setattr(
+                mgr_b, "_async_provision_token", AsyncMock(return_value="tok")
+            )
+            monkeypatch.setattr(mgr_b, "_prepare_config_dir", lambda: None)
+            monkeypatch.setattr(mgr_b, "_async_wait_until_ready", AsyncMock())
+            monkeypatch.setattr(mgr_b, "_thread_main", lambda token: None)
+            monkeypatch.setattr(
+                es, "_purge_ha_mcp_modules", lambda: purges.append(True)
+            )
+
+            with caplog.at_level("WARNING"):
+                await mgr_b.async_start()
+            if mgr_b._thread is not None:
+                mgr_b._thread.join(timeout=2)
+
+            assert purges == []
+            assert "Skipping the ha_mcp module purge" in caplog.text
+        finally:
+            release.set()
+            worker_a.join(timeout=5)
+        assert not worker_a.is_alive()
+        # Worker A deregistered itself on exit; manager B's stubbed worker
+        # (no real _thread_main, so no self-discard) may linger dead.
+        assert worker_a not in es._IMPORTING_WORKERS
+
+    def test_serve_deregisters_before_building_the_app(self, tmp_path, monkeypatch):
+        # Once the import section completes, a concurrent purge is harmless -
+        # the worker must leave the registry BEFORE the listener build so a
+        # long-running healthy server never blocks later bring-ups' purges.
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", set())
+
+        class _StopServe(Exception):
+            pass
+
+        membership: list[bool] = []
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                membership.append(
+                    ("http_app", threading.current_thread() in es._IMPORTING_WORKERS)
+                )
+                raise _StopServe
+
+        _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: None)
+
+        # Recorder on the stubbed settings-routes hook: registration must
+        # still be in effect there (imports not yet complete), making this
+        # test self-contained rather than relying on the sibling test to
+        # prove the add() happened at all.
+        def _routes_probe(*args, **kwargs):
+            membership.append(
+                ("routes", threading.current_thread() in es._IMPORTING_WORKERS)
+            )
+
+        sys.modules["ha_mcp.settings_ui"].register_settings_routes = _routes_probe
+
+        # Pre-register the current thread the way async_start does before
+        # start(); _serve's early discard must clear it before http_app.
+        with es._IMPORTING_WORKERS_LOCK:
+            es._IMPORTING_WORKERS.add(threading.current_thread())
+        mgr._thread_main("tok")
+
+        assert membership == [("routes", True), ("http_app", False)]
+        assert not es._IMPORTING_WORKERS
+        assert isinstance(mgr._thread_exc, _StopServe)
+
+
+class TestImporterAwareBringUp:
+    """async_start must register its worker itself and defer package
+    mutations while a previous worker is still importing (review findings:
+    the worker-side add left a pre-registration window, and ensure-package
+    could replace files on disk under a live importer)."""
+
+    def _stub_bring_up(self, mgr, monkeypatch, ensure: AsyncMock) -> None:
+        monkeypatch.setattr(mgr, "_async_ensure_package", ensure)
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
+
+    async def test_async_start_registers_worker_before_it_runs(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", set())
+        ensure = AsyncMock(return_value="1.2.3")
+        self._stub_bring_up(mgr, monkeypatch, ensure)
+        recorded: list[bool] = []
+
+        def _stub_main(token: str) -> None:
+            recorded.append(threading.current_thread() in es._IMPORTING_WORKERS)
+
+        monkeypatch.setattr(mgr, "_thread_main", _stub_main)
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert recorded == [True]
+
+    async def test_async_start_defers_install_while_importer_busy(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+
+        class _AliveWorker:
+            def is_alive(self):
+                return True
+
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", {_AliveWorker()})
+        ensure = AsyncMock(return_value="1.2.3")
+        self._stub_bring_up(mgr, monkeypatch, ensure)
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert ensure.await_args.kwargs == {"defer_mutations": True}
+
+    async def test_async_start_allows_install_when_no_importer(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", set())
+        ensure = AsyncMock(return_value="1.2.3")
+        self._stub_bring_up(mgr, monkeypatch, ensure)
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert ensure.await_args.kwargs == {"defer_mutations": False}
+
+    async def test_ensure_package_defers_force_install(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # An unpinned dev channel would normally take the uninstall +
+        # force-install path; with defer_mutations it must fall back to the
+        # non-mutating fast path and say so.
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEV_PIP_SPEC},
+        )
+
+        def installed_version(preferred_dist: str | None = None) -> str | None:
+            return "7.12.1.dev5"
+
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
+        fast = AsyncMock()
+        force = AsyncMock()
+        remove_conflicting = AsyncMock()
+        remove_legacy = AsyncMock()
+        monkeypatch.setattr(mgr, "_async_process_requirements_fast", fast)
+        monkeypatch.setattr(mgr, "_async_force_install", force)
+        monkeypatch.setattr(mgr, "_async_remove_conflicting_dist", remove_conflicting)
+        monkeypatch.setattr(mgr, "_async_remove_legacy_target", remove_legacy)
+
+        with caplog.at_level("WARNING"):
+            ready = await mgr._async_ensure_package(defer_mutations=True)
+
+        assert ready == "7.12.1.dev5"
+        fast.assert_awaited_once()
+        force.assert_not_awaited()
+        remove_conflicting.assert_not_awaited()
+        remove_legacy.assert_not_awaited()
+        assert "Deferring the ha-mcp install/upgrade" in caplog.text
 
 
 class TestPurgeSkippedOnWarmCache:
