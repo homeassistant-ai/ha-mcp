@@ -1550,6 +1550,7 @@ async def _capture_dashboard_screenshot_result(
             result.setdefault("warnings", []).extend(target.warnings)
 
     capture_failures: list[dict[str, Any]] = []
+    guard_warnings: list[str] = []
     captures = await screenshot_capture.capture_dashboard_images(
         render_path,
         width=options.width,
@@ -1565,6 +1566,8 @@ async def _capture_dashboard_screenshot_result(
         image_format=options.image_format,
         render_timeout_seconds=options.render_timeout_seconds,
         partial_failures=capture_failures,
+        client=client,
+        capture_warnings=guard_warnings,
     )
     # Build every fallible image/metadata object before publishing screenshot
     # fields. The write path can then degrade serialization failures to a
@@ -1580,7 +1583,10 @@ async def _capture_dashboard_screenshot_result(
         if capture_failures:
             structured_result["screenshot_partial"] = True
             structured_result["screenshot_failures"] = capture_failures
-        capture_warnings = dashboard_screenshot_warnings(captures)
+        capture_warnings = [
+            *dashboard_screenshot_warnings(captures),
+            *guard_warnings,
+        ]
         if capture_warnings:
             structured_result["warnings"] = [
                 *structured_result.get("warnings", []),
@@ -1593,14 +1599,17 @@ async def _capture_dashboard_screenshot_result(
     except ToolError:
         raise
     except Exception as exc:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.IMAGE_SERIALIZATION_FAILED,
-                "Rendered dashboard images could not be packaged into the MCP response.",
-                details=str(exc),
-                context={"capture_count": len(captures), "render_path": render_path},
-            )
+        error_payload = create_error_response(
+            ErrorCode.IMAGE_SERIALIZATION_FAILED,
+            "Rendered dashboard images could not be packaged into the MCP response.",
+            details=str(exc),
+            context={"capture_count": len(captures), "render_path": render_path},
         )
+        if guard_warnings:
+            # The render already happened, so a theme-guard warning (e.g. a
+            # failed restore) must stay visible even when packaging fails.
+            error_payload["warnings"] = list(guard_warnings)
+        raise_tool_error(error_payload)
     # raise_tool_error is typed -> NoReturn, but CodeQL cannot see that, so it
     # reports py/mixed-returns for the implicit None fall-through past the
     # except block. Keep this terminal statement to suppress the false positive.
@@ -1709,13 +1718,20 @@ def _attach_screenshot_tool_error(
         {
             key: value
             for key, value in error_payload.items()
-            if key not in {"success", "error"}
+            if key not in {"success", "error", "warnings"}
         }
     )
     result["screenshot_error"] = screenshot_error
     result.setdefault("warnings", []).append(
         f"Screenshot unavailable: {extract_tool_error_message(error)}"
     )
+    # Theme-guard warnings ride on the error payload (a failing batch may
+    # already have rendered and clobbered the engine user's theme); keep them
+    # visible on the degraded-to-warning path instead of burying them in
+    # screenshot_error.
+    payload_warnings = error_payload.get("warnings")
+    if isinstance(payload_warnings, list):
+        result["warnings"].extend(str(warning) for warning in payload_warnings)
     return result
 
 

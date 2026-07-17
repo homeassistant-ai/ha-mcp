@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -30,8 +31,26 @@ from fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error
+from .theme_guard import EngineCredential, addon_credential_from_options
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class EngineTarget:
+    """A resolved screenshot engine endpoint.
+
+    ``addon_credential`` authenticates as the engine's user (extracted from
+    the Puppet add-on's Supervisor options during discovery, so the theme
+    guard needs no second round-trip and the raw secret-bearing options
+    dict never leaves this module). It is ``None`` for an explicitly
+    configured engine URL. The token inside never leaves the server process
+    — it must not be logged or surfaced in responses.
+    """
+
+    url: str
+    addon_credential: EngineCredential | None = None
+
 
 ENGINE_PORT = 10000
 # The Supervisor slug is ``<repo-hash>_puppet`` for balloob's Puppet add-on.
@@ -146,8 +165,8 @@ def _supervisor_addon_listing(payload: Any) -> list[dict[str, Any]]:
     return addons
 
 
-async def resolve_engine_url() -> str:
-    """Return the base URL of the screenshot engine, or raise ToolError.
+async def resolve_engine() -> EngineTarget:
+    """Resolve the screenshot engine endpoint, or raise ToolError.
 
     See module docstring for the three-mode resolution order.
     """
@@ -155,10 +174,13 @@ async def resolve_engine_url() -> str:
 
     explicit = (get_global_settings().dashboard_screenshot_engine_url or "").strip()
     if explicit:
-        return explicit.rstrip("/")
+        return EngineTarget(
+            url=explicit.rstrip("/"),
+            addon_credential=await _addon_credential_best_effort(),
+        )
 
     if os.environ.get("SUPERVISOR_TOKEN"):
-        return await _discover_engine_url_via_supervisor()
+        return await _discover_engine_via_supervisor()
 
     raise_tool_error(
         create_error_response(
@@ -178,8 +200,35 @@ async def resolve_engine_url() -> str:
     raise AssertionError("unreachable: raise_tool_error always raises")
 
 
-async def _discover_engine_url_via_supervisor() -> str:
-    """Find the Puppet add-on via the Supervisor and return its internal URL.
+async def _addon_credential_best_effort() -> EngineCredential | None:
+    """Best-effort theme-guard credential for an explicitly configured URL.
+
+    HA OS / Supervised users may set ``HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL``
+    to override auto-discovery while still running the Puppet add-on; without
+    its token the theme guard would go inactive exactly where the add-on
+    credential exists (``_client_credential`` refuses Supervisor-proxy auth).
+    Any failure — no Supervisor, no verified add-on, not started — simply
+    means "no credential": the explicit URL may point at a non-add-on
+    engine, so this must never raise. If the explicit URL targets a
+    different engine than the discovered add-on, the guard still only ever
+    writes back a value that the discovered add-on's own user changed
+    mid-capture, which only that add-on's renders would do — a safe no-op.
+    """
+    if not os.environ.get("SUPERVISOR_TOKEN"):
+        return None
+    try:
+        return (await _discover_engine_via_supervisor()).addon_credential
+    except Exception:
+        logger.debug(
+            "No Supervisor-discoverable engine credential for the explicit "
+            "engine URL; the theme guard stays inactive.",
+            exc_info=True,
+        )
+        return None
+
+
+async def _discover_engine_via_supervisor() -> EngineTarget:
+    """Find the Puppet add-on via the Supervisor and return its endpoint.
 
     Requires the ha-mcp add-on's ``manager`` role (already declared) for the
     read-only ``/addons`` + ``/addons/<slug>/info`` endpoints. Raises a
@@ -229,7 +278,13 @@ async def _discover_engine_url_via_supervisor() -> str:
                         context={"slug": slug},
                     )
                 )
-            return f"http://{hostname}:{ENGINE_PORT}"
+            options = data.get("options")
+            return EngineTarget(
+                url=f"http://{hostname}:{ENGINE_PORT}",
+                addon_credential=addon_credential_from_options(
+                    options if isinstance(options, dict) else None
+                ),
+            )
     except ToolError:
         raise
     except (httpx.HTTPError, KeyError, ValueError) as e:

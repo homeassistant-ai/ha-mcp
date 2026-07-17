@@ -836,7 +836,7 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     AdvancedField("enable_websocket", "ENABLE_WEBSOCKET", bool, "operations", True),
     # Dashboard-screenshot engine URL (#1538): docker/.env users could set
     # HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL, but add-on users had no path to
-    # it. It is resolved live per capture (resolve_engine_url), so unlike the
+    # it. It is resolved live per capture (resolve_engine), so unlike the
     # time budgets it takes effect without a restart. Blank = auto-discover
     # the Puppet add-on via the Supervisor.
     AdvancedField(

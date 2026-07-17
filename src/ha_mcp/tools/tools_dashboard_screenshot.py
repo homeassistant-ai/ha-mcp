@@ -51,6 +51,7 @@ def _package_screenshot_result(
     captures: list[Any],
     target: Any,
     capture_failures: list[dict[str, Any]],
+    capture_warnings: list[str],
 ) -> ToolResult:
     """Build the standalone native-image result with structured failures."""
     try:
@@ -67,7 +68,11 @@ def _package_screenshot_result(
         if capture_failures:
             structured_content["partial"] = True
             structured_content["screenshot_failures"] = capture_failures
-        warnings = [*target.warnings, *dashboard_screenshot_warnings(captures)]
+        warnings = [
+            *target.warnings,
+            *dashboard_screenshot_warnings(captures),
+            *capture_warnings,
+        ]
         if warnings:
             structured_content["warnings"] = warnings
         return ToolResult(
@@ -77,17 +82,20 @@ def _package_screenshot_result(
     except ToolError:
         raise
     except Exception as exc:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.IMAGE_SERIALIZATION_FAILED,
-                "Rendered dashboard images could not be packaged into the MCP response.",
-                details=str(exc),
-                context={
-                    "capture_count": len(captures),
-                    "render_path": target.render_path,
-                },
-            )
+        error_payload = create_error_response(
+            ErrorCode.IMAGE_SERIALIZATION_FAILED,
+            "Rendered dashboard images could not be packaged into the MCP response.",
+            details=str(exc),
+            context={
+                "capture_count": len(captures),
+                "render_path": target.render_path,
+            },
         )
+        if capture_warnings:
+            # The render already happened, so a theme-guard warning (e.g. a
+            # failed restore) must stay visible even when packaging fails.
+            error_payload["warnings"] = list(capture_warnings)
+        raise_tool_error(error_payload)
 
 
 class DashboardScreenshotTools:
@@ -186,15 +194,17 @@ class DashboardScreenshotTools:
         theme: Annotated[
             str | None,
             Field(
-                description="Installed Home Assistant frontend theme name. Puppet "
-                "persists this selection on the frontend profile used by its token."
+                description="Installed Home Assistant frontend theme name, "
+                "applied to this render. The engine user's saved theme "
+                "preference is restored after the capture (best effort)."
             ),
         ] = None,
         dark_mode: Annotated[
             bool,
             Field(
-                description="Render the requested theme in dark mode. Puppet may "
-                "persist the theme/dark preference on the profile used by its token."
+                description="Render the requested theme in dark mode, applied "
+                "to this render. The engine user's saved theme preference is "
+                "restored after the capture (best effort)."
             ),
         ] = False,
         language: Annotated[
@@ -250,6 +260,7 @@ class DashboardScreenshotTools:
         )
         try:
             capture_failures: list[dict[str, Any]] = []
+            capture_warnings: list[str] = []
             captures = await capture_dashboard_images(
                 target.render_path,
                 width=width,
@@ -265,6 +276,8 @@ class DashboardScreenshotTools:
                 image_format=image_format,
                 render_timeout_seconds=render_timeout_seconds,
                 partial_failures=capture_failures,
+                client=self._client,
+                capture_warnings=capture_warnings,
             )
         except ToolError:
             raise
@@ -281,6 +294,7 @@ class DashboardScreenshotTools:
             captures=captures,
             target=target,
             capture_failures=capture_failures,
+            capture_warnings=capture_warnings,
         )
 
 
