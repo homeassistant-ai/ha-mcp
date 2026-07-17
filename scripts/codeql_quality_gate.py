@@ -68,6 +68,14 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "completion, which is the required shutdown-sequencing effect.",
     ),
     (
+        "py/ineffectual-statement",
+        "tests/src/unit/test_embedded_server.py",
+        "This statement has no effect",
+        "False positive on bare 'await task' inside pytest.raises("
+        "CancelledError): the await IS the assertion's effect - it delivers "
+        "the cancellation the context manager verifies (shield-contract test).",
+    ),
+    (
         "py/unused-global-variable",
         "src/ha_mcp/__main__.py",
         "_shutdown_in_progress",
