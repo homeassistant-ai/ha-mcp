@@ -38,5 +38,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: Number('${{ inputs.issue_number }}'),
-              body: '@codex review',
+              body: '@codex review — apply the review criteria in .gemini/styleguide.md in addition to AGENTS.md guidance',
             });

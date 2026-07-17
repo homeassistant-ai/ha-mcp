@@ -97,7 +97,8 @@ Gemini Code Assist is retired — Google sunset its GitHub review activities and
 the app now only posts sunset-notice banners, so `.gemini/config.yaml`
 disables it fully. `.gemini/styleguide.md` remains the repo's review-criteria
 document (code quality, test coverage, security patterns, MCP conventions,
-safety annotation accuracy).
+safety annotation accuracy): the `@codex review` request comment points Codex
+at it explicitly, and the Claude review skills below apply it.
 
 **Division of Labor:**
 - **Codex (automatic)**: Code quality, test coverage, generic security, MCP conventions

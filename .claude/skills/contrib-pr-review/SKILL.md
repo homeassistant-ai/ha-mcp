@@ -33,8 +33,11 @@ Review PR #$ARGUMENTS from external contributor for safety, quality, and readine
 **Note:** Codex reviews PRs automatically (posts as `chatgpt-codex-connector[bot]`). Check if Codex flagged any security concerns.
 
 ```bash
-# Check Codex's reviews and any security-related comments
+# Check Codex's reviews and any security-related comments.
+# Codex findings can be inline-only, so also fetch the pull review comments
+# endpoint — review bodies and conversation comments alone can miss them.
 gh api /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/reviews --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | {state: .state, body: .body}'
+gh api /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/comments --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | {path: .path, line: .line, body: .body}'
 gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json comments --jq '.comments[] | select(.body | contains("security") or contains("Security")) | {author: .author.login, body: .body}'
 ```
 
