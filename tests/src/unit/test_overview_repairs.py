@@ -162,6 +162,39 @@ class TestHaGetOverviewRepairs:
         assert by_id["dismissed_one"]["dismissed_version"] == "2026.4.0"
 
     @pytest.mark.asyncio
+    async def test_inactive_registry_entries_not_counted(
+        self, mock_mcp, mock_smart_tools
+    ):
+        """Inactive issue-registry stubs (``active=False``, as emitted by the
+        component's raw registry dump) must not inflate ``repair_count``,
+        must not appear in ``repairs[]``, and must not be miscounted as
+        dismissed. Mirrors HA core's ``ws_list_issues`` filter.
+        """
+        ghost = {**_active_issue("ghost_restart_required"), "active": False}
+        issues = [
+            {**_active_issue("active_one"), "active": True},
+            ghost,
+            {**_ignored_issue("dismissed_one"), "active": True},
+        ]
+        client = self._make_client(issues)
+        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
+
+        result = await tool(detail_level="minimal")
+
+        assert result["repair_count"] == 1
+        assert [r["issue_id"] for r in result["repairs"]] == ["active_one"]
+        # The inactive ghost is not a dismissed repair either
+        assert result["dismissed_repair_count"] == 1
+
+        # Opting into dismissed repairs still never surfaces inactive stubs
+        result = await tool(detail_level="minimal", include_dismissed_repairs=True)
+        assert result["repair_count"] == 2
+        assert {r["issue_id"] for r in result["repairs"]} == {
+            "active_one",
+            "dismissed_one",
+        }
+
+    @pytest.mark.asyncio
     async def test_no_repairs_yields_zero_counts(self, mock_mcp, mock_smart_tools):
         """Empty issue list yields repair_count = 0 and ``repairs == []``.
 
