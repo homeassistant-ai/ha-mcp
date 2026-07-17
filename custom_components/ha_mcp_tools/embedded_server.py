@@ -50,6 +50,8 @@ from homeassistant.requirements import (
     pip_kwargs,
 )
 from homeassistant.util.package import install_package
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from .const import (
@@ -652,7 +654,7 @@ class EmbeddedServerManager:
         requirements manager; a pinned spec does not move, so there is nothing to
         upgrade to. A CHANGED spec (a new override, a cleared override, a
         toggled auto-update, a channel switch) falls through to the
-        force-install path below — and additionally uninstalls the target
+        force-install path below — and additionally uninstalls the replaced
         distribution first (:meth:`_async_remove_replaced_source`), because
         ``upgrade=True`` alone decides by version and a changed SOURCE can keep
         the version string (issue #1914).
@@ -743,9 +745,7 @@ class EmbeddedServerManager:
         else:
             await self._async_remove_conflicting_dist()
             await self._async_remove_legacy_target(target_dist, installed_version)
-            await self._async_remove_replaced_source(
-                target_dist, stored_spec, installed_version
-            )
+            await self._async_remove_replaced_source(stored_spec, installed_version)
             await self._async_force_install()
 
         version: str | None
@@ -810,13 +810,14 @@ class EmbeddedServerManager:
         """Handle the defer-mutations branch of :meth:`_async_ensure_package`.
 
         A previous bring-up's worker is still importing, so the package files
-        must not be replaced under it. With a build already on disk nothing is
-        touched at all — not even the requirements manager, which installs any
-        unsatisfied spec and would mutate exactly like the deferred force
-        install. When NOTHING usable is installed there are no distribution
-        files to replace under the live importer, and without an install this
-        bring-up cannot produce a server at all, so the requirements manager
-        still runs.
+        must not be replaced under it. With an importable build on disk
+        (``installed_version`` non-None — importability only, compatibility is
+        checked by the caller afterwards) nothing is touched at all — not even
+        the requirements manager, which installs any unsatisfied spec and
+        would mutate exactly like the deferred force install. When nothing
+        imports there are no distribution files to replace under the live
+        importer, and without an install this bring-up cannot produce a
+        server at all, so the requirements manager still runs.
         """
         _LOGGER.warning(
             "Deferring the ha-mcp install/upgrade: a previous bring-up's "
@@ -828,36 +829,78 @@ class EmbeddedServerManager:
         if installed_version is None:
             await self._async_process_requirements_fast()
 
-    async def _async_remove_replaced_source(
-        self, target_dist: str, stored_spec: str | None, installed_version: str | None
-    ) -> None:
-        """Uninstall the target distribution when the requested source changed.
+    def _replaced_dist_name(self) -> str | None:
+        """Return the distribution whose presence could no-op the new spec.
 
-        The forced install that follows relies on ``upgrade=True``, and pip
-        decides "already satisfied" by VERSION alone — but a source change can
-        keep the version string. A GitHub PR tarball carries no git metadata,
-        so it installs with the same base version as the channel release it
-        branched from; clearing that override resolves the channel spec to the
-        exact version already on disk and pip swaps nothing, leaving the PR
-        code running while the entry reports a clean channel install (issue
-        #1914). The same version-blindness bites a manual spec edit that pins
-        the version already installed. pip cannot see the difference, so when
-        the spec that produced the current install differs from the one about
-        to be installed, the installed distribution is removed first — the
-        install that follows is then unconditionally real.
+        This is the distribution the effective spec installs *by name* — the
+        channel's distribution for a channel spec, or the named distribution
+        of an override that parses as a requirement (a pin like
+        ``ha-mcp==X``, matched against the two known channel dists). It is
+        deliberately NOT the channel's dist for every override: a repo
+        tarball installs as ``ha-mcp`` regardless of the selected channel, so
+        keying on the channel would miss the dev-channel + override case.
+
+        Returns None for an override that names an unknown distribution or
+        does not parse as a requirement at all (a direct URL): the installer
+        re-fetches and rebuilds URL requirements under ``upgrade=True``
+        regardless of the installed version, so a URL install is already
+        real and nothing needs removing.
+        """
+        if not self._pip_spec_override:
+            return dist_for_channel(self._channel)
+        try:
+            name = canonicalize_name(Requirement(self._pip_spec_override).name)
+        except InvalidRequirement:
+            return None
+        for dist_name in (DIST_NAME_STABLE, DIST_NAME_DEV):
+            if name == canonicalize_name(dist_name):
+                return dist_name
+        return None
+
+    async def _async_remove_replaced_source(
+        self, stored_spec: str | None, installed_version: str | None
+    ) -> None:
+        """Uninstall the replaced distribution when the requested source changed.
+
+        The forced install that follows relies on ``upgrade=True``, and the
+        installer decides "already satisfied" by VERSION alone — but a source
+        change can keep the version string. A PR branch's committed
+        ``project.version`` equals the release it branched from (only release
+        automation bumps it), so its tarball installs with that same version
+        string; clearing the override then resolves the channel spec to the
+        exact version already on disk and the install swaps nothing, leaving
+        the PR code running while the entry reports a clean channel install
+        (issue #1914). The same version-blindness bites a manual spec edit
+        that pins the version already installed. The installer cannot see the
+        difference, so when the spec that produced the current install
+        differs from the one about to be installed, the distribution the new
+        spec resolves to by name (:meth:`_replaced_dist_name`) is removed
+        first — the install that follows is then unconditionally real.
 
         Skipped when nothing is installed, when the last-installed spec is
         unknown (nothing to compare: first install, or entry data predating
-        the spec tracking), or when the spec is unchanged (the routine
+        the spec tracking), when the spec is unchanged (the routine
         reload/restart path, where ``upgrade=True`` alone is correct and an
         uninstall would churn — and briefly break — a healthy install on
-        every restart).
+        every restart), when the new spec is a direct URL (always installs
+        for real), or when the named distribution is not installed (e.g. a
+        cross-channel switch already removed it).
+
+        Unlike the other pre-install uninstalls this one is NOT best-effort:
+        if the distribution survives a failed uninstall, the forced install
+        would no-op as "already satisfied", the new spec would be persisted,
+        and the next reload would see it as unchanged — reproducing #1914 and
+        then permanently masking it. Raising instead keeps the stored spec on
+        the old value, so the next reload retries the whole source change.
         """
         if installed_version is None or stored_spec is None:
             return
         if stored_spec == self._pip_spec:
             return
-        if not await self._hass.async_add_executor_job(_dist_installed, target_dist):
+        replaced_dist = self._replaced_dist_name()
+        if replaced_dist is None:
+            return
+        if not await self._hass.async_add_executor_job(_dist_installed, replaced_dist):
             return
         _LOGGER.info(
             "The requested server source changed (%r -> %r); removing the "
@@ -865,9 +908,20 @@ class EmbeddedServerManager:
             "already satisfied",
             stored_spec,
             self._pip_spec,
-            target_dist,
+            replaced_dist,
         )
-        await self._async_remove_distribution(target_dist)
+        removed = await self._async_remove_distribution(replaced_dist)
+        if not removed and await self._hass.async_add_executor_job(
+            _dist_installed, replaced_dist
+        ):
+            raise EmbeddedServerError(
+                f"Could not remove the installed {replaced_dist!r} (from "
+                f"{stored_spec!r}) before installing {self._pip_spec!r}: the "
+                "installer would report the new source as already satisfied "
+                "and keep the old code running. Uninstall details are logged "
+                "above; reload the integration to retry the source change.",
+                kind="package",
+            )
 
     async def _async_process_requirements_fast(self) -> None:
         """Fast path: let HA's requirements manager satisfy the override spec."""
@@ -938,20 +992,25 @@ class EmbeddedServerManager:
         )
         await self._async_remove_distribution(other)
 
-    async def _async_remove_distribution(self, dist_name: str) -> None:
+    async def _async_remove_distribution(self, dist_name: str) -> bool:
         """Remove a distribution from the same target used for installation.
 
         Tracked like the install: an uninstall mutates the same package files.
+        Returns whether the uninstall subprocess reported success; callers
+        decide whether a failure is best-effort (channel-conflict / legacy
+        cleanup) or fatal (the replaced-source removal, whose failure would
+        silently void the reinstall — see ``_async_remove_replaced_source``).
         """
         target = pip_kwargs(self._hass.config.config_dir).get("target")
         if target is None:
-            await self._async_run_tracked_install_job(
+            result = await self._async_run_tracked_install_job(
                 partial(_uninstall_distribution, dist_name)
             )
         else:
-            await self._async_run_tracked_install_job(
+            result = await self._async_run_tracked_install_job(
                 partial(_uninstall_distribution, dist_name, target=target)
             )
+        return bool(result)
 
     def _store_installed_spec(self) -> None:
         """Persist the pip spec just installed so a restart skips the reinstall."""
