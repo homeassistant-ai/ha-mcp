@@ -570,6 +570,8 @@ class FakeConfigEntry:
         pref_disable_polling=False,
         disabled_by=None,
         reason=None,
+        error_reason_translation_key=None,
+        error_reason_translation_placeholders=None,
         subentries=None,
     ):
         self.domain = domain
@@ -589,6 +591,8 @@ class FakeConfigEntry:
         self.pref_disable_polling = pref_disable_polling
         self.disabled_by = disabled_by
         self.reason = reason
+        self.error_reason_translation_key = error_reason_translation_key
+        self.error_reason_translation_placeholders = error_reason_translation_placeholders
         # Modern core stores subentries as a MappingProxyType keyed by subentry_id.
         self.subentries = dict(subentries or {})
 
@@ -3189,6 +3193,8 @@ class TestConfigEntries:
             "pref_disable_polling": True,
             "disabled_by": None,
             "reason": None,
+            "error_reason_translation_key": "config_entry_not_ready",
+            "error_reason_translation_placeholders": {"host": "1.2.3.4"},
             "subentries": {
                 "sub1": FakeSubentry(
                     "sub1", "device", "Sub One", unique_id="u1", data={"k": "SUBSECRET"}
@@ -3217,6 +3223,9 @@ class TestConfigEntries:
                 "pref_disable_polling": True,
                 "disabled_by": None,
                 "reason": None,
+                "error_reason_translation_key": "config_entry_not_ready",
+                "error_reason_translation_placeholders": {"host": "1.2.3.4"},
+                "num_subentries": 1,
                 "options": {"discovery": True},
                 "subentries": [
                     {
@@ -3305,6 +3314,18 @@ class TestConfigEntries:
         entry.subentries = None
         res = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})
         assert res["entries"][0]["subentries"] == []
+        assert res["entries"][0]["num_subentries"] == 0
+
+    def test_error_reason_translation_fields_absent_default_to_none(self):
+        # An older ConfigEntry (pre-dating these attrs) must degrade to None via
+        # getattr, not raise -- mirrors the subentries-absent degrade above.
+        entry = FakeConfigEntry("mqtt", entry_id="c1", state=_FakeEnum("loaded"))
+        del entry.error_reason_translation_key
+        del entry.error_reason_translation_placeholders
+        res = wsapi._do_config_entries(FakeHass(config_entries=[entry]), {})
+        row = res["entries"][0]
+        assert row["error_reason_translation_key"] is None
+        assert row["error_reason_translation_placeholders"] is None
 
     def test_mappingproxy_options_read(self):
         # ConfigEntry.options is a MappingProxyType in live HA — it must still be

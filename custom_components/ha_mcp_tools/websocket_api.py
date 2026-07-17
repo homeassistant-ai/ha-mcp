@@ -2808,11 +2808,16 @@ def _do_config_entries(
     ``{entries: [{entry_id, domain, title, state, source, supports_options,
     supports_remove_device, supports_unload, supports_reconfigure,
     pref_disable_new_entities, pref_disable_polling, disabled_by, reason,
-    options, subentries}]}``. Filtered by ``domain`` when given, or the single
-    entry by ``entry_id`` (``hass.config_entries.async_get_entry`` — absent id
-    yields an empty list). ``state`` is serialized as ``ConfigEntryState.value``
-    (mirroring how core's ``config_entries/get`` emits it via
-    ``as_json_fragment``).
+    error_reason_translation_key, error_reason_translation_placeholders,
+    num_subentries, options, subentries}]}``. Filtered by ``domain`` when
+    given, or the single entry by ``entry_id``
+    (``hass.config_entries.async_get_entry`` — absent id yields an empty
+    list). ``state`` is serialized as ``ConfigEntryState.value`` (mirroring
+    how core's ``config_entries/get`` emits it via ``as_json_fragment``, whose
+    ``json_repr`` in ``homeassistant/config_entries.py`` is this row's source
+    of truth for every field above except ``options``/``subentries``, which
+    this integration re-derives since ``as_json_fragment`` never carries
+    credential data).
 
     Data minimization: ``entry.data`` (integration credentials) is NEVER read.
     ``options`` is the only credential-bearing surface emitted, so it is passed
@@ -2894,6 +2899,13 @@ def _config_entry_row(entry: Any, secret_values: frozenset[str]) -> dict[str, An
         "pref_disable_polling": bool(getattr(entry, "pref_disable_polling", False)),
         "disabled_by": _enum_value(getattr(entry, "disabled_by", None)),
         "reason": getattr(entry, "reason", None),
+        "error_reason_translation_key": getattr(
+            entry, "error_reason_translation_key", None
+        ),
+        "error_reason_translation_placeholders": getattr(
+            entry, "error_reason_translation_placeholders", None
+        ),
+        "num_subentries": len(_mapping_values(getattr(entry, "subentries", None))),
         "options": options,
         "subentries": _config_subentries(entry),
     }
