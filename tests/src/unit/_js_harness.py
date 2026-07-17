@@ -266,7 +266,8 @@ def extract_script_body(source: str, *, source_label: str = "<source>") -> str:
     and attributed forms like Astro's ``<script define:vars={...}>``.
     The body is everything between the opening tag's ``>`` and the next
     ``</script>``. External scripts (``<script src=...></script>``) are
-    skipped — they have no inline body to extract. Scripts carrying a
+    skipped — they have no inline body to extract. Non-JavaScript data blocks
+    such as ``type="application/json"`` are skipped too. Scripts carrying a
     ``data-purpose="…"`` attribute are also skipped: that marker tags
     auxiliary inline snippets (anti-FOUC theme resolver, toggle-binding
     handlers) that are intentionally separate from the page's main
@@ -281,6 +282,13 @@ def extract_script_body(source: str, *, source_label: str = "<source>") -> str:
     for match in re.finditer(r"<script\b([^>]*)>", search_source):
         attrs = match.group(1)
         if re.search(r"\bsrc\s*=", attrs):
+            continue
+        type_match = re.search(r'\btype\s*=\s*["\']([^"\']+)["\']', attrs)
+        if type_match and type_match.group(1).lower() not in {
+            "application/javascript",
+            "text/javascript",
+            "module",
+        }:
             continue
         if re.search(r"\bdata-purpose\s*=", attrs):
             continue

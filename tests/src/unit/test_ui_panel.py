@@ -402,9 +402,12 @@ class TestBootView:
         resp = await ui_panel._BootView().get(_make_request(hass=_make_hass()))
         assert resp.content_type == "text/html"
         assert ui_panel._SESSION_URL.encode() in resp.body
-        # The script builds APP_URL as _APP_PREFIX + "settings", so only the
+        # The script builds APP_BASE_URL as _APP_PREFIX + "settings", so only the
         # prefix appears literally in the served body.
         assert ui_panel._APP_PREFIX.encode() in resp.body
+        assert b"root.hass.language" in resp.body
+        assert b"?ha_lang=" in resp.body
+        assert b"encodeURIComponent(language)" in resp.body
         assert b"<iframe" in resp.body
 
     def test_view_auth_model_is_pinned(self):

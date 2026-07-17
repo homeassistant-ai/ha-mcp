@@ -587,15 +587,24 @@ class TestSettingsJsExtraction:
         """No sentinel token may survive into the rendered JS — an unfilled
         token would mean a broken page that still 'looks' extracted.
 
-        ``_SETTINGS_HTML`` is allowed exactly one documented exception: the
-        ``__HA_MCP_THEME_PREFS__`` placeholder in the ``server-prefs`` head
-        script is substituted per request by ``_render_settings_html()``
-        (the prefs file can change between requests), so the import-time
-        constant must still carry it while the served page must not.
+        ``_SETTINGS_HTML`` carries a small documented set of per-request
+        placeholders: theme preferences plus the selected locale, direction,
+        and merged i18n payload. The import-time constant must carry them while
+        the served page must not.
         """
         assert "__HA_MCP_" not in _SETTINGS_JS
-        assert _SETTINGS_HTML.count("__HA_MCP_THEME_PREFS__") == 1
-        assert "__HA_MCP_" not in _SETTINGS_HTML.replace("__HA_MCP_THEME_PREFS__", "")
+        render_tokens = {
+            "__HA_MCP_THEME_PREFS__",
+            "__HA_MCP_I18N__",
+            "__HA_MCP_LANG__",
+            "__HA_MCP_DIR__",
+        }
+        for token in render_tokens:
+            assert _SETTINGS_HTML.count(token) == 1
+        template_without_tokens = _SETTINGS_HTML
+        for token in render_tokens:
+            template_without_tokens = template_without_tokens.replace(token, "")
+        assert "__HA_MCP_" not in template_without_tokens
         assert "__HA_MCP_" not in _render_settings_html()
 
     def test_injected_constant_lists_have_expected_values(self) -> None:

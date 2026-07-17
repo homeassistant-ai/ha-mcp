@@ -220,6 +220,69 @@ DEFAULT_FETCHES: dict[str, dict] = {
 }
 
 
+class TestLocalizationBehavior:
+    """Russian catalog application and language-selector behaviour."""
+
+    @staticmethod
+    def _localized_dom(locale: str = "ru") -> str:
+        from ha_mcp.settings_ui._i18n import build_payload, serialize_payload
+
+        payload = serialize_payload(build_payload(locale))
+        additions = (
+            f'<script id="ha-mcp-i18n" type="application/json">{payload}</script>'
+            '<select id="languageToggle"></select>'
+            '<span id="i18nProbe" data-i18n="tabs.tools">Tools</span>'
+        )
+        return MIN_DOM.replace("</body>", additions + "</body>")
+
+    def test_russian_static_group_and_tool_copy(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_get_addon",
+                            "title": "Get Add-ons",
+                            "description": "Get Home Assistant add-ons.",
+                            "primary_tag": "Add-ons",
+                            "category": "read",
+                        }
+                    ],
+                    "states": {},
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=self._localized_dom(),
+            fetch_map=fetches,
+        )
+        assert not result.errors
+        assert "Инструменты" in result.dom
+        assert "Дополнения" in result.dom
+        assert "Получить дополнения" in result.dom
+
+    def test_language_selector_sets_cookie_and_reloads(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=self._localized_dom("en"),
+            fetch_map=DEFAULT_FETCHES,
+            invoke="""
+              const select = document.getElementById('languageToggle');
+              select.value = 'ru';
+              select.dispatchEvent(new Event('change', {bubbles: true}));
+              document.body.dataset.localeCookie = document.cookie;
+            """,
+        )
+        assert not result.errors
+        assert result.reloads == 1
+        assert "ha_mcp_locale=ru" in result.dom
+
+
 def _assert_clean_init(result: HarnessResult) -> None:
     """Fail loud on any script-init or transpile error.
 

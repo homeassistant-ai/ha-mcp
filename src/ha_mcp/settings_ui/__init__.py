@@ -33,6 +33,12 @@ from ._handlers_server import (
 )
 from ._handlers_theme import build_theme_handlers
 from ._handlers_tools import build_tools_handlers
+from ._i18n import (
+    LOCALE_COOKIE,
+    build_payload,
+    select_locale,
+    serialize_payload,
+)
 from ._persistence import (
     _atomic_write_json,
     _get_backup_settings_override_path,
@@ -136,11 +142,14 @@ except OSError as exc:  # pragma: no cover - packaging guard
 
 # The settings page HTML lives in settings.html, extracted the same way as
 # settings.js / settings.css (a real file for editor/HTML tooling). It carries
-# three substitution markers — two filled once at import, one per request:
+# six substitution markers — two filled once at import, four per request:
 #   __HA_MCP_CSS__         -> settings.css contents (inside <style>)
 #   __HA_MCP_JS__          -> settings.js contents (inside <script>)
 #   __HA_MCP_THEME_PREFS__ -> per-request server-seeded theme prefs JSON,
 #                             substituted in _render_settings_html()
+#   __HA_MCP_I18N__        -> selected merged translation catalog JSON
+#   __HA_MCP_LANG__        -> selected locale code for the html lang attribute
+#   __HA_MCP_DIR__         -> selected catalog text direction (ltr / rtl)
 # Same import-time packaging dependency as settings.js/css (wheel package-data,
 # MANIFEST.in, PyInstaller datas) and the same OSError guard -- but this loader
 # raises RuntimeError, not the ImportError that settings.js/css raise.
@@ -158,7 +167,14 @@ except OSError as exc:  # pragma: no cover - packaging guard
 # versa) — str.replace() silently no-ops on an absent token, which would ship a
 # page missing its CSS, JS, or server-seeded theme prefs. Assert all three
 # markers are present.
-for _sentinel in ("__HA_MCP_CSS__", "__HA_MCP_JS__", "__HA_MCP_THEME_PREFS__"):
+for _sentinel in (
+    "__HA_MCP_CSS__",
+    "__HA_MCP_JS__",
+    "__HA_MCP_THEME_PREFS__",
+    "__HA_MCP_I18N__",
+    "__HA_MCP_LANG__",
+    "__HA_MCP_DIR__",
+):
     if _sentinel not in _settings_html_template:
         raise RuntimeError(
             f"settings.html is out of sync: sentinel {_sentinel} not found. "
@@ -307,8 +323,8 @@ def _build_visibility_handlers(*, data_dir: Path) -> dict[str, Any]:
     }
 
 
-def _render_settings_html() -> str:
-    """Substitute the persisted theme prefs into the served settings page.
+def _render_settings_html(request: Request | None = None) -> str:
+    """Substitute theme preferences and the request-selected locale.
 
     The ``server-prefs`` head script carries a ``data-prefs`` attribute
     with a placeholder token; request-time substitution keeps
@@ -316,19 +332,44 @@ def _render_settings_html() -> str:
     body itself parseable at rest for the script-surface tests). Values
     are sanitized enums / vetted hex colors and the JSON is HTML-escaped,
     so the attribute cannot break out of its quoting context.
+
+    Locale priority is a user-selected cookie, the Home Assistant language
+    hint supplied by the embedded panel, the browser's Accept-Language header,
+    then English. Only the selected merged catalog is embedded in the page.
     """
-    payload = html.escape(
+    theme_payload = html.escape(
         json.dumps(_load_theme_prefs(), separators=(",", ":")), quote=True
     )
-    rendered = _SETTINGS_HTML.replace("__HA_MCP_THEME_PREFS__", payload, 1)
-    if "__HA_MCP_THEME_PREFS__" in rendered:
+    locale = select_locale(
+        cookie_locale=request.cookies.get(LOCALE_COOKIE) if request else None,
+        ha_language=request.query_params.get("ha_lang") if request else None,
+        accept_language=request.headers.get("accept-language") if request else None,
+    )
+    locale_payload = build_payload(locale)
+    i18n_payload = serialize_payload(locale_payload)
+    direction = locale_payload["dir"]
+    rendered = (
+        _SETTINGS_HTML.replace("__HA_MCP_THEME_PREFS__", theme_payload, 1)
+        .replace("__HA_MCP_I18N__", i18n_payload, 1)
+        .replace("__HA_MCP_LANG__", locale, 1)
+        .replace("__HA_MCP_DIR__", direction, 1)
+    )
+    if any(
+        sentinel in rendered
+        for sentinel in (
+            "__HA_MCP_THEME_PREFS__",
+            "__HA_MCP_I18N__",
+            "__HA_MCP_LANG__",
+            "__HA_MCP_DIR__",
+        )
+    ):
         # str.replace silently no-ops when the placeholder vanishes in a
         # refactor; the unit contract test catches that in CI, this line
-        # catches it loudly in a live deployment instead of quietly
-        # serving a page without server-side prefs.
+        # catches it loudly in a live deployment instead of quietly serving a
+        # page without server-side preferences or translations.
         logger.error(
-            "server-prefs placeholder was not substituted; theme prefs "
-            "will not survive fresh origins"
+            "settings-page request placeholder was not substituted; theme "
+            "preferences or translations may be unavailable"
         )
     return rendered
 
@@ -363,11 +404,11 @@ def build_settings_handlers(
     so the served page is identical regardless of transport.
     """
 
-    async def _root_page(_: Request) -> HTMLResponse:
-        return HTMLResponse(_render_settings_html())
+    async def _root_page(request: Request) -> HTMLResponse:
+        return HTMLResponse(_render_settings_html(request))
 
-    async def _settings_page(_: Request) -> HTMLResponse:
-        return HTMLResponse(_render_settings_html())
+    async def _settings_page(request: Request) -> HTMLResponse:
+        return HTMLResponse(_render_settings_html(request))
 
     handlers: dict[str, Any] = {
         "root_page": _root_page,

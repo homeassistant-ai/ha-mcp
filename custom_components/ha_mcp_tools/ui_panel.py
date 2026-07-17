@@ -473,7 +473,7 @@ class _suppress_all:
 
 _BOOT_JS = f"""
 const SESSION_URL = {_SESSION_URL!r};
-const APP_URL = {_APP_PREFIX!r} + "settings";
+const APP_BASE_URL = {_APP_PREFIX!r} + "settings";
 // Re-mint at half the cookie lifetime so an open panel never expires mid-use.
 const REFRESH_MS = {_SESSION_TTL_SECONDS // 2} * 1000;
 // While the frontend is still booting (a cold start straight into this panel),
@@ -494,6 +494,22 @@ let timer = null;
 let busy = false;
 let tokenMisses = 0;
 let authDead = false;
+
+function homeAssistantRoot() {{
+  try {{
+    if (window.parent === window) return null;
+    return window.parent.document.querySelector("home-assistant");
+  }} catch (err) {{
+    return null;
+  }}
+}}
+
+function appUrl() {{
+  const root = homeAssistantRoot();
+  const language = root && root.hass && root.hass.language;
+  if (!language) return APP_BASE_URL;
+  return APP_BASE_URL + "?ha_lang=" + encodeURIComponent(language);
+}}
 
 function showMessage(text, isError) {{
   frame.classList.add("hidden");
@@ -532,8 +548,7 @@ async function token() {{
   // (#1802). A failed refresh means the sign-in itself is dead: mark it
   // terminal rather than looping.
   try {{
-    if (window.parent === window) return null;
-    const root = window.parent.document.querySelector("home-assistant");
+    const root = homeAssistantRoot();
     const auth = root && root.hass && root.hass.auth;
     if (!auth) return null;
     if (auth.expired && typeof auth.refreshAccessToken === "function") {{
@@ -615,9 +630,10 @@ async function mint() {{
 async function showApp() {{
   // Probe the proxy so a not-yet-running server shows a friendly message
   // instead of a raw 503 page inside the iframe.
+  const targetUrl = appUrl();
   let probe;
   try {{
-    probe = await fetchWithTimeout(APP_URL, {{ credentials: "same-origin" }});
+    probe = await fetchWithTimeout(targetUrl, {{ credentials: "same-origin" }});
   }} catch (err) {{
     transientFailure("Could not reach Home Assistant to load the settings UI.");
     return;
@@ -636,8 +652,8 @@ async function showApp() {{
     transientFailure("The settings UI returned HTTP " + probe.status + ".");
     return;
   }}
-  if (frame.getAttribute("src") !== APP_URL) {{
-    frame.setAttribute("src", APP_URL);
+  if (frame.getAttribute("src") !== targetUrl) {{
+    frame.setAttribute("src", targetUrl);
   }}
   msg.classList.add("hidden");
   frame.classList.remove("hidden");
