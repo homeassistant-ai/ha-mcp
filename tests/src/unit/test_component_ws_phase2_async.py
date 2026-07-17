@@ -140,7 +140,7 @@ class TestCapabilityPresence:
             assert cap in wsapi.CAPABILITIES
 
     def test_component_version_bumped(self):
-        assert wsapi.COMPONENT_VERSION == "1.2.0"
+        assert wsapi.COMPONENT_VERSION == "1.3.0"
 
 
 # =============================================================================
@@ -1387,6 +1387,33 @@ _base._exceptions_stub.ServiceNotFound = _StubServiceNotFound
 sys.modules.setdefault(
     "homeassistant.const", SimpleNamespace(EVENT_STATE_CHANGED="state_changed")
 )
+
+
+@pytest.fixture(autouse=True)
+def _ensure_event_state_changed_const():
+    """Guarantee ``homeassistant.const.EVENT_STATE_CHANGED`` at RUN time.
+
+    The module-level ``setdefault`` above is a no-op when an earlier-collected
+    test module already installed a ``homeassistant.const`` stub lacking
+    ``EVENT_STATE_CHANGED`` — under full-suite collection the call_service
+    confirmation-waiter's function-local import then raised ``ImportError``. Set
+    the attribute on whatever stub is present (works for a SimpleNamespace or a
+    MagicMock; preserves its other attrs) so the waiter binds regardless of
+    collection order. Mirrors the per-test ``homeassistant.exceptions`` override.
+    """
+    mod = sys.modules.get("homeassistant.const")
+    if mod is None:
+        sys.modules["homeassistant.const"] = SimpleNamespace(
+            EVENT_STATE_CHANGED="state_changed"
+        )
+    elif not getattr(mod, "EVENT_STATE_CHANGED", None):
+        try:
+            mod.EVENT_STATE_CHANGED = "state_changed"
+        except (AttributeError, TypeError):
+            sys.modules["homeassistant.const"] = SimpleNamespace(
+                EVENT_STATE_CHANGED="state_changed"
+            )
+    yield
 
 
 class _FakeEvent:
