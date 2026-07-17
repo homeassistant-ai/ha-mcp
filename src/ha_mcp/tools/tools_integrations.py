@@ -940,6 +940,7 @@ class IntegrationTools:
                 f"Config entry not found: {entry_id}", status_code=404
             )
         entry, subentries = _split_component_entry_row(rows[0])
+        entry.setdefault("options", {})
 
         resp: dict[str, Any] = {
             "success": True,

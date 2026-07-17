@@ -264,6 +264,8 @@ async def test_options_shape_caveat_raw_persisted(tmp_path) -> None:
 
     # The OptionsFlow-derived shape over the same entry WOULD inject the default
     # for the unset field — a different shape. This is the caveat, made explicit.
+    # (The dict below is a synthetic flow-step shape, not a real flow captured
+    # from a live options flow — there's no flow machine in this unit test.)
     flow_shape = options_from_form_flow(
         {
             "type": "form",
