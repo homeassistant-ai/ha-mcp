@@ -83,6 +83,8 @@ from .const import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from homeassistant.config_entries import ConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
@@ -119,6 +121,16 @@ _PIP_INSTALL_TIMEOUT_SECONDS = 300
 # Uninstall just removes files/metadata, so it is quick; cap it so a wedged
 # subprocess can never tie up an executor thread indefinitely.
 _PIP_UNINSTALL_TIMEOUT_SECONDS = 120
+
+# How long a bring-up waits for an install job orphaned by a CANCELLED
+# previous bring-up before giving up: asyncio cancellation detaches the
+# awaiter but an executor pip job runs to completion regardless. Sized to
+# the same absolute budget as the readiness cap: pip's own timeout (300s)
+# is per-download, so a healthy cold install pulling the whole dependency
+# tree on slow hardware can legitimately run for minutes — a tighter bound
+# would misreport it as stuck. On expiry the bring-up fails with a clear
+# message and the next reload retries.
+_PENDING_INSTALL_WAIT_SECONDS = 600.0
 
 # The in-process connection API was added with the embedded server in 7.10.0.
 # Older distributions can be left behind by an unsupported Core version's
@@ -525,6 +537,91 @@ class EmbeddedServerManager:
         else:
             _purge_ha_mcp_modules()
 
+    async def _async_run_tracked_install_job(
+        self, func: Callable[[], object]
+    ) -> object:
+        """Run a package-mutating executor job, tracked process-wide.
+
+        Registration happens BEFORE dispatch and completion is signalled on
+        the executor thread in a finally, so a bring-up cancelled mid-job
+        (install or uninstall) leaves behind a waitable job instead of an
+        invisible one.
+        """
+        global _PENDING_INSTALL_DONE
+        done = threading.Event()
+        with _PENDING_INSTALL_LOCK:
+            _PENDING_INSTALL_DONE = done
+
+        def _run() -> object:
+            global _PENDING_INSTALL_DONE
+            try:
+                return func()
+            finally:
+                done.set()
+                with _PENDING_INSTALL_LOCK:
+                    # A newer job may already have replaced the slot.
+                    if _PENDING_INSTALL_DONE is done:
+                        _PENDING_INSTALL_DONE = None
+
+        try:
+            # Shielded: cancelling the awaiter must NOT cancel the executor
+            # job. Unshielded, a cancel landing while the job is still
+            # QUEUED removes it from the pool — _run never starts, nothing
+            # ever sets the event, and the next bring-up waits the full
+            # budget on a job that does not exist (review finding). With the
+            # shield, _run always runs and its finally always fires; the
+            # awaiter still detaches immediately on cancel.
+            return await asyncio.shield(self._hass.async_add_executor_job(_run))
+        except asyncio.CancelledError:
+            # The job is queued or running and its finally will clear the
+            # slot; leaving it registered is the whole point — the next
+            # bring-up must wait it out.
+            raise
+        except BaseException:
+            # A DISPATCH failure (e.g. executor already shut down) means
+            # _run never ran and nothing will ever set the event — clear our
+            # own registration or the next bring-up waits the full budget on
+            # a job that does not exist. The identity check makes this a
+            # no-op if _run did run and already cleaned up.
+            with _PENDING_INSTALL_LOCK:
+                if _PENDING_INSTALL_DONE is done:
+                    _PENDING_INSTALL_DONE = None
+            raise
+
+    async def _async_wait_for_pending_install(self) -> None:
+        """Wait out an install job orphaned by a cancelled previous bring-up.
+
+        Raises :class:`EmbeddedServerError` if it is still running after the
+        bounded wait — mutating the package (or importing from it) underneath
+        a live pip job is the same corruption class as purging sys.modules
+        under a live importer.
+
+        The wait occupies one pooled executor thread (bounded): the setter
+        runs on an executor thread with no handle to this loop, so a
+        loop-side wakeup would need cross-thread plumbing this rare recovery
+        path does not justify.
+        """
+        with _PENDING_INSTALL_LOCK:
+            pending = _PENDING_INSTALL_DONE
+        if pending is None or pending.is_set():
+            return
+        _LOGGER.warning(
+            "A previous bring-up's install job is still running on the "
+            "executor (the bring-up was cancelled but pip cannot be); "
+            "waiting for it to finish before touching the ha-mcp package."
+        )
+        finished = await self._hass.async_add_executor_job(
+            pending.wait, _PENDING_INSTALL_WAIT_SECONDS
+        )
+        if not finished:
+            raise EmbeddedServerError(
+                f"A previous install job was still running after "
+                f"{_PENDING_INSTALL_WAIT_SECONDS:.0f}s; refusing to modify "
+                "the ha-mcp package underneath it. Reload the integration "
+                "to retry.",
+                kind="package",
+            )
+
     async def _async_ensure_package(
         self, *, defer_mutations: bool = False
     ) -> str | None:
@@ -571,6 +668,8 @@ class EmbeddedServerManager:
         Never imports ``ha_mcp`` in this (main) process — that happens only inside
         the worker thread.
         """
+        await self._async_wait_for_pending_install()
+
         stored_spec = self._entry.data.get(DATA_LAST_PIP_SPEC)
         installed_version = await self._hass.async_add_executor_job(
             _installed_ha_mcp_version
@@ -728,7 +827,7 @@ class EmbeddedServerManager:
         kwargs["timeout"] = max(
             int(kwargs.get("timeout") or 0), _PIP_INSTALL_TIMEOUT_SECONDS
         )
-        installed = await self._hass.async_add_executor_job(
+        installed = await self._async_run_tracked_install_job(
             partial(install_package, self._pip_spec, upgrade=True, **kwargs)
         )
         if not installed:
@@ -770,12 +869,17 @@ class EmbeddedServerManager:
         await self._async_remove_distribution(other)
 
     async def _async_remove_distribution(self, dist_name: str) -> None:
-        """Remove a distribution from the same target used for installation."""
+        """Remove a distribution from the same target used for installation.
+
+        Tracked like the install: an uninstall mutates the same package files.
+        """
         target = pip_kwargs(self._hass.config.config_dir).get("target")
         if target is None:
-            await self._hass.async_add_executor_job(_uninstall_distribution, dist_name)
+            await self._async_run_tracked_install_job(
+                partial(_uninstall_distribution, dist_name)
+            )
         else:
-            await self._hass.async_add_executor_job(
+            await self._async_run_tracked_install_job(
                 partial(_uninstall_distribution, dist_name, target=target)
             )
 
@@ -1262,6 +1366,31 @@ def _prune_and_check_importing_workers() -> bool:
             [t for t in _IMPORTING_WORKERS if not t.is_alive()]
         )
         return bool(_IMPORTING_WORKERS)
+
+
+# Completion event of the package-mutating install/uninstall job currently on
+# the executor, if any. asyncio cancellation of a bring-up detaches the
+# awaiter, but the executor job keeps running to completion — untracked, an
+# orphaned pip could swap the distribution's files under the NEXT bring-up's
+# install or its worker's cold import (found in review of PR #1911, the
+# #1904 fixes; pre-existing). The dispatching coroutine registers the event BEFORE handing
+# the job to the executor, and the executor fn sets it in a finally that
+# survives cancellation; the next bring-up waits on it before mutating
+# anything. Process-global for the same reason as _IMPORTING_WORKERS: a
+# manager is recreated on every bring-up.
+#
+# Single slot BY DESIGN: at most one tracked job can exist at a time — the
+# server entry is single-instance, an entry reload cancels-and-awaits the
+# previous bring-up before setting up, and every dispatch site sits behind
+# _async_wait_for_pending_install. A second concurrent dispatcher would
+# overwrite the slot and silently lose the older live job — keep any new
+# package-mutating call site behind the wait gate. The slot tracking wraps
+# the DIRECT-pip sites (force install, uninstalls); the fast path goes
+# through HA's requirements manager, which is behind the gate but untracked —
+# it only dispatches pip when the package is missing outright, which cannot
+# co-occur with a live orphaned job worth waiting on.
+_PENDING_INSTALL_LOCK = threading.Lock()
+_PENDING_INSTALL_DONE: threading.Event | None = None
 
 
 # Version of the ha_mcp generation currently cached in sys.modules — set by

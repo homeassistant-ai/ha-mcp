@@ -84,12 +84,21 @@ jobs:
       actions: read
     outputs:
       proceed: ${{ steps.decide.outputs.proceed }}
+      # True when the gate proceeded WITHOUT positive confirmation that a
+      # release happened (API error / job-absent fail-open). The tag step
+      # uses it to raise an alarm if a stable tag actually gets cut on such
+      # a run: fail-open is deliberate (see below), but a stable tag with no
+      # release behind it means the component version must be bumped rather
+      # than piled onto (live: v1.1.1 went stable off a skipped
+      # pull_request Hotfix Release shell whose job list came back empty).
+      failopen: ${{ steps.decide.outputs.failopen }}
     steps:
       - name: Gate on the Semantic Release job, not the whole run
         id: decide
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "failopen=false" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" != "workflow_run" ]; then
             echo "Push/dispatch trigger - proceeding."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
@@ -106,6 +115,7 @@ jobs:
             --jq '[.jobs[] | select(.name == "Semantic Release") | .conclusion] | first // empty'); then
             echo "::warning::Could not query the triggering run's jobs; failing open."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "failopen=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "Semantic Release job conclusion: ${conclusion:-<job absent>}"
@@ -116,6 +126,7 @@ jobs:
             "")
               echo "::warning::No 'Semantic Release' job in the triggering run - the job-name coupling with the release workflows may be broken; failing open."
               echo "proceed=true" >> "$GITHUB_OUTPUT"
+              echo "failopen=true" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "No successful release in the triggering run - skipping the mirror sync."
@@ -127,6 +138,11 @@ jobs:
     needs: gate
     if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # For the out-of-cycle alert issue the stable-tag step files when a
+      # tag is cut on a fail-open gate run.
+      issues: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -219,6 +235,7 @@ jobs:
           (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
         env:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VER=$(python3 -c "import json; print(json.load(open('custom_components/ha_mcp_tools/manifest.json'))['version'])")
           # Capture instead of `| grep -q .`: without pipefail a FAILED
@@ -238,6 +255,27 @@ jobs:
           cd /tmp/mirror
           git tag -a "v${VER}" -F /tmp/mirror_notes.md --cleanup=verbatim
           git push origin "v${VER}"
+          # A NEW stable tag cut on a fail-open gate run had no CONFIRMED
+          # release behind it. Keeping fail-open is deliberate (a suppressed
+          # tag strands HACS on the old component version — worse), so the
+          # response is an alarm, not prevention: file an issue so the
+          # component version gets BUMPED next rather than piled onto (the
+          # accidental v1.1.1 stable took further master changes with no
+          # installable release until 1.1.2). Fail the step if the alert
+          # cannot be filed — the tag is already pushed, and a red run is
+          # itself a visible signal; swallowing the failure would defeat
+          # the alert's entire purpose.
+          if [ "${{ needs.gate.outputs.failopen }}" = "true" ]; then
+            # --body-file (not --body): keeps $VER out of an unquoted
+            # argument interpolation entirely (review note).
+            cat > /tmp/oob_alert.md <<EOF
+          The mirror sync's fail-open gate cut stable tag v${VER} on ha-mcp-integration without a confirmed release behind it (triggering run: ${{ github.event.workflow_run.html_url }}; this sync run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Treat v${VER} as published: bump the component manifest version in the next PR that touches the component instead of adding changes onto v${VER}.
+          EOF
+            gh issue create --repo "${{ github.repository }}" \
+              --title "Out-of-cycle stable mirror tag v${VER} was cut - bump the component version" \
+              --body-file /tmp/oob_alert.md \
+              || { echo "::error::stable tag v${VER} was cut on a fail-open run but the alert issue could not be filed - bump the component version manually."; exit 1; }
+          fi
 
       - name: Tag mirror dev pre-release
         # Publishes the master component snapshot as a HACS pre-release
