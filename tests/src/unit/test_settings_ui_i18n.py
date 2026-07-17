@@ -184,3 +184,11 @@ def test_render_cookie_overrides_home_assistant_and_browser_language() -> None:
     )
 
     assert '<html lang="ru" dir="ltr">' in html
+
+
+def test_de_catalog_loads_and_is_registered() -> None:
+    from ha_mcp.settings_ui._i18n import CATALOGS
+
+    assert "de" in CATALOGS
+    assert CATALOGS["de"]["meta"]["native_name"] == "Deutsch"
+    assert CATALOGS["de"]["meta"]["dir"] == "ltr"
