@@ -269,6 +269,27 @@ class TestFetchRepairs:
         assert result["dismissed_count"] == 1
 
     @pytest.mark.asyncio
+    async def test_inactive_repairs_are_not_counted_or_dismissed(self):
+        ws = _ws_client_with_issues(
+            [
+                {"issue_id": "active", "ignored": False, "active": True},
+                {"issue_id": "dismissed", "ignored": True, "active": True},
+                {"issue_id": "inactive", "ignored": False, "active": False},
+                {
+                    "issue_id": "inactive_dismissed",
+                    "ignored": True,
+                    "active": False,
+                },
+            ]
+        )
+
+        result = await SystemTools._fetch_repairs(ws)
+
+        assert result["count"] == 1
+        assert [i["issue_id"] for i in result["issues"]] == ["active"]
+        assert result["dismissed_count"] == 1
+
+    @pytest.mark.asyncio
     async def test_include_dismissed_returns_all(self):
         ws = _ws_client_with_issues(
             [

@@ -1019,7 +1019,11 @@ class SystemTools:
                     "count": len(visible_issues),
                 }
                 if not include_dismissed:
-                    dismissed_count = len(all_issues) - len(visible_issues)
+                    dismissed_count = sum(
+                        issue.get("ignored")
+                        and issue.get("active") is not False
+                        for issue in all_issues
+                    )
                     if dismissed_count:
                         repairs["dismissed_count"] = dismissed_count
             else:

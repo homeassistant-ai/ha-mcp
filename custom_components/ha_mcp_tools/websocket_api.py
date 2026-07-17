@@ -2067,15 +2067,17 @@ def _notification_values(data: Any) -> list[Any]:
 
 
 def _overview_repairs(hass: HomeAssistant) -> list[dict[str, Any]]:
-    """Raw issue-registry entries (the server filters/projects them itself).
+    """Return active issue-registry entries for server-side projection.
 
     ``ignored`` is derived from ``dismissed_version`` so the server's
-    ``filter_active_repairs`` (which keys off ``ignored``) works unchanged.
+    ``filter_active_repairs`` can apply the requested dismissed-repair filter.
     """
     registry = _safe(ir.async_get, hass)
     issues = getattr(registry, "issues", None) if registry is not None else None
     out: list[dict[str, Any]] = []
     for issue in _mapping_values(issues):
+        if getattr(issue, "active", True) is False:
+            continue
         dismissed = getattr(issue, "dismissed_version", None)
         out.append(
             {

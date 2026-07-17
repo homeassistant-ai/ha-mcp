@@ -3353,7 +3353,11 @@ class SearchTools:
                 )
                 result["repair_count"] = len(visible_issues)
                 if not include_dismissed_repairs_bool:
-                    dismissed_count = len(all_issues) - len(visible_issues)
+                    dismissed_count = sum(
+                        issue.get("ignored")
+                        and issue.get("active") is not False
+                        for issue in all_issues
+                    )
                     if dismissed_count:
                         result["dismissed_repair_count"] = dismissed_count
                 result["repairs"] = [project_repair_fields(r) for r in visible_issues]

@@ -2352,6 +2352,20 @@ class TestOverview:
         assert by_id["old_issue"]["ignored"] is True
         assert by_id["old_issue"]["dismissed_version"] == "2026.1.0"
 
+    def test_repairs_exclude_inactive_issue_registry_entries(self, monkeypatch):
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
+        registry = FakeIssueRegistry(
+            [
+                FakeIssue("active_issue", "mqtt"),
+                FakeIssue("inactive_issue", "zwave", active=False),
+            ]
+        )
+        monkeypatch.setattr(wsapi, "ir", FakeIssueRegModule(registry))
+
+        res = wsapi._do_overview(self._hass(), {})
+
+        assert [repair["issue_id"] for repair in res["repairs"]] == ["active_issue"]
+
     def test_include_flags_skip_sections(self, monkeypatch):
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
         monkeypatch.setattr(

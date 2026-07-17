@@ -377,10 +377,21 @@ class TestFilterActiveRepairs:
         ]
         assert [r["issue_id"] for r in filter_active_repairs(issues)] == ["a", "c"]
 
-    def test_include_dismissed_returns_all(self):
+    def test_filters_inactive_repairs(self):
         issues = [
-            {"issue_id": "a", "ignored": False},
-            {"issue_id": "b", "ignored": True},
+            {"issue_id": "a", "ignored": False, "active": True},
+            {"issue_id": "b", "ignored": False, "active": False},
+            {"issue_id": "c", "ignored": True, "active": False},
+            {"issue_id": "d", "ignored": False},
+        ]
+        assert [r["issue_id"] for r in filter_active_repairs(issues)] == ["a", "d"]
+
+    def test_include_dismissed_still_filters_inactive(self):
+        issues = [
+            {"issue_id": "a", "ignored": False, "active": True},
+            {"issue_id": "b", "ignored": True, "active": True},
+            {"issue_id": "c", "ignored": False, "active": False},
+            {"issue_id": "d", "ignored": True, "active": False},
         ]
         out = filter_active_repairs(issues, include_dismissed=True)
         assert [r["issue_id"] for r in out] == ["a", "b"]

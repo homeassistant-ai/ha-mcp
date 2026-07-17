@@ -47,6 +47,12 @@ def _ignored_issue(issue_id: str, dismissed_version: str = "2026.4.0") -> dict:
     }
 
 
+def _inactive_issue(issue_id: str, *, ignored: bool = False) -> dict:
+    issue = _ignored_issue(issue_id) if ignored else _active_issue(issue_id)
+    issue["active"] = False
+    return issue
+
+
 class TestHaGetOverviewRepairs:
     """ha_get_overview repairs filtering, count, and field projection."""
 
@@ -114,13 +120,35 @@ class TestHaGetOverviewRepairs:
         assert result["dismissed_repair_count"] == 2
 
     @pytest.mark.asyncio
+    async def test_inactive_repairs_are_not_counted_or_returned(
+        self, mock_mcp, mock_smart_tools
+    ):
+        """Inactive issue-registry entries stay hidden in every repair view."""
+        issues = [
+            _active_issue("active_one"),
+            _ignored_issue("dismissed_one"),
+            _inactive_issue("inactive_one"),
+            _inactive_issue("inactive_dismissed", ignored=True),
+        ]
+        client = self._make_client(issues)
+        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
+
+        result = await tool(detail_level="minimal")
+
+        assert result["repair_count"] == 1
+        assert [r["issue_id"] for r in result["repairs"]] == ["active_one"]
+        assert result["dismissed_repair_count"] == 1
+
+    @pytest.mark.asyncio
     async def test_include_dismissed_returns_all_repairs(
         self, mock_mcp, mock_smart_tools
     ):
-        """With `include_dismissed_repairs=True`, all repairs surface and
-        the standalone dismissed counter is omitted.
-        """
-        issues = [_active_issue("active_one"), _ignored_issue("dismissed_one")]
+        """Opting into dismissed repairs still excludes inactive entries."""
+        issues = [
+            _active_issue("active_one"),
+            _ignored_issue("dismissed_one"),
+            _inactive_issue("inactive_one"),
+        ]
         client = self._make_client(issues)
         tool = self._build_tool(mock_mcp, client, mock_smart_tools)
 

@@ -540,16 +540,18 @@ _REPAIR_PROJECTION_FIELDS = (
 def filter_active_repairs(
     issues: list[dict[str, Any]], *, include_dismissed: bool = False
 ) -> list[dict[str, Any]]:
-    """Drop user-dismissed repairs unless ``include_dismissed`` is set.
+    """Drop inactive and, by default, user-dismissed repairs.
 
     HA's `repairs/list_issues` returns both active and ignored repairs (the
     Repairs UI hides ignored ones by default). Mirror that UI default so
-    overview / system-health responses don't surface repairs the user has
-    already dismissed.
+    overview / system-health responses don't surface inactive repairs or ones
+    the user has already dismissed. Entries without ``active`` are live
+    WebSocket responses and are treated as active.
     """
+    active_issues = [r for r in issues if r.get("active") is not False]
     if include_dismissed:
-        return list(issues)
-    return [r for r in issues if not r.get("ignored")]
+        return active_issues
+    return [r for r in active_issues if not r.get("ignored")]
 
 
 def project_repair_fields(issue: dict[str, Any]) -> dict[str, Any]:
