@@ -88,6 +88,29 @@ async def test_info_probe_parses_capabilities() -> None:
     assert caps.schema_version == 1
     assert caps.component_version == "1.1.0"
     assert caps.limits == {"max_results": 500}
+    # _INFO_OK carries no timezone (a component too old to report it): None.
+    assert caps.timezone is None
+
+
+@pytest.mark.asyncio
+async def test_info_probe_parses_timezone_present() -> None:
+    """An ``info`` payload carrying ``timezone`` (a newer component) is cached."""
+    ws = _make_ws(info_result={**_INFO_OK, "timezone": "Europe/London"})
+    with _patch_ws(ws):
+        caps = await get_component_caps(_client())
+
+    assert isinstance(caps, ComponentCaps)
+    assert caps.timezone == "Europe/London"
+
+
+@pytest.mark.asyncio
+async def test_info_probe_non_string_timezone_is_none() -> None:
+    """A non-string ``timezone`` (malformed / drift) is ignored (None)."""
+    ws = _make_ws(info_result={**_INFO_OK, "timezone": 123})
+    with _patch_ws(ws):
+        caps = await get_component_caps(_client())
+
+    assert caps.timezone is None
 
 
 @pytest.mark.asyncio
@@ -122,16 +145,86 @@ async def test_unknown_command_caches_none_and_does_not_reprobe() -> None:
 
 
 @pytest.mark.asyncio
-async def test_connection_error_is_not_cached_and_reprobes() -> None:
+async def test_connection_error_caches_short_transient_negative(monkeypatch) -> None:
+    """A WS-down probe caches a SHORT transient negative: a repeat WITHIN the window
+    skips the (slow) re-connect and serves ``None`` from cache (review-5 M8)."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
     ws = _make_ws(info_exc=HomeAssistantConnectionError("WebSocket not authenticated"))
     client = _client()
     with _patch_ws(ws):
-        first = await get_component_caps(client)
-        second = await get_component_caps(client)
+        assert await get_component_caps(client) is None
+        # Still inside the short transient window: no re-probe.
+        clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S - 1
+        assert await get_component_caps(client) is None
+    assert ws.send_command.await_count == 1
 
-    assert first is None
-    assert second is None
-    # Transient failure is not cached, so each call re-probes.
+
+@pytest.mark.asyncio
+async def test_expired_transient_negative_reprobes_and_adopts(monkeypatch) -> None:
+    """Past the short transient TTL the negative expires: the next call re-probes
+    and adopts a now-reachable component (self-healing)."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+
+    ws = AsyncMock()
+    probe_count = _clock(0.0)
+
+    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+        assert command_type == "ha_mcp_tools/info"
+        probe_count[0] += 1
+        if probe_count[0] == 1:
+            raise HomeAssistantConnectionError("WebSocket not authenticated")
+        return {"success": True, "result": _INFO_OK}
+
+    ws.send_command = AsyncMock(side_effect=_send)
+    client = _client()
+    with _patch_ws(ws):
+        assert await get_component_caps(client) is None  # transient cached at t0
+        clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1  # expire it
+        caps = await get_component_caps(client)
+
+    assert isinstance(caps, ComponentCaps)
+    assert ws.send_command.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_establish_failure_caches_short_transient_negative(monkeypatch) -> None:
+    """The plain ``Exception`` ``get_websocket_client()`` raises when it can't build
+    the socket (review-5 M8's slow-connect case) also caches the short transient
+    negative, so a repeat within the window skips the connect attempt entirely."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    client = _client()
+    factory = AsyncMock(
+        side_effect=Exception("Failed to connect to Home Assistant WebSocket")
+    )
+    with patch.object(component_api, "get_websocket_client", factory):
+        assert await get_component_caps(client) is None
+        clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S - 1
+        assert await get_component_caps(client) is None
+    # The connect attempt ran exactly once — the second call used the cache.
+    assert factory.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_transient_negative_shorter_than_absent_negative(monkeypatch) -> None:
+    """A transport transient negative expires FAST while an absent-negative from the
+    same instant is still live — the two windows are independent."""
+    assert (
+        component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S
+        < component_api._NEGATIVE_CACHE_TTL_S
+    )
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    ws = _make_ws(info_exc=HomeAssistantConnectionError("ws down"))
+    client = _client()
+    with _patch_ws(ws):
+        assert await get_component_caps(client) is None
+        # Between the transient TTL and the absent TTL: the transient has expired,
+        # so this re-probes (unlike a definitive absent-negative, which would not).
+        clock[0] += component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S + 1
+        assert await get_component_caps(client) is None
     assert ws.send_command.await_count == 2
 
 

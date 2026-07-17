@@ -50,7 +50,11 @@ from ha_mcp.tools.tools_config_helpers import (
     register_config_helper_tools,
 )
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 # person is the one storage type whose {type}/list does not return a flat list:
 # HA's PersonStorageCollectionWebsocket overrides the base ws_list_item to send
@@ -311,6 +315,28 @@ async def test_raised_command_falls_back_with_warning() -> None:
     list_helpers = _build_list_helpers(client)
 
     with patch_ws(ws, tools_config_helpers):
+        resp = await list_helpers(helper_type="input_boolean")
+
+    assert resp["success"] is True
+    assert client.list_calls == 1
+    assert any("served via legacy path" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_storage_type_falls_back_with_warning() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) → for a STORAGE type, legacy ``{type}/list`` AND a ``warnings[]``
+    entry, not a propagated error. The legacy body rides the never-raising bridge,
+    so it does not die identically on a pooled-WS drop."""
+    caps_ws = make_ws("ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS)
+    client = RoutingClient()
+    list_helpers = _build_list_helpers(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_config_helpers,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
         resp = await list_helpers(helper_type="input_boolean")
 
     assert resp["success"] is True

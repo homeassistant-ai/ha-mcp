@@ -33,7 +33,11 @@ from ha_mcp.tools.tools_registry import (
     register_registry_tools,
 )
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _CAPS_DEVICES = {
     "schema_version": 1,
@@ -446,6 +450,33 @@ async def test_non_unknown_error_falls_back_without_invalidating_caps() -> None:
     assert resp["entity_count"] == 1
     # Caps stay cached: a transient failure is not a downgrade, so the next call
     # still routes through the component instead of re-probing.
+    assert client in component_api._CAPS_CACHE
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_falls_back_without_invalidating_caps() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) falls back to the legacy registries for the byte-identical result
+    WITHOUT invalidating caps. The legacy device/entity reads ride the swallowing
+    bridge, so they do not die identically on a pooled-WS drop."""
+    caps_ws = make_ws("ha_mcp_tools/device_get", info_result=_CAPS_DEVICES)
+    client = RoutingClient(
+        devices=[_raw_device("dev-1")],
+        entities=[_entity_row("sensor.x", "dev-1")],
+    )
+    get_device = _build_get_device(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        component_devices,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
+        resp = await get_device(device_id="dev-1")
+
+    assert resp["device"]["device_id"] == "dev-1"
+    assert client.device_list_calls == 1
+    assert client.entity_list_calls == 1
+    assert resp["entity_count"] == 1
     assert client in component_api._CAPS_CACHE
 
 

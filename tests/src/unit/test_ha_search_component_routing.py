@@ -31,7 +31,11 @@ from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _STATES = [
     {
@@ -246,6 +250,32 @@ async def test_command_timeout_falls_back_with_warning(tmp_path, monkeypatch) ->
     ha_search = _build_ha_search(client)
 
     with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 1
+    assert any("served via legacy path" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_falls_back_with_warning(
+    tmp_path, monkeypatch
+) -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) → legacy path AND a ``warnings[]`` entry, not a propagated error.
+
+    The legacy search reads ``/api/states`` over REST + the swallowing registry
+    bridge, so it does not die identically on a pooled-WS drop."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    caps_ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH)
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_search,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True

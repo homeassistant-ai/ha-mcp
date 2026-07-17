@@ -376,6 +376,10 @@ class TestCheckRefs:
 
 def _mock_client(services_payload: Any, states_payload: Any) -> Any:
     client = AsyncMock()
+    # Credential-less: get_component_caps short-circuits to None (no component),
+    # so these tests exercise the legacy get_services/get_states path they pin.
+    client.base_url = None
+    client.token = None
     client.get_services = AsyncMock(return_value=services_payload)
     client.get_states = AsyncMock(return_value=states_payload)
     return client
@@ -448,6 +452,9 @@ class TestValidateConfigReferences:
         """A broken client must never break the automation write path."""
         config = {"action": [{"service": "light.turn_on"}]}
         client = AsyncMock()
+        # Credential-less → legacy gather path (the broken get_services below).
+        client.base_url = None
+        client.token = None
         client.get_services = AsyncMock(side_effect=RuntimeError("boom"))
         client.get_states = AsyncMock(return_value=[])
         with caplog.at_level("ERROR"):

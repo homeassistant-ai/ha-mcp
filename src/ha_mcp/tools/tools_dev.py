@@ -20,8 +20,19 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from .._version import get_version, is_dev_version, is_embedded, is_running_in_addon
-from ..client.rest_client import HomeAssistantAPIError
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
+from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -39,6 +50,11 @@ FEATURE_FLAG = "HAMCP_ENABLE_DEV_MODE"
 # runs the ha-mcp server in-process inside HA and exposes channel /
 # pip-spec options that ha_dev_manage_server drives.
 COMPONENT_DOMAIN = "ha_mcp_tools"
+
+# The component's own in-process command for locating its "server" config
+# entry (see ``_fetch_server_entry_via_component``) — replaces probing every
+# ha_mcp_tools-domain entry's options-flow schema from the outside.
+WS_SERVER_ENTRY = "ha_mcp_tools/server_entry"
 
 # Options-flow field names of the component's server entry
 # (custom_components/ha_mcp_tools/const.py OPT_CHANNEL / OPT_PIP_SPEC).
@@ -119,24 +135,130 @@ def _field_prefill(item: dict[str, Any]) -> Any:
     return item.get("default", item.get("value"))
 
 
+async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | None:
+    """One ``ha_mcp_tools/server_entry`` read; ``None`` ⇒ use the legacy probe.
+
+    Returns the component's ``{entry_id, channel, pip_spec}`` payload —
+    ``entry_id`` is ``None`` when no server entry exists, an AUTHORITATIVE
+    verdict the component reaches in-process (its own ``DOMAIN`` entries),
+    not a "try the legacy path" signal. Returns ``None`` (⇒ legacy probe) on
+    capability miss, downgrade (``unknown_command`` → invalidate the cached
+    caps), command error/timeout (logged), or an empty-string ``entry_id``
+    (a malformed reply shape — not the component's real "no entry" signal,
+    which is ``None`` — so it is not trusted as authoritative either) — same
+    taxonomy as ``component_devices.fetch_device_via_component``. A
+    ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain ``Exception``
+    ``get_websocket_client()`` raises on a failed (re)connect is caught here and
+    mapped to ``None``: the legacy probe (``find_server_config_entry``) rides the
+    swallowing ``send_websocket_message`` bridge, NOT this pooled socket — so a
+    transport failure must fall back rather than escape.
+    """
+    caps = await get_component_caps(client)
+    if not component_supports(caps, "server_entry"):
+        return None
+    try:
+        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        raw = await ws.send_command(WS_SERVER_ENTRY)
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+        if is_unknown_command(exc):
+            invalidate_caps(client)
+        else:
+            logger.warning("%s failed; fell back to legacy: %r", WS_SERVER_ENTRY, exc)
+        return None
+    except Exception as exc:
+        # HomeAssistantConnectionError / plain establish Exception → legacy probe
+        # (which rides the swallowing send_websocket_message bridge).
+        logger.warning(
+            "%s connection error; falling back to legacy: %r", WS_SERVER_ENTRY, exc
+        )
+        return None
+    result = raw.get("result")
+    if not isinstance(result, dict) or "entry_id" not in result:
+        return None
+    if result.get("entry_id") == "":
+        return None
+    return result
+
+
+def _fields_from_flow_schema(flow: dict[str, Any]) -> dict[str, Any]:
+    """Map an options-flow's ``data_schema`` field names to their current values.
+
+    Shared by ``_open_server_entry_flow`` (the component-identified entry)
+    and ``find_server_config_entry``'s legacy per-candidate probe — both open
+    a flow and need the same ``{field_name: current_value}`` shape, via
+    ``_field_prefill``.
+    """
+    schema = flow.get("data_schema") or []
+    return {
+        str(item["name"]): _field_prefill(item)
+        for item in schema
+        if isinstance(item, dict) and item.get("name")
+    }
+
+
+async def _open_server_entry_flow(
+    client: Any, entry_id: str
+) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
+    """Open the options flow for a KNOWN server ``entry_id``; ``None`` on failure.
+
+    Builds ``current_options`` from the freshly-opened flow's own schema (via
+    ``_fields_from_flow_schema``) rather than the component's narrower
+    ``{channel, pip_spec}`` shape, so callers like ``_update_source`` that
+    resend ``_PRESERVED_OPTION_KEYS`` (``server_url`` / ``external_url`` /
+    ``webhook_id_override`` / ``secret_path_override`` — fields the
+    ``server_entry`` capability does not carry) still see them.
+    """
+    try:
+        flow = await client.start_options_flow(entry_id)
+    except HomeAssistantAPIError as exc:
+        # The component-identified entry couldn't open its flow (e.g. a race
+        # where the entry vanished between the two calls) — the caller falls
+        # back to the legacy per-candidate probe rather than treating this as
+        # authoritative "no server entry".
+        logger.debug("Options-flow open failed for %s: %s", entry_id, exc)
+        return None
+    return str(entry_id), flow, _fields_from_flow_schema(flow)
+
+
 async def find_server_config_entry(
     client: Any,
 ) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
     """Find the ha_mcp_tools in-process "server" config entry.
 
-    Probes each ``ha_mcp_tools`` entry's options flow: the server entry's
-    flow is a form whose schema carries the ``pip_spec`` field; the tools
-    (services) entry's flow is an informational form with no ``pip_spec``
-    field, so it never matches. Returns
-    ``(entry_id, open_flow, current_options)`` with the options flow left
-    OPEN (callers must submit or abort it), or ``None`` when no server
-    entry exists. ``current_options`` maps schema field names to their current
-    values (persisted ``suggested_value`` first, else the schema ``default`` or
-    ``value``, via ``_field_prefill``).
+    When the component advertises ``server_entry``, one
+    ``ha_mcp_tools/server_entry`` read identifies the entry in-process (no
+    per-candidate options-flow probing, no ``pip_spec`` schema-shape
+    heuristic); an authoritative "no server entry" verdict from that read
+    returns ``None`` directly. Only ONE options flow is then opened — for the
+    identified entry — because the write path (``_update_source``) submits
+    it; a component read never substitutes for that flow.
+
+    On capability miss, component error, or a failure to open the identified
+    entry's flow, this falls back to probing each ``ha_mcp_tools`` entry's
+    options flow directly: the server entry's flow is a form whose schema
+    carries the ``pip_spec`` field; the tools (services) entry's flow is an
+    informational form with no ``pip_spec`` field, so it never matches.
+
+    Returns ``(entry_id, open_flow, current_options)`` with the options flow
+    left OPEN (callers must submit or abort it), or ``None`` when no server
+    entry exists. ``current_options`` maps schema field names to their
+    current values (persisted ``suggested_value`` first, else the schema
+    ``default`` or ``value``, via ``_field_prefill``).
 
     Module-level (not a DevTools method) so the settings UI's embedded
     restart handler can share it.
     """
+    via_component = await _fetch_server_entry_via_component(client)
+    if via_component is not None:
+        entry_id = via_component.get("entry_id")
+        if entry_id is None:
+            # Authoritative: the component confirmed no server entry exists.
+            return None
+        found = await _open_server_entry_flow(client, str(entry_id))
+        if found is not None:
+            return found
+        # Fall through to the legacy probe below as a defensive retry.
+
     response = await client.send_websocket_message(
         {"type": "config_entries/get", "domain": COMPONENT_DOMAIN}
     )
@@ -165,12 +287,7 @@ async def find_server_config_entry(
             # component that is already running.
             logger.debug("Options-flow probe failed for %s: %s", entry_id, exc)
             continue
-        schema = flow.get("data_schema") or []
-        fields: dict[str, Any] = {
-            str(item["name"]): _field_prefill(item)
-            for item in schema
-            if isinstance(item, dict) and item.get("name")
-        }
+        fields = _fields_from_flow_schema(flow)
         if flow.get("type") == "form" and _OPT_PIP_SPEC in fields:
             return str(entry_id), flow, fields
         # Not the server entry — close the probe flow if one opened.

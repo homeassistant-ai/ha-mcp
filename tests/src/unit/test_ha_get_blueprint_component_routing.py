@@ -27,7 +27,11 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import component_api, tools_blueprints
 from ha_mcp.tools.tools_blueprints import register_blueprint_tools
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._component_routing_helpers import (
+    make_ws,
+    patch_ws,
+    patch_ws_establish_failure,
+)
 
 _PATH = "user/motion.yaml"
 _LIST_RESULT = {
@@ -242,6 +246,27 @@ async def test_command_error_metadata_only_silent() -> None:
     get_blueprint = _build_get_blueprint(client)
 
     with patch_ws(ws, tools_blueprints):
+        resp = await get_blueprint(path=_PATH, domain="automation")
+
+    assert resp["success"] is True
+    assert "config" not in resp
+
+
+@pytest.mark.asyncio
+async def test_ws_establish_failure_metadata_only_silent() -> None:
+    """A plain establish ``Exception`` from ``get_websocket_client()`` (after caps
+    are cached) → metadata-only, not a propagated error. There is no full-body
+    legacy fetch, so a transport failure simply serves the already-fetched
+    metadata."""
+    caps_ws = make_ws("ha_mcp_tools/blueprint_get", info_result=_CAPS_BLUEPRINT)
+    client = RoutingClient()
+    get_blueprint = _build_get_blueprint(client)
+
+    with patch_ws_establish_failure(
+        caps_ws,
+        tools_blueprints,
+        Exception("Failed to connect to Home Assistant WebSocket"),
+    ):
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True

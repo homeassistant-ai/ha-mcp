@@ -28,7 +28,7 @@ from ..utils.fuzzy_search import apply_hidden_penalty
 from ..visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
-    visibility_filter_active,
+    visibility_state_and_wire,
 )
 from .component_api import (
     component_supports,
@@ -950,6 +950,24 @@ def _build_component_search_request(req: _ResolvedSearch) -> dict[str, Any]:
     return request
 
 
+def _merge_component_visibility_warnings(
+    response: dict[str, Any], component_result: dict[str, Any]
+) -> None:
+    """Fold the component's ``visibility_warnings`` into the response warnings.
+
+    The component emits these when a hide dimension fails open (unknown category /
+    empty-registry allowlist / Assist unavailable). Merged into the same top-level
+    warnings surface the legacy path fills via ``merge_visibility_warnings``, so the
+    fast path is no longer silent about incomplete filtering.
+    """
+    component_visibility_warnings = component_result.get("visibility_warnings")
+    if isinstance(component_visibility_warnings, list):
+        merge_visibility_warnings(
+            response,
+            [w for w in component_visibility_warnings if isinstance(w, str)],
+        )
+
+
 def _shape_component_search_response(
     req: _ResolvedSearch, component_result: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1045,6 +1063,8 @@ def _shape_component_search_response(
         if diag_reason:
             response["partial"] = True
             _merge_partial_reason(response, diag_reason)
+
+    _merge_component_visibility_warnings(response, component_result)
 
     response["count"] = len(response["entities"]) + sum(
         len(response.get(bucket, [])) for bucket in _CONFIG_BUCKETS
@@ -1870,31 +1890,78 @@ class SearchTools:
         # registry-only calls, so the component round-trip buys nothing worth
         # the shape risk.
         #
-        # The component also applies no entity-visibility filtering, so an
-        # install with an ACTIVE visibility filter (enabled + a hide dimension)
-        # must keep the legacy path, which excludes hidden entities before the
-        # counts/pagination. ``visibility_filter_active`` reloads the same
-        # opt-in config file the legacy filter uses (fail-closed to legacy on a
-        # malformed config). Checked only when the component would otherwise
-        # serve, so the common (no-component / filter-off) install pays nothing;
-        # visibility-enabled installs are the opt-in minority and stay on legacy
-        # until a later capability passes the hide rules to the component.
+        # Entity-visibility gate. A plain ``search`` component applies no
+        # filtering, so an install with an ACTIVE visibility filter would leak
+        # hidden entities through the fast path. The ``search_visibility``
+        # capability closes that: a component that advertises it accepts the raw
+        # hide config (``VisibilityConfig.to_wire``) as the ``visibility`` param
+        # and excludes hidden entities before its own counts/pagination, exactly
+        # as the legacy path does — so a visibility-active install can still take
+        # the fast path. Without the capability an active filter stays on the
+        # legacy path; with no active filter the plain ``search`` route runs with
+        # no ``visibility`` param (old components keep working). ``ha_get_overview``
+        # needs no analogous gate — it re-applies the filter server-side over the
+        # component's raw slices. Checked only when the component would otherwise
+        # serve, so the common (no-component / filter-off) install pays nothing.
         if req.query_text and not (req.area_filter or "").strip():
             caps = await get_component_caps(self._client)
-            if (
-                component_supports(caps, "search")
-                and not await visibility_filter_active()
-            ):
-                component_response = await self._ha_search_via_component(req, ctx)
-                if component_response is not None:
-                    return component_response
+            if component_supports(caps, "search"):
+                (
+                    route_component,
+                    visibility,
+                ) = await self._resolve_component_search_visibility(caps)
+                if route_component:
+                    component_response = await self._ha_search_via_component(
+                        req, ctx, visibility=visibility
+                    )
+                    if component_response is not None:
+                        return component_response
 
         return await self._legacy_ha_search(req, ctx)
 
+    async def _resolve_component_search_visibility(
+        self, caps: Any
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Decide the ha_search route under the entity-visibility gate.
+
+        Returns ``(route_component, visibility_param)`` for a caller that has
+        already confirmed the component advertises ``search``:
+
+        - filter inactive → ``(True, None)``: the plain component search, no
+          ``visibility`` param (parity with a pre-``search_visibility`` component).
+        - filter active + ``search_visibility`` capability + config serialized →
+          ``(True, <wire dict>)``: the component applies the hide dimensions
+          in-process.
+        - filter active without the capability, or the config could not be loaded
+          → ``(False, None)``: the legacy path applies the filter server-side
+          before the counts/pagination (fail-closed to legacy on a bad config,
+          matching ``visibility_state_and_wire``'s fail-closed pairing).
+
+        ``visibility_state_and_wire`` loads the config once for both the active
+        gate and its wire form, instead of the active check and the wire fetch
+        each hitting the (memoized) config read separately.
+        """
+        active, visibility = await visibility_state_and_wire()
+        if not active:
+            return True, None
+        if component_supports(caps, "search_visibility") and visibility is not None:
+            return True, visibility
+        return False, None
+
     async def _ha_search_via_component(
-        self, req: _ResolvedSearch, ctx: Context | None
+        self,
+        req: _ResolvedSearch,
+        ctx: Context | None,
+        *,
+        visibility: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Serve ha_search from the component; ``None`` ⇒ run the legacy path.
+
+        ``visibility`` is the serialized hide config passed to a
+        ``search_visibility``-capable component so it applies the entity-
+        visibility filter in-process (``None`` ⇒ no filter / not supported ⇒ the
+        component surfaces every match, correct only because the caller routes
+        here solely when the filter is inactive or the component can apply it).
 
         Error taxonomy (design § 4):
 
@@ -1906,12 +1973,16 @@ class SearchTools:
           ``HomeAssistantCommandTimeout`` (the component WS search timed out):
           serve the correct result from the legacy path, append a ``warnings[]``
           entry, and ``log.warning`` — correct results now, breakage visible.
-        - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
-          propagates; the legacy path depends on the same socket and would fail
-          identically, so surfacing it is correct.
+        - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
+          ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
+          served the same way — the legacy path reads ``/api/states`` over REST and
+          the entity registry through the swallowing ``send_websocket_message``
+          bridge (which returns ``{"success": False}`` rather than raising), so it
+          degrades to partial results rather than dying identically on a pooled-WS
+          drop; a transport failure must not escape.
         """
         try:
-            raw = await self._send_component_search(req)
+            raw = await self._send_component_search(req, visibility)
         except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
@@ -1922,16 +1993,33 @@ class SearchTools:
             )
             logger.warning("ha_mcp_tools/search failed; fell back to legacy: %r", exc)
             return legacy
+        except Exception as exc:
+            legacy = await self._legacy_ha_search(req, ctx)
+            legacy.setdefault("warnings", []).append(
+                f"component search connection error ({exc}); served via legacy path"
+            )
+            logger.warning(
+                "ha_mcp_tools/search connection error; fell back to legacy: %r", exc
+            )
+            return legacy
         return _shape_component_search_response(req, raw.get("result") or {})
 
-    async def _send_component_search(self, req: _ResolvedSearch) -> dict[str, Any]:
-        """Send one ``ha_mcp_tools/search`` command over the per-client WebSocket."""
+    async def _send_component_search(
+        self, req: _ResolvedSearch, visibility: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Send one ``ha_mcp_tools/search`` command over the per-client WebSocket.
+
+        ``visibility`` (the serialized hide config) is attached only when set, so
+        a plain-``search`` component (which lacks the param in its schema) never
+        receives it.
+        """
         ws = await get_websocket_client(
             url=self._client.base_url, token=self._client.token
         )
-        return await ws.send_command(
-            "ha_mcp_tools/search", **_build_component_search_request(req)
-        )
+        request = _build_component_search_request(req)
+        if visibility is not None:
+            request["visibility"] = visibility
+        return await ws.send_command("ha_mcp_tools/search", **request)
 
     async def _legacy_ha_search(
         self, req: _ResolvedSearch, ctx: Context | None
@@ -3346,7 +3434,15 @@ class SearchTools:
                 )
             )
             if repairs_result.get("success"):
-                all_issues = repairs_result.get("result", {}).get("issues", [])
+                raw_issues = repairs_result.get("result", {}).get("issues", [])
+                # Core's ``repairs/list_issues`` filters ``if issue.active``; the
+                # component's ``overview`` repairs slice does NOT (it emits every
+                # registry issue, carrying ``active`` additively). After an HA
+                # restart the registry restores previously-reported issues as
+                # ``active=False`` placeholders the legacy path and Repairs UI
+                # never show, so drop them here for parity. Legacy rows omit
+                # ``active`` (None) → no-op for them.
+                all_issues = [i for i in raw_issues if i.get("active") is not False]
                 visible_issues = filter_active_repairs(
                     all_issues,
                     include_dismissed=include_dismissed_repairs_bool,
@@ -3418,9 +3514,13 @@ class SearchTools:
           non-empty ``slice_errors`` — ``_build_overview_slices`` returns
           ``None``): treated like the command-error branch (legacy + warning +
           log), so a partial snapshot never serves a silently-degraded overview.
-        - ``HomeAssistantConnectionError`` (WS down): not caught here, so it
-          propagates; the legacy path depends on the same socket and would fail
-          identically, so surfacing it is correct.
+        - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
+          ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
+          served the same way — the legacy overview reads ``/api/states`` +
+          ``/api/services`` over REST and the registries through the swallowing
+          ``send_websocket_message`` bridge, so it degrades to a partial overview
+          rather than dying identically on a pooled-WS drop; a transport failure
+          must not escape.
         """
         try:
             raw = await self._send_component_overview(inputs)
@@ -3433,6 +3533,15 @@ class SearchTools:
                 f"component overview path failed ({exc}); served via legacy path"
             )
             logger.warning("ha_mcp_tools/overview failed; fell back to legacy: %r", exc)
+            return legacy
+        except Exception as exc:
+            legacy = await self._assemble_overview(inputs, None)
+            legacy.setdefault("warnings", []).append(
+                f"component overview connection error ({exc}); served via legacy path"
+            )
+            logger.warning(
+                "ha_mcp_tools/overview connection error; fell back to legacy: %r", exc
+            )
             return legacy
         slices = _build_overview_slices(raw.get("result") or {})
         if slices is None:
@@ -3959,15 +4068,16 @@ class SearchTools:
         ``ha_search`` / ``ha_get_zone`` which append a ``warnings[]`` entry —
         because ``ha_get_state``'s single- and bulk-mode responses do not share one
         warnings channel; the ``log.warning`` preserves operator visibility and the
-        legacy REST path returns the byte-identical correct data either way. Unlike
-        ``ha_search`` / ``ha_get_overview`` (whose legacy paths also read the
-        WebSocket registry, so a connection failure fails both backends identically
-        and is left to propagate), ``ha_get_state``'s legacy path is a REST
-        ``get_entity_state`` read on a SEPARATE transport, so a WS transport/connect
-        failure (``HomeAssistantConnectionError``) is caught here and falls back to
-        REST — an install whose REST API still works keeps getting its state instead
-        of a spurious connection error. If REST is also down, the legacy path raises
-        the same connection error itself.
+        legacy REST path returns the byte-identical correct data either way.
+        ``ha_get_state``'s legacy path is a REST ``get_entity_state`` read on a
+        SEPARATE transport, so a WS transport/connect failure
+        (``HomeAssistantConnectionError``, or the plain ``Exception``
+        ``get_websocket_client()`` raises when ``WebSocketManager`` can't build the
+        socket) is caught here and falls back to REST — an install whose REST API
+        still works keeps getting its state instead of a spurious connection error.
+        If REST is also down, the legacy path raises the same connection error
+        itself. (``ha_search`` / ``ha_get_overview`` likewise fall back on a
+        transport failure — no component fetch helper propagates one.)
         """
         caps = await get_component_caps(self._client)
         if not component_supports(caps, "states"):
@@ -3985,6 +4095,14 @@ class SearchTools:
                 logger.warning(
                     "ha_mcp_tools/states failed; fell back to legacy: %r", exc
                 )
+            return None
+        except Exception as exc:
+            # The plain Exception get_websocket_client() raises when
+            # WebSocketManager can't build the socket (the connection-establishment
+            # failure the tuple above doesn't cover) → legacy REST.
+            logger.warning(
+                "ha_mcp_tools/states connection error; fell back to legacy: %r", exc
+            )
             return None
         result = raw.get("result") or {}
         if not isinstance(result.get("states"), dict):

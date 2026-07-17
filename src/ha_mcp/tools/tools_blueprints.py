@@ -271,7 +271,10 @@ class BlueprintTools:
         - ``(dict, None)`` — the parsed body was read.
         - ``(None, None)`` — metadata-only is the expected outcome: the component
           is absent / lacks the capability, was downgraded (``unknown_command`` →
-          invalidate the cached caps), or errored (logged).
+          invalidate the cached caps), errored (logged), or the WS transport failed
+          to connect (logged). There is no full-body legacy fetch — core's
+          ``blueprint/list`` carries no body — so a transport failure simply serves
+          the already-fetched metadata rather than escaping into ``ha_get_blueprint``.
         - ``(None, warning)`` — the component is present and the server has already
           confirmed the path is a real installed blueprint, yet it returned a null
           ``config`` (corrupt / unparseable file, read error). Metadata-only would
@@ -296,6 +299,14 @@ class BlueprintTools:
                     "ha_mcp_tools/blueprint_get failed; served metadata-only: %r",
                     exc,
                 )
+            return None, None
+        except Exception as exc:
+            # HomeAssistantConnectionError / plain establish Exception → metadata-only
+            # (no full-body legacy fetch exists; the base metadata is already served).
+            logger.warning(
+                "ha_mcp_tools/blueprint_get connection error; served metadata-only: %r",
+                exc,
+            )
             return None, None
         result = raw.get("result") or {}
         config = result.get("config")

@@ -15,6 +15,11 @@ from fastmcp.tools import tool
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
+from ..client.websocket_client import get_websocket_client
 from ..dashboard_screenshot.capture import (
     DEFAULT_HEIGHT,
     DEFAULT_RENDER_TIMEOUT_SECONDS,
@@ -45,6 +50,12 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import with_auto_backup
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
@@ -169,15 +180,20 @@ async def _verify_config_unchanged(
     - error: str (if config changed)
     - suggestions: list[str] (if config changed)
     """
-    # Re-fetch current config
-    get_data: dict[str, Any] = {"type": "lovelace/config"}
-    if url_path:
-        get_data["url_path"] = url_path
+    # Re-fetch current config. The component ``get`` reads the same in-memory
+    # object core serves (freshness-safe, audit-verified — the optimistic-lock
+    # re-read must not lag a concurrent save); ``None`` (component unavailable /
+    # YAML body / not found) falls back to the unchanged legacy re-fetch.
+    current_config: Any = await _component_dashboard_config(client, url_path or None)
+    if current_config is None:
+        get_data: dict[str, Any] = {"type": "lovelace/config"}
+        if url_path:
+            get_data["url_path"] = url_path
 
-    result = await client.send_websocket_message(get_data)
-    current_config = (
-        result.get("result", result) if isinstance(result, dict) else result
-    )
+        result = await client.send_websocket_message(get_data)
+        current_config = (
+            result.get("result", result) if isinstance(result, dict) else result
+        )
 
     if not isinstance(current_config, dict):
         return {"success": True}  # Can't verify, proceed anyway
@@ -808,6 +824,450 @@ def _should_lazy_resolve(error_msg: str) -> bool:
     return _LAZY_RESOLVE_TRIGGER in error_msg
 
 
+# The ha_mcp_tools/dashboards WS command: list / get / search over the live
+# lovelace collection in one in-process frame. Named once so the routing helpers
+# and their tests agree on the wire string (Global-Constraint-2 idiom, mirroring
+# ``component_devices.WS_DEVICE_GET``).
+WS_DASHBOARDS = "ha_mcp_tools/dashboards"
+
+# ``LovelaceConfig.mode`` wire string for a storage dashboard. On both paths the
+# ``list`` rows normally carry ``mode``: the ha_mcp_tools component tags every
+# runtime row, and the legacy ``lovelace/dashboards/list`` rows are the
+# ``LovelaceConfig.config`` dicts, where core's schemas stamp it (storage items
+# default ``mode: storage`` in ``STORAGE_DASHBOARD_CREATE_FIELDS``; YAML entries
+# REQUIRE ``mode: yaml`` in ``YAML_DASHBOARD_SCHEMA`` — verified against
+# home-assistant/core ``lovelace/{dashboard,const,__init__}.py``). A YAML
+# dashboard's BODY may carry resolved ``!secret`` plaintext, so the
+# cross-dashboard ``search`` walk reads a row's body ONLY when it is EXPLICITLY
+# tagged ``storage`` — fail-closed, which also skips the rare UNTAGGED row
+# (storage items persisted before core's mode default existed) rather than risk
+# reading a body it can't prove is storage. ``list`` still surfaces YAML rows,
+# since listing metadata is safe.
+_DASHBOARD_STORAGE_MODE = "storage"
+
+# Cross-dashboard ``search`` match cap — mirrors the component's
+# ``_DASHBOARD_MATCH_CAP`` so the component-less legacy walk truncates identically
+# (parity pinned by test_component_dashboards_contract.py).
+_SEARCH_ALL_MATCH_CAP = 200
+
+# Structural keys walked as their own card containers, never scored as leaf
+# strings — mirrors the component's ``_DASHBOARD_STRUCTURAL_KEYS``.
+_SEARCH_ALL_STRUCTURAL_KEYS = frozenset({"cards", "sections"})
+
+
+async def _dashboards_via_component(
+    client: Any,
+    mode: str,
+    *,
+    url_path: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any] | None:
+    """One ``ha_mcp_tools/dashboards`` read; ``None`` ⇒ use the legacy path.
+
+    Global-Constraint-2 idiom (mirrors
+    ``component_devices.fetch_device_via_component``). Returns the component's
+    ``result`` dict for ``mode`` (``list`` / ``get`` / ``search``) when the
+    component advertises the ``dashboards`` capability AND reports
+    ``available: true`` (the lovelace integration is set up). Returns ``None`` —
+    the caller runs its unchanged legacy path — on capability miss, downgrade
+    (``unknown_command`` → invalidate the cached caps), command error/timeout
+    (logged), a connection-establishment failure (logged), a malformed
+    envelope, or ``available: false`` (lovelace not set up). A
+    ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain ``Exception``
+    ``get_websocket_client()`` raises on a failed (re)connect is caught here and
+    mapped to ``None``: the legacy dashboards path rides the never-raising
+    ``send_websocket_message`` bridge (and the auto-backup capture consumer forbids
+    a blocked write), NOT this pooled socket — so a wedged pooled socket must fall
+    back to legacy rather than escape into a set/delete write path.
+    """
+    caps = await get_component_caps(client)
+    if not component_supports(caps, "dashboards"):
+        return None
+    kwargs: dict[str, Any] = {"mode": mode}
+    if url_path is not None:
+        kwargs["url_path"] = url_path
+    if query is not None:
+        kwargs["query"] = query
+    try:
+        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        raw = await ws.send_command(WS_DASHBOARDS, **kwargs)
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+        if is_unknown_command(exc):
+            invalidate_caps(client)
+        else:
+            logger.warning("%s failed; fell back to legacy: %r", WS_DASHBOARDS, exc)
+        return None
+    except Exception as exc:
+        # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
+        # get_websocket_client() raises on a failed (re)connect. The legacy path is
+        # the never-raising bridge and the capture consumer must not block a write,
+        # so fall back to legacy rather than escape.
+        logger.warning(
+            "%s connection error; falling back to legacy: %r", WS_DASHBOARDS, exc
+        )
+        return None
+    result = raw.get("result")
+    if not isinstance(result, dict) or not result.get("available"):
+        logger.debug(
+            "%s (mode=%s) returned unavailable/malformed result; falling back to legacy",
+            WS_DASHBOARDS,
+            mode,
+        )
+        return None
+    return result
+
+
+async def _component_dashboard_rows(client: Any) -> list[dict[str, Any]] | None:
+    """All dashboard metadata rows via the component ``list``; ``None`` ⇒ legacy.
+
+    The legacy ``lovelace/dashboards/list`` returns a metadata row for every
+    dashboard that has a config — YAML dashboards included — so the component
+    ``list`` is passed through with YAML rows KEPT. Dropping them diverged the two
+    paths (a YAML dashboard vanished from ``list_only`` output only when the
+    component was installed). Listing metadata is safe: only a dashboard's BODY can
+    carry resolved ``!secret`` plaintext, and the body-serving paths still exclude
+    YAML — ``get`` via the component's ``yaml_excluded`` status and ``search`` by
+    reading only ``mode == "storage"`` rows. The additive ``mode`` tag is preserved
+    on every row so those exclusions can key off it. ``None`` (component unavailable
+    / malformed) routes the caller to the legacy list read.
+    """
+    result = await _dashboards_via_component(client, "list")
+    if result is None:
+        return None
+    rows = result.get("dashboards")
+    if not isinstance(rows, list):
+        logger.debug(
+            "%s list returned a non-list 'dashboards' (%s); falling back to legacy",
+            WS_DASHBOARDS,
+            type(rows).__name__,
+        )
+        return None
+    return [row for row in rows if isinstance(row, dict)]
+
+
+async def _component_dashboard_config(
+    client: Any, url_path: str | None
+) -> dict[str, Any] | None:
+    """One dashboard's config via the component ``get``; ``None`` ⇒ legacy.
+
+    Returns the config body ONLY when the component is available and reports
+    ``status == "ok"``. ``yaml_excluded`` (a YAML body may carry resolved
+    ``!secret`` plaintext — the legacy read is authoritative for it) and
+    ``not_found`` (let the legacy path produce the real error or lazy-resolve an
+    internal id) both return ``None`` so the caller runs its unchanged legacy
+    read. ``url_path`` ``None`` targets the default dashboard.
+    """
+    result = await _dashboards_via_component(client, "get", url_path=url_path)
+    if result is None or result.get("status") != "ok":
+        return None
+    config = result.get("config")
+    if not isinstance(config, dict):
+        logger.debug(
+            "%s get returned status=ok but a non-dict config for url_path=%r; "
+            "falling back to legacy",
+            WS_DASHBOARDS,
+            url_path,
+        )
+        return None
+    return config
+
+
+# --- Cross-dashboard search walk (component-less legacy path) -----------------
+# Byte-for-byte port of the component's ``_search_dashboard_docs`` walk
+# (custom_components/ha_mcp_tools/websocket_api.py) so a component-less install
+# gets the SAME cross-dashboard ``search`` matches, just at N+1 WS cost. The two
+# implementations are pinned equal by test_component_dashboards_contract.py.
+
+
+def _walk_all_dashboard_docs(
+    docs: list[dict[str, Any]], query_lower: str
+) -> tuple[list[dict[str, Any]], bool]:
+    """Walk each dashboard config for ``query_lower``; return ``(matches, truncated)``.
+
+    An empty query matches nothing (a bare substring would match every string).
+    Matches are capped at :data:`_SEARCH_ALL_MATCH_CAP` with a ``truncated`` flag.
+    """
+    if not query_lower:
+        return [], False
+    matches: list[dict[str, Any]] = []
+    for doc in docs:
+        _collect_all_dashboard_doc_matches(doc, query_lower, matches)
+    truncated = len(matches) > _SEARCH_ALL_MATCH_CAP
+    return matches[:_SEARCH_ALL_MATCH_CAP], truncated
+
+
+def _collect_all_dashboard_doc_matches(
+    doc: dict[str, Any], query_lower: str, matches: list[dict[str, Any]]
+) -> None:
+    """Append every ``query_lower`` hit in one dashboard config to ``matches``.
+
+    Walks each view's card containers (``cards`` + sections-view ``sections.cards``,
+    nested cards recursed), plus the two view-level containers the card walk never
+    visits: ``badges`` and a sections-view ``header.card``. Mirrors the component's
+    ``_collect_dashboard_matches`` visit order exactly so both paths return the
+    same match records (a badge- or header-card-only entity reference is no longer
+    a cross-path blind spot).
+    """
+    config = doc.get("config")
+    if not isinstance(config, dict):
+        return
+    views = config.get("views")
+    if not isinstance(views, list):
+        return
+    url_path = doc.get("url_path")
+    dash_title = doc.get("title")
+    for view_index, view in enumerate(views):
+        if not isinstance(view, dict):
+            continue
+        view_title = view.get("title")
+        for cards, base_path in _all_dashboard_view_card_containers(view, view_index):
+            _collect_all_dashboard_card_matches(
+                cards,
+                base_path,
+                url_path,
+                dash_title,
+                view_index,
+                view_title,
+                query_lower,
+                matches,
+            )
+        _collect_all_dashboard_badge_matches(
+            view, view_index, url_path, dash_title, view_title, query_lower, matches
+        )
+        _collect_all_dashboard_header_card_matches(
+            view, view_index, url_path, dash_title, view_title, query_lower, matches
+        )
+
+
+def _all_dashboard_view_card_containers(
+    view: dict[str, Any], view_index: int
+) -> list[tuple[Any, str]]:
+    """The card lists in a view: top-level ``cards`` plus each section's ``cards``."""
+    containers: list[tuple[Any, str]] = []
+    if isinstance(view.get("cards"), list):
+        containers.append((view["cards"], f"views[{view_index}].cards"))
+    sections = view.get("sections")
+    if isinstance(sections, list):
+        for si, section in enumerate(sections):
+            if isinstance(section, dict) and isinstance(section.get("cards"), list):
+                containers.append(
+                    (section["cards"], f"views[{view_index}].sections[{si}].cards")
+                )
+    return containers
+
+
+def _all_dashboard_match(
+    url_path: Any,
+    dash_title: Any,
+    view_index: int,
+    view_title: Any,
+    card_path: str,
+    card_type: Any,
+    matched_field: str,
+    matched_value: str,
+) -> dict[str, Any]:
+    """One MODE 4 cross-dashboard search match record (shared, fixed shape).
+
+    Mirrors the component's ``_dashboard_match`` so every match site — cards,
+    badges, header cards — emits the identical wire shape on both paths.
+    """
+    return {
+        "url_path": url_path,
+        "title": dash_title,
+        "view_index": view_index,
+        "view_title": view_title,
+        "card_path": card_path,
+        "card_type": card_type,
+        "matched_field": matched_field,
+        "matched_value": matched_value,
+    }
+
+
+def _collect_all_dashboard_card_matches(
+    cards: Any,
+    base_path: str,
+    url_path: Any,
+    dash_title: Any,
+    view_index: int,
+    view_title: Any,
+    query_lower: str,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Recurse a card list, recording one match per string leaf containing the query."""
+    if not isinstance(cards, list):
+        return
+    for card_index, card in enumerate(cards):
+        if not isinstance(card, dict):
+            continue
+        _collect_one_all_dashboard_card_matches(
+            card,
+            f"{base_path}[{card_index}]",
+            url_path,
+            dash_title,
+            view_index,
+            view_title,
+            query_lower,
+            matches,
+        )
+
+
+def _collect_one_all_dashboard_card_matches(
+    card: dict[str, Any],
+    card_path: str,
+    url_path: Any,
+    dash_title: Any,
+    view_index: int,
+    view_title: Any,
+    query_lower: str,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Record matches for a SINGLE card at ``card_path`` and recurse its nested cards.
+
+    Mirrors the component's ``_collect_one_card_matches`` — shared by the
+    list-indexed card walk and the header-card walk (a header card is a single
+    card, not list-indexed).
+    """
+    card_type = card.get("type")
+    for field, value in _all_dashboard_card_string_leaves(card):
+        if query_lower in value.lower():
+            matches.append(
+                _all_dashboard_match(
+                    url_path,
+                    dash_title,
+                    view_index,
+                    view_title,
+                    card_path,
+                    card_type,
+                    field,
+                    value,
+                )
+            )
+    nested = card.get("cards")
+    if isinstance(nested, list):
+        _collect_all_dashboard_card_matches(
+            nested,
+            f"{card_path}.cards",
+            url_path,
+            dash_title,
+            view_index,
+            view_title,
+            query_lower,
+            matches,
+        )
+
+
+def _collect_all_dashboard_badge_matches(
+    view: dict[str, Any],
+    view_index: int,
+    url_path: Any,
+    dash_title: Any,
+    view_title: Any,
+    query_lower: str,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Record query hits in a view's ``badges`` — entity refs the card walk misses.
+
+    Mirrors the component's ``_collect_badge_matches``: a bare-string badge is
+    recorded as a ``badges`` leaf (``card_type="badge"``); a dict badge's string
+    leaves are walked like a card's (``card_type`` = its ``type`` or ``"badge"``).
+    """
+    badges = view.get("badges")
+    if not isinstance(badges, list):
+        return
+    for badge_index, badge in enumerate(badges):
+        badge_path = f"views[{view_index}].badges[{badge_index}]"
+        if isinstance(badge, str):
+            if badge and query_lower in badge.lower():
+                matches.append(
+                    _all_dashboard_match(
+                        url_path,
+                        dash_title,
+                        view_index,
+                        view_title,
+                        badge_path,
+                        "badge",
+                        "badges",
+                        badge,
+                    )
+                )
+        elif isinstance(badge, dict):
+            badge_type = badge.get("type") or "badge"
+            for field, value in _all_dashboard_card_string_leaves(badge):
+                if query_lower in value.lower():
+                    matches.append(
+                        _all_dashboard_match(
+                            url_path,
+                            dash_title,
+                            view_index,
+                            view_title,
+                            badge_path,
+                            badge_type,
+                            field,
+                            value,
+                        )
+                    )
+
+
+def _collect_all_dashboard_header_card_matches(
+    view: dict[str, Any],
+    view_index: int,
+    url_path: Any,
+    dash_title: Any,
+    view_title: Any,
+    query_lower: str,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Record query hits in a sections-view header card (``views[n].header.card``).
+
+    Mirrors the component's ``_collect_header_card_matches`` — the card walk never
+    visits the header card, so it is walked here as a single card.
+    """
+    header = view.get("header")
+    if not isinstance(header, dict):
+        return
+    header_card = header.get("card")
+    if not isinstance(header_card, dict):
+        return
+    _collect_one_all_dashboard_card_matches(
+        header_card,
+        f"views[{view_index}].header.card",
+        url_path,
+        dash_title,
+        view_index,
+        view_title,
+        query_lower,
+        matches,
+    )
+
+
+def _all_dashboard_card_string_leaves(card: dict[str, Any]) -> list[tuple[str, str]]:
+    """``(immediate_key, string)`` for every string leaf of a card.
+
+    Descends nested dicts/lists but NOT the structural ``cards``/``sections`` keys
+    (those are walked as their own cards). The key attributed to a leaf is the
+    nearest dict key, matching the component's field taxonomy.
+    """
+    out: list[tuple[str, str]] = []
+    _walk_all_dashboard_card_leaves(card, "", out)
+    return out
+
+
+def _walk_all_dashboard_card_leaves(
+    value: Any, key: str, out: list[tuple[str, str]]
+) -> None:
+    """Recursive worker for :func:`_all_dashboard_card_string_leaves`."""
+    if isinstance(value, str):
+        if value:
+            out.append((key, value))
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            if k not in _SEARCH_ALL_STRUCTURAL_KEYS:
+                _walk_all_dashboard_card_leaves(v, str(k), out)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _walk_all_dashboard_card_leaves(item, key, out)
+
+
 async def fetch_dashboards_list(
     client: Any,
 ) -> list[dict[str, Any]] | None:
@@ -818,9 +1278,19 @@ async def fetch_dashboards_list(
     unexpected shapes so that future HA response-format changes surface at
     every fetch site rather than silently degrading.
 
+    When the ``ha_mcp_tools`` component advertises the ``dashboards`` capability
+    the storage-only rows are served from one in-process ``list`` frame (the
+    ``_resolve_dashboard`` / ``_lookup_existing_dashboards`` / list-mode callers
+    all funnel here); otherwise the legacy ``lovelace/dashboards/list`` WS read
+    runs unchanged.
+
     Callers decide how to handle ``None`` (e.g. fall through to ``[]`` or
     propagate the failure).
     """
+    component_rows = await _component_dashboard_rows(client)
+    if component_rows is not None:
+        return component_rows
+
     result = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
     if isinstance(result, dict) and isinstance(result.get("result"), list):
         return cast(list[dict[str, Any]], result["result"])
@@ -1321,7 +1791,11 @@ class DashboardConfigTools:
                 "matches with their own config, so deeply-nested stacks multiply the "
                 "payload — keep the default (False) unless you need the bodies. Does not "
                 "affect whether the full dashboard config is returned — search mode always "
-                "returns matches only, not the full dashboard. Ignored outside search mode."
+                "returns matches only, not the full dashboard. Config bodies are surfaced "
+                "only for dashboards provably in storage mode; for a YAML or unconfirmed "
+                "dashboard the bodies are withheld (they may carry resolved !secret values) "
+                "and the response says so, with match locations still reported. Ignored "
+                "outside search mode."
             ),
         ] = False,
         include_screenshot: Annotated[
@@ -1343,12 +1817,29 @@ class DashboardConfigTools:
                 "views[].path to render. Omit to render the dashboard base route."
             ),
         ] = None,
+        mode: Annotated[
+            Literal["search"] | None,
+            Field(
+                description="Set to 'search' for a CROSS-dashboard search: which "
+                "dashboards contain a given entity_id or text (requires query). "
+                "Leave unset for the default list/get/single-dashboard-search "
+                "behavior selected by list_only / entity_id / card_type / heading."
+            ),
+        ] = None,
+        query: Annotated[
+            str | None,
+            Field(
+                description="With mode='search': the entity_id or substring to "
+                "find across all storage-mode dashboards. Ignored otherwise."
+            ),
+        ] = None,
     ) -> "dict[str, Any] | ToolResult":
         """
         Get dashboard info - list all dashboards, get config, or search for cards.
 
         MODE 1 — List: list_only=True
-          Lists all storage-mode dashboards with metadata (url_path, title, icon).
+          Lists every dashboard's metadata (url_path, title, icon), storage and
+          YAML alike (metadata only — bodies are never included here).
 
         MODE 2 — Search: any of entity_id / card_type / heading provided
           Finds cards, badges, and header cards matching the criteria, including
@@ -1370,6 +1861,19 @@ class DashboardConfigTools:
         MODE 3 — Get: Active when list_only=False and no search parameters are provided.
           Returns the full Lovelace dashboard config, defaulting to the
           main dashboard if url_path is omitted.
+
+        MODE 4 — Search all: mode="search" with query=<entity_id or text>
+          Answers "which dashboards contain this entity/card" by walking every
+          storage-mode dashboard's views/cards/sections for the query substring.
+          Each match names the url_path, view, card_path, card_type, and the
+          matched field/value. Takes precedence over the other modes (list_only /
+          entity_id / card_type / heading are ignored when mode="search").
+          YAML-mode dashboards are never searched on either path — the component
+          walk skips them in-process and the component-less legacy walk skips any
+          row tagged mode="yaml" — because HA resolves `!secret` when loading a
+          YAML Lovelace config, so searching one could surface resolved secrets.
+          On installs without the ha_mcp_tools component, the default (unnamed)
+          dashboard is also not searched — only dashboards with a url_path are.
 
         Return a stable `config_hash` (Get and Search modes only; not present in list_only mode) across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
@@ -1404,6 +1908,10 @@ class DashboardConfigTools:
         # accurate error context.
         resolved_url_path: list[str | None] = [url_path]
         try:
+            if mode == "search":
+                # Cross-dashboard search takes precedence over every other mode.
+                return await self._get_dashboard_search_all_mode(query)
+
             if list_only:
                 return await self._get_dashboard_list_mode(
                     include_screenshot=include_screenshot,
@@ -1452,12 +1960,21 @@ class DashboardConfigTools:
             raise
         except Exception as e:
             effective_url_path = resolved_url_path[0]
-            if search_mode:
+            if mode == "search":
+                suggestions = [
+                    "Check HA connection",
+                    "Verify dashboards with ha_config_get_dashboard(list_only=True)",
+                ]
+                context: dict[str, Any] = {
+                    "action": "search_all",
+                    "query": query,
+                }
+            elif search_mode:
                 suggestions = [
                     "Check HA connection",
                     "Verify dashboard with ha_config_get_dashboard(list_only=True)",
                 ]
-                context: dict[str, Any] = {
+                context = {
                     "action": "find_card",
                     "url_path": effective_url_path,
                     "entity_id": entity_id,
@@ -1487,7 +2004,12 @@ class DashboardConfigTools:
         include_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
     ) -> dict[str, Any]:
-        """``list_only=True`` mode: list all storage-mode dashboards."""
+        """``list_only=True`` mode: list every dashboard's metadata row.
+
+        Storage and YAML dashboards alike (metadata only — no bodies — so a
+        YAML dashboard's resolved ``!secret`` never surfaces here), matching the
+        legacy ``lovelace/dashboards/list`` row set.
+        """
         dashboards = await fetch_dashboards_list(self._client) or []
         list_result: dict[str, Any] = {
             "success": True,
@@ -1595,8 +2117,16 @@ class DashboardConfigTools:
         heading: str | None,
         include_config: bool,
         search_resolved_from: str | None,
+        config_suppressed_note: str | None = None,
     ) -> dict[str, Any]:
-        """Run the card search over ``config`` and assemble the response dict."""
+        """Run the card search over ``config`` and assemble the response dict.
+
+        ``config_suppressed_note`` (set by the caller when the target dashboard is
+        not provably storage-mode) forces the matched-card config bodies to be
+        withheld even with ``include_config=True`` and surfaces the note as a
+        warning — a YAML dashboard's card config may carry HA-resolved ``!secret``
+        plaintext. Match LOCATIONS are always reported.
+        """
         truncation: list[str] = []
         uncovered: list[str] = []
         matches = _find_cards_in_config(
@@ -1608,7 +2138,8 @@ class DashboardConfigTools:
             uncovered=uncovered,
         )
 
-        if not include_config:
+        surface_config = include_config and config_suppressed_note is None
+        if not surface_config:
             for match in matches:
                 del match["card_config"]
 
@@ -1624,6 +2155,8 @@ class DashboardConfigTools:
         # longer suppresses the warning, and a true negative over a
         # fully-coverable dashboard no longer cries wolf.
         warnings: list[str] = []
+        if config_suppressed_note is not None and matches:
+            warnings.append(config_suppressed_note)
         if truncation:
             warnings.append(
                 f"Search stopped at the nesting depth bound "
@@ -1699,6 +2232,20 @@ class DashboardConfigTools:
         # reports the resolved identifier (see ha_config_get_dashboard's
         # except block).
         resolved_url_path[0] = url_path
+        # Fail-closed storage guard (mirrors the cross-dashboard MODE 4 walk):
+        # matched-card config bodies are surfaced ONLY for a dashboard PROVABLY
+        # tagged mode="storage". A YAML dashboard — or one whose mode we cannot
+        # confirm (untagged, or the default dashboard, which the list omits) —
+        # may carry HA-resolved !secret plaintext in its cards, so we withhold
+        # the bodies and say so. Only paid when the caller asked for bodies.
+        config_suppressed_note: str | None = None
+        if include_config and not await self._dashboard_is_storage_mode(url_path):
+            config_suppressed_note = (
+                "Matched-card config bodies were withheld: dashboard "
+                f"{url_path!r} is not provably storage-mode (a YAML dashboard's "
+                "config can carry resolved !secret values). Match locations are "
+                "reported; the config was not surfaced."
+            )
         search_result = self._build_search_result(
             config,
             url_path,
@@ -1707,6 +2254,7 @@ class DashboardConfigTools:
             heading=heading,
             include_config=include_config,
             search_resolved_from=search_resolved_from,
+            config_suppressed_note=config_suppressed_note,
         )
         _note_screenshot_ignored(
             search_result,
@@ -1715,6 +2263,151 @@ class DashboardConfigTools:
             mode="search",
         )
         return search_result
+
+    async def _get_dashboard_search_all_mode(self, query: str | None) -> dict[str, Any]:
+        """mode='search': find which storage dashboards contain ``query``.
+
+        The component ``search`` walks every storage dashboard in one in-process
+        frame; a component-less install runs the SAME walk server-side over each
+        dashboard's config (one WS get per storage dashboard). Both paths return
+        byte-identical match records.
+        """
+        if not query or not query.strip():
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "query is required for mode='search'",
+                    suggestions=[
+                        "Pass query='light.kitchen' to find dashboards using that entity",
+                        "Use list_only=True to list dashboards, or url_path=... to get one",
+                    ],
+                    context={"action": "search_all"},
+                )
+            )
+
+        matches, truncated = await self._search_all_dashboards(query)
+        result: dict[str, Any] = {
+            "success": True,
+            "action": "search_all",
+            "query": query,
+            "matches": matches,
+            "match_count": len(matches),
+            "truncated": truncated,
+            "hint": (
+                "Each match names the dashboard (url_path), view, and card path. "
+                "Use ha_config_get_dashboard(url_path=..., entity_id=...) for the "
+                "python_path to edit a specific card."
+                if matches
+                else "No storage-mode dashboard card contains that query."
+            ),
+        }
+        if truncated:
+            result["warnings"] = [
+                f"Results capped at {_SEARCH_ALL_MATCH_CAP} matches; "
+                "refine the query for a complete list."
+            ]
+        return result
+
+    async def _search_all_dashboards(
+        self, query: str
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Cross-dashboard matches for ``query`` — component frame or legacy walk.
+
+        Returns ``(matches, truncated)``. When the component serves ``search`` the
+        matches come straight from its one in-process frame; otherwise the storage
+        dashboards are listed, each config fetched, and the SAME walk run
+        server-side (parity pinned by test_component_dashboards_contract.py).
+        """
+        result = await _dashboards_via_component(self._client, "search", query=query)
+        if result is not None:
+            matches = result.get("matches")
+            return (
+                matches if isinstance(matches, list) else [],
+                bool(result.get("truncated")),
+            )
+
+        docs = await self._collect_legacy_search_docs()
+        # Mirror the component's query normalization exactly (parity).
+        query_lower = (query or "").strip().lower()
+        return _walk_all_dashboard_docs(docs, query_lower)
+
+    async def _collect_legacy_search_docs(self) -> list[dict[str, Any]]:
+        """Storage-dashboard ``{url_path, title, config}`` docs for the legacy walk.
+
+        One ``lovelace/config`` read per STORAGE dashboard from
+        ``fetch_dashboards_list``. A body is read ONLY when its row is EXPLICITLY
+        tagged ``mode == "storage"`` — fail-closed. HA resolves ``!secret`` when it
+        loads a YAML Lovelace config, so reading a YAML (or unknown-mode) body could
+        leak resolved secrets into a match. Core's own schemas stamp ``mode`` on
+        both kinds of row (storage items default it; YAML entries require it), so
+        the legacy walk searches storage dashboards normally; the fail-closed check
+        additionally skips the rare UNTAGGED row (a storage item persisted before
+        core's mode default existed) rather than read a body it can't prove is
+        storage. A per-dashboard read failure is skipped (fail-soft, mirroring the
+        component's per-dashboard skip) so one broken dashboard doesn't fail the
+        whole search.
+        """
+        rows = await fetch_dashboards_list(self._client) or []
+        docs: list[dict[str, Any]] = []
+        for row in rows:
+            url_path = row.get("url_path")
+            if not url_path:
+                continue
+            if row.get("mode") != _DASHBOARD_STORAGE_MODE:
+                # Fail-closed: only an explicit storage tag is safe to read. A YAML
+                # body may carry resolved !secret plaintext, and an untagged row
+                # (every row on a component-less install) is not provably storage.
+                continue
+            config = await self._fetch_dashboard_config_fail_soft(url_path)
+            if config is None:
+                continue
+            title = config.get("title")
+            docs.append(
+                {
+                    "url_path": url_path,
+                    "title": str(title) if title is not None else None,
+                    "config": config,
+                }
+            )
+        return docs
+
+    async def _dashboard_is_storage_mode(self, url_path: str | None) -> bool:
+        """True only when ``url_path`` is a dashboard PROVABLY tagged mode="storage".
+
+        Fail-closed, mirroring the cross-dashboard (MODE 4) walk's storage check:
+        the dashboards-list row for ``url_path`` must carry an explicit
+        ``mode == "storage"``. A YAML row, an untagged row, or a dashboard absent
+        from the list (the default dashboard is never listed) all return ``False``
+        — its config body may carry HA-resolved ``!secret`` plaintext and must not
+        be surfaced. A malformed/unavailable list also fails closed.
+        """
+        rows = await fetch_dashboards_list(self._client) or []
+        for row in rows:
+            if row.get("url_path") == url_path:
+                return row.get("mode") == _DASHBOARD_STORAGE_MODE
+        return False
+
+    async def _fetch_dashboard_config_fail_soft(
+        self, url_path: str
+    ) -> dict[str, Any] | None:
+        """One dashboard's config, or ``None`` when it is unreadable (fail-soft).
+
+        A ``ToolError`` (dashboard missing / config invalid) is swallowed so the
+        cross-dashboard walk skips that dashboard; a transport error propagates to
+        the tool's outer handler.
+        """
+        try:
+            config, _config_hash = await _get_dashboard_config_internal(
+                self._client, url_path
+            )
+        except ToolError as exc:
+            logger.debug(
+                "Cross-dashboard search skipping unreadable dashboard %r: %r",
+                url_path,
+                exc,
+            )
+            return None
+        return config
 
     async def _get_dashboard_get_mode(
         self,
@@ -1725,7 +2418,41 @@ class DashboardConfigTools:
         include_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
     ) -> "dict[str, Any] | ToolResult":
-        """Get mode: return the full Lovelace config for a single dashboard."""
+        """Get mode: return the full Lovelace config for a single dashboard.
+
+        The component ``get`` serves this from one in-process, freshness-safe read
+        (the default dashboard included — the tool's ``"default"``/omitted alias
+        maps to the component's ``None`` url_path); ``None`` falls back to the
+        unchanged legacy ``lovelace/config`` read, which also covers YAML bodies
+        (never served in-process) and internal-id lazy-resolve.
+
+        ``force_reload`` bypasses the component fast path entirely: the component
+        ``get`` carries no force semantic, so a forced read must go straight to the
+        legacy ``lovelace/config`` request below (which threads ``force=True``) to
+        actually bust HA's Lovelace cache. (The optimistic-lock re-read in
+        ``_verify_config_unchanged`` deliberately keeps the no-force component read
+        — it wants the same in-memory object core serves.)
+        """
+        component_url_path = (
+            None if (not url_path or url_path == "default") else url_path
+        )
+        component_config = (
+            None
+            if force_reload
+            else await _component_dashboard_config(self._client, component_url_path)
+        )
+        if component_config is not None:
+            # The component matches an exact url_path (or the default), so no
+            # lazy-resolve is possible: original == final, resolved_from unset.
+            resolved_url_path[0] = url_path
+            return await self._finalize_get_result(
+                url_path,
+                component_config,
+                original_url_path=url_path,
+                include_screenshot=include_screenshot,
+                screenshot_options=screenshot_options,
+            )
+
         data: dict[str, Any] = {"type": "lovelace/config", "force": force_reload}
         # Handle "default" as special value for default dashboard
         if url_path and url_path != "default":
@@ -1768,6 +2495,31 @@ class DashboardConfigTools:
         # Extract config from WebSocket response
         config = response.get("result") if isinstance(response, dict) else response
 
+        return await self._finalize_get_result(
+            url_path,
+            config,
+            original_url_path=original_url_path,
+            include_screenshot=include_screenshot,
+            screenshot_options=screenshot_options,
+        )
+
+    async def _finalize_get_result(
+        self,
+        url_path: str | None,
+        config: Any,
+        *,
+        original_url_path: str | None,
+        include_screenshot: bool,
+        screenshot_options: _DashboardScreenshotOptions,
+    ) -> "dict[str, Any] | ToolResult":
+        """Shape + return the get-mode response for an already-fetched config.
+
+        Shared by the component fast path and the legacy path so both produce a
+        byte-identical envelope: ``config_hash`` (optimistic locking), size,
+        render paths, ``resolved_from`` (when the legacy lazy resolver
+        canonicalised an internal id), the large-config disclosure hint, and an
+        optional screenshot.
+        """
         # Compute hash for optimistic locking in subsequent operations
         config_hash = compute_config_hash(config) if isinstance(config, dict) else None
 

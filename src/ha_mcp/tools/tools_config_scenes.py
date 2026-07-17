@@ -30,6 +30,7 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import with_auto_backup
+from .component_config_reads import fetch_entity_lookup_via_component
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -74,7 +75,18 @@ class ConfigSceneTools:
     # in suite runs.
     _RESOLVE_RETRY_DELAY = 0.2
 
-    async def _resolve_scene_entity_id(self, scene_id: str) -> str:
+    @staticmethod
+    def _first_scene_entity_id(matches: list[dict[str, Any]]) -> str | None:
+        """First ``scene.``-domain ``entity_id`` in a component match list, else None."""
+        for match in matches:
+            entity_id = match.get("entity_id") or ""
+            if entity_id.startswith("scene."):
+                return entity_id
+        return None
+
+    async def _resolve_scene_entity_id(
+        self, scene_id: str, *, allow_component: bool = False
+    ) -> str:
         """Resolve a scene's actual entity_id via the entity registry.
 
         Unlike scripts (where ``entity_id == 'script.<storage_key>'``), HA
@@ -97,12 +109,61 @@ class ConfigSceneTools:
         callsites see the real entity_id instead of trailing the lookup
         with a phantom (issue #1168 R3 blocker 1).
 
+        When ``allow_component`` (set/remove/post-write call sites only — a
+        config-get must never route through the component, see
+        ``component_config_reads`` and ``TestConfigGetSeam``) AND the component
+        advertises ``entity_lookup``, one in-process
+        ``entity_lookup(unique_id=scene_id, domain="scene")`` frame replaces the
+        whole-registry dump. A hit returns immediately — the in-process read
+        needs no settle. But an EMPTY result right after an upsert can be HA's
+        async entity-registration lag (#1168) rather than a true absence: the
+        in-process read removes the network latency, not the registration lag
+        (the upsert and this resolve are separate round-trips). So an empty
+        result is rechecked ONCE after ``_RESOLVE_RETRY_DELAY`` — the same delay
+        the legacy path uses — before the naive ``scene.{scene_id}`` fallback. If the recheck answers
+        AUTHORITATIVELY (component still available) its verdict is final: a hit is
+        returned, a genuine empty falls to the naive guess. But if the recheck
+        itself returns ``None`` (component went unavailable / errored / downgraded
+        mid-retry) the first empty read is NOT authoritative, so resolution drops
+        to the legacy list+retry path below (its own retry absorbs the same lag)
+        rather than trusting the empty and guessing.
+        The component unavailable / errored ⇒ the legacy list+retry path below
+        runs unchanged; that is the FIRST-read case (issue #1813 Phase 2).
+
         Accepts a bare ``scene_id`` ("movie_night") or a fully-qualified
         ``entity_id`` ("scene.movie_night") — the leading ``scene.`` is
         stripped so callers don't accidentally produce ``scene.scene.movie_night``
         on fallback. Mirrors ``rest_client.resolve_scene_id`` ergonomics.
         """
         scene_id = scene_id.removeprefix("scene.")
+        if allow_component:
+            matches = await fetch_entity_lookup_via_component(
+                self._client, scene_id, domain="scene"
+            )
+            if matches is not None:
+                # Component answered authoritatively. A hit returns at once — the
+                # in-process registry read needs no settle. An EMPTY result right
+                # after an upsert can be HA's async entity-registration lag
+                # (#1168), not a true absence, so recheck ONCE after the same
+                # short delay the legacy path uses before the naive fallback.
+                entity_id = self._first_scene_entity_id(matches)
+                if entity_id is not None:
+                    return entity_id
+                await asyncio.sleep(self._RESOLVE_RETRY_DELAY)
+                recheck = await fetch_entity_lookup_via_component(
+                    self._client, scene_id, domain="scene"
+                )
+                if recheck is not None:
+                    # Authoritative recheck: a hit is returned; a genuine empty
+                    # (still absent after the settle) falls to the naive guess.
+                    entity_id = self._first_scene_entity_id(recheck)
+                    if entity_id is not None:
+                        return entity_id
+                    return f"scene.{scene_id}"
+                # recheck is None: the component went unavailable/errored/downgraded
+                # mid-retry, so the first empty read is NOT authoritative. Fall
+                # through to the legacy list+retry path below (its own retry
+                # absorbs the same registration lag) instead of guessing.
         retried = False
         for attempt in range(2):
             try:
@@ -781,7 +842,9 @@ class ConfigSceneTools:
                 # post-upsert finalisation the full-config branch runs. Without
                 # these, ``wait`` and ``category`` are silently dropped on
                 # python_transform calls.
-                entity_id = await self._resolve_scene_entity_id(resolved_id)
+                entity_id = await self._resolve_scene_entity_id(
+                    resolved_id, allow_component=True
+                )
                 if wait:
                     try:
                         registered = await wait_for_entity_registered(
@@ -905,7 +968,9 @@ class ConfigSceneTools:
             # Resolve actual entity_id via registry — HA derives scene
             # entity_ids from the 'name' slug, not the scene_id storage key,
             # so f"scene.{scene_id}" is wrong whenever a name is supplied.
-            entity_id = await self._resolve_scene_entity_id(resolved_id)
+            entity_id = await self._resolve_scene_entity_id(
+                resolved_id, allow_component=True
+            )
 
             # Wait for scene to be queryable
             if wait:
@@ -1045,7 +1110,9 @@ class ConfigSceneTools:
             # entry is gone, the unique_id lookup can no longer find it.
             # Falls back to f"scene.{resolved_id}" if the registry has no
             # matching unique_id (e.g. scene_id-as-entity-id slug case).
-            entity_id = await self._resolve_scene_entity_id(resolved_id)
+            entity_id = await self._resolve_scene_entity_id(
+                resolved_id, allow_component=True
+            )
 
             # ``resolved_id`` is already the storage key (resolved above), so
             # skip the redundant re-resolve inside delete_scene_config.

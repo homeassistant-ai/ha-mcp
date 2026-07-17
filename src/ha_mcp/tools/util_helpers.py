@@ -25,6 +25,7 @@ from ..client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from .component_api import get_component_caps
 
 logger = logging.getLogger(__name__)
 
@@ -654,11 +655,31 @@ _TIMESTAMP_METADATA_FIELDS = {
 
 
 async def _fetch_ha_timezone(client: Any) -> tuple[str, bool]:
-    """Fetch ``time_zone`` from ``/api/config``, falling back to UTC on failure.
+    """Fetch the HA timezone, preferring the ``ha_mcp_tools`` component's cached
+    ``info`` handshake over a fresh ``/api/config`` REST call.
 
-    Returns ``(ha_timezone, fetch_failed)``. ``fetch_failed`` is ``True`` when
-    the config fetch raised, in which case *ha_timezone* is always ``"UTC"``.
+    When ``get_component_caps(client)`` reports a non-empty ``timezone`` (an
+    additive ``info`` field — see ``ComponentCaps.timezone``), return it
+    directly with NO REST call. Otherwise falls back to the legacy
+    ``client.get_config()`` fetch exactly as before — the path taken when the
+    component is absent, predates the ``timezone`` field, or reports it empty.
+
+    Staleness trade-off: the component route reads a cached, process-lifetime
+    probe, so an HA timezone change mid-session keeps serving the value from
+    the last successful negotiation (positive cache entries do not expire on a
+    timer — only ``invalidate_caps`` or a process restart forces a re-probe)
+    until then. The #1813 Phase 2 audit rated this Low risk and acceptable —
+    instance timezone changes are rare — versus the legacy path, which always
+    re-fetches fresh on every call.
+
+    Returns ``(ha_timezone, fetch_failed)``. ``fetch_failed`` is ``True`` only
+    when the legacy REST fetch raised, in which case *ha_timezone* is always
+    ``"UTC"``.
     """
+    caps = await get_component_caps(client)
+    if caps is not None and caps.timezone:
+        return caps.timezone, False
+
     try:
         config = await client.get_config()
         return config.get("time_zone", "UTC"), False
@@ -726,10 +747,12 @@ async def add_timezone_metadata(
 ) -> dict[str, Any]:
     """Add Home Assistant timezone to tool responses and convert timestamps to local time.
 
-    Fetches ``time_zone`` from ``/api/config``, converts every
-    ``last_changed``, ``last_updated``, ``last_reported``, ``when``, and
-    ``last_triggered`` field found anywhere in *data* from UTC to that local
-    timezone, then wraps the result in ``{"data": ..., "metadata": {...}}``.
+    Resolves the Home Assistant time zone via ``_fetch_ha_timezone`` (which
+    prefers the ``ha_mcp_tools`` component's cached handshake and falls back to
+    ``/api/config``), converts every ``last_changed``, ``last_updated``,
+    ``last_reported``, ``when``, and ``last_triggered`` field found anywhere in
+    *data* from UTC to that local timezone, then wraps the result in
+    ``{"data": ..., "metadata": {...}}``.
 
     Pass ``include_metadata=False`` to return *data* unchanged — the
     ``metadata`` wrapper is then omitted entirely.

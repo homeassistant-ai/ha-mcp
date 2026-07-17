@@ -16,10 +16,20 @@ from pydantic import Field
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
+from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_config_entry,
@@ -48,6 +58,13 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The ``ha_mcp_tools`` component command that serves config entries (identity +
+# already-materialized ``options`` + ``subentries``) from HA's live registry in
+# one in-process frame, replacing the REST list-all + OptionsFlow start/abort
+# dance + subentries WS call. Module-local constant per the component-routing
+# idiom (see ``component_devices.WS_DEVICE_GET``).
+WS_CONFIG_ENTRIES = "ha_mcp_tools/config_entries"
 
 
 FlowLookupReason = Literal[
@@ -215,6 +232,127 @@ async def fetch_entry_options_with_status(
                     f"Failed to abort options flow {flow_id}: "
                     f"{type(abort_err).__name__}: {abort_err}"
                 )
+
+
+async def _fetch_entries_via_component(
+    client: Any, *, entry_id: str | None = None, domain: str | None = None
+) -> list[dict[str, Any]] | None:
+    """One ``ha_mcp_tools/config_entries`` read; ``None`` ⇒ run the legacy path.
+
+    Returns the component's ``entries`` list — each row in the
+    ``config_entries/get`` shape (identity + status fields plus the entry's
+    already-materialized ``options`` [raw persisted, secret-scrubbed] and its
+    ``subentries`` identity rows) — so a single in-process frame replaces the
+    legacy REST list-all + OptionsFlow start/abort probe + subentries WS call.
+    Pass ``entry_id`` for the single entry (empty list ⇒ no such entry) or
+    ``domain`` to filter the list; neither lists all.
+
+    Consumers: ``ha_get_integration`` (single-entry + list) and radio's
+    ``resolve_entry_id`` (single-instance domain → entry_id) both import this so
+    the domain/entry-scoped read routes through one place.
+
+    ``None`` on capability miss, downgrade (``unknown_command`` → invalidate the
+    cached caps), or command error/timeout (logged) — the caller falls back to
+    its legacy path.
+
+    Per the uniform transport-fallback taxonomy, a connection-establishment
+    failure IS caught here and mapped to ``None`` (legacy fallback), like every
+    component fetch helper. The callers' legacy paths are NOT the shared pooled WS —
+    ``ha_get_integration`` reads pure REST (``get_config_entry`` /
+    ``GET /config/config_entries`` + the REST OptionsFlow probe) and radio's
+    ``resolve_entry_id`` uses the REST client's ``send_websocket_message`` bridge
+    (which never raises) — so a WS outage must not kill the tool when the legacy
+    path can still serve the entry. The catch is broad because
+    ``get_websocket_client()`` raises a plain ``Exception`` (not
+    ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot establish the
+    socket, so a narrow catch would let that escape and kill the tool; routing any
+    non-command component failure back to the legacy fetch is safe here (mirrors
+    ``get_component_caps``' own broad-catch precedent). Otherwise the same caps-gate
+    discipline as ``component_devices.fetch_device_via_component``.
+    """
+    caps = await get_component_caps(client)
+    if not component_supports(caps, "config_entries"):
+        return None
+    kwargs: dict[str, Any] = {}
+    if entry_id is not None:
+        kwargs["entry_id"] = entry_id
+    if domain is not None:
+        kwargs["domain"] = domain
+    try:
+        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        raw = await ws.send_command(WS_CONFIG_ENTRIES, **kwargs)
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+        if is_unknown_command(exc):
+            invalidate_caps(client)
+        else:
+            logger.warning("%s failed; fell back to legacy: %r", WS_CONFIG_ENTRIES, exc)
+        return None
+    except Exception as exc:
+        # DEVIATION (see docstring): the legacy path is pure REST / the REST-client
+        # WS bridge, NOT the shared pooled WS. A pooled-WS drop
+        # (HomeAssistantConnectionError) OR get_websocket_client() raising a plain
+        # Exception when WebSocketManager can't (re)connect must fall back to legacy
+        # rather than kill the tool.
+        logger.warning(
+            "%s connection error; falling back to legacy: %r",
+            WS_CONFIG_ENTRIES,
+            exc,
+        )
+        return None
+    result = raw.get("result")
+    entries = result.get("entries") if isinstance(result, dict) else None
+    if not isinstance(entries, list):
+        logger.debug(
+            "%s returned a malformed result (no 'entries' list); falling back to legacy",
+            WS_CONFIG_ENTRIES,
+        )
+        return None
+    return entries
+
+
+def _split_component_entry_row(
+    row: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Split a component ``config_entries`` row into ``(entry, subentries)``.
+
+    The returned ``entry`` mirrors the legacy REST per-entry shape: the row's
+    identity + status fields and its already-materialized ``options`` (raw
+    persisted, secret-scrubbed), with the nested ``subentries`` list lifted out
+    so callers surface subentries at the top level exactly like the legacy
+    ``include_subentries`` branch — and never leak them onto ``entry`` when
+    subentries were not requested. ``options`` values may be ``"**redacted**"``
+    where the component scrubbed a resolved ``!secret``.
+    """
+    entry = dict(row)
+    subentries = entry.pop("subentries", None)
+    if not isinstance(subentries, list):
+        subentries = []
+    return entry, subentries
+
+
+def _flatten_option_sections(options: dict[str, Any]) -> dict[str, Any]:
+    """Additively surface one level of nested option *sections* at the top level.
+
+    HA's OptionsFlow groups related fields under a *section* key, so a template
+    helper persists e.g. ``{"advanced_options": {"availability": "..."}}``. The
+    legacy OptionsFlow-derived read flattens those sections — exposing
+    ``options["availability"]`` directly — whereas the component serves the RAW
+    persisted mapping with the section nesting intact. To keep the two read paths
+    interchangeable for consumers, copy each nested section's leaf keys up to the
+    top level WITHOUT overwriting an existing top-level key (first section wins on
+    a cross-section collision) and WITHOUT removing the nested original (raw
+    nesting preserved for fidelity). Returns a NEW dict; the input is not mutated.
+    A non-dict is returned unchanged.
+    """
+    if not isinstance(options, dict):
+        return options
+    flattened: dict[str, Any] = dict(options)
+    for value in options.values():
+        if isinstance(value, dict):
+            for leaf_key, leaf_value in value.items():
+                if leaf_key not in flattened:
+                    flattened[leaf_key] = leaf_value
+    return flattened
 
 
 async def _get_entry_id_for_flow_helper(
@@ -587,6 +725,16 @@ class IntegrationTools:
         STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
         'failed_unload', 'migration_error'.
 
+        OPTIONS: ``options`` reflect the entry's persisted values; a field that
+        was never set may be absent (rather than shown at its schema default).
+        Values that match a ``secrets.yaml`` entry are returned as
+        ``"**redacted**"``. Use ``include_schema=True`` to see every editable
+        field and its default/type. Nested option *sections* (e.g. a template
+        helper's ``advanced_options``) are additively flattened one level —
+        each section's leaf keys are copied to the top of ``options`` (mirroring
+        the OptionsFlow-derived read) while the raw nested section is preserved
+        for fidelity, and an existing top-level key is never overwritten.
+
         Each entry carries:
 
         - ``log_level``: the canonical Python logger level name
@@ -733,6 +881,19 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """Fetch a single config entry by ID, optionally including its options schema."""
         try:
+            rows = await _fetch_entries_via_component(self._client, entry_id=entry_id)
+            if rows is not None:
+                return await self._single_entry_from_component(
+                    entry_id,
+                    rows,
+                    include_schema,
+                    include_subentries=include_subentries,
+                    include_subentry_schema=include_subentry_schema,
+                    subentry_type=subentry_type,
+                    subentry_id=subentry_id,
+                    show_advanced_options=show_advanced_options,
+                )
+
             result = await self._client.get_config_entry(entry_id)
             entry_domain = result.get("domain") if isinstance(result, dict) else None
 
@@ -805,6 +966,80 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+
+    async def _single_entry_from_component(
+        self,
+        entry_id: str,
+        rows: list[dict[str, Any]],
+        include_schema: bool | None,
+        *,
+        include_subentries: bool,
+        include_subentry_schema: bool,
+        subentry_type: str | None,
+        subentry_id: str | None,
+        show_advanced_options: bool,
+    ) -> dict[str, Any]:
+        """Build the single-entry response from a component ``config_entries`` read.
+
+        The component row already carries the entry identity, its raw persisted
+        ``options`` (secret-scrubbed), and its ``subentries`` identity rows — so
+        this one read replaces the legacy REST list-all + OptionsFlow
+        start/abort probe + subentries WS call. The options schema (and the
+        subentry schema) still come from the legacy live flow: a schema only
+        exists inside an open flow, which the component cannot serialize. When a
+        schema is requested the component's ``options`` are kept
+        (``populate_options=False``) rather than overwritten by the
+        OptionsFlow-derived suggested-value shape.
+
+        ``log_level`` / ``log_level_raw`` come from ``get_logger_levels`` on both
+        paths (the component does not carry logger overrides).
+        """
+        if not rows:
+            # ``async_get_entry(entry_id)`` found nothing — an authoritative
+            # not-found, mapped to the same 404 the legacy REST get raises.
+            raise HomeAssistantAPIError(
+                f"Config entry not found: {entry_id}", status_code=404
+            )
+        entry, subentries = _split_component_entry_row(rows[0])
+        entry.setdefault("options", {})
+        # Mirror the OptionsFlow-derived read: additively flatten one level of
+        # nested option sections (raw nesting preserved). See
+        # `_flatten_option_sections`.
+        entry["options"] = _flatten_option_sections(entry["options"])
+
+        resp: dict[str, Any] = {
+            "success": True,
+            "entry_id": entry_id,
+            "entry": entry,
+        }
+
+        # Surface the effective Python logger level for this integration
+        # (unconditionally, for symmetry with the legacy path and _format_entry).
+        logger_levels = await get_logger_levels(self._client)
+        level_info = logger_levels.get(entry.get("domain") or "")
+        resp["log_level"] = level_info["name"] if level_info else "DEFAULT"
+        resp["log_level_raw"] = level_info["raw"] if level_info else None
+
+        # Options schema only exists in a live options flow — read it from the
+        # legacy flow, but keep the component-provided options (populate_options
+        # False) so the raw persisted values win over the flow-derived shape.
+        if include_schema and entry.get("supports_options"):
+            await self._fetch_options_schema(entry_id, resp, populate_options=False)
+
+        if include_subentries:
+            resp["subentry_count"] = len(subentries)
+            resp["subentries"] = subentries
+
+        if include_subentry_schema:
+            await self._fetch_config_subentry_schema(
+                entry_id,
+                resp,
+                subentry_type=subentry_type,
+                subentry_id=subentry_id,
+                show_advanced_options=show_advanced_options,
+            )
+
+        return resp
 
     async def _attach_knx_project(self, resp: dict[str, Any], entry_id: str) -> None:
         """Attach the parsed KNX ETS project to a single-entry response.
@@ -963,12 +1198,17 @@ class IntegrationTools:
         """Class-method alias for :func:`options_from_form_flow`."""
         return options_from_form_flow(flow)
 
-    async def _fetch_options_schema(self, entry_id: str, resp: dict[str, Any]) -> None:
+    async def _fetch_options_schema(
+        self, entry_id: str, resp: dict[str, Any], *, populate_options: bool = True
+    ) -> None:
         """Start an options flow to read the schema, then abort it.
 
         Also populates ``resp["entry"]["options"]`` for form-type flows from
         the same flow result so callers requesting both schema and options
-        don't pay for two round-trips.
+        don't pay for two round-trips. Pass ``populate_options=False`` on the
+        component-served path, where ``options`` already carry the raw persisted
+        values and must NOT be overwritten by the OptionsFlow-derived
+        suggested-value shape.
         """
         flow_id = None
         try:
@@ -982,7 +1222,7 @@ class IntegrationTools:
                     "step_id": flow_result.get("step_id"),
                     "data_schema": flow_result.get("data_schema", []),
                 }
-                if entry is not None:
+                if entry is not None and populate_options:
                     entry["options"] = self._options_from_form_flow(flow_result)
             elif flow_type == "menu":
                 resp["options_schema"] = {
@@ -1021,6 +1261,17 @@ class IntegrationTools:
         offset_int: int,
     ) -> dict[str, Any]:
         """List config entries with optional domain/query filtering and pagination."""
+        # Component fast path: one in-process read (domain filtered server-side,
+        # options materialized on each row) replaces the REST list + per-entry
+        # OptionsFlow probes. Normalize the domain to HA's canonical lowercase so
+        # the component's exact-match filter mirrors the legacy client-side one.
+        domain_norm = domain.strip().lower() if domain else None
+        rows = await _fetch_entries_via_component(self._client, domain=domain_norm)
+        if rows is not None:
+            return await self._list_entries_from_component(
+                rows, domain, query, include_opts, exact_match, limit_int, offset_int
+            )
+
         # Use REST API endpoint for config entries
         response = await self._client._request("GET", "/config/config_entries/entry")
 
@@ -1076,6 +1327,69 @@ class IntegrationTools:
                     if not probe_ok:
                         probe_failures.append(entry["entry_id"])
 
+        return self._finalize_entry_list(
+            formatted_entries,
+            domain,
+            query,
+            exact_match,
+            limit_int,
+            offset_int,
+            probe_failures,
+        )
+
+    async def _list_entries_from_component(
+        self,
+        rows: list[dict[str, Any]],
+        domain: str | None,
+        query: str | None,
+        include_opts: bool | None,
+        exact_match: bool | None,
+        limit_int: int,
+        offset_int: int,
+    ) -> dict[str, Any]:
+        """List config entries from a component ``config_entries`` read.
+
+        The component already filtered by ``domain`` (server-side) and
+        materialized each entry's ``options`` on the row, so there is no
+        per-entry OptionsFlow probe and thus no probe-failure warnings.
+        ``options`` are raw persisted values (a field never set may be absent),
+        may contain ``"**redacted**"`` markers, and have nested option sections
+        additively flattened one level (raw nesting preserved) — see
+        ``ha_get_integration``'s OPTIONS note and ``_flatten_option_sections``.
+        """
+        logger_levels = await get_logger_levels(self._client)
+        formatted_entries = [
+            self._format_entry(row, include_opts, logger_levels) for row in rows
+        ]
+        # Mirror the OptionsFlow-derived read: additively flatten one level of
+        # nested option sections on each row (raw nesting preserved). Only the
+        # include_opts path carries an ``options`` key. See
+        # `_flatten_option_sections`.
+        if include_opts:
+            for formatted in formatted_entries:
+                formatted["options"] = _flatten_option_sections(
+                    formatted.get("options", {})
+                )
+        return self._finalize_entry_list(
+            formatted_entries, domain, query, exact_match, limit_int, offset_int, []
+        )
+
+    def _finalize_entry_list(
+        self,
+        formatted_entries: list[dict[str, Any]],
+        domain: str | None,
+        query: str | None,
+        exact_match: bool | None,
+        limit_int: int,
+        offset_int: int,
+        probe_failures: list[str],
+    ) -> dict[str, Any]:
+        """Query-filter, summarize, and paginate formatted entries.
+
+        Shared tail of the component-served and legacy list paths so their
+        response shapes stay identical. ``probe_failures`` is always empty on
+        the component path (options ride the same read — no per-entry probe).
+        """
         # Apply search filter if query provided
         if query and query.strip():
             formatted_entries = self._filter_by_query(
@@ -2061,64 +2375,95 @@ class IntegrationTools:
         )
 
         try:
-            # Resolve unique_id via the entity registry, with a retry loop
-            # for transient registry failures.
+            # Resolve the helper's unique_id from the entity registry. When the
+            # component advertises registry_lookup, ONE in-process read replaces
+            # the 3-attempt exponential-backoff loop. That loop absorbed the
+            # registry-registration LAG between a helper's creation and its entity
+            # landing in the registry index (not a WS-timing race — the legacy
+            # read hits the same live registry over the same socket); the
+            # single read is equally subject to that lag, but on this delete path
+            # a stale/missing resolve degrades to the direct-id fallback below
+            # rather than a wrong delete. On capability miss / component error the
+            # legacy retry loop runs unchanged.
             unique_id = None
             registry_result: dict[str, Any] | None = None
             max_retries = 3
 
-            for attempt in range(max_retries):
-                logger.info(
-                    f"Getting entity registry for: {entity_id} "
-                    f"(attempt {attempt + 1}/{max_retries})"
-                )
+            component = await resolve_entities_via_component(client, [entity_id])
+            if component is not None:
+                found = component.get("entities") or []
+                if found:
+                    # Shape a config/entity_registry/get-style ack so the
+                    # exhausted-fallback err_detail below reads registry_result
+                    # uniformly across both the component and legacy paths.
+                    registry_result = {"success": True, "result": found[0]}
+                    unique_id = found[0].get("unique_id")
+                    if unique_id:
+                        logger.info(f"Found unique_id: {unique_id} for {entity_id}")
+                else:
+                    registry_result = {
+                        "success": False,
+                        "error": "not found in entity registry",
+                    }
+            else:
+                for attempt in range(max_retries):
+                    logger.info(
+                        f"Getting entity registry for: {entity_id} "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
 
-                # State check is informational only — disabled entities are
-                # missing from the state machine but resolved via the registry
-                # below (issue #1057). Kept as a debug breadcrumb rather than
-                # removed; full removal is option 3.2 in #1057, deferred to a
-                # separate PR for minimal blast radius here.
-                try:
-                    state_check = await client.get_entity_state(entity_id)
-                    if not state_check:
-                        logger.debug(
-                            f"Entity {entity_id} not in state; "
-                            "proceeding to registry lookup"
-                        )
-                except HomeAssistantAPIError as e:
-                    # State check is best-effort here; an APIError (e.g. 404)
-                    # is informational. Auth/connection errors must propagate
-                    # so they're not re-reported as ENTITY_NOT_FOUND below.
-                    logger.debug(f"State check failed for {entity_id}: {e}")
+                    # State check is informational only — disabled entities are
+                    # missing from the state machine but resolved via the registry
+                    # below (issue #1057). Kept as a debug breadcrumb rather than
+                    # removed; full removal is option 3.2 in #1057, deferred to a
+                    # separate PR for minimal blast radius here.
+                    try:
+                        state_check = await client.get_entity_state(entity_id)
+                        if not state_check:
+                            logger.debug(
+                                f"Entity {entity_id} not in state; "
+                                "proceeding to registry lookup"
+                            )
+                    except HomeAssistantAPIError as e:
+                        # State check is best-effort here; an APIError (e.g. 404)
+                        # is informational. Auth/connection errors must propagate
+                        # so they're not re-reported as ENTITY_NOT_FOUND below.
+                        logger.debug(f"State check failed for {entity_id}: {e}")
 
-                # Registry lookup
-                registry_msg: dict[str, Any] = {
-                    "type": "config/entity_registry/get",
-                    "entity_id": entity_id,
-                }
-                try:
-                    registry_result = await client.send_websocket_message(registry_msg)
-                    if (registry_result or {}).get("success"):
-                        entity_entry = (registry_result or {}).get("result") or {}
-                        unique_id = entity_entry.get("unique_id")
-                        if unique_id:
-                            logger.info(f"Found unique_id: {unique_id} for {entity_id}")
-                            break
-                    if attempt < max_retries - 1:
-                        wait_time = 0.5 * (2**attempt)
-                        logger.debug(
-                            f"Registry lookup failed for {entity_id}, "
-                            f"waiting {wait_time}s before retry..."
+                    # Registry lookup
+                    registry_msg: dict[str, Any] = {
+                        "type": "config/entity_registry/get",
+                        "entity_id": entity_id,
+                    }
+                    try:
+                        registry_result = await client.send_websocket_message(
+                            registry_msg
                         )
-                        await asyncio.sleep(wait_time)
-                except HomeAssistantAPIError as e:
-                    # APIError (e.g. 404) is informational and worth a retry.
-                    # Auth/connection errors must propagate so they're not
-                    # re-reported as ENTITY_NOT_FOUND in the fallback below.
-                    logger.warning(f"Registry lookup attempt {attempt + 1} failed: {e}")
-                    if attempt < max_retries - 1:
-                        wait_time = 0.5 * (2**attempt)
-                        await asyncio.sleep(wait_time)
+                        if (registry_result or {}).get("success"):
+                            entity_entry = (registry_result or {}).get("result") or {}
+                            unique_id = entity_entry.get("unique_id")
+                            if unique_id:
+                                logger.info(
+                                    f"Found unique_id: {unique_id} for {entity_id}"
+                                )
+                                break
+                        if attempt < max_retries - 1:
+                            wait_time = 0.5 * (2**attempt)
+                            logger.debug(
+                                f"Registry lookup failed for {entity_id}, "
+                                f"waiting {wait_time}s before retry..."
+                            )
+                            await asyncio.sleep(wait_time)
+                    except HomeAssistantAPIError as e:
+                        # APIError (e.g. 404) is informational and worth a retry.
+                        # Auth/connection errors must propagate so they're not
+                        # re-reported as ENTITY_NOT_FOUND in the fallback below.
+                        logger.warning(
+                            f"Registry lookup attempt {attempt + 1} failed: {e}"
+                        )
+                        if attempt < max_retries - 1:
+                            wait_time = 0.5 * (2**attempt)
+                            await asyncio.sleep(wait_time)
 
             # Fallback strategy 1: direct-ID delete if unique_id not found
             if not unique_id:
@@ -2272,13 +2617,23 @@ class IntegrationTools:
                     if registry_result
                     else "No registry response"
                 )
+                # The component path resolves via ONE authoritative in-process
+                # lookup (no retry loop), so the detail text must not claim
+                # "3 attempts" there. The legacy branch's wording is unchanged.
+                if component is not None:
+                    not_found_detail = (
+                        f"Component registry lookup found no unique_id for "
+                        f"{entity_id}: {err_detail}"
+                    )
+                else:
+                    not_found_detail = (
+                        f"Helper not found in entity registry after "
+                        f"{max_retries} attempts: {err_detail}"
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.ENTITY_NOT_FOUND,
-                        (
-                            f"Helper not found in entity registry after "
-                            f"{max_retries} attempts: {err_detail}"
-                        ),
+                        not_found_detail,
                         suggestions=[
                             "Helper may not be properly registered or was "
                             "already deleted. Use ha_search() to "

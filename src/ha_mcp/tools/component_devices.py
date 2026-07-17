@@ -71,9 +71,12 @@ async def fetch_device_via_component(
     unavailable, fall back"). Falls back **silently**, mirroring
     ``ha_get_state``: the legacy path returns the byte-identical device either way
     and the ``log.warning`` preserves operator visibility. A
-    ``HomeAssistantConnectionError`` (WS down) is not caught here, so it
-    propagates to the caller's own error handling — the legacy path shares the
-    same socket and would fail identically.
+    ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain ``Exception``
+    ``get_websocket_client()`` raises on a failed (re)connect is caught here and
+    mapped to ``None``: the consumers' legacy paths ride the swallowing
+    ``send_websocket_message`` bridge (registry tools) or a dedicated one-shot WS
+    client (the auto-backup capture) — NOT this pooled socket — so a transport
+    failure must fall back rather than block a tool / a wrapped write.
 
     With ``include_entities`` the payload also carries a sibling ``entities`` list
     (the device's ``config/entity_registry/list``-shaped rows), so a single-device
@@ -96,8 +99,21 @@ async def fetch_device_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_DEVICE_GET, exc)
         return None
+    except Exception as exc:
+        # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
+        # get_websocket_client() raises when WebSocketManager can't (re)connect.
+        # The legacy paths ride the swallowing send_websocket_message bridge / a
+        # dedicated capture socket, not this pooled one, so fall back to legacy.
+        logger.warning(
+            "%s connection error; falling back to legacy: %r", WS_DEVICE_GET, exc
+        )
+        return None
     result = raw.get("result")
     if not isinstance(result, dict) or "device" not in result:
+        logger.debug(
+            "%s returned a malformed result (missing 'device' key); falling back to legacy",
+            WS_DEVICE_GET,
+        )
         return None
     return result
 
@@ -123,7 +139,14 @@ async def fetch_device_entities_via_component(
     if result is None:
         return None
     entities = result.get("entities")
-    return entities if isinstance(entities, list) else None
+    if not isinstance(entities, list):
+        logger.debug(
+            "%s served the device but no 'entities' list (additive join absent); "
+            "falling back to legacy entity_registry/list",
+            WS_DEVICE_GET,
+        )
+        return None
+    return entities
 
 
 async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
@@ -132,8 +155,9 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
     Returns the component's ``{"devices": [<raw dict>, ...]}`` payload (each a raw
     ``DeviceEntry.dict_repr``, the in-process equivalent of
     ``config/device_registry/list``) or ``None`` on capability miss, downgrade
-    (``unknown_command`` → invalidate caps), or error (logged) — same
-    error-taxonomy and silent fallback as :func:`fetch_device_via_component`.
+    (``unknown_command`` → invalidate caps), command error/timeout, or a
+    connection-establishment failure (all logged) — same error-taxonomy and silent
+    fallback as :func:`fetch_device_via_component`.
     """
     caps = await get_component_caps(client)
     if not component_supports(caps, "device_list"):
@@ -147,7 +171,18 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_DEVICE_LIST, exc)
         return None
+    except Exception as exc:
+        # HomeAssistantConnectionError / plain establish Exception → legacy (the
+        # legacy device list rides the swallowing send_websocket_message bridge).
+        logger.warning(
+            "%s connection error; falling back to legacy: %r", WS_DEVICE_LIST, exc
+        )
+        return None
     result = raw.get("result")
     if not isinstance(result, dict) or not isinstance(result.get("devices"), list):
+        logger.debug(
+            "%s returned a malformed result (no 'devices' list); falling back to legacy",
+            WS_DEVICE_LIST,
+        )
         return None
     return result

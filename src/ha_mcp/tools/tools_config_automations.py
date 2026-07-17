@@ -38,6 +38,7 @@ from .best_practice_checker import (
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
 )
+from .component_config_reads import fetch_entity_lookup_via_component
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -313,15 +314,41 @@ class AutomationConfigTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    async def _resolve_automation_entity_id(self, identifier: str) -> str | None:
+    async def _resolve_automation_entity_id(
+        self, identifier: str, *, allow_component: bool = False
+    ) -> str | None:
         """Resolve an automation identifier to its entity_id.
 
         If identifier is already an entity_id (starts with "automation."),
         returns it directly. Otherwise, searches states to find the entity
         whose unique_id matches the identifier.
+
+        When ``allow_component`` (remove/post-write call sites only — a
+        config-get must never route through the component, see
+        ``component_config_reads`` and ``TestConfigGetSeam``) AND the component
+        advertises ``entity_lookup``, one in-process
+        ``entity_lookup(unique_id=identifier, domain="automation")`` frame
+        replaces the whole-``get_states()`` scan. An automation's registry
+        ``unique_id`` IS its config ``id`` — the same value the legacy scan
+        matches against ``attributes["id"]`` — so the two paths resolve the same
+        entity_id (pinned by the cross-seam contract test). A component miss
+        (empty matches) returns ``None``, exactly like the legacy no-match. The
+        component unavailable / errored ⇒ the legacy ``get_states()`` scan below
+        runs unchanged (issue #1813 Phase 2).
         """
         if identifier.startswith("automation."):
             return identifier
+        if allow_component:
+            matches = await fetch_entity_lookup_via_component(
+                self._client, identifier, domain="automation"
+            )
+            if matches is not None:
+                # In-process registry read: authoritative on return.
+                for match in matches:
+                    entity_id = match.get("entity_id") or ""
+                    if entity_id.startswith("automation."):
+                        return entity_id
+                return None
         try:
             states = await self._client.get_states()
             for state in states:
@@ -1344,7 +1371,9 @@ class AutomationConfigTools:
                 context={"operation": "remove_automation"},
             )
             # Resolve entity_id for wait verification (identifier may be a unique_id)
-            entity_id_for_wait = await self._resolve_automation_entity_id(identifier)
+            entity_id_for_wait = await self._resolve_automation_entity_id(
+                identifier, allow_component=True
+            )
             if not entity_id_for_wait:
                 logger.warning(
                     f"Could not resolve unique_id '{identifier}' to entity_id -- wait verification will be skipped"

@@ -6,11 +6,32 @@ time-ordered ``logger`` source. The logbook windowing mirrors the traces
 newest-first fix (#1178).
 """
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_utility import UtilityTools
+
+
+@pytest.fixture(autouse=True)
+def _no_real_caps_probe():
+    """Keep the ``ha_mcp_tools/info`` caps probe from opening a real socket.
+
+    The mock clients here carry a real-looking ``base_url``/``token`` but never
+    patch ``get_websocket_client``, so ``get_component_caps`` (invoked by the
+    logbook path's ``add_timezone_metadata`` for every completed
+    ``ha_get_logs`` call) would otherwise attempt a real WS connection and pay
+    its full failure latency per test. Forcing a
+    ``HomeAssistantConnectionError`` reproduces the "component absent" outcome
+    these tests already assume, without the real connection attempt (mirrors
+    ``test_tools_history.py``'s fixture of the same name).
+    """
+    with patch(
+        "ha_mcp.tools.component_api.get_websocket_client",
+        AsyncMock(side_effect=HomeAssistantConnectionError("no WS in unit tests")),
+    ):
+        yield
 
 
 def _call_kwargs(**overrides):
