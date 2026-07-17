@@ -196,7 +196,23 @@ async def test_component_and_legacy_paths_agree(
                         translation_key="tk",
                         created="2026-01-01T00:00:00+00:00",
                         issue_domain="mqtt",
-                    )
+                    ),
+                    # A post-restart RESTORED placeholder (active=False, null
+                    # severity/translation_key). The component's issues slice emits
+                    # it (carrying `active` additively) where core's
+                    # `repairs/list_issues` would filter it out; the server's
+                    # active-filter must drop it so the component path matches the
+                    # legacy path, which sees only `iss-mqtt` (_ISSUES).
+                    FakeIssue(
+                        "iss-restored",
+                        "hue",
+                        severity=None,
+                        translation_key=None,
+                        is_fixable=None,
+                        created="2026-01-01T00:00:00+00:00",
+                        issue_domain=None,
+                        active=False,
+                    ),
                 ]
             )
         ),

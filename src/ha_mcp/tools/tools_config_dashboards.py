@@ -895,6 +895,11 @@ async def _dashboards_via_component(
         return None
     result = raw.get("result")
     if not isinstance(result, dict) or not result.get("available"):
+        logger.debug(
+            "%s (mode=%s) returned unavailable/malformed result; falling back to legacy",
+            WS_DASHBOARDS,
+            mode,
+        )
         return None
     return result
 
@@ -918,6 +923,11 @@ async def _component_dashboard_rows(client: Any) -> list[dict[str, Any]] | None:
         return None
     rows = result.get("dashboards")
     if not isinstance(rows, list):
+        logger.debug(
+            "%s list returned a non-list 'dashboards' (%s); falling back to legacy",
+            WS_DASHBOARDS,
+            type(rows).__name__,
+        )
         return None
     return [row for row in rows if isinstance(row, dict)]
 
@@ -938,7 +948,15 @@ async def _component_dashboard_config(
     if result is None or result.get("status") != "ok":
         return None
     config = result.get("config")
-    return config if isinstance(config, dict) else None
+    if not isinstance(config, dict):
+        logger.debug(
+            "%s get returned status=ok but a non-dict config for url_path=%r; "
+            "falling back to legacy",
+            WS_DASHBOARDS,
+            url_path,
+        )
+        return None
+    return config
 
 
 # --- Cross-dashboard search walk (component-less legacy path) -----------------
@@ -968,7 +986,15 @@ def _walk_all_dashboard_docs(
 def _collect_all_dashboard_doc_matches(
     doc: dict[str, Any], query_lower: str, matches: list[dict[str, Any]]
 ) -> None:
-    """Append every ``query_lower`` hit in one dashboard config to ``matches``."""
+    """Append every ``query_lower`` hit in one dashboard config to ``matches``.
+
+    Walks each view's card containers (``cards`` + sections-view ``sections.cards``,
+    nested cards recursed), plus the two view-level containers the card walk never
+    visits: ``badges`` and a sections-view ``header.card``. Mirrors the component's
+    ``_collect_dashboard_matches`` visit order exactly so both paths return the
+    same match records (a badge- or header-card-only entity reference is no longer
+    a cross-path blind spot).
+    """
     config = doc.get("config")
     if not isinstance(config, dict):
         return
@@ -992,6 +1018,12 @@ def _collect_all_dashboard_doc_matches(
                 query_lower,
                 matches,
             )
+        _collect_all_dashboard_badge_matches(
+            view, view_index, url_path, dash_title, view_title, query_lower, matches
+        )
+        _collect_all_dashboard_header_card_matches(
+            view, view_index, url_path, dash_title, view_title, query_lower, matches
+        )
 
 
 def _all_dashboard_view_card_containers(
@@ -1011,6 +1043,33 @@ def _all_dashboard_view_card_containers(
     return containers
 
 
+def _all_dashboard_match(
+    url_path: Any,
+    dash_title: Any,
+    view_index: int,
+    view_title: Any,
+    card_path: str,
+    card_type: Any,
+    matched_field: str,
+    matched_value: str,
+) -> dict[str, Any]:
+    """One MODE 4 cross-dashboard search match record (shared, fixed shape).
+
+    Mirrors the component's ``_dashboard_match`` so every match site — cards,
+    badges, header cards — emits the identical wire shape on both paths.
+    """
+    return {
+        "url_path": url_path,
+        "title": dash_title,
+        "view_index": view_index,
+        "view_title": view_title,
+        "card_path": card_path,
+        "card_type": card_type,
+        "matched_field": matched_field,
+        "matched_value": matched_value,
+    }
+
+
 def _collect_all_dashboard_card_matches(
     cards: Any,
     base_path: str,
@@ -1027,34 +1086,145 @@ def _collect_all_dashboard_card_matches(
     for card_index, card in enumerate(cards):
         if not isinstance(card, dict):
             continue
-        card_path = f"{base_path}[{card_index}]"
-        card_type = card.get("type")
-        for field, value in _all_dashboard_card_string_leaves(card):
-            if query_lower in value.lower():
-                matches.append(
-                    {
-                        "url_path": url_path,
-                        "title": dash_title,
-                        "view_index": view_index,
-                        "view_title": view_title,
-                        "card_path": card_path,
-                        "card_type": card_type,
-                        "matched_field": field,
-                        "matched_value": value,
-                    }
+        _collect_one_all_dashboard_card_matches(
+            card,
+            f"{base_path}[{card_index}]",
+            url_path,
+            dash_title,
+            view_index,
+            view_title,
+            query_lower,
+            matches,
+        )
+
+
+def _collect_one_all_dashboard_card_matches(
+    card: dict[str, Any],
+    card_path: str,
+    url_path: Any,
+    dash_title: Any,
+    view_index: int,
+    view_title: Any,
+    query_lower: str,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Record matches for a SINGLE card at ``card_path`` and recurse its nested cards.
+
+    Mirrors the component's ``_collect_one_card_matches`` — shared by the
+    list-indexed card walk and the header-card walk (a header card is a single
+    card, not list-indexed).
+    """
+    card_type = card.get("type")
+    for field, value in _all_dashboard_card_string_leaves(card):
+        if query_lower in value.lower():
+            matches.append(
+                _all_dashboard_match(
+                    url_path,
+                    dash_title,
+                    view_index,
+                    view_title,
+                    card_path,
+                    card_type,
+                    field,
+                    value,
                 )
-        nested = card.get("cards")
-        if isinstance(nested, list):
-            _collect_all_dashboard_card_matches(
-                nested,
-                f"{card_path}.cards",
-                url_path,
-                dash_title,
-                view_index,
-                view_title,
-                query_lower,
-                matches,
             )
+    nested = card.get("cards")
+    if isinstance(nested, list):
+        _collect_all_dashboard_card_matches(
+            nested,
+            f"{card_path}.cards",
+            url_path,
+            dash_title,
+            view_index,
+            view_title,
+            query_lower,
+            matches,
+        )
+
+
+def _collect_all_dashboard_badge_matches(
+    view: dict[str, Any],
+    view_index: int,
+    url_path: Any,
+    dash_title: Any,
+    view_title: Any,
+    query_lower: str,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Record query hits in a view's ``badges`` — entity refs the card walk misses.
+
+    Mirrors the component's ``_collect_badge_matches``: a bare-string badge is
+    recorded as a ``badges`` leaf (``card_type="badge"``); a dict badge's string
+    leaves are walked like a card's (``card_type`` = its ``type`` or ``"badge"``).
+    """
+    badges = view.get("badges")
+    if not isinstance(badges, list):
+        return
+    for badge_index, badge in enumerate(badges):
+        badge_path = f"views[{view_index}].badges[{badge_index}]"
+        if isinstance(badge, str):
+            if badge and query_lower in badge.lower():
+                matches.append(
+                    _all_dashboard_match(
+                        url_path,
+                        dash_title,
+                        view_index,
+                        view_title,
+                        badge_path,
+                        "badge",
+                        "badges",
+                        badge,
+                    )
+                )
+        elif isinstance(badge, dict):
+            badge_type = badge.get("type") or "badge"
+            for field, value in _all_dashboard_card_string_leaves(badge):
+                if query_lower in value.lower():
+                    matches.append(
+                        _all_dashboard_match(
+                            url_path,
+                            dash_title,
+                            view_index,
+                            view_title,
+                            badge_path,
+                            badge_type,
+                            field,
+                            value,
+                        )
+                    )
+
+
+def _collect_all_dashboard_header_card_matches(
+    view: dict[str, Any],
+    view_index: int,
+    url_path: Any,
+    dash_title: Any,
+    view_title: Any,
+    query_lower: str,
+    matches: list[dict[str, Any]],
+) -> None:
+    """Record query hits in a sections-view header card (``views[n].header.card``).
+
+    Mirrors the component's ``_collect_header_card_matches`` — the card walk never
+    visits the header card, so it is walked here as a single card.
+    """
+    header = view.get("header")
+    if not isinstance(header, dict):
+        return
+    header_card = header.get("card")
+    if not isinstance(header_card, dict):
+        return
+    _collect_one_all_dashboard_card_matches(
+        header_card,
+        f"views[{view_index}].header.card",
+        url_path,
+        dash_title,
+        view_index,
+        view_title,
+        query_lower,
+        matches,
+    )
 
 
 def _all_dashboard_card_string_leaves(card: dict[str, Any]) -> list[tuple[str, str]]:
@@ -1608,7 +1778,11 @@ class DashboardConfigTools:
                 "matches with their own config, so deeply-nested stacks multiply the "
                 "payload — keep the default (False) unless you need the bodies. Does not "
                 "affect whether the full dashboard config is returned — search mode always "
-                "returns matches only, not the full dashboard. Ignored outside search mode."
+                "returns matches only, not the full dashboard. Config bodies are surfaced "
+                "only for dashboards provably in storage mode; for a YAML or unconfirmed "
+                "dashboard the bodies are withheld (they may carry resolved !secret values) "
+                "and the response says so, with match locations still reported. Ignored "
+                "outside search mode."
             ),
         ] = False,
         include_screenshot: Annotated[
@@ -1930,8 +2104,16 @@ class DashboardConfigTools:
         heading: str | None,
         include_config: bool,
         search_resolved_from: str | None,
+        config_suppressed_note: str | None = None,
     ) -> dict[str, Any]:
-        """Run the card search over ``config`` and assemble the response dict."""
+        """Run the card search over ``config`` and assemble the response dict.
+
+        ``config_suppressed_note`` (set by the caller when the target dashboard is
+        not provably storage-mode) forces the matched-card config bodies to be
+        withheld even with ``include_config=True`` and surfaces the note as a
+        warning — a YAML dashboard's card config may carry HA-resolved ``!secret``
+        plaintext. Match LOCATIONS are always reported.
+        """
         truncation: list[str] = []
         uncovered: list[str] = []
         matches = _find_cards_in_config(
@@ -1943,7 +2125,8 @@ class DashboardConfigTools:
             uncovered=uncovered,
         )
 
-        if not include_config:
+        surface_config = include_config and config_suppressed_note is None
+        if not surface_config:
             for match in matches:
                 del match["card_config"]
 
@@ -1959,6 +2142,8 @@ class DashboardConfigTools:
         # longer suppresses the warning, and a true negative over a
         # fully-coverable dashboard no longer cries wolf.
         warnings: list[str] = []
+        if config_suppressed_note is not None and matches:
+            warnings.append(config_suppressed_note)
         if truncation:
             warnings.append(
                 f"Search stopped at the nesting depth bound "
@@ -2034,6 +2219,20 @@ class DashboardConfigTools:
         # reports the resolved identifier (see ha_config_get_dashboard's
         # except block).
         resolved_url_path[0] = url_path
+        # Fail-closed storage guard (mirrors the cross-dashboard MODE 4 walk):
+        # matched-card config bodies are surfaced ONLY for a dashboard PROVABLY
+        # tagged mode="storage". A YAML dashboard — or one whose mode we cannot
+        # confirm (untagged, or the default dashboard, which the list omits) —
+        # may carry HA-resolved !secret plaintext in its cards, so we withhold
+        # the bodies and say so. Only paid when the caller asked for bodies.
+        config_suppressed_note: str | None = None
+        if include_config and not await self._dashboard_is_storage_mode(url_path):
+            config_suppressed_note = (
+                "Matched-card config bodies were withheld: dashboard "
+                f"{url_path!r} is not provably storage-mode (a YAML dashboard's "
+                "config can carry resolved !secret values). Match locations are "
+                "reported; the config was not surfaced."
+            )
         search_result = self._build_search_result(
             config,
             url_path,
@@ -2042,6 +2241,7 @@ class DashboardConfigTools:
             heading=heading,
             include_config=include_config,
             search_resolved_from=search_resolved_from,
+            config_suppressed_note=config_suppressed_note,
         )
         _note_screenshot_ignored(
             search_result,
@@ -2158,6 +2358,22 @@ class DashboardConfigTools:
             )
         return docs
 
+    async def _dashboard_is_storage_mode(self, url_path: str | None) -> bool:
+        """True only when ``url_path`` is a dashboard PROVABLY tagged mode="storage".
+
+        Fail-closed, mirroring the cross-dashboard (MODE 4) walk's storage check:
+        the dashboards-list row for ``url_path`` must carry an explicit
+        ``mode == "storage"``. A YAML row, an untagged row, or a dashboard absent
+        from the list (the default dashboard is never listed) all return ``False``
+        — its config body may carry HA-resolved ``!secret`` plaintext and must not
+        be surfaced. A malformed/unavailable list also fails closed.
+        """
+        rows = await fetch_dashboards_list(self._client) or []
+        for row in rows:
+            if row.get("url_path") == url_path:
+                return row.get("mode") == _DASHBOARD_STORAGE_MODE
+        return False
+
     async def _fetch_dashboard_config_fail_soft(
         self, url_path: str
     ) -> dict[str, Any] | None:
@@ -2171,7 +2387,12 @@ class DashboardConfigTools:
             config, _config_hash = await _get_dashboard_config_internal(
                 self._client, url_path
             )
-        except ToolError:
+        except ToolError as exc:
+            logger.debug(
+                "Cross-dashboard search skipping unreadable dashboard %r: %r",
+                url_path,
+                exc,
+            )
             return None
         return config
 

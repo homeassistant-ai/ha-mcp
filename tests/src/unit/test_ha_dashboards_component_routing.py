@@ -570,3 +570,94 @@ async def test_existence_check_uses_component_list() -> None:
     assert missing is False
     assert builtin is True
     assert client.list_calls == 0
+
+
+# --- MODE-2 single-dashboard search: storage-mode config guard ---------------
+# The single-dashboard search (entity_id / card_type / heading) fetches the
+# target dashboard's lovelace/config directly. With include_config=True the
+# matched-card config bodies would surface — a YAML dashboard's body can carry
+# HA-resolved !secret plaintext — so the guard withholds them unless the target
+# is PROVABLY storage-mode (its dashboards-list row is tagged mode="storage").
+_MODE2_BODY = {
+    "title": "Home",
+    "views": [
+        {
+            "title": "Living",
+            "cards": [{"type": "entities", "entities": ["light.kitchen"]}],
+        }
+    ],
+}
+
+
+async def _run_mode2_search(client: Any, url_path: str) -> dict[str, Any]:
+    """Run the single-dashboard search (include_config=True) over the legacy path."""
+    legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    with patch_ws(legacy_ws, tools_config_dashboards):
+        return await _build_get_dashboard(client)(
+            url_path=url_path, entity_id="light.kitchen", include_config=True
+        )
+
+
+@pytest.mark.asyncio
+async def test_mode2_search_storage_dashboard_surfaces_config() -> None:
+    """A storage-mode dashboard surfaces matched-card config (include_config=True)."""
+    client = RoutingClient(
+        dashboards_list=[_STORAGE_ROW], configs={"home": _MODE2_BODY}
+    )
+
+    resp = await _run_mode2_search(client, "home")
+
+    assert resp["match_count"] == 1
+    assert "card_config" in resp["matches"][0]
+    assert "warnings" not in resp
+    # The storage-mode resolution paid one list read.
+    assert client.list_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_mode2_search_yaml_dashboard_suppresses_config() -> None:
+    """A YAML dashboard's matched-card config is withheld (it may carry resolved
+    !secret plaintext); the match location is still reported, with a note."""
+    client = RoutingClient(
+        dashboards_list=[_YAML_ROW], configs={"yaml-dash": _MODE2_BODY}
+    )
+
+    resp = await _run_mode2_search(client, "yaml-dash")
+
+    assert resp["match_count"] == 1
+    assert "card_config" not in resp["matches"][0]
+    assert any("withheld" in w for w in resp.get("warnings", []))
+
+
+@pytest.mark.asyncio
+async def test_mode2_search_untagged_dashboard_suppresses_config() -> None:
+    """A dashboard whose list row carries no mode tag is not provably storage, so
+    its matched-card config is withheld (fail-closed)."""
+    untagged_row = {"url_path": "untagged", "title": "Untagged"}
+    client = RoutingClient(
+        dashboards_list=[untagged_row], configs={"untagged": _MODE2_BODY}
+    )
+
+    resp = await _run_mode2_search(client, "untagged")
+
+    assert resp["match_count"] == 1
+    assert "card_config" not in resp["matches"][0]
+    assert any("withheld" in w for w in resp.get("warnings", []))
+
+
+@pytest.mark.asyncio
+async def test_mode2_search_include_config_false_skips_storage_resolution() -> None:
+    """include_config=False already strips card_config, so the storage-mode
+    resolution (an extra list read) is skipped and no note is added."""
+    client = RoutingClient(configs={"yaml-dash": _MODE2_BODY})  # no dashboards_list
+
+    legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    with patch_ws(legacy_ws, tools_config_dashboards):
+        resp = await _build_get_dashboard(client)(
+            url_path="yaml-dash", entity_id="light.kitchen", include_config=False
+        )
+
+    assert resp["match_count"] == 1
+    assert "card_config" not in resp["matches"][0]
+    assert client.list_calls == 0
+    assert "warnings" not in resp

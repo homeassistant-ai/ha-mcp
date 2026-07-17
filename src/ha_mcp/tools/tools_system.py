@@ -1191,7 +1191,16 @@ class SystemTools:
                 else await ws_client.send_command("repairs/list_issues")
             )
             if repairs_result.get("success"):
-                all_issues = repairs_result.get("result", {}).get("issues", [])
+                raw_issues = repairs_result.get("result", {}).get("issues", [])
+                # Core's ``repairs/list_issues`` filters ``if issue.active``; the
+                # component's ``system_snapshot`` issues slice does NOT (it emits
+                # every registry issue, carrying ``active`` additively). After an
+                # HA restart the registry restores previously-reported issues as
+                # ``active=False`` placeholders (severity/translation_key null),
+                # which the legacy path and the Repairs UI never show. Drop them
+                # here so the component path matches. Legacy rows omit ``active``
+                # entirely (None), so this is a no-op for them.
+                all_issues = [i for i in raw_issues if i.get("active") is not False]
                 visible_issues = filter_active_repairs(
                     all_issues, include_dismissed=include_dismissed
                 )

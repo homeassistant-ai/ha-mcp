@@ -167,6 +167,33 @@ _SCENARIOS = [
         expected=frozenset({"light.vismark_keep"}),
     ),
     _Scenario(
+        # The ninth hide dimension (allow_labels), the twin of the exclude-side
+        # label scenario: a direct label AND a device-inherited label both keep
+        # their entity; anything without the allowlisted label is dropped.
+        id="allow_label_direct_and_device_inherited",
+        ents=(
+            _Ent("light.vismark_direct", labels=("keep",)),
+            _Ent("light.vismark_viadev", device_id="d1"),
+            _Ent("light.vismark_drop", labels=("other",)),
+        ),
+        devices={"d1": (None, ("keep",))},
+        config=_cfg(allow_labels=["keep"]),
+        expected=frozenset({"light.vismark_direct", "light.vismark_viadev"}),
+    ),
+    _Scenario(
+        # Allow-side area device-inheritance: an entity with no direct area still
+        # survives an allow_areas restriction via its device's area (mirrors the
+        # exclude-side area device-inheritance), while a wrong-area entity drops.
+        id="allow_area_device_inherited",
+        ents=(
+            _Ent("light.vismark_viadev", device_id="d1"),
+            _Ent("light.vismark_drop", area_id="garage"),
+        ),
+        devices={"d1": ("office", ())},
+        config=_cfg(allow_areas=["office"]),
+        expected=frozenset({"light.vismark_viadev"}),
+    ),
+    _Scenario(
         id="assist_via_injected_fake",
         ents=(_Ent("light.vismark_a"), _Ent("light.vismark_b")),
         exposed=frozenset({"light.vismark_b"}),

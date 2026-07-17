@@ -98,6 +98,10 @@ async def fetch_device_via_component(
         return None
     result = raw.get("result")
     if not isinstance(result, dict) or "device" not in result:
+        logger.debug(
+            "%s returned a malformed result (missing 'device' key); falling back to legacy",
+            WS_DEVICE_GET,
+        )
         return None
     return result
 
@@ -123,7 +127,14 @@ async def fetch_device_entities_via_component(
     if result is None:
         return None
     entities = result.get("entities")
-    return entities if isinstance(entities, list) else None
+    if not isinstance(entities, list):
+        logger.debug(
+            "%s served the device but no 'entities' list (additive join absent); "
+            "falling back to legacy entity_registry/list",
+            WS_DEVICE_GET,
+        )
+        return None
+    return entities
 
 
 async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
@@ -149,5 +160,9 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
         return None
     result = raw.get("result")
     if not isinstance(result, dict) or not isinstance(result.get("devices"), list):
+        logger.debug(
+            "%s returned a malformed result (no 'devices' list); falling back to legacy",
+            WS_DEVICE_LIST,
+        )
         return None
     return result

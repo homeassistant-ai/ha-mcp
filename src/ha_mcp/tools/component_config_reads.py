@@ -112,10 +112,12 @@ async def fetch_entity_lookup_via_component(
             logger.warning("%s failed; fell back to legacy: %r", WS_ENTITY_LOOKUP, exc)
         return None
     result = raw.get("result")
-    if not isinstance(result, dict):
-        return None
-    matches = result.get("matches")
+    matches = result.get("matches") if isinstance(result, dict) else None
     if not isinstance(matches, list):
+        logger.debug(
+            "%s returned a malformed result (no 'matches' list); falling back to legacy",
+            WS_ENTITY_LOOKUP,
+        )
         return None
     return matches
 
@@ -179,5 +181,10 @@ async def fetch_reference_data_via_component(
         or not isinstance(result.get("services"), list)
         or not isinstance(result.get("entity_ids"), list)
     ):
+        logger.debug(
+            "%s returned a malformed result (services/entity_ids not both lists); "
+            "falling back to legacy",
+            WS_REFERENCE_DATA,
+        )
         return None
     return result

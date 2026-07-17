@@ -3421,7 +3421,15 @@ class SearchTools:
                 )
             )
             if repairs_result.get("success"):
-                all_issues = repairs_result.get("result", {}).get("issues", [])
+                raw_issues = repairs_result.get("result", {}).get("issues", [])
+                # Core's ``repairs/list_issues`` filters ``if issue.active``; the
+                # component's ``overview`` repairs slice does NOT (it emits every
+                # registry issue, carrying ``active`` additively). After an HA
+                # restart the registry restores previously-reported issues as
+                # ``active=False`` placeholders the legacy path and Repairs UI
+                # never show, so drop them here for parity. Legacy rows omit
+                # ``active`` (None) → no-op for them.
+                all_issues = [i for i in raw_issues if i.get("active") is not False]
                 visible_issues = filter_active_repairs(
                     all_issues,
                     include_dismissed=include_dismissed_repairs_bool,

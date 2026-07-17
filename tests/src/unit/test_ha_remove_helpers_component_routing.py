@@ -6,8 +6,9 @@ Two helper paths resolve entities from the registry today:
 - The SIMPLE-helper delete resolves one entity's ``unique_id`` with a 3-attempt
   exponential-backoff ``config/entity_registry/get`` loop. When the component
   advertises ``registry_lookup``, ONE ``registry_lookup(entity_ids=[...])`` read
-  resolves it — an in-process read has no WS-timing race, so the retry loop (and
-  its sleeps) is skipped entirely.
+  resolves it — the single read plus the direct-id fallback replaces the retry
+  loop (the loop absorbed registration LAG, not a WS-timing race), so the retry
+  loop and its sleeps are skipped entirely.
 - The FLOW-helper delete and the ``ha_config_set_helper`` post-create wait poll
   both need EVERY entity for one ``config_entry_id`` and get them by dumping the
   WHOLE ``config/entity_registry/list``. ``registry_lookup(config_entry_id=...)``
@@ -35,7 +36,10 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, component_registry_lookup
-from ha_mcp.tools.tools_config_helpers import _wait_for_flow_entities
+from ha_mcp.tools.tools_config_helpers import (
+    _get_entities_for_config_entry,
+    _wait_for_flow_entities,
+)
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._component_routing_helpers import make_ws, patch_ws
@@ -194,7 +198,7 @@ async def test_simple_delete_resolves_via_component_no_retry_loop() -> None:
     assert lookups[0].kwargs["entity_ids"] == ["input_button.my_button"]
     # The delete used the component-resolved unique_id.
     assert client.delete_calls[0]["input_button_id"] == "uid-1"
-    # No WS-timing race → no backoff sleep during resolve.
+    # Component read replaces the retry loop → no backoff sleep during resolve.
     sleep_mock.assert_not_awaited()
 
 
@@ -538,6 +542,33 @@ async def test_config_entry_lookup_malformed_shape_falls_back() -> None:
             )
             is None
         )
+
+
+@pytest.mark.asyncio
+async def test_get_entities_component_connection_error_converted_to_warnings() -> None:
+    """The flow consumer swallows a propagating component connection error.
+
+    Unlike the seam (which lets ``HomeAssistantConnectionError`` propagate),
+    ``_get_entities_for_config_entry`` catches ALL registry-read failures into
+    ``warnings`` + ``[]`` so a flow-helper delete's REST step can still succeed —
+    and (F8) the warning names the read that actually failed (``registry_lookup``,
+    not ``entity_registry/list``, since the component read raised)."""
+    ws = make_ws(
+        "ha_mcp_tools/registry_lookup",
+        info_result=_CAPS_REGISTRY,
+        cmd_exc=HomeAssistantConnectionError("socket down"),
+    )
+    client = RoutingClient()
+    warnings: list[str] = []
+
+    with patch_ws(ws, component_registry_lookup):
+        result = await _get_entities_for_config_entry(client, "um_entry", warnings)
+
+    assert result == []
+    assert len(warnings) == 1
+    assert "registry_lookup failed for config_entry_id=um_entry" in warnings[0]
+    # Never touched the legacy entity_registry/list dump.
+    assert client.entity_list_calls == 0
 
 
 @pytest.mark.asyncio

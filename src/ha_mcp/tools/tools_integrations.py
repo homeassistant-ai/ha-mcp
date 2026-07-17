@@ -247,20 +247,26 @@ async def _fetch_entries_via_component(
     Pass ``entry_id`` for the single entry (empty list ⇒ no such entry) or
     ``domain`` to filter the list; neither lists all.
 
+    Consumers: ``ha_get_integration`` (single-entry + list) and radio's
+    ``resolve_entry_id`` (single-instance domain → entry_id) both import this so
+    the domain/entry-scoped read routes through one place.
+
     ``None`` on capability miss, downgrade (``unknown_command`` → invalidate the
     cached caps), or command error/timeout (logged) — the caller falls back to
-    the legacy REST list + OptionsFlow probe.
+    its legacy path.
 
     DEVIATION from the uniform component-fetch taxonomy: a connection-establishment
     failure IS caught here and mapped to ``None`` (legacy fallback). Unlike the
-    pooled-WS consumers, this tool's legacy path is a pure REST read
-    (``get_config_entry`` / ``GET /config/config_entries`` + the REST OptionsFlow
-    probe), NOT the shared pooled WS — so a WS outage must not kill the tool when
-    REST can still serve the entry. The catch is broad because
+    pooled-WS consumers, the callers' legacy paths are NOT the shared pooled WS —
+    ``ha_get_integration`` reads pure REST (``get_config_entry`` /
+    ``GET /config/config_entries`` + the REST OptionsFlow probe) and radio's
+    ``resolve_entry_id`` uses the REST client's ``send_websocket_message`` bridge
+    (which never raises) — so a WS outage must not kill the tool when the legacy
+    path can still serve the entry. The catch is broad because
     ``get_websocket_client()`` raises a plain ``Exception`` (not
     ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot establish the
     socket, so a narrow catch would let that escape and kill the tool; routing any
-    non-command component failure back to the REST fetch is safe here (mirrors
+    non-command component failure back to the legacy fetch is safe here (mirrors
     ``get_component_caps``' own broad-catch precedent). Otherwise the same caps-gate
     discipline as ``component_devices.fetch_device_via_component``.
     """
@@ -282,21 +288,24 @@ async def _fetch_entries_via_component(
             logger.warning("%s failed; fell back to legacy: %r", WS_CONFIG_ENTRIES, exc)
         return None
     except Exception as exc:
-        # DEVIATION (see docstring): the legacy path is pure REST, NOT the shared
-        # pooled WS. A pooled-WS drop (HomeAssistantConnectionError) OR
-        # get_websocket_client() raising a plain Exception when WebSocketManager
-        # can't (re)connect must fall back to REST rather than kill the tool.
+        # DEVIATION (see docstring): the legacy path is pure REST / the REST-client
+        # WS bridge, NOT the shared pooled WS. A pooled-WS drop
+        # (HomeAssistantConnectionError) OR get_websocket_client() raising a plain
+        # Exception when WebSocketManager can't (re)connect must fall back to legacy
+        # rather than kill the tool.
         logger.warning(
-            "%s connection error; falling back to REST legacy: %r",
+            "%s connection error; falling back to legacy: %r",
             WS_CONFIG_ENTRIES,
             exc,
         )
         return None
     result = raw.get("result")
-    if not isinstance(result, dict):
-        return None
-    entries = result.get("entries")
+    entries = result.get("entries") if isinstance(result, dict) else None
     if not isinstance(entries, list):
+        logger.debug(
+            "%s returned a malformed result (no 'entries' list); falling back to legacy",
+            WS_CONFIG_ENTRIES,
+        )
         return None
     return entries
 
@@ -2367,12 +2376,15 @@ class IntegrationTools:
 
         try:
             # Resolve the helper's unique_id from the entity registry. When the
-            # component advertises registry_lookup, ONE in-process read resolves
-            # it with no WS-timing race — so the 3-attempt exponential-backoff
-            # loop (which existed only to absorb that race between a helper's
-            # creation and its registry index catching up) is skipped entirely.
-            # On capability miss / component error the legacy retry loop runs
-            # unchanged.
+            # component advertises registry_lookup, ONE in-process read replaces
+            # the 3-attempt exponential-backoff loop. That loop absorbed the
+            # registry-registration LAG between a helper's creation and its entity
+            # landing in the registry index (not a WS-timing race — the legacy
+            # read hits the same live registry over the same socket); the
+            # single read is equally subject to that lag, but on this delete path
+            # a stale/missing resolve degrades to the direct-id fallback below
+            # rather than a wrong delete. On capability miss / component error the
+            # legacy retry loop runs unchanged.
             unique_id = None
             registry_result: dict[str, Any] | None = None
             max_retries = 3

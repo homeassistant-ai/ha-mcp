@@ -251,6 +251,43 @@ async def test_command_error_falls_back_to_legacy() -> None:
     assert client in component_api._CAPS_CACHE
 
 
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        pytest.param("not-a-dict", id="non_dict_result"),
+        pytest.param({"services": "nope", "translations": {}}, id="services_not_list"),
+        pytest.param(
+            {"services": [], "translations": "nope"}, id="translations_not_dict"
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_malformed_component_payload_falls_back_to_legacy(
+    malformed: Any,
+) -> None:
+    """A shape-drift component reply (non-dict result, ``services`` not a list, or
+    ``translations`` not a dict) routes to the legacy REST + WS fetches
+    (tools_services.py:314-320); caps stay cached (drift is not unknown_command)."""
+    ws = make_ws(
+        "ha_mcp_tools/services_list",
+        info_result=_CAPS_SERVICES_LIST,
+        cmd_result=malformed,
+    )
+    client = RoutingClient()
+    list_services = _build_list_services(client)
+
+    with patch_ws(ws, tools_services):
+        resp = await list_services()
+
+    assert resp["success"] is True
+    assert "light.turn_on" in resp["services"]
+    assert client.legacy_rest_calls == 1
+    assert client.legacy_ws_calls == 1
+    # The component WAS asked (one frame); its malformed reply fell back.
+    assert len(_services_list_calls(ws)) == 1
+    assert client in component_api._CAPS_CACHE
+
+
 @pytest.mark.asyncio
 async def test_connection_error_falls_back_to_legacy() -> None:
     """A WS-down error on the component frame falls back to the REST legacy.

@@ -747,10 +747,12 @@ async def add_timezone_metadata(
 ) -> dict[str, Any]:
     """Add Home Assistant timezone to tool responses and convert timestamps to local time.
 
-    Fetches ``time_zone`` from ``/api/config``, converts every
-    ``last_changed``, ``last_updated``, ``last_reported``, ``when``, and
-    ``last_triggered`` field found anywhere in *data* from UTC to that local
-    timezone, then wraps the result in ``{"data": ..., "metadata": {...}}``.
+    Resolves the Home Assistant time zone via ``_fetch_ha_timezone`` (which
+    prefers the ``ha_mcp_tools`` component's cached handshake and falls back to
+    ``/api/config``), converts every ``last_changed``, ``last_updated``,
+    ``last_reported``, ``when``, and ``last_triggered`` field found anywhere in
+    *data* from UTC to that local timezone, then wraps the result in
+    ``{"data": ..., "metadata": {...}}``.
 
     Pass ``include_metadata=False`` to return *data* unchanged — the
     ``metadata`` wrapper is then omitted entirely.

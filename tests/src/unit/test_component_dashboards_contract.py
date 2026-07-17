@@ -95,6 +95,30 @@ _OFFICE_BODY = {
 _DEFAULT_BODY = {"views": [{"title": "Overview", "cards": []}]}
 _YAML_BODY = {"views": [{"cards": [{"type": "markdown", "content": "yaml secret"}]}]}
 
+# A sections-view carrying entity refs the plain card walk never visits: a
+# bare-string badge, a dict badge, and a header card. Each entity appears in
+# exactly ONE container so a query isolates that container — pinning that both
+# the component walk and the server legacy walk reach badges + header cards.
+_BADGE_HEADER_BODY = {
+    "title": "Sensors",
+    "views": [
+        {
+            "title": "Overview",
+            "type": "sections",
+            "badges": [
+                "sensor.badge_only",
+                {"type": "entity", "entity": "sensor.badge_dict"},
+            ],
+            "header": {
+                "card": {"type": "markdown", "content": "sensor.header_only status"}
+            },
+            "sections": [
+                {"cards": [{"type": "entities", "entities": ["light.in_section"]}]}
+            ],
+        }
+    ],
+}
+
 
 def _real_component_ws(hass: FakeHass) -> AsyncMock:
     """A WS mock whose ``dashboards`` command is served by the REAL component.
@@ -394,6 +418,58 @@ async def test_search_parity_case_insensitive_query() -> None:
 
     assert comp_resp["matches"]  # uppercase query still hits lowercase content
     assert comp_resp["matches"] == legacy_resp["matches"]
+
+
+@pytest.mark.asyncio
+async def test_search_parity_badges_and_header_cards() -> None:
+    """A view badge and a sections-view header card are searched on BOTH paths.
+
+    An entity referenced only as a badge or only inside a header card must be
+    found identically by the component's in-process walk and the server's legacy
+    walk — otherwise a rename/remove would wrongly read as "no dashboard uses it".
+    """
+    dmap = {"sensors": _storage_dash("sensors", "Sensors", body=_BADGE_HEADER_BODY)}
+    legacy_rows = [{**_storage_dash("sensors", "Sensors").config, "mode": "storage"}]
+    legacy_configs = {"sensors": _BADGE_HEADER_BODY}
+
+    async def _both(query: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        hass = _component_hass(dmap)
+        ws = _real_component_ws(hass)
+        with patch_ws(ws, tools_config_dashboards):
+            comp = await _build_get_dashboard(RoutingClient())(
+                mode="search", query=query
+            )
+        legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+        legacy_client = RoutingClient(
+            dashboards_list=legacy_rows, configs=legacy_configs
+        )
+        with patch_ws(legacy_ws, tools_config_dashboards):
+            legacy = await _build_get_dashboard(legacy_client)(
+                mode="search", query=query
+            )
+        return comp["matches"], legacy["matches"]
+
+    # Badge-only (bare string): matched nowhere else.
+    comp_b, legacy_b = await _both("sensor.badge_only")
+    assert comp_b == legacy_b
+    assert len(comp_b) == 1
+    assert ".badges[" in comp_b[0]["card_path"]
+    assert comp_b[0]["card_type"] == "badge"
+    assert comp_b[0]["matched_value"] == "sensor.badge_only"
+
+    # Dict badge: walked like a card (its own type + field taxonomy).
+    comp_d, legacy_d = await _both("sensor.badge_dict")
+    assert comp_d == legacy_d
+    assert len(comp_d) == 1
+    assert ".badges[" in comp_d[0]["card_path"]
+    assert comp_d[0]["card_type"] == "entity"
+
+    # Header-card-only: matched only in views[n].header.card.
+    comp_h, legacy_h = await _both("sensor.header_only")
+    assert comp_h == legacy_h
+    assert len(comp_h) == 1
+    assert comp_h[0]["card_path"].endswith(".header.card")
+    assert comp_h[0]["card_type"] == "markdown"
 
 
 @pytest.mark.asyncio

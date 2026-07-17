@@ -88,8 +88,12 @@ async def fetch_registries_via_component(
     categories: {scope: [...]}}`` payload — only the keys for the requested
     ``registries`` kinds are present (a kind not requested is absent, never an
     empty list, so a caller can't confuse "not asked for" with "asked for,
-    empty"). ``category`` additionally consults ``category_scopes`` (categories
-    are scoped; an omitted/empty list yields ``{"categories": {}}``).
+    empty"). ``category`` additionally consults ``category_scopes``: categories
+    are scoped and the component REQUIRES a non-empty scope list for a category
+    request, so an omitted/empty list makes the component raise
+    ``HomeAssistantError`` — which this helper logs and maps to ``None`` (legacy
+    fallback), NOT ``{"categories": {}}``. Callers requesting ``category`` must
+    pass scopes.
 
     ``None`` on capability miss, downgrade (``unknown_command`` → invalidate
     the cached caps), command error/timeout (logged), or a malformed

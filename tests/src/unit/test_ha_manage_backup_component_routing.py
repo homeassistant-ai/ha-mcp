@@ -185,6 +185,50 @@ class TestCreateBackupRouting:
         assert "backup/agents/info" in legacy_calls
         assert "backup/config/info" in legacy_calls
 
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            pytest.param({"agent_ids": ["hassio.local"]}, id="missing_local_agent_id"),
+            pytest.param("not-a-dict", id="non_dict_result"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_malformed_component_payload_falls_back_to_legacy_probes(
+        self, malformed: Any
+    ) -> None:
+        """A shape-drift component reply (non-dict result, or a dict missing the
+        ``local_agent_id`` key) routes to the legacy sequential probes rather than
+        being trusted as an authoritative "no agents" answer (backup.py:263-266)."""
+        legacy_ws = _legacy_ws()
+        component_ws = make_ws(
+            backup_module.WS_BACKUP_PREP,
+            info_result=_CAPS_BACKUP_PREP,
+            cmd_result=malformed,
+        )
+        client = _client()
+
+        with (
+            patch_ws(component_ws, backup_module),
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(legacy_ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(return_value={"success": True, "backup_id": "b1"}),
+            ),
+        ):
+            result = await backup_module.create_backup(client, name="n")
+
+        assert result["success"] is True
+        # The component WAS asked (one frame); its malformed reply fell back.
+        assert len(_backup_prep_calls(component_ws)) == 1
+        legacy_calls = [c.args[0] for c in legacy_ws.send_command.call_args_list]
+        assert "backup/agents/info" in legacy_calls
+        assert "backup/config/info" in legacy_calls
+        # Shape drift is not ``unknown_command``, so caps stay cached.
+        assert client in component_api._CAPS_CACHE
+
     @pytest.mark.asyncio
     async def test_unknown_command_invalidates_caps_and_falls_back(self) -> None:
         legacy_ws = _legacy_ws()

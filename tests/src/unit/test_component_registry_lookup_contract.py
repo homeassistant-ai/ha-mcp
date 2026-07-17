@@ -13,9 +13,10 @@ its tariff sub-entities, all bound to one ``config_entry_id``):
   ``config_entry_id`` scan (the single-valued ``_entities_by_config_entry`` index
   would silently drop members — this proves the multi-valued scan is used).
 - The SIMPLE delete resolves one ``unique_id`` from ``_do_registry_lookup``'s
-  ``entity_ids`` mode in EXACTLY one lookup with NO retry-loop sleep (an
-  in-process read has no WS-timing race) — ``asyncio.sleep`` is patched to fail
-  the test if the resolve ever sleeps.
+  ``entity_ids`` mode in EXACTLY one lookup with NO retry-loop sleep (the single
+  read plus the direct-id fallback replaces the retry loop that absorbed
+  registration lag) — ``asyncio.sleep`` is patched to fail the test if the
+  resolve ever sleeps.
 """
 
 from __future__ import annotations

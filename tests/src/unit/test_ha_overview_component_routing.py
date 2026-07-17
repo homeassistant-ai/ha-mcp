@@ -214,6 +214,60 @@ async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_component_overview_drops_inactive_placeholder_repairs(
+    tmp_path, monkeypatch
+) -> None:
+    """The component overview repairs slice carries EVERY registry issue including
+    post-restart ``active=False`` placeholders; the server applies core's
+    ``if issue.active`` filter so phantom null-severity issues never surface in
+    the overview or inflate ``repair_count``."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    _quiet_tail(monkeypatch)
+    slices = _overview_slices()
+    active = {
+        "issue_id": "iss-active",
+        "domain": "demo",
+        "severity": "warning",
+        "translation_key": "tk",
+        "translation_placeholders": {},
+        "ignored": False,
+        "dismissed_version": None,
+        "is_fixable": True,
+        "breaks_in_ha_version": None,
+        "created": "2026-05-01T00:00:00+00:00",
+        "issue_domain": "demo",
+        "learn_more_url": None,
+        "active": True,
+    }
+    placeholder = {
+        **active,
+        "issue_id": "iss-restored",
+        "severity": None,
+        "translation_key": None,
+        "is_fixable": None,
+        "issue_domain": None,
+        "active": False,
+    }
+    slices["repairs"] = [active, placeholder]
+    ws = make_ws(
+        "ha_mcp_tools/overview",
+        info_result=_CAPS_OVERVIEW,
+        cmd_result=slices,
+    )
+    client = OverviewRoutingClient()
+    overview = _build_overview_tool(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await overview(detail_level="minimal")
+
+    assert resp["repair_count"] == 1
+    assert [r["issue_id"] for r in resp["repairs"]] == ["iss-active"]
+    assert "dismissed_repair_count" not in resp
+    # Served from the component slice; no legacy repairs fetch ran.
+    assert client.total_legacy_fetches() == 0
+
+
+@pytest.mark.asyncio
 async def test_caps_probed_once_across_overviews(tmp_path, monkeypatch) -> None:
     """The info probe is cached: two overviews, one ha_mcp_tools/info call."""
     _setup_visibility_disabled(tmp_path, monkeypatch)

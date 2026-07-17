@@ -1449,7 +1449,9 @@ async def _enrich_helpers_with_current_registry(
     # an unexpected registry shape (e.g. a non-hashable ``id`` breaking the
     # lookup), or a malformed response — flags the result rather than raising
     # out and letting the caller's handler turn a list call into a failure.
-    # Mirrors _get_entities_for_config_entry, which reads the same endpoint.
+    # Mirrors _get_entities_for_config_entry's degrade-open behavior (it now
+    # routes through the component's registry_lookup first, falling back to this
+    # same config/entity_registry/list read).
     # send_websocket_message returns {"success": false, ...} instead of raising,
     # so the malformed-response check below is the branch production takes.
     try:
@@ -1575,17 +1577,26 @@ async def _get_entities_for_config_entry(
     caller would otherwise see `entity_ids: []` and be told that registry-update
     targets like `area_id` / `labels` were silently dropped. If `warnings` is
     provided, append a concrete message so the caller surfaces the partial
-    failure instead. The component read runs inside the same guard so a WS drop
-    on the in-process read degrades identically to the legacy dump — this
-    consumer swallows ALL registry-read failures into ``warnings`` and returns
-    ``[]`` (a flow-helper delete's REST step can still succeed), so a propagated
-    ``HomeAssistantConnectionError`` would change that behavior.
+    failure instead. Each read is guarded separately so the warning names the
+    call that actually failed (``registry_lookup`` for the component read vs
+    ``entity_registry/list`` for the legacy dump). This consumer swallows ALL
+    registry-read failures into ``warnings`` and returns ``[]`` (a flow-helper
+    delete's REST step can still succeed), so a propagated
+    ``HomeAssistantConnectionError`` from either read is converted here, not
+    raised.
     """
     try:
         rows = await fetch_entities_for_config_entry_via_component(client, entry_id)
-        if rows is not None:
-            # Component-served rows are ALREADY scoped to the entry.
-            return rows
+    except Exception as e:
+        if warnings is not None:
+            warnings.append(
+                f"registry_lookup failed for config_entry_id={entry_id}: {e}"
+            )
+        return []
+    if rows is not None:
+        # Component-served rows are ALREADY scoped to the entry.
+        return rows
+    try:
         result = await client.send_websocket_message(
             {"type": "config/entity_registry/list"}
         )

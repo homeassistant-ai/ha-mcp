@@ -317,6 +317,11 @@ async def _fetch_services_list_via_component(
         or not isinstance(result.get("services"), list)
         or not isinstance(result.get("translations"), dict)
     ):
+        logger.debug(
+            "%s returned a malformed result (services/translations wrong shape); "
+            "falling back to legacy",
+            WS_SERVICES_LIST,
+        )
         return None
     return result
 

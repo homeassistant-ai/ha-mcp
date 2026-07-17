@@ -262,6 +262,11 @@ async def _backup_prep_via_component(
         return None
     result = raw.get("result")
     if not isinstance(result, dict) or "local_agent_id" not in result:
+        logger.debug(
+            "%s returned a malformed result (missing 'local_agent_id' key); "
+            "falling back to legacy",
+            WS_BACKUP_PREP,
+        )
         return None
     return result
 

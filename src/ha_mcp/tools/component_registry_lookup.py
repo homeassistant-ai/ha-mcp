@@ -8,9 +8,9 @@ way today:
   sub-entities), and get them by dumping the WHOLE ``config/entity_registry/list``
   and filtering client-side.
 - The simple-helper delete path resolves ONE entity's ``unique_id`` with a
-  3-attempt exponential-backoff ``config/entity_registry/get`` loop, whose only
-  reason to exist is absorbing the WS-timing race between a helper's creation and
-  its registry index catching up.
+  3-attempt exponential-backoff ``config/entity_registry/get`` loop, whose reason
+  to exist is absorbing the registry-registration LAG between a helper's creation
+  and its entity landing in the registry index.
 
 When the component advertises the ``registry_lookup`` capability, both collapse
 to a single in-process read: ``registry_lookup(config_entry_id=...)`` returns
@@ -18,9 +18,13 @@ every entity for one entry, ``registry_lookup(entity_ids=[...])`` returns the
 rows for a set of ids (with a ``missing`` list for ids with no registry entry).
 Each row is core's ``RegistryEntry.as_partial_dict`` VERBATIM — byte-identical to
 a ``config/entity_registry/list`` element — so the consumers keep their existing
-transforms over the raw shape. An in-process read is also a single consistent
-snapshot with no round-trip latency, so the retry loop's race simply cannot occur
-(the audit-verified point of routing the simple-delete resolve here).
+transforms over the raw shape. On the simple-delete path, ONE authoritative
+in-process read plus the direct-id fallback replaces the 3-attempt retry loop —
+NOT because the read is fresher (there was never a WS-timing race: the legacy
+``config/entity_registry/get`` reads the same live registry over the same socket,
+so an in-process read is equally subject to the registration LAG the loop
+absorbed), but because a stale/missing resolve degrades to the direct-id delete
+rather than a wrong one.
 
 This module owns the caps-gated fetch so the routing discipline — probe caps,
 send one frame, invalidate on ``unknown_command``, fall back to the legacy path
@@ -85,10 +89,13 @@ async def fetch_entities_for_config_entry_via_component(
             )
         return None
     result = raw.get("result")
-    if not isinstance(result, dict):
-        return None
-    entities = result.get("entities")
+    entities = result.get("entities") if isinstance(result, dict) else None
     if not isinstance(entities, list):
+        logger.debug(
+            "%s (config_entry_id) returned a malformed result (no 'entities' list); "
+            "falling back to legacy",
+            WS_REGISTRY_LOOKUP,
+        )
         return None
     return entities
 
@@ -123,5 +130,10 @@ async def resolve_entities_via_component(
         return None
     result = raw.get("result")
     if not isinstance(result, dict) or not isinstance(result.get("entities"), list):
+        logger.debug(
+            "%s (entity_ids) returned a malformed result (no 'entities' list); "
+            "falling back to legacy",
+            WS_REGISTRY_LOOKUP,
+        )
         return None
     return result
