@@ -47,6 +47,7 @@ while the server is running and returns 503 otherwise.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import time
 from typing import TYPE_CHECKING, Any
@@ -82,6 +83,10 @@ _PROXY_URL = f"{_UI_BASE}/app/{{path:.*}}"
 # path-scoped to the proxy so it is never sent to the boot/session endpoints.
 _COOKIE_NAME = "ha_mcp_tools_ui_session"
 _COOKIE_PATH = f"{_UI_BASE}/app"
+# Keep in sync with ``ha_mcp.settings_ui._i18n.LOCALE_COOKIE`` without
+# importing the separately installed server package into the HA component.
+_LOCALE_COOKIE_NAME = "ha_mcp_locale"
+_LOCALE_COOKIE_VALUE_RE = re.compile(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*\Z")
 
 # Session lifetime. Short by design; the panel re-mints well within it while open.
 _SESSION_TTL_SECONDS = 8 * 60 * 60
@@ -94,7 +99,9 @@ _SESSIONS_KEY = "ha_mcp_tools_ui_sessions"
 
 # Request headers never forwarded to the loopback server. Hop-by-hop plus the
 # browser's cookie/authorization (the loopback server has no auth on the secret
-# path and must not receive the session cookie or the frontend bearer).
+# path and must not receive the session cookie or the frontend bearer). The
+# locale cookie is reconstructed separately from the parsed cookie jar so no
+# other browser cookie can cross this trust boundary.
 _STRIPPED_REQUEST_HEADERS = frozenset(
     {
         "host",
@@ -119,6 +126,24 @@ _STRIPPED_RESPONSE_HEADERS = frozenset(
         "keep-alive",
     }
 )
+
+
+def _forwarded_locale_cookie(request: web.Request) -> str | None:
+    """Return the single safe locale cookie header allowed upstream.
+
+    The settings app stores a manual language override in ``ha_mcp_locale``.
+    Forwarding the browser's raw Cookie header would also expose Home
+    Assistant's authenticated session cookie to the unauthenticated loopback
+    server, so rebuild a header containing only a short BCP-47-like value.
+    """
+    value = request.cookies.get(_LOCALE_COOKIE_NAME)
+    if (
+        not isinstance(value, str)
+        or len(value) > 64
+        or _LOCALE_COOKIE_VALUE_RE.fullmatch(value) is None
+    ):
+        return None
+    return f"{_LOCALE_COOKIE_NAME}={value}"
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +325,9 @@ class _ProxyView(HomeAssistantView):
             for key, value in request.headers.items()
             if key.lower() not in _STRIPPED_REQUEST_HEADERS
         }
+        locale_cookie = _forwarded_locale_cookie(request)
+        if locale_cookie is not None:
+            forward_headers["Cookie"] = locale_cookie
 
         try:
             async with session.request(

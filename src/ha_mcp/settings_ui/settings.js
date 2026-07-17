@@ -62,7 +62,13 @@ function applyStaticTranslations(root = document) {
 function _readLocaleCookie() {
   const prefix = `${LOCALE_COOKIE}=`;
   const entry = document.cookie.split(';').map(value => value.trim()).find(value => value.startsWith(prefix));
-  return entry ? decodeURIComponent(entry.slice(prefix.length)) : '';
+  if (!entry) return '';
+  try {
+    return decodeURIComponent(entry.slice(prefix.length));
+  } catch (err) {
+    console.warn('[ha-mcp] ignoring malformed locale cookie', err);
+    return '';
+  }
 }
 
 function _writeLocaleCookie(locale) {
@@ -852,10 +858,17 @@ function render() {
       const lockEnabled = roForcedOff || isEnvPinned || isMandatory || isFeatureGated;
       const lockPinned = roForcedOff || isEnvPinned || isMandatory || isFeatureGated || !isEnabled;
 
+      const sourceDesc = (t.description || '').split('\n')[0].slice(0, 120);
+      const toolCopy = localizedToolCopy(t, sourceDesc);
+      const title = toolCopy.title;
+      const desc = toolCopy.description;
+
       const div = document.createElement('div');
       div.className = isEnvPinned ? 'tool env-pinned' : 'tool';
       div.dataset.name = t.name.toLowerCase();
-      div.dataset.title = (t.title || '').toLowerCase();
+      // Search the same localized title the user sees while retaining the
+      // source title as a secondary alias for bilingual/admin workflows.
+      div.dataset.title = [title, t.title].filter(Boolean).join(' ').toLowerCase();
 
       let badges = '';
       if (isMandatory) badges += `<span class="badge mandatory">${escapeHtml(tr('tools.badges.mandatory', {}, 'mandatory'))}</span>`;
@@ -866,10 +879,6 @@ function render() {
       // destructive tool showing no tier badge would understate its risk.
       else badges += `<span class="badge unknown">${escapeHtml(category) || '?'}</span>`;
 
-      const sourceDesc = (t.description || '').split('\n')[0].slice(0, 120);
-      const toolCopy = localizedToolCopy(t, sourceDesc);
-      const title = toolCopy.title;
-      const desc = toolCopy.description;
       const gatedNote = disabledBy
         ? `<div class="disabled-by-note">${tr(
             'tools.notes.beta_disabled',

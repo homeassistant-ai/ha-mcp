@@ -345,6 +345,44 @@ class TestProxyForwarding:
         assert "host" not in fwd
         assert "accept" in fwd  # innocuous headers pass through
 
+    async def test_forwards_only_allowlisted_locale_cookie(self):
+        session = FakeSession(upstream=FakeUpstream(body=b"{}"))
+        hass = _running_hass(session)
+        cookies = {
+            **_valid_cookie(hass),
+            ui_panel._LOCALE_COOKIE_NAME: "ru-RU",
+            "other_browser_cookie": "must-not-leak",
+        }
+        request = _make_request(
+            hass=hass,
+            cookies=cookies,
+            headers={
+                "Cookie": (
+                    "ha_mcp_tools_ui_session=secret; ha_mcp_locale=ru-RU; "
+                    "other_browser_cookie=must-not-leak"
+                )
+            },
+        )
+
+        await ui_panel._ProxyView().get(request, "settings")
+
+        forwarded = session.calls[0]["headers"]
+        assert forwarded["Cookie"] == "ha_mcp_locale=ru-RU"
+        assert "ha_mcp_tools_ui_session" not in forwarded["Cookie"]
+        assert "other_browser_cookie" not in forwarded["Cookie"]
+
+    @pytest.mark.parametrize("locale", ["ru; admin=true", "x" * 65])
+    async def test_rejects_unsafe_locale_cookie(self, locale: str):
+        session = FakeSession(upstream=FakeUpstream(body=b"{}"))
+        hass = _running_hass(session)
+        cookies = {**_valid_cookie(hass), ui_panel._LOCALE_COOKIE_NAME: locale}
+        request = _make_request(hass=hass, cookies=cookies)
+
+        await ui_panel._ProxyView().get(request, "settings")
+
+        forwarded = {key.lower() for key in session.calls[0]["headers"]}
+        assert "cookie" not in forwarded
+
     async def test_post_body_is_forwarded(self):
         session = FakeSession(upstream=FakeUpstream(body=b"{}"))
         hass = _running_hass(session)

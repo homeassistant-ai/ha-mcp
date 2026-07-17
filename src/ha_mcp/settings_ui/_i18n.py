@@ -66,7 +66,9 @@ def load_catalogs(directory: Path = LOCALES_DIR) -> dict[str, dict[str, Any]]:
     try:
         paths = sorted(directory.glob("*.json"))
     except OSError as exc:  # pragma: no cover - packaging guard
-        raise ImportError(f"Unable to enumerate settings UI locales at {directory}") from exc
+        raise ImportError(
+            f"Unable to enumerate settings UI locales at {directory}"
+        ) from exc
 
     for path in paths:
         locale = path.stem.lower().replace("_", "-")

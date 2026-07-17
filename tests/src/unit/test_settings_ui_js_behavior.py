@@ -264,6 +264,49 @@ class TestLocalizationBehavior:
         assert "Дополнения" in result.dom
         assert "Получить дополнения" in result.dom
 
+    def test_tool_search_matches_localized_title(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_get_addon",
+                            "title": "Get Add-ons",
+                            "description": "Get Home Assistant add-ons.",
+                            "primary_tag": "Add-ons",
+                            "category": "read",
+                        }
+                    ],
+                    "states": {},
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=self._localized_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const search = document.getElementById('search');
+              search.value = 'получить дополнения';
+              search.dispatchEvent(new Event('input', {bubbles: true}));
+              const row = document.querySelector('[data-name="ha_get_addon"]');
+              document.body.dataset.localizedSearchMatch = String(
+                row && !row.classList.contains('hidden')
+              );
+              search.value = 'get add-ons';
+              search.dispatchEvent(new Event('input', {bubbles: true}));
+              document.body.dataset.sourceSearchMatch = String(
+                row && !row.classList.contains('hidden')
+              );
+            """,
+        )
+        assert not result.errors
+        assert 'data-localized-search-match="true"' in result.dom
+        assert 'data-source-search-match="true"' in result.dom
+
     def test_language_selector_sets_cookie_and_reloads(
         self, settings_script: str
     ) -> None:
@@ -281,6 +324,27 @@ class TestLocalizationBehavior:
         assert not result.errors
         assert result.reloads == 1
         assert "ha_mcp_locale=ru" in result.dom
+
+    def test_malformed_locale_cookie_falls_back_to_auto(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=self._localized_dom("en"),
+            fetch_map=DEFAULT_FETCHES,
+            prelude="document.cookie = 'ha_mcp_locale=%E0%A4%A; Path=/';",
+            invoke="""
+              const select = document.getElementById('languageToggle');
+              document.body.dataset.languageValue = select.value;
+            """,
+        )
+        assert not result.errors
+        assert 'data-language-value="auto"' in result.dom
+        assert any(
+            entry["level"] == "warn"
+            and "ignoring malformed locale cookie" in str(entry["args"])
+            for entry in result.console
+        )
 
 
 def _assert_clean_init(result: HarnessResult) -> None:
