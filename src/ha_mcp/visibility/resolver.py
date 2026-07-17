@@ -535,6 +535,27 @@ async def visibility_filter_active() -> bool:
     return config_has_active_hide_dimensions(config)
 
 
+async def load_visibility_wire() -> dict[str, Any] | None:
+    """Serialize the visibility config for the component ``search`` fast path.
+
+    Loads the same memoized config ``visibility_filter_active`` reads and returns
+    its hide dimensions via ``VisibilityConfig.to_wire`` — the ``visibility``
+    param the ha_search consumer hands the ha_mcp_tools component when it
+    advertises the ``search_visibility`` capability, letting the component apply
+    the hide dimensions in-process instead of the server dropping to the legacy
+    path. Returns ``None`` on a load error so the caller keeps the legacy path
+    (there is no config to push into the component), matching the fail-closed-to-
+    legacy policy ``visibility_filter_active`` uses for the same gate. Reuses
+    ``get_data_dir`` so a test redirecting ``resolver.get_data_dir`` steers this
+    too.
+    """
+    try:
+        config = await asyncio.to_thread(load_visibility_config, get_data_dir())
+    except Exception:
+        return None
+    return config.to_wire()
+
+
 async def device_registry_needed_for_visibility() -> bool:
     """Load the visibility config off-loop and report whether the device-registry
     fetch is needed by any active area/label dimension.

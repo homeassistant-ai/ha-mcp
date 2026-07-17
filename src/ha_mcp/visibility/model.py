@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -33,3 +35,28 @@ class VisibilityConfig(BaseModel):
     # Respect HA Assist exposure: when true, hide entities not effectively exposed
     # to the "conversation" assistant (explicit override, else domain default).
     respect_assist_exposure: bool = False
+
+    def to_wire(self) -> dict[str, Any]:
+        """Serialize the hide dimensions for the component ``search`` fast path.
+
+        Emits exactly the fields the ha_mcp_tools component's ``search``
+        ``visibility`` param consumes (``_visibility_hidden_set``) — the nine hide
+        dimensions, one-to-one with what ``config_has_active_hide_dimensions`` and
+        ``hidden_entity_ids`` read. ``version``/``enabled`` are omitted: the
+        component applies the dimensions unconditionally, and the server only ever
+        sends this dict when the filter is active, so an ``enabled`` gate would be
+        redundant. Kept in lockstep with ``_visibility_hidden_set``; a new
+        dimension must be added on both sides (a new component capability), not
+        silently dropped here.
+        """
+        return {
+            "exclude_categories": list(self.exclude_categories),
+            "exclude_hidden": self.exclude_hidden,
+            "deny_entity_ids": list(self.deny_entity_ids),
+            "exclude_areas": list(self.exclude_areas),
+            "exclude_labels": list(self.exclude_labels),
+            "allow_entity_ids": list(self.allow_entity_ids),
+            "allow_areas": list(self.allow_areas),
+            "allow_labels": list(self.allow_labels),
+            "respect_assist_exposure": self.respect_assist_exposure,
+        }

@@ -28,6 +28,7 @@ from ..utils.fuzzy_search import apply_hidden_penalty
 from ..visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
+    load_visibility_wire,
     visibility_filter_active,
 )
 from .component_api import (
@@ -1870,31 +1871,78 @@ class SearchTools:
         # registry-only calls, so the component round-trip buys nothing worth
         # the shape risk.
         #
-        # The component also applies no entity-visibility filtering, so an
-        # install with an ACTIVE visibility filter (enabled + a hide dimension)
-        # must keep the legacy path, which excludes hidden entities before the
-        # counts/pagination. ``visibility_filter_active`` reloads the same
-        # opt-in config file the legacy filter uses (fail-closed to legacy on a
-        # malformed config). Checked only when the component would otherwise
-        # serve, so the common (no-component / filter-off) install pays nothing;
-        # visibility-enabled installs are the opt-in minority and stay on legacy
-        # until a later capability passes the hide rules to the component.
+        # Entity-visibility gate. A plain ``search`` component applies no
+        # filtering, so an install with an ACTIVE visibility filter would leak
+        # hidden entities through the fast path. The ``search_visibility``
+        # capability closes that: a component that advertises it accepts the raw
+        # hide config (``VisibilityConfig.to_wire``) as the ``visibility`` param
+        # and excludes hidden entities before its own counts/pagination, exactly
+        # as the legacy path does — so a visibility-active install can still take
+        # the fast path. Without the capability an active filter stays on the
+        # legacy path; with no active filter the plain ``search`` route runs with
+        # no ``visibility`` param (old components keep working). ``ha_get_overview``
+        # needs no analogous gate — it re-applies the filter server-side over the
+        # component's raw slices. Checked only when the component would otherwise
+        # serve, so the common (no-component / filter-off) install pays nothing.
         if req.query_text and not (req.area_filter or "").strip():
             caps = await get_component_caps(self._client)
-            if (
-                component_supports(caps, "search")
-                and not await visibility_filter_active()
-            ):
-                component_response = await self._ha_search_via_component(req, ctx)
-                if component_response is not None:
-                    return component_response
+            if component_supports(caps, "search"):
+                route_component, visibility = (
+                    await self._resolve_component_search_visibility(caps)
+                )
+                if route_component:
+                    component_response = await self._ha_search_via_component(
+                        req, ctx, visibility=visibility
+                    )
+                    if component_response is not None:
+                        return component_response
 
         return await self._legacy_ha_search(req, ctx)
 
+    async def _resolve_component_search_visibility(
+        self, caps: Any
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Decide the ha_search route under the entity-visibility gate.
+
+        Returns ``(route_component, visibility_param)`` for a caller that has
+        already confirmed the component advertises ``search``:
+
+        - filter inactive → ``(True, None)``: the plain component search, no
+          ``visibility`` param (parity with a pre-``search_visibility`` component).
+        - filter active + ``search_visibility`` capability + config serialized →
+          ``(True, <wire dict>)``: the component applies the hide dimensions
+          in-process.
+        - filter active without the capability, or the config could not be loaded
+          → ``(False, None)``: the legacy path applies the filter server-side
+          before the counts/pagination (fail-closed to legacy on a bad config,
+          matching ``visibility_filter_active``).
+
+        ``visibility_filter_active`` then ``load_visibility_wire`` both hit the
+        memoized config read, so the capability branch re-stats the file rather
+        than re-parsing it.
+        """
+        if not await visibility_filter_active():
+            return True, None
+        if component_supports(caps, "search_visibility"):
+            visibility = await load_visibility_wire()
+            if visibility is not None:
+                return True, visibility
+        return False, None
+
     async def _ha_search_via_component(
-        self, req: _ResolvedSearch, ctx: Context | None
+        self,
+        req: _ResolvedSearch,
+        ctx: Context | None,
+        *,
+        visibility: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Serve ha_search from the component; ``None`` ⇒ run the legacy path.
+
+        ``visibility`` is the serialized hide config passed to a
+        ``search_visibility``-capable component so it applies the entity-
+        visibility filter in-process (``None`` ⇒ no filter / not supported ⇒ the
+        component surfaces every match, correct only because the caller routes
+        here solely when the filter is inactive or the component can apply it).
 
         Error taxonomy (design § 4):
 
@@ -1911,7 +1959,7 @@ class SearchTools:
           identically, so surfacing it is correct.
         """
         try:
-            raw = await self._send_component_search(req)
+            raw = await self._send_component_search(req, visibility)
         except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
@@ -1924,14 +1972,22 @@ class SearchTools:
             return legacy
         return _shape_component_search_response(req, raw.get("result") or {})
 
-    async def _send_component_search(self, req: _ResolvedSearch) -> dict[str, Any]:
-        """Send one ``ha_mcp_tools/search`` command over the per-client WebSocket."""
+    async def _send_component_search(
+        self, req: _ResolvedSearch, visibility: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Send one ``ha_mcp_tools/search`` command over the per-client WebSocket.
+
+        ``visibility`` (the serialized hide config) is attached only when set, so
+        a plain-``search`` component (which lacks the param in its schema) never
+        receives it.
+        """
         ws = await get_websocket_client(
             url=self._client.base_url, token=self._client.token
         )
-        return await ws.send_command(
-            "ha_mcp_tools/search", **_build_component_search_request(req)
-        )
+        request = _build_component_search_request(req)
+        if visibility is not None:
+            request["visibility"] = visibility
+        return await ws.send_command("ha_mcp_tools/search", **request)
 
     async def _legacy_ha_search(
         self, req: _ResolvedSearch, ctx: Context | None
