@@ -124,10 +124,13 @@ _PIP_UNINSTALL_TIMEOUT_SECONDS = 120
 
 # How long a bring-up waits for an install job orphaned by a CANCELLED
 # previous bring-up before giving up: asyncio cancellation detaches the
-# awaiter but an executor pip job runs to completion regardless. Sized just
-# above the per-download install timeout so a healthy-but-slow job is waited
-# out rather than raced.
-_PENDING_INSTALL_WAIT_SECONDS = 330.0
+# awaiter but an executor pip job runs to completion regardless. Sized to
+# the same absolute budget as the readiness cap: pip's own timeout (300s)
+# is per-download, so a healthy cold install pulling the whole dependency
+# tree on slow hardware can legitimately run for minutes — a tighter bound
+# would misreport it as stuck. On expiry the bring-up fails with a clear
+# message and the next reload retries.
+_PENDING_INSTALL_WAIT_SECONDS = 600.0
 
 # The in-process connection API was added with the embedded server in 7.10.0.
 # Older distributions can be left behind by an unsupported Core version's
@@ -540,8 +543,9 @@ class EmbeddedServerManager:
         """Run a package-mutating executor job, tracked process-wide.
 
         Registration happens BEFORE dispatch and completion is signalled on
-        the executor thread in a finally, so a bring-up cancelled mid-install
-        leaves behind a waitable job instead of an invisible one.
+        the executor thread in a finally, so a bring-up cancelled mid-job
+        (install or uninstall) leaves behind a waitable job instead of an
+        invisible one.
         """
         global _PENDING_INSTALL_DONE
         done = threading.Event()
@@ -559,7 +563,23 @@ class EmbeddedServerManager:
                     if _PENDING_INSTALL_DONE is done:
                         _PENDING_INSTALL_DONE = None
 
-        return await self._hass.async_add_executor_job(_run)
+        try:
+            return await self._hass.async_add_executor_job(_run)
+        except asyncio.CancelledError:
+            # The job is queued or running and its finally will clear the
+            # slot; leaving it registered is the whole point — the next
+            # bring-up must wait it out.
+            raise
+        except BaseException:
+            # A DISPATCH failure (e.g. executor already shut down) means
+            # _run never ran and nothing will ever set the event — clear our
+            # own registration or the next bring-up waits the full budget on
+            # a job that does not exist. The identity check makes this a
+            # no-op if _run did run and already cleaned up.
+            with _PENDING_INSTALL_LOCK:
+                if _PENDING_INSTALL_DONE is done:
+                    _PENDING_INSTALL_DONE = None
+            raise
 
     async def _async_wait_for_pending_install(self) -> None:
         """Wait out an install job orphaned by a cancelled previous bring-up.
@@ -568,6 +588,11 @@ class EmbeddedServerManager:
         bounded wait — mutating the package (or importing from it) underneath
         a live pip job is the same corruption class as purging sys.modules
         under a live importer.
+
+        The wait occupies one pooled executor thread (bounded): the setter
+        runs on an executor thread with no handle to this loop, so a
+        loop-side wakeup would need cross-thread plumbing this rare recovery
+        path does not justify.
         """
         with _PENDING_INSTALL_LOCK:
             pending = _PENDING_INSTALL_DONE
@@ -1340,12 +1365,19 @@ def _prune_and_check_importing_workers() -> bool:
 # the executor, if any. asyncio cancellation of a bring-up detaches the
 # awaiter, but the executor job keeps running to completion — untracked, an
 # orphaned pip could swap the distribution's files under the NEXT bring-up's
-# install or its worker's cold import (found in review of the #1904 fixes;
-# pre-existing). The dispatching coroutine registers the event BEFORE handing
+# install or its worker's cold import (found in review of PR #1911, the
+# #1904 fixes; pre-existing). The dispatching coroutine registers the event BEFORE handing
 # the job to the executor, and the executor fn sets it in a finally that
 # survives cancellation; the next bring-up waits on it before mutating
 # anything. Process-global for the same reason as _IMPORTING_WORKERS: a
 # manager is recreated on every bring-up.
+#
+# Single slot BY DESIGN: at most one tracked job can exist at a time — the
+# server entry is single-instance, an entry reload cancels-and-awaits the
+# previous bring-up before setting up, and every dispatch site sits behind
+# _async_wait_for_pending_install. A second concurrent dispatcher would
+# overwrite the slot and silently lose the older live job — keep any new
+# package-mutating call site behind the wait gate.
 _PENDING_INSTALL_LOCK = threading.Lock()
 _PENDING_INSTALL_DONE: threading.Event | None = None
 

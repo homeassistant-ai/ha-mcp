@@ -2560,6 +2560,102 @@ class TestPendingInstallTracking:
         monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", None)
         await mgr._async_wait_for_pending_install()  # must not raise or block
 
+    async def test_finally_leaves_a_foreign_slot_untouched(self, tmp_path, monkeypatch):
+        # The identity guard in the tracked job's finally: if a NEWER job has
+        # already replaced the slot, the older job's cleanup must not clear
+        # it — an unconditional clear would let the next bring-up skip the
+        # wait and mutate the package under the newer, still-running pip.
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", None)
+        foreign = threading.Event()
+
+        def _job() -> str:
+            with es._PENDING_INSTALL_LOCK:
+                es._PENDING_INSTALL_DONE = foreign
+            return "ok"
+
+        await mgr._async_run_tracked_install_job(_job)
+
+        with es._PENDING_INSTALL_LOCK:
+            assert es._PENDING_INSTALL_DONE is foreign
+
+    async def test_force_install_routes_through_tracking(self, tmp_path, monkeypatch):
+        # The wiring IS the behavioral payload: a revert to a bare
+        # async_add_executor_job would silently reintroduce the orphaned,
+        # untrackable install. Observe the slot from inside the pip stub.
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", None)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        observed: list[bool] = []
+
+        def _fake_install(spec: str, **kwargs: object) -> bool:
+            with es._PENDING_INSTALL_LOCK:
+                observed.append(es._PENDING_INSTALL_DONE is not None)
+            return True
+
+        monkeypatch.setattr(es, "install_package", _fake_install)
+
+        await mgr._async_force_install()
+
+        assert observed == [True]
+        with es._PENDING_INSTALL_LOCK:
+            assert es._PENDING_INSTALL_DONE is None
+
+    async def test_remove_distribution_routes_through_tracking(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", None)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        observed: list[bool] = []
+
+        def _fake_uninstall(dist_name: str, *, target: str | None = None) -> bool:
+            with es._PENDING_INSTALL_LOCK:
+                observed.append(es._PENDING_INSTALL_DONE is not None)
+            return True
+
+        monkeypatch.setattr(es, "_uninstall_distribution", _fake_uninstall)
+
+        await mgr._async_remove_distribution("ha-mcp-dev")
+
+        assert observed == [True]
+        with es._PENDING_INSTALL_LOCK:
+            assert es._PENDING_INSTALL_DONE is None
+
+    async def test_dispatch_failure_clears_own_registration(
+        self, tmp_path, monkeypatch
+    ):
+        # If dispatch itself raises (executor shut down), _run never starts
+        # and nothing would ever set the event - the registration must be
+        # rolled back or the next bring-up waits the full budget on a job
+        # that does not exist.
+        mgr, hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", None)
+
+        def _refuse(func, *args):
+            raise RuntimeError("cannot schedule new futures after shutdown")
+
+        monkeypatch.setattr(hass, "async_add_executor_job", _refuse)
+
+        with pytest.raises(RuntimeError, match="cannot schedule"):
+            await mgr._async_run_tracked_install_job(lambda: "never runs")
+
+        with es._PENDING_INSTALL_LOCK:
+            assert es._PENDING_INSTALL_DONE is None
+
+    async def test_wait_noop_when_pending_already_set(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        done = threading.Event()
+        done.set()
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", done)
+
+        with caplog.at_level("WARNING"):
+            await mgr._async_wait_for_pending_install()  # must not raise
+
+        assert "install job is still running" not in caplog.text
+
     async def test_ensure_package_waits_before_touching_anything(
         self, tmp_path, monkeypatch
     ):
