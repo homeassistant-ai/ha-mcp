@@ -161,8 +161,12 @@ def strict_bps_ack_line() -> str:
 def _raise_bps_ack_required_error(name: str) -> NoReturn:
     """Raise the structured block error for a gated write missing the key.
 
-    The message and suggestion tell the model how to obtain the key but
-    never contain the key itself.
+    The suggestions tell the model how to obtain the key but never contain
+    the key itself. The second suggestion pre-arms the model for clients
+    that validate tool arguments against a stale cached tool schema and
+    reject the ``BestPracticeKey`` retry client-side (#1901) — that
+    rejection never reaches the server, so this error is the only server
+    surface that can carry the recovery path.
     """
     reference_file = STRICT_BPS_GATED_TOOLS[name]
     message = (
@@ -178,7 +182,14 @@ def _raise_bps_ack_required_error(name: str) -> NoReturn:
             suggestions=[
                 f"Call ha_get_skill_guide(skill={_HA_BEST_PRACTICES_SKILL_NAME!r}, "
                 f"file={reference_file!r}), read the content, then retry with "
-                f"{STRICT_BPS_KEY_PARAM} set."
+                f"{STRICT_BPS_KEY_PARAM} set.",
+                f"If your client then rejects the retry with a schema-validation "
+                f"error such as 'must NOT have additional properties', it is "
+                f"validating against a stale cached tool schema from an older "
+                f"server version that lacks {STRICT_BPS_KEY_PARAM}. Ask the user "
+                f"to fully reload the client application (VS Code: run "
+                f"'Developer: Reload Window' — restarting the MCP server or "
+                f"resetting cached tools is not enough), then retry.",
             ],
             context={"tool_name": name, "strict_mandatory_bps": True},
         )

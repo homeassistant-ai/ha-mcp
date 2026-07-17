@@ -196,6 +196,30 @@ class TestStrictBpsMiddleware:
         # scene maps to SKILL.md (its canonical first file).
         assert "SKILL.md" in body["error"]["suggestion"]
 
+    async def test_block_error_guides_stale_schema_clients(self, strict_on):
+        """The block error pre-arms the model for schema-validating clients
+        that reject the BestPracticeKey retry against a stale cached tool
+        schema (#1901). That rejection happens client-side — the call never
+        reaches the server — so this error is the only server surface that
+        can carry the recovery path."""
+        mw = StrictBpsMiddleware()
+        call_next = AsyncMock(return_value="ok")
+        ctx = make_context("ha_config_set_dashboard", {"url_path": "x"})
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(ctx, call_next)
+        raw = excinfo.value.args[0]
+        body = json.loads(raw)
+        suggestions = body["error"]["suggestions"]
+        assert len(suggestions) == 2
+        # The primary suggestion stays the key-recovery call.
+        assert "ha_get_skill_guide" in suggestions[0]
+        stale_hint = suggestions[1]
+        # Names the client-side error verbatim so the model can match it.
+        assert "must NOT have additional properties" in stale_hint
+        assert "Developer: Reload Window" in stale_hint
+        # The key literal must still never appear anywhere in the error.
+        assert STRICT_BPS_ACK_KEY not in raw
+
     async def test_gated_with_correct_key_passes_and_strips_key(self, strict_on):
         mw = StrictBpsMiddleware()
         call_next = AsyncMock(return_value="ok")
