@@ -9,6 +9,18 @@ history from before the fork.
 -->
 
 
+## v2.0.3.dev1 (2026-07-18)
+
+Version line re-based onto the stable series (stable is 2.0.2, so dev now
+leads it as 2.0.3.devN); the 1.2.3.devN entries below predate this rule.
+
+### Bug Fixes
+
+- Write the proxy-config handoff file with restricted (0600) permissions like
+  the OAuth creds file, falling back to a plain write with a logged warning
+  when the filesystem cannot honor the mode.
+
+
 ## v1.2.3.dev6 (2026-07-05)
 
 ### Documentation

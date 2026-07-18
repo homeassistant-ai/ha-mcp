@@ -5793,3 +5793,38 @@ class TestStartOAuthOffConfigShape:
         assert set(written.keys()) == {"target_url", "webhook_id"}
         assert "oauth" not in written
         assert "public_base_url" not in written
+
+
+class TestProxyConfigFilePersistence:
+    """The proxy-config handoff file carries the OAuth keys when auth is
+    enabled, so it must actually land on disk with the flavor's expected
+    permissions: the dev flavor writes it via _atomic_write_0600 (with a
+    warned plain-write fallback); stable still plain-writes until the next
+    promote carries the dev change over."""
+
+    def _run(self, tmp_path):
+        return TestMainDismissesMutexBanners()._run_main_to_keepalive(tmp_path)
+
+    def test_config_file_written_and_dev_gets_0600(self, tmp_path):
+        rc, _api_calls, _start = self._run(tmp_path)
+        assert rc == 0
+        config_path = tmp_path / "proxy_config.json"
+        assert config_path.exists()
+        assert isinstance(json.loads(config_path.read_text()), dict)
+        if CURRENT["key"] == "dev":
+            assert oct(config_path.stat().st_mode & 0o777) == "0o600"
+
+    def test_dev_falls_back_and_warns_when_0600_unavailable(self, tmp_path, capsys):
+        if CURRENT["key"] != "dev":
+            pytest.skip("stable plain-writes until the dev 0600 change promotes")
+        # os.open is only reached via _atomic_write_0600 on this path (OAuth
+        # off, creds resolution skipped), so failing it exercises exactly the
+        # proxy-config fallback branch.
+        with patch.object(os, "open", side_effect=OSError("no mode bits")):
+            rc, _api_calls, _start = self._run(tmp_path)
+        assert rc == 0
+        config_path = tmp_path / "proxy_config.json"
+        assert config_path.exists()
+        assert isinstance(json.loads(config_path.read_text()), dict)
+        err = capsys.readouterr().err
+        assert "Could not create the proxy config file" in err

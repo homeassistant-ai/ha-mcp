@@ -471,6 +471,121 @@ class TestLocalizationBehavior:
         )
 
 
+class TestTranslationHtmlSanitization:
+    """Catalog strings rendered into ``innerHTML`` go through ``tHtml``:
+    the whole value is HTML-escaped and only the fixed allowlist of
+    formatting tags (``<code>``, ``<strong>``, the internal tab links) is
+    restored, so a hostile or vandalized community translation cannot
+    contribute any other markup (CodeQL js/xss-through-dom).
+    """
+
+    @staticmethod
+    def _dom_with_catalog(messages: dict[str, str], extra_html: str = "") -> str:
+        from ha_mcp.settings_ui._i18n import build_payload, serialize_payload
+
+        catalog = build_payload("en")
+        catalog["messages"].update(messages)
+        payload = serialize_payload(catalog)
+        additions = (
+            f'<script id="ha-mcp-i18n" type="application/json">{payload}</script>'
+            + extra_html
+        )
+        return MIN_DOM.replace("</body>", additions + "</body>")
+
+    def test_malicious_static_html_translation_is_neutralized(
+        self, settings_script: str
+    ) -> None:
+        """A ``[data-i18n-html]`` catalog value carrying a non-allowlisted
+        element renders as escaped text, while allowlisted formatting
+        survives.
+        """
+        result = run_script(
+            settings_script,
+            initial_html=self._dom_with_catalog(
+                {
+                    "notice.env_pins": (
+                        'evil <img src=x onerror="document.title=1"> but '
+                        "<code>kept-code</code> and <strong>kept-strong</strong>"
+                    )
+                },
+                '<div id="xssProbe" data-i18n-html="notice.env_pins">original</div>',
+            ),
+            fetch_map=DEFAULT_FETCHES,
+        )
+        _assert_clean_init(result)
+        assert "<img" not in result.dom
+        assert "&lt;img" in result.dom
+        assert "<code>kept-code</code>" in result.dom
+        assert "<strong>kept-strong</strong>" in result.dom
+
+    def test_allowlisted_panel_link_is_restored(self, settings_script: str) -> None:
+        """The internal tab-link shape used by ``policies.rules.empty`` is
+        restored exactly; a link with any other attribute set stays escaped.
+        """
+        result = run_script(
+            settings_script,
+            initial_html=self._dom_with_catalog(
+                {
+                    "policies.rules.empty": (
+                        'Go to the <a href="#" data-panel-link="tools">Tools</a> tab, '
+                        'not <a href="https://evil.example">elsewhere</a>'
+                    )
+                },
+                '<div id="linkProbe" data-i18n-html="policies.rules.empty">x</div>',
+            ),
+            fetch_map=DEFAULT_FETCHES,
+        )
+        _assert_clean_init(result)
+        assert '<a href="#" data-panel-link="tools">Tools</a>' in result.dom
+        assert '<a href="https://evil.example">' not in result.dom
+        assert "&lt;a href=" in result.dom
+
+    def test_env_pinned_note_params_substituted_after_escaping(
+        self, settings_script: str
+    ) -> None:
+        """Placeholder params are trusted fragments injected after the
+        catalog string is escaped: a hostile translation around
+        ``{variable}`` is neutralized while the built ``<code>`` fragment
+        with the env var name still renders as markup.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_foo",
+                            "title": "Foo",
+                            "primary_tag": "Utilities",
+                            "tags": ["Utilities"],
+                            "description": "Test tool",
+                            "annotations": {},
+                        }
+                    ],
+                    "states": {"ha_foo": "disabled"},
+                    "env_pinned": {"ha_foo": "disabled"},
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=self._dom_with_catalog(
+                {
+                    "tools.notes.env_pinned": (
+                        'Pwn <em onmouseover="x()">{variable}</em> here'
+                    )
+                }
+            ),
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "<code>DISABLED_TOOLS</code>" in result.dom
+        assert "&lt;em" in result.dom
+        assert "<em onmouseover" not in result.dom
+
+
 def _assert_clean_init(result: HarnessResult) -> None:
     """Fail loud on any script-init or transpile error.
 
