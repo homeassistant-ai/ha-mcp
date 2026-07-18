@@ -163,6 +163,20 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "heuristic to have correctly caught. mypy already confirms this file is "
         "clean under that typing.",
     ),
+    # NOTE: same PATH-WIDE caveat as the server.py entry above — re-audit if
+    # backup.py grows genuinely mixed-returns functions.
+    (
+        "py/mixed-returns",
+        "src/ha_mcp/tools/backup.py",
+        "Mixing implicit and explicit returns",
+        "False positive on _finalize_backup_timeout and _perform_restore's "
+        "success-branch-vs-raise shape (helpers extracted from the C901 "
+        "refactor, issue #925): the non-return branch in each always goes "
+        "through raise_tool_error, typed '-> NoReturn' (see helpers.py), so "
+        "there is no implicit None return for CodeQL's heuristic to have "
+        "correctly caught. mypy already confirms this file is clean under "
+        "that typing.",
+    ),
     # ---- Security-suite entries (the workflow also gates the default
     # <language>-code-scanning suites; see codeql-quality.yml header). Entries
     # whose message substring is generic ("as clear text", "hashing algorithm")

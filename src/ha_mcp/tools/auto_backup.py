@@ -194,60 +194,114 @@ def with_auto_backup(
                     )
                 )
             if enabled:
-                client_obj = explicit_client
-                if client_obj is None and args:
-                    client_obj = getattr(args[0], "_client", None) or getattr(
-                        args[0], "client", None
-                    )
-                snap_domain: str = (
-                    domain_fn(kwargs) if domain_fn is not None else domain or ""
+                await _capture_pre_write_snapshot(
+                    func,
+                    args,
+                    kwargs,
+                    settings=settings,
+                    explicit_client=explicit_client,
+                    domain=domain,
+                    domain_fn=domain_fn,
+                    id_param=id_param,
+                    id_fn=id_fn,
+                    mandatory=mandatory,
                 )
-                if id_fn is not None:
-                    entity_id = _resolve_str(id_fn(kwargs))
-                else:
-                    entity_id = _resolve_str(kwargs.get(id_param or ""))
-                if entity_id:
-                    try:
-                        if client_obj is not None:
-                            mgr = get_backup_manager(client_obj, settings)
-                            await mgr.maybe_snapshot(
-                                snap_domain,
-                                entity_id,
-                                tool_name=func.__name__,
-                                mandatory=mandatory,
-                            )
-                        elif mandatory:
-                            # No client to capture with, but this tool requires a
-                            # backup — fail closed rather than write un-backed-up.
-                            raise MandatoryBackupError(
-                                "no Home Assistant client is available to capture "
-                                "the pre-write backup"
-                            )
-                    except MandatoryBackupError as err:
-                        # A required pre-write snapshot genuinely failed (not a
-                        # legitimate "nothing to snapshot" skip). Fail closed: the
-                        # wrapped write never runs, so nothing has been changed.
-                        # The ToolError this raises propagates rather than being
-                        # swallowed by the best-effort handler below.
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.BACKUP_CAPTURE_FAILED,
-                                f"'{func.__name__}' requires a pre-write backup, "
-                                f"but the snapshot could not be captured: {err}. "
-                                "The write was blocked and nothing was changed.",
-                                suggestions=err.suggestions
-                                or ["Retry once the underlying issue is resolved"],
-                                context={"tool_name": func.__name__},
-                            )
-                        )
-                    except _DECORATOR_TRANSIENT_ERRORS as err:
-                        logger.warning(
-                            "Auto-backup: capture raised %s: %s — write proceeding",
-                            type(err).__name__,
-                            err,
-                        )
             return await func(*args, **kwargs)
 
         return wrapper
 
     return decorator
+
+
+def _resolve_backup_client(explicit_client: Any, args: tuple[Any, ...]) -> Any:
+    """Resolve the HA client for capture: the explicit decorator kwarg, else the
+    bound ``self._client`` / ``self.client`` of a wrapped class method."""
+    client_obj = explicit_client
+    if client_obj is None and args:
+        client_obj = getattr(args[0], "_client", None) or getattr(
+            args[0], "client", None
+        )
+    return client_obj
+
+
+def _resolve_snapshot_target(
+    kwargs: dict[str, Any],
+    *,
+    domain: str | None,
+    domain_fn: Callable[[dict[str, Any]], str] | None,
+    id_param: str | None,
+    id_fn: Callable[[dict[str, Any]], str] | None,
+) -> tuple[str, str]:
+    """Compute the ``(domain, entity_id)`` snapshot target from the tool kwargs."""
+    snap_domain: str = domain_fn(kwargs) if domain_fn is not None else domain or ""
+    if id_fn is not None:
+        entity_id = _resolve_str(id_fn(kwargs))
+    else:
+        entity_id = _resolve_str(kwargs.get(id_param or ""))
+    return snap_domain, entity_id
+
+
+async def _capture_pre_write_snapshot(
+    func: Callable[..., Awaitable[Any]],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    settings: Any,
+    explicit_client: Any,
+    domain: str | None,
+    domain_fn: Callable[[dict[str, Any]], str] | None,
+    id_param: str | None,
+    id_fn: Callable[[dict[str, Any]], str] | None,
+    mandatory: bool,
+) -> None:
+    """Resolve the snapshot target and capture a pre-write backup.
+
+    Extracted from ``with_auto_backup``'s wrapper. Best-effort: a transient
+    capture failure logs a WARNING and lets the write proceed; a ``mandatory``
+    failure maps to a structured ``BACKUP_CAPTURE_FAILED`` error that fails the
+    write closed (nothing is changed).
+    """
+    client_obj = _resolve_backup_client(explicit_client, args)
+    snap_domain, entity_id = _resolve_snapshot_target(
+        kwargs, domain=domain, domain_fn=domain_fn, id_param=id_param, id_fn=id_fn
+    )
+    if entity_id:
+        try:
+            if client_obj is not None:
+                mgr = get_backup_manager(client_obj, settings)
+                await mgr.maybe_snapshot(
+                    snap_domain,
+                    entity_id,
+                    tool_name=func.__name__,
+                    mandatory=mandatory,
+                )
+            elif mandatory:
+                # No client to capture with, but this tool requires a
+                # backup — fail closed rather than write un-backed-up.
+                raise MandatoryBackupError(
+                    "no Home Assistant client is available to capture "
+                    "the pre-write backup"
+                )
+        except MandatoryBackupError as err:
+            # A required pre-write snapshot genuinely failed (not a
+            # legitimate "nothing to snapshot" skip). Fail closed: the
+            # wrapped write never runs, so nothing has been changed.
+            # The ToolError this raises propagates rather than being
+            # swallowed by the best-effort handler below.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.BACKUP_CAPTURE_FAILED,
+                    f"'{func.__name__}' requires a pre-write backup, "
+                    f"but the snapshot could not be captured: {err}. "
+                    "The write was blocked and nothing was changed.",
+                    suggestions=err.suggestions
+                    or ["Retry once the underlying issue is resolved"],
+                    context={"tool_name": func.__name__},
+                )
+            )
+        except _DECORATOR_TRANSIENT_ERRORS as err:
+            logger.warning(
+                "Auto-backup: capture raised %s: %s — write proceeding",
+                type(err).__name__,
+                err,
+            )

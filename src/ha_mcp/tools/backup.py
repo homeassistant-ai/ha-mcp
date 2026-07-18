@@ -27,6 +27,7 @@ from pydantic import Field
 
 from ..backup_manager import (
     LEGACY_PREFIX,
+    BackupManager,
     MandatoryBackupError,
     get_backup_manager,
 )
@@ -508,6 +509,33 @@ async def _poll_backup_completion(
         # state=idle+completed observed but entry not yet (or not freshly) in
         # the list — same bug class as #1433 one tick earlier; continue polling.
 
+    return await _finalize_backup_timeout(
+        ws_client,
+        name=name,
+        backup_job_id=backup_job_id,
+        agent_id=agent_id,
+        max_wait_seconds=max_wait_seconds,
+        job_start_ts=job_start_ts,
+    )
+
+
+async def _finalize_backup_timeout(
+    ws_client: HomeAssistantWebSocketClient,
+    *,
+    name: str,
+    backup_job_id: str,
+    agent_id: str,
+    max_wait_seconds: int,
+    job_start_ts: datetime,
+) -> dict[str, Any]:
+    """Final backup-list lookup after the poll window; return a late success or raise.
+
+    One best-effort ``backup/info`` lookup after the poll loop gives up: if it
+    confirms the backup completed just after the window, returns the success
+    response (with a late-completion warning); otherwise raises
+    ``TIMEOUT_OPERATION``, annotating the context with ``verification_error``
+    (the lookup itself failed) or ``likely_in_progress`` (still creating).
+    """
     logger.info(
         f"Backup did not complete within {max_wait_seconds}s; "
         "performing final backup-list lookup before raising timeout"
@@ -532,50 +560,16 @@ async def _poll_backup_completion(
         )
 
     if final_info is not None and final_info.get("success"):
-        response = _build_success_response_if_found(
+        response, likely_in_progress = _inspect_post_timeout_info(
             final_info,
             name=name,
             backup_job_id=backup_job_id,
             agent_id=agent_id,
-            duration_seconds=max_wait_seconds,
+            max_wait_seconds=max_wait_seconds,
             job_start_ts=job_start_ts,
         )
         if response is not None:
-            response["warnings"] = [
-                f"Backup completion observed only after the {max_wait_seconds}s "
-                "poll window — the operation succeeded but took longer than "
-                "expected. Increase max_wait_seconds if this recurs.",
-            ]
-            logger.info(
-                f"Backup found in post-timeout list lookup: {response['backup_id']}"
-            )
             return response
-        # Helper returned None. Three cases distinguishable from the raw
-        # final_info: (a) backup failed in the gap between last in-loop poll
-        # and the final lookup → raise SERVICE_CALL_FAILED, the failure mode
-        # is known and unambiguous; (b) state still indicates creation in
-        # progress → surface `likely_in_progress` so callers back off retries
-        # rather than compounding duplicates; (c) state idle+completed but no
-        # fresh matching entry → genuine TIMEOUT_OPERATION, nothing extra to
-        # add.
-        result_block = final_info.get("result") or {}
-        last_event = result_block.get("last_action_event") or {}
-        state = result_block.get("state")
-        event_state = last_event.get("state")
-        if event_state == "failed":
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Backup creation failed (observed at post-timeout lookup)",
-                    context={
-                        "backup_job_id": backup_job_id,
-                        "name": name,
-                        "last_action_event": last_event,
-                    },
-                )
-            )
-        if state != "idle":
-            likely_in_progress = True
 
     logger.warning(f"Backup did not complete within {max_wait_seconds} seconds")
     error_context: dict[str, Any] = {"backup_job_id": backup_job_id, "name": name}
@@ -594,6 +588,101 @@ async def _poll_backup_completion(
             ],
         )
     )
+
+
+def _inspect_post_timeout_info(
+    final_info: dict[str, Any],
+    *,
+    name: str,
+    backup_job_id: str,
+    agent_id: str,
+    max_wait_seconds: int,
+    job_start_ts: datetime,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Interpret the post-timeout ``backup/info``: (late-success, likely_in_progress).
+
+    Returns the late-completion success response (with a warning appended) when
+    the backup finished just after the poll window, else ``(None,
+    likely_in_progress)``. Raises ``SERVICE_CALL_FAILED`` when the final lookup
+    shows the backup failed in the gap after the last in-loop poll.
+    """
+    response = _build_success_response_if_found(
+        final_info,
+        name=name,
+        backup_job_id=backup_job_id,
+        agent_id=agent_id,
+        duration_seconds=max_wait_seconds,
+        job_start_ts=job_start_ts,
+    )
+    if response is not None:
+        response["warnings"] = [
+            f"Backup completion observed only after the {max_wait_seconds}s "
+            "poll window — the operation succeeded but took longer than "
+            "expected. Increase max_wait_seconds if this recurs.",
+        ]
+        logger.info(
+            f"Backup found in post-timeout list lookup: {response['backup_id']}"
+        )
+        return response, False
+    # Helper returned None. Three cases distinguishable from the raw
+    # final_info: (a) backup failed in the gap between last in-loop poll
+    # and the final lookup → raise SERVICE_CALL_FAILED, the failure mode
+    # is known and unambiguous; (b) state still indicates creation in
+    # progress → surface `likely_in_progress` so callers back off retries
+    # rather than compounding duplicates; (c) state idle+completed but no
+    # fresh matching entry → genuine TIMEOUT_OPERATION, nothing extra to
+    # add.
+    result_block = final_info.get("result") or {}
+    last_event = result_block.get("last_action_event") or {}
+    state = result_block.get("state")
+    event_state = last_event.get("state")
+    if event_state == "failed":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Backup creation failed (observed at post-timeout lookup)",
+                context={
+                    "backup_job_id": backup_job_id,
+                    "name": name,
+                    "last_action_event": last_event,
+                },
+            )
+        )
+    likely_in_progress = False
+    if state != "idle":
+        likely_in_progress = True
+    return None, likely_in_progress
+
+
+async def _resolve_backup_credentials(
+    client: HomeAssistantClient, ws_client: HomeAssistantWebSocketClient
+) -> tuple[str, str]:
+    """Resolve ``(password, local_agent_id)`` for a create_backup call.
+
+    One ``backup_prep`` component read replaces the sequential password +
+    local-agent probes when supported; otherwise falls back to the legacy
+    per-probe WS calls. Raises when the default password or local agent is
+    missing (both are required to create a backup).
+    """
+    # One component read replaces the sequential password + local-agent
+    # probes when the ha_mcp_tools component supports backup_prep.
+    prep = await _backup_prep_via_component(client)
+    if prep is not None:
+        password = prep.get("default_password")
+        if not password:
+            _raise_no_default_password_error()
+        local_agent = prep.get("local_agent_id")
+        if not local_agent:
+            _raise_no_local_backup_agent_error(prep.get("agent_ids"))
+    else:
+        # Get backup password (raises ToolError on failure)
+        password = await _get_backup_password(ws_client)
+
+        # Discover the local backup agent at call time. HA Core registers
+        # `backup.local`; HA Supervised registers `hassio.local`. Hardcoding
+        # either breaks the other deployment.
+        local_agent = await _get_local_backup_agent_id(ws_client)
+    return password, local_agent
 
 
 async def create_backup(
@@ -629,24 +718,7 @@ async def create_backup(
             )
         ws_client = cast(HomeAssistantWebSocketClient, ws_client)
 
-        # One component read replaces the sequential password + local-agent
-        # probes when the ha_mcp_tools component supports backup_prep.
-        prep = await _backup_prep_via_component(client)
-        if prep is not None:
-            password = prep.get("default_password")
-            if not password:
-                _raise_no_default_password_error()
-            local_agent = prep.get("local_agent_id")
-            if not local_agent:
-                _raise_no_local_backup_agent_error(prep.get("agent_ids"))
-        else:
-            # Get backup password (raises ToolError on failure)
-            password = await _get_backup_password(ws_client)
-
-            # Discover the local backup agent at call time. HA Core registers
-            # `backup.local`; HA Supervised registers `hassio.local`. Hardcoding
-            # either breaks the other deployment.
-            local_agent = await _get_local_backup_agent_id(ws_client)
+        password, local_agent = await _resolve_backup_credentials(client, ws_client)
 
         # Generate backup name if not provided
         if not name:
@@ -810,6 +882,203 @@ def _backup_protected(entry: dict[str, Any]) -> bool | None:
     return any(flags) if flags else None
 
 
+async def _verify_backup_exists(
+    ws_client: HomeAssistantWebSocketClient, backup_id: str
+) -> dict[str, Any]:
+    """Confirm ``backup_id`` exists in ``backup/info``; return its entry or raise."""
+    # Verify backup exists
+    backup_info = await ws_client.send_command("backup/info")
+    if not backup_info.get("success"):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                backup_info.get("error", "Failed to retrieve backup information"),
+            )
+        )
+
+    backups = backup_info.get("result", {}).get("backups", [])
+    matched = next((b for b in backups if b.get("backup_id") == backup_id), None)
+
+    if matched is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Backup '{backup_id}' not found",
+                suggestions=[
+                    "Inspect available snapshots in Home Assistant's "
+                    "backup panel before retrying"
+                ],
+            )
+        )
+    return cast(dict[str, Any], matched)
+
+
+async def _resolve_restore_credentials(
+    client: HomeAssistantClient, ws_client: HomeAssistantWebSocketClient
+) -> tuple[str | None, str]:
+    """Resolve ``(password, local_agent_id)`` for a restore.
+
+    Unlike create, a missing default password is tolerated (returns ``None``)
+    so the restore can proceed without a safety backup — the local agent is
+    still required. One ``backup_prep`` component read replaces the sequential
+    probes when supported; otherwise falls back to the legacy WS calls.
+    """
+    # One component read replaces the sequential local-agent + password
+    # probes when the ha_mcp_tools component supports backup_prep.
+    prep = await _backup_prep_via_component(client)
+    if prep is not None:
+        # Local backup agent (Supervisor's hassio.local on Supervised,
+        # backup.local on Core). Used for both the safety backup and the
+        # restore call below.
+        local_agent = prep.get("local_agent_id")
+        if not local_agent:
+            _raise_no_local_backup_agent_error(prep.get("agent_ids"))
+
+        # Create safety backup BEFORE restoring
+        logger.info("Creating safety backup before restore...")
+        password = prep.get("default_password")
+        if not password:
+            # No default password - log warning but continue (restore might still work)
+            logger.warning("No default password - proceeding without safety backup")
+            password = None
+    else:
+        # Discover the local backup agent (Supervisor's hassio.local on
+        # Supervised, backup.local on Core). Used for both the safety backup
+        # and the restore call below.
+        local_agent = await _get_local_backup_agent_id(ws_client)
+
+        # Create safety backup BEFORE restoring
+        logger.info("Creating safety backup before restore...")
+        try:
+            password = await _get_backup_password(ws_client)
+        except ToolError:
+            # Password error - log warning but continue (restore might still work)
+            logger.warning("No default password - proceeding without safety backup")
+            password = None
+    return password, local_agent
+
+
+async def _perform_restore(
+    ws_client: HomeAssistantWebSocketClient,
+    matched: dict[str, Any],
+    *,
+    backup_id: str,
+    local_agent: str,
+    password: str | None,
+    restore_database: bool,
+    safety_backup_id: str | None,
+    safety_warnings: list[str],
+) -> dict[str, Any]:
+    """Issue ``backup/restore`` and build the success response (or raise on failure).
+
+    Reconciles ``restore_database`` against the target on Supervised, forwards
+    the default password only for a protected target, and assembles the
+    user-facing warnings/note.
+    """
+    # `backup/info` returns ManagerBackup entries: `database_included` is a
+    # top-level field (inherited from BaseBackup), but `protected` is NOT —
+    # it lives per-agent under the entry's `agents` map (AgentBackupStatus),
+    # so a top-level `matched.get("protected")` is always None against real
+    # HA. Derive it from the agents map (shared with _summarize_backup).
+    target_protected = _backup_protected(matched)
+
+    # Reconcile restore_database with the target only on Supervised. HA's
+    # Supervisor raises "Restore database must match backup" when
+    # restore_homeassistant is set and restore_database != the backup's
+    # database_included flag (hassio/backup.py). HA Core's restore path
+    # (CoreBackupReaderWriter) has no such constraint and writes the caller's
+    # value verbatim, so overriding it there would silently discard an
+    # explicit request for no HA-side reason. Fall back to the caller's
+    # request when not Supervised or when the field is absent. Surface a
+    # warning when the derived value overrides what the caller asked for so
+    # the override isn't silent on a destructive op.
+    is_supervised = local_agent == "hassio.local"
+    target_database_included = matched.get("database_included")
+    if is_supervised and target_database_included is not None:
+        effective_restore_database = target_database_included
+    else:
+        effective_restore_database = restore_database
+
+    # Perform restore
+    restore_params: dict[str, Any] = {
+        "backup_id": backup_id,
+        "agent_id": local_agent,
+        "restore_database": effective_restore_database,
+        "restore_homeassistant": True,
+        "restore_addons": [],  # Restore all addons from backup
+        "restore_folders": [],  # Restore all folders from backup
+    }
+    # Forward the default backup password ONLY for a protected (encrypted)
+    # target. `password` here is HA's default create_backup.password, which
+    # is independent of whether *this* backup is encrypted: HA validates the
+    # password against the target unconditionally and rejects a password on
+    # an unprotected backup ("Invalid password for backup" →
+    # IncorrectPasswordError). Gate on the target's per-agent `protected`
+    # flag (read above) so an unprotected snapshot still restores on a
+    # default-password instance. HA's backup/restore schema types `password`
+    # as `str` (not `str | None`), so only include the key when we actually
+    # forward one — passing None would fail voluptuous validation. Without
+    # this a protected backup cannot be restored even though the HA UI,
+    # which applies the stored key, succeeds (#1681).
+    if password is not None and target_protected:
+        restore_params["password"] = password
+
+    result = await ws_client.send_command("backup/restore", **restore_params)
+
+    if result.get("success"):
+        # Honest note + warnings depending on whether the safety
+        # backup actually landed. When ``password is None`` (default
+        # password unavailable / not configured), ``_create_safety_backup``
+        # returned None; telling the user "a safety backup was created"
+        # in that case is user-visible misinformation.
+        warnings = [
+            "Home Assistant is restarting. Connection will be temporarily lost."
+        ]
+        # Surface any late-completion notice from the safety-backup poll —
+        # a slow backup subsystem right before a destructive restore is
+        # exactly the signal a caller wants to see.
+        warnings.extend(safety_warnings)
+        if effective_restore_database != restore_database:
+            warnings.append(
+                "restore_database was adjusted to "
+                f"{effective_restore_database} to match the target backup "
+                "(Home Assistant's Supervisor requires it to match the "
+                "backup's database_included flag when restoring Home "
+                "Assistant)."
+            )
+        if safety_backup_id is None:
+            warnings.append(
+                "No safety backup was created (the default backup "
+                "password is not set). If the restore corrupts state, "
+                "there is no automatic rollback — configure the "
+                "default password in Settings → System → Backups and "
+                "retry to get a safety net."
+            )
+            note = "Restore proceeding WITHOUT a safety backup. See warnings above."
+        else:
+            note = (
+                "A safety backup was created before restore. You can "
+                "restore from it if needed."
+            )
+        return {
+            "success": True,
+            "backup_id": backup_id,
+            "status": "Restore initiated - Home Assistant will restart",
+            "safety_backup_id": safety_backup_id,
+            "restore_database": effective_restore_database,
+            "warnings": warnings,
+            "note": note,
+        }
+    else:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                result.get("error", "Restore operation failed"),
+                context={"backup_id": backup_id},
+            )
+        )
+
+
 async def restore_backup(
     client: HomeAssistantClient,
     backup_id: str,
@@ -853,170 +1122,24 @@ async def restore_backup(
             )
         ws_client = cast(HomeAssistantWebSocketClient, ws_client)
 
-        # Verify backup exists
-        backup_info = await ws_client.send_command("backup/info")
-        if not backup_info.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    backup_info.get("error", "Failed to retrieve backup information"),
-                )
-            )
+        matched = await _verify_backup_exists(ws_client, backup_id)
 
-        backups = backup_info.get("result", {}).get("backups", [])
-        matched = next((b for b in backups if b.get("backup_id") == backup_id), None)
-
-        if matched is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    f"Backup '{backup_id}' not found",
-                    suggestions=[
-                        "Inspect available snapshots in Home Assistant's "
-                        "backup panel before retrying"
-                    ],
-                )
-            )
-
-        # One component read replaces the sequential local-agent + password
-        # probes when the ha_mcp_tools component supports backup_prep.
-        prep = await _backup_prep_via_component(client)
-        if prep is not None:
-            # Local backup agent (Supervisor's hassio.local on Supervised,
-            # backup.local on Core). Used for both the safety backup and the
-            # restore call below.
-            local_agent = prep.get("local_agent_id")
-            if not local_agent:
-                _raise_no_local_backup_agent_error(prep.get("agent_ids"))
-
-            # Create safety backup BEFORE restoring
-            logger.info("Creating safety backup before restore...")
-            password = prep.get("default_password")
-            if not password:
-                # No default password - log warning but continue (restore might still work)
-                logger.warning("No default password - proceeding without safety backup")
-                password = None
-        else:
-            # Discover the local backup agent (Supervisor's hassio.local on
-            # Supervised, backup.local on Core). Used for both the safety backup
-            # and the restore call below.
-            local_agent = await _get_local_backup_agent_id(ws_client)
-
-            # Create safety backup BEFORE restoring
-            logger.info("Creating safety backup before restore...")
-            try:
-                password = await _get_backup_password(ws_client)
-            except ToolError:
-                # Password error - log warning but continue (restore might still work)
-                logger.warning("No default password - proceeding without safety backup")
-                password = None
+        password, local_agent = await _resolve_restore_credentials(client, ws_client)
 
         safety_backup_id, safety_warnings = await _create_safety_backup(
             ws_client, password, local_agent, ctx=ctx
         )
 
-        # `backup/info` returns ManagerBackup entries: `database_included` is a
-        # top-level field (inherited from BaseBackup), but `protected` is NOT —
-        # it lives per-agent under the entry's `agents` map (AgentBackupStatus),
-        # so a top-level `matched.get("protected")` is always None against real
-        # HA. Derive it from the agents map (shared with _summarize_backup).
-        target_protected = _backup_protected(matched)
-
-        # Reconcile restore_database with the target only on Supervised. HA's
-        # Supervisor raises "Restore database must match backup" when
-        # restore_homeassistant is set and restore_database != the backup's
-        # database_included flag (hassio/backup.py). HA Core's restore path
-        # (CoreBackupReaderWriter) has no such constraint and writes the caller's
-        # value verbatim, so overriding it there would silently discard an
-        # explicit request for no HA-side reason. Fall back to the caller's
-        # request when not Supervised or when the field is absent. Surface a
-        # warning when the derived value overrides what the caller asked for so
-        # the override isn't silent on a destructive op.
-        is_supervised = local_agent == "hassio.local"
-        target_database_included = matched.get("database_included")
-        if is_supervised and target_database_included is not None:
-            effective_restore_database = target_database_included
-        else:
-            effective_restore_database = restore_database
-
-        # Perform restore
-        restore_params: dict[str, Any] = {
-            "backup_id": backup_id,
-            "agent_id": local_agent,
-            "restore_database": effective_restore_database,
-            "restore_homeassistant": True,
-            "restore_addons": [],  # Restore all addons from backup
-            "restore_folders": [],  # Restore all folders from backup
-        }
-        # Forward the default backup password ONLY for a protected (encrypted)
-        # target. `password` here is HA's default create_backup.password, which
-        # is independent of whether *this* backup is encrypted: HA validates the
-        # password against the target unconditionally and rejects a password on
-        # an unprotected backup ("Invalid password for backup" →
-        # IncorrectPasswordError). Gate on the target's per-agent `protected`
-        # flag (read above) so an unprotected snapshot still restores on a
-        # default-password instance. HA's backup/restore schema types `password`
-        # as `str` (not `str | None`), so only include the key when we actually
-        # forward one — passing None would fail voluptuous validation. Without
-        # this a protected backup cannot be restored even though the HA UI,
-        # which applies the stored key, succeeds (#1681).
-        if password is not None and target_protected:
-            restore_params["password"] = password
-
-        result = await ws_client.send_command("backup/restore", **restore_params)
-
-        if result.get("success"):
-            # Honest note + warnings depending on whether the safety
-            # backup actually landed. When ``password is None`` (default
-            # password unavailable / not configured), ``_create_safety_backup``
-            # returned None; telling the user "a safety backup was created"
-            # in that case is user-visible misinformation.
-            warnings = [
-                "Home Assistant is restarting. Connection will be temporarily lost."
-            ]
-            # Surface any late-completion notice from the safety-backup poll —
-            # a slow backup subsystem right before a destructive restore is
-            # exactly the signal a caller wants to see.
-            warnings.extend(safety_warnings)
-            if effective_restore_database != restore_database:
-                warnings.append(
-                    "restore_database was adjusted to "
-                    f"{effective_restore_database} to match the target backup "
-                    "(Home Assistant's Supervisor requires it to match the "
-                    "backup's database_included flag when restoring Home "
-                    "Assistant)."
-                )
-            if safety_backup_id is None:
-                warnings.append(
-                    "No safety backup was created (the default backup "
-                    "password is not set). If the restore corrupts state, "
-                    "there is no automatic rollback — configure the "
-                    "default password in Settings → System → Backups and "
-                    "retry to get a safety net."
-                )
-                note = "Restore proceeding WITHOUT a safety backup. See warnings above."
-            else:
-                note = (
-                    "A safety backup was created before restore. You can "
-                    "restore from it if needed."
-                )
-            return {
-                "success": True,
-                "backup_id": backup_id,
-                "status": "Restore initiated - Home Assistant will restart",
-                "safety_backup_id": safety_backup_id,
-                "restore_database": effective_restore_database,
-                "warnings": warnings,
-                "note": note,
-            }
-        else:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    result.get("error", "Restore operation failed"),
-                    context={"backup_id": backup_id},
-                )
-            )
+        return await _perform_restore(
+            ws_client,
+            matched,
+            backup_id=backup_id,
+            local_agent=local_agent,
+            password=password,
+            restore_database=restore_database,
+            safety_backup_id=safety_backup_id,
+            safety_warnings=safety_warnings,
+        )
 
     except ToolError:
         raise
@@ -1040,7 +1163,6 @@ async def restore_backup(
                     type(err).__name__,
                     err,
                 )
-    return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def _summarize_backup(entry: dict[str, Any]) -> dict[str, Any]:
@@ -1249,124 +1371,9 @@ async def delete_backup(
             )
         ws_client = cast(HomeAssistantWebSocketClient, ws_client)
 
-        info_result = await ws_client.send_command("backup/info")
-        if not info_result.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    info_result.get("error", "Failed to retrieve backup information"),
-                )
-            )
-        info_result_block = info_result.get("result") or {}
-        info_agent_errors = info_result_block.get("agent_errors") or {}
-        if info_agent_errors:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Cannot verify the backup inventory is complete: one or "
-                    "more backup agents failed to respond, so the newest-"
-                    "snapshot and scheduled-backup guards can't be trusted "
-                    "against a possibly-partial list.",
-                    context={"backup_id": backup_id, "agent_errors": info_agent_errors},
-                )
-            )
-        backups = info_result_block.get("backups") or []
-        matched = next((b for b in backups if b.get("backup_id") == backup_id), None)
-        if matched is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    f"Backup '{backup_id}' not found",
-                    suggestions=[
-                        "Use ha_manage_backup(scope='snapshot', action='list') "
-                        "to see available backup IDs",
-                    ],
-                )
-            )
-
-        if matched.get("with_automatic_settings") is not False:
-            _refuse_snapshot_delete(
-                "Refusing to delete a scheduled (automatic) backup, or one "
-                "whose automatic/manual origin Home Assistant cannot "
-                "confirm (with_automatic_settings=None — not created by "
-                "this HA instance, or predates this metadata) — treated "
-                "as not provably manual, and therefore not deletable.",
-                backup_id=backup_id,
-            )
-
-        # Checked before the age floor below: a backup that is BOTH the
-        # newest AND too young must report "newest" (create a new one
-        # first), not "too young" — the age-floor message's remedy
-        # ("lower snapshot_delete_min_age_days") would be actively
-        # misleading advice for the newest snapshot, which stays
-        # protected at any age floor including 0.
-        newest_id = _newest_backup_id(backups)
-        if newest_id == backup_id:
-            _refuse_snapshot_delete(
-                "Refusing to delete the newest snapshot — at least one "
-                "recovery point must remain. Create a new snapshot first "
-                "if you specifically need to free this one's space.",
-                backup_id=backup_id,
-            )
-
-        min_age_days = settings.snapshot_delete_min_age_days
-        target_date = _parse_backup_date(matched.get("date"))
-        if target_date is None:
-            _refuse_snapshot_delete(
-                "Refusing to delete a backup with a missing or unparseable "
-                "date — cannot verify it clears the minimum-age floor.",
-                backup_id=backup_id,
-            )
-        cutoff = datetime.now(UTC) - timedelta(days=min_age_days)
-        # min_age_days=0 must unconditionally disable the floor, even if
-        # target_date is slightly ahead of this host's clock (clock skew
-        # vs the HA instance that stamped it) — guard explicitly rather
-        # than relying on the arithmetic reduction, which clock skew breaks.
-        if min_age_days > 0 and target_date > cutoff:
-            _refuse_snapshot_delete(
-                f"Refusing to delete a backup younger than "
-                f"snapshot_delete_min_age_days={min_age_days} days — at "
-                "least one recent recovery point must remain. Delete an "
-                "older backup, or lower snapshot_delete_min_age_days if "
-                "this recurs.",
-                backup_id=backup_id,
-            )
-
-        await safe_progress(
-            ctx,
-            progress=0,
-            total=_BACKUP_DELETE_WAIT_S,
-            message="deleting backup",
-        )
-        delete_result = await ws_client.send_command(
-            "backup/delete",
-            backup_id=backup_id,
-            _wait_timeout=_BACKUP_DELETE_WAIT_S,
-        )
-        if not delete_result.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    delete_result.get("error", "Backup deletion failed"),
-                    context={"backup_id": backup_id},
-                )
-            )
-        agent_errors = (delete_result.get("result") or {}).get("agent_errors") or {}
-        if agent_errors:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Backup deletion failed on one or more agents",
-                    context={"backup_id": backup_id, "agent_errors": agent_errors},
-                )
-            )
-
-        return {
-            "success": True,
-            "backup_id": backup_id,
-            "name": matched.get("name"),
-            "status": "Backup deleted successfully",
-        }
+        matched, backups = await _verify_delete_inventory(ws_client, backup_id)
+        _check_snapshot_deletable(matched, backups, settings, backup_id)
+        return await _execute_snapshot_delete(ws_client, matched, backup_id, ctx)
 
     except ToolError:
         raise
@@ -1388,6 +1395,152 @@ async def delete_backup(
                     type(err).__name__,
                     err,
                 )
+
+
+async def _verify_delete_inventory(
+    ws_client: HomeAssistantWebSocketClient, backup_id: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Fetch ``backup/info`` for a delete: return ``(matched entry, all backups)`` or raise.
+
+    Rejects when any agent failed to enumerate its backups (a partial list
+    would make the newest/scheduled guards untrustworthy) and when the target
+    backup does not exist.
+    """
+    info_result = await ws_client.send_command("backup/info")
+    if not info_result.get("success"):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                info_result.get("error", "Failed to retrieve backup information"),
+            )
+        )
+    info_result_block = info_result.get("result") or {}
+    info_agent_errors = info_result_block.get("agent_errors") or {}
+    if info_agent_errors:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Cannot verify the backup inventory is complete: one or "
+                "more backup agents failed to respond, so the newest-"
+                "snapshot and scheduled-backup guards can't be trusted "
+                "against a possibly-partial list.",
+                context={"backup_id": backup_id, "agent_errors": info_agent_errors},
+            )
+        )
+    backups = info_result_block.get("backups") or []
+    matched = next((b for b in backups if b.get("backup_id") == backup_id), None)
+    if matched is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Backup '{backup_id}' not found",
+                suggestions=[
+                    "Use ha_manage_backup(scope='snapshot', action='list') "
+                    "to see available backup IDs",
+                ],
+            )
+        )
+    return matched, backups
+
+
+def _check_snapshot_deletable(
+    matched: dict[str, Any],
+    backups: list[dict[str, Any]],
+    settings: Any,
+    backup_id: str,
+) -> None:
+    """Apply the scheduled / newest / age-floor delete guards; raise to refuse."""
+    if matched.get("with_automatic_settings") is not False:
+        _refuse_snapshot_delete(
+            "Refusing to delete a scheduled (automatic) backup, or one "
+            "whose automatic/manual origin Home Assistant cannot "
+            "confirm (with_automatic_settings=None — not created by "
+            "this HA instance, or predates this metadata) — treated "
+            "as not provably manual, and therefore not deletable.",
+            backup_id=backup_id,
+        )
+
+    # Checked before the age floor below: a backup that is BOTH the
+    # newest AND too young must report "newest" (create a new one
+    # first), not "too young" — the age-floor message's remedy
+    # ("lower snapshot_delete_min_age_days") would be actively
+    # misleading advice for the newest snapshot, which stays
+    # protected at any age floor including 0.
+    newest_id = _newest_backup_id(backups)
+    if newest_id == backup_id:
+        _refuse_snapshot_delete(
+            "Refusing to delete the newest snapshot — at least one "
+            "recovery point must remain. Create a new snapshot first "
+            "if you specifically need to free this one's space.",
+            backup_id=backup_id,
+        )
+
+    min_age_days = settings.snapshot_delete_min_age_days
+    target_date = _parse_backup_date(matched.get("date"))
+    if target_date is None:
+        _refuse_snapshot_delete(
+            "Refusing to delete a backup with a missing or unparseable "
+            "date — cannot verify it clears the minimum-age floor.",
+            backup_id=backup_id,
+        )
+    cutoff = datetime.now(UTC) - timedelta(days=min_age_days)
+    # min_age_days=0 must unconditionally disable the floor, even if
+    # target_date is slightly ahead of this host's clock (clock skew
+    # vs the HA instance that stamped it) — guard explicitly rather
+    # than relying on the arithmetic reduction, which clock skew breaks.
+    if min_age_days > 0 and target_date > cutoff:
+        _refuse_snapshot_delete(
+            f"Refusing to delete a backup younger than "
+            f"snapshot_delete_min_age_days={min_age_days} days — at "
+            "least one recent recovery point must remain. Delete an "
+            "older backup, or lower snapshot_delete_min_age_days if "
+            "this recurs.",
+            backup_id=backup_id,
+        )
+
+
+async def _execute_snapshot_delete(
+    ws_client: HomeAssistantWebSocketClient,
+    matched: dict[str, Any],
+    backup_id: str,
+    ctx: Context | None,
+) -> dict[str, Any]:
+    """Issue ``backup/delete`` with an elevated WS wait and return the result."""
+    await safe_progress(
+        ctx,
+        progress=0,
+        total=_BACKUP_DELETE_WAIT_S,
+        message="deleting backup",
+    )
+    delete_result = await ws_client.send_command(
+        "backup/delete",
+        backup_id=backup_id,
+        _wait_timeout=_BACKUP_DELETE_WAIT_S,
+    )
+    if not delete_result.get("success"):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                delete_result.get("error", "Backup deletion failed"),
+                context={"backup_id": backup_id},
+            )
+        )
+    agent_errors = (delete_result.get("result") or {}).get("agent_errors") or {}
+    if agent_errors:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Backup deletion failed on one or more agents",
+                context={"backup_id": backup_id, "agent_errors": agent_errors},
+            )
+        )
+
+    return {
+        "success": True,
+        "backup_id": backup_id,
+        "name": matched.get("name"),
+        "status": "Backup deleted successfully",
+    }
 
 
 # Valid (scope, action) combinations. Anything outside this set is
@@ -1605,314 +1758,423 @@ survives an agent's own mistakes.
         _gate_combo(scope, action)
 
         if scope == "snapshot":
-            if action == "create":
-                return await create_backup(client, name, ctx=ctx)
-            if action == "list":
-                return await list_backups(client, limit)
-            if action == "delete":
-                bid = _require("backup_id", backup_id, scope, action)
-                return await delete_backup(client, bid, confirm, ctx=ctx)
-            # action == "restore"
-            bid = _require("backup_id", backup_id, scope, action)
-            return await restore_backup(client, bid, restore_database, ctx=ctx)
+            return await _dispatch_snapshot_action(
+                client,
+                action,
+                scope=scope,
+                name=name,
+                backup_id=backup_id,
+                restore_database=restore_database,
+                confirm=confirm,
+                limit=limit,
+                ctx=ctx,
+            )
 
         # scope == "edits"
         settings = get_global_settings()
         mgr = get_backup_manager(client, settings)
+        return await _dispatch_edits_action(
+            mgr,
+            settings,
+            action,
+            scope=scope,
+            domain=domain,
+            entity_id=entity_id,
+            backup_name=backup_name,
+            older_than_days=older_than_days,
+            limit=limit,
+        )
 
-        if action == "create":
-            # On-demand snapshot for "I'm about to edit this in the HA UI,
-            # save the current state first." Drives the same handler path
-            # the ``@with_auto_backup`` decorator uses on writes, but goes
-            # through ``mgr.maybe_snapshot(force=True)`` which bypasses
-            # both the ``enable_auto_backup`` toggle and the per-entity
-            # throttle window — the request is explicit, so neither
-            # should suppress it.
-            dom = _require("domain", domain, scope, action)
-            eid = _require("entity_id", entity_id, scope, action)
-            if mgr.handler_for(dom) is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"No backup handler registered for domain={dom!r}",
-                        context={"domain": dom, "entity_id": eid},
-                        suggestions=[
-                            "Supported domains: " + ", ".join(mgr.supported_domains()),
-                        ],
-                    )
-                )
-            path = await mgr.maybe_snapshot(
-                dom,
-                eid,
-                tool_name="ha_manage_backup.edits.create",
-                force=True,
+
+async def _dispatch_snapshot_action(
+    client: HomeAssistantClient,
+    action: str,
+    *,
+    scope: str,
+    name: str | None,
+    backup_id: str | None,
+    restore_database: bool,
+    confirm: bool,
+    limit: int,
+    ctx: Context | None,
+) -> dict[str, Any]:
+    """Route a ``scope="snapshot"`` action to its full-tarball handler."""
+    if action == "create":
+        return await create_backup(client, name, ctx=ctx)
+    if action == "list":
+        return await list_backups(client, limit)
+    if action == "delete":
+        bid = _require("backup_id", backup_id, scope, action)
+        return await delete_backup(client, bid, confirm, ctx=ctx)
+    # action == "restore"
+    bid = _require("backup_id", backup_id, scope, action)
+    return await restore_backup(client, bid, restore_database, ctx=ctx)
+
+
+async def _dispatch_edits_action(
+    mgr: BackupManager,
+    settings: Any,
+    action: str,
+    *,
+    scope: str,
+    domain: str | None,
+    entity_id: str | None,
+    backup_name: str | None,
+    older_than_days: int | None,
+    limit: int,
+) -> dict[str, Any]:
+    """Route a ``scope="edits"`` action to its per-entity auto-backup handler."""
+    if action == "create":
+        return await _edits_create(mgr, scope, action, domain, entity_id)
+    if action == "list":
+        return await _edits_list(mgr, settings, domain, entity_id, limit)
+    if action == "view":
+        return await _edits_view(mgr, scope, action, backup_name)
+    if action == "diff":
+        return await _edits_diff(mgr, scope, action, backup_name)
+    if action == "restore":
+        return await _edits_restore(mgr, scope, action, backup_name)
+    # action == "delete"
+    return await _edits_delete(mgr, domain, entity_id, backup_name, older_than_days)
+
+
+async def _edits_create(
+    mgr: BackupManager,
+    scope: str,
+    action: str,
+    domain: str | None,
+    entity_id: str | None,
+) -> dict[str, Any]:
+    """(edits, create) On-demand force-snapshot of one entity."""
+    # On-demand snapshot for "I'm about to edit this in the HA UI,
+    # save the current state first." Drives the same handler path
+    # the ``@with_auto_backup`` decorator uses on writes, but goes
+    # through ``mgr.maybe_snapshot(force=True)`` which bypasses
+    # both the ``enable_auto_backup`` toggle and the per-entity
+    # throttle window — the request is explicit, so neither
+    # should suppress it.
+    dom = _require("domain", domain, scope, action)
+    eid = _require("entity_id", entity_id, scope, action)
+    if mgr.handler_for(dom) is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"No backup handler registered for domain={dom!r}",
+                context={"domain": dom, "entity_id": eid},
+                suggestions=[
+                    "Supported domains: " + ", ".join(mgr.supported_domains()),
+                ],
             )
-            if path is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Could not snapshot {dom}:{eid} — entity not found "
-                        + "or fetch returned no config",
-                        context={"domain": dom, "entity_id": eid},
-                        suggestions=[
-                            "Verify the entity exists via the matching "
-                            + "ha_config_get_* tool first",
-                            "For helpers, pass domain='helper_<helper_type>' "
-                            + "(e.g. 'helper_input_boolean')",
-                        ],
-                    )
-                )
-            return {
-                "success": True,
-                "data": {
-                    "backup_name": path.name,
-                    "domain": dom,
-                    "entity_id": eid,
-                    "size": path.stat().st_size,
-                },
-            }
-
-        if action == "list":
-            # Edits-store snapshots + pre-#1579 legacy .bak entries (#1579).
-            # The manager owns the merge (sync dir-glob off-thread + async
-            # legacy service call) so this layer stays source-agnostic.
-            entries = await mgr.list_edits_and_legacy(
-                domain=domain,
-                entity_id=entity_id,
-                limit=limit,
+        )
+    path = await mgr.maybe_snapshot(
+        dom,
+        eid,
+        tool_name="ha_manage_backup.edits.create",
+        force=True,
+    )
+    if path is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Could not snapshot {dom}:{eid} — entity not found "
+                + "or fetch returned no config",
+                context={"domain": dom, "entity_id": eid},
+                suggestions=[
+                    "Verify the entity exists via the matching "
+                    + "ha_config_get_* tool first",
+                    "For helpers, pass domain='helper_<helper_type>' "
+                    + "(e.g. 'helper_input_boolean')",
+                ],
             )
-            return {
-                "success": True,
-                "data": {
-                    "backups": entries,
-                    "count": len(entries),
-                    "backup_dir": str(mgr.backup_dir),
-                    "enabled": mgr.enabled,
-                    "throttle_minutes": settings.auto_backup_throttle_minutes,
-                    "retain_per_entity": settings.auto_backup_retain_per_entity,
-                },
-            }
+        )
+    return {
+        "success": True,
+        "data": {
+            "backup_name": path.name,
+            "domain": dom,
+            "entity_id": eid,
+            "size": path.stat().st_size,
+        },
+    }
 
-        if action == "view":
-            bname = _require("backup_name", backup_name, scope, action)
-            try:
-                if bname.startswith(LEGACY_PREFIX):
-                    # Legacy read is an async service call (component-side store),
-                    # not a local-dir read; same FileNotFound/ValueError contract.
-                    data = await mgr.read_legacy(bname[len(LEGACY_PREFIX) :])
-                else:
-                    data = await asyncio.to_thread(mgr.read_snapshot, bname)
-            except FileNotFoundError:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Backup {bname!r} not found",
-                        context={"backup_name": bname},
-                    )
-                )
-            except ValueError as err:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        str(err),
-                        context={"backup_name": bname},
-                    )
-                )
-            return {"success": True, "data": data}
 
-        if action == "diff":
-            bname = _require("backup_name", backup_name, scope, action)
-            try:
-                diff = await mgr.diff_snapshot(bname)
-            except FileNotFoundError:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Backup {bname!r} not found",
-                        context={"backup_name": bname},
-                    )
-                )
-            except (ValueError, LookupError) as err:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        str(err),
-                        context={"backup_name": bname},
-                    )
-                )
-            except ToolError:
-                raise
-            except Exception as err:
-                # Fetching the live config for diff goes through the
-                # same domain handler ``restore`` uses, so the same
-                # HA-side failure modes (4xx/5xx, WS errors, schema
-                # drift) apply. Funnel through
-                # ``exception_to_structured_error`` so the structured
-                # response carries enough context to retry.
-                exception_to_structured_error(
-                    err,
-                    context={"backup_name": bname, "action": "diff"},
-                    suggestions=[
-                        "Verify the entity referenced by the backup still "
-                        + "exists; diff fetches its current config",
-                        "Inspect the snapshot YAML via "
-                        + "ha_manage_backup(scope='edits', action='view', "
-                        + "backup_name=...) to confirm it parses",
-                    ],
-                )
-                return None  # unreachable: exception_to_structured_error always raises
-            warnings: list[str] = []
-            if diff.get("entity_missing"):
-                # ``restore_snapshot`` outcome on a missing entity is
-                # domain-dependent: upsert paths (automation, script,
-                # dashboard) recreate it, but helper / label / category
-                # restores go through ``<domain>/update`` WS commands
-                # that expect the entity to exist and would surface a
-                # WS error if it does not. Hedge rather than promise
-                # one specific outcome.
-                warnings.append(
-                    "Entity is missing from HA; restore behaviour is "
-                    "domain-dependent (upsert paths recreate it; "
-                    "update-only paths return an error)"
-                )
-            if diff.get("truncated"):
-                # Text snapshots (file/YAML) carry a unified diff, not a
-                # JSON-Patch — name it accordingly.
-                noun = "Diff" if diff.get("kind") == "text" else "Patch"
-                warnings.append(
-                    f"{noun} truncated; the target has more changes than the "
-                    "bounded diff captures — view the snapshot for the full state"
-                )
-            return {
-                "success": True,
-                "data": diff,
-                **({"warnings": warnings} if warnings else {}),
-            }
+async def _edits_list(
+    mgr: BackupManager,
+    settings: Any,
+    domain: str | None,
+    entity_id: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    """(edits, list) List per-entity auto-backups plus legacy .bak entries."""
+    # Edits-store snapshots + pre-#1579 legacy .bak entries (#1579).
+    # The manager owns the merge (sync dir-glob off-thread + async
+    # legacy service call) so this layer stays source-agnostic.
+    entries = await mgr.list_edits_and_legacy(
+        domain=domain,
+        entity_id=entity_id,
+        limit=limit,
+    )
+    return {
+        "success": True,
+        "data": {
+            "backups": entries,
+            "count": len(entries),
+            "backup_dir": str(mgr.backup_dir),
+            "enabled": mgr.enabled,
+            "throttle_minutes": settings.auto_backup_throttle_minutes,
+            "retain_per_entity": settings.auto_backup_retain_per_entity,
+        },
+    }
 
-        if action == "restore":
-            bname = _require("backup_name", backup_name, scope, action)
-            try:
-                result = await mgr.restore_snapshot(bname)
-            except FileNotFoundError:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Backup {bname!r} not found",
-                        context={"backup_name": bname},
-                    )
-                )
-            except (ValueError, LookupError) as err:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        str(err),
-                        context={"backup_name": bname},
-                    )
-                )
-            except MandatoryBackupError as err:
-                # A legacy restore's mandatory pre-restore safety snapshot
-                # genuinely failed — the overwrite was blocked, nothing changed.
-                # Same fail-closed contract + error code as the @with_auto_backup
-                # write path (#1579), so callers see one consistent failure mode.
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.BACKUP_CAPTURE_FAILED,
-                        f"Restore blocked: the pre-restore safety snapshot could "
-                        f"not be captured: {err}. Nothing was changed.",
-                        context={"backup_name": bname},
-                        suggestions=err.suggestions
-                        or ["Retry once the underlying issue is resolved"],
-                    )
-                )
-            except ToolError:
-                raise
-            except Exception as err:
-                # ``handler.restore`` is domain-specific and can surface
-                # HA-side rejections (schema-validation failures, 4xx/5xx
-                # responses, WS command errors). Without this catch those
-                # propagate as opaque INTERNAL_ERROR with no
-                # ``backup_name`` / ``domain`` context — the user is left
-                # to read the FastMCP traceback. Funnel through
-                # ``exception_to_structured_error`` so the structured
-                # response carries enough context to retry.
-                exception_to_structured_error(
-                    err,
-                    context={"backup_name": bname, "action": "restore"},
-                    suggestions=[
-                        "Verify the entity referenced by the backup still "
-                        + "exists; restore re-POSTs to its current registry "
-                        + "key",
-                        "Compare the captured schema vs current HA — HA "
-                        + "minor versions occasionally drop/rename fields",
-                        "Inspect the snapshot YAML via "
-                        + "ha_manage_backup(scope='edits', action='view', "
-                        + "backup_name=...)",
-                    ],
-                )
-                return None  # unreachable: exception_to_structured_error always raises
-            return {
-                "success": True,
-                "data": result,
-                "warnings": [
-                    "This restore did NOT restart HA. To revert, restore the safety_backup."
-                ]
-                if result.get("safety_backup")
-                else [],
-            }
 
-        # action == "delete"
-        if backup_name:
-            try:
-                await asyncio.to_thread(mgr.delete_snapshot, backup_name)
-            except FileNotFoundError:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Backup {backup_name!r} not found",
-                        context={"backup_name": backup_name},
-                    )
+async def _edits_view(
+    mgr: BackupManager,
+    scope: str,
+    action: str,
+    backup_name: str | None,
+) -> dict[str, Any]:
+    """(edits, view) Read one auto-backup file by name."""
+    bname = _require("backup_name", backup_name, scope, action)
+    try:
+        if bname.startswith(LEGACY_PREFIX):
+            # Legacy read is an async service call (component-side store),
+            # not a local-dir read; same FileNotFound/ValueError contract.
+            data = await mgr.read_legacy(bname[len(LEGACY_PREFIX) :])
+        else:
+            data = await asyncio.to_thread(mgr.read_snapshot, bname)
+    except FileNotFoundError:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Backup {bname!r} not found",
+                context={"backup_name": bname},
+            )
+        )
+    except ValueError as err:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(err),
+                context={"backup_name": bname},
+            )
+        )
+    return {"success": True, "data": data}
+
+
+async def _edits_diff(
+    mgr: BackupManager,
+    scope: str,
+    action: str,
+    backup_name: str | None,
+) -> dict[str, Any]:
+    """(edits, diff) Compare one auto-backup against the entity's live config."""
+    bname = _require("backup_name", backup_name, scope, action)
+    try:
+        diff = await mgr.diff_snapshot(bname)
+    except FileNotFoundError:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Backup {bname!r} not found",
+                context={"backup_name": bname},
+            )
+        )
+    except (ValueError, LookupError) as err:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(err),
+                context={"backup_name": bname},
+            )
+        )
+    except ToolError:
+        raise
+    except Exception as err:
+        # Fetching the live config for diff goes through the
+        # same domain handler ``restore`` uses, so the same
+        # HA-side failure modes (4xx/5xx, WS errors, schema
+        # drift) apply. Funnel through
+        # ``exception_to_structured_error`` so the structured
+        # response carries enough context to retry.
+        exception_to_structured_error(
+            err,
+            context={"backup_name": bname, "action": "diff"},
+            suggestions=[
+                "Verify the entity referenced by the backup still "
+                + "exists; diff fetches its current config",
+                "Inspect the snapshot YAML via "
+                + "ha_manage_backup(scope='edits', action='view', "
+                + "backup_name=...) to confirm it parses",
+            ],
+        )
+        return None  # unreachable: exception_to_structured_error always raises
+    warnings: list[str] = []
+    if diff.get("entity_missing"):
+        # ``restore_snapshot`` outcome on a missing entity is
+        # domain-dependent: upsert paths (automation, script,
+        # dashboard) recreate it, but helper / label / category
+        # restores go through ``<domain>/update`` WS commands
+        # that expect the entity to exist and would surface a
+        # WS error if it does not. Hedge rather than promise
+        # one specific outcome.
+        warnings.append(
+            "Entity is missing from HA; restore behaviour is "
+            "domain-dependent (upsert paths recreate it; "
+            "update-only paths return an error)"
+        )
+    if diff.get("truncated"):
+        # Text snapshots (file/YAML) carry a unified diff, not a
+        # JSON-Patch — name it accordingly.
+        noun = "Diff" if diff.get("kind") == "text" else "Patch"
+        warnings.append(
+            f"{noun} truncated; the target has more changes than the "
+            "bounded diff captures — view the snapshot for the full state"
+        )
+    return {
+        "success": True,
+        "data": diff,
+        **({"warnings": warnings} if warnings else {}),
+    }
+
+
+async def _edits_restore(
+    mgr: BackupManager,
+    scope: str,
+    action: str,
+    backup_name: str | None,
+) -> dict[str, Any]:
+    """(edits, restore) Re-apply one auto-backup (with a fresh safety snapshot)."""
+    bname = _require("backup_name", backup_name, scope, action)
+    try:
+        result = await mgr.restore_snapshot(bname)
+    except FileNotFoundError:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Backup {bname!r} not found",
+                context={"backup_name": bname},
+            )
+        )
+    except (ValueError, LookupError) as err:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(err),
+                context={"backup_name": bname},
+            )
+        )
+    except MandatoryBackupError as err:
+        # A legacy restore's mandatory pre-restore safety snapshot
+        # genuinely failed — the overwrite was blocked, nothing changed.
+        # Same fail-closed contract + error code as the @with_auto_backup
+        # write path (#1579), so callers see one consistent failure mode.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.BACKUP_CAPTURE_FAILED,
+                f"Restore blocked: the pre-restore safety snapshot could "
+                f"not be captured: {err}. Nothing was changed.",
+                context={"backup_name": bname},
+                suggestions=err.suggestions
+                or ["Retry once the underlying issue is resolved"],
+            )
+        )
+    except ToolError:
+        raise
+    except Exception as err:
+        # ``handler.restore`` is domain-specific and can surface
+        # HA-side rejections (schema-validation failures, 4xx/5xx
+        # responses, WS command errors). Without this catch those
+        # propagate as opaque INTERNAL_ERROR with no
+        # ``backup_name`` / ``domain`` context — the user is left
+        # to read the FastMCP traceback. Funnel through
+        # ``exception_to_structured_error`` so the structured
+        # response carries enough context to retry.
+        exception_to_structured_error(
+            err,
+            context={"backup_name": bname, "action": "restore"},
+            suggestions=[
+                "Verify the entity referenced by the backup still "
+                + "exists; restore re-POSTs to its current registry "
+                + "key",
+                "Compare the captured schema vs current HA — HA "
+                + "minor versions occasionally drop/rename fields",
+                "Inspect the snapshot YAML via "
+                + "ha_manage_backup(scope='edits', action='view', "
+                + "backup_name=...)",
+            ],
+        )
+        return None  # unreachable: exception_to_structured_error always raises
+    return {
+        "success": True,
+        "data": result,
+        "warnings": [
+            "This restore did NOT restart HA. To revert, restore the safety_backup."
+        ]
+        if result.get("safety_backup")
+        else [],
+    }
+
+
+async def _edits_delete(
+    mgr: BackupManager,
+    domain: str | None,
+    entity_id: str | None,
+    backup_name: str | None,
+    older_than_days: int | None,
+) -> dict[str, Any]:
+    """(edits, delete) Delete one auto-backup by name, or bulk-delete by filter."""
+    if backup_name:
+        try:
+            await asyncio.to_thread(mgr.delete_snapshot, backup_name)
+        except FileNotFoundError:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"Backup {backup_name!r} not found",
+                    context={"backup_name": backup_name},
                 )
-            except ValueError as err:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        str(err),
-                        context={"backup_name": backup_name},
-                    )
-                )
-            return {"success": True, "data": {"deleted": [backup_name]}}
-        # Bulk
-        if domain is None and entity_id is None and older_than_days is None:
+            )
+        except ValueError as err:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "edits.delete requires backup_name OR at least one filter "
-                    "(domain, entity_id, older_than_days)",
-                    suggestions=[
-                        "Pass backup_name to delete one auto-backup",
-                        "Pass domain/entity_id/older_than_days to bulk-delete (requires at least one)",
-                    ],
+                    str(err),
+                    context={"backup_name": backup_name},
                 )
             )
-        bulk = await asyncio.to_thread(
-            mgr.delete_bulk,
-            domain=domain,
-            entity_id=entity_id,
-            older_than_days=older_than_days,
+        return {"success": True, "data": {"deleted": [backup_name]}}
+    # Bulk
+    if domain is None and entity_id is None and older_than_days is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "edits.delete requires backup_name OR at least one filter "
+                "(domain, entity_id, older_than_days)",
+                suggestions=[
+                    "Pass backup_name to delete one auto-backup",
+                    "Pass domain/entity_id/older_than_days to bulk-delete (requires at least one)",
+                ],
+            )
         )
-        deleted = bulk["deleted"]
-        failed = bulk["failed"]
-        return {
-            "success": True,
-            "data": {
-                "deleted": deleted,
-                "failed": failed,
-                "count": len(deleted),
-                "failed_count": len(failed),
-            },
-            "warnings": (
-                [f"Failed to delete {len(failed)} backup(s); see server log"]
-                if failed
-                else []
-            ),
-        }
+    bulk = await asyncio.to_thread(
+        mgr.delete_bulk,
+        domain=domain,
+        entity_id=entity_id,
+        older_than_days=older_than_days,
+    )
+    deleted = bulk["deleted"]
+    failed = bulk["failed"]
+    return {
+        "success": True,
+        "data": {
+            "deleted": deleted,
+            "failed": failed,
+            "count": len(deleted),
+            "failed_count": len(failed),
+        },
+        "warnings": (
+            [f"Failed to delete {len(failed)} backup(s); see server log"]
+            if failed
+            else []
+        ),
+    }
