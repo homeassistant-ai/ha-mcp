@@ -302,11 +302,14 @@ class ConfigScriptTools:
 
     async def _get_script_config_internal(
         self, script_id: str
-    ) -> tuple[dict[str, Any], str]:
+    ) -> tuple[dict[str, Any], str, str]:
         """Fetch script config without logging or category injection.
 
-        Returns (actual_config, config_hash) tuple where actual_config is
-        the inner script body (not the REST wrapper).
+        Returns ``(actual_config, config_hash, resolved_id)`` where
+        ``actual_config`` is the inner script body (not the REST wrapper) and
+        ``resolved_id`` is the storage key the REST client resolved the input to
+        (from the envelope's ``script_id``). Threading ``resolved_id`` lets the
+        upsert call site skip the redundant re-resolve (issue #1813 Phase 0).
         Used internally by _fetch_and_verify_hash and ha_config_get_script.
 
         404 responses from the REST client are mapped to a structured
@@ -315,17 +318,25 @@ class ConfigScriptTools:
         config_result = await self._fetch_script_config_envelope(script_id)
         actual_config = config_result.get("config", config_result)
         config_hash_value = compute_config_hash(actual_config)
-        return actual_config, config_hash_value
+        resolved_id = config_result.get("script_id", script_id)
+        return actual_config, config_hash_value, resolved_id
 
     async def _fetch_and_verify_hash(
         self, script_id: str, config_hash: str, action: str
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], str]:
         """Fetch current script config and verify config_hash for optimistic locking.
 
-        Returns the actual script config dict (inner body).
-        Raises ToolError if the hash does not match (conflict).
+        Returns ``(actual_config, resolved_id)`` — the inner script body and the
+        storage key the REST client resolved the input to. Threading
+        ``resolved_id`` lets the upsert call site skip the redundant re-resolve
+        (issue #1813 Phase 0). Raises ToolError if the hash does not match
+        (conflict).
         """
-        actual_config, current_hash = await self._get_script_config_internal(script_id)
+        (
+            actual_config,
+            current_hash,
+            resolved_id,
+        ) = await self._get_script_config_internal(script_id)
         if current_hash != config_hash:
             raise_tool_error(
                 create_error_response(
@@ -338,7 +349,24 @@ class ConfigScriptTools:
                     context={"action": action, "script_id": script_id},
                 )
             )
-        return actual_config
+        return actual_config, resolved_id
+
+    async def _upsert_script(
+        self, config: dict[str, Any], script_id: str, resolved_id: str | None
+    ) -> dict[str, Any]:
+        """Upsert, threading a pre-resolved storage key when available.
+
+        When ``resolved_id`` is set the caller already resolved ``script_id``
+        (via ``_fetch_and_verify_hash``); pass it with ``_resolved=True`` so the
+        REST client skips the redundant entity-registry lookup (issue #1813
+        Phase 0). Otherwise fall back to the raw ``script_id`` and let the REST
+        client resolve — the no-hash update path lands here unchanged.
+        """
+        if resolved_id is not None:
+            return await self._client.upsert_script_config(
+                config, resolved_id, _resolved=True
+            )
+        return await self._client.upsert_script_config(config, script_id)
 
     @staticmethod
     def _validate_script_config(
@@ -677,7 +705,7 @@ class ConfigScriptTools:
                     )
 
                 # Fetch current config and verify hash
-                actual_config = await self._fetch_and_verify_hash(
+                actual_config, resolved_id = await self._fetch_and_verify_hash(
                     script_id, config_hash, "python_transform"
                 )
 
@@ -719,13 +747,17 @@ class ConfigScriptTools:
                     )
                 bp_warnings = _check_best_practices(transformed_config)
 
-                # Save transformed config
+                # Save transformed config. ``_fetch_and_verify_hash`` already
+                # resolved the storage key; thread it so the upsert skips the
+                # redundant re-resolve (issue #1813 Phase 0).
                 result = await self._client.upsert_script_config(
-                    transformed_config, script_id
+                    transformed_config, resolved_id, _resolved=True
                 )
 
                 # Re-fetch to get authoritative hash (HA may normalize after save)
-                _, new_config_hash = await self._get_script_config_internal(script_id)
+                _, new_config_hash, _ = await self._get_script_config_internal(
+                    script_id
+                )
 
                 response: dict[str, Any] = {
                     "success": True,
@@ -766,9 +798,15 @@ class ConfigScriptTools:
                 category,
             )
 
-            # Optional hash check for full config updates
+            # Optional hash check for full config updates. When it runs it
+            # resolves ``script_id`` to the storage key — thread that through so
+            # the upsert doesn't re-resolve (issue #1813 Phase 0). Stays None on
+            # the no-hash path (raw script_id resolved once, inside upsert).
+            resolved_id: str | None = None
             if config_hash:
-                await self._fetch_and_verify_hash(script_id, config_hash, "set")
+                _, resolved_id = await self._fetch_and_verify_hash(
+                    script_id, config_hash, "set"
+                )
 
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(config_dict)
@@ -780,7 +818,7 @@ class ConfigScriptTools:
                 self._client, config_dict
             )
 
-            result = await self._client.upsert_script_config(config_dict, script_id)
+            result = await self._upsert_script(config_dict, script_id, resolved_id)
 
             # Wait for script to be queryable
             entity_id = f"script.{script_id}"

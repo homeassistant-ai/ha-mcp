@@ -975,7 +975,11 @@ class HomeAssistantClient:
             raise
 
     async def upsert_automation_config(
-        self, config: dict[str, Any], identifier: str | None = None
+        self,
+        config: dict[str, Any],
+        identifier: str | None = None,
+        *,
+        _resolved: bool = False,
     ) -> dict[str, Any]:
         """
         Create new automation or update existing one.
@@ -983,6 +987,12 @@ class HomeAssistantClient:
         Args:
             config: Automation configuration dictionary
             identifier: Optional automation entity_id or unique_id (None = create new)
+            _resolved: When True, ``identifier`` is already the resolved unique_id
+                (the caller ran ``_resolve_automation_id``), so the redundant
+                entity_id→unique_id lookup is skipped. Ignored on the create path
+                (``identifier is None``). The #1404 config-id mismatch guard below
+                is unaffected — it still compares ``config['id']`` to the resolved
+                unique_id.
 
         Returns:
             Result with automation unique_id and status
@@ -996,7 +1006,11 @@ class HomeAssistantClient:
             operation = "created"
             logger.debug(f"Creating new automation with unique_id: {unique_id}")
         else:
-            unique_id = await self._resolve_automation_id(identifier)
+            unique_id = (
+                identifier
+                if _resolved
+                else await self._resolve_automation_id(identifier)
+            )
             operation = "updated"
             logger.debug(f"Updating automation with unique_id: {unique_id}")
 
@@ -1592,10 +1606,18 @@ class HomeAssistantClient:
             raise
 
     async def upsert_script_config(
-        self, config: dict[str, Any], script_id: str
+        self, config: dict[str, Any], script_id: str, *, _resolved: bool = False
     ) -> dict[str, Any]:
-        """Create or update Home Assistant script configuration."""
-        resolved_id = await self._resolve_script_id(script_id)
+        """Create or update Home Assistant script configuration.
+
+        ``_resolved=True`` signals ``script_id`` is already the resolved storage
+        key (the caller ran :meth:`_resolve_script_id`), skipping the redundant
+        entity-registry lookup (``_resolve_script_id`` is idempotent, so the
+        endpoint id is unchanged).
+        """
+        resolved_id = (
+            script_id if _resolved else await self._resolve_script_id(script_id)
+        )
         try:
             endpoint = f"config/script/config/{resolved_id}"
 

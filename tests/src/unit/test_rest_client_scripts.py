@@ -402,3 +402,55 @@ class TestResolveScriptId:
         error_msg = str(exc_info.value)
         assert "renamed_script" in error_msg
         assert "original_key" in error_msg
+
+
+class TestUpsertScriptResolvedShortCircuit:
+    """``_resolved=True`` skips the redundant ``_resolve_script_id`` registry
+    lookup on ``upsert_script_config`` (issue #1813 Phase 0 item #6).
+
+    ``_make_mock_client`` makes ``send_websocket_message`` raise, so
+    ``assert_not_called`` proves the resolver was genuinely skipped rather than
+    merely falling back to the bare id after a failed lookup.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        return _make_mock_client()
+
+    @pytest.mark.asyncio
+    async def test_resolved_skips_lookup(self, mock_client):
+        """``_resolved=True`` uses ``script_id`` directly as the storage key and
+        never issues the entity-registry lookup."""
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        config = {"alias": "x", "sequence": [{"delay": {"seconds": 1}}]}
+        result = await mock_client.upsert_script_config(
+            config, "storage_key", _resolved=True
+        )
+
+        assert result["success"] is True
+        assert result["script_id"] == "storage_key"
+        mock_client.send_websocket_message.assert_not_called()
+        mock_client._request.assert_called_once_with(
+            "POST", "config/script/config/storage_key", json=config
+        )
+
+    @pytest.mark.asyncio
+    async def test_default_still_resolves(self, mock_client):
+        """Contrast: without ``_resolved`` the registry resolver is consulted and
+        the resolved storage key is used for the endpoint."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"result": {"unique_id": "storage_key"}}
+        )
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        config = {"alias": "x", "sequence": [{"delay": {"seconds": 1}}]}
+        result = await mock_client.upsert_script_config(config, "renamed_script")
+
+        assert result["script_id"] == "storage_key"
+        mock_client.send_websocket_message.assert_called_once_with(
+            {"type": "config/entity_registry/get", "entity_id": "script.renamed_script"}
+        )
+        mock_client._request.assert_called_once_with(
+            "POST", "config/script/config/storage_key", json=config
+        )
