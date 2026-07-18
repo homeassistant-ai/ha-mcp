@@ -1421,6 +1421,15 @@ class TestSummarizeFetchError:
     def test_empty_message_yields_bare_type(self):
         assert summarize_fetch_error(RuntimeError()) == "RuntimeError"
 
+    def test_empty_body_500_renders_bare_http_500(self):
+        """An empty-bodied 500 renders the bare colon-less ``HTTP 500`` —
+        the exact form the ``_HTTP_500_SAMPLE`` regex's ``$`` alternative
+        exists to match, so the hint can't silently drop it. Pins the
+        renderer side of that chain (the hint side is pinned in
+        ``test_bare_http_500_sample_still_carries_hint``)."""
+        exc = HomeAssistantAPIError("API error: 500 - ", status_code=500)
+        assert summarize_fetch_error(exc) == "HTTP 500"
+
     def test_multiline_body_keeps_first_line_only(self):
         exc = HomeAssistantAPIError(
             "API error: 500 - 500 Internal Server Error\n"
