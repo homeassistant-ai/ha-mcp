@@ -419,6 +419,47 @@ def _is_missing_column_or_table_error(exc: sqlite3.OperationalError) -> bool:
     return "no such table" in msg or "no such column" in msg
 
 
+def _find_newest_recorder_timestamp(
+    conn: sqlite3.Connection,
+    timestamp_columns: dict[str, tuple[str, ...]],
+) -> float:
+    """Return the max numeric timestamp across ``timestamp_columns`` (0.0 if none)."""
+    newest = 0.0
+    for table, cols in timestamp_columns.items():
+        for col in cols:
+            try:
+                row = conn.execute(f"SELECT MAX({col}) FROM {table}").fetchone()
+            except sqlite3.OperationalError as exc:
+                if _is_missing_column_or_table_error(exc):
+                    continue
+                raise
+            if row and row[0] is not None and isinstance(row[0], (int, float)):
+                newest = max(newest, float(row[0]))
+    return newest
+
+
+def _shift_recorder_timestamps(
+    conn: sqlite3.Connection,
+    timestamp_columns: dict[str, tuple[str, ...]],
+    offset: float,
+) -> int:
+    """Add ``offset`` to every non-null timestamp cell; return rows updated."""
+    rows_updated = 0
+    for table, cols in timestamp_columns.items():
+        for col in cols:
+            try:
+                cur = conn.execute(
+                    f"UPDATE {table} SET {col} = {col} + ? WHERE {col} IS NOT NULL",
+                    (offset,),
+                )
+                rows_updated += cur.rowcount
+            except sqlite3.OperationalError as exc:
+                if _is_missing_column_or_table_error(exc):
+                    continue
+                raise
+    return rows_updated
+
+
 def _refresh_recorder_timestamps(
     db_path: Path, target_age_seconds: float = 300.0
 ) -> None:
@@ -462,17 +503,7 @@ def _refresh_recorder_timestamps(
             "statistics_short_term": ("start_ts", "created_ts"),
         }
 
-        newest = 0.0
-        for table, cols in TIMESTAMP_COLUMNS.items():
-            for col in cols:
-                try:
-                    row = conn.execute(f"SELECT MAX({col}) FROM {table}").fetchone()
-                except sqlite3.OperationalError as exc:
-                    if _is_missing_column_or_table_error(exc):
-                        continue
-                    raise
-                if row and row[0] is not None and isinstance(row[0], (int, float)):
-                    newest = max(newest, float(row[0]))
+        newest = _find_newest_recorder_timestamp(conn, TIMESTAMP_COLUMNS)
 
         if newest <= 0:
             raise RuntimeError(
@@ -490,19 +521,7 @@ def _refresh_recorder_timestamps(
             )
             return
 
-        rows_updated = 0
-        for table, cols in TIMESTAMP_COLUMNS.items():
-            for col in cols:
-                try:
-                    cur = conn.execute(
-                        f"UPDATE {table} SET {col} = {col} + ? WHERE {col} IS NOT NULL",
-                        (offset,),
-                    )
-                    rows_updated += cur.rowcount
-                except sqlite3.OperationalError as exc:
-                    if _is_missing_column_or_table_error(exc):
-                        continue
-                    raise
+        rows_updated = _shift_recorder_timestamps(conn, TIMESTAMP_COLUMNS, offset)
         if rows_updated == 0:
             raise RuntimeError(
                 f"Recorder seed DB at {db_path} matched zero rows for the "
@@ -539,35 +558,8 @@ def _setup_config_permissions(config_path: Path) -> None:
             )
 
 
-def _ensure_hacs_frontend(initial_state_path: Path) -> None:
-    """Download HACS frontend if not present.
-
-    HACS requires the frontend (~51MB) to be present to fully initialize.
-    This is not committed to git to keep the repo size manageable.
-
-    Uses a directory-based atomic lock so concurrent xdist workers don't race
-    on ``shutil.move`` into the shared ``initial_test_state`` path. One worker
-    wins ``mkdir(exist_ok=False)`` and performs the download; the losers poll
-    on the lock and exit when the winner releases it.
-    """
-    import tarfile
-
-    def _is_valid_frontend(path: Path) -> bool:
-        """Best-effort check that ``path`` holds a complete HACS frontend.
-
-        A SIGKILL or partial-failure during ``tar.extractall`` →
-        ``shutil.move`` can leave a populated but incomplete ``frontend_dir``
-        from a prior session. ``entrypoint.js`` is a top-level file in every
-        release tarball published at https://github.com/hacs/frontend/releases,
-        so its absence flags an interrupted prior session and forces a clean
-        re-download instead of letting HACS boot against a broken frontend.
-        """
-        return (path / "entrypoint.js").is_file()
-
-    hacs_dir = initial_state_path / "custom_components" / "hacs"
-    frontend_dir = hacs_dir / "hacs_frontend"
-    lock_dir = initial_state_path / ".hacs_frontend.lock"
-
+def _clear_stale_hacs_lock(lock_dir: Path) -> None:
+    """Remove an orphaned HACS frontend lock older than a safe threshold."""
     # Staleness check: a SIGKILL during the winner's critical section (e.g.
     # a developer hard-kills pytest mid-download) leaves an orphan
     # ``lock_dir`` that would force every peer in the next session into the
@@ -604,6 +596,124 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
             # existing 180s polling timeout still catches the orphan.
             logger.warning(f"Stale-lock cleanup failed at {lock_dir}: {exc}")
 
+
+def _wait_for_hacs_lock_release(lock_dir: Path) -> None:
+    """Poll until the winning worker releases the HACS frontend lock (≤180s)."""
+    wait_start = time.monotonic()
+    while lock_dir.exists():
+        if time.monotonic() - wait_start >= 180:
+            # Warn-and-continue (not ``pytest.fail``): a stuck HACS
+            # download only breaks HACS-dependent tests, while the
+            # rest of the session still produces useful signal.
+            # Clear the stale lock so a subsequent session does not
+            # also hit the 180s wait when the winner truly crashed.
+            logger.warning(
+                f"Timeout waiting for HACS frontend lock release at "
+                f"{lock_dir}; proceeding without verification."
+            )
+            try:
+                lock_dir.rmdir()
+            except OSError as exc:
+                logger.warning(f"Could not clear stale HACS lock dir: {exc}")
+            return
+        time.sleep(2)
+
+
+def _download_hacs_frontend(frontend_dir: Path) -> None:
+    """Download the latest HACS frontend release into ``frontend_dir``."""
+    import tarfile
+
+    if frontend_dir.exists():
+        # Partial/corrupt directory from a prior interrupted
+        # session. Clear it so ``shutil.move`` below replaces it
+        # cleanly — moving onto an existing directory nests the
+        # fresh ``hacs_frontend/`` inside the stale one.
+        logger.warning(
+            f"HACS frontend at {frontend_dir} is partial or corrupt; "
+            f"removing before re-download."
+        )
+        shutil.rmtree(frontend_dir)
+    logger.info("HACS frontend not found, downloading...")
+
+    try:
+        # Get the latest frontend version from GitHub API
+        api_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
+        with urllib.request.urlopen(api_url, timeout=30) as response:
+            release_data = json.loads(response.read())
+            tag_name = release_data["tag_name"]
+
+        # Download and extract the frontend
+        tarball_url = f"https://github.com/hacs/frontend/releases/download/{tag_name}/hacs_frontend-{tag_name}.tar.gz"
+        logger.info(f"Downloading HACS frontend {tag_name}...")
+
+        with (
+            urllib.request.urlopen(tarball_url, timeout=120) as response,
+            tarfile.open(fileobj=response, mode="r:gz") as tar,
+            tempfile.TemporaryDirectory() as temp_dir_str,
+        ):
+            # Extract to temp location first; the context manager
+            # cleans up even if extractall or shutil.move raises.
+            temp_extract = Path(temp_dir_str)
+            tar.extractall(temp_extract, filter="data")
+
+            # Move the hacs_frontend subdirectory
+            extracted_frontend = (
+                temp_extract / f"hacs_frontend-{tag_name}" / "hacs_frontend"
+            )
+            if extracted_frontend.exists():
+                shutil.move(str(extracted_frontend), str(frontend_dir))
+                logger.info(f"HACS frontend installed at {frontend_dir}")
+            else:
+                logger.warning(
+                    f"Could not find hacs_frontend in downloaded archive for {tag_name}"
+                )
+
+    except (
+        urllib.error.URLError,
+        json.JSONDecodeError,
+        KeyError,
+        tarfile.TarError,
+        OSError,
+    ):
+        # Narrow catch + ``logger.exception`` so the full
+        # traceback surfaces in CI logs, not just the exception
+        # type — KP13's "don't green-pass a failed download"
+        # principle. HACS-dependent tests will fail at first
+        # HACS call; other tests can still run.
+        logger.exception("Failed to download HACS frontend")
+        logger.warning("HACS tests may be skipped without the frontend")
+
+
+def _ensure_hacs_frontend(initial_state_path: Path) -> None:
+    """Download HACS frontend if not present.
+
+    HACS requires the frontend (~51MB) to be present to fully initialize.
+    This is not committed to git to keep the repo size manageable.
+
+    Uses a directory-based atomic lock so concurrent xdist workers don't race
+    on ``shutil.move`` into the shared ``initial_test_state`` path. One worker
+    wins ``mkdir(exist_ok=False)`` and performs the download; the losers poll
+    on the lock and exit when the winner releases it.
+    """
+
+    def _is_valid_frontend(path: Path) -> bool:
+        """Best-effort check that ``path`` holds a complete HACS frontend.
+
+        A SIGKILL or partial-failure during ``tar.extractall`` →
+        ``shutil.move`` can leave a populated but incomplete ``frontend_dir``
+        from a prior session. ``entrypoint.js`` is a top-level file in every
+        release tarball published at https://github.com/hacs/frontend/releases,
+        so its absence flags an interrupted prior session and forces a clean
+        re-download instead of letting HACS boot against a broken frontend.
+        """
+        return (path / "entrypoint.js").is_file()
+
+    hacs_dir = initial_state_path / "custom_components" / "hacs"
+    frontend_dir = hacs_dir / "hacs_frontend"
+    lock_dir = initial_state_path / ".hacs_frontend.lock"
+
+    _clear_stale_hacs_lock(lock_dir)
+
     # Fast path: HACS not installed (nothing to do), or frontend present
     # AND no lock held. The lock-held check rules out the window where
     # another worker's ``shutil.move`` is mid-flight — ``frontend_dir``
@@ -627,24 +737,7 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     try:
         lock_dir.mkdir(exist_ok=False)
     except FileExistsError:
-        wait_start = time.monotonic()
-        while lock_dir.exists():
-            if time.monotonic() - wait_start >= 180:
-                # Warn-and-continue (not ``pytest.fail``): a stuck HACS
-                # download only breaks HACS-dependent tests, while the
-                # rest of the session still produces useful signal.
-                # Clear the stale lock so a subsequent session does not
-                # also hit the 180s wait when the winner truly crashed.
-                logger.warning(
-                    f"Timeout waiting for HACS frontend lock release at "
-                    f"{lock_dir}; proceeding without verification."
-                )
-                try:
-                    lock_dir.rmdir()
-                except OSError as exc:
-                    logger.warning(f"Could not clear stale HACS lock dir: {exc}")
-                return
-            time.sleep(2)
+        _wait_for_hacs_lock_release(lock_dir)
         return
 
     # We own the lock. Outer try/finally guarantees release even when the
@@ -652,65 +745,7 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     try:
         # Check if HACS is installed and frontend is missing or invalid.
         if hacs_dir.exists() and not _is_valid_frontend(frontend_dir):
-            if frontend_dir.exists():
-                # Partial/corrupt directory from a prior interrupted
-                # session. Clear it so ``shutil.move`` below replaces it
-                # cleanly — moving onto an existing directory nests the
-                # fresh ``hacs_frontend/`` inside the stale one.
-                logger.warning(
-                    f"HACS frontend at {frontend_dir} is partial or corrupt; "
-                    f"removing before re-download."
-                )
-                shutil.rmtree(frontend_dir)
-            logger.info("HACS frontend not found, downloading...")
-
-            try:
-                # Get the latest frontend version from GitHub API
-                api_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
-                with urllib.request.urlopen(api_url, timeout=30) as response:
-                    release_data = json.loads(response.read())
-                    tag_name = release_data["tag_name"]
-
-                # Download and extract the frontend
-                tarball_url = f"https://github.com/hacs/frontend/releases/download/{tag_name}/hacs_frontend-{tag_name}.tar.gz"
-                logger.info(f"Downloading HACS frontend {tag_name}...")
-
-                with (
-                    urllib.request.urlopen(tarball_url, timeout=120) as response,
-                    tarfile.open(fileobj=response, mode="r:gz") as tar,
-                    tempfile.TemporaryDirectory() as temp_dir_str,
-                ):
-                    # Extract to temp location first; the context manager
-                    # cleans up even if extractall or shutil.move raises.
-                    temp_extract = Path(temp_dir_str)
-                    tar.extractall(temp_extract, filter="data")
-
-                    # Move the hacs_frontend subdirectory
-                    extracted_frontend = (
-                        temp_extract / f"hacs_frontend-{tag_name}" / "hacs_frontend"
-                    )
-                    if extracted_frontend.exists():
-                        shutil.move(str(extracted_frontend), str(frontend_dir))
-                        logger.info(f"HACS frontend installed at {frontend_dir}")
-                    else:
-                        logger.warning(
-                            f"Could not find hacs_frontend in downloaded archive for {tag_name}"
-                        )
-
-            except (
-                urllib.error.URLError,
-                json.JSONDecodeError,
-                KeyError,
-                tarfile.TarError,
-                OSError,
-            ):
-                # Narrow catch + ``logger.exception`` so the full
-                # traceback surfaces in CI logs, not just the exception
-                # type — KP13's "don't green-pass a failed download"
-                # principle. HACS-dependent tests will fail at first
-                # HACS call; other tests can still run.
-                logger.exception("Failed to download HACS frontend")
-                logger.warning("HACS tests may be skipped without the frontend")
+            _download_hacs_frontend(frontend_dir)
     finally:
         # Release the lock so waiting workers can proceed. A
         # ``FileNotFoundError`` here means a timed-out waiter cleared
@@ -1209,39 +1244,8 @@ def _wait_for_core_state_running(
     )
 
 
-def _dump_ha_readiness_diagnostics(
-    container: DockerContainer,
-    base_url: str,
-    headers: dict[str, str],
-    label: str,
-    *,
-    config_entry_domain: str | None = None,
-) -> None:
-    """Emit HA-side diagnostics for any readiness-gate failure.
-
-    Generic best-effort dump used by every readiness gate in
-    ``ha_container_with_fresh_config``. The optional
-    ``config_entry_domain`` argument lets the caller surface
-    domain-specific presence/absence information (e.g. the sun-gate
-    failure path passes ``config_entry_domain="sun"`` to make the
-    config-entries section call out whether that specific entry is
-    present or which state it's stuck in) instead of only the generic
-    counts.
-
-    Without it, the dump shows aggregate ``/api/services`` and
-    ``/api/config/config_entries/entry`` domain lists — enough context
-    to distinguish "HA never finished starting" from "HA started but a
-    specific domain regressed".
-
-    Each capture is wrapped in its own try/except so a single failure
-    (container already exited, HA API gone) does not lose the other
-    captures. Surfaced at WARNING level so CI logs keep the lines
-    visible even with default filtering.
-    """
-    import docker as _docker
-
-    logger.warning(f"📋 readiness diagnostics dump ({label}):")
-
+def _dump_services_diagnostics(base_url: str, headers: dict[str, str]) -> None:
+    """Log the ``/api/services`` domain snapshot for a readiness-gate failure."""
     # /api/services snapshot — distinguishes "domain absent" from
     # "request errored at timeout edge".
     try:
@@ -1263,6 +1267,11 @@ def _dump_ha_readiness_diagnostics(
         # single failure is logged without losing the others.
         logger.warning(f"  /api/services: request failed: {type(exc).__name__}: {exc}")
 
+
+def _dump_config_entries_diagnostics(
+    base_url: str, headers: dict[str, str], config_entry_domain: str | None
+) -> None:
+    """Log the config-entries snapshot for a readiness-gate failure."""
     # /api/config/config_entries/entry — surfaces the entry's state
     # ('loaded' / 'setup_retry' / 'setup_error' / 'not_loaded' / etc.).
     # Distinguishes "HA never imported the entry" from "HA imported but
@@ -1319,6 +1328,11 @@ def _dump_ha_readiness_diagnostics(
             f"  /api/config/config_entries/entry: request failed: {type(exc).__name__}: {exc}"
         )
 
+
+def _dump_docker_diagnostics(container: DockerContainer) -> None:
+    """Log container status + recent docker logs for a readiness-gate failure."""
+    import docker as _docker
+
     # docker logs --tail 100 + container state. The early ``tail=20`` grab
     # inside ``ha_container_with_fresh_config`` fires immediately after
     # container start and so does not cover the custom-component lifecycle
@@ -1347,6 +1361,41 @@ def _dump_ha_readiness_diagnostics(
             logger.warning(f"  docker logs: failed: {type(exc).__name__}: {exc}")
     except _docker.errors.DockerException as exc:
         logger.warning(f"  docker client: failed: {type(exc).__name__}: {exc}")
+
+
+def _dump_ha_readiness_diagnostics(
+    container: DockerContainer,
+    base_url: str,
+    headers: dict[str, str],
+    label: str,
+    *,
+    config_entry_domain: str | None = None,
+) -> None:
+    """Emit HA-side diagnostics for any readiness-gate failure.
+
+    Generic best-effort dump used by every readiness gate in
+    ``ha_container_with_fresh_config``. The optional
+    ``config_entry_domain`` argument lets the caller surface
+    domain-specific presence/absence information (e.g. the sun-gate
+    failure path passes ``config_entry_domain="sun"`` to make the
+    config-entries section call out whether that specific entry is
+    present or which state it's stuck in) instead of only the generic
+    counts.
+
+    Without it, the dump shows aggregate ``/api/services`` and
+    ``/api/config/config_entries/entry`` domain lists — enough context
+    to distinguish "HA never finished starting" from "HA started but a
+    specific domain regressed".
+
+    Each capture is wrapped in its own try/except so a single failure
+    (container already exited, HA API gone) does not lose the other
+    captures. Surfaced at WARNING level so CI logs keep the lines
+    visible even with default filtering.
+    """
+    logger.warning(f"📋 readiness diagnostics dump ({label}):")
+    _dump_services_diagnostics(base_url, headers)
+    _dump_config_entries_diagnostics(base_url, headers, config_entry_domain)
+    _dump_docker_diagnostics(container)
 
 
 def _reset_ha_in_process_caches() -> None:
@@ -1545,386 +1594,347 @@ def _haos_worker_setup(base_image_path: Path) -> Path:
     return overlay_path
 
 
-@pytest.fixture(scope="session")
-def ha_container_with_fresh_config(request):
-    """Create Home Assistant test environment with fresh config.
-
-    Default backend: testcontainer (HA Core Docker image). When the
-    ``HAOS_TEST_IMAGE_PATH`` env var points to a pre-baked HAOS qcow2,
-    the fixture instead boots HAOS under QEMU/KVM and returns the same
-    base_url + token contract. Container-specific keys (container,
-    port, config_path) are None on the HAOS path — tests that depend on
-    those should skip when the HAOS backend is selected (see #1281).
-    """
-    # HAOS backend dispatch — short-circuit the testcontainer path entirely.
-    if is_haos_backend_selected():
-        base_image_path = Path(os.environ[HAOS_IMAGE_ENV])
-        inaddon = is_haos_inaddon_mode()
-        haos_embedded = is_haos_embedded_mode()
-        # Per-worker port + overlay setup for pytest-xdist parallel HAOS
-        # (#1350). Single-worker runs short-circuit and reuse the base
-        # image path unchanged.
-        image_path = _haos_worker_setup(base_image_path)
-        logger.info(
-            "HAOS backend selected (mode=%s) — booting qcow2 at %s",
-            "inaddon" if inaddon else "embedded" if haos_embedded else "external",
+def _prepare_haos_image(
+    base_image_path: Path, inaddon: bool, haos_embedded: bool
+) -> Path:
+    """Set up the per-worker qcow2 overlay and stage all pre-boot mutations."""
+    # Per-worker port + overlay setup for pytest-xdist parallel HAOS
+    # (#1350). Single-worker runs short-circuit and reuse the base
+    # image path unchanged.
+    image_path = _haos_worker_setup(base_image_path)
+    logger.info(
+        "HAOS backend selected (mode=%s) — booting qcow2 at %s",
+        "inaddon" if inaddon else "embedded" if haos_embedded else "external",
+        image_path,
+    )
+    # Shift the baked recorder timestamps forward so seeded rows fall
+    # inside history's 24h window (same intent as the testcontainer
+    # path's _refresh_recorder_timestamps). Must run before boot
+    # because HA Core takes an exclusive lock on the DB.
+    refresh_recorder_in_qcow2(image_path)
+    # Authenticate HACS with the CI GitHub token (parity with the
+    # testcontainer path's injection below) so HACS repo adds don't
+    # ride the shared-IP 60 req/h unauthenticated GitHub budget —
+    # the long-standing HACS-install flake. Must run before boot.
+    inject_hacs_token_in_qcow2(image_path)
+    # Deliver a checkout-built ha-mcp wheel into /config and point the baked
+    # (disabled) in-process server config entry's pip_spec at it, so the HAOS
+    # embedded-server E2E (#1527) exercises the PR's own src/ha_mcp when it
+    # enables the entry. Best-effort — a failure only affects that one test.
+    # Must run before boot (offline qcow2 edit), like the refreshers above.
+    stage_embedded_server_wheel_in_qcow2(image_path)
+    # haos_embedded lane only: the WHOLE suite runs through the in-process
+    # server, so deliver the same settings overrides the container
+    # ``embedded`` backend injects — feature flags (yaml editing, filesystem
+    # tools, custom component integration, …) into
+    # <config>/.ha_mcp/feature_flags.json, and separately the
+    # BACKUP_OVERRIDE_FIELDS values (enable_snapshot_delete, #1861) into
+    # <config>/.ha_mcp/backup_settings.json — two different override files
+    # since ha_mcp.config reads the two registries separately.
+    # Gated to this lane so the external / inaddon lanes (green) are untouched —
+    # their only embedded consumer is the smoke test, which needs no overrides.
+    # Hard-raises on failure (unlike the best-effort wheel staging): the suite
+    # depends on these overrides, so a delivery failure should fail setup loudly.
+    if haos_embedded:
+        stage_embedded_server_feature_flags_in_qcow2(
+            image_path, _EMBEDDED_FEATURE_FLAGS
+        )
+        stage_embedded_server_feature_flags_in_qcow2(
             image_path,
+            _EMBEDDED_BACKUP_OVERRIDES,
+            filename="backup_settings.json",
         )
-        # Shift the baked recorder timestamps forward so seeded rows fall
-        # inside history's 24h window (same intent as the testcontainer
-        # path's _refresh_recorder_timestamps). Must run before boot
-        # because HA Core takes an exclusive lock on the DB.
-        refresh_recorder_in_qcow2(image_path)
-        # Authenticate HACS with the CI GitHub token (parity with the
-        # testcontainer path's injection below) so HACS repo adds don't
-        # ride the shared-IP 60 req/h unauthenticated GitHub budget —
-        # the long-standing HACS-install flake. Must run before boot.
-        inject_hacs_token_in_qcow2(image_path)
-        # Deliver a checkout-built ha-mcp wheel into /config and point the baked
-        # (disabled) in-process server config entry's pip_spec at it, so the HAOS
-        # embedded-server E2E (#1527) exercises the PR's own src/ha_mcp when it
-        # enables the entry. Best-effort — a failure only affects that one test.
-        # Must run before boot (offline qcow2 edit), like the refreshers above.
-        stage_embedded_server_wheel_in_qcow2(image_path)
-        # haos_embedded lane only: the WHOLE suite runs through the in-process
-        # server, so deliver the same settings overrides the container
-        # ``embedded`` backend injects — feature flags (yaml editing, filesystem
-        # tools, custom component integration, …) into
-        # <config>/.ha_mcp/feature_flags.json, and separately the
-        # BACKUP_OVERRIDE_FIELDS values (enable_snapshot_delete, #1861) into
-        # <config>/.ha_mcp/backup_settings.json — two different override files
-        # since ha_mcp.config reads the two registries separately.
-        # Gated to this lane so the external / inaddon lanes (green) are untouched —
-        # their only embedded consumer is the smoke test, which needs no overrides.
-        # Hard-raises on failure (unlike the best-effort wheel staging): the suite
-        # depends on these overrides, so a delivery failure should fail setup loudly.
-        if haos_embedded:
-            stage_embedded_server_feature_flags_in_qcow2(
-                image_path, _EMBEDDED_FEATURE_FLAGS
-            )
-            stage_embedded_server_feature_flags_in_qcow2(
-                image_path,
-                _EMBEDDED_BACKUP_OVERRIDES,
-                filename="backup_settings.json",
-            )
-        # Inaddon mode: overwrite the baked addon source with PR's current
-        # source + bump config.yaml version so Supervisor detects an
-        # update-available on next boot. The Supervisor WS API trigger
-        # below applies it via Docker layer cache (#1349 item 7).
-        if inaddon:
-            refresh_dev_addon_source_in_qcow2(image_path)
-        with boot_haos_qemu(image_path) as base_url:
-            token = login_for_token(base_url, TEST_USER, TEST_PASSWORD)
-            # Mirror the env-var setup the testcontainer path does below at
-            # ~line 1077 — feature flags for the in-process MCP server, plus
-            # HA URL/token for any code reading from env. The cache reset
-            # ensures the WebSocket pool and settings pick up the HAOS URL.
-            os.environ["HOMEASSISTANT_URL"] = base_url
-            os.environ["HOMEASSISTANT_TOKEN"] = token
-            # Beta sub-flags require the master to be on too.
-            os.environ["ENABLE_BETA_FEATURES"] = "true"
-            os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
-            # Per-key sub-toggles default OFF; the E2E suite covers the
-            # whole packages/*.yaml surface so enable all three.
-            os.environ["ENABLE_YAML_PACKAGES_AUTOMATION"] = "true"
-            os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
-            os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
-            os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
-            # Strict best-practices gate (#1779) defaults ON with its parent;
-            # pin it OFF so the suite's keyless writes aren't hard-blocked. The
-            # strict-gate e2e test builds its own server with the flag enabled.
-            os.environ["ENABLE_STRICT_MANDATORY_BPS"] = "false"
-            # Snapshot deletion (#1861) defaults OFF in production; enabled
-            # here so the e2e suite can cover the (snapshot, delete) guard
-            # chain against a disposable test HAOS instance.
-            os.environ["ENABLE_SNAPSHOT_DELETE"] = "true"
-            _reset_ha_in_process_caches()
-            # Mirrors the sun.sun + entity wait loop in the testcontainer
-            # branch of ha_container_with_fresh_config: the first tests reach
-            # for sun.sun's state immediately, but HA Core may still be
-            # propagating registry → state-machine when boot_haos_qemu's
-            # /manifest.json gate releases (manifest.json is served by the
-            # frontend before all integrations finish loading). Wait for
-            # sun.sun to (a) exist, then (b) leave the "unknown" state so
-            # template tests don't race.
-            haos_headers = {"Authorization": f"Bearer {token}"}
-            sun_url = f"{base_url}/api/states/sun.sun"
-            SUN_WAIT = 60
-            sun_start = time.monotonic()
-            last_sun_err: Exception | None = None
-            last_sun_status: int | None = None
-            while time.monotonic() - sun_start < SUN_WAIT:
-                try:
-                    sun_resp = requests.get(sun_url, timeout=5, headers=haos_headers)
-                    last_sun_status = sun_resp.status_code
-                    if sun_resp.status_code == 200:
-                        sun_state = sun_resp.json().get("state", "unknown")
-                        if sun_state != "unknown":
-                            elapsed = time.monotonic() - sun_start
-                            logger.info(
-                                f"✅ HAOS sun.sun is '{sun_state}' after {elapsed:.1f}s"
-                            )
-                            break
-                except (
-                    requests.exceptions.RequestException,
-                    json.JSONDecodeError,
-                ) as exc:
-                    last_sun_err = exc
-                time.sleep(1)
-            else:
-                # Surface what we saw on the LAST attempt so a future
-                # operator can tell "HA returned 401 for 60s" from
-                # "connection refused for 60s" from "endpoint returned
-                # 200 but state was 'unknown'".
-                logger.warning(
-                    "HAOS sun.sun still not ready after %ds "
-                    "(last_status=%s, last_exc=%r) — template / connection "
-                    "tests may race",
-                    SUN_WAIT,
-                    last_sun_status,
-                    last_sun_err,
-                )
-            # Sun.sun ready means all *integrations* finished setup, but
-            # the demo platform that registers ``light.bed_light`` and the
-            # other seeded fixtures publishes its initial states *after*
-            # its integration's async_setup returns — the recorder + state
-            # machine writes are scheduled tasks. Under the parallel
-            # HAOS run (-n2) the first test on each worker hits the search
-            # / state API before those tasks complete, and search returns
-            # ``total_matches=0`` for ``light`` (verified on PR #1379 CI
-            # run 26130708983 diagnostics: core.entity_registry has all 6
-            # lights, but the state machine had no light.* entries at the
-            # moment the test fired). Poll for one of the known seeded
-            # light entities so downstream tests don't race.
-            light_url = f"{base_url}/api/states/light.bed_light"
-            LIGHT_WAIT = 60
-            light_start = time.monotonic()
-            last_light_status: int | None = None
-            while time.monotonic() - light_start < LIGHT_WAIT:
-                try:
-                    light_resp = requests.get(
-                        light_url, timeout=5, headers=haos_headers
-                    )
-                    last_light_status = light_resp.status_code
-                    if light_resp.status_code == 200:
-                        elapsed = time.monotonic() - light_start
-                        logger.info(
-                            "HAOS light.bed_light is in state machine after %.1fs",
-                            elapsed,
-                        )
-                        break
-                except (
-                    requests.exceptions.RequestException,
-                    json.JSONDecodeError,
-                ):
-                    # Boot-phase polling: state machine not ready — retry (#1266).
-                    pass
-                time.sleep(1)
-            else:
-                logger.warning(
-                    "HAOS light.bed_light still not in state machine after "
-                    "%ds (last_status=%s) — search / state tests may race",
-                    LIGHT_WAIT,
-                    last_light_status,
-                )
-            # Set HA Core's default backup-create password via WS so
-            # ha_backup_create tests pass without a pre-baked seed. Must
-            # run AFTER the sun.sun ready-wait above — sun.sun ready
-            # implies all integrations have finished loading, including
-            # ``backup`` which registers the ``backup/config/update`` WS
-            # command. Calling earlier would hit "Unknown command" before
-            # the integration's WS handlers are registered. The helper
-            # also retries on unknown_command as a belt-and-braces
-            # defence against race conditions on slow CI runners.
-            # Idempotent — safe across the inaddon dev-addon update.
-            set_default_backup_password(base_url, token)
-            blueprint_http_server = request.getfixturevalue("_blueprint_http_server")
-            # The session-scope _blueprint_http_server fixture computes its
-            # base_url using host.docker.internal — meaningless from inside
-            # the HAOS QEMU guest. Slirp user networking always reaches the
-            # host at 10.0.2.2, so rewrite the URL here for tests that fetch
-            # blueprints through HA's import_blueprint flow.
-            blueprint_for_haos = {
-                **blueprint_http_server,
-                "base_url": f"http://10.0.2.2:{blueprint_http_server['port']}",
-            }
-            # Inaddon mode: refresh_dev_addon_source_in_qcow2 ran above
-            # with a bumped version, so Supervisor now sees an update
-            # available. Trigger it via WS supervisor_api (Docker layer
-            # cache → only the COPY src/ + uv-sync-project layers
-            # re-execute), then wait for the addon's MCP endpoint.
-            addon_mcp_url: str | None = None
-            # haos_embedded: URL the mcp_client fixture connects to (the baked
-            # in-process MCP server's ingress webhook inside the HAOS VM).
-            embedded_webhook_url: str | None = None
-            # Pull setup-time work INTO the try/finally so post-mortem log
-            # dump runs even when trigger_dev_addon_update or
-            # wait_for_addon_mcp_ready raises — those steps own ~all the
-            # inaddon-specific failure surface, and without logs they're
-            # opaque "unknown error" failures.
-            try:
-                if inaddon:
-                    logger.info(
-                        "Inaddon mode: triggering Supervisor addon update for PR source"
-                    )
-                    trigger_dev_addon_update(base_url, token, timeout=600.0)
-                    addon_mcp_url = wait_for_addon_mcp_ready(timeout=180.0)
-                    logger.info("Inaddon addon MCP endpoint ready at %s", addon_mcp_url)
-                    assert addon_mcp_url is not None, (
-                        "Inaddon setup completed without producing an "
-                        "addon_mcp_url — wait_for_addon_mcp_ready contract "
-                        "violation. Downstream mcp_client fixture would fail "
-                        "with an obscure TypeError on transport construction."
-                    )
-                elif haos_embedded:
-                    # Enable the baked-disabled in-process server entry ONCE for the
-                    # whole session (the per-test smoke module is skipped on this
-                    # lane via not_on_haos_embedded), then wait for its in-process
-                    # server to install itself, start, and register the webhook —
-                    # the same webhook the mcp_client fixture then drives for every
-                    # test. enable_config_entry raises on a WS-level failure (e.g.
-                    # a missing entry id) so the cause is clear rather than a
-                    # downstream webhook timeout.
-                    logger.info(
-                        "haos_embedded mode: enabling %s and waiting for the "
-                        "in-process server webhook",
-                        HA_MCP_SERVER_ENTRY_ID,
-                    )
-                    enable_config_entry(base_url, token, HA_MCP_SERVER_ENTRY_ID)
-                    embedded_webhook_url = (
-                        f"{base_url}/api/webhook/{HA_MCP_SERVER_WEBHOOK_ID}"
-                    )
-                    if not _wait_for_embedded_webhook_ready(
-                        embedded_webhook_url, timeout=_HAOS_EMBEDDED_BRINGUP_TIMEOUT
-                    ):
-                        raise AssertionError(
-                            "The in-process MCP server did not answer its HAOS "
-                            f"ingress webhook within {_HAOS_EMBEDDED_BRINGUP_TIMEOUT}s "
-                            f"of enabling {HA_MCP_SERVER_ENTRY_ID}. Bring-up (runtime "
-                            "pip install of the fastmcp tree inside HAOS / server "
-                            "thread / webhook registration) failed — see the HA Core "
-                            "runtime log in the HAOS diagnostics artifact for the "
-                            f"{HA_MCP_SERVER_DOMAIN} config-entry state."
-                        )
-                yield {
-                    "container": None,
-                    "port": None,
-                    "base_url": base_url,
-                    "config_path": None,
-                    "blueprint_server": blueprint_for_haos,
-                    "token": token,
-                    # backend marker distinguishes inaddon dispatch (mcp_client
-                    # → addon_mcp_url), haos_embedded (mcp_client →
-                    # embedded_webhook_url), and external (in-process FastMCP
-                    # server pointing at base_url).
-                    "backend": (
-                        "haos_inaddon"
-                        if inaddon
-                        else "haos_embedded"
-                        if haos_embedded
-                        else "haos"
-                    ),
-                    # Only set on inaddon mode; external/embedded modes leave None.
-                    "addon_mcp_url": addon_mcp_url,
-                    # Only set on haos_embedded; other HAOS modes leave None. Named
-                    # to match the container embedded backend's key so mcp_client's
-                    # HTTP-transport branch is shared.
-                    "embedded_webhook_url": embedded_webhook_url,
-                }
-            finally:
-                # Pull HA Core's runtime log + Supervisor's own log via the
-                # Supervisor /core/logs and /supervisor/logs endpoints before
-                # QEMU shuts down. HA on HAOS logs to stdout (no file-based
-                # home-assistant.log) so this is the only way to see what HA
-                # itself said during the session. ?lines=20000 because the
-                # default returns just a tail and we lose the boot phase
-                # where recorder/integration init errors happen.
-                #
-                # IMPORTANT: each urlopen has its own 60s timeout so a hung
-                # Supervisor caps total teardown delay at 2 endpoints × 60s
-                # = 120s before boot_haos_qemu's own SIGTERM/SIGKILL kicks
-                # in. Without per-call timeout an indefinitely-hanging
-                # supervisor would stall session teardown forever.
-                log_dest = Path("/tmp/haos-diagnostics")
-                log_dest.mkdir(parents=True, exist_ok=True)
-                log_endpoints = [
-                    (
-                        "ha-core-runtime.log",
-                        f"{base_url}/api/hassio/core/logs?lines=20000",
-                    ),
-                    (
-                        "supervisor-runtime.log",
-                        f"{base_url}/api/hassio/supervisor/logs?lines=20000",
-                    ),
-                ]
-                # Inaddon mode: also grab the dev addon container's logs —
-                # often the real "Check Supervisor logs for details" detail
-                # lives in the addon's own container output rather than
-                # Supervisor's. /api/hassio/addons/{slug}/logs IS in
-                # HA Core's REST PATHS_ADMIN allowlist (verified at
-                # hassio/http.py).
-                if inaddon:
-                    log_endpoints.append(
-                        (
-                            "ha-mcp-dev-addon.log",
-                            f"{base_url}/api/hassio/addons/{HA_MCP_DEV_ADDON_SLUG}/logs?lines=20000",
-                        ),
-                    )
-                # Always grab the webhook-proxy addon's stdout — it's
-                # installed by the bake (boot=manual) and started by the
-                # haos_only test module's session fixture. When tests in
-                # that module fail, the addon's own logs are the only
-                # place start.py's failure mode is visible (Supervisor's
-                # log only shows container lifecycle events, not addon
-                # stdout).
-                log_endpoints.append(
-                    (
-                        "webhook-proxy-addon.log",
-                        f"{base_url}/api/hassio/addons/"
-                        f"{HA_MCP_WEBHOOK_PROXY_ADDON_SLUG}/logs?lines=20000",
-                    ),
-                )
-                # Narrow except: any non-network error (NameError, KeyError
-                # from a future refactor) should propagate instead of being
-                # misreported as "Failed to dump". Per-endpoint network
-                # failures are still per-mortem and shouldn't kill teardown.
-                for name, url in log_endpoints:
-                    try:
-                        req = urllib.request.Request(
-                            url,
-                            headers={"Authorization": f"Bearer {token}"},
-                        )
-                        with urllib.request.urlopen(req, timeout=60) as resp:
-                            (log_dest / name).write_bytes(resp.read())
-                        logger.info("Dumped %s via supervisor", name)
-                    except (
-                        OSError,
-                        urllib.error.URLError,
-                        urllib.error.HTTPError,
-                        TimeoutError,
-                    ) as exc:
-                        logger.warning("Failed to dump %s: %s", name, exc)
-        return
+    # Inaddon mode: overwrite the baked addon source with PR's current
+    # source + bump config.yaml version so Supervisor detects an
+    # update-available on next boot. The Supervisor WS API trigger
+    # below applies it via Docker layer cache (#1349 item 7).
+    if inaddon:
+        refresh_dev_addon_source_in_qcow2(image_path)
+    return image_path
 
-    # --- Testcontainer path ---
-    # Safety guard 1: ensure Docker is available before doing anything else
-    try:
-        import docker as docker_sdk
 
-        docker_sdk.from_env().ping()
-    except Exception as e:
-        pytest.fail(
-            f"Docker is not available: {e}\n"
-            "E2E tests require a running Docker daemon (testcontainers).\n"
-            "Start Docker and retry."
+def _wait_for_haos_sun_ready(base_url: str, haos_headers: dict[str, str]) -> None:
+    """Wait for HAOS sun.sun to exist and leave the 'unknown' state."""
+    # Mirrors the sun.sun + entity wait loop in the testcontainer
+    # branch of ha_container_with_fresh_config: the first tests reach
+    # for sun.sun's state immediately, but HA Core may still be
+    # propagating registry → state-machine when boot_haos_qemu's
+    # /manifest.json gate releases (manifest.json is served by the
+    # frontend before all integrations finish loading). Wait for
+    # sun.sun to (a) exist, then (b) leave the "unknown" state so
+    # template tests don't race.
+    sun_url = f"{base_url}/api/states/sun.sun"
+    SUN_WAIT = 60
+    sun_start = time.monotonic()
+    last_sun_err: Exception | None = None
+    last_sun_status: int | None = None
+    while time.monotonic() - sun_start < SUN_WAIT:
+        try:
+            sun_resp = requests.get(sun_url, timeout=5, headers=haos_headers)
+            last_sun_status = sun_resp.status_code
+            if sun_resp.status_code == 200:
+                sun_state = sun_resp.json().get("state", "unknown")
+                if sun_state != "unknown":
+                    elapsed = time.monotonic() - sun_start
+                    logger.info(
+                        f"✅ HAOS sun.sun is '{sun_state}' after {elapsed:.1f}s"
+                    )
+                    break
+        except (
+            requests.exceptions.RequestException,
+            json.JSONDecodeError,
+        ) as exc:
+            last_sun_err = exc
+        time.sleep(1)
+    else:
+        # Surface what we saw on the LAST attempt so a future
+        # operator can tell "HA returned 401 for 60s" from
+        # "connection refused for 60s" from "endpoint returned
+        # 200 but state was 'unknown'".
+        logger.warning(
+            "HAOS sun.sun still not ready after %ds "
+            "(last_status=%s, last_exc=%r) — template / connection "
+            "tests may race",
+            SUN_WAIT,
+            last_sun_status,
+            last_sun_err,
         )
 
-    logger.info("🐳 Creating Home Assistant container with testcontainers...")
 
-    # Embedded backend (#1527): install the in-process MCP server integration
-    # into this same testcontainer and drive it over its ingress webhook. The
-    # wheel name is captured here and consumed by the entrypoint preinstall below.
-    embedded = _is_embedded_backend_selected()
+def _wait_for_haos_light_ready(base_url: str, haos_headers: dict[str, str]) -> None:
+    """Wait for a seeded HAOS light entity to appear in the state machine."""
+    # Sun.sun ready means all *integrations* finished setup, but
+    # the demo platform that registers ``light.bed_light`` and the
+    # other seeded fixtures publishes its initial states *after*
+    # its integration's async_setup returns — the recorder + state
+    # machine writes are scheduled tasks. Under the parallel
+    # HAOS run (-n2) the first test on each worker hits the search
+    # / state API before those tasks complete, and search returns
+    # ``total_matches=0`` for ``light`` (verified on PR #1379 CI
+    # run 26130708983 diagnostics: core.entity_registry has all 6
+    # lights, but the state machine had no light.* entries at the
+    # moment the test fired). Poll for one of the known seeded
+    # light entities so downstream tests don't race.
+    light_url = f"{base_url}/api/states/light.bed_light"
+    LIGHT_WAIT = 60
+    light_start = time.monotonic()
+    last_light_status: int | None = None
+    while time.monotonic() - light_start < LIGHT_WAIT:
+        try:
+            light_resp = requests.get(light_url, timeout=5, headers=haos_headers)
+            last_light_status = light_resp.status_code
+            if light_resp.status_code == 200:
+                elapsed = time.monotonic() - light_start
+                logger.info(
+                    "HAOS light.bed_light is in state machine after %.1fs",
+                    elapsed,
+                )
+                break
+        except (
+            requests.exceptions.RequestException,
+            json.JSONDecodeError,
+        ):
+            # Boot-phase polling: state machine not ready — retry (#1266).
+            pass
+        time.sleep(1)
+    else:
+        logger.warning(
+            "HAOS light.bed_light still not in state machine after "
+            "%ds (last_status=%s) — search / state tests may race",
+            LIGHT_WAIT,
+            last_light_status,
+        )
+
+
+def _haos_post_boot_setup(base_url: str, request) -> tuple[str, dict]:
+    """Post-boot HAOS setup: token, env, readiness waits, blueprint rewrite."""
+    token = login_for_token(base_url, TEST_USER, TEST_PASSWORD)
+    # Mirror the env-var setup the testcontainer path does below at
+    # ~line 1077 — feature flags for the in-process MCP server, plus
+    # HA URL/token for any code reading from env. The cache reset
+    # ensures the WebSocket pool and settings pick up the HAOS URL.
+    os.environ["HOMEASSISTANT_URL"] = base_url
+    os.environ["HOMEASSISTANT_TOKEN"] = token
+    # Beta sub-flags require the master to be on too.
+    os.environ["ENABLE_BETA_FEATURES"] = "true"
+    os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
+    # Per-key sub-toggles default OFF; the E2E suite covers the
+    # whole packages/*.yaml surface so enable all three.
+    os.environ["ENABLE_YAML_PACKAGES_AUTOMATION"] = "true"
+    os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
+    os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
+    os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
+    # Strict best-practices gate (#1779) defaults ON with its parent;
+    # pin it OFF so the suite's keyless writes aren't hard-blocked. The
+    # strict-gate e2e test builds its own server with the flag enabled.
+    os.environ["ENABLE_STRICT_MANDATORY_BPS"] = "false"
+    # Snapshot deletion (#1861) defaults OFF in production; enabled
+    # here so the e2e suite can cover the (snapshot, delete) guard
+    # chain against a disposable test HAOS instance.
+    os.environ["ENABLE_SNAPSHOT_DELETE"] = "true"
+    _reset_ha_in_process_caches()
+    haos_headers = {"Authorization": f"Bearer {token}"}
+    _wait_for_haos_sun_ready(base_url, haos_headers)
+    _wait_for_haos_light_ready(base_url, haos_headers)
+    # Set HA Core's default backup-create password via WS so
+    # ha_backup_create tests pass without a pre-baked seed. Must
+    # run AFTER the sun.sun ready-wait above — sun.sun ready
+    # implies all integrations have finished loading, including
+    # ``backup`` which registers the ``backup/config/update`` WS
+    # command. Calling earlier would hit "Unknown command" before
+    # the integration's WS handlers are registered. The helper
+    # also retries on unknown_command as a belt-and-braces
+    # defence against race conditions on slow CI runners.
+    # Idempotent — safe across the inaddon dev-addon update.
+    set_default_backup_password(base_url, token)
+    blueprint_http_server = request.getfixturevalue("_blueprint_http_server")
+    # The session-scope _blueprint_http_server fixture computes its
+    # base_url using host.docker.internal — meaningless from inside
+    # the HAOS QEMU guest. Slirp user networking always reaches the
+    # host at 10.0.2.2, so rewrite the URL here for tests that fetch
+    # blueprints through HA's import_blueprint flow.
+    blueprint_for_haos = {
+        **blueprint_http_server,
+        "base_url": f"http://10.0.2.2:{blueprint_http_server['port']}",
+    }
+    return token, blueprint_for_haos
+
+
+def _bringup_haos_out_of_process_server(
+    base_url: str, token: str, inaddon: bool, haos_embedded: bool
+) -> tuple[str | None, str | None]:
+    """Bring up the inaddon dev-addon or haos_embedded server; return their URLs."""
+    addon_mcp_url: str | None = None
+    # haos_embedded: URL the mcp_client fixture connects to (the baked
+    # in-process MCP server's ingress webhook inside the HAOS VM).
+    embedded_webhook_url: str | None = None
+    # Inaddon mode: refresh_dev_addon_source_in_qcow2 ran above
+    # with a bumped version, so Supervisor now sees an update
+    # available. Trigger it via WS supervisor_api (Docker layer
+    # cache → only the COPY src/ + uv-sync-project layers
+    # re-execute), then wait for the addon's MCP endpoint.
+    if inaddon:
+        logger.info("Inaddon mode: triggering Supervisor addon update for PR source")
+        trigger_dev_addon_update(base_url, token, timeout=600.0)
+        addon_mcp_url = wait_for_addon_mcp_ready(timeout=180.0)
+        logger.info("Inaddon addon MCP endpoint ready at %s", addon_mcp_url)
+        assert addon_mcp_url is not None, (
+            "Inaddon setup completed without producing an "
+            "addon_mcp_url — wait_for_addon_mcp_ready contract "
+            "violation. Downstream mcp_client fixture would fail "
+            "with an obscure TypeError on transport construction."
+        )
+    elif haos_embedded:
+        # Enable the baked-disabled in-process server entry ONCE for the
+        # whole session (the per-test smoke module is skipped on this
+        # lane via not_on_haos_embedded), then wait for its in-process
+        # server to install itself, start, and register the webhook —
+        # the same webhook the mcp_client fixture then drives for every
+        # test. enable_config_entry raises on a WS-level failure (e.g.
+        # a missing entry id) so the cause is clear rather than a
+        # downstream webhook timeout.
+        logger.info(
+            "haos_embedded mode: enabling %s and waiting for the "
+            "in-process server webhook",
+            HA_MCP_SERVER_ENTRY_ID,
+        )
+        enable_config_entry(base_url, token, HA_MCP_SERVER_ENTRY_ID)
+        embedded_webhook_url = f"{base_url}/api/webhook/{HA_MCP_SERVER_WEBHOOK_ID}"
+        if not _wait_for_embedded_webhook_ready(
+            embedded_webhook_url, timeout=_HAOS_EMBEDDED_BRINGUP_TIMEOUT
+        ):
+            raise AssertionError(
+                "The in-process MCP server did not answer its HAOS "
+                f"ingress webhook within {_HAOS_EMBEDDED_BRINGUP_TIMEOUT}s "
+                f"of enabling {HA_MCP_SERVER_ENTRY_ID}. Bring-up (runtime "
+                "pip install of the fastmcp tree inside HAOS / server "
+                "thread / webhook registration) failed — see the HA Core "
+                "runtime log in the HAOS diagnostics artifact for the "
+                f"{HA_MCP_SERVER_DOMAIN} config-entry state."
+            )
+    return addon_mcp_url, embedded_webhook_url
+
+
+def _dump_haos_session_logs(base_url: str, token: str, inaddon: bool) -> None:
+    """Pull HA Core + Supervisor (+ addon) logs before QEMU shutdown."""
+    # Pull HA Core's runtime log + Supervisor's own log via the
+    # Supervisor /core/logs and /supervisor/logs endpoints before
+    # QEMU shuts down. HA on HAOS logs to stdout (no file-based
+    # home-assistant.log) so this is the only way to see what HA
+    # itself said during the session. ?lines=20000 because the
+    # default returns just a tail and we lose the boot phase
+    # where recorder/integration init errors happen.
+    #
+    # IMPORTANT: each urlopen has its own 60s timeout so a hung
+    # Supervisor caps total teardown delay at 2 endpoints × 60s
+    # = 120s before boot_haos_qemu's own SIGTERM/SIGKILL kicks
+    # in. Without per-call timeout an indefinitely-hanging
+    # supervisor would stall session teardown forever.
+    log_dest = Path("/tmp/haos-diagnostics")
+    log_dest.mkdir(parents=True, exist_ok=True)
+    log_endpoints = [
+        (
+            "ha-core-runtime.log",
+            f"{base_url}/api/hassio/core/logs?lines=20000",
+        ),
+        (
+            "supervisor-runtime.log",
+            f"{base_url}/api/hassio/supervisor/logs?lines=20000",
+        ),
+    ]
+    # Inaddon mode: also grab the dev addon container's logs —
+    # often the real "Check Supervisor logs for details" detail
+    # lives in the addon's own container output rather than
+    # Supervisor's. /api/hassio/addons/{slug}/logs IS in
+    # HA Core's REST PATHS_ADMIN allowlist (verified at
+    # hassio/http.py).
+    if inaddon:
+        log_endpoints.append(
+            (
+                "ha-mcp-dev-addon.log",
+                f"{base_url}/api/hassio/addons/{HA_MCP_DEV_ADDON_SLUG}/logs?lines=20000",
+            ),
+        )
+    # Always grab the webhook-proxy addon's stdout — it's
+    # installed by the bake (boot=manual) and started by the
+    # haos_only test module's session fixture. When tests in
+    # that module fail, the addon's own logs are the only
+    # place start.py's failure mode is visible (Supervisor's
+    # log only shows container lifecycle events, not addon
+    # stdout).
+    log_endpoints.append(
+        (
+            "webhook-proxy-addon.log",
+            f"{base_url}/api/hassio/addons/"
+            f"{HA_MCP_WEBHOOK_PROXY_ADDON_SLUG}/logs?lines=20000",
+        ),
+    )
+    # Narrow except: any non-network error (NameError, KeyError
+    # from a future refactor) should propagate instead of being
+    # misreported as "Failed to dump". Per-endpoint network
+    # failures are still per-mortem and shouldn't kill teardown.
+    for name, url in log_endpoints:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                (log_dest / name).write_bytes(resp.read())
+            logger.info("Dumped %s via supervisor", name)
+        except (
+            OSError,
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            TimeoutError,
+        ) as exc:
+            logger.warning("Failed to dump %s: %s", name, exc)
+
+
+def _prepare_testcontainer_config(
+    embedded: bool,
+) -> tuple[Path, str, dict, str | None]:
+    """Stage the fresh HA config dir (custom components, seeds, recorder)."""
     embedded_wheel_name: str | None = None
 
     # Create temporary directory for this test session
@@ -2010,7 +2020,13 @@ def ha_container_with_fresh_config(request):
     logger.info(
         f"📁 Fresh HA config prepared at: {config_path} with proper permissions"
     )
+    return config_path, temp_dir, local_blueprint, embedded_wheel_name
 
+
+def _build_ha_testcontainer(
+    config_path: Path, embedded: bool, embedded_wheel_name: str | None
+) -> DockerContainer:
+    """Construct the HA DockerContainer with ports, mounts, and preinstall entrypoint."""
     # Create testcontainer with port configuration
     container = DockerContainer(HA_TEST_IMAGE)
 
@@ -2120,6 +2136,251 @@ def ha_container_with_fresh_config(request):
     if restore_file.exists():
         restore_file.unlink()
         logger.info("🗑️ Removed .HA_RESTORE file from config")
+    return container
+
+
+def _wait_for_testcontainer_sun(
+    base_url: str,
+    headers: dict[str, str],
+    container: DockerContainer,
+    SUN_WAIT: int,
+) -> None:
+    """Poll sun.sun until it leaves 'unknown'; warn + dump diagnostics on timeout."""
+    logger.info("⏳ Waiting for sun.sun to reach a known state...")
+    sun_start = time.monotonic()
+    while time.monotonic() - sun_start < SUN_WAIT:
+        try:
+            sun_resp = requests.get(
+                f"{base_url}/api/states/sun.sun", timeout=5, headers=headers
+            )
+            if sun_resp.status_code == 200:
+                sun_state = sun_resp.json().get("state", "unknown")
+                if sun_state != "unknown":
+                    elapsed = time.monotonic() - sun_start
+                    logger.info(f"✅ sun.sun is '{sun_state}' after {elapsed:.1f}s")
+                    _log_readiness_timing("sun", elapsed, state=sun_state)
+                    break
+        except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+            logger.debug(f"sun.sun check failed: {exc}")
+        time.sleep(1)
+    else:
+        _dump_ha_readiness_diagnostics(
+            container,
+            base_url,
+            headers,
+            label="sun-wait-warn",
+            config_entry_domain="sun",
+        )
+        logger.warning(
+            f"⚠️ sun.sun still 'unknown' after {SUN_WAIT}s — template tests may fail"
+        )
+
+
+def _wait_for_testcontainer_ready(
+    container: DockerContainer,
+    base_url: str,
+    headers: dict[str, str],
+    embedded: bool,
+    CORE_STATE_TIMEOUT: int,
+    SUN_WAIT: int,
+) -> str | None:
+    """Run every testcontainer readiness gate; return the embedded webhook URL or None."""
+    # Check if container is actually running
+    import docker
+
+    docker_client = docker.from_env()
+    try:
+        container_obj = docker_client.containers.get(
+            container.get_wrapped_container().id
+        )
+        logger.info(f"📋 Container status: {container_obj.status}")
+        logger.info(f"🔌 Port mappings: {container_obj.ports}")
+
+        # Get recent logs for debugging
+        logs = container_obj.logs(tail=20).decode("utf-8", errors="ignore")
+        logger.info(f"📄 Container logs:\n{logs}")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not inspect container: {e}")
+
+    # Wait for API to be ready via the module-level
+    # ``_wait_for_ha_api_ready`` helper. The helper extraction is
+    # preserved as a single-contract surface in case a future bounded
+    # retry path is reintroduced.
+    # NOTE: ``requests`` is imported at module top; do NOT re-import it
+    # locally here — Python's scoping rules would then make ``requests``
+    # a function-local for the entire ha_container_with_fresh_config,
+    # which previously caused UnboundLocalError in the HAOS branch.
+
+    # The embedded backend's entrypoint preinstalls the ha-mcp wheel + its
+    # dependency tree before HA's /init, so /api/ liveness is delayed by that
+    # pip window and needs a much larger budget than the default 60s.
+    api_ready_timeout = _EMBEDDED_API_READY_TIMEOUT if embedded else 60
+    logger.info("🔄 Waiting for Home Assistant API to become ready...")
+    if not _wait_for_ha_api_ready(base_url, headers, timeout=api_ready_timeout):
+        _dump_ha_readiness_diagnostics(
+            container, base_url, headers, label="api-not-ready"
+        )
+        pytest.fail(
+            f"Home Assistant API at {base_url} did not become ready within "
+            f"{api_ready_timeout} seconds.\n"
+            "The container may have failed to start. Check Docker logs for details."
+        )
+
+    # Single readiness gate: poll ``/api/core/state`` until
+    # ``CoreState.RUNNING``. This replaces five separate polling gates
+    # (components/entities/input_boolean/ha_mcp_tools/sun) that were
+    # racing ``async_setup_entry`` for slow integrations — see #366
+    # thread (Ilya0527 2026-05-18) and the docstring on
+    # ``_wait_for_core_state_running`` for the structural rationale.
+    # ``CORE_STATE_TIMEOUT`` is defined at the top of this ``with
+    # container:`` block alongside ``SUN_WAIT`` for grep-ability.
+    logger.info("⏳ Waiting for HA CoreState to reach RUNNING...")
+    (
+        core_state_ok,
+        core_state_elapsed,
+        core_state_last,
+        entries_loaded,
+        entries_total,
+        snapshot_ok,
+    ) = _wait_for_core_state_running(base_url, headers, CORE_STATE_TIMEOUT)
+    if not core_state_ok:
+        _dump_ha_readiness_diagnostics(
+            container, base_url, headers, label="core-state-not-running"
+        )
+        pytest.fail(
+            f"HA CoreState did not reach 'RUNNING' within "
+            f"{CORE_STATE_TIMEOUT}s. Last observed state: "
+            f"{core_state_last!r}. Config entries loaded: "
+            f"{entries_loaded}/{entries_total}"
+            f"{'' if snapshot_ok else ' (snapshot unavailable)'}. "
+            f"Most likely an integration's async_setup_entry hit the "
+            f"300s SLOW_SETUP_MAX_WAIT ceiling. Check Docker logs."
+        )
+    _log_readiness_timing(
+        "core_state",
+        core_state_elapsed,
+        state=core_state_last,
+        entries_loaded=entries_loaded,
+        entries_total=entries_total,
+        snapshot_ok=snapshot_ok,
+    )
+
+    _wait_for_testcontainer_sun(base_url, headers, container, SUN_WAIT)
+
+    # Embedded backend: HA core is up, but the in-process MCP server
+    # integration's background bring-up (force-install of the local wheel,
+    # token provisioning, worker-thread start, webhook registration) runs
+    # after CoreState RUNNING. Wait for its ingress webhook to answer MCP
+    # ``initialize`` before yielding so the session mcp_client fixture connects
+    # to a live server. This is a REAL bring-up gate — a timeout here means the
+    # embedded server genuinely failed to come up, not a flaky environment.
+    embedded_webhook_url: str | None = None
+    if embedded:
+        embedded_webhook_url = f"{base_url}/api/webhook/{_EMBEDDED_WEBHOOK_ID}"
+        logger.info("⏳ Waiting for the in-process MCP server webhook to come up...")
+        if not _wait_for_embedded_webhook_ready(
+            embedded_webhook_url, timeout=_EMBEDDED_BRINGUP_TIMEOUT
+        ):
+            _dump_ha_readiness_diagnostics(
+                container,
+                base_url,
+                headers,
+                label="embedded-webhook-not-ready",
+                config_entry_domain=_EMBEDDED_DOMAIN,
+            )
+            pytest.fail(
+                "The in-process MCP server did not answer its ingress "
+                f"webhook within {_EMBEDDED_BRINGUP_TIMEOUT}s. Bring-up "
+                "(wheel install / token provisioning / server thread / webhook "
+                "registration) failed — check the HA log dump above for the "
+                f"{_EMBEDDED_DOMAIN} config-entry state and any repair issue."
+            )
+    return embedded_webhook_url
+
+
+@pytest.fixture(scope="session")
+def ha_container_with_fresh_config(request):
+    """Create Home Assistant test environment with fresh config.
+
+    Default backend: testcontainer (HA Core Docker image). When the
+    ``HAOS_TEST_IMAGE_PATH`` env var points to a pre-baked HAOS qcow2,
+    the fixture instead boots HAOS under QEMU/KVM and returns the same
+    base_url + token contract. Container-specific keys (container,
+    port, config_path) are None on the HAOS path — tests that depend on
+    those should skip when the HAOS backend is selected (see #1281).
+    """
+    # HAOS backend dispatch — short-circuit the testcontainer path entirely.
+    if is_haos_backend_selected():
+        base_image_path = Path(os.environ[HAOS_IMAGE_ENV])
+        inaddon = is_haos_inaddon_mode()
+        haos_embedded = is_haos_embedded_mode()
+        image_path = _prepare_haos_image(base_image_path, inaddon, haos_embedded)
+        with boot_haos_qemu(image_path) as base_url:
+            token, blueprint_for_haos = _haos_post_boot_setup(base_url, request)
+            # Pull setup-time work INTO the try/finally so post-mortem log
+            # dump runs even when trigger_dev_addon_update or
+            # wait_for_addon_mcp_ready raises — those steps own ~all the
+            # inaddon-specific failure surface, and without logs they're
+            # opaque "unknown error" failures.
+            try:
+                addon_mcp_url, embedded_webhook_url = (
+                    _bringup_haos_out_of_process_server(
+                        base_url, token, inaddon, haos_embedded
+                    )
+                )
+                yield {
+                    "container": None,
+                    "port": None,
+                    "base_url": base_url,
+                    "config_path": None,
+                    "blueprint_server": blueprint_for_haos,
+                    "token": token,
+                    # backend marker distinguishes inaddon dispatch (mcp_client
+                    # → addon_mcp_url), haos_embedded (mcp_client →
+                    # embedded_webhook_url), and external (in-process FastMCP
+                    # server pointing at base_url).
+                    "backend": (
+                        "haos_inaddon"
+                        if inaddon
+                        else "haos_embedded"
+                        if haos_embedded
+                        else "haos"
+                    ),
+                    # Only set on inaddon mode; external/embedded modes leave None.
+                    "addon_mcp_url": addon_mcp_url,
+                    # Only set on haos_embedded; other HAOS modes leave None. Named
+                    # to match the container embedded backend's key so mcp_client's
+                    # HTTP-transport branch is shared.
+                    "embedded_webhook_url": embedded_webhook_url,
+                }
+            finally:
+                _dump_haos_session_logs(base_url, token, inaddon)
+        return
+
+    # --- Testcontainer path ---
+    # Safety guard 1: ensure Docker is available before doing anything else
+    try:
+        import docker as docker_sdk
+
+        docker_sdk.from_env().ping()
+    except Exception as e:
+        pytest.fail(
+            f"Docker is not available: {e}\n"
+            "E2E tests require a running Docker daemon (testcontainers).\n"
+            "Start Docker and retry."
+        )
+
+    logger.info("🐳 Creating Home Assistant container with testcontainers...")
+
+    # Embedded backend (#1527): install the in-process MCP server integration
+    # into this same testcontainer and drive it over its ingress webhook. The
+    # wheel name is captured here and consumed by the entrypoint preinstall below.
+    embedded = _is_embedded_backend_selected()
+    config_path, temp_dir, local_blueprint, embedded_wheel_name = (
+        _prepare_testcontainer_config(embedded)
+    )
+
+    container = _build_ha_testcontainer(config_path, embedded, embedded_wheel_name)
 
     with container:
         # Readiness-gate budgets for the testcontainer path. Defined at
@@ -2180,148 +2441,17 @@ def ha_container_with_fresh_config(request):
         logger.info(f"🚀 Home Assistant container started on {base_url}")
         logger.info(f"🐳 Container ID: {container.get_container_host_ip()}:{host_port}")
 
-        # Check if container is actually running
-        import docker
-
-        docker_client = docker.from_env()
-        try:
-            container_obj = docker_client.containers.get(
-                container.get_wrapped_container().id
-            )
-            logger.info(f"📋 Container status: {container_obj.status}")
-            logger.info(f"🔌 Port mappings: {container_obj.ports}")
-
-            # Get recent logs for debugging
-            logs = container_obj.logs(tail=20).decode("utf-8", errors="ignore")
-            logger.info(f"📄 Container logs:\n{logs}")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not inspect container: {e}")
-
-        # Wait for API to be ready via the module-level
-        # ``_wait_for_ha_api_ready`` helper. The helper extraction is
-        # preserved as a single-contract surface in case a future bounded
-        # retry path is reintroduced.
-        # NOTE: ``requests`` is imported at module top; do NOT re-import it
-        # locally here — Python's scoping rules would then make ``requests``
-        # a function-local for the entire ha_container_with_fresh_config,
-        # which previously caused UnboundLocalError in the HAOS branch.
-
         # Use test token for API readiness checks
         headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
 
-        # The embedded backend's entrypoint preinstalls the ha-mcp wheel + its
-        # dependency tree before HA's /init, so /api/ liveness is delayed by that
-        # pip window and needs a much larger budget than the default 60s.
-        api_ready_timeout = _EMBEDDED_API_READY_TIMEOUT if embedded else 60
-        logger.info("🔄 Waiting for Home Assistant API to become ready...")
-        if not _wait_for_ha_api_ready(base_url, headers, timeout=api_ready_timeout):
-            _dump_ha_readiness_diagnostics(
-                container, base_url, headers, label="api-not-ready"
-            )
-            pytest.fail(
-                f"Home Assistant API at {base_url} did not become ready within "
-                f"{api_ready_timeout} seconds.\n"
-                "The container may have failed to start. Check Docker logs for details."
-            )
-
-        # Single readiness gate: poll ``/api/core/state`` until
-        # ``CoreState.RUNNING``. This replaces five separate polling gates
-        # (components/entities/input_boolean/ha_mcp_tools/sun) that were
-        # racing ``async_setup_entry`` for slow integrations — see #366
-        # thread (Ilya0527 2026-05-18) and the docstring on
-        # ``_wait_for_core_state_running`` for the structural rationale.
-        # ``CORE_STATE_TIMEOUT`` is defined at the top of this ``with
-        # container:`` block alongside ``SUN_WAIT`` for grep-ability.
-        logger.info("⏳ Waiting for HA CoreState to reach RUNNING...")
-        (
-            core_state_ok,
-            core_state_elapsed,
-            core_state_last,
-            entries_loaded,
-            entries_total,
-            snapshot_ok,
-        ) = _wait_for_core_state_running(base_url, headers, CORE_STATE_TIMEOUT)
-        if not core_state_ok:
-            _dump_ha_readiness_diagnostics(
-                container, base_url, headers, label="core-state-not-running"
-            )
-            pytest.fail(
-                f"HA CoreState did not reach 'RUNNING' within "
-                f"{CORE_STATE_TIMEOUT}s. Last observed state: "
-                f"{core_state_last!r}. Config entries loaded: "
-                f"{entries_loaded}/{entries_total}"
-                f"{'' if snapshot_ok else ' (snapshot unavailable)'}. "
-                f"Most likely an integration's async_setup_entry hit the "
-                f"300s SLOW_SETUP_MAX_WAIT ceiling. Check Docker logs."
-            )
-        _log_readiness_timing(
-            "core_state",
-            core_state_elapsed,
-            state=core_state_last,
-            entries_loaded=entries_loaded,
-            entries_total=entries_total,
-            snapshot_ok=snapshot_ok,
+        embedded_webhook_url = _wait_for_testcontainer_ready(
+            container,
+            base_url,
+            headers,
+            embedded,
+            CORE_STATE_TIMEOUT,
+            SUN_WAIT,
         )
-
-        logger.info("⏳ Waiting for sun.sun to reach a known state...")
-        sun_start = time.monotonic()
-        while time.monotonic() - sun_start < SUN_WAIT:
-            try:
-                sun_resp = requests.get(
-                    f"{base_url}/api/states/sun.sun", timeout=5, headers=headers
-                )
-                if sun_resp.status_code == 200:
-                    sun_state = sun_resp.json().get("state", "unknown")
-                    if sun_state != "unknown":
-                        elapsed = time.monotonic() - sun_start
-                        logger.info(f"✅ sun.sun is '{sun_state}' after {elapsed:.1f}s")
-                        _log_readiness_timing("sun", elapsed, state=sun_state)
-                        break
-            except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
-                logger.debug(f"sun.sun check failed: {exc}")
-            time.sleep(1)
-        else:
-            _dump_ha_readiness_diagnostics(
-                container,
-                base_url,
-                headers,
-                label="sun-wait-warn",
-                config_entry_domain="sun",
-            )
-            logger.warning(
-                f"⚠️ sun.sun still 'unknown' after {SUN_WAIT}s — template tests may fail"
-            )
-
-        # Embedded backend: HA core is up, but the in-process MCP server
-        # integration's background bring-up (force-install of the local wheel,
-        # token provisioning, worker-thread start, webhook registration) runs
-        # after CoreState RUNNING. Wait for its ingress webhook to answer MCP
-        # ``initialize`` before yielding so the session mcp_client fixture connects
-        # to a live server. This is a REAL bring-up gate — a timeout here means the
-        # embedded server genuinely failed to come up, not a flaky environment.
-        embedded_webhook_url: str | None = None
-        if embedded:
-            embedded_webhook_url = f"{base_url}/api/webhook/{_EMBEDDED_WEBHOOK_ID}"
-            logger.info(
-                "⏳ Waiting for the in-process MCP server webhook to come up..."
-            )
-            if not _wait_for_embedded_webhook_ready(
-                embedded_webhook_url, timeout=_EMBEDDED_BRINGUP_TIMEOUT
-            ):
-                _dump_ha_readiness_diagnostics(
-                    container,
-                    base_url,
-                    headers,
-                    label="embedded-webhook-not-ready",
-                    config_entry_domain=_EMBEDDED_DOMAIN,
-                )
-                pytest.fail(
-                    "The in-process MCP server did not answer its ingress "
-                    f"webhook within {_EMBEDDED_BRINGUP_TIMEOUT}s. Bring-up "
-                    "(wheel install / token provisioning / server thread / webhook "
-                    "registration) failed — check the HA log dump above for the "
-                    f"{_EMBEDDED_DOMAIN} config-entry state and any repair issue."
-                )
 
         # Store connection info for other fixtures
         container_info = {
