@@ -328,6 +328,20 @@ class TestSceneResolvedShortCircuit:
         assert mock_client._request.call_args.kwargs["json"]["name"] == "new_slug"
 
     @pytest.mark.asyncio
+    async def test_upsert_scene_name_default_strips_entity_prefix(self, mock_client):
+        """A caller-facing ``scene.<slug>`` id must NOT become the scene name
+        verbatim — HA derives the entity_id from the name slug, so a prefixed
+        default would rename the scene and change its entity_id on a plain update."""
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        config = {"entities": {"light.k": {"state": "on"}}}  # no name
+        await mock_client.upsert_scene_config(
+            config, "scene.movie_night", resolved_id="movie_night"
+        )
+
+        assert mock_client._request.call_args.kwargs["json"]["name"] == "movie_night"
+
+    @pytest.mark.asyncio
     async def test_delete_scene_resolved_skips_lookup(self, mock_client):
         mock_client._request = AsyncMock(return_value={"result": "ok"})
 

@@ -1782,9 +1782,12 @@ class HomeAssistantClient:
             # Default a name when missing from the CALLER's ``scene_id`` (not
             # ``write_id``) — mirrors the script upsert behaviour so a bare
             # config dict is acceptable, without resetting a renamed scene's
-            # name to the storage key.
+            # name to the storage key. Strip the ``scene.`` prefix: a caller may
+            # pass the entity_id form (``resolve_scene_id`` accepts it), and HA
+            # derives the entity_id from the name slug — persisting the prefixed
+            # form would rename the scene and change its entity_id on a plain update.
             if "name" not in config:
-                config["name"] = scene_id
+                config["name"] = scene_id.removeprefix("scene.")
 
             # Validate required field. ``entities`` is a dict keyed by entity_id,
             # not a list — distinct from script ``sequence`` and automation ``action``.
