@@ -405,8 +405,9 @@ class TestResolveScriptId:
 
 
 class TestUpsertScriptResolvedShortCircuit:
-    """``_resolved=True`` skips the redundant ``_resolve_script_id`` registry
-    lookup on ``upsert_script_config`` (issue #1813 Phase 0 item #6).
+    """``resolved_id`` skips the redundant ``_resolve_script_id`` registry lookup
+    on ``upsert_script_config`` (issue #1813 Phase 0 item #6) — while ``script_id``
+    stays the caller's identifier for alias-defaulting (#1935).
 
     ``_make_mock_client`` makes ``send_websocket_message`` raise, so
     ``assert_not_called`` proves the resolver was genuinely skipped rather than
@@ -418,14 +419,14 @@ class TestUpsertScriptResolvedShortCircuit:
         return _make_mock_client()
 
     @pytest.mark.asyncio
-    async def test_resolved_skips_lookup(self, mock_client):
-        """``_resolved=True`` uses ``script_id`` directly as the storage key and
-        never issues the entity-registry lookup."""
+    async def test_resolved_id_skips_lookup(self, mock_client):
+        """``resolved_id`` is used directly as the write target and no
+        entity-registry lookup is issued."""
         mock_client._request = AsyncMock(return_value={"result": "ok"})
 
         config = {"alias": "x", "sequence": [{"delay": {"seconds": 1}}]}
         result = await mock_client.upsert_script_config(
-            config, "storage_key", _resolved=True
+            config, "renamed_script", resolved_id="storage_key"
         )
 
         assert result["success"] is True
@@ -436,9 +437,30 @@ class TestUpsertScriptResolvedShortCircuit:
         )
 
     @pytest.mark.asyncio
+    async def test_resolved_id_alias_defaults_to_caller_script_id(self, mock_client):
+        """#1935 regression: with ``resolved_id`` provided (renamed script), a
+        missing alias defaults to the CALLER's ``script_id`` — NOT the storage
+        key — while the write still targets the resolved key with no re-resolve."""
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        config = {"sequence": [{"delay": {"seconds": 1}}]}  # no alias
+        result = await mock_client.upsert_script_config(
+            config, "new_name", resolved_id="old_storage_key"
+        )
+
+        # Write targets the resolved storage key; resolver never consulted.
+        assert result["script_id"] == "old_storage_key"
+        mock_client.send_websocket_message.assert_not_called()
+        method, endpoint = mock_client._request.call_args.args
+        assert endpoint == "config/script/config/old_storage_key"
+        # Alias defaulted from the caller's id, not the stale storage key.
+        assert mock_client._request.call_args.kwargs["json"]["alias"] == "new_name"
+
+    @pytest.mark.asyncio
     async def test_default_still_resolves(self, mock_client):
-        """Contrast: without ``_resolved`` the registry resolver is consulted and
-        the resolved storage key is used for the endpoint."""
+        """Contrast: without ``resolved_id`` the registry resolver is consulted,
+        the resolved storage key is the write target, and a missing alias
+        defaults to the caller's id."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={"result": {"unique_id": "storage_key"}}
         )

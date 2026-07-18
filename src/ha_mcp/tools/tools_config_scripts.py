@@ -356,20 +356,16 @@ class ConfigScriptTools:
     ) -> dict[str, Any]:
         """Upsert, threading a pre-resolved storage key when available.
 
-        When ``resolved_id`` is set the caller already resolved ``script_id``
-        (via ``_fetch_and_verify_hash``); pass it with ``_resolved=True`` so the
+        ``script_id`` is always the CALLER's identifier (used to default a
+        missing alias). ``resolved_id`` — set only when ``_fetch_and_verify_hash``
+        already resolved the storage key — is passed as the write target so the
         REST client skips the redundant entity-registry lookup (issue #1813
-        Phase 0). Otherwise fall back to the raw ``script_id`` and let the REST
-        client resolve — the no-hash update path lands here unchanged.
+        Phase 0); None lets the REST client resolve. Passing the caller id
+        separately keeps a renamed script's alias caller-facing (#1935).
         """
-        result: dict[str, Any]
-        if resolved_id is not None:
-            result = await self._client.upsert_script_config(
-                config, resolved_id, _resolved=True
-            )
-        else:
-            result = await self._client.upsert_script_config(config, script_id)
-        return result
+        return await self._client.upsert_script_config(
+            config, script_id, resolved_id=resolved_id
+        )
 
     @staticmethod
     def _validate_script_config(
@@ -751,10 +747,13 @@ class ConfigScriptTools:
                 bp_warnings = _check_best_practices(transformed_config)
 
                 # Save transformed config. ``_fetch_and_verify_hash`` already
-                # resolved the storage key; thread it so the upsert skips the
-                # redundant re-resolve (issue #1813 Phase 0).
+                # resolved the storage key; pass it as the write target so the
+                # upsert skips the redundant re-resolve (issue #1813 Phase 0).
+                # ``script_id`` stays the caller id (the fetched config already
+                # carries an alias here, so the default is a no-op, but keep the
+                # contract consistent — #1935).
                 result = await self._client.upsert_script_config(
-                    transformed_config, resolved_id, _resolved=True
+                    transformed_config, script_id, resolved_id=resolved_id
                 )
 
                 # Re-fetch to get authoritative hash (HA may normalize after save)

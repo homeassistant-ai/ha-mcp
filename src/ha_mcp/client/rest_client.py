@@ -1606,22 +1606,33 @@ class HomeAssistantClient:
             raise
 
     async def upsert_script_config(
-        self, config: dict[str, Any], script_id: str, *, _resolved: bool = False
+        self,
+        config: dict[str, Any],
+        script_id: str,
+        *,
+        resolved_id: str | None = None,
     ) -> dict[str, Any]:
         """Create or update Home Assistant script configuration.
 
-        ``_resolved=True`` signals ``script_id`` is already the resolved storage
-        key (the caller ran :meth:`_resolve_script_id`), skipping the redundant
-        entity-registry lookup (``_resolve_script_id`` is idempotent, so the
-        endpoint id is unchanged).
+        ``resolved_id``, when provided, is the already-resolved storage key used
+        as the write target (the caller ran :meth:`_resolve_script_id`),
+        skipping the redundant entity-registry lookup. ``script_id`` stays the
+        CALLER's identifier and is used only to default a missing ``alias`` — a
+        renamed script (whose storage key differs from the entity slug the
+        caller passed) keeps its caller-facing name rather than resetting the
+        user-visible alias to the stale storage key (#1935).
         """
-        resolved_id = (
-            script_id if _resolved else await self._resolve_script_id(script_id)
+        write_id = (
+            resolved_id
+            if resolved_id is not None
+            else await self._resolve_script_id(script_id)
         )
         try:
-            endpoint = f"config/script/config/{resolved_id}"
+            endpoint = f"config/script/config/{write_id}"
 
-            # Validate required fields
+            # Default a missing alias from the CALLER's ``script_id`` (not
+            # ``write_id``) so a renamed script's user-visible name is preserved
+            # instead of being reset to the storage key.
             if "alias" not in config:
                 config["alias"] = script_id
 
@@ -1636,7 +1647,7 @@ class HomeAssistantClient:
 
             return {
                 "success": True,
-                "script_id": resolved_id,
+                "script_id": write_id,
                 "result": response.get("result", "ok"),
                 "operation": "created" if response.get("result") == "ok" else "updated",
             }

@@ -243,10 +243,12 @@ class TestGetScriptCanonicalId:
 
 class TestScriptUpsertResolvedThreading:
     """Issue #1813 Phase 0 item #6: when the tool pre-resolves the storage key
-    (its hash-verify fetch already resolved it via the REST envelope), it
-    threads ``_resolved=True`` and the resolved id into ``upsert_script_config``
-    so the REST client skips the redundant second registry lookup. The no-hash
-    path stays unthreaded (raw script_id resolved once, inside the upsert).
+    (its hash-verify fetch already resolved it via the REST envelope), it passes
+    that key as ``resolved_id`` to ``upsert_script_config`` so the REST client
+    skips the redundant second registry lookup — while ``script_id`` stays the
+    CALLER's identifier so a renamed script's alias is not reset to the storage
+    key (#1935). The no-hash path passes ``resolved_id=None`` (resolved once,
+    inside the upsert).
     """
 
     # The inner script body the stubbed envelope carries; its hash is the
@@ -289,7 +291,8 @@ class TestScriptUpsertResolvedThreading:
 
     async def test_full_config_with_hash_threads_resolved_id(self, tools, mock_client):
         """A full-config update supplying ``config_hash`` pre-resolves via the
-        hash-verify fetch → upsert is threaded with the resolved storage key."""
+        hash-verify fetch → the resolved storage key is passed as ``resolved_id``
+        (write target) while ``script_id`` stays the caller's id."""
         result = await tools.ha_config_set_script(
             script_id="renamed_script",
             config={"alias": "Morning", "sequence": [{"delay": {"seconds": 5}}]},
@@ -299,11 +302,11 @@ class TestScriptUpsertResolvedThreading:
 
         assert result["success"] is True
         args, kwargs = mock_client.upsert_script_config.call_args
-        assert kwargs.get("_resolved") is True
-        assert args[1] == "storage_key"
+        assert kwargs.get("resolved_id") == "storage_key"
+        assert args[1] == "renamed_script"
 
     async def test_python_transform_threads_resolved_id(self, tools, mock_client):
-        """python_transform always hash-verifies first → upsert threaded."""
+        """python_transform always hash-verifies first → threaded the same way."""
         result = await tools.ha_config_set_script(
             script_id="renamed_script",
             python_transform="config['mode'] = 'single'",
@@ -312,12 +315,37 @@ class TestScriptUpsertResolvedThreading:
 
         assert result["success"] is True
         args, kwargs = mock_client.upsert_script_config.call_args
-        assert kwargs.get("_resolved") is True
-        assert args[1] == "storage_key"
+        assert kwargs.get("resolved_id") == "storage_key"
+        assert args[1] == "renamed_script"
+
+    async def test_renamed_config_hash_no_alias_forwards_caller_id_for_alias(
+        self, tools, mock_client
+    ):
+        """#1935: a renamed script updated with config_hash + a config omitting
+        ``alias`` forwards the CALLER's id as ``script_id`` (the REST client's
+        alias-default source) and the resolved storage key as ``resolved_id``
+        (write target) — so the alias is not reset to the storage key, and the
+        resolver runs only once (in the hash-verify fetch)."""
+        result = await tools.ha_config_set_script(
+            script_id="renamed_script",
+            config={"sequence": [{"delay": {"seconds": 5}}]},  # no alias
+            config_hash=self._seed_hash(),
+            wait=False,
+        )
+
+        assert result["success"] is True
+        args, kwargs = mock_client.upsert_script_config.call_args
+        # Caller id is the alias-default source; storage key is the write target.
+        assert args[1] == "renamed_script"
+        assert kwargs.get("resolved_id") == "storage_key"
+        # The config forwarded to the REST client still has no alias — the
+        # default is applied inside upsert_script_config from ``script_id``
+        # (proven by TestUpsertScriptResolvedShortCircuit at the REST level).
+        assert "alias" not in args[0]
 
     async def test_full_config_without_hash_is_not_threaded(self, tools, mock_client):
-        """No ``config_hash`` → no pre-resolve → raw script_id passed, the REST
-        client resolves once (``_resolved`` stays False/absent)."""
+        """No ``config_hash`` → no pre-resolve → ``resolved_id=None``, the REST
+        client resolves once from the caller ``script_id``."""
         result = await tools.ha_config_set_script(
             script_id="renamed_script",
             config={"alias": "Morning", "sequence": [{"delay": {"seconds": 5}}]},
@@ -326,7 +354,7 @@ class TestScriptUpsertResolvedThreading:
 
         assert result["success"] is True
         args, kwargs = mock_client.upsert_script_config.call_args
-        assert kwargs.get("_resolved", False) is False
+        assert kwargs.get("resolved_id") is None
         assert args[1] == "renamed_script"
 
 
