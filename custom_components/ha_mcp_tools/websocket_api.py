@@ -5161,7 +5161,7 @@ async def _call_service_prep(
     # The server's confirmation HINT (``_SERVICE_TO_STATE.get(service)``), applied to
     # every confirmation target. Absent / None keeps any-first-event confirmation.
     expected_state = msg.get("expected_state")
-    expected_by_entity = {eid: expected_state for eid in entity_ids}
+    expected_by_entity = dict.fromkeys(entity_ids, expected_state)
 
     # 3. Pre-state capture (synchronous in-memory reads, guarded against drift).
     pre = {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids}
@@ -5627,7 +5627,7 @@ def _bulk_op_record(
         "service": op["service"],
         "service_data": op.get("service_data") or {},
         "entity_ids": entity_ids,
-        "expected_by_entity": {eid: expected_state for eid in entity_ids},
+        "expected_by_entity": dict.fromkeys(entity_ids, expected_state),
         "should_confirm": bool(wait and entity_ids),
         "pre": {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids},
         "evt": None,
