@@ -475,6 +475,21 @@ class TestRouteRegistration:
         # Nothing mounted → no hint prefix recorded (stays None, not "")
         assert get_http_settings_prefix() is None
 
+    def test_advertise_prefix_false_mounts_but_does_not_record(self, monkeypatch):
+        # OAuth/OIDC dedicated-secret mount: routes are served, but the secret
+        # prefix must NOT be recorded — otherwise ha_get_overview would leak it
+        # to every connected MCP client (GHSA-mx64-982r-65vg).
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        register_settings_routes(
+            mcp, MagicMock(), secret_path="/private_s", advertise_prefix=False
+        )
+        paths = self._collect_paths(mcp)
+        assert "/private_s/settings" in paths
+        assert "/private_s/api/settings/tools" in paths
+        assert get_http_settings_prefix() is None
+
 
 class TestFaviconSuppression:
     """The page carries an empty-data-URI `<link rel="icon">` so the browser

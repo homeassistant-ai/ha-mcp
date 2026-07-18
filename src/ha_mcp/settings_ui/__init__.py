@@ -530,6 +530,7 @@ def register_settings_routes(
     mcp: FastMCP,
     server: HomeAssistantSmartMCPServer,
     secret_path: str = "",
+    advertise_prefix: bool = True,
 ) -> None:
     """Register the settings UI HTTP routes on the FastMCP Starlette app.
 
@@ -550,6 +551,12 @@ def register_settings_routes(
             ``/mcp``). Required for non-add-on HTTP modes; if empty in
             non-add-on mode, the function logs a warning and registers
             nothing rather than expose the routes publicly.
+        advertise_prefix: When True (default), record the secret-path mount in
+            ``_http_settings_prefix`` so ``ha_get_overview`` can hint at the
+            settings URL. OAuth/OIDC modes pass False: there the settings UI
+            sits under a *dedicated* secret path that must never be handed to
+            MCP clients (GHSA-mx64-982r-65vg), so the mount happens but the
+            prefix is not recorded.
     """
     handlers = build_settings_handlers(server)
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
@@ -636,7 +643,10 @@ def register_settings_routes(
         # need the same secret to reach the UI as they do for the MCP
         # endpoint.
         _mount(secret_prefix)
-        # Record the mount so ha_get_overview can point users at the settings
-        # page in HTTP transports that have no stdio sidecar URL file (#1458).
-        global _http_settings_prefix
-        _http_settings_prefix = secret_prefix
+        if advertise_prefix:
+            # Record the mount so ha_get_overview can point users at the
+            # settings page in HTTP transports that have no stdio sidecar URL
+            # file (#1458). Suppressed in OAuth/OIDC modes, where the dedicated
+            # secret path must not leak to MCP clients (GHSA-mx64-982r-65vg).
+            global _http_settings_prefix
+            _http_settings_prefix = secret_prefix
