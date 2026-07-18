@@ -21,14 +21,8 @@ API_TIMEOUT = 120
 ENTITY_TIMEOUT = 30
 
 
-def wait_for_ha_ready(url: str, token: str) -> None:
-    """Wait until HA is fully ready: components loaded, entities registered.
-
-    Raises TimeoutError if any gate is not reached within its timeout.
-    """
-    headers = {"Authorization": f"Bearer {token}"}
-
-    # Gate 1: API reachable and components loaded
+def _wait_for_components(url: str, headers: dict[str, str]) -> None:
+    """Gate 1: block until the HA API responds and enough components load."""
     logger.info(f"Waiting for HA at {url} ...")
     api_responded = False
     last_component_count = 0
@@ -62,7 +56,9 @@ def wait_for_ha_ready(url: str, token: str) -> None:
             f"Only {last_component_count} components loaded (minimum: {MIN_COMPONENTS})."
         )
 
-    # Gate 2: Entities registered
+
+def _wait_for_entities(url: str, headers: dict[str, str]) -> None:
+    """Gate 2: block until enough entities have registered."""
     logger.info("Waiting for HA entities to register...")
     last_entity_count = 0
     for attempt in range(ENTITY_TIMEOUT):
@@ -88,3 +84,17 @@ def wait_for_ha_ready(url: str, token: str) -> None:
             f"Entity registration timed out after {ENTITY_TIMEOUT}s. "
             f"Only {last_entity_count} entities registered (minimum: {MIN_ENTITIES})."
         )
+
+
+def wait_for_ha_ready(url: str, token: str) -> None:
+    """Wait until HA is fully ready: components loaded, entities registered.
+
+    Raises TimeoutError if any gate is not reached within its timeout.
+    """
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Gate 1: API reachable and components loaded
+    _wait_for_components(url, headers)
+
+    # Gate 2: Entities registered
+    _wait_for_entities(url, headers)

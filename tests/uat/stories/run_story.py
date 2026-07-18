@@ -242,6 +242,32 @@ def _extract_tool_calls(session_file: str | None, agent: str) -> int | None:
     return None if seq is None else len(seq)
 
 
+def _gemini_tool_sequence(session_file: str) -> list[str]:
+    """Ordered tool-call names from a gemini session file."""
+    data = json.loads(Path(session_file).read_text())
+    seq: list[str] = []
+    for msg in data.get("messages", []):
+        for call in msg.get("toolCalls", []):
+            name = call.get("name") or call.get("toolName")
+            if name:
+                seq.append(name)
+    return seq
+
+
+def _claude_tool_sequence(session_file: str) -> list[str]:
+    """Ordered tool-call names from a claude session file."""
+    seq: list[str] = []
+    for line in Path(session_file).read_text().splitlines():
+        entry = json.loads(line)
+        if entry.get("type") == "assistant":
+            for block in entry.get("message", {}).get("content", []):
+                if block.get("type") == "tool_use":
+                    name = block.get("name")
+                    if name:
+                        seq.append(name)
+    return seq
+
+
 def _extract_tool_sequence(session_file: str | None, agent: str) -> list[str] | None:
     """Extract the ordered tool-call sequence (names only) from a session file.
 
@@ -254,26 +280,10 @@ def _extract_tool_sequence(session_file: str | None, agent: str) -> list[str] | 
 
     try:
         if agent == "gemini":
-            data = json.loads(Path(session_file).read_text())
-            seq: list[str] = []
-            for msg in data.get("messages", []):
-                for call in msg.get("toolCalls", []):
-                    name = call.get("name") or call.get("toolName")
-                    if name:
-                        seq.append(name)
-            return seq
+            return _gemini_tool_sequence(session_file)
 
         if agent == "claude":
-            seq = []
-            for line in Path(session_file).read_text().splitlines():
-                entry = json.loads(line)
-                if entry.get("type") == "assistant":
-                    for block in entry.get("message", {}).get("content", []):
-                        if block.get("type") == "tool_use":
-                            name = block.get("name")
-                            if name:
-                                seq.append(name)
-            return seq
+            return _claude_tool_sequence(session_file)
     except Exception as exc:
         logger.warning(f"  Tool sequence extraction failed: {exc}")
         return None
@@ -347,24 +357,19 @@ async def _run_mcp_steps(mcp_client: MCPClient, steps: list[dict], phase: str) -
 # ---------------------------------------------------------------------------
 # Test prompt execution via agent CLI
 # ---------------------------------------------------------------------------
-def _run_test_prompt(
-    prompt: str,
+def _build_run_uat_cmd(
     agent: str,
     ha_url: str,
     ha_token: str,
-    branch: str | None = None,
-    extra_args: list[str] | None = None,
-    model: str | None = None,
-    base_url: str | None = None,
-    api_key: str | None = None,
-    max_tools: int | None = None,
-    no_think: bool = False,
-    max_tokens: int | None = None,
-    mcp_env: list[str] | None = None,
-) -> tuple[int, dict | None]:
-    """Run test prompt via run_uat.py for a single agent. Returns (exit_code, parsed_summary)."""
-    scenario = {"test_prompt": prompt.strip()}
-
+    branch: str | None,
+    model: str | None,
+    base_url: str | None,
+    api_key: str | None,
+    max_tools: int | None,
+    no_think: bool,
+    max_tokens: int | None,
+) -> list[str]:
+    """Assemble the base run_uat.py subprocess command and its simple flags."""
     cmd = [
         sys.executable,
         str(RUN_UAT),
@@ -389,6 +394,39 @@ def _run_test_prompt(
         cmd.append("--no-think")
     if max_tokens is not None:
         cmd.extend(["--max-tokens", str(max_tokens)])
+    return cmd
+
+
+def _run_test_prompt(
+    prompt: str,
+    agent: str,
+    ha_url: str,
+    ha_token: str,
+    branch: str | None = None,
+    extra_args: list[str] | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    max_tools: int | None = None,
+    no_think: bool = False,
+    max_tokens: int | None = None,
+    mcp_env: list[str] | None = None,
+) -> tuple[int, dict | None]:
+    """Run test prompt via run_uat.py for a single agent. Returns (exit_code, parsed_summary)."""
+    scenario = {"test_prompt": prompt.strip()}
+
+    cmd = _build_run_uat_cmd(
+        agent,
+        ha_url,
+        ha_token,
+        branch,
+        model,
+        base_url,
+        api_key,
+        max_tools,
+        no_think,
+        max_tokens,
+    )
     if mcp_env:
         for pair in mcp_env:
             cmd.extend(["--mcp-env", pair])
@@ -709,6 +747,83 @@ def _suite_exit_code(all_results: list, backend_aborted: bool) -> int:
 # ---------------------------------------------------------------------------
 # JSONL results
 # ---------------------------------------------------------------------------
+def _add_result_markers(record: dict, test_phase: dict) -> None:
+    # Surface the failure-reason marker so reports can tell an incomplete run
+    # (e.g. context_window_exceeded, hit_iteration_limit) apart from a run that
+    # finished but failed its checks.
+    error = test_phase.get("error")
+    if error:
+        record["error"] = error
+    context_overflow = test_phase.get("context_overflow")
+    if context_overflow:
+        record["context_overflow"] = context_overflow
+
+    # Cost from Claude's JSON output (direct, no session file needed)
+    cost_usd = test_phase.get("cost_usd")
+    if cost_usd is not None:
+        record["cost_usd"] = cost_usd
+
+
+def _add_tool_sequence(record: dict, session_file: str | None, agent: str) -> None:
+    # Extract tool call count from session file if not in summary.
+    # Always extract the ordered sequence too — flip-flop count is the BAT's
+    # primary native-path metric (openai path emits the sequence directly).
+    seq = _extract_tool_sequence(session_file, agent)
+    if record["tool_calls"] is None and seq is not None:
+        record["tool_calls"] = len(seq)
+    if seq:
+        record["tool_sequence"] = seq
+
+
+def _add_token_usage(
+    record: dict, test_phase: dict, session_file: str | None, agent: str
+) -> None:
+    # Extract token usage: from phase summary (openai) or session file (claude/gemini)
+    tokens = _extract_tokens(session_file, agent)
+    if tokens is None:
+        ti = test_phase.get("tokens_input")
+        to = test_phase.get("tokens_output")
+        if ti is not None or to is not None:
+            # reasoning_tokens are a subset of completion_tokens, so tokens_output
+            # already counts them; tokens_thoughts is the informational breakdown.
+            tokens = {
+                "input": ti or 0,
+                "output": to or 0,
+                "cached": 0,
+                "thoughts": test_phase.get("tokens_thoughts") or 0,
+            }
+    if tokens:
+        record["tokens_input"] = tokens["input"]
+        record["tokens_output"] = tokens["output"]
+        record["tokens_cached"] = tokens["cached"]
+        record["tokens_thoughts"] = tokens["thoughts"]
+        record["tokens_billable"] = (tokens["input"] - tokens["cached"]) + tokens[
+            "output"
+        ]
+
+
+def _add_response_and_verify(
+    record: dict, test_phase: dict, verify_results: list[dict] | None
+) -> None:
+    # Always include agent_response so passing runs are inspectable.
+    agent_response = test_phase.get("output", "")
+    if agent_response:
+        record["agent_response"] = agent_response
+
+    # Always include tool_trace (openai path: ordered name+args from
+    # tool_trace_sink) — the BAT's primary signal for tool-pick analysis,
+    # not just for failure debug.
+    tool_trace = test_phase.get("tool_trace")
+    if tool_trace:
+        record["tool_trace"] = tool_trace
+
+    # verify_results stays failure-only — too verbose for the BAT result
+    # file otherwise, and verify_results.passed is already captured in
+    # record["passed"].
+    if verify_results is not None and not all(r["passed"] for r in verify_results):
+        record["verify_results"] = verify_results
+
+
 def append_result(
     results_file: Path,
     story: dict,
@@ -751,52 +866,11 @@ def append_result(
     if session_file:
         record["session_file"] = session_file
 
-    # Surface the failure-reason marker so reports can tell an incomplete run
-    # (e.g. context_window_exceeded, hit_iteration_limit) apart from a run that
-    # finished but failed its checks.
-    error = test_phase.get("error")
-    if error:
-        record["error"] = error
-    context_overflow = test_phase.get("context_overflow")
-    if context_overflow:
-        record["context_overflow"] = context_overflow
+    _add_result_markers(record, test_phase)
 
-    # Cost from Claude's JSON output (direct, no session file needed)
-    cost_usd = test_phase.get("cost_usd")
-    if cost_usd is not None:
-        record["cost_usd"] = cost_usd
+    _add_tool_sequence(record, session_file, agent)
 
-    # Extract tool call count from session file if not in summary.
-    # Always extract the ordered sequence too — flip-flop count is the BAT's
-    # primary native-path metric (openai path emits the sequence directly).
-    seq = _extract_tool_sequence(session_file, agent)
-    if record["tool_calls"] is None and seq is not None:
-        record["tool_calls"] = len(seq)
-    if seq:
-        record["tool_sequence"] = seq
-
-    # Extract token usage: from phase summary (openai) or session file (claude/gemini)
-    tokens = _extract_tokens(session_file, agent)
-    if tokens is None:
-        ti = test_phase.get("tokens_input")
-        to = test_phase.get("tokens_output")
-        if ti is not None or to is not None:
-            # reasoning_tokens are a subset of completion_tokens, so tokens_output
-            # already counts them; tokens_thoughts is the informational breakdown.
-            tokens = {
-                "input": ti or 0,
-                "output": to or 0,
-                "cached": 0,
-                "thoughts": test_phase.get("tokens_thoughts") or 0,
-            }
-    if tokens:
-        record["tokens_input"] = tokens["input"]
-        record["tokens_output"] = tokens["output"]
-        record["tokens_cached"] = tokens["cached"]
-        record["tokens_thoughts"] = tokens["thoughts"]
-        record["tokens_billable"] = (tokens["input"] - tokens["cached"]) + tokens[
-            "output"
-        ]
+    _add_token_usage(record, test_phase, session_file, agent)
 
     # First-turn input tokens: most direct measure of idle context size (openai agent only).
     # Comes from aggregate (not test_phase) since make_phase_summary doesn't propagate it.
@@ -804,23 +878,7 @@ def append_result(
     if tokens_first_input is not None:
         record["tokens_first_input"] = tokens_first_input
 
-    # Always include agent_response so passing runs are inspectable.
-    agent_response = test_phase.get("output", "")
-    if agent_response:
-        record["agent_response"] = agent_response
-
-    # Always include tool_trace (openai path: ordered name+args from
-    # tool_trace_sink) — the BAT's primary signal for tool-pick analysis,
-    # not just for failure debug.
-    tool_trace = test_phase.get("tool_trace")
-    if tool_trace:
-        record["tool_trace"] = tool_trace
-
-    # verify_results stays failure-only — too verbose for the BAT result
-    # file otherwise, and verify_results.passed is already captured in
-    # record["passed"].
-    if verify_results is not None and not all(r["passed"] for r in verify_results):
-        record["verify_results"] = verify_results
+    _add_response_and_verify(record, test_phase, verify_results)
 
     results_file.parent.mkdir(parents=True, exist_ok=True)
     with open(results_file, "a") as f:
@@ -909,25 +967,14 @@ def _record_backend_abort(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-async def run_stories(
-    args: argparse.Namespace, filtered: list[tuple[Path, dict]]
-) -> int:
-    """Run stories with a fresh container per agent.
+def _preflight_stories(
+    args: argparse.Namespace, agent_list: list[str], using_external_ha: bool
+) -> int | None:
+    """Fail-fast preflight for docker/openai reachability.
 
-    For each agent: start container -> run all stories -> stop container.
-    When --ha-url is provided, all agents share the external instance.
+    Returns a nonzero exit code to abort the run, or None to proceed.
     """
-    run_start = time.monotonic()
-    sha, describe = get_git_info()
-    agent_list = [a.strip() for a in args.agents.split(",")]
-    using_external_ha = bool(args.ha_url)
-
-    from uat.run_uat import (
-        build_stdio_mcp_config,
-        parse_mcp_env,
-        preflight_check_base_url,
-        preflight_check_docker,
-    )
+    from uat.run_uat import preflight_check_base_url, preflight_check_docker
 
     if not using_external_ha:
         err = preflight_check_docker()
@@ -939,293 +986,499 @@ async def run_stories(
         if err:
             logger.critical(err)
             return 2
+    return None
 
-    all_results: list[tuple[str, str, dict, int, dict | None, str | None, bool]] = []
-    # Each entry: (agent, story_id, story, exit_code, summary, session_file, passed)
-    backend_aborted = False  # set if any agent aborted on an unreachable backend
 
-    mcp_env_dict = parse_mcp_env(
-        getattr(args, "mcp_env", None),
-        base_url=args.base_url,
-        on_default_applied=logger.info,
+def _log_kept_container(agent: str, ha: dict | None, keep_container: bool) -> None:
+    if ha and keep_container:
+        logger.info(f"\n[{agent}] Container kept alive: {ha['url']}")
+        logger.info(f"[{agent}] Token: {ha['token']}")
+        logger.info(f"[{agent}] Config dir: {ha['config_dir']}")
+        logger.info(f"[{agent}] Stop manually: docker stop <container>")
+
+
+async def _setup_inline_agent(
+    agent: str,
+    ha_url: str,
+    ha_token: str,
+    args: argparse.Namespace,
+    agent_stack: contextlib.AsyncExitStack,
+    mcp_env_dict: dict[str, str],
+    filtered: list[tuple[Path, dict]],
+    all_results: list,
+    sha: str,
+    describe: str,
+) -> tuple[openai.AsyncOpenAI, str, str | None, MCPClient, list[dict]] | None:
+    """Warm the OpenAI client and start the shared MCP server for an inline agent.
+
+    Returns ``(openai_client, resolved_model, resolved_quant, inline_mcp_client,
+    openai_tools)`` on success, or ``None`` if setup failed (a per-story failure
+    row is recorded before returning).
+    """
+    from fastmcp import Client as _MCPClient
+    from uat.openai_agent import (
+        create_and_warm_openai_client,
+        fetch_openai_tools,
     )
-    effective_mcp_env: list[str] = [f"{k}={v}" for k, v in mcp_env_dict.items()]
+    from uat.run_uat import build_stdio_mcp_config
 
-    for agent in agent_list:
-        logger.info(f"\n{'#' * 60}")
-        logger.info(f"Agent: {agent}")
-        logger.info(f"{'#' * 60}")
+    config = build_stdio_mcp_config(ha_url, ha_token, args.branch, mcp_env_dict or None)
+    try:
+        (
+            openai_client,
+            resolved_model,
+            resolved_quant,
+        ) = await create_and_warm_openai_client(
+            base_url=args.base_url,
+            api_key=args.api_key,
+            model=args.model,
+        )
+        agent_stack.push_async_callback(openai_client.close)
+    except Exception as e:
+        error_msg = f"Failed to initialise OpenAI client: {type(e).__name__}: {e}"
+        logger.error(f"[{agent}] {error_msg}")
+        _record_setup_failure(
+            filtered,
+            agent,
+            error_msg,
+            all_results=all_results,
+            results_file=args.results_file,
+            sha=sha,
+            describe=describe,
+            branch=args.branch,
+        )
+        return None
+    try:
+        source = f"uvx download @ {args.branch}" if args.branch else "local"
+        logger.info(f"[{agent}] Starting MCP server ({source})...")
+        inline_mcp_client = await agent_stack.enter_async_context(_MCPClient(config))
+        openai_tools = await fetch_openai_tools(
+            inline_mcp_client, max_tools=args.max_tools
+        )
+        logger.info(f"[{agent}] MCP server ready ({len(openai_tools)} tools)")
+    except Exception as e:
+        error_msg = f"Failed to start MCP server: {type(e).__name__}: {e}"
+        logger.error(f"[{agent}] {error_msg}")
+        _record_setup_failure(
+            filtered,
+            agent,
+            error_msg,
+            all_results=all_results,
+            results_file=args.results_file,
+            sha=sha,
+            describe=describe,
+            branch=args.branch,
+        )
+        return None
+    return (
+        openai_client,
+        resolved_model,
+        resolved_quant,
+        inline_mcp_client,
+        openai_tools,
+    )
 
-        ha = None
-        ha_url = args.ha_url
-        ha_token = args.ha_token
-        if not using_external_ha:
-            ha = _start_container(keep_alive=args.keep_container)
-            ha_url = ha["url"]
-            ha_token = ha["token"]
 
-        # Inline agents (see INLINE_AGENTS) hold one MCP server + one OpenAI
-        # client across all stories for this agent, skipping the per-story
-        # MCP server spawn and model warmup. Other agents take the subprocess
-        # path via _run_test_prompt.
-        use_inline = agent in INLINE_AGENTS
-        inline_mcp_client: MCPClient | None = None
-        openai_client: openai.AsyncOpenAI | None = None
-        resolved_model: str | None = None
-        resolved_quant: str | None = None
-        openai_tools: list[dict] = []
+async def _execute_prompt(
+    story_index: int,
+    story: dict,
+    *,
+    agent: str,
+    use_inline: bool,
+    ha_url: str,
+    ha_token: str,
+    openai_client,
+    inline_mcp_client,
+    resolved_model: str | None,
+    openai_tools: list[dict],
+    args: argparse.Namespace,
+    effective_mcp_env: list[str],
+    filtered: list[tuple[Path, dict]],
+    sha: str,
+    describe: str,
+) -> tuple[int | None, dict | None, bool]:
+    """Execute one story's test prompt (inline or subprocess).
 
-        async with contextlib.AsyncExitStack() as agent_stack:
-            if ha and not args.keep_container:
-                agent_stack.callback(_stop_container, ha)
+    Returns ``(rc, summary, aborted)``. ``aborted`` is True only when the
+    inline backend connection was refused/reset, in which case a backend-abort
+    marker has already been recorded and the caller should stop this agent.
+    """
+    sid = story["id"]
+    if use_inline:
+        import openai
 
-            if use_inline:
-                import openai  # runtime ref for APIConnectionError in the story loop
-                from fastmcp import Client as _MCPClient
-                from uat.openai_agent import (
-                    create_and_warm_openai_client,
-                    fetch_openai_tools,
-                )
-
-                config = build_stdio_mcp_config(
-                    ha_url, ha_token, args.branch, mcp_env_dict or None
-                )
-                try:
-                    (
-                        openai_client,
-                        resolved_model,
-                        resolved_quant,
-                    ) = await create_and_warm_openai_client(
-                        base_url=args.base_url,
-                        api_key=args.api_key,
-                        model=args.model,
-                    )
-                    agent_stack.push_async_callback(openai_client.close)
-                except Exception as e:
-                    error_msg = (
-                        f"Failed to initialise OpenAI client: {type(e).__name__}: {e}"
-                    )
-                    logger.error(f"[{agent}] {error_msg}")
-                    _record_setup_failure(
-                        filtered,
-                        agent,
-                        error_msg,
-                        all_results=all_results,
-                        results_file=args.results_file,
-                        sha=sha,
-                        describe=describe,
-                        branch=args.branch,
-                    )
-                    continue
-                try:
-                    source = f"uvx download @ {args.branch}" if args.branch else "local"
-                    logger.info(f"[{agent}] Starting MCP server ({source})...")
-                    inline_mcp_client = await agent_stack.enter_async_context(
-                        _MCPClient(config)
-                    )
-                    openai_tools = await fetch_openai_tools(
-                        inline_mcp_client, max_tools=args.max_tools
-                    )
-                    logger.info(
-                        f"[{agent}] MCP server ready ({len(openai_tools)} tools)"
-                    )
-                except Exception as e:
-                    error_msg = f"Failed to start MCP server: {type(e).__name__}: {e}"
-                    logger.error(f"[{agent}] {error_msg}")
-                    _record_setup_failure(
-                        filtered,
-                        agent,
-                        error_msg,
-                        all_results=all_results,
-                        results_file=args.results_file,
-                        sha=sha,
-                        describe=describe,
-                        branch=args.branch,
-                    )
-                    continue
-
-            if ha and args.keep_container:
-                logger.info(f"\n[{agent}] Container kept alive: {ha['url']}")
-                logger.info(f"[{agent}] Token: {ha['token']}")
-                logger.info(f"[{agent}] Config dir: {ha['config_dir']}")
-                logger.info(f"[{agent}] Stop manually: docker stop <container>")
-
-            shared_mcp = await agent_stack.enter_async_context(
-                inprocess_mcp_client(ha_url, ha_token)
+        assert (
+            openai_client is not None
+            and inline_mcp_client is not None
+            and resolved_model is not None
+        ), "inline setup invariant: clients/model are populated when use_inline is True"
+        try:
+            rc, summary = await _run_test_prompt_inline(
+                story["prompt"],
+                agent_name=agent,
+                openai_client=openai_client,
+                mcp_client=inline_mcp_client,
+                model=resolved_model,
+                openai_tools=openai_tools,
+                no_think=args.no_think,
+                max_tokens=getattr(args, "max_tokens", None),
             )
+        except openai.APIConnectionError as e:
+            # A refused/reset connection (NOT a timeout; those are
+            # handled per-story inside _run_test_prompt_inline). The
+            # backend is gone, so abort this agent's remaining stories
+            # rather than failing each one in turn. The current story
+            # never validly ran, so it is skipped too (not recorded).
+            _record_backend_abort(
+                args.results_file,
+                agent,
+                sid,
+                [s["id"] for _p, s in filtered[story_index:]],
+                f"{type(e).__name__}: {e}",
+                sha=sha,
+                describe=describe,
+                branch=args.branch,
+            )
+            return None, None, True
+    else:
+        rc, summary = _run_test_prompt(
+            story["prompt"],
+            agent,
+            ha_url,
+            ha_token,
+            args.branch,
+            args.extra_args or None,
+            model=args.model,
+            base_url=args.base_url,
+            api_key=args.api_key,
+            max_tools=args.max_tools,
+            no_think=args.no_think,
+            max_tokens=getattr(args, "max_tokens", None),
+            mcp_env=effective_mcp_env or None,
+        )
 
-            # Consecutive per-story timeouts; reset by any non-timeout story.
-            # Hitting CONSECUTIVE_TIMEOUT_ABORT aborts the agent (backend gone).
-            consecutive_timeouts = 0
+    return rc, summary, False
 
-            for story_index, (_path, story) in enumerate(filtered):
-                sid = story["id"]
-                logger.info(f"\n{'=' * 60}")
-                logger.info(f"[{agent}] Story {sid}: {story['title']}")
-                logger.info(f"{'=' * 60}")
 
-                setup_steps = story.get("setup") or []
-                if setup_steps:
-                    logger.info(
-                        f"[{agent}/{sid}] Setup ({len(setup_steps)} steps via FastMCP)..."
-                    )
-                    await _run_mcp_steps(shared_mcp, setup_steps, "setup")
+def _resolve_session_file(
+    summary: dict | None, agent: str, prompt_start: float
+) -> tuple[str | None, dict]:
+    """Locate the agent's session file and return (session_file, test_phase)."""
+    session_file = None
+    test_phase = (summary or {}).get("agents", {}).get(agent, {}).get("test", {})
+    claude_session_id = test_phase.get("session_id")
+    if claude_session_id:
+        session_file = _find_session_file_by_id(claude_session_id)
+    if not session_file:
+        session_file = _find_latest_session_file(agent, after=prompt_start)
+    return session_file, test_phase
 
-                logger.info(f"[{agent}/{sid}] Running test prompt...")
-                # ``prompt_start`` is compared to file ``st_mtime`` in
-                # ``_find_latest_session_file`` below, so it MUST be a
-                # wall-clock Unix epoch (not ``time.monotonic()``).
-                prompt_start = time.time()
-                summary: dict | None
-                if use_inline:
-                    assert (
-                        openai_client is not None
-                        and inline_mcp_client is not None
-                        and resolved_model is not None
-                    ), (
-                        "inline setup invariant: clients/model are populated when use_inline is True"
-                    )
-                    try:
-                        rc, summary = await _run_test_prompt_inline(
-                            story["prompt"],
-                            agent_name=agent,
-                            openai_client=openai_client,
-                            mcp_client=inline_mcp_client,
-                            model=resolved_model,
-                            openai_tools=openai_tools,
-                            no_think=args.no_think,
-                            max_tokens=getattr(args, "max_tokens", None),
-                        )
-                    except openai.APIConnectionError as e:
-                        # A refused/reset connection (NOT a timeout; those are
-                        # handled per-story inside _run_test_prompt_inline). The
-                        # backend is gone, so abort this agent's remaining stories
-                        # rather than failing each one in turn. The current story
-                        # never validly ran, so it is skipped too (not recorded).
-                        _record_backend_abort(
-                            args.results_file,
-                            agent,
-                            sid,
-                            [s["id"] for _p, s in filtered[story_index:]],
-                            f"{type(e).__name__}: {e}",
-                            sha=sha,
-                            describe=describe,
-                            branch=args.branch,
-                        )
-                        backend_aborted = True
-                        break
-                else:
-                    rc, summary = _run_test_prompt(
-                        story["prompt"],
-                        agent,
-                        ha_url,
-                        ha_token,
-                        args.branch,
-                        args.extra_args or None,
-                        model=args.model,
-                        base_url=args.base_url,
-                        api_key=args.api_key,
-                        max_tools=args.max_tools,
-                        no_think=args.no_think,
-                        max_tokens=getattr(args, "max_tokens", None),
-                        mcp_env=effective_mcp_env or None,
-                    )
 
-                session_file = None
-                test_phase = (
-                    (summary or {}).get("agents", {}).get(agent, {}).get("test", {})
-                )
-                claude_session_id = test_phase.get("session_id")
-                if claude_session_id:
-                    session_file = _find_session_file_by_id(claude_session_id)
-                if not session_file:
-                    session_file = _find_latest_session_file(agent, after=prompt_start)
+async def _verify_story(
+    story: dict,
+    summary: dict | None,
+    agent: str,
+    sid: str,
+    ha_url: str,
+    ha_token: str,
+    shared_mcp,
+) -> list[dict] | None:
+    """Run the story's ha_checks (if any) and return the verify results."""
+    verify_results = None
+    ha_checks = (story.get("verify") or {}).get("ha_checks")
+    if ha_checks:
+        agent_output = (
+            (summary or {})
+            .get("agents", {})
+            .get(agent, {})
+            .get("test", {})
+            .get("output", "")
+        )
+        logger.info(f"[{agent}/{sid}] Verifying {len(ha_checks)} ha_check(s)...")
+        verify_results = await verify_ha_checks(
+            ha_url, ha_token, ha_checks, agent_output, shared_mcp
+        )
+        failed_checks = [r for r in verify_results if not r["passed"]]
+        if failed_checks:
+            logger.warning(
+                f"[{agent}/{sid}] {len(failed_checks)}/{len(ha_checks)} check(s) FAILED"
+            )
+            for r in failed_checks:
+                logger.warning(f"  FAIL [{r['type']}] {r['detail']}")
+        else:
+            logger.info(f"[{agent}/{sid}] All checks passed")
+    return verify_results
 
-                verify_results = None
-                ha_checks = (story.get("verify") or {}).get("ha_checks")
-                if ha_checks:
-                    agent_output = (
-                        (summary or {})
-                        .get("agents", {})
-                        .get(agent, {})
-                        .get("test", {})
-                        .get("output", "")
-                    )
-                    logger.info(
-                        f"[{agent}/{sid}] Verifying {len(ha_checks)} ha_check(s)..."
-                    )
-                    verify_results = await verify_ha_checks(
-                        ha_url, ha_token, ha_checks, agent_output, shared_mcp
-                    )
-                    failed_checks = [r for r in verify_results if not r["passed"]]
-                    if failed_checks:
-                        logger.warning(
-                            f"[{agent}/{sid}] {len(failed_checks)}/{len(ha_checks)} check(s) FAILED"
-                        )
-                        for r in failed_checks:
-                            logger.warning(f"  FAIL [{r['type']}] {r['detail']}")
-                    else:
-                        logger.info(f"[{agent}/{sid}] All checks passed")
 
-                agg = (
-                    (summary or {})
-                    .get("agents", {})
-                    .get(agent, {})
-                    .get("aggregate", {})
-                )
-                passed = _compute_passed(
-                    exit_code=rc,
-                    tool_calls=agg.get("total_tool_calls"),
-                    verify_results=verify_results,
-                    completed=_run_completed(test_phase, summary, rc),
-                )
-                all_results.append(
-                    (agent, sid, story, rc, summary, session_file, passed)
-                )
+def _record_story_result(
+    story: dict,
+    summary: dict | None,
+    agent: str,
+    sid: str,
+    rc: int | None,
+    session_file: str | None,
+    test_phase: dict,
+    verify_results: list[dict] | None,
+    all_results: list,
+    args: argparse.Namespace,
+    resolved_model: str | None,
+    resolved_quant: str | None,
+    sha: str,
+    describe: str,
+) -> None:
+    """Compute pass/fail, append to all_results, and persist the JSONL row."""
+    agg = (summary or {}).get("agents", {}).get(agent, {}).get("aggregate", {})
+    passed = _compute_passed(
+        exit_code=rc,
+        tool_calls=agg.get("total_tool_calls"),
+        verify_results=verify_results,
+        completed=_run_completed(test_phase, summary, rc),
+    )
+    all_results.append((agent, sid, story, rc, summary, session_file, passed))
 
-                if summary or verify_results is not None:
-                    append_result(
-                        args.results_file,
-                        story,
-                        agent,
-                        sha,
-                        describe,
-                        args.branch,
-                        summary or {},
-                        session_file,
-                        passed=passed,
-                        verify_results=verify_results,
-                        model=resolved_model or args.model,
-                        quantization=resolved_quant,
-                    )
+    if summary or verify_results is not None:
+        append_result(
+            args.results_file,
+            story,
+            agent,
+            sha,
+            describe,
+            args.branch,
+            summary or {},
+            session_file,
+            passed=passed,
+            verify_results=verify_results,
+            model=resolved_model or args.model,
+            quantization=resolved_quant,
+        )
 
-                if session_file:
-                    logger.info(f"[{agent}/{sid}] Session file: {session_file}")
+    if session_file:
+        logger.info(f"[{agent}/{sid}] Session file: {session_file}")
 
-                # A request timeout is recorded above as a per-story failure, but
-                # several in a row mean the backend has stopped responding: abort
-                # rather than time out on every remaining story. Unlike the
-                # connection-error path (which skips the current story, never
-                # validly run), the timed-out story here WAS recorded, so only
-                # the stories after it are skipped.
-                consecutive_timeouts = _update_timeout_streak(
-                    consecutive_timeouts,
-                    was_timeout=test_phase.get("error") == TIMEOUT_ERROR_MARKER,
-                )
-                if consecutive_timeouts >= CONSECUTIVE_TIMEOUT_ABORT:
-                    _record_backend_abort(
-                        args.results_file,
-                        agent,
-                        sid,
-                        _stories_after(filtered, story_index),
-                        f"{consecutive_timeouts} consecutive request timeouts",
-                        sha=sha,
-                        describe=describe,
-                        branch=args.branch,
-                    )
-                    backend_aborted = True
-                    break
 
+async def _run_one_story(
+    story_index: int,
+    story: dict,
+    *,
+    agent: str,
+    use_inline: bool,
+    ha_url: str,
+    ha_token: str,
+    shared_mcp,
+    openai_client,
+    inline_mcp_client,
+    resolved_model: str | None,
+    resolved_quant: str | None,
+    openai_tools: list[dict],
+    args: argparse.Namespace,
+    effective_mcp_env: list[str],
+    filtered: list[tuple[Path, dict]],
+    all_results: list,
+    consecutive_timeouts: int,
+    sha: str,
+    describe: str,
+) -> tuple[bool, int]:
+    """Run one story end-to-end for an agent.
+
+    Returns ``(should_abort, consecutive_timeouts)``. ``should_abort`` is True
+    when the LLM backend went unreachable (connection error or the
+    consecutive-timeout threshold), signalling the caller to stop this agent.
+    """
+    sid = story["id"]
+    logger.info(f"\n{'=' * 60}")
+    logger.info(f"[{agent}] Story {sid}: {story['title']}")
+    logger.info(f"{'=' * 60}")
+
+    setup_steps = story.get("setup") or []
+    if setup_steps:
+        logger.info(f"[{agent}/{sid}] Setup ({len(setup_steps)} steps via FastMCP)...")
+        await _run_mcp_steps(shared_mcp, setup_steps, "setup")
+
+    logger.info(f"[{agent}/{sid}] Running test prompt...")
+    # ``prompt_start`` is compared to file ``st_mtime`` in
+    # ``_find_latest_session_file`` below, so it MUST be a
+    # wall-clock Unix epoch (not ``time.monotonic()``).
+    prompt_start = time.time()
+    rc, summary, aborted = await _execute_prompt(
+        story_index,
+        story,
+        agent=agent,
+        use_inline=use_inline,
+        ha_url=ha_url,
+        ha_token=ha_token,
+        openai_client=openai_client,
+        inline_mcp_client=inline_mcp_client,
+        resolved_model=resolved_model,
+        openai_tools=openai_tools,
+        args=args,
+        effective_mcp_env=effective_mcp_env,
+        filtered=filtered,
+        sha=sha,
+        describe=describe,
+    )
+    if aborted:
+        return True, consecutive_timeouts
+
+    session_file, test_phase = _resolve_session_file(summary, agent, prompt_start)
+
+    verify_results = await _verify_story(
+        story, summary, agent, sid, ha_url, ha_token, shared_mcp
+    )
+
+    _record_story_result(
+        story,
+        summary,
+        agent,
+        sid,
+        rc,
+        session_file,
+        test_phase,
+        verify_results,
+        all_results,
+        args,
+        resolved_model,
+        resolved_quant,
+        sha,
+        describe,
+    )
+
+    # A request timeout is recorded above as a per-story failure, but
+    # several in a row mean the backend has stopped responding: abort
+    # rather than time out on every remaining story. Unlike the
+    # connection-error path (which skips the current story, never
+    # validly run), the timed-out story here WAS recorded, so only
+    # the stories after it are skipped.
+    consecutive_timeouts = _update_timeout_streak(
+        consecutive_timeouts,
+        was_timeout=test_phase.get("error") == TIMEOUT_ERROR_MARKER,
+    )
+    if consecutive_timeouts >= CONSECUTIVE_TIMEOUT_ABORT:
+        _record_backend_abort(
+            args.results_file,
+            agent,
+            sid,
+            _stories_after(filtered, story_index),
+            f"{consecutive_timeouts} consecutive request timeouts",
+            sha=sha,
+            describe=describe,
+            branch=args.branch,
+        )
+        return True, consecutive_timeouts
+
+    return False, consecutive_timeouts
+
+
+async def _run_agent_stories(
+    agent: str,
+    args: argparse.Namespace,
+    filtered: list[tuple[Path, dict]],
+    all_results: list,
+    using_external_ha: bool,
+    mcp_env_dict: dict[str, str],
+    effective_mcp_env: list[str],
+    sha: str,
+    describe: str,
+) -> bool:
+    """Run all stories for one agent with a fresh container.
+
+    Returns whether the LLM backend became unreachable (aborting this agent's
+    remaining stories).
+    """
+    logger.info(f"\n{'#' * 60}")
+    logger.info(f"Agent: {agent}")
+    logger.info(f"{'#' * 60}")
+
+    ha = None
+    ha_url = args.ha_url
+    ha_token = args.ha_token
+    if not using_external_ha:
+        ha = _start_container(keep_alive=args.keep_container)
+        ha_url = ha["url"]
+        ha_token = ha["token"]
+
+    # Inline agents (see INLINE_AGENTS) hold one MCP server + one OpenAI
+    # client across all stories for this agent, skipping the per-story
+    # MCP server spawn and model warmup. Other agents take the subprocess
+    # path via _run_test_prompt.
+    use_inline = agent in INLINE_AGENTS
+    inline_mcp_client: MCPClient | None = None
+    openai_client: openai.AsyncOpenAI | None = None
+    resolved_model: str | None = None
+    resolved_quant: str | None = None
+    openai_tools: list[dict] = []
+
+    async with contextlib.AsyncExitStack() as agent_stack:
+        if ha and not args.keep_container:
+            agent_stack.callback(_stop_container, ha)
+
+        if use_inline:
+            setup = await _setup_inline_agent(
+                agent,
+                ha_url,
+                ha_token,
+                args,
+                agent_stack,
+                mcp_env_dict,
+                filtered,
+                all_results,
+                sha,
+                describe,
+            )
+            if setup is None:
+                return False
+            (
+                openai_client,
+                resolved_model,
+                resolved_quant,
+                inline_mcp_client,
+                openai_tools,
+            ) = setup
+
+        _log_kept_container(agent, ha, args.keep_container)
+
+        shared_mcp = await agent_stack.enter_async_context(
+            inprocess_mcp_client(ha_url, ha_token)
+        )
+
+        # Consecutive per-story timeouts; reset by any non-timeout story.
+        # Hitting CONSECUTIVE_TIMEOUT_ABORT aborts the agent (backend gone).
+        consecutive_timeouts = 0
+
+        for story_index, (_path, story) in enumerate(filtered):
+            should_abort, consecutive_timeouts = await _run_one_story(
+                story_index,
+                story,
+                agent=agent,
+                use_inline=use_inline,
+                ha_url=ha_url,
+                ha_token=ha_token,
+                shared_mcp=shared_mcp,
+                openai_client=openai_client,
+                inline_mcp_client=inline_mcp_client,
+                resolved_model=resolved_model,
+                resolved_quant=resolved_quant,
+                openai_tools=openai_tools,
+                args=args,
+                effective_mcp_env=effective_mcp_env,
+                filtered=filtered,
+                all_results=all_results,
+                consecutive_timeouts=consecutive_timeouts,
+                sha=sha,
+                describe=describe,
+            )
+            if should_abort:
+                return True
+
+    return False
+
+
+def _log_run_summary(
+    all_results: list,
+    backend_aborted: bool,
+    run_start: float,
+    args: argparse.Namespace,
+) -> int:
+    """Log the per-story summary table and totals; return the suite exit code."""
     # Summary
     logger.info(f"\n{'=' * 60}")
     logger.info("Summary")
@@ -1252,6 +1505,53 @@ async def run_stories(
     else:
         logger.info(f"\nAll {total} story runs passed")
     return _suite_exit_code(all_results, backend_aborted)
+
+
+async def run_stories(
+    args: argparse.Namespace, filtered: list[tuple[Path, dict]]
+) -> int:
+    """Run stories with a fresh container per agent.
+
+    For each agent: start container -> run all stories -> stop container.
+    When --ha-url is provided, all agents share the external instance.
+    """
+    run_start = time.monotonic()
+    sha, describe = get_git_info()
+    agent_list = [a.strip() for a in args.agents.split(",")]
+    using_external_ha = bool(args.ha_url)
+
+    from uat.run_uat import parse_mcp_env
+
+    rc = _preflight_stories(args, agent_list, using_external_ha)
+    if rc is not None:
+        return rc
+
+    all_results: list[tuple[str, str, dict, int, dict | None, str | None, bool]] = []
+    # Each entry: (agent, story_id, story, exit_code, summary, session_file, passed)
+    backend_aborted = False  # set if any agent aborted on an unreachable backend
+
+    mcp_env_dict = parse_mcp_env(
+        getattr(args, "mcp_env", None),
+        base_url=args.base_url,
+        on_default_applied=logger.info,
+    )
+    effective_mcp_env: list[str] = [f"{k}={v}" for k, v in mcp_env_dict.items()]
+
+    for agent in agent_list:
+        if await _run_agent_stories(
+            agent,
+            args,
+            filtered,
+            all_results,
+            using_external_ha,
+            mcp_env_dict,
+            effective_mcp_env,
+            sha,
+            describe,
+        ):
+            backend_aborted = True
+
+    return _log_run_summary(all_results, backend_aborted, run_start, args)
 
 
 def main() -> None:
