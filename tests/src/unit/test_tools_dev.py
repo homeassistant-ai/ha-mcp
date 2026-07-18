@@ -288,11 +288,9 @@ class TestManageServer:
         )
         result = await DevTools(client).ha_dev_manage_server(action="info")
         entry = result["data"]["component_server_entry"]
-        assert entry == {
-            "entry_id": "server-e",
-            "channel": "stable",
-            "pip_spec": "",
-        }
+        assert entry["entry_id"] == "server-e"
+        assert entry["channel"] == "stable"
+        assert entry["pip_spec"] == ""
         client.abort_options_flow.assert_awaited_with("flow-1")
 
     async def test_info_quietly_aborts_the_tools_entry_info_form(self):
@@ -424,6 +422,53 @@ class TestManageServer:
         client.submit_options_flow_step.assert_not_awaited()
         await _drain_background_tasks()
         client.submit_options_flow_step.assert_awaited_once()
+
+    async def test_update_source_result_names_component_target(self):
+        """The non-embedded success payload must say WHICH server changed.
+
+        Regression: an agent connected to the ADD-ON called update_source,
+        read success:true plus a generic "the component is reloading" note,
+        and concluded the server it was talking to would change version. It
+        never does — only the ha_mcp_tools component's separate in-process
+        entry is updated, and success means the entry options were applied,
+        not that the background install finished.
+        """
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        result = await DevTools(client).ha_dev_manage_server(
+            action="update_source", channel="dev"
+        )
+        data = result["data"]
+        assert data["target"] == "ha_mcp_tools in-process server entry"
+        assert "NOT" in data["note"]
+        assert "this connection" in data["note"]
+        assert "background" in data["note"]
+        assert "fail" in data["note"]
+
+    async def test_update_source_embedded_target_says_this_server(self, monkeypatch):
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        result = await DevTools(client).ha_dev_manage_server(
+            action="update_source", channel="dev"
+        )
+        assert "this server" in result["data"]["target"]
+        await _drain_background_tasks()
+
+    async def test_info_distinguishes_serving_server_from_component_entry(self):
+        """info must label the component entry as a separate server, so its
+        channel/pip_spec can't be conflated with the serving server's
+        version (deployment_mode 'standalone'/'addon')."""
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        result = await DevTools(client).ha_dev_manage_server(action="info")
+        entry = result["data"]["component_server_entry"]
+        assert "separate" in entry["role"]
+        assert "update_source" in entry["role"]
 
     async def test_restart_standalone_errors(self):
         with pytest.raises(ToolError, match="standalone"):
