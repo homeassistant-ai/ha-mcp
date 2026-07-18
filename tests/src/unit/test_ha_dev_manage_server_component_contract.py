@@ -148,8 +148,9 @@ async def test_real_component_write_maps_and_defers_merged_apply() -> None:
     assert data["entry_id"] == "srv1"
     assert data["applying"] == {"channel": "dev"}
     assert data["previous"] == {"channel": "stable", "pip_spec": ""}
-    # The consumer aborted the unused legacy flow and never submitted it.
-    assert client.abort_calls == ["flow-srv1"]
+    # Component-first: the consumer tries the component write BEFORE opening the
+    # legacy options flow, so no flow is opened — nothing to submit or abort.
+    assert client.abort_calls == []
 
     # The component deferred the write; drive it and confirm the merged options.
     assert component_hass.config_entries.update_calls == []
