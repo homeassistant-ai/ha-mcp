@@ -618,7 +618,10 @@ class TestApplyScenePartialFlag:
         """The scene failed fragment names ONE representative error when
         Attempt C captured one (#1784 follow-up) — mirrors the
         automation/script ``e.g.`` sample so the response itself carries
-        the diagnosis instead of pointing at a debug-log dive."""
+        the diagnosis instead of pointing at a debug-log dive. An HTTP 500's
+        body is aiohttp's generic placeholder, so the static HA-log hint
+        rides alongside the sample (also mirroring the automation/script
+        path)."""
         from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
 
         response: dict[str, Any] = {"success": True}
@@ -629,17 +632,18 @@ class TestApplyScenePartialFlag:
                 "skipped": 0,
                 "integration_skipped": 0,
                 "registry_failed": False,
-                "failed_sample": "HTTP 500: Internal Server Error",
+                "failed_sample": "HTTP 500: 500 Internal Server Error",
             },
         )
         assert response["partial"] is True
         reason = response["partial_reason"]
         assert (
             "2 scene(s) not scanned (per-id fetch raised; "
-            "e.g. HTTP 500: Internal Server Error)" in reason
+            "e.g. HTTP 500: 500 Internal Server Error)" in reason
         )
         assert "match status is unknown" in reason
         assert "not exhaustive" in reason
+        assert "in the Home Assistant log" in reason
 
     def test_stats_dict_without_failed_sample_key_is_tolerated(self) -> None:
         """``failed_sample`` is read with ``.get()`` — older stats-dict

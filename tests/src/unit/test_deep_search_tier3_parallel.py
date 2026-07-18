@@ -386,7 +386,7 @@ class TestYamlSkippedClassification:
     """Component-level coverage of the 404 → ``yaml_skipped`` classification.
 
     These tests drive ``_deep_search_automations`` / ``_deep_search_scripts``
-    directly and assert on their returned 5-tuple, pinning the
+    directly and assert on their returned 6-tuple, pinning the
     FETCH→CLASSIFY→COUNT path *inside* each per-type helper (wrong exception
     type, wrong status-code attribute, wrong return slot) so a regression
     surfaces here rather than silently misclassifying YAML-defined entities
@@ -718,7 +718,7 @@ class TestYamlSkippedThroughDeepSearch:
     ``deep_search`` entrypoint.
 
     ``TestYamlSkippedClassification`` pins each per-type helper's returned
-    5-tuple; these tests pin the wiring *between* that return and the
+    6-tuple; these tests pin the wiring *between* that return and the
     response — ``deep_search`` unpacks the 4th slot (the ``if "automation"``
     / ``if "script"`` blocks in ``deep_search``) and forwards it via the
     ``_paginate_and_build_response`` call to
@@ -1379,14 +1379,14 @@ class TestSummarizeFetchError:
     behind a debug-log dive)."""
 
     def test_api_error_strips_client_prefix_and_names_status(self):
+        # The realistic per-id 500 body: aiohttp's generic placeholder (the
+        # ``!secret`` cause is HA-log-only). The client's "API error: 500 - "
+        # prefix is stripped so the status isn't stated twice.
         exc = HomeAssistantAPIError(
-            "API error: 500 - Secrets not supported in this YAML file",
+            "API error: 500 - 500 Internal Server Error",
             status_code=500,
         )
-        assert (
-            summarize_fetch_error(exc)
-            == "HTTP 500: Secrets not supported in this YAML file"
-        )
+        assert summarize_fetch_error(exc) == "HTTP 500: 500 Internal Server Error"
 
     def test_api_error_without_prefix_keeps_message(self):
         exc = HomeAssistantAPIError("Script not found: foo", status_code=502)
@@ -1409,14 +1409,11 @@ class TestSummarizeFetchError:
 
     def test_multiline_body_keeps_first_line_only(self):
         exc = HomeAssistantAPIError(
-            "API error: 500 - Secrets not supported in this YAML file\n"
+            "API error: 500 - 500 Internal Server Error\n"
             "Traceback (most recent call last):\n  boom",
             status_code=500,
         )
-        assert (
-            summarize_fetch_error(exc)
-            == "HTTP 500: Secrets not supported in this YAML file"
-        )
+        assert summarize_fetch_error(exc) == "HTTP 500: 500 Internal Server Error"
 
     def test_long_message_truncated(self):
         out = summarize_fetch_error(RuntimeError("x" * 500))
@@ -1480,8 +1477,10 @@ class TestFailedSampleThroughDeepSearch:
         async def _per_id_500(method: str, url: str) -> dict:
             if url.rstrip("/") == "/config/automation/config":
                 raise Exception("Bulk fetch unavailable")
+            # aiohttp's generic production 500 body — the realistic sample for
+            # the ``!secret`` scenario (the cause is HA-log-only).
             raise HomeAssistantAPIError(
-                "API error: 500 - Secrets not supported in this YAML file",
+                "API error: 500 - 500 Internal Server Error",
                 status_code=500,
             )
 
@@ -1501,7 +1500,7 @@ class TestFailedSampleThroughDeepSearch:
             exact_match=False,
         )
         assert failed_count == 2
-        assert failed_sample == "HTTP 500: Secrets not supported in this YAML file"
+        assert failed_sample == "HTTP 500: 500 Internal Server Error"
 
     @pytest.mark.asyncio
     async def test_automation_generic_exception_sample_names_type(
@@ -1529,6 +1528,44 @@ class TestFailedSampleThroughDeepSearch:
         ) = await smart_tools._deep_search_automations(
             automations,
             {"automation.secret_one": "uid_one"},
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert failed_count == 1
+        assert failed_sample == "RuntimeError: generic explosion"
+
+    @pytest.mark.asyncio
+    async def test_script_generic_exception_sample_names_type(
+        self, mock_client, smart_tools
+    ):
+        """The script closure's generic ``except Exception`` branch
+        (``_deep.py`` ``_fetch_script_config``, the non-``HomeAssistantAPIError``
+        non-timeout path) captures a ``Type: message`` summary. Covers the
+        branch the maintainer flagged as untested: unlike the 500 path it
+        exercises a bare ``RuntimeError`` raised by ``get_script_config``."""
+        scripts = [
+            {
+                "entity_id": "script.boom_one",
+                "state": "off",
+                "attributes": {"friendly_name": "Boom One"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=scripts)
+
+        async def _script_boom(sid: str) -> dict:
+            raise RuntimeError("generic explosion")
+
+        mock_client.get_script_config = AsyncMock(side_effect=_script_boom)
+
+        (
+            _matches,
+            _skipped_count,
+            failed_count,
+            _yaml_skipped_count,
+            _timeout_count,
+            failed_sample,
+        ) = await smart_tools._deep_search_scripts(
+            scripts,
             query_lower="anything",
             exact_match=False,
         )
@@ -1584,8 +1621,13 @@ class TestFailedSampleThroughDeepSearch:
         self, mock_client, smart_tools
     ):
         """The reporter's exact scenario: every per-id script fetch 500s on
-        a ``!secret`` reference. The fragment must carry the count AND the
-        representative error through the public entrypoint."""
+        a ``!secret`` reference. The per-id config view raises a YAMLException
+        that escapes to aiohttp, whose production 500 body is the generic
+        ``500 Internal Server Error`` placeholder (the ``!secret`` detail goes
+        to the HA log, never the HTTP body), so the rendered sample names the
+        500 — not the cause — and the static HA-log hint carries the
+        diagnosis. The fragment must carry the count, the representative
+        error, AND that hint through the public entrypoint."""
         scripts = [
             {
                 "entity_id": "script.secret_one",
@@ -1601,8 +1643,10 @@ class TestFailedSampleThroughDeepSearch:
         mock_client.get_states = AsyncMock(return_value=scripts)
 
         async def _script_500(sid: str) -> dict:
+            # aiohttp's generic production 500 body — what the client actually
+            # sees when the per-id config view's YAMLException escapes.
             raise HomeAssistantAPIError(
-                "API error: 500 - Secrets not supported in this YAML file",
+                "API error: 500 - 500 Internal Server Error",
                 status_code=500,
             )
 
@@ -1618,8 +1662,11 @@ class TestFailedSampleThroughDeepSearch:
         reason = result["partial_reason"]
         assert (
             "2 script(s) not scanned (per-id fetch raised a non-404 error; "
-            "e.g. HTTP 500: Secrets not supported in this YAML file)" in reason
+            "e.g. HTTP 500: 500 Internal Server Error)" in reason
         ), f"failed fragment must carry the representative error; got {reason!r}"
+        assert "`!secret` reference in the config file HA loads" in reason, (
+            f"HTTP-500 fragment must carry the static HA-log hint; got {reason!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_scene_500_sample_surfaces_through_deep_search(
@@ -1642,8 +1689,9 @@ class TestFailedSampleThroughDeepSearch:
         mock_client.get_states = AsyncMock(return_value=scenes)
 
         async def _scene_500(sid: str) -> dict:
+            # aiohttp's generic production 500 body (see the script mirror).
             raise HomeAssistantAPIError(
-                "API error: 500 - Internal Server Error", status_code=500
+                "API error: 500 - 500 Internal Server Error", status_code=500
             )
 
         mock_client.get_scene_config = AsyncMock(side_effect=_scene_500)
@@ -1658,5 +1706,60 @@ class TestFailedSampleThroughDeepSearch:
         reason = result["partial_reason"]
         assert (
             "2 scene(s) not scanned (per-id fetch raised; "
-            "e.g. HTTP 500: Internal Server Error)" in reason
+            "e.g. HTTP 500: 500 Internal Server Error)" in reason
         ), f"scene failed fragment must carry the representative error; got {reason!r}"
+        assert "`!secret` reference in the config file HA loads" in reason, (
+            f"HTTP-500 scene fragment must carry the static HA-log hint; got {reason!r}"
+        )
+        # The shared hint is endpoint-agnostic: a scene 500 has nothing to do
+        # with scripts.yaml/automations.yaml, so those filenames must NOT
+        # appear on the scene path (Codex review P2).
+        assert "scripts.yaml" not in reason and "automations.yaml" not in reason, (
+            f"scene hint must not name script/automation files; got {reason!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_only_first_failure_is_summarized(self, mock_client, smart_tools):
+        """The fetch closure keeps only the FIRST ``failed``-class sample
+        (``if not failed_errors:`` guard): in the motivating "every per-id
+        fetch 500s" case, ``summarize_fetch_error`` runs once, not once per
+        failure. All failures still COUNT."""
+        scripts = [
+            {
+                "entity_id": f"script.secret_{n}",
+                "state": "off",
+                "attributes": {"friendly_name": f"Secret {n}"},
+            }
+            for n in range(5)
+        ]
+        mock_client.get_states = AsyncMock(return_value=scripts)
+
+        async def _script_500(sid: str) -> dict:
+            raise HomeAssistantAPIError(
+                "API error: 500 - 500 Internal Server Error", status_code=500
+            )
+
+        mock_client.get_script_config = AsyncMock(side_effect=_script_500)
+
+        with patch(
+            "ha_mcp.tools.smart_search._fetch.summarize_fetch_error",
+            wraps=summarize_fetch_error,
+        ) as spy:
+            (
+                _matches,
+                _skipped_count,
+                failed_count,
+                _yaml_skipped_count,
+                _timeout_count,
+                failed_sample,
+            ) = await smart_tools._deep_search_scripts(
+                scripts,
+                query_lower="anything",
+                exact_match=False,
+            )
+
+        assert failed_count == 5, "every failure must still be counted"
+        assert failed_sample == "HTTP 500: 500 Internal Server Error"
+        assert spy.call_count == 1, (
+            f"guard must summarize only the first failure; got {spy.call_count}"
+        )

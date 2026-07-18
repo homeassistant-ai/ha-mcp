@@ -21,7 +21,11 @@ from ._config import (
     INDIVIDUAL_FETCH_BATCH_SIZE,
     SCRIPT_CONFIG_TIME_BUDGET,
 )
-from ._fetch import is_timeout_error, summarize_fetch_error
+from ._fetch import (
+    http_500_diagnosis_hint,
+    is_timeout_error,
+    record_first_failure,
+)
 from ._scenes import SceneSearchMixin
 
 logger = logging.getLogger(__name__)
@@ -389,9 +393,12 @@ class DeepSearchMixin(SceneSearchMixin):
         failed_count = 0
         yaml_skipped_count = 0
         timeout_count = 0
-        # One representative summary per ``failed``-class exception, appended
-        # by the fetch closure below; the first entry rides partial_reason as
-        # an ``e.g.`` (#1784 follow-up). List membership tracks failed_count.
+        # One representative summary — only the FIRST ``failed``-class
+        # exception is kept (the fetch closure guards the append); it rides
+        # partial_reason as an ``e.g.`` (#1784 follow-up). The remaining
+        # failures are counted (``failed_count``) but not summarized, so the
+        # motivating "every per-id fetch 500s" case does N-1 fewer
+        # ``summarize_fetch_error`` calls.
         failed_errors: list[str] = []
         if not bulk_fetched:
             uids_to_fetch = [
@@ -422,7 +429,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     logger.debug(
                         f"Automation individual config fetch ({uid}) failed: {e}"
                     )
-                    failed_errors.append(summarize_fetch_error(e))
+                    record_first_failure(failed_errors, e)
                     return (uid, None, "failed")
                 except TimeoutError:
                     # asyncio.wait_for hit INDIVIDUAL_CONFIG_TIMEOUT. Classify
@@ -448,7 +455,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     logger.debug(
                         f"Automation individual config fetch ({uid}) failed: {e}"
                     )
-                    failed_errors.append(summarize_fetch_error(e))
+                    record_first_failure(failed_errors, e)
                     return (uid, None, "failed")
 
             (
@@ -540,9 +547,12 @@ class DeepSearchMixin(SceneSearchMixin):
         failed_count = 0
         yaml_skipped_count = 0
         timeout_count = 0
-        # One representative summary per ``failed``-class exception, appended
-        # by the fetch closure below; the first entry rides partial_reason as
-        # an ``e.g.`` (#1784 follow-up). List membership tracks failed_count.
+        # One representative summary — only the FIRST ``failed``-class
+        # exception is kept (the fetch closure guards the append); it rides
+        # partial_reason as an ``e.g.`` (#1784 follow-up). The remaining
+        # failures are counted (``failed_count``) but not summarized, so the
+        # motivating "every per-id fetch 500s" case does N-1 fewer
+        # ``summarize_fetch_error`` calls.
         failed_errors: list[str] = []
         if not bulk_fetched:
             sids_to_fetch = [
@@ -570,7 +580,7 @@ class DeepSearchMixin(SceneSearchMixin):
                         )
                         return (sid, None, "yaml_skipped")
                     logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
-                    failed_errors.append(summarize_fetch_error(e))
+                    record_first_failure(failed_errors, e)
                     return (sid, None, "failed")
                 except TimeoutError:
                     # See _fetch_automation_config: per-request timeout under
@@ -590,7 +600,7 @@ class DeepSearchMixin(SceneSearchMixin):
                         )
                         return (sid, None, "timeout")
                     logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
-                    failed_errors.append(summarize_fetch_error(e))
+                    record_first_failure(failed_errors, e)
                     return (sid, None, "failed")
 
             (
@@ -1126,7 +1136,10 @@ class DeepSearchMixin(SceneSearchMixin):
         representative ``summarize_fetch_error`` summary for the generic
         ``failed`` class, appended to its fragment as an ``e.g.`` so the
         response names WHAT raised instead of pointing at debug logs
-        (#1784 follow-up). ``None`` keeps the fragment wording unchanged.
+        (#1784 follow-up). When that sample is an HTTP 500 — whose body is
+        aiohttp's generic placeholder, so the sample can't name the cause —
+        a static HA-log diagnosis is appended too (``http_500_diagnosis_hint``).
+        ``None`` keeps the fragment wording unchanged.
 
         Append-safe: the existing ``partial_reason`` (if any) is preserved
         and the new reasons are concatenated with ``" ; "``.
@@ -1182,10 +1195,16 @@ class DeepSearchMixin(SceneSearchMixin):
                 # (#1784 follow-up: every per-id script fetch 500ing on a
                 # ``!secret`` reference in scripts.yaml).
                 sample_suffix = f"; e.g. {failed_sample}" if failed_sample else ""
+                # An HTTP 500 body is aiohttp's generic "500 Internal Server
+                # Error" — the real cause (e.g. a ``!secret`` the per-id
+                # config endpoint rejects) is HA-log-only, never in the
+                # response — so the sample can't name it. Append the static
+                # diagnosis the sample can't carry (#1784 follow-up).
+                hint = http_500_diagnosis_hint(failed_sample)
                 reasons.append(
                     f"{failed} {noun}(s) not scanned (per-id fetch raised "
                     f"a non-404 error{sample_suffix}) — their match status "
-                    "is unknown; this result is not exhaustive."
+                    f"is unknown; this result is not exhaustive.{hint}"
                 )
             if yaml_skipped:
                 reasons.append(

@@ -55,6 +55,54 @@ def summarize_fetch_error(exc: BaseException) -> str:
     return summary
 
 
+# Marks a rendered ``summarize_fetch_error`` summary whose cause the sample
+# cannot name: an HTTP 500's body is aiohttp's generic "500 Internal Server
+# Error" placeholder, so the real error (a YAMLException the per-id config
+# view raised, most often a ``!secret`` reference it rejects) lives only in
+# the HA log, never in the response.
+_HTTP_500_PREFIX = "HTTP 500:"
+
+# Static diagnosis appended to an HTTP-500 failed fragment. The sample names
+# the status but not the cause (see ``_HTTP_500_PREFIX``); this points the
+# reader at the HA log and the single most common cause, delivering the
+# five-minute diagnosis the #1784 follow-up asked for without claiming a
+# cause the response can't actually confirm. Kept endpoint-agnostic — this
+# same string rides the automation, script, AND scene fragments, so it names
+# no specific YAML file (a scene 500 has nothing to do with scripts.yaml);
+# "the config file HA loads for this entity" covers all three.
+_HTTP_500_DIAGNOSIS = (
+    " A per-id config fetch returning HTTP 500 is most often a `!secret` "
+    "reference in the config file HA loads for this entity, which the per-id "
+    "config endpoint rejects; the specific cause is in the Home Assistant log "
+    "(the 500 body is a generic placeholder), not in this response."
+)
+
+
+def http_500_diagnosis_hint(failed_sample: str | None) -> str:
+    """Static HA-log hint to append when ``failed_sample`` is an HTTP 500.
+
+    Returns ``""`` for any other sample (or ``None``), so non-500 fragments
+    are byte-identical to before. See ``_HTTP_500_DIAGNOSIS``.
+    """
+    if failed_sample and failed_sample.startswith(_HTTP_500_PREFIX):
+        return _HTTP_500_DIAGNOSIS
+    return ""
+
+
+def record_first_failure(failed_errors: list[str], exc: BaseException) -> None:
+    """Capture ``exc``'s summary as the representative ``failed`` sample, once.
+
+    Only the FIRST generic-``failed`` exception per fetch pass is summarized
+    (subsequent ones are counted but not summarized) — in the motivating
+    "every per-id fetch 500s" case that is N-1 fewer ``summarize_fetch_error``
+    calls. The append is a no-op once ``failed_errors`` is non-empty. Called
+    from the per-id fetch closures, which run under ``asyncio.gather`` but
+    never suspend between the check and the append, so no lock is needed.
+    """
+    if not failed_errors:
+        failed_errors.append(summarize_fetch_error(exc))
+
+
 def is_timeout_error(exc: BaseException) -> bool:
     """True when ``exc`` is, or was directly caused by, a request timeout.
 

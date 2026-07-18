@@ -972,22 +972,26 @@ def test_failed_fragment_carries_error_sample_when_provided() -> None:
     fetch path captured one (#1784 follow-up): the opaque "raised a non-404
     error" hid a trivially-diagnosable server-side failure — every per-id
     script fetch 500ing on a ``!secret`` reference in scripts.yaml —
-    behind a debug-log dive. The sample makes the response itself carry
-    the diagnosis."""
+    behind a debug-log dive. The sample makes the response itself carry the
+    diagnosis; because an HTTP 500's body is aiohttp's generic placeholder
+    (the ``!secret`` cause is HA-log-only), the static HA-log hint rides
+    alongside the sample."""
     response: dict = {"success": True}
     DeepSearchMixin._apply_per_type_partial_flag(
         response,
         script_failed=27,
-        script_failed_sample="HTTP 500: Secrets not supported in this YAML file",
+        script_failed_sample="HTTP 500: 500 Internal Server Error",
     )
     assert response["partial"] is True
     reason = response["partial_reason"]
     assert (
         "27 script(s) not scanned (per-id fetch raised a non-404 error; "
-        "e.g. HTTP 500: Secrets not supported in this YAML file)" in reason
+        "e.g. HTTP 500: 500 Internal Server Error)" in reason
     )
     assert "match status is unknown" in reason
     assert "not exhaustive" in reason
+    assert "`!secret` reference in the config file HA loads" in reason
+    assert "in the Home Assistant log" in reason
 
 
 def test_failed_fragment_unchanged_without_sample() -> None:
@@ -1014,6 +1018,32 @@ def test_failed_sample_is_per_type() -> None:
     reason = response["partial_reason"]
     assert "non-404 error; e.g. RuntimeError: automation boom)" in reason
     assert "non-404 error; e.g. HTTP 500: script boom)" in reason
+    # The static HA-log hint is scoped to HTTP-500 samples: the 500 script
+    # fragment carries it, the RuntimeError automation fragment does not.
+    assert reason.count("in the Home Assistant log") == 1
+
+
+def test_http_500_hint_only_on_http_500_sample() -> None:
+    """The static HA-log hint rides an HTTP-500 sample (whose body can't name
+    the cause) but not a non-500 sample, which already names its own type +
+    message. Scoping it keeps every non-500 fragment byte-identical."""
+    http500: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(
+        http500, automation_failed=1, automation_failed_sample="HTTP 500: boom"
+    )
+    assert "in the Home Assistant log" in http500["partial_reason"]
+
+    non500: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(
+        non500,
+        automation_failed=1,
+        automation_failed_sample="HTTP 502: Bad Gateway",
+    )
+    assert "in the Home Assistant log" not in non500["partial_reason"]
+
+    no_sample: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(no_sample, automation_failed=1)
+    assert "in the Home Assistant log" not in no_sample["partial_reason"]
 
 
 def test_budget_partial_flag_set_when_helper_type_lists_failed() -> None:

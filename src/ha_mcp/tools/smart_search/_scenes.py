@@ -10,7 +10,12 @@ from ._config import (
     INDIVIDUAL_FETCH_BATCH_SIZE,
     SCENE_CONFIG_TIME_BUDGET,
 )
-from ._fetch import ConfigFetchMixin, is_timeout_error, summarize_fetch_error
+from ._fetch import (
+    ConfigFetchMixin,
+    http_500_diagnosis_hint,
+    is_timeout_error,
+    record_first_failure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -268,9 +273,10 @@ class SceneSearchMixin(ConfigFetchMixin):
         skipped_count = 0
         integration_skipped = 0
         timeout_count = 0
-        # One representative summary per ``failed``-class exception, appended
-        # by the fetch closure below; the first entry rides partial_reason as
-        # an ``e.g.`` (#1784 follow-up). List membership tracks failed_count.
+        # One representative summary — only the FIRST ``failed``-class
+        # exception is kept (the fetch closure guards the append); it rides
+        # partial_reason as an ``e.g.`` (#1784 follow-up). The remaining
+        # failures are counted (``failed_count``) but not summarized.
         failed_errors: list[str] = []
 
         # Attempt C: parallel per-id fetch with a wall-clock budget so a few
@@ -308,7 +314,7 @@ class SceneSearchMixin(ConfigFetchMixin):
                         )
                         return (sid, None, "timeout")
                     logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")
-                    failed_errors.append(summarize_fetch_error(e))
+                    record_first_failure(failed_errors, e)
                     return (sid, None, "failed")
 
             (
@@ -391,10 +397,15 @@ class SceneSearchMixin(ConfigFetchMixin):
             # mirrors the automation/script ``e.g.`` sample, #1784 follow-up.
             failed_sample = scene_stats.get("failed_sample")
             sample_suffix = f"; e.g. {failed_sample}" if failed_sample else ""
+            # An HTTP 500 sample names the status but not the cause (the body
+            # is aiohttp's generic placeholder); append the static HA-log
+            # diagnosis, mirroring the automation/script fragment (#1784).
+            hint = http_500_diagnosis_hint(failed_sample)
             reason_parts.append(
                 f"{failed} scene(s) not scanned (per-id fetch raised"
                 f"{sample_suffix}) — "
-                "their match status is unknown; this result is not exhaustive."
+                f"their match status is unknown; this result is not "
+                f"exhaustive.{hint}"
             )
         if timeout:
             reason_parts.append(
