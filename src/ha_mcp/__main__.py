@@ -1096,6 +1096,28 @@ _SETTINGS_TRUTHY = {"1", "true", "yes", "on"}
 _SETTINGS_FALSY = {"0", "false", "no", "off", ""}
 
 
+def _settings_ui_disabled() -> bool:
+    """Return True when ``HA_MCP_DISABLE_SETTINGS_UI`` turns the settings UI off.
+
+    Honored by every long-lived HTTP transport (standard ``ha-mcp-web`` /
+    ``ha-mcp-sse`` as well as OAuth/OIDC) and by the stdio sidecar, so the kill
+    switch behaves the same everywhere. Warns — rather than silently leaving the
+    UI served — on an unrecognized value, since a mistyped kill switch failing
+    open is the dangerous direction.
+    """
+    disable = os.getenv("HA_MCP_DISABLE_SETTINGS_UI", "").strip().lower()
+    if disable in _SETTINGS_TRUTHY:
+        return True
+    if disable not in _SETTINGS_FALSY:
+        logger.warning(
+            "HA_MCP_DISABLE_SETTINGS_UI=%r is not a recognized on/off value; the "
+            "settings UI remains served. Use one of %s to disable it.",
+            disable,
+            ", ".join(sorted(_SETTINGS_TRUTHY)),
+        )
+    return False
+
+
 def _resolve_settings_secret_path() -> str | None:
     """Resolve the dedicated settings-UI secret path for OAuth/OIDC modes.
 
@@ -1109,18 +1131,8 @@ def _resolve_settings_secret_path() -> str | None:
 
     Returns the path to mount the settings UI under, or ``None`` when disabled.
     """
-    disable = os.getenv("HA_MCP_DISABLE_SETTINGS_UI", "").strip().lower()
-    if disable in _SETTINGS_TRUTHY:
+    if _settings_ui_disabled():
         return None
-    if disable not in _SETTINGS_FALSY:
-        # Fail visible, not silently open: this is the settings-UI kill switch, so
-        # an unrecognized value that leaves the UI served must be surfaced.
-        logger.warning(
-            "HA_MCP_DISABLE_SETTINGS_UI=%r is not a recognized on/off value; the "
-            "settings UI remains served. Use one of %s to disable it.",
-            disable,
-            ", ".join(sorted(_SETTINGS_TRUTHY)),
-        )
     explicit = os.getenv("MCP_SETTINGS_SECRET_PATH", "").strip()
     if explicit:
         return explicit
@@ -1219,8 +1231,13 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
     register_browser_landing(_get_mcp(), path, quiet_probe_log=transport != "sse")
     if _healthz_enabled():
         _register_healthz_route(_get_mcp())
-    register_settings_routes(_get_mcp(), _get_server(), secret_path=path)
-    _log_settings_url(host, port, path)
+    if _settings_ui_disabled():
+        logger.info(
+            "Settings UI disabled (HA_MCP_DISABLE_SETTINGS_UI); routes not registered."
+        )
+    else:
+        register_settings_routes(_get_mcp(), _get_server(), secret_path=path)
+        _log_settings_url(host, port, path)
 
     _run_entrypoint(
         _run_http_with_graceful_shutdown(transport, host, port, path),
@@ -1237,6 +1254,8 @@ def main_web() -> None:
     - MCP_HOST (optional, default: "0.0.0.0"; set 127.0.0.1 to restrict to loopback)
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
+    - HA_MCP_DISABLE_SETTINGS_UI (optional): set truthy to not serve the web
+      settings UI at all
     """
     _setup_standard_mode()
     _run_http_server("http", default_port=8086)
@@ -1251,6 +1270,8 @@ def main_sse() -> None:
     - MCP_HOST (optional, default: "0.0.0.0"; set 127.0.0.1 to restrict to loopback)
     - MCP_PORT (optional, default: 8087)
     - MCP_SECRET_PATH (optional, default: "/mcp")
+    - HA_MCP_DISABLE_SETTINGS_UI (optional): set truthy to not serve the web
+      settings UI at all
     """
     _setup_standard_mode()
     _run_http_server("sse", default_port=8087)

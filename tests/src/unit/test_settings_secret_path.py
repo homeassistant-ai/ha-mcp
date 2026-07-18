@@ -17,6 +17,7 @@ import pytest
 from ha_mcp.__main__ import (
     _register_settings_ui_secret_path,
     _resolve_settings_secret_path,
+    _settings_ui_disabled,
 )
 from ha_mcp.settings_ui import get_http_settings_prefix, is_http_settings_mounted
 
@@ -33,6 +34,31 @@ def _reset_settings_globals():
     yield
     _su._http_settings_prefix = saved_prefix
     _su._http_settings_mounted = saved_mounted
+
+
+class TestSettingsUiDisabled:
+    """The kill switch is honored uniformly across HTTP transports (standard
+    ha-mcp-web/ha-mcp-sse, OAuth, OIDC) via this shared predicate."""
+
+    @pytest.mark.parametrize("val", ["1", "true", "TRUE", "yes", "on", " on "])
+    def test_truthy_disables(self, monkeypatch, val):
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", val)
+        assert _settings_ui_disabled() is True
+
+    @pytest.mark.parametrize("val", ["0", "false", "no", "off", "", "  "])
+    def test_falsy_or_unset_keeps_enabled(self, monkeypatch, val):
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", val)
+        assert _settings_ui_disabled() is False
+
+    def test_unset_keeps_enabled(self, monkeypatch):
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        assert _settings_ui_disabled() is False
+
+    def test_unrecognized_keeps_enabled_and_warns(self, monkeypatch, caplog):
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "disable")
+        with caplog.at_level(logging.WARNING):
+            assert _settings_ui_disabled() is False
+        assert any("not a recognized" in r.getMessage() for r in caplog.records)
 
 
 class TestResolveSettingsSecretPath:

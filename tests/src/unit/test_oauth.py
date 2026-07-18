@@ -1735,7 +1735,7 @@ class TestRunOAuthServerSettingsUI:
         _su._http_settings_prefix, _su._http_settings_mounted = sp, sm
 
     async def _run(self, mcp_path="/mcp"):
-        import ha_mcp.__main__ as main_module
+        from ha_mcp.__main__ import _run_oauth_server
 
         mock_mcp = MagicMock()
         mock_mcp.custom_route = MagicMock(return_value=lambda fn: fn)
@@ -1754,15 +1754,15 @@ class TestRunOAuthServerSettingsUI:
             coro.close()
 
         with (
-            patch.object(main_module, "OAuthProxyClient", MagicMock()),
+            patch("ha_mcp.__main__.OAuthProxyClient", MagicMock()),
             patch("ha_mcp.auth.HomeAssistantOAuthProvider", MagicMock()),
             patch(
                 "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
             ),
-            patch.object(main_module, "register_browser_landing", MagicMock()),
-            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+            patch("ha_mcp.__main__.register_browser_landing", MagicMock()),
+            patch("ha_mcp.__main__._run_with_shutdown", side_effect=noop_shutdown),
         ):
-            await main_module._run_oauth_server(
+            await _run_oauth_server(
                 ha_url="http://ha.example:8123",
                 base_url="https://mcp.example.com",
                 host="0.0.0.0",
