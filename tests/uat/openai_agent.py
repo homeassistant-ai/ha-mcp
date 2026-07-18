@@ -213,6 +213,108 @@ def extract_tool_result_text(result) -> str:
     return str(result)
 
 
+def _maybe_warn_no_think(
+    no_think: bool,
+    no_think_warned: bool,
+    message,
+    reasoning_this_turn: int,
+    model: str,
+) -> bool:
+    """Warn once if --no-think was requested but the model still reasoned.
+
+    Returns the updated ``no_think_warned`` flag.
+    """
+    # If --no-think was requested but the model still reasoned, the backend
+    # didn't honor it (e.g. LM Studio can't map enable_thinking to some
+    # Qwen3.6 GGUFs). Warn once so the no-op is visible instead of silently
+    # paying full reasoning-decode cost. reasoning_tokens is the structured
+    # signal; reasoning_content and an inline <think> block in content cover
+    # servers that emit reasoning without a separate token detail.
+    if no_think and not no_think_warned:
+        still_reasoning = (
+            reasoning_this_turn
+            or getattr(message, "reasoning_content", None)
+            or "<think>" in (message.content or "").lower()
+        )
+        if still_reasoning:
+            detail = (
+                f"{reasoning_this_turn} reasoning tokens"
+                if reasoning_this_turn
+                else "reasoning in output, token count unavailable"
+            )
+            logger.warning(
+                "--no-think requested but model %s still produced reasoning "
+                "(%s); backend may not honor enable_thinking",
+                model,
+                detail,
+            )
+            no_think_warned = True
+    return no_think_warned
+
+
+async def _dispatch_tool_calls(
+    message,
+    messages: list[dict],
+    mcp_client: MCPClient,
+    tool_trace_sink: list[str] | None,
+    total_calls: int,
+    total_success: int,
+    total_fail: int,
+) -> tuple[int, int, int]:
+    """Execute one turn's tool calls, appending each result to ``messages``.
+
+    Returns the updated ``(total_calls, total_success, total_fail)`` counters.
+    """
+    for tc in message.tool_calls:
+        total_calls += 1
+        tool_name = tc.function.name
+        try:
+            tool_args = json.loads(tc.function.arguments)
+        except json.JSONDecodeError as e:
+            malformed_line = (
+                f"  [tool] {tool_name}: malformed arguments: {tc.function.arguments!r}"
+            )
+            logger.info(malformed_line)
+            if tool_trace_sink is not None:
+                tool_trace_sink.append(malformed_line.strip())
+            total_fail += 1
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": f"Error: Invalid JSON in tool arguments: {e}",
+                }
+            )
+            continue
+
+        call_line = f"  [tool] {tool_name}({tool_args})"
+        logger.info(call_line)
+        if tool_trace_sink is not None:
+            tool_trace_sink.append(call_line.strip())
+
+        try:
+            result = await mcp_client.call_tool(tool_name, tool_args)
+            result_text = extract_tool_result_text(result)
+            total_success += 1
+        except Exception as e:
+            err_text = _strip_pydantic_url(str(e))
+            result_text = f"Error: {err_text}"
+            total_fail += 1
+            # Server-side WARNING log already shows the failure details;
+            # only record to the trace sink for test artifacts.
+            if tool_trace_sink is not None:
+                tool_trace_sink.append(f"[tool] {tool_name} failed: {err_text}")
+
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": result_text,
+            }
+        )
+    return total_calls, total_success, total_fail
+
+
 async def tool_call_loop(
     client: openai.AsyncOpenAI,
     model: str,
@@ -292,31 +394,9 @@ async def tool_call_loop(
         choice = response.choices[0]
         message = choice.message
 
-        # If --no-think was requested but the model still reasoned, the backend
-        # didn't honor it (e.g. LM Studio can't map enable_thinking to some
-        # Qwen3.6 GGUFs). Warn once so the no-op is visible instead of silently
-        # paying full reasoning-decode cost. reasoning_tokens is the structured
-        # signal; reasoning_content and an inline <think> block in content cover
-        # servers that emit reasoning without a separate token detail.
-        if no_think and not no_think_warned:
-            still_reasoning = (
-                reasoning_this_turn
-                or getattr(message, "reasoning_content", None)
-                or "<think>" in (message.content or "").lower()
-            )
-            if still_reasoning:
-                detail = (
-                    f"{reasoning_this_turn} reasoning tokens"
-                    if reasoning_this_turn
-                    else "reasoning in output, token count unavailable"
-                )
-                logger.warning(
-                    "--no-think requested but model %s still produced reasoning "
-                    "(%s); backend may not honor enable_thinking",
-                    model,
-                    detail,
-                )
-                no_think_warned = True
+        no_think_warned = _maybe_warn_no_think(
+            no_think, no_think_warned, message, reasoning_this_turn, model
+        )
 
         # No tool calls — we have a final response
         if not message.tool_calls:
@@ -354,54 +434,15 @@ async def tool_call_loop(
             }
         )
 
-        for tc in message.tool_calls:
-            total_calls += 1
-            tool_name = tc.function.name
-            try:
-                tool_args = json.loads(tc.function.arguments)
-            except json.JSONDecodeError as e:
-                malformed_line = (
-                    f"  [tool] {tool_name}: malformed arguments: "
-                    f"{tc.function.arguments!r}"
-                )
-                logger.info(malformed_line)
-                if tool_trace_sink is not None:
-                    tool_trace_sink.append(malformed_line.strip())
-                total_fail += 1
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": f"Error: Invalid JSON in tool arguments: {e}",
-                    }
-                )
-                continue
-
-            call_line = f"  [tool] {tool_name}({tool_args})"
-            logger.info(call_line)
-            if tool_trace_sink is not None:
-                tool_trace_sink.append(call_line.strip())
-
-            try:
-                result = await mcp_client.call_tool(tool_name, tool_args)
-                result_text = extract_tool_result_text(result)
-                total_success += 1
-            except Exception as e:
-                err_text = _strip_pydantic_url(str(e))
-                result_text = f"Error: {err_text}"
-                total_fail += 1
-                # Server-side WARNING log already shows the failure details;
-                # only record to the trace sink for test artifacts.
-                if tool_trace_sink is not None:
-                    tool_trace_sink.append(f"[tool] {tool_name} failed: {err_text}")
-
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": result_text,
-                }
-            )
+        total_calls, total_success, total_fail = await _dispatch_tool_calls(
+            message,
+            messages,
+            mcp_client,
+            tool_trace_sink,
+            total_calls,
+            total_success,
+            total_fail,
+        )
 
     # Max iterations reached without a final message. Flag it so callers can
     # surface it as a test failure — otherwise a model stuck in a tool-call

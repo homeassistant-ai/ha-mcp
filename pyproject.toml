@@ -174,10 +174,6 @@ ignore = [
 "src/ha_mcp/tools/tools_dev.py" = ["C901"]
 "src/ha_mcp/tools/tools_system.py" = ["C901"]
 "tests/src/unit/test_advanced_settings_coverage.py" = ["C901"]
-"tests/uat/ha_wait.py" = ["C901"]
-"tests/uat/openai_agent.py" = ["C901"]
-"tests/uat/run_uat.py" = ["C901"]
-"tests/uat/stories/run_story.py" = ["C901"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

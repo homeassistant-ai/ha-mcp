@@ -303,6 +303,86 @@ def check_agent_available(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+def _extract_cli_json_fields(raw_json: object, stdout_text: str) -> dict:
+    """Pull the optional output/stat/token fields out of an agent's JSON stdout.
+
+    Returns a dict whose values are ``None`` for fields absent from
+    ``raw_json`` (or when ``raw_json`` is not a dict).
+    """
+    output_text = stdout_text
+    num_turns = None
+    tool_stats = None
+    session_id = None
+    cost_usd = None
+    tokens_input = None
+    tokens_output = None
+    tokens_thoughts = None
+    tokens_first_input = None
+    if raw_json and isinstance(raw_json, dict):
+        # Claude JSON format
+        if "result" in raw_json:
+            output_text = raw_json.get("result", stdout_text)
+        # Gemini JSON format
+        if "response" in raw_json:
+            output_text = raw_json.get("response", stdout_text)
+        num_turns = raw_json.get("num_turns")
+        tool_stats = raw_json.get("tool_stats")
+        session_id = raw_json.get("session_id")
+        cost_usd = raw_json.get("total_cost_usd") or raw_json.get("cost_usd")
+        # Gemini stats
+        if "stats" in raw_json and isinstance(raw_json["stats"], dict):
+            tool_stats = raw_json["stats"].get("tools")
+        # OpenAI agent token counts and first-input baseline (included directly in JSON output)
+        tokens_input = raw_json.get("tokens_input")
+        tokens_output = raw_json.get("tokens_output")
+        tokens_thoughts = raw_json.get("tokens_thoughts")
+        tokens_first_input = raw_json.get("tokens_first_input")
+    return {
+        "output_text": output_text,
+        "num_turns": num_turns,
+        "tool_stats": tool_stats,
+        "session_id": session_id,
+        "cost_usd": cost_usd,
+        "tokens_input": tokens_input,
+        "tokens_output": tokens_output,
+        "tokens_thoughts": tokens_thoughts,
+        "tokens_first_input": tokens_first_input,
+    }
+
+
+def _assemble_cli_result(
+    returncode: int | None,
+    duration_ms: int,
+    stderr_text: str,
+    fields: dict,
+) -> dict:
+    """Build the run_cli result dict from extracted stdout fields."""
+    result: dict = {
+        "completed": returncode == 0,
+        "output": fields["output_text"],
+        "duration_ms": duration_ms,
+        "exit_code": returncode,
+        "stderr": stderr_text,
+    }
+    if fields["num_turns"] is not None:
+        result["num_turns"] = fields["num_turns"]
+    if fields["tool_stats"] is not None:
+        result["tool_stats"] = fields["tool_stats"]
+    if fields["session_id"] is not None:
+        result["session_id"] = fields["session_id"]
+    if fields["cost_usd"] is not None:
+        result["cost_usd"] = fields["cost_usd"]
+    if fields["tokens_input"] is not None:
+        result["tokens_input"] = fields["tokens_input"]
+    if fields["tokens_output"] is not None:
+        result["tokens_output"] = fields["tokens_output"]
+    if fields["tokens_thoughts"] is not None:
+        result["tokens_thoughts"] = fields["tokens_thoughts"]
+    if fields["tokens_first_input"] is not None:
+        result["tokens_first_input"] = fields["tokens_first_input"]
+    return result
+
+
 async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict:
     """Run a CLI command and capture output."""
     # Strip CLAUDECODE env var to allow nested Claude CLI sessions
@@ -337,58 +417,8 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             pass
 
         # Extract fields from JSON if available
-        output_text = stdout_text
-        num_turns = None
-        tool_stats = None
-        session_id = None
-        cost_usd = None
-        tokens_input = None
-        tokens_output = None
-        tokens_thoughts = None
-        tokens_first_input = None
-        if raw_json and isinstance(raw_json, dict):
-            # Claude JSON format
-            if "result" in raw_json:
-                output_text = raw_json.get("result", stdout_text)
-            # Gemini JSON format
-            if "response" in raw_json:
-                output_text = raw_json.get("response", stdout_text)
-            num_turns = raw_json.get("num_turns")
-            tool_stats = raw_json.get("tool_stats")
-            session_id = raw_json.get("session_id")
-            cost_usd = raw_json.get("total_cost_usd") or raw_json.get("cost_usd")
-            # Gemini stats
-            if "stats" in raw_json and isinstance(raw_json["stats"], dict):
-                tool_stats = raw_json["stats"].get("tools")
-            # OpenAI agent token counts and first-input baseline (included directly in JSON output)
-            tokens_input = raw_json.get("tokens_input")
-            tokens_output = raw_json.get("tokens_output")
-            tokens_thoughts = raw_json.get("tokens_thoughts")
-            tokens_first_input = raw_json.get("tokens_first_input")
-
-        result: dict = {
-            "completed": proc.returncode == 0,
-            "output": output_text,
-            "duration_ms": duration_ms,
-            "exit_code": proc.returncode,
-            "stderr": stderr_text,
-        }
-        if num_turns is not None:
-            result["num_turns"] = num_turns
-        if tool_stats is not None:
-            result["tool_stats"] = tool_stats
-        if session_id is not None:
-            result["session_id"] = session_id
-        if cost_usd is not None:
-            result["cost_usd"] = cost_usd
-        if tokens_input is not None:
-            result["tokens_input"] = tokens_input
-        if tokens_output is not None:
-            result["tokens_output"] = tokens_output
-        if tokens_thoughts is not None:
-            result["tokens_thoughts"] = tokens_thoughts
-        if tokens_first_input is not None:
-            result["tokens_first_input"] = tokens_first_input
+        fields = _extract_cli_json_fields(raw_json, stdout_text)
+        result = _assemble_cli_result(proc.returncode, duration_ms, stderr_text, fields)
         if raw_json is not None:
             result["raw_json"] = raw_json
         return result
@@ -480,6 +510,73 @@ def build_openai_cmd(
     return cmd
 
 
+async def _run_agent_phase(
+    agent_name: str,
+    prompt: str,
+    stdio_config_path: Path | None,
+    gemini_workdir: Path | None,
+    timeout: int,
+    *,
+    model: str | None,
+    base_url: str | None,
+    api_key: str,
+    max_tools: int | None,
+    no_think: bool,
+    max_tokens: int | None,
+) -> dict:
+    """Build the agent command for one phase and run it, returning the result."""
+    if agent_name == "claude":
+        assert stdio_config_path is not None
+        cmd = build_claude_cmd(prompt, stdio_config_path, model=model or "sonnet")
+        return await run_cli(cmd, timeout)
+    elif agent_name == "gemini":
+        cmd = build_gemini_cmd(prompt)
+        return await run_cli(cmd, timeout, cwd=gemini_workdir)
+    elif agent_name == "openai":
+        assert stdio_config_path is not None
+        assert base_url is not None  # validated in run()
+        cmd = build_openai_cmd(
+            prompt,
+            stdio_config_path,
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
+            max_tools=max_tools,
+            no_think=no_think,
+            max_tokens=max_tokens,
+        )
+        return await run_cli(cmd, timeout)
+    else:
+        return {
+            "completed": False,
+            "output": f"Unknown agent: {agent_name}",
+            "duration_ms": 0,
+            "exit_code": -1,
+            "stderr": "",
+        }
+
+
+def _forward_agent_stderr(agent_name: str, result: dict) -> None:
+    # Forward agent stderr on failure so the error is visible to the user
+    if result["exit_code"] != 0 and result.get("stderr"):
+        _BOX_CHARS = frozenset("│╭╰╮─▄█▀ \t")
+        for line in result["stderr"].splitlines():
+            if "error" in line.lower():
+                logger.info(f"  [{agent_name}] !! {line.strip()}")
+            elif not all(c in _BOX_CHARS for c in line):
+                logger.info(f"  [{agent_name}] stderr: {line}")
+
+
+def _cleanup_scenario_temp(
+    stdio_config_path: Path | None, gemini_workdir: Path | None
+) -> None:
+    # Cleanup temp files
+    if stdio_config_path and stdio_config_path.exists():
+        stdio_config_path.unlink()
+    if gemini_workdir and gemini_workdir.exists():
+        shutil.rmtree(gemini_workdir, ignore_errors=True)
+
+
 async def run_agent_scenario(
     agent_name: str,
     scenario: dict,
@@ -517,56 +614,27 @@ async def run_agent_scenario(
             phase_key = phase.replace("_prompt", "")
             logger.info(f"  [{agent_name}] Running {phase_key}...")
 
-            if agent_name == "claude":
-                assert stdio_config_path is not None
-                cmd = build_claude_cmd(
-                    prompt, stdio_config_path, model=model or "sonnet"
-                )
-                result = await run_cli(cmd, timeout)
-            elif agent_name == "gemini":
-                cmd = build_gemini_cmd(prompt)
-                result = await run_cli(cmd, timeout, cwd=gemini_workdir)
-            elif agent_name == "openai":
-                assert stdio_config_path is not None
-                assert base_url is not None  # validated in run()
-                cmd = build_openai_cmd(
-                    prompt,
-                    stdio_config_path,
-                    base_url=base_url,
-                    model=model,
-                    api_key=api_key,
-                    max_tools=max_tools,
-                    no_think=no_think,
-                    max_tokens=max_tokens,
-                )
-                result = await run_cli(cmd, timeout)
-            else:
-                result = {
-                    "completed": False,
-                    "output": f"Unknown agent: {agent_name}",
-                    "duration_ms": 0,
-                    "exit_code": -1,
-                    "stderr": "",
-                }
+            result = await _run_agent_phase(
+                agent_name,
+                prompt,
+                stdio_config_path,
+                gemini_workdir,
+                timeout,
+                model=model,
+                base_url=base_url,
+                api_key=api_key,
+                max_tools=max_tools,
+                no_think=no_think,
+                max_tokens=max_tokens,
+            )
 
             results[phase_key] = result
             logger.info(
                 f"  [{agent_name}] {phase_key} completed (exit={result['exit_code']}, {result['duration_ms']}ms)"
             )
-            # Forward agent stderr on failure so the error is visible to the user
-            if result["exit_code"] != 0 and result.get("stderr"):
-                _BOX_CHARS = frozenset("│╭╰╮─▄█▀ \t")
-                for line in result["stderr"].splitlines():
-                    if "error" in line.lower():
-                        logger.info(f"  [{agent_name}] !! {line.strip()}")
-                    elif not all(c in _BOX_CHARS for c in line):
-                        logger.info(f"  [{agent_name}] stderr: {line}")
+            _forward_agent_stderr(agent_name, result)
     finally:
-        # Cleanup temp files
-        if stdio_config_path and stdio_config_path.exists():
-            stdio_config_path.unlink()
-        if gemini_workdir and gemini_workdir.exists():
-            shutil.rmtree(gemini_workdir, ignore_errors=True)
+        _cleanup_scenario_temp(stdio_config_path, gemini_workdir)
 
     return results
 
@@ -574,6 +642,24 @@ async def run_agent_scenario(
 # ---------------------------------------------------------------------------
 # Summary Generation
 # ---------------------------------------------------------------------------
+def _add_phase_stats(summary: dict, phase_result: dict) -> None:
+    # Always include stats (for comparison between branches)
+    if phase_result.get("num_turns") is not None:
+        summary["num_turns"] = phase_result["num_turns"]
+    if phase_result.get("session_id") is not None:
+        summary["session_id"] = phase_result["session_id"]
+    if phase_result.get("cost_usd") is not None:
+        summary["cost_usd"] = phase_result["cost_usd"]
+    if phase_result.get("tool_stats") is not None:
+        summary["tool_stats"] = phase_result["tool_stats"]
+    if phase_result.get("tokens_input") is not None:
+        summary["tokens_input"] = phase_result["tokens_input"]
+    if phase_result.get("tokens_output") is not None:
+        summary["tokens_output"] = phase_result["tokens_output"]
+    if phase_result.get("tokens_thoughts") is not None:
+        summary["tokens_thoughts"] = phase_result["tokens_thoughts"]
+
+
 def make_phase_summary(phase_key: str, phase_result: dict) -> dict:
     """Extract concise summary from a phase result (no raw_json)."""
     summary: dict = {
@@ -591,21 +677,7 @@ def make_phase_summary(phase_key: str, phase_result: dict) -> dict:
             summary["tool_trace"] = tool_lines
     if not phase_result["completed"] and stderr:
         summary["stderr"] = stderr
-    # Always include stats (for comparison between branches)
-    if phase_result.get("num_turns") is not None:
-        summary["num_turns"] = phase_result["num_turns"]
-    if phase_result.get("session_id") is not None:
-        summary["session_id"] = phase_result["session_id"]
-    if phase_result.get("cost_usd") is not None:
-        summary["cost_usd"] = phase_result["cost_usd"]
-    if phase_result.get("tool_stats") is not None:
-        summary["tool_stats"] = phase_result["tool_stats"]
-    if phase_result.get("tokens_input") is not None:
-        summary["tokens_input"] = phase_result["tokens_input"]
-    if phase_result.get("tokens_output") is not None:
-        summary["tokens_output"] = phase_result["tokens_output"]
-    if phase_result.get("tokens_thoughts") is not None:
-        summary["tokens_thoughts"] = phase_result["tokens_thoughts"]
+    _add_phase_stats(summary, phase_result)
     return summary
 
 
@@ -690,24 +762,14 @@ def make_summary(full_results: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-async def run(args: argparse.Namespace) -> dict:
-    """Execute the BAT scenario and return results."""
-    # Read scenario
-    if args.scenario_file:
-        scenario = json.loads(Path(args.scenario_file).read_text())  # noqa: ASYNC240
-    else:
-        if sys.stdin.isatty():
-            raise ValueError(
-                "No scenario provided. Pipe scenario JSON via stdin, or pass --scenario-file.\n"
-                '  echo \'{"test_prompt":"..."}\' | uv run python tests/uat/run_uat.py --agents gemini\n'
-                "  uv run python tests/uat/run_uat.py --scenario-file scenario.json --agents gemini\n"
-                "For the pre-built story catalog, use tests/uat/stories/run_story.py --all."
-            )
-        scenario = json.loads(sys.stdin.read())
+def _resolve_active_agents(
+    args: argparse.Namespace,
+) -> tuple[dict[str, bool], list[str]]:
+    """Resolve requested agents to (availability map, active list).
 
-    if "test_prompt" not in scenario:
-        raise ValueError("scenario must contain 'test_prompt'")
-
+    Raises ValueError if no agent is available, or if the openai agent is
+    requested without --base-url.
+    """
     # Determine agents
     requested_agents = [a.strip() for a in args.agents.split(",")]
     agents: dict[str, bool] = {}
@@ -726,7 +788,10 @@ async def run(args: argparse.Namespace) -> dict:
             "--base-url is required when using the openai agent. "
             "Example: --base-url http://localhost:1234/v1"
         )
+    return agents, active_agents
 
+
+def _run_preflight_checks(args: argparse.Namespace, active_agents: list[str]) -> None:
     # Preflight: fail fast if Docker or the OpenAI endpoint is unreachable,
     # rather than stalling inside container startup / model warmup.
     if not args.ha_url:
@@ -737,6 +802,65 @@ async def run(args: argparse.Namespace) -> dict:
         err = preflight_check_base_url(args.base_url)
         if err:
             raise RuntimeError(err)
+
+
+async def _run_all_agents(
+    active_agents: list[str],
+    agents: dict[str, bool],
+    scenario: dict,
+    ha_url: str,
+    ha_token: str,
+    args: argparse.Namespace,
+    extra_env: dict[str, str],
+) -> dict:
+    """Run each active agent's scenario sequentially; mark unavailable agents."""
+    # Run agents sequentially to avoid resource contention
+    agent_results = {}
+    for name in active_agents:
+        agent_results[name] = await run_agent_scenario(
+            name,
+            scenario,
+            ha_url,
+            ha_token,
+            args.branch,
+            args.timeout,
+            model=getattr(args, "model", None),
+            base_url=getattr(args, "base_url", None),
+            api_key=getattr(args, "api_key", "no-key"),
+            max_tools=getattr(args, "max_tools", None),
+            no_think=getattr(args, "no_think", False),
+            max_tokens=getattr(args, "max_tokens", None),
+            extra_env=extra_env,
+        )
+
+    # Add unavailable agents
+    for name, avail in agents.items():
+        if not avail:
+            agent_results[name] = {"available": False}
+    return agent_results
+
+
+async def run(args: argparse.Namespace) -> dict:
+    """Execute the BAT scenario and return results."""
+    # Read scenario
+    if args.scenario_file:
+        scenario = json.loads(Path(args.scenario_file).read_text())  # noqa: ASYNC240
+    else:
+        if sys.stdin.isatty():
+            raise ValueError(
+                "No scenario provided. Pipe scenario JSON via stdin, or pass --scenario-file.\n"
+                '  echo \'{"test_prompt":"..."}\' | uv run python tests/uat/run_uat.py --agents gemini\n'
+                "  uv run python tests/uat/run_uat.py --scenario-file scenario.json --agents gemini\n"
+                "For the pre-built story catalog, use tests/uat/stories/run_story.py --all."
+            )
+        scenario = json.loads(sys.stdin.read())
+
+    if "test_prompt" not in scenario:
+        raise ValueError("scenario must contain 'test_prompt'")
+
+    agents, active_agents = _resolve_active_agents(args)
+
+    _run_preflight_checks(args, active_agents)
 
     # Start HA (container or external)
     ha_url = args.ha_url
@@ -763,29 +887,9 @@ async def run(args: argparse.Namespace) -> dict:
             on_default_applied=logger.info,
         )
 
-        # Run agents sequentially to avoid resource contention
-        agent_results = {}
-        for name in active_agents:
-            agent_results[name] = await run_agent_scenario(
-                name,
-                scenario,
-                ha_url,
-                ha_token,
-                args.branch,
-                args.timeout,
-                model=getattr(args, "model", None),
-                base_url=getattr(args, "base_url", None),
-                api_key=getattr(args, "api_key", "no-key"),
-                max_tools=getattr(args, "max_tools", None),
-                no_think=getattr(args, "no_think", False),
-                max_tokens=getattr(args, "max_tokens", None),
-                extra_env=extra_env,
-            )
-
-        # Add unavailable agents
-        for name, avail in agents.items():
-            if not avail:
-                agent_results[name] = {"available": False}
+        agent_results = await _run_all_agents(
+            active_agents, agents, scenario, ha_url, ha_token, args, extra_env
+        )
 
         return {
             "scenario": scenario,
