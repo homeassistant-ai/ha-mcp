@@ -83,6 +83,38 @@ def _assert_entity_not_found(excinfo, *, must_contain: str | None = None) -> Non
         )
 
 
+def _simple_registry_validator_response(msg_type: str) -> dict | None:
+    """Canned success for the area/label/category registry-list validators."""
+    if msg_type == "config/area_registry/list":
+        return {"success": True, "result": []}
+    if msg_type == "config/label_registry/list":
+        return {"success": True, "result": []}
+    if msg_type == "config/category_registry/list":
+        return {"success": True, "result": []}
+    return None
+
+
+def _simple_write_response(
+    msg: dict, msg_type: str, helper_type: str, unique_id: str
+) -> dict | None:
+    """Canned success for the create/update and entity-registry/update calls."""
+    if msg_type.endswith("/create") or msg_type.endswith("/update"):
+        return {
+            "success": True,
+            "result": {
+                "id": unique_id,
+                "entity_id": f"{helper_type}.{unique_id}",
+                **{k: v for k, v in msg.items() if k != "type"},
+            },
+        }
+    if msg_type == "config/entity_registry/update":
+        return {
+            "success": True,
+            "result": {"entity_entry": {"entity_id": msg.get("entity_id")}},
+        }
+    return None
+
+
 def _make_simple_handler(
     *,
     helper_type: str,
@@ -102,12 +134,9 @@ def _make_simple_handler(
         msg_type = msg.get("type", "")
 
         # Registry validators.
-        if msg_type == "config/area_registry/list":
-            return {"success": True, "result": []}
-        if msg_type == "config/label_registry/list":
-            return {"success": True, "result": []}
-        if msg_type == "config/category_registry/list":
-            return {"success": True, "result": []}
+        validator = _simple_registry_validator_response(msg_type)
+        if validator is not None:
+            return validator
 
         # Collision detector + general listing.
         if msg_type == f"{helper_type}/list":
@@ -127,20 +156,9 @@ def _make_simple_handler(
                 },
             }
 
-        if msg_type.endswith("/create") or msg_type.endswith("/update"):
-            return {
-                "success": True,
-                "result": {
-                    "id": unique_id,
-                    "entity_id": f"{helper_type}.{unique_id}",
-                    **{k: v for k, v in msg.items() if k != "type"},
-                },
-            }
-        if msg_type == "config/entity_registry/update":
-            return {
-                "success": True,
-                "result": {"entity_entry": {"entity_id": msg.get("entity_id")}},
-            }
+        write = _simple_write_response(msg, msg_type, helper_type, unique_id)
+        if write is not None:
+            return write
         return {"success": True, "result": {}}
 
     return ws_handler

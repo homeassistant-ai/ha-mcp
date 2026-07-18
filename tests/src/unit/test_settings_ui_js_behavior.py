@@ -107,6 +107,57 @@ _TOP_LEVEL_ELEMENT_IDS = [
 ]
 
 
+def _min_dom_row(el_id: str) -> str | None:
+    """DOM stub markup for ``el_id`` (first half of the dispatch); None emits nothing."""
+    if el_id.startswith("backup") and el_id.endswith(("Domain", "Entity", "State")):
+        return f'<select id="{el_id}"></select>'
+    if el_id in ("backupList", "featuresBody"):
+        return f'<table><tbody id="{el_id}"></tbody></table>'
+    if el_id == "modalBackdrop":
+        # Full modal scaffold (mirrors settings.html) so the focus-trap
+        # code in showModal/closeModal — which queries `.modal` and
+        # #modalClose — has the structure it depends on.
+        return (
+            '<div id="modalBackdrop">'
+            '<div class="modal" role="dialog" tabindex="-1">'
+            '<div class="modal-header">'
+            '<span class="modal-title" id="modalTitle"></span>'
+            '<button class="modal-close" id="modalClose">×</button>'
+            "</div>"
+            '<div class="modal-body" id="modalBody"></div>'
+            "</div>"
+            "</div>"
+        )
+    if el_id in ("modalBody", "modalTitle", "modalClose"):
+        return None  # rendered as children of modalBackdrop above
+    if el_id.startswith("panel-"):
+        return f'<div id="{el_id}" class="panel"></div>'
+    return _min_dom_row_tail(el_id)
+
+
+def _min_dom_row_tail(el_id: str) -> str | None:
+    """DOM stub markup for ``el_id`` (second half of the dispatch); None emits nothing."""
+    if el_id in (
+        "restartBtn",
+        "stopSidecarBtn",
+        "backupConfigSave",
+        "backupRefresh",
+        "backupBulkDelete",
+    ):
+        return f'<button id="{el_id}"></button>'
+    if el_id == "restartNotice":
+        return '<div id="restartNotice"><span id="restartNoticeText"></span></div>'
+    if el_id == "restartNoticeText":
+        return None  # rendered as a child of restartNotice above
+    if el_id == "search":
+        return '<input id="search" />'
+    if el_id in ("policy-master-toggle", "read-only-mode-toggle"):
+        return f'<input id="{el_id}" type="checkbox" />'
+    if el_id == "policy-save-global-btn":
+        return '<button id="policy-save-global-btn"></button>'
+    return f'<div id="{el_id}"></div>'
+
+
 def _build_min_dom() -> str:
     """Render an HTML document that supplies every element the script
     binds a top-level handler on, so the init pass doesn't throw on a
@@ -114,51 +165,9 @@ def _build_min_dom() -> str:
     """
     rows = []
     for el_id in _TOP_LEVEL_ELEMENT_IDS:
-        if el_id.startswith("backup") and el_id.endswith(("Domain", "Entity", "State")):
-            rows.append(f'<select id="{el_id}"></select>')
-        elif el_id in ("backupList", "featuresBody"):
-            rows.append(f'<table><tbody id="{el_id}"></tbody></table>')
-        elif el_id == "modalBackdrop":
-            # Full modal scaffold (mirrors settings.html) so the focus-trap
-            # code in showModal/closeModal — which queries `.modal` and
-            # #modalClose — has the structure it depends on.
-            rows.append(
-                '<div id="modalBackdrop">'
-                '<div class="modal" role="dialog" tabindex="-1">'
-                '<div class="modal-header">'
-                '<span class="modal-title" id="modalTitle"></span>'
-                '<button class="modal-close" id="modalClose">×</button>'
-                "</div>"
-                '<div class="modal-body" id="modalBody"></div>'
-                "</div>"
-                "</div>"
-            )
-        elif el_id in ("modalBody", "modalTitle", "modalClose"):
-            continue  # rendered as children of modalBackdrop above
-        elif el_id.startswith("panel-"):
-            rows.append(f'<div id="{el_id}" class="panel"></div>')
-        elif el_id in (
-            "restartBtn",
-            "stopSidecarBtn",
-            "backupConfigSave",
-            "backupRefresh",
-            "backupBulkDelete",
-        ):
-            rows.append(f'<button id="{el_id}"></button>')
-        elif el_id == "restartNotice":
-            rows.append(
-                '<div id="restartNotice"><span id="restartNoticeText"></span></div>'
-            )
-        elif el_id == "restartNoticeText":
-            continue  # rendered as a child of restartNotice above
-        elif el_id == "search":
-            rows.append('<input id="search" />')
-        elif el_id in ("policy-master-toggle", "read-only-mode-toggle"):
-            rows.append(f'<input id="{el_id}" type="checkbox" />')
-        elif el_id == "policy-save-global-btn":
-            rows.append('<button id="policy-save-global-btn"></button>')
-        else:
-            rows.append(f'<div id="{el_id}"></div>')
+        row = _min_dom_row(el_id)
+        if row is not None:
+            rows.append(row)
     body = "\n  ".join(rows)
     return f"<!DOCTYPE html>\n<html><body>\n  {body}\n</body></html>"
 

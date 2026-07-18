@@ -231,6 +231,42 @@ def _parse_documented_keys(desc: str) -> set[str]:
     return keys
 
 
+def _documented_keys_from_annotation(anno: ast.expr) -> set[str] | None:
+    """Parse the ``Available keys:`` enumeration out of a ``fields=`` annotation.
+
+    Returns the parsed key set (possibly empty) once a ``Field(description=...)``
+    is found, or None if the annotation carries no such description.
+    """
+    # Expect Annotated[Type, Field(description="...")]
+    if not isinstance(anno, ast.Subscript):
+        return None
+    slice_node = anno.slice
+    elts: list[ast.expr]
+    if isinstance(slice_node, ast.Tuple):
+        elts = list(slice_node.elts)
+    else:
+        elts = [slice_node]
+    for elt in elts:
+        if (
+            isinstance(elt, ast.Call)
+            and isinstance(elt.func, ast.Name)
+            and elt.func.id == "Field"
+        ):
+            for kw in elt.keywords:
+                if kw.arg != "description":
+                    continue
+                # The description is often a parenthesised
+                # implicit-concatenated string literal — ast.literal_eval
+                # collapses that into one str.
+                try:
+                    desc = ast.literal_eval(kw.value)
+                except ValueError:
+                    continue
+                if isinstance(desc, str):
+                    return _parse_documented_keys(desc)
+    return None
+
+
 def _extract_documented_keys(rel_path: str, func_name: str) -> set[str]:
     module = _read_module(rel_path)
     func = _find_function(module, func_name)
@@ -240,35 +276,58 @@ def _extract_documented_keys(rel_path: str, func_name: str) -> set[str]:
     for arg in all_args:
         if arg.arg != "fields" or arg.annotation is None:
             continue
-        # Expect Annotated[Type, Field(description="...")]
-        anno = arg.annotation
-        if not isinstance(anno, ast.Subscript):
-            continue
-        slice_node = anno.slice
-        elts: list[ast.expr]
-        if isinstance(slice_node, ast.Tuple):
-            elts = list(slice_node.elts)
-        else:
-            elts = [slice_node]
-        for elt in elts:
-            if (
-                isinstance(elt, ast.Call)
-                and isinstance(elt.func, ast.Name)
-                and elt.func.id == "Field"
-            ):
-                for kw in elt.keywords:
-                    if kw.arg != "description":
-                        continue
-                    # The description is often a parenthesised
-                    # implicit-concatenated string literal — ast.literal_eval
-                    # collapses that into one str.
-                    try:
-                        desc = ast.literal_eval(kw.value)
-                    except ValueError:
-                        continue
-                    if isinstance(desc, str):
-                        return _parse_documented_keys(desc)
+        keys = _documented_keys_from_annotation(arg.annotation)
+        if keys is not None:
+            return keys
     return set()
+
+
+def _keys_from_assign(node: ast.AST, var_name: str) -> set[str]:
+    """Keys from ``var = {...}`` / ``var: T = {...}`` and ``var["k"] = ...``."""
+    if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+        return set()
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    value = node.value
+    if value is None:
+        return set()
+    keys: set[str] = set()
+    for tgt in targets:
+        if (
+            isinstance(tgt, ast.Name)
+            and tgt.id == var_name
+            and isinstance(value, ast.Dict)
+        ):
+            for k in value.keys:
+                if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                    keys.add(k.value)
+        if (
+            isinstance(tgt, ast.Subscript)
+            and isinstance(tgt.value, ast.Name)
+            and tgt.value.id == var_name
+            and isinstance(tgt.slice, ast.Constant)
+            and isinstance(tgt.slice.value, str)
+        ):
+            keys.add(tgt.slice.value)
+    return keys
+
+
+def _keys_from_update(node: ast.AST, var_name: str) -> set[str]:
+    """Keys from ``var.update({"k": ...})``."""
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "update"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == var_name
+        and node.args
+        and isinstance(node.args[0], ast.Dict)
+    ):
+        return set()
+    keys: set[str] = set()
+    for k in node.args[0].keys:
+        if isinstance(k, ast.Constant) and isinstance(k.value, str):
+            keys.add(k.value)
+    return keys
 
 
 def _harvest_var_keys(rel_path: str, func_name: str, var_name: str) -> set[str]:
@@ -281,29 +340,8 @@ def _harvest_var_keys(rel_path: str, func_name: str, var_name: str) -> set[str]:
     keys: set[str] = set()
 
     for node in ast.walk(func):
-        # var = {"k1": ..., "k2": ...}  or  var: Type = {...}
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            value = node.value
-            if value is None:
-                continue
-            for tgt in targets:
-                if (
-                    isinstance(tgt, ast.Name)
-                    and tgt.id == var_name
-                    and isinstance(value, ast.Dict)
-                ):
-                    for k in value.keys:
-                        if isinstance(k, ast.Constant) and isinstance(k.value, str):
-                            keys.add(k.value)
-                if (
-                    isinstance(tgt, ast.Subscript)
-                    and isinstance(tgt.value, ast.Name)
-                    and tgt.value.id == var_name
-                    and isinstance(tgt.slice, ast.Constant)
-                    and isinstance(tgt.slice.value, str)
-                ):
-                    keys.add(tgt.slice.value)
+        # var = {"k1": ..., "k2": ...}  or  var: Type = {...}  or  var["k"] = ...
+        keys |= _keys_from_assign(node, var_name)
 
         # var["k"] += ...  (covers ``warnings`` accumulation and similar
         # augmented writes that AST splits off from the plain ``Assign``
@@ -332,18 +370,7 @@ def _harvest_var_keys(rel_path: str, func_name: str, var_name: str) -> set[str]:
             keys.add(node.args[0].value)
 
         # var.update({"k": ...})
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "update"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == var_name
-            and node.args
-            and isinstance(node.args[0], ast.Dict)
-        ):
-            for k in node.args[0].keys:
-                if isinstance(k, ast.Constant) and isinstance(k.value, str):
-                    keys.add(k.value)
+        keys |= _keys_from_update(node, var_name)
 
     return keys
 
@@ -362,6 +389,37 @@ def _harvest_return_keys(rel_path: str, func_name: str) -> set[str]:
                 if isinstance(k, ast.Constant) and isinstance(k.value, str):
                     keys.add(k.value)
     return keys
+
+
+def _literal_keys(d: ast.Dict) -> set[str]:
+    return {
+        k.value
+        for k in d.keys
+        if isinstance(k, ast.Constant) and isinstance(k.value, str)
+    }
+
+
+def _marker_subscript_vars(node: ast.AST, markers: frozenset[str]) -> set[str]:
+    """Pass-1b: var names a subscript write of a marker key flags as response-shaped.
+
+    Both plain ``var["k"] = ...`` and augmented ``var["k"] += ...`` flag the var.
+    """
+    subscript_targets: list[ast.expr] = []
+    if isinstance(node, ast.Assign):
+        subscript_targets.extend(node.targets)
+    elif isinstance(node, ast.AugAssign):
+        subscript_targets.append(node.target)
+    marker_vars: set[str] = set()
+    for tgt in subscript_targets:
+        if (
+            isinstance(tgt, ast.Subscript)
+            and isinstance(tgt.value, ast.Name)
+            and isinstance(tgt.slice, ast.Constant)
+            and isinstance(tgt.slice.value, str)
+            and tgt.slice.value in markers
+        ):
+            marker_vars.add(tgt.value.id)
+    return marker_vars
 
 
 def _harvest_marker_dicts(
@@ -396,13 +454,6 @@ def _harvest_marker_dicts(
     keys: set[str] = set()
     marker_vars: set[str] = set()
 
-    def _literal_keys(d: ast.Dict) -> set[str]:
-        return {
-            k.value
-            for k in d.keys
-            if isinstance(k, ast.Constant) and isinstance(k.value, str)
-        }
-
     for node in ast.walk(func):
         # Pass 1a — marker-bearing dict literal assigned or returned.
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
@@ -423,22 +474,8 @@ def _harvest_marker_dicts(
                 keys.update(literal)
 
         # Pass 1b — subscript write of a marker key surfaces the var as
-        # response-shaped even when its init wasn't a literal. Both plain
-        # `var["k"] = ...` and augmented `var["k"] += ...` flag the var.
-        subscript_targets: list[ast.expr] = []
-        if isinstance(node, ast.Assign):
-            subscript_targets.extend(node.targets)
-        elif isinstance(node, ast.AugAssign):
-            subscript_targets.append(node.target)
-        for tgt in subscript_targets:
-            if (
-                isinstance(tgt, ast.Subscript)
-                and isinstance(tgt.value, ast.Name)
-                and isinstance(tgt.slice, ast.Constant)
-                and isinstance(tgt.slice.value, str)
-                and tgt.slice.value in markers
-            ):
-                marker_vars.add(tgt.value.id)
+        # response-shaped even when its init wasn't a literal.
+        marker_vars |= _marker_subscript_vars(node, markers)
 
     # Pass 2 — pick up subscript / setdefault / update on every flagged var.
     for var in marker_vars:

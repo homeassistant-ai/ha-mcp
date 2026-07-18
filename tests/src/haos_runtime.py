@@ -285,6 +285,143 @@ def is_haos_backend_selected() -> bool:
     return bool(raw and Path(raw).exists())
 
 
+def _execute_recorder_sql(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> Any:
+    """Run ``sql``; return the fetched row, or None if the table/column is absent."""
+    import sqlite3
+
+    try:
+        return conn.execute(sql, params).fetchone()
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "no such table" in msg or "no such column" in msg:
+            return None
+        raise
+
+
+def _prepare_recorder_connection(conn: Any, db_local: Path) -> None:
+    """Checkpoint any preexisting WAL and switch the connection to DELETE mode."""
+    # The bake's seed DB is in WAL journal mode. Our copy-in only
+    # ships the .db file (not -wal / -shm) into the qcow2, so any
+    # pending WAL frames written during our UPDATE would land in
+    # the workdir alongside the .db and never reach HAOS — HA Core
+    # then sees a .db whose page tree is mid-transaction, raises
+    # ``sqlite3.DatabaseError: database disk image is malformed``,
+    # and renames the seed to ``.corrupt.<ts>`` before booting with
+    # an empty fresh DB. (Captured in PR #1361 diagnostics: see
+    # /supervisor/homeassistant/home-assistant_v2.db.corrupt.*.)
+    #
+    # Fix: checkpoint any preexisting WAL into the main file, then
+    # switch this connection to DELETE mode so our UPDATEs write
+    # straight to .db with no journal artefacts. End state on disk:
+    # one self-contained .db file. HA Core will switch it back to
+    # WAL on first boot — its preferred mode.
+    #
+    # Both PRAGMAs return rows we MUST inspect: a busy WAL
+    # checkpoint or a refused mode switch silently leaves the
+    # same corruption the comment above describes.
+    ckpt_row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    # Result shape: (busy, log_pages, checkpointed_pages). busy=0
+    # means all frames were merged into the main DB.
+    if ckpt_row is not None and ckpt_row[0] not in (0, None):
+        raise RuntimeError(
+            f"wal_checkpoint(TRUNCATE) reported busy={ckpt_row[0]} on "
+            f"{db_local}; another connection is holding WAL frames. "
+            f"Aborting refresh — copy-in would still produce a "
+            f"WAL/SHM-mismatched DB inside the qcow2."
+        )
+    mode_row = conn.execute("PRAGMA journal_mode=DELETE").fetchone()
+    if mode_row is None or mode_row[0] != "delete":
+        raise RuntimeError(
+            f"Failed to switch {db_local} to DELETE journal mode "
+            f"(got {mode_row!r}); subsequent UPDATEs would write WAL "
+            f"frames that the qcow2 copy-in won't include."
+        )
+
+
+def _apply_recorder_offset(
+    conn: Any, timestamp_columns: dict[str, tuple[str, ...]], offset: float
+) -> None:
+    """Shift every recorder timestamp column by ``offset`` seconds, then commit."""
+    for table, cols in timestamp_columns.items():
+        for col in cols:
+            _execute_recorder_sql(
+                conn,
+                f"UPDATE {table} SET {col} = {col} + ? WHERE {col} IS NOT NULL",
+                (offset,),
+            )
+    conn.commit()
+
+
+def _shift_recorder_timestamps(db_local: Path, target_age_seconds: float) -> bool:
+    """Shift ``db_local``'s recorder timestamps so the newest lands recently.
+
+    Returns True if a shift was applied (the DB must be copied back into the
+    qcow2), or False if the timestamps were already recent enough to skip.
+    """
+    import sqlite3
+
+    # Same logic as conftest._refresh_recorder_timestamps. Kept inline
+    # rather than importing because conftest pulls in heavy dev deps
+    # (docker, testcontainers) that the HAOS-only paths don't need.
+    TIMESTAMP_COLUMNS = {
+        "states": ("last_updated_ts", "last_changed_ts", "last_reported_ts"),
+        "events": ("time_fired_ts",),
+        "statistics": ("start_ts", "created_ts"),
+        "statistics_short_term": ("start_ts", "created_ts"),
+    }
+    conn = sqlite3.connect(str(db_local))
+    try:
+        _prepare_recorder_connection(conn, db_local)
+        newest = 0.0
+        matched_columns = 0
+        for table, cols in TIMESTAMP_COLUMNS.items():
+            for col in cols:
+                row = _execute_recorder_sql(conn, f"SELECT MAX({col}) FROM {table}")
+                if row is None:
+                    continue
+                matched_columns += 1
+                if row[0] is not None and isinstance(row[0], (int, float)):
+                    newest = max(newest, float(row[0]))
+
+        # Schema drift guard: if HAOS bumps the recorder schema and renames
+        # every column in TIMESTAMP_COLUMNS, the loop above silently
+        # `continue`s through all of them and newest stays 0. Without this
+        # check, history pagination tests would mysteriously fail with "no
+        # data" instead of pointing at the schema bump. Mirrors the
+        # testcontainer _refresh_recorder_timestamps "raise vs no-op"
+        # discipline.
+        if matched_columns == 0:
+            raise RuntimeError(
+                f"Recorder DB at {db_local} matched zero TIMESTAMP_COLUMNS "
+                f"entries — recorder schema may have drifted; update "
+                f"TIMESTAMP_COLUMNS to match the new column names."
+            )
+        if newest <= 0:
+            raise RuntimeError(
+                f"Recorder DB at {db_local} has no numeric timestamps in "
+                f"any of the {matched_columns} matched columns — the bake "
+                f"may have produced an empty DB; re-run "
+                f"`uv run python scripts/bake_pagination_seed.py`."
+            )
+
+        target = time.time() - target_age_seconds
+        offset = target - newest
+        if offset <= 0:
+            LOG.info(
+                "Recorder timestamps already recent (newest=%.0f, "
+                "target=%.0f); no shift needed",
+                newest,
+                target,
+            )
+            return False
+
+        _apply_recorder_offset(conn, TIMESTAMP_COLUMNS, offset)
+        LOG.info("Shifted recorder timestamps by %+.0fs", offset)
+        return True
+    finally:
+        conn.close()
+
+
 def refresh_recorder_in_qcow2(
     image_path: Path, *, target_age_seconds: float = 300.0
 ) -> None:
@@ -301,7 +438,6 @@ def refresh_recorder_in_qcow2(
     Uses guestfish (libguestfs) for both copy-out and copy-in; sqlite3
     stdlib for the shift itself. ~30s wall-clock overhead per session.
     """
-    import sqlite3
     import tempfile
 
     workdir = Path(tempfile.mkdtemp(prefix="haos-ts-refresh-"))
@@ -330,117 +466,8 @@ def refresh_recorder_in_qcow2(
             timeout=180,
         )
 
-        # Same logic as conftest._refresh_recorder_timestamps. Kept inline
-        # rather than importing because conftest pulls in heavy dev deps
-        # (docker, testcontainers) that the HAOS-only paths don't need.
-        TIMESTAMP_COLUMNS = {
-            "states": ("last_updated_ts", "last_changed_ts", "last_reported_ts"),
-            "events": ("time_fired_ts",),
-            "statistics": ("start_ts", "created_ts"),
-            "statistics_short_term": ("start_ts", "created_ts"),
-        }
-        conn = sqlite3.connect(str(db_local))
-        try:
-            # The bake's seed DB is in WAL journal mode. Our copy-in only
-            # ships the .db file (not -wal / -shm) into the qcow2, so any
-            # pending WAL frames written during our UPDATE would land in
-            # the workdir alongside the .db and never reach HAOS — HA Core
-            # then sees a .db whose page tree is mid-transaction, raises
-            # ``sqlite3.DatabaseError: database disk image is malformed``,
-            # and renames the seed to ``.corrupt.<ts>`` before booting with
-            # an empty fresh DB. (Captured in PR #1361 diagnostics: see
-            # /supervisor/homeassistant/home-assistant_v2.db.corrupt.*.)
-            #
-            # Fix: checkpoint any preexisting WAL into the main file, then
-            # switch this connection to DELETE mode so our UPDATEs write
-            # straight to .db with no journal artefacts. End state on disk:
-            # one self-contained .db file. HA Core will switch it back to
-            # WAL on first boot — its preferred mode.
-            #
-            # Both PRAGMAs return rows we MUST inspect: a busy WAL
-            # checkpoint or a refused mode switch silently leaves the
-            # same corruption the comment above describes.
-            ckpt_row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-            # Result shape: (busy, log_pages, checkpointed_pages). busy=0
-            # means all frames were merged into the main DB.
-            if ckpt_row is not None and ckpt_row[0] not in (0, None):
-                raise RuntimeError(
-                    f"wal_checkpoint(TRUNCATE) reported busy={ckpt_row[0]} on "
-                    f"{db_local}; another connection is holding WAL frames. "
-                    f"Aborting refresh — copy-in would still produce a "
-                    f"WAL/SHM-mismatched DB inside the qcow2."
-                )
-            mode_row = conn.execute("PRAGMA journal_mode=DELETE").fetchone()
-            if mode_row is None or mode_row[0] != "delete":
-                raise RuntimeError(
-                    f"Failed to switch {db_local} to DELETE journal mode "
-                    f"(got {mode_row!r}); subsequent UPDATEs would write WAL "
-                    f"frames that the qcow2 copy-in won't include."
-                )
-            newest = 0.0
-            matched_columns = 0
-            for table, cols in TIMESTAMP_COLUMNS.items():
-                for col in cols:
-                    try:
-                        row = conn.execute(f"SELECT MAX({col}) FROM {table}").fetchone()
-                    except sqlite3.OperationalError as exc:
-                        msg = str(exc).lower()
-                        if "no such table" in msg or "no such column" in msg:
-                            continue
-                        raise
-                    matched_columns += 1
-                    if row and row[0] is not None and isinstance(row[0], (int, float)):
-                        newest = max(newest, float(row[0]))
-
-            # Schema drift guard: if HAOS bumps the recorder schema and renames
-            # every column in TIMESTAMP_COLUMNS, the loop above silently
-            # `continue`s through all of them and newest stays 0. Without this
-            # check, history pagination tests would mysteriously fail with "no
-            # data" instead of pointing at the schema bump. Mirrors the
-            # testcontainer _refresh_recorder_timestamps "raise vs no-op"
-            # discipline.
-            if matched_columns == 0:
-                raise RuntimeError(
-                    f"Recorder DB at {db_local} matched zero TIMESTAMP_COLUMNS "
-                    f"entries — recorder schema may have drifted; update "
-                    f"TIMESTAMP_COLUMNS to match the new column names."
-                )
-            if newest <= 0:
-                raise RuntimeError(
-                    f"Recorder DB at {db_local} has no numeric timestamps in "
-                    f"any of the {matched_columns} matched columns — the bake "
-                    f"may have produced an empty DB; re-run "
-                    f"`uv run python scripts/bake_pagination_seed.py`."
-                )
-
-            target = time.time() - target_age_seconds
-            offset = target - newest
-            if offset <= 0:
-                LOG.info(
-                    "Recorder timestamps already recent (newest=%.0f, "
-                    "target=%.0f); no shift needed",
-                    newest,
-                    target,
-                )
-                return
-
-            for table, cols in TIMESTAMP_COLUMNS.items():
-                for col in cols:
-                    try:
-                        conn.execute(
-                            f"UPDATE {table} SET {col} = {col} + ? "
-                            f"WHERE {col} IS NOT NULL",
-                            (offset,),
-                        )
-                    except sqlite3.OperationalError as exc:
-                        msg = str(exc).lower()
-                        if "no such table" in msg or "no such column" in msg:
-                            continue
-                        raise
-            conn.commit()
-            LOG.info("Shifted recorder timestamps by %+.0fs", offset)
-        finally:
-            conn.close()
+        if not _shift_recorder_timestamps(db_local, target_age_seconds):
+            return
 
         # copy-in the shifted DB, and PURGE any stale ``-wal`` / ``-shm``
         # sidecars in the qcow2. Two-part fix: the PRAGMA block above
@@ -1414,6 +1441,29 @@ def _wait_http_ok(url: str, timeout: float = 300.0) -> None:
 DEFAULT_BACKUP_PASSWORD = "e2e-test-backup-password"
 
 
+def _await_backup_config_frame(
+    ws: Any, msg_id: int, call_deadline: float
+) -> dict[str, Any] | None:
+    """Read WS frames until the one answering ``msg_id`` (or None past the deadline)."""
+    while time.monotonic() < call_deadline:
+        try:
+            raw = ws.recv(timeout=max(call_deadline - time.monotonic(), 1.0))
+        except TimeoutError:
+            continue
+        try:
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            candidate = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"backup/config/update: malformed WS frame: {exc} (raw={raw!r})"
+            ) from exc
+        if candidate.get("id") != msg_id:
+            continue
+        return candidate
+    return None
+
+
 def set_default_backup_password(
     base_url: str,
     token: str,
@@ -1485,24 +1535,7 @@ def set_default_backup_password(
             # covers the case where backup integration hasn't registered
             # its WS handlers yet (we retry the whole call below).
             call_deadline = time.monotonic() + 15
-            resp: dict[str, Any] | None = None
-            while time.monotonic() < call_deadline:
-                try:
-                    raw = ws.recv(timeout=max(call_deadline - time.monotonic(), 1.0))
-                except TimeoutError:
-                    continue
-                try:
-                    if not isinstance(raw, str):
-                        raw = raw.decode()
-                    candidate = json.loads(raw)
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise RuntimeError(
-                        f"backup/config/update: malformed WS frame: {exc} (raw={raw!r})"
-                    ) from exc
-                if candidate.get("id") != msg_id:
-                    continue
-                resp = candidate
-                break
+            resp = _await_backup_config_frame(ws, msg_id, call_deadline)
 
             if resp is None:
                 raise TimeoutError(
@@ -1649,6 +1682,39 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
             proc.wait()
 
 
+def _recv_supervisor_info_frame(
+    ws: Any, info_id: int, deadline: float
+) -> tuple[dict | None, str | None]:
+    """Read frames until the ``/supervisor/info`` answer for ``info_id``.
+
+    Returns ``(result, None)`` on success, ``(None, error)`` on a transient
+    Supervisor failure frame, or ``(None, None)`` if the deadline passes with no
+    matching frame.
+    """
+    while time.monotonic() < deadline:
+        remaining = max(deadline - time.monotonic(), 1.0)
+        try:
+            raw = ws.recv(timeout=remaining)
+        except TimeoutError:
+            continue
+        try:
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            resp = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"supervisor/api /supervisor/info: malformed WS frame: "
+                f"{exc} (raw={raw!r})"
+            ) from exc
+        if resp.get("id") != info_id:
+            continue
+        if not resp.get("success", False):
+            err = resp.get("error") or resp
+            return None, f"supervisor/api /supervisor/info failed: {err!r}"
+        return resp.get("result") or {}, None
+    return None, None
+
+
 def _wait_supervisor_update_done(
     ws: Any,
     deadline: float,
@@ -1695,34 +1761,10 @@ def _wait_supervisor_update_done(
                 }
             )
         )
-        result: dict | None = None
-        transient_failure = False
-        while time.monotonic() < deadline:
-            remaining = max(deadline - time.monotonic(), 1.0)
-            try:
-                raw = ws.recv(timeout=remaining)
-            except TimeoutError:
-                continue
-            try:
-                if not isinstance(raw, str):
-                    raw = raw.decode()
-                resp = json.loads(raw)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise RuntimeError(
-                    f"supervisor/api /supervisor/info: malformed WS frame: "
-                    f"{exc} (raw={raw!r})"
-                ) from exc
-            if resp.get("id") != info_id:
-                continue
-            if not resp.get("success", False):
-                err = resp.get("error") or resp
-                last_error = f"supervisor/api /supervisor/info failed: {err!r}"
-                log.debug("Transient /supervisor/info failure: %s", last_error)
-                transient_failure = True
-                break
-            result = resp.get("result") or {}
-            break
-        if transient_failure:
+        result, error = _recv_supervisor_info_frame(ws, info_id, deadline)
+        if error is not None:
+            last_error = error
+            log.debug("Transient /supervisor/info failure: %s", last_error)
             time.sleep(10.0)
             continue
         if result is None:
@@ -1742,6 +1784,50 @@ def _wait_supervisor_update_done(
     suffix = f"; last error: {last_error}" if last_error else ""
     raise TimeoutError(
         f"Supervisor did not finish self-updating before the update deadline{suffix}"
+    )
+
+
+def _authenticate_ws_supervisor(ws: Any, token: str) -> None:
+    """Complete the HA WebSocket auth handshake for the Supervisor-update flow."""
+    first_frame = json.loads(ws.recv())
+    if first_frame.get("type") != "auth_required":
+        raise RuntimeError(
+            f"WS handshake: expected auth_required as first frame, got {first_frame!r}"
+        )
+    ws.send(json.dumps({"type": "auth", "access_token": token}))
+    auth_resp = json.loads(ws.recv())
+    if auth_resp.get("type") != "auth_ok":
+        raise RuntimeError(f"WS auth rejected: {auth_resp}")
+
+
+def _await_supervisor_ws_result(
+    ws: Any, msg_id: int, op_endpoint: str, op_deadline: float
+) -> None:
+    """Read WS frames until the response for ``msg_id`` arrives or the deadline hits."""
+    while time.monotonic() < op_deadline:
+        remaining = max(op_deadline - time.monotonic(), 1.0)
+        try:
+            raw = ws.recv(timeout=remaining)
+        except TimeoutError:
+            continue
+        try:
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            resp = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"supervisor/api {op_endpoint}: malformed WS frame: {exc} (raw={raw!r})"
+            ) from exc
+        if resp.get("id") != msg_id:
+            continue
+        if not resp.get("success", False):
+            # ``error`` may be missing or None — include the full
+            # frame so a maintainer can see what Supervisor sent.
+            err = resp.get("error") or resp
+            raise RuntimeError(f"supervisor/api {op_endpoint} failed: {err!r}")
+        return
+    raise TimeoutError(
+        f"supervisor/api {op_endpoint} did not complete before its deadline"
     )
 
 
@@ -1795,32 +1881,7 @@ def trigger_dev_addon_update(
         let the outer ``op_deadline`` govern; on each per-recv timeout
         we re-poll. Bare propagation would skip our descriptive error.
         """
-        while time.monotonic() < op_deadline:
-            remaining = max(op_deadline - time.monotonic(), 1.0)
-            try:
-                raw = ws.recv(timeout=remaining)
-            except TimeoutError:
-                continue
-            try:
-                if not isinstance(raw, str):
-                    raw = raw.decode()
-                resp = json.loads(raw)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise RuntimeError(
-                    f"supervisor/api {op_endpoint}: malformed WS frame: "
-                    f"{exc} (raw={raw!r})"
-                ) from exc
-            if resp.get("id") != msg_id:
-                continue
-            if not resp.get("success", False):
-                # ``error`` may be missing or None — include the full
-                # frame so a maintainer can see what Supervisor sent.
-                err = resp.get("error") or resp
-                raise RuntimeError(f"supervisor/api {op_endpoint} failed: {err!r}")
-            return
-        raise TimeoutError(
-            f"supervisor/api {op_endpoint} did not complete before its deadline"
-        )
+        _await_supervisor_ws_result(ws, msg_id, op_endpoint, op_deadline)
 
     def _supervisor_post_with_job_retry(
         endpoint: str, op_timeout: int, *, data: dict | None = None
@@ -1877,16 +1938,7 @@ def trigger_dev_addon_update(
                 raise
 
     with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
-        first_frame = json.loads(ws.recv())
-        if first_frame.get("type") != "auth_required":
-            raise RuntimeError(
-                f"WS handshake: expected auth_required as first frame, got "
-                f"{first_frame!r}"
-            )
-        ws.send(json.dumps({"type": "auth", "access_token": token}))
-        auth_resp = json.loads(ws.recv())
-        if auth_resp.get("type") != "auth_ok":
-            raise RuntimeError(f"WS auth rejected: {auth_resp}")
+        _authenticate_ws_supervisor(ws, token)
 
         _wait_supervisor_update_done(ws, time.monotonic() + timeout, _next_id)
 
