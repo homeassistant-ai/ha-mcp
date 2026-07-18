@@ -118,6 +118,9 @@ class TestExemptionRules:
         [
             ({"scope": "edits", "action": "list"}, True),
             ({"scope": "edits", "action": "view", "backup_name": "x"}, True),
+            # #1944: diff reads the snapshot and live config to compare, it
+            # never mutates, so it stays callable in read-only mode.
+            ({"scope": "edits", "action": "diff", "backup_name": "x"}, True),
             ({"scope": "edits", "action": "create"}, False),
             ({"scope": "edits", "action": "restore"}, False),
             ({"scope": "edits", "action": "delete"}, False),
