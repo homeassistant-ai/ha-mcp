@@ -1163,7 +1163,6 @@ async def restore_backup(
                     type(err).__name__,
                     err,
                 )
-    return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def _summarize_backup(entry: dict[str, Any]) -> dict[str, Any]:
