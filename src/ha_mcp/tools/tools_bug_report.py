@@ -443,15 +443,21 @@ def _sanitize_log_text(text: str) -> str:
     # configured value (catches custom paths) and the generated
     # ``/private_<token>`` convention. Only bug-report output is scrubbed here;
     # the raw logs this text is copied from are left intact.
-    configured = os.getenv("MCP_SECRET_PATH", "").rstrip("/")
-    if configured and configured != "/mcp":
-        # Anchor on a path-segment boundary so a short/substring-prone configured
-        # value (e.g. "/ha") cannot corrupt unrelated text (e.g. "/happy").
-        text = re.sub(
-            re.escape(configured) + r"(?![A-Za-z0-9_-])",
-            "[REDACTED_SECRET_PATH]",
-            text,
-        )
+    # The dedicated settings-UI secret path (OAuth/OIDC) is a second secret whose
+    # leak grants the same unauthenticated settings access, so redact a custom
+    # value the same way. The auto-generated /private_<token> form is caught by
+    # the generic pattern below.
+    for env_name in ("MCP_SECRET_PATH", "MCP_SETTINGS_SECRET_PATH"):
+        configured = os.getenv(env_name, "").rstrip("/")
+        if configured and configured != "/mcp":
+            # Anchor on a path-segment boundary so a short/substring-prone
+            # configured value (e.g. "/ha") cannot corrupt unrelated text
+            # (e.g. "/happy").
+            text = re.sub(
+                re.escape(configured) + r"(?![A-Za-z0-9_-])",
+                "[REDACTED_SECRET_PATH]",
+                text,
+            )
     text = re.sub(r"/private_[A-Za-z0-9_-]+", "[REDACTED_SECRET_PATH]", text)
     return text
 

@@ -426,14 +426,18 @@ class TestRouteRegistration:
 
     @pytest.fixture(autouse=True)
     def _reset_http_settings_prefix(self):
-        # _http_settings_prefix is process-global; isolate each test so the
-        # recording assertions below are not order-dependent (issue #1458).
+        # _http_settings_prefix / _http_settings_mounted are process-global;
+        # isolate each test so the recording assertions below are not
+        # order-dependent (issue #1458).
         from ha_mcp import settings_ui as _su
 
         saved = _su._http_settings_prefix
+        saved_mounted = _su._http_settings_mounted
         _su._http_settings_prefix = None
+        _su._http_settings_mounted = False
         yield
         _su._http_settings_prefix = saved
+        _su._http_settings_mounted = saved_mounted
 
     def _collect_paths(self, mcp):
         return [call.args[0] for call in mcp.custom_route.call_args_list]
@@ -489,6 +493,11 @@ class TestRouteRegistration:
         assert "/private_s/settings" in paths
         assert "/private_s/api/settings/tools" in paths
         assert get_http_settings_prefix() is None
+        # The routes ARE HTTP-mounted, so the settings page must not treat this
+        # as the stdio sidecar just because the prefix is hidden (GHSA-mx64).
+        from ha_mcp.settings_ui import is_http_settings_mounted
+
+        assert is_http_settings_mounted() is True
 
 
 class TestFaviconSuppression:
@@ -3130,8 +3139,10 @@ class TestAdvancedSettingsEndpoints:
 
     @pytest.mark.asyncio
     async def test_get_advanced_reports_is_stdio(self, monkeypatch):
-        """is_stdio gates the sidecar-port section: True when no HTTP settings
-        prefix is set (stdio sidecar), False for HTTP/SSE/OAuth/addon."""
+        """is_stdio gates the sidecar-port section: True only for the stdio
+        sidecar (nothing HTTP-mounted), False for HTTP/SSE/OAuth/OIDC/addon —
+        including the OAuth/OIDC dedicated-secret mount where the prefix is
+        hidden but the UI is still HTTP-served (GHSA-mx64-982r-65vg)."""
         from ha_mcp.config import _reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
@@ -3139,11 +3150,20 @@ class TestAdvancedSettingsEndpoints:
         _reset_global_settings()
         handlers = build_settings_handlers(server=None)
 
-        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", None)
+        # stdio sidecar: nothing HTTP-mounted.
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_mounted", False)
         body = json.loads((await handlers["get_advanced_settings"](MagicMock())).body)
         assert body["is_stdio"] is True
 
+        # HTTP-mounted with an advertised prefix (Docker / add-on).
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_mounted", True)
         monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", "/private_x")
+        body = json.loads((await handlers["get_advanced_settings"](MagicMock())).body)
+        assert body["is_stdio"] is False
+
+        # HTTP-mounted but prefix hidden (OAuth/OIDC dedicated secret): not stdio.
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_mounted", True)
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", None)
         body = json.loads((await handlers["get_advanced_settings"](MagicMock())).body)
         assert body["is_stdio"] is False
 

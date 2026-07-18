@@ -136,7 +136,7 @@ async def _get_advanced_settings(
     and saves route through Supervisor so the add-on Configuration tab and
     the web UI share state.
     """
-    from ha_mcp.settings_ui import get_http_settings_prefix
+    from ha_mcp.settings_ui import is_http_settings_mounted
 
     from ..config import ADVANCED_SETTINGS_FIELDS, _read_feature_flag_override_file
 
@@ -172,7 +172,7 @@ async def _get_advanced_settings(
         {
             "fields": fields,
             "is_addon": is_running_in_addon(),
-            "is_stdio": get_http_settings_prefix() is None,
+            "is_stdio": not is_http_settings_mounted(),
         }
     )
 

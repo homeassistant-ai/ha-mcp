@@ -1717,3 +1717,87 @@ class TestWebSocketManagerVerifySslKey:
         )
         assert a is not b
         assert len(clients) == 2
+
+
+class TestRunOAuthServerSettingsUI:
+    """_run_oauth_server must mount the settings UI off a dedicated secret path,
+    never the OAuth-known MCP path where FastMCP custom routes bypass auth
+    (GHSA-mx64-982r-65vg). Exercises the actual call site, not the helper."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_settings_globals(self):
+        from ha_mcp import settings_ui as _su
+
+        sp, sm = _su._http_settings_prefix, _su._http_settings_mounted
+        _su._http_settings_prefix = None
+        _su._http_settings_mounted = False
+        yield
+        _su._http_settings_prefix, _su._http_settings_mounted = sp, sm
+
+    async def _run(self, mcp_path="/mcp"):
+        import ha_mcp.__main__ as main_module
+
+        mock_mcp = MagicMock()
+        mock_mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        mock_mcp.list_tools = AsyncMock(return_value=[])
+
+        async def fake_run_async(**kwargs):
+            pass
+
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
+        mock_server = MagicMock()
+        mock_server.mcp = mock_mcp
+
+        async def noop_shutdown(coro):
+            coro.close()
+
+        with (
+            patch.object(main_module, "OAuthProxyClient", MagicMock()),
+            patch("ha_mcp.auth.HomeAssistantOAuthProvider", MagicMock()),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
+            patch.object(main_module, "register_browser_landing", MagicMock()),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+        ):
+            await main_module._run_oauth_server(
+                ha_url="http://ha.example:8123",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path=mcp_path,
+            )
+        return mock_mcp
+
+    @pytest.mark.asyncio
+    async def test_settings_mounted_off_secret_path_not_mcp_path(self, monkeypatch):
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.delenv("MCP_SETTINGS_SECRET_PATH", raising=False)
+        monkeypatch.delenv("MCP_HEALTHZ", raising=False)
+
+        mock_mcp = await self._run(mcp_path="/mcp")
+        paths = [c.args[0] for c in mock_mcp.custom_route.call_args_list]
+
+        assert any(p.startswith("/private_") and p.endswith("/settings") for p in paths)
+        # The vulnerable location must NOT be mounted (non-vacuous: the call site
+        # is what chooses the path here).
+        assert not any(p.startswith("/mcp/") and "settings" in p for p in paths)
+
+        from ha_mcp.settings_ui import get_http_settings_prefix
+
+        assert get_http_settings_prefix() is None
+
+    @pytest.mark.asyncio
+    async def test_disable_env_mounts_no_settings(self, monkeypatch):
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
+        monkeypatch.delenv("MCP_SETTINGS_SECRET_PATH", raising=False)
+        monkeypatch.delenv("MCP_HEALTHZ", raising=False)
+
+        mock_mcp = await self._run(mcp_path="/mcp")
+        paths = [c.args[0] for c in mock_mcp.custom_route.call_args_list]
+
+        assert not any("settings" in p for p in paths)

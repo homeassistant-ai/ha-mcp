@@ -9,6 +9,7 @@ These tests pin the resolution helper (`_resolve_settings_secret_path`) and the
 registration helper (`_register_settings_ui_secret_path`) in `ha_mcp.__main__`.
 """
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,25 +18,45 @@ from ha_mcp.__main__ import (
     _register_settings_ui_secret_path,
     _resolve_settings_secret_path,
 )
-from ha_mcp.settings_ui import get_http_settings_prefix
+from ha_mcp.settings_ui import get_http_settings_prefix, is_http_settings_mounted
 
 
 @pytest.fixture(autouse=True)
-def _reset_http_settings_prefix():
-    # _http_settings_prefix is process-global; isolate each test.
+def _reset_settings_globals():
+    # _http_settings_prefix / _http_settings_mounted are process-global; isolate.
     from ha_mcp import settings_ui as _su
 
-    saved = _su._http_settings_prefix
+    saved_prefix = _su._http_settings_prefix
+    saved_mounted = _su._http_settings_mounted
     _su._http_settings_prefix = None
+    _su._http_settings_mounted = False
     yield
-    _su._http_settings_prefix = saved
+    _su._http_settings_prefix = saved_prefix
+    _su._http_settings_mounted = saved_mounted
 
 
 class TestResolveSettingsSecretPath:
-    def test_disabled_returns_none(self, monkeypatch):
-        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
+    @pytest.mark.parametrize("val", ["1", "true", "TRUE", "yes", "on", " on ", "True"])
+    def test_truthy_values_disable(self, monkeypatch, val):
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", val)
         monkeypatch.delenv("MCP_SETTINGS_SECRET_PATH", raising=False)
         assert _resolve_settings_secret_path() is None
+
+    @pytest.mark.parametrize("val", ["0", "false", "no", "off", "", "  "])
+    def test_falsy_values_keep_enabled(self, monkeypatch, val):
+        # The security-relevant direction: a falsy value must NOT disable the UI.
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", val)
+        monkeypatch.delenv("MCP_SETTINGS_SECRET_PATH", raising=False)
+        path = _resolve_settings_secret_path()
+        assert path is not None and path.startswith("/private_")
+
+    def test_unrecognized_value_keeps_enabled_and_warns(self, monkeypatch, caplog):
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "disabled")
+        monkeypatch.delenv("MCP_SETTINGS_SECRET_PATH", raising=False)
+        with caplog.at_level(logging.WARNING):
+            path = _resolve_settings_secret_path()
+        assert path is not None and path.startswith("/private_")
+        assert any("not a recognized" in r.getMessage() for r in caplog.records)
 
     def test_explicit_path_used(self, monkeypatch):
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
@@ -48,7 +69,6 @@ class TestResolveSettingsSecretPath:
         path = _resolve_settings_secret_path()
         assert path is not None
         assert path.startswith("/private_")
-        # token_urlsafe(16) → ~22 chars of entropy, unguessable.
         assert len(path) > len("/private_") + 15
 
     def test_autogen_paths_are_unique(self, monkeypatch):
@@ -57,56 +77,105 @@ class TestResolveSettingsSecretPath:
         assert _resolve_settings_secret_path() != _resolve_settings_secret_path()
 
     def test_disable_beats_explicit(self, monkeypatch):
-        # Hard off wins even if a secret path is also provided.
         monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "true")
         monkeypatch.setenv("MCP_SETTINGS_SECRET_PATH", "/private_custom")
         assert _resolve_settings_secret_path() is None
 
 
 class TestRegisterSettingsUiSecretPath:
+    def _mk(self):
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        return mcp
+
     def _paths(self, mcp):
-        return [call.args[0] for call in mcp.custom_route.call_args_list]
+        return [c.args[0] for c in mcp.custom_route.call_args_list]
 
     def test_autogen_mounts_but_never_advertises(self, monkeypatch):
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         monkeypatch.delenv("MCP_SETTINGS_SECRET_PATH", raising=False)
-        mcp = MagicMock()
-        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        mcp = self._mk()
 
-        _register_settings_ui_secret_path(mcp, MagicMock(), "0.0.0.0", 8086)
+        _register_settings_ui_secret_path(mcp, MagicMock(), "0.0.0.0", 8086, "/mcp")
 
         paths = self._paths(mcp)
-        # Mounted under an auto-generated secret path...
         assert any(p.startswith("/private_") and p.endswith("/settings") for p in paths)
-        # ...never at the guessable default MCP path (the vulnerable location)...
         assert "/mcp/api/settings/advanced" not in paths
-        # ...and no bare-root mount either.
         assert "/settings" not in paths
-        # ...and the secret is never advertised to MCP clients via ha_get_overview.
+        # Path hidden from MCP clients, but the HTTP-mounted flag is still set so
+        # the settings page does not mistake itself for the stdio sidecar.
         assert get_http_settings_prefix() is None
+        assert is_http_settings_mounted() is True
 
     def test_explicit_path_mounted_not_advertised(self, monkeypatch):
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         monkeypatch.setenv("MCP_SETTINGS_SECRET_PATH", "/private_fixed")
-        mcp = MagicMock()
-        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        mcp = self._mk()
 
-        _register_settings_ui_secret_path(mcp, MagicMock(), "0.0.0.0", 8086)
+        _register_settings_ui_secret_path(mcp, MagicMock(), "0.0.0.0", 8086, "/mcp")
 
         paths = self._paths(mcp)
         assert "/private_fixed/settings" in paths
         assert "/private_fixed/api/settings/tools" in paths
         assert get_http_settings_prefix() is None
+        assert is_http_settings_mounted() is True
 
     def test_disabled_registers_nothing(self, monkeypatch):
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
-        mcp = MagicMock()
-        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        mcp = self._mk()
 
-        _register_settings_ui_secret_path(mcp, MagicMock(), "0.0.0.0", 8086)
+        _register_settings_ui_secret_path(mcp, MagicMock(), "0.0.0.0", 8086, "/mcp")
 
         assert mcp.custom_route.call_count == 0
         assert get_http_settings_prefix() is None
+        assert is_http_settings_mounted() is False
+
+    def test_collision_with_mcp_path_is_rejected(self, monkeypatch):
+        # GHSA-mx64: reusing the client-known MCP path must not re-expose settings.
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setenv("MCP_SETTINGS_SECRET_PATH", "/mcp")
+        mcp = self._mk()
+
+        _register_settings_ui_secret_path(mcp, MagicMock(), "0.0.0.0", 8086, "/mcp")
+
+        assert mcp.custom_route.call_count == 0
+        assert is_http_settings_mounted() is False
+
+    def test_collision_ignores_trailing_slash(self, monkeypatch):
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setenv("MCP_SETTINGS_SECRET_PATH", "/mcp/")
+        mcp = self._mk()
+
+        _register_settings_ui_secret_path(mcp, MagicMock(), "0.0.0.0", 8086, "/mcp")
+
+        assert mcp.custom_route.call_count == 0
+
+    def test_missing_leading_slash_is_normalized(self, monkeypatch):
+        # Starlette asserts routes start with "/", so a slash-less explicit value
+        # must be normalized, not mounted verbatim (which would crash startup).
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setenv("MCP_SETTINGS_SECRET_PATH", "private_fixed")
+        mcp = self._mk()
+
+        _register_settings_ui_secret_path(mcp, MagicMock(), "0.0.0.0", 8086, "/mcp")
+
+        paths = self._paths(mcp)
+        assert "/private_fixed/settings" in paths
+        assert not any(p.startswith("private_fixed") for p in paths)
+
+    def test_empty_after_normalization_is_rejected(self, monkeypatch):
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setenv("MCP_SETTINGS_SECRET_PATH", "/")
+        mcp = self._mk()
+
+        _register_settings_ui_secret_path(mcp, MagicMock(), "0.0.0.0", 8086, "/mcp")
+
+        assert mcp.custom_route.call_count == 0
+        assert is_http_settings_mounted() is False

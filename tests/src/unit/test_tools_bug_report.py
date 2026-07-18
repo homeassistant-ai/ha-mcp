@@ -423,6 +423,19 @@ class TestBugReportTool:
         assert "/customhook" not in out
         assert "[REDACTED_SECRET_PATH]" in out
 
+    def test_sanitize_log_text_redacts_configured_settings_path(self, monkeypatch):
+        """A custom ``MCP_SETTINGS_SECRET_PATH`` is redacted by value too, so
+        ha_report_issue can't hand the settings secret to an MCP client
+        (GHSA-mx64-982r-65vg). The auto-generated /private_ form is caught by the
+        generic pattern already; this covers a non-/private_ custom value."""
+        monkeypatch.delenv("MCP_SECRET_PATH", raising=False)
+        monkeypatch.setenv("MCP_SETTINGS_SECRET_PATH", "/admin_ui")
+        out = _sanitize_log_text(
+            "Settings UI available at: http://ha.local:8086/admin_ui/settings"
+        )
+        assert "/admin_ui" not in out
+        assert "[REDACTED_SECRET_PATH]" in out
+
     def test_sanitize_log_text_keeps_default_mcp_path(self, monkeypatch):
         """The low-entropy ``/mcp`` default is left intact (avoids noise)."""
         monkeypatch.delenv("MCP_SECRET_PATH", raising=False)
