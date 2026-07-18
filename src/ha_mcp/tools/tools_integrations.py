@@ -7,7 +7,7 @@ integrations (config entries) via the REST and WebSocket APIs.
 
 import asyncio
 import logging
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal, NoReturn, get_args
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -786,67 +786,44 @@ class IntegrationTools:
 
             # If entry_id provided, get specific config entry
             if entry_id is not None:
-                resp = await self._get_single_entry(
+                return await self._get_entry_detail_response(
                     entry_id,
-                    include_schema_bool,
-                    include_subentries=include_subentries_bool
-                    or include_subentry_schema_bool,
+                    include_schema=include_schema_bool,
+                    include_subentries=include_subentries_bool,
                     include_subentry_schema=include_subentry_schema_bool,
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
                     show_advanced_options=show_advanced_options_bool,
+                    include_diagnostics=include_diagnostics_bool,
+                    include_knx_project=include_knx_project_bool,
+                    device_id=device_id,
+                    fields_list=fields_list,
+                    truncate_bytes=truncate_bytes,
+                    diagnostics_data_path=diagnostics_data_path,
+                    data_offset_int=data_offset_int,
+                    data_limit_int=data_limit_int,
                 )
-                if include_diagnostics_bool:
-                    resp["diagnostics"] = await fetch_integration_diagnostics(
-                        self._client,
-                        entry_id,
-                        device_id,
-                        fields=fields_list,
-                        truncate_at_bytes=truncate_bytes,
-                        data_path=diagnostics_data_path,
-                        data_offset=data_offset_int,
-                        data_limit=data_limit_int,
-                    )
-                elif device_id is not None:
-                    resp.setdefault("warnings", []).append(
-                        "device_id was provided but ignored because "
-                        "include_diagnostics=False"
-                    )
-                if include_knx_project_bool:
-                    await self._attach_knx_project(resp, entry_id)
-                return resp
 
             # List mode - get all config entries
             result = await self._list_entries(
                 domain, query, include_opts, exact_match_bool, limit_int, offset_int
             )
-            ignored_detail_params = []
-            if include_diagnostics_bool:
-                ignored_detail_params.append("include_diagnostics")
-            if include_knx_project_bool:
-                ignored_detail_params.append("include_knx_project")
-            if device_id is not None:
-                ignored_detail_params.append("device_id")
-            if fields_list is not None:
-                ignored_detail_params.append("diagnostics_fields")
-            if truncate_bytes is not None:
-                ignored_detail_params.append("diagnostics_truncate_at_bytes")
-            if diagnostics_data_path is not None:
-                ignored_detail_params.append("diagnostics_data_path")
-            if data_offset_int > 0:
-                ignored_detail_params.append("diagnostics_data_offset")
-            if data_limit_int is not None:
-                ignored_detail_params.append("diagnostics_data_limit")
-            if include_subentries_bool:
-                ignored_detail_params.append("include_subentries")
-            if include_subentry_schema_bool:
-                ignored_detail_params.append("include_subentry_schema")
-            if subentry_type is not None:
-                ignored_detail_params.append("subentry_type")
-            if subentry_id is not None:
-                ignored_detail_params.append("subentry_id")
-            if show_advanced_options_bool:
-                ignored_detail_params.append("show_advanced_options")
+            ignored_detail_params = self._ignored_diagnostics_detail_params(
+                include_diagnostics=include_diagnostics_bool,
+                include_knx_project=include_knx_project_bool,
+                device_id=device_id,
+                fields_list=fields_list,
+                truncate_bytes=truncate_bytes,
+                diagnostics_data_path=diagnostics_data_path,
+                data_offset_int=data_offset_int,
+                data_limit_int=data_limit_int,
+            ) + self._ignored_subentry_detail_params(
+                include_subentries=include_subentries_bool,
+                include_subentry_schema=include_subentry_schema_bool,
+                subentry_type=subentry_type,
+                subentry_id=subentry_id,
+                show_advanced_options=show_advanced_options_bool,
+            )
             if ignored_detail_params:
                 result.setdefault("warnings", []).append(
                     f"{', '.join(ignored_detail_params)} "
@@ -867,6 +844,109 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+
+    async def _get_entry_detail_response(
+        self,
+        entry_id: str,
+        *,
+        include_schema: bool,
+        include_subentries: bool,
+        include_subentry_schema: bool,
+        subentry_type: str | None,
+        subentry_id: str | None,
+        show_advanced_options: bool,
+        include_diagnostics: bool,
+        include_knx_project: bool,
+        device_id: str | None,
+        fields_list: list[str] | None,
+        truncate_bytes: int | None,
+        diagnostics_data_path: str | None,
+        data_offset_int: int,
+        data_limit_int: int | None,
+    ) -> dict[str, Any]:
+        """Build the single-entry response, attaching diagnostics/KNX when asked."""
+        resp = await self._get_single_entry(
+            entry_id,
+            include_schema,
+            include_subentries=include_subentries or include_subentry_schema,
+            include_subentry_schema=include_subentry_schema,
+            subentry_type=subentry_type,
+            subentry_id=subentry_id,
+            show_advanced_options=show_advanced_options,
+        )
+        if include_diagnostics:
+            resp["diagnostics"] = await fetch_integration_diagnostics(
+                self._client,
+                entry_id,
+                device_id,
+                fields=fields_list,
+                truncate_at_bytes=truncate_bytes,
+                data_path=diagnostics_data_path,
+                data_offset=data_offset_int,
+                data_limit=data_limit_int,
+            )
+        elif device_id is not None:
+            resp.setdefault("warnings", []).append(
+                "device_id was provided but ignored because include_diagnostics=False"
+            )
+        if include_knx_project:
+            await self._attach_knx_project(resp, entry_id)
+        return resp
+
+    @staticmethod
+    def _ignored_diagnostics_detail_params(
+        *,
+        include_diagnostics: bool,
+        include_knx_project: bool,
+        device_id: str | None,
+        fields_list: list[str] | None,
+        truncate_bytes: int | None,
+        diagnostics_data_path: str | None,
+        data_offset_int: int,
+        data_limit_int: int | None,
+    ) -> list[str]:
+        """Detail-only diagnostics/KNX params that are ignored in list mode."""
+        ignored_detail_params: list[str] = []
+        if include_diagnostics:
+            ignored_detail_params.append("include_diagnostics")
+        if include_knx_project:
+            ignored_detail_params.append("include_knx_project")
+        if device_id is not None:
+            ignored_detail_params.append("device_id")
+        if fields_list is not None:
+            ignored_detail_params.append("diagnostics_fields")
+        if truncate_bytes is not None:
+            ignored_detail_params.append("diagnostics_truncate_at_bytes")
+        if diagnostics_data_path is not None:
+            ignored_detail_params.append("diagnostics_data_path")
+        if data_offset_int > 0:
+            ignored_detail_params.append("diagnostics_data_offset")
+        if data_limit_int is not None:
+            ignored_detail_params.append("diagnostics_data_limit")
+        return ignored_detail_params
+
+    @staticmethod
+    def _ignored_subentry_detail_params(
+        *,
+        include_subentries: bool,
+        include_subentry_schema: bool,
+        subentry_type: str | None,
+        subentry_id: str | None,
+        show_advanced_options: bool,
+    ) -> list[str]:
+        """Detail-only subentry params that are ignored in list mode."""
+        ignored_detail_params: list[str] = []
+        if include_subentries:
+            ignored_detail_params.append("include_subentries")
+        if include_subentry_schema:
+            ignored_detail_params.append("include_subentry_schema")
+        if subentry_type is not None:
+            ignored_detail_params.append("subentry_type")
+        if subentry_id is not None:
+            ignored_detail_params.append("subentry_id")
+        if show_advanced_options:
+            ignored_detail_params.append("show_advanced_options")
+        return ignored_detail_params
 
     async def _get_single_entry(
         self,
@@ -904,20 +984,9 @@ class IntegrationTools:
             # populates options from the same flow init so we don't pay for
             # two round-trips.
             probe_warnings: list[str] = []
-            if isinstance(result, dict):
-                result.setdefault("options", {})
-                if result.get("supports_options") and not include_schema:
-                    options, probe_ok = await fetch_entry_options_with_status(
-                        self._client, entry_id
-                    )
-                    result["options"] = options
-                    if not probe_ok:
-                        probe_warnings.append(
-                            f"options probe failed for {entry_id}: the "
-                            "OptionsFlow could not be read, so 'options' may "
-                            "be incomplete — empty options does not mean the "
-                            "entry has none"
-                        )
+            await self._probe_legacy_entry_options(
+                result, entry_id, include_schema, probe_warnings
+            )
 
             resp: dict[str, Any] = {
                 "success": True,
@@ -966,6 +1035,34 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+
+    async def _probe_legacy_entry_options(
+        self,
+        result: Any,
+        entry_id: str,
+        include_schema: bool | None,
+        probe_warnings: list[str],
+    ) -> None:
+        """Fill a legacy REST entry's ``options`` via OptionsFlow, noting misses.
+
+        Mutates ``result['options']`` in place and appends to ``probe_warnings``
+        when the probe fails. No-op for a non-dict ``result`` or when
+        ``include_schema`` is set (the schema path populates options instead).
+        """
+        if isinstance(result, dict):
+            result.setdefault("options", {})
+            if result.get("supports_options") and not include_schema:
+                options, probe_ok = await fetch_entry_options_with_status(
+                    self._client, entry_id
+                )
+                result["options"] = options
+                if not probe_ok:
+                    probe_warnings.append(
+                        f"options probe failed for {entry_id}: the "
+                        "OptionsFlow could not be read, so 'options' may "
+                        "be incomplete — empty options does not mean the "
+                        "entry has none"
+                    )
 
     async def _single_entry_from_component(
         self,
@@ -1666,11 +1763,7 @@ class IntegrationTools:
             raise
         except Exception as e:
             logger.error(f"Failed to set integration: {e}")
-            error_context: dict[str, Any] = {}
-            if entry_id is not None:
-                error_context["entry_id"] = entry_id
-            if domain is not None:
-                error_context["domain"] = domain
+            error_context = self._set_integration_error_context(entry_id, domain)
             exception_to_structured_error(
                 e,
                 context=error_context,
@@ -1685,6 +1778,18 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+
+    @staticmethod
+    def _set_integration_error_context(
+        entry_id: str | None, domain: str | None
+    ) -> dict[str, Any]:
+        """Build the error-context dict for ha_set_integration failures."""
+        error_context: dict[str, Any] = {}
+        if entry_id is not None:
+            error_context["entry_id"] = entry_id
+        if domain is not None:
+            error_context["domain"] = domain
+        return error_context
 
     async def _set_entry_enabled(self, entry_id: str, enabled: bool) -> dict[str, Any]:
         """Enable or disable a config entry via ``config_entries/disable``."""
@@ -2068,110 +2173,7 @@ class IntegrationTools:
                 client, helper_type, target, warnings
             )
             if entry_id is None:
-                # Reason discriminates the failure mode without a second
-                # WebSocket round-trip. The lookup helper already queried
-                # the registry; the response told us everything we need.
-                entity_id = target if "." in target else f"{helper_type}.{target}"
-                if reason == "no_config_entry":
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_NOT_FOUND,
-                            (
-                                f"Helper {target} is not a storage-based "
-                                "helper (no config entry). YAML-configured "
-                                "helpers must be removed by editing the "
-                                "configuration file."
-                            ),
-                            context={
-                                "target": target,
-                                "helper_type": helper_type,
-                                "entity_id": entity_id,
-                            },
-                            suggestions=[
-                                "Edit the YAML file and reload the relevant "
-                                "integration.",
-                            ],
-                        )
-                    )
-                if reason == "lookup_failed":
-                    # Registry WebSocket call failed transiently. Surface as
-                    # a connectivity error so the caller knows to retry,
-                    # rather than chasing a non-existent entity_id.
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.WEBSOCKET_DISCONNECTED,
-                            (
-                                f"Registry lookup for {entity_id} failed "
-                                "due to a WebSocket error."
-                            ),
-                            context={
-                                "target": target,
-                                "helper_type": helper_type,
-                                "entity_id": entity_id,
-                            },
-                        )
-                    )
-                # wrong_helper_type cannot occur here because the dispatcher
-                # already checked SIMPLE_HELPER_TYPES / FLOW_HELPER_TYPES; the
-                # assertion enforces that contract at runtime.
-                assert reason != "wrong_helper_type"
-                if reason == "not_in_registry":
-                    # Target is absent from the entity registry. Surface
-                    # as ENTITY_NOT_FOUND (entity-shaped target) so the
-                    # caller learns the identifier is unusable — the typo
-                    # case is the failure mode "absent → success" would
-                    # silently mask. Matches the bare_id_not_supported
-                    # branch below and sibling ha_remove_entity.
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.ENTITY_NOT_FOUND,
-                            (
-                                f"Helper {target} not found in entity "
-                                f"registry (looked up as {entity_id}). "
-                                "May indicate it was already removed, "
-                                "never existed, or the identifier is a "
-                                "typo. Verify with ha_search() "
-                                "before retrying."
-                            ),
-                            context={
-                                "target": target,
-                                "helper_type": helper_type,
-                                "entity_id": entity_id,
-                            },
-                            suggestions=[
-                                "Use ha_search() — flow helper "
-                                "types often expose entities under a "
-                                "different domain than the helper_type "
-                                "itself (e.g. utility_meter → sensor.*, "
-                                "switch_as_x → switch.* / light.*).",
-                            ],
-                        )
-                    )
-                # bare_id_not_supported → caller passed a bare ID where an
-                # entity_id was required. That's a call-shape error, not
-                # missing-target; surface as ENTITY_NOT_FOUND with the
-                # search suggestion so the caller can self-correct.
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
-                        (
-                            f"Helper {target} not found in entity registry "
-                            f"(looked up as {entity_id})."
-                        ),
-                        context={
-                            "target": target,
-                            "helper_type": helper_type,
-                            "entity_id": entity_id,
-                        },
-                        suggestions=[
-                            "If unsure about the correct entity_id, use "
-                            "ha_search() — flow helper types often "
-                            "expose entities under a different domain than "
-                            "the helper_type itself (e.g. utility_meter → "
-                            "sensor.*, switch_as_x → switch.* / light.*).",
-                        ],
-                    )
-                )
+                self._raise_flow_helper_lookup_error(reason, helper_type, target)
 
             # Step 2: collect sub-entity IDs for the wait phase
             sub_entities = await _get_entities_for_config_entry(
@@ -2180,49 +2182,9 @@ class IntegrationTools:
             entity_ids = [e["entity_id"] for e in sub_entities if "entity_id" in e]
 
             # Step 3: delete the config entry
-            try:
-                delete_result = await client.delete_config_entry(entry_id)
-            except HomeAssistantAPIError as e:
-                # TOCTOU window: entry_id resolved at step 1 was deleted
-                # before step 3 reached HA. Surface as RESOURCE_NOT_FOUND
-                # so the caller knows the config entry is gone — silent
-                # success would hide the race from any wrapper that
-                # acted on the intermediate state. Non-404 still surfaces.
-                if e.status_code == 404:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_NOT_FOUND,
-                            (
-                                f"Config entry {entry_id} for {target} "
-                                "not found at delete time (resolved by "
-                                "registry but absent when DELETE reached "
-                                "Home Assistant). May indicate a "
-                                "concurrent removal."
-                            ),
-                            context={
-                                "entry_id": entry_id,
-                                "target": target,
-                                "helper_type": helper_type,
-                            },
-                        )
-                    )
-                exception_to_structured_error(
-                    e,
-                    context={
-                        "entry_id": entry_id,
-                        "target": target,
-                        "helper_type": helper_type,
-                    },
-                )
-            except Exception as e:
-                exception_to_structured_error(
-                    e,
-                    context={
-                        "entry_id": entry_id,
-                        "target": target,
-                        "helper_type": helper_type,
-                    },
-                )
+            delete_result = await self._delete_flow_config_entry(
+                entry_id, target, helper_type
+            )
 
             require_restart = bool(
                 isinstance(delete_result, dict)
@@ -2289,6 +2251,169 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+
+    def _raise_flow_helper_lookup_error(
+        self,
+        reason: FlowLookupReason,
+        helper_type: HelperTypeLiteral,
+        target: str,
+    ) -> NoReturn:
+        """Raise the structured error for a failed flow-helper entry_id lookup.
+
+        ``reason`` discriminates the failure mode without a second WebSocket
+        round-trip. The lookup helper already queried the registry; the response
+        told us everything we need.
+        """
+        entity_id = target if "." in target else f"{helper_type}.{target}"
+        if reason == "no_config_entry":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    (
+                        f"Helper {target} is not a storage-based "
+                        "helper (no config entry). YAML-configured "
+                        "helpers must be removed by editing the "
+                        "configuration file."
+                    ),
+                    context={
+                        "target": target,
+                        "helper_type": helper_type,
+                        "entity_id": entity_id,
+                    },
+                    suggestions=[
+                        "Edit the YAML file and reload the relevant integration.",
+                    ],
+                )
+            )
+        if reason == "lookup_failed":
+            # Registry WebSocket call failed transiently. Surface as
+            # a connectivity error so the caller knows to retry,
+            # rather than chasing a non-existent entity_id.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.WEBSOCKET_DISCONNECTED,
+                    (
+                        f"Registry lookup for {entity_id} failed "
+                        "due to a WebSocket error."
+                    ),
+                    context={
+                        "target": target,
+                        "helper_type": helper_type,
+                        "entity_id": entity_id,
+                    },
+                )
+            )
+        # wrong_helper_type cannot occur here because the dispatcher
+        # already checked SIMPLE_HELPER_TYPES / FLOW_HELPER_TYPES; the
+        # assertion enforces that contract at runtime.
+        assert reason != "wrong_helper_type"
+        if reason == "not_in_registry":
+            # Target is absent from the entity registry. Surface
+            # as ENTITY_NOT_FOUND (entity-shaped target) so the
+            # caller learns the identifier is unusable — the typo
+            # case is the failure mode "absent → success" would
+            # silently mask. Matches the bare_id_not_supported
+            # branch below and sibling ha_remove_entity.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    (
+                        f"Helper {target} not found in entity "
+                        f"registry (looked up as {entity_id}). "
+                        "May indicate it was already removed, "
+                        "never existed, or the identifier is a "
+                        "typo. Verify with ha_search() "
+                        "before retrying."
+                    ),
+                    context={
+                        "target": target,
+                        "helper_type": helper_type,
+                        "entity_id": entity_id,
+                    },
+                    suggestions=[
+                        "Use ha_search() — flow helper "
+                        "types often expose entities under a "
+                        "different domain than the helper_type "
+                        "itself (e.g. utility_meter → sensor.*, "
+                        "switch_as_x → switch.* / light.*).",
+                    ],
+                )
+            )
+        # bare_id_not_supported → caller passed a bare ID where an
+        # entity_id was required. That's a call-shape error, not
+        # missing-target; surface as ENTITY_NOT_FOUND with the
+        # search suggestion so the caller can self-correct.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.ENTITY_NOT_FOUND,
+                (
+                    f"Helper {target} not found in entity registry "
+                    f"(looked up as {entity_id})."
+                ),
+                context={
+                    "target": target,
+                    "helper_type": helper_type,
+                    "entity_id": entity_id,
+                },
+                suggestions=[
+                    "If unsure about the correct entity_id, use "
+                    "ha_search() — flow helper types often "
+                    "expose entities under a different domain than "
+                    "the helper_type itself (e.g. utility_meter → "
+                    "sensor.*, switch_as_x → switch.* / light.*).",
+                ],
+            )
+        )
+
+    async def _delete_flow_config_entry(
+        self, entry_id: str, target: str, helper_type: HelperTypeLiteral
+    ) -> Any:
+        """Delete the resolved config entry, mapping a delete-time 404 to NOT_FOUND.
+
+        TOCTOU window: entry_id resolved at step 1 may be gone before the DELETE
+        reaches HA. A 404 surfaces as RESOURCE_NOT_FOUND so a concurrent removal
+        is not masked as success; non-404 errors bubble through
+        exception_to_structured_error.
+        """
+        try:
+            return await self._client.delete_config_entry(entry_id)
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        (
+                            f"Config entry {entry_id} for {target} "
+                            "not found at delete time (resolved by "
+                            "registry but absent when DELETE reached "
+                            "Home Assistant). May indicate a "
+                            "concurrent removal."
+                        ),
+                        context={
+                            "entry_id": entry_id,
+                            "target": target,
+                            "helper_type": helper_type,
+                        },
+                    )
+                )
+            exception_to_structured_error(
+                e,
+                context={
+                    "entry_id": entry_id,
+                    "target": target,
+                    "helper_type": helper_type,
+                },
+            )
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={
+                    "entry_id": entry_id,
+                    "target": target,
+                    "helper_type": helper_type,
+                },
+            )
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _delete_config_subentry(
         self, entry_id: str, subentry_id: str
@@ -2362,7 +2487,6 @@ class IntegrationTools:
         helper's unique_id, then falls back to direct-id-delete and a
         confirmed-absent classification if the registry has no record.
         """
-        client = self._client
         # Convert to entity_id form
         entity_id = (
             target
@@ -2375,326 +2499,25 @@ class IntegrationTools:
         )
 
         try:
-            # Resolve the helper's unique_id from the entity registry. When the
-            # component advertises registry_lookup, ONE in-process read replaces
-            # the 3-attempt exponential-backoff loop. That loop absorbed the
-            # registry-registration LAG between a helper's creation and its entity
-            # landing in the registry index (not a WS-timing race — the legacy
-            # read hits the same live registry over the same socket); the
-            # single read is equally subject to that lag, but on this delete path
-            # a stale/missing resolve degrades to the direct-id fallback below
-            # rather than a wrong delete. On capability miss / component error the
-            # legacy retry loop runs unchanged.
-            unique_id = None
-            registry_result: dict[str, Any] | None = None
-            max_retries = 3
+            (
+                unique_id,
+                registry_result,
+                component_used,
+            ) = await self._resolve_helper_unique_id(entity_id)
 
-            component = await resolve_entities_via_component(client, [entity_id])
-            if component is not None:
-                found = component.get("entities") or []
-                if found:
-                    # Shape a config/entity_registry/get-style ack so the
-                    # exhausted-fallback err_detail below reads registry_result
-                    # uniformly across both the component and legacy paths.
-                    registry_result = {"success": True, "result": found[0]}
-                    unique_id = found[0].get("unique_id")
-                    if unique_id:
-                        logger.info(f"Found unique_id: {unique_id} for {entity_id}")
-                else:
-                    registry_result = {
-                        "success": False,
-                        "error": "not found in entity registry",
-                    }
-            else:
-                for attempt in range(max_retries):
-                    logger.info(
-                        f"Getting entity registry for: {entity_id} "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
-
-                    # State check is informational only — disabled entities are
-                    # missing from the state machine but resolved via the registry
-                    # below (issue #1057). Kept as a debug breadcrumb rather than
-                    # removed; full removal is option 3.2 in #1057, deferred to a
-                    # separate PR for minimal blast radius here.
-                    try:
-                        state_check = await client.get_entity_state(entity_id)
-                        if not state_check:
-                            logger.debug(
-                                f"Entity {entity_id} not in state; "
-                                "proceeding to registry lookup"
-                            )
-                    except HomeAssistantAPIError as e:
-                        # State check is best-effort here; an APIError (e.g. 404)
-                        # is informational. Auth/connection errors must propagate
-                        # so they're not re-reported as ENTITY_NOT_FOUND below.
-                        logger.debug(f"State check failed for {entity_id}: {e}")
-
-                    # Registry lookup
-                    registry_msg: dict[str, Any] = {
-                        "type": "config/entity_registry/get",
-                        "entity_id": entity_id,
-                    }
-                    try:
-                        registry_result = await client.send_websocket_message(
-                            registry_msg
-                        )
-                        if (registry_result or {}).get("success"):
-                            entity_entry = (registry_result or {}).get("result") or {}
-                            unique_id = entity_entry.get("unique_id")
-                            if unique_id:
-                                logger.info(
-                                    f"Found unique_id: {unique_id} for {entity_id}"
-                                )
-                                break
-                        if attempt < max_retries - 1:
-                            wait_time = 0.5 * (2**attempt)
-                            logger.debug(
-                                f"Registry lookup failed for {entity_id}, "
-                                f"waiting {wait_time}s before retry..."
-                            )
-                            await asyncio.sleep(wait_time)
-                    except HomeAssistantAPIError as e:
-                        # APIError (e.g. 404) is informational and worth a retry.
-                        # Auth/connection errors must propagate so they're not
-                        # re-reported as ENTITY_NOT_FOUND in the fallback below.
-                        logger.warning(
-                            f"Registry lookup attempt {attempt + 1} failed: {e}"
-                        )
-                        if attempt < max_retries - 1:
-                            wait_time = 0.5 * (2**attempt)
-                            await asyncio.sleep(wait_time)
-
-            # Fallback strategy 1: direct-ID delete if unique_id not found
             if not unique_id:
-                logger.info(
-                    f"Could not find unique_id for {entity_id}, "
-                    "trying direct deletion with helper_id"
-                )
-                delete_msg: dict[str, Any] = {
-                    "type": f"{helper_type}/delete",
-                    f"{helper_type}_id": helper_id,
-                }
-                logger.info(f"Sending fallback WebSocket delete: {delete_msg}")
-                result = await client.send_websocket_message(delete_msg)
-
-                if result.get("success"):
-                    response: dict[str, Any] = {
-                        "success": True,
-                        "action": "delete",
-                        "target": target,
-                        "helper_type": helper_type,
-                        "method": "websocket_delete",
-                        "entry_id": None,
-                        "entity_ids": [entity_id],
-                        "require_restart": False,
-                        "message": (
-                            f"Successfully deleted {helper_type}: {target} "
-                            f"using direct ID (entity: {entity_id})."
-                        ),
-                        "fallback_used": "direct_id",
-                    }
-                    if wait_bool:
-                        removed = await wait_for_entity_removed(client, entity_id)
-                        if not removed:
-                            response.setdefault("warnings", []).append(
-                                f"Deletion confirmed but {entity_id} "
-                                "is still present after the wait window."
-                            )
-                    return response
-
-                # Fallback strategy 2: confirmed-absent classification.
-                # Confirm via the registry too — a disabled entity is
-                # state-absent but still registry-resident, so
-                # state-absence alone is not enough to classify as
-                # confirmed-absent. The APIError-404 branch routes the
-                # never-existed-target case (HA returns 404 on
-                # get_entity_state for unknown entity_ids) into the same
-                # confirmed-absent path so the resulting ENTITY_NOT_FOUND
-                # raise carries the structured "typo or removed" hint
-                # message rather than a raw 404.
-                state_gone = False
-                try:
-                    final_state_check = await client.get_entity_state(entity_id)
-                    state_gone = not final_state_check
-                except HomeAssistantAPIError as e:
-                    # Only 404 confirms the entity is absent from the state
-                    # machine. Other API failures (500, 401, …) are transient
-                    # or auth issues and must propagate so they aren't
-                    # mis-classified as a missing target. Mirrors the
-                    # status_code == 404 narrow in _delete_direct_entry.
-                    if e.status_code != 404:
-                        raise
-                    logger.debug(
-                        f"State check for {entity_id} raised 404 "
-                        f"(treating as state-absent): {e}"
-                    )
-                    state_gone = True
-
-                if state_gone:
-                    registry_still_has_entry = False
-                    try:
-                        verify_result = await client.send_websocket_message(
-                            {
-                                "type": "config/entity_registry/get",
-                                "entity_id": entity_id,
-                            }
-                        )
-                        if (verify_result or {}).get("success"):
-                            verify_entry = (verify_result or {}).get("result") or {}
-                            if verify_entry.get("entity_id"):
-                                registry_still_has_entry = True
-                    except HomeAssistantAPIError as verify_err:
-                        # On verify failure, conservatively assume the
-                        # entry is still there rather than misclassify
-                        # a verify failure as confirmed-absent.
-                        logger.debug(
-                            f"Registry verify for {entity_id} failed: {verify_err}"
-                        )
-                        registry_still_has_entry = True
-
-                    if not registry_still_has_entry:
-                        logger.info(
-                            f"Entity {entity_id} absent from state and "
-                            "registry; surfacing as ENTITY_NOT_FOUND"
-                        )
-                        # Entity-shape target confirmed absent from both
-                        # the state machine and the entity registry.
-                        # Surface as ENTITY_NOT_FOUND — silent success
-                        # would mask the typo case (agent passed the
-                        # wrong helper_id / entity_id). Matches sibling
-                        # ha_remove_entity.
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.ENTITY_NOT_FOUND,
-                                (
-                                    f"Helper {target} not found (looked "
-                                    f"up as {entity_id}). May indicate "
-                                    "it was already removed, never "
-                                    "existed, or the identifier is a "
-                                    "typo. Verify with "
-                                    "ha_search() before "
-                                    "retrying."
-                                ),
-                                context={
-                                    "target": target,
-                                    "helper_type": helper_type,
-                                    "entity_id": entity_id,
-                                },
-                            )
-                        )
-
-                    logger.warning(
-                        f"Entity {entity_id} absent from state but still "
-                        "in registry; treating as SERVICE_CALL_FAILED"
-                    )
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            (
-                                f"Helper {target} could not be deleted: "
-                                "registry entry exists but unique_id was "
-                                "absent and the direct-id fallback "
-                                "delete failed."
-                            ),
-                            suggestions=[
-                                "Re-enable the entity via "
-                                + "ha_set_entity(enabled=True), then retry "
-                                + "deletion.",
-                                "Or inspect the entity registry entry "
-                                + "directly to confirm unique_id presence.",
-                            ],
-                            context={
-                                "target": target,
-                                "entity_id": entity_id,
-                            },
-                        )
-                    )
-
-                # All fallbacks exhausted
-                err_detail = (
-                    registry_result.get("error", "Unknown error")
-                    if registry_result
-                    else "No registry response"
-                )
-                # The component path resolves via ONE authoritative in-process
-                # lookup (no retry loop), so the detail text must not claim
-                # "3 attempts" there. The legacy branch's wording is unchanged.
-                if component is not None:
-                    not_found_detail = (
-                        f"Component registry lookup found no unique_id for "
-                        f"{entity_id}: {err_detail}"
-                    )
-                else:
-                    not_found_detail = (
-                        f"Helper not found in entity registry after "
-                        f"{max_retries} attempts: {err_detail}"
-                    )
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
-                        not_found_detail,
-                        suggestions=[
-                            "Helper may not be properly registered or was "
-                            "already deleted. Use ha_search() to "
-                            "verify.",
-                        ],
-                        context={"target": target, "entity_id": entity_id},
-                    )
+                return await self._delete_simple_helper_fallback(
+                    helper_type,
+                    helper_id,
+                    target,
+                    entity_id,
+                    wait_bool,
+                    registry_result,
+                    component_used,
                 )
 
-            # Standard path: delete using unique_id
-            delete_message: dict[str, Any] = {
-                "type": f"{helper_type}/delete",
-                f"{helper_type}_id": unique_id,
-            }
-            logger.info(f"Sending WebSocket delete: {delete_message}")
-            result = await client.send_websocket_message(delete_message)
-            logger.info(f"WebSocket delete response: {result}")
-
-            if result.get("success"):
-                response = {
-                    "success": True,
-                    "action": "delete",
-                    "target": target,
-                    "helper_type": helper_type,
-                    "method": "websocket_delete",
-                    "entry_id": None,
-                    "entity_ids": [entity_id],
-                    "require_restart": False,
-                    "unique_id": unique_id,
-                    "message": (
-                        f"Successfully deleted {helper_type}: {target} "
-                        f"(entity: {entity_id})."
-                    ),
-                }
-                if wait_bool:
-                    removed = await wait_for_entity_removed(client, entity_id)
-                    if not removed:
-                        response.setdefault("warnings", []).append(
-                            f"Deletion confirmed but {entity_id} "
-                            "is still present after the wait window."
-                        )
-                return response
-
-            # Standard path delete failed → SERVICE_CALL_FAILED
-            error_msg = result.get("error", "Unknown error")
-            if isinstance(error_msg, dict):
-                error_msg = error_msg.get("message", str(error_msg))
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to delete helper: {error_msg}",
-                    suggestions=[
-                        "Make sure the helper exists and is not being used "
-                        "by automations or scripts",
-                    ],
-                    context={
-                        "target": target,
-                        "entity_id": entity_id,
-                        "unique_id": unique_id,
-                    },
-                )
+            return await self._delete_simple_via_unique_id(
+                helper_type, unique_id, target, entity_id, wait_bool
             )
 
         except ToolError:
@@ -2710,6 +2533,407 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+
+    async def _resolve_helper_unique_id(
+        self, entity_id: str
+    ) -> tuple[str | None, dict[str, Any] | None, bool]:
+        """Resolve a SIMPLE helper's unique_id from the entity registry.
+
+        Returns ``(unique_id, registry_result, component_used)``. When the
+        component advertises registry_lookup, ONE in-process read replaces the
+        3-attempt exponential-backoff loop. That loop absorbed the
+        registry-registration LAG between a helper's creation and its entity
+        landing in the registry index (not a WS-timing race — the legacy read
+        hits the same live registry over the same socket); the single read is
+        equally subject to that lag, but on this delete path a stale/missing
+        resolve degrades to the direct-id fallback rather than a wrong delete.
+        On capability miss / component error the legacy retry loop runs
+        unchanged. ``component_used`` records which path served the read so the
+        exhausted-fallback detail can word the "3 attempts" text accurately.
+        """
+        client = self._client
+        component = await resolve_entities_via_component(client, [entity_id])
+        if component is not None:
+            found = component.get("entities") or []
+            if found:
+                # Shape a config/entity_registry/get-style ack so the
+                # exhausted-fallback err_detail below reads registry_result
+                # uniformly across both the component and legacy paths.
+                registry_result: dict[str, Any] = {"success": True, "result": found[0]}
+                unique_id = found[0].get("unique_id")
+                if unique_id:
+                    logger.info(f"Found unique_id: {unique_id} for {entity_id}")
+                return unique_id, registry_result, True
+            # Assignment form (not a dict literal in the return) keeps the
+            # no-return-success-false AST rule scoped to real tool returns:
+            # this is an internal registry-ack shape, not an MCP tool response.
+            miss_result: dict[str, Any] = {
+                "success": False,
+                "error": "not found in entity registry",
+            }
+            return None, miss_result, True
+        unique_id, legacy_result = await self._resolve_unique_id_via_registry_retry(
+            entity_id
+        )
+        return unique_id, legacy_result, False
+
+    async def _resolve_unique_id_via_registry_retry(
+        self, entity_id: str
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        """Legacy 3-retry registry lookup for a helper's unique_id.
+
+        Returns ``(unique_id, registry_result)`` — ``registry_result`` is the
+        last WebSocket response (or None if none arrived), used by the caller's
+        exhausted-fallback detail.
+        """
+        client = self._client
+        unique_id = None
+        registry_result: dict[str, Any] | None = None
+        max_retries = 3
+        for attempt in range(max_retries):
+            logger.info(
+                f"Getting entity registry for: {entity_id} "
+                f"(attempt {attempt + 1}/{max_retries})"
+            )
+
+            # State check is informational only — disabled entities are
+            # missing from the state machine but resolved via the registry
+            # below (issue #1057). Kept as a debug breadcrumb rather than
+            # removed; full removal is option 3.2 in #1057, deferred to a
+            # separate PR for minimal blast radius here.
+            try:
+                state_check = await client.get_entity_state(entity_id)
+                if not state_check:
+                    logger.debug(
+                        f"Entity {entity_id} not in state; "
+                        "proceeding to registry lookup"
+                    )
+            except HomeAssistantAPIError as e:
+                # State check is best-effort here; an APIError (e.g. 404)
+                # is informational. Auth/connection errors must propagate
+                # so they're not re-reported as ENTITY_NOT_FOUND below.
+                logger.debug(f"State check failed for {entity_id}: {e}")
+
+            # Registry lookup
+            registry_msg: dict[str, Any] = {
+                "type": "config/entity_registry/get",
+                "entity_id": entity_id,
+            }
+            try:
+                registry_result = await client.send_websocket_message(registry_msg)
+                if (registry_result or {}).get("success"):
+                    entity_entry = (registry_result or {}).get("result") or {}
+                    unique_id = entity_entry.get("unique_id")
+                    if unique_id:
+                        logger.info(f"Found unique_id: {unique_id} for {entity_id}")
+                        break
+                if attempt < max_retries - 1:
+                    wait_time = 0.5 * (2**attempt)
+                    logger.debug(
+                        f"Registry lookup failed for {entity_id}, "
+                        f"waiting {wait_time}s before retry..."
+                    )
+                    await asyncio.sleep(wait_time)
+            except HomeAssistantAPIError as e:
+                # APIError (e.g. 404) is informational and worth a retry.
+                # Auth/connection errors must propagate so they're not
+                # re-reported as ENTITY_NOT_FOUND in the fallback below.
+                logger.warning(f"Registry lookup attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    wait_time = 0.5 * (2**attempt)
+                    await asyncio.sleep(wait_time)
+        return unique_id, registry_result
+
+    async def _delete_simple_helper_fallback(
+        self,
+        helper_type: HelperTypeLiteral,
+        helper_id: str,
+        target: str,
+        entity_id: str,
+        wait_bool: bool,
+        registry_result: dict[str, Any] | None,
+        component_used: bool,
+    ) -> dict[str, Any]:
+        """Handle SIMPLE-helper deletion when the registry yielded no unique_id.
+
+        Tries a direct-id delete, then classifies the target as confirmed-absent
+        (ENTITY_NOT_FOUND) or a real failure (SERVICE_CALL_FAILED). Always
+        returns a success response or raises a structured error.
+        """
+        # Fallback strategy 1: direct-ID delete if unique_id not found
+        response = await self._try_direct_id_delete(
+            helper_type, helper_id, target, entity_id, wait_bool
+        )
+        if response is not None:
+            return response
+
+        # Fallback strategy 2: confirmed-absent classification.
+        # Confirm via the registry too — a disabled entity is
+        # state-absent but still registry-resident, so
+        # state-absence alone is not enough to classify as
+        # confirmed-absent. The APIError-404 branch routes the
+        # never-existed-target case (HA returns 404 on
+        # get_entity_state for unknown entity_ids) into the same
+        # confirmed-absent path so the resulting ENTITY_NOT_FOUND
+        # raise carries the structured "typo or removed" hint
+        # message rather than a raw 404.
+        if await self._state_absent(entity_id):
+            if not await self._registry_still_has_entry(entity_id):
+                logger.info(
+                    f"Entity {entity_id} absent from state and "
+                    "registry; surfacing as ENTITY_NOT_FOUND"
+                )
+                # Entity-shape target confirmed absent from both
+                # the state machine and the entity registry.
+                # Surface as ENTITY_NOT_FOUND — silent success
+                # would mask the typo case (agent passed the
+                # wrong helper_id / entity_id). Matches sibling
+                # ha_remove_entity.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        (
+                            f"Helper {target} not found (looked "
+                            f"up as {entity_id}). May indicate "
+                            "it was already removed, never "
+                            "existed, or the identifier is a "
+                            "typo. Verify with "
+                            "ha_search() before "
+                            "retrying."
+                        ),
+                        context={
+                            "target": target,
+                            "helper_type": helper_type,
+                            "entity_id": entity_id,
+                        },
+                    )
+                )
+
+            logger.warning(
+                f"Entity {entity_id} absent from state but still "
+                "in registry; treating as SERVICE_CALL_FAILED"
+            )
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    (
+                        f"Helper {target} could not be deleted: "
+                        "registry entry exists but unique_id was "
+                        "absent and the direct-id fallback "
+                        "delete failed."
+                    ),
+                    suggestions=[
+                        "Re-enable the entity via "
+                        + "ha_set_entity(enabled=True), then retry "
+                        + "deletion.",
+                        "Or inspect the entity registry entry "
+                        + "directly to confirm unique_id presence.",
+                    ],
+                    context={
+                        "target": target,
+                        "entity_id": entity_id,
+                    },
+                )
+            )
+
+        # All fallbacks exhausted
+        err_detail = (
+            registry_result.get("error", "Unknown error")
+            if registry_result
+            else "No registry response"
+        )
+        max_retries = 3
+        # The component path resolves via ONE authoritative in-process
+        # lookup (no retry loop), so the detail text must not claim
+        # "3 attempts" there. The legacy branch's wording is unchanged.
+        if component_used:
+            not_found_detail = (
+                f"Component registry lookup found no unique_id for "
+                f"{entity_id}: {err_detail}"
+            )
+        else:
+            not_found_detail = (
+                f"Helper not found in entity registry after "
+                f"{max_retries} attempts: {err_detail}"
+            )
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.ENTITY_NOT_FOUND,
+                not_found_detail,
+                suggestions=[
+                    "Helper may not be properly registered or was "
+                    "already deleted. Use ha_search() to "
+                    "verify.",
+                ],
+                context={"target": target, "entity_id": entity_id},
+            )
+        )
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
+
+    async def _try_direct_id_delete(
+        self,
+        helper_type: HelperTypeLiteral,
+        helper_id: str,
+        target: str,
+        entity_id: str,
+        wait_bool: bool,
+    ) -> dict[str, Any] | None:
+        """Fallback: delete a SIMPLE helper by bare id when no unique_id resolved.
+
+        Returns the success response, or None when the direct-id delete did not
+        succeed (caller proceeds to confirmed-absent classification).
+        """
+        client = self._client
+        logger.info(
+            f"Could not find unique_id for {entity_id}, "
+            "trying direct deletion with helper_id"
+        )
+        delete_msg: dict[str, Any] = {
+            "type": f"{helper_type}/delete",
+            f"{helper_type}_id": helper_id,
+        }
+        logger.info(f"Sending fallback WebSocket delete: {delete_msg}")
+        result = await client.send_websocket_message(delete_msg)
+
+        if not result.get("success"):
+            return None
+
+        response: dict[str, Any] = {
+            "success": True,
+            "action": "delete",
+            "target": target,
+            "helper_type": helper_type,
+            "method": "websocket_delete",
+            "entry_id": None,
+            "entity_ids": [entity_id],
+            "require_restart": False,
+            "message": (
+                f"Successfully deleted {helper_type}: {target} "
+                f"using direct ID (entity: {entity_id})."
+            ),
+            "fallback_used": "direct_id",
+        }
+        if wait_bool:
+            removed = await wait_for_entity_removed(client, entity_id)
+            if not removed:
+                response.setdefault("warnings", []).append(
+                    f"Deletion confirmed but {entity_id} "
+                    "is still present after the wait window."
+                )
+        return response
+
+    async def _state_absent(self, entity_id: str) -> bool:
+        """Return True when ``entity_id`` is absent from the state machine.
+
+        A non-404 APIError (transient/auth) is re-raised so it is not
+        mis-classified as a missing target; a 404 is treated as state-absent.
+        """
+        client = self._client
+        try:
+            final_state_check = await client.get_entity_state(entity_id)
+            return not final_state_check
+        except HomeAssistantAPIError as e:
+            # Only 404 confirms the entity is absent from the state
+            # machine. Other API failures (500, 401, …) are transient
+            # or auth issues and must propagate so they aren't
+            # mis-classified as a missing target. Mirrors the
+            # status_code == 404 narrow in _delete_direct_entry.
+            if e.status_code != 404:
+                raise
+            logger.debug(
+                f"State check for {entity_id} raised 404 "
+                f"(treating as state-absent): {e}"
+            )
+            return True
+
+    async def _registry_still_has_entry(self, entity_id: str) -> bool:
+        """Return True if ``entity_id`` still has an entity-registry entry.
+
+        On a verify failure, conservatively returns True so a transient error
+        is not misread as confirmed-absent.
+        """
+        client = self._client
+        try:
+            verify_result = await client.send_websocket_message(
+                {
+                    "type": "config/entity_registry/get",
+                    "entity_id": entity_id,
+                }
+            )
+            if (verify_result or {}).get("success"):
+                verify_entry = (verify_result or {}).get("result") or {}
+                if verify_entry.get("entity_id"):
+                    return True
+        except HomeAssistantAPIError as verify_err:
+            # On verify failure, conservatively assume the
+            # entry is still there rather than misclassify
+            # a verify failure as confirmed-absent.
+            logger.debug(f"Registry verify for {entity_id} failed: {verify_err}")
+            return True
+        return False
+
+    async def _delete_simple_via_unique_id(
+        self,
+        helper_type: HelperTypeLiteral,
+        unique_id: str,
+        target: str,
+        entity_id: str,
+        wait_bool: bool,
+    ) -> dict[str, Any]:
+        """Delete a SIMPLE helper by its resolved registry unique_id."""
+        client = self._client
+        delete_message: dict[str, Any] = {
+            "type": f"{helper_type}/delete",
+            f"{helper_type}_id": unique_id,
+        }
+        logger.info(f"Sending WebSocket delete: {delete_message}")
+        result = await client.send_websocket_message(delete_message)
+        logger.info(f"WebSocket delete response: {result}")
+
+        if result.get("success"):
+            response: dict[str, Any] = {
+                "success": True,
+                "action": "delete",
+                "target": target,
+                "helper_type": helper_type,
+                "method": "websocket_delete",
+                "entry_id": None,
+                "entity_ids": [entity_id],
+                "require_restart": False,
+                "unique_id": unique_id,
+                "message": (
+                    f"Successfully deleted {helper_type}: {target} "
+                    f"(entity: {entity_id})."
+                ),
+            }
+            if wait_bool:
+                removed = await wait_for_entity_removed(client, entity_id)
+                if not removed:
+                    response.setdefault("warnings", []).append(
+                        f"Deletion confirmed but {entity_id} "
+                        "is still present after the wait window."
+                    )
+            return response
+
+        # Standard path delete failed → SERVICE_CALL_FAILED
+        error_msg = result.get("error", "Unknown error")
+        if isinstance(error_msg, dict):
+            error_msg = error_msg.get("message", str(error_msg))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to delete helper: {error_msg}",
+                suggestions=[
+                    "Make sure the helper exists and is not being used "
+                    "by automations or scripts",
+                ],
+                context={
+                    "target": target,
+                    "entity_id": entity_id,
+                    "unique_id": unique_id,
+                },
+            )
+        )
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
