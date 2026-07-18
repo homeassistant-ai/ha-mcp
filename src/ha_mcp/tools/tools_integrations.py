@@ -2533,7 +2533,6 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
-        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _resolve_helper_unique_id(
         self, entity_id: str
