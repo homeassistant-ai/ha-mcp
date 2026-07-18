@@ -89,7 +89,7 @@ _ACK_KEY_ROTATION_SECONDS = 3600
 def _current_ack_key(now: float | None = None) -> str:
     bucket = int((time.time() if now is None else now) // _ACK_KEY_ROTATION_SECONDS)
     digest = hashlib.sha256(f"{_ACK_KEY_SALT}:{bucket}".encode()).hexdigest()
-    return f"{STRICT_BPS_ACK_KEY_PREFIX}-{digest[:4]}"
+    return f"{STRICT_BPS_ACK_KEY_PREFIX}-{digest[:8]}"
 
 
 def current_strict_bps_ack_key() -> str:
@@ -198,8 +198,8 @@ def strict_bps_ack_line() -> str:
     """Return the single line that publishes the acknowledgment key.
 
     Prepended to the ha_get_skill_guide Tier-3 best-practices content when
-    strict mode is effective (server.py). This is the ONLY place the key
-    literal is emitted to a caller.
+    strict mode is effective (server.py). This is the ONLY place the actual
+    key value is emitted to a caller.
     """
     return (
         f"Acknowledgment key: {current_strict_bps_ack_key()} — strict "
@@ -226,7 +226,9 @@ def _raise_bps_ack_required_error(name: str) -> NoReturn:
         "Strict best-practices mode is enabled for this tool. Read the "
         "best-practices skill to obtain the required acknowledgment key, then "
         "pass it as the BestPracticeKey argument on this call. The key is "
-        "published only in that skill's content."
+        "published only in that skill's content, and it rotates periodically "
+        "— a key obtained earlier may have expired, so re-read the skill for "
+        "the current value instead of resending a previous one."
     )
     raise_tool_error(
         create_error_response(
@@ -313,10 +315,10 @@ class StrictBpsMiddleware(Middleware):
             return await call_next(context)
 
         # The gate is the ONLY reader of BestPracticeKey: strip it before
-        # dispatch (whether or not strict mode is on) so the constant never
+        # dispatch (whether or not strict mode is on) so the key value never
         # reaches the tool body, the policy middleware's approval args-hash
-        # (where it would churn remembered approvals across strict toggles),
-        # or downstream logging.
+        # (where the hourly-rotating value would churn remembered approvals
+        # every rotation), or downstream logging.
         args = context.message.arguments or {}
         supplied = args.get(STRICT_BPS_KEY_PARAM)
         if STRICT_BPS_KEY_PARAM in args:
@@ -325,9 +327,13 @@ class StrictBpsMiddleware(Middleware):
                 message=context.message.model_copy(update={"arguments": stripped})
             )
 
+        # isinstance guards the set-membership test: the middleware reads
+        # raw transport arguments before pydantic validation, so an
+        # off-spec client can send an unhashable value (dict/list) that
+        # would otherwise TypeError instead of hitting the block error.
         if (
             strict_bps_effective()
-            and supplied not in _valid_ack_keys()
+            and not (isinstance(supplied, str) and supplied in _valid_ack_keys())
             and await self._is_registered(name)
         ):
             logger.info("strict-BPS mode blocked keyless write to %s", name)

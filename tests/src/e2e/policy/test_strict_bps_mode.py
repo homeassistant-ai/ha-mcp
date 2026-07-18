@@ -25,6 +25,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from test_constants import TEST_TOKEN
 
+from ha_mcp import strict_bps
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.strict_bps import current_strict_bps_ack_key
@@ -203,7 +204,11 @@ async def test_skill_guide_publishes_ack_key(strict_bps_mcp):
     )
     body = parse_mcp_result(result)
     assert body.get("success") is True, body
-    assert current_strict_bps_ack_key() in body.get("content", ""), (
+    # Accept either currently-valid key: content generation and this
+    # assertion derive the key independently, and an hour-boundary straddle
+    # between them would otherwise flake an exact-match check.
+    content = body.get("content", "")
+    assert any(key in content for key in strict_bps._valid_ack_keys()), (
         "strict mode ON: the Tier-3 best-practices content must publish the "
         "acknowledgment key"
     )
