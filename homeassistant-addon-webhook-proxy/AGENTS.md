@@ -49,13 +49,18 @@ is `started`. `start.py:_sibling_is_running` matches the sibling by exact slug o
 `_<base>` suffix (Supervisor hash-prefixes third-party slugs).
 
 ## Versioning
-- Dev: bump `homeassistant-addon-webhook-proxy-dev/config.yaml` `version` AND
+- Dev: the version is BASED ON THE CURRENT STABLE version — the next stable
+  patch with a `.devN` suffix (stable `2.0.2` → `2.0.3.dev1`, `2.0.3.dev2`, …),
+  so dev always sorts ahead of the stable it will promote into. Bump
+  `homeassistant-addon-webhook-proxy-dev/config.yaml` `version` AND
   `mcp_proxy_dev/manifest.json` `version` together (they must stay equal). The
   `webhook-proxy-dev-version-guard` workflow fails any PR that touches the dev add-on
   without an increase. Use the `Webhook Proxy Dev — Bump Version` workflow
   (`workflow_dispatch`, never scheduled) to do the bump and open a draft PR, or edit the
-  two files by hand.
-- Stable keeps its own independent version line and never inherits a `.devN` label.
+  two files by hand. (Dev entries below `v2.0.3.dev1` in the dev CHANGELOG predate this
+  rule — the line originally counted independently from the 1.2.2 fork point.)
+- Stable keeps its own version line and never inherits a `.devN` label; the promote
+  workflow assigns the stable number.
 
 ## Promotion (dev -> stable)
 When the dev flavor is ready to become stable, run the `Webhook Proxy — Promote Dev to

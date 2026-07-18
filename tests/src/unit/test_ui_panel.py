@@ -550,3 +550,23 @@ class TestBootPage:
         finally:
             os.unlink(path)
         assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [
+        ("ru-RU", True),
+        ("en_US", True),
+        ("de", True),
+        ("a" * 64, True),
+        ("-ru", False),
+        ("ru-", False),
+        ("ru--RU", False),
+        ("en__US", False),
+        ("", False),
+        ("café", False),
+        ("٣", False),
+    ],
+)
+def test_is_valid_locale_cookie_value(value: str, ok: bool) -> None:
+    assert ui_panel._is_valid_locale_cookie_value(value) is ok

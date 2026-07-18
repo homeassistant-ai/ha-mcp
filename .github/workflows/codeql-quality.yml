@@ -1,6 +1,15 @@
 name: CodeQL Code Quality
 
-# Runs the CodeQL "<language>-code-quality" suites and fails the PR on ANY finding.
+# Runs the CodeQL "<language>-code-quality" suite PLUS the default
+# "<language>-code-scanning" security suite per language and fails the PR on
+# ANY finding.
+#
+# Why the security suite is gated here too: GitHub default setup (the
+# Security tab) only analyzes master after merge and posts no blocking check
+# on PRs, so a PR can introduce security-query findings (e.g.
+# js/xss-through-dom) that surface as code-scanning alerts minutes after
+# merge — that is how alerts 33-40 landed. Running the same default
+# code-scanning suite in this gate catches them pre-merge.
 #
 # Languages gated (one matrix leg each), both scanning the whole tree
 # (--source-root .):
@@ -68,8 +77,10 @@ jobs:
         include:
           - language: python
             suite: codeql/python-queries:codeql-suites/python-code-quality.qls
+            security_suite: codeql/python-queries:codeql-suites/python-code-scanning.qls
           - language: javascript
             suite: codeql/javascript-queries:codeql-suites/javascript-code-quality.qls
+            security_suite: codeql/javascript-queries:codeql-suites/javascript-code-scanning.qls
 
     steps:
       - uses: actions/checkout@v7
@@ -96,12 +107,13 @@ jobs:
             --source-root . \
             --overwrite
 
-      - name: Analyze with ${{ matrix.language }}-code-quality suite
+      - name: Analyze with ${{ matrix.language }} quality + security suites
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh codeql database analyze ha-mcp-db \
             ${{ matrix.suite }} \
+            ${{ matrix.security_suite }} \
             --format=sarif-latest \
             --output quality.sarif \
             --download

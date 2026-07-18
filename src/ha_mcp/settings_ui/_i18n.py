@@ -112,6 +112,7 @@ def load_catalogs(directory: Path = LOCALES_DIR) -> dict[str, dict[str, Any]]:
             f"The settings UI requires {DEFAULT_LOCALE}.json in {directory}"
         )
     _validate_placeholder_parity(catalogs)
+    _validate_inline_markup(catalogs)
     return catalogs
 
 
@@ -151,6 +152,39 @@ def _validate_placeholder_parity(catalogs: dict[str, dict[str, Any]]) -> None:
                         f"Locale {locale} tool {tool_name!r} field {field!r} "
                         f"has placeholders {sorted(translated_fields)}, expected "
                         f"{sorted(source_fields)}"
+                    )
+
+
+# Anything that looks like an HTML tag in a catalog message. A bare "<" in
+# prose (e.g. "< 5") deliberately does not match — it renders fine escaped.
+_TAG_LIKE_RE = re.compile(r"</?[a-zA-Z][^>]*>")
+# The exact tag shapes settings.js::tHtml restores after escaping. Keep in
+# sync with the restore regexes there — any other spelling (case, spacing,
+# attribute order) survives escaping and shows the user literal markup text.
+_ALLOWED_TAGS_RE = re.compile(
+    r'</?code>|</?strong>|</a>|<a href="#" data-panel-link="[a-z][a-z-]*">'
+)
+
+
+def _validate_inline_markup(catalogs: dict[str, dict[str, Any]]) -> None:
+    """Reject catalog messages whose markup ``tHtml`` cannot restore.
+
+    ``settings.js::tHtml`` escapes every translated value and restores only
+    the exact allowlisted tag shapes, so a translation written with
+    ``<CODE>`` or ``<code >`` would silently render as literal escaped text.
+    Fail fast at load time instead, mirroring the placeholder-parity check.
+    Scoped to ``messages``: tool translations are plain text rendered through
+    ``escapeHtml`` and carry no markup contract.
+    """
+    for locale, catalog in catalogs.items():
+        for key, value in catalog["messages"].items():
+            for tag in _TAG_LIKE_RE.findall(value):
+                if _ALLOWED_TAGS_RE.fullmatch(tag) is None:
+                    raise ValueError(
+                        f"Locale {locale} message {key!r} contains inline "
+                        f"markup {tag!r} that the settings UI cannot render; "
+                        f"allowed: <code>, <strong>, </a>, and "
+                        f'<a href="#" data-panel-link="...">'
                     )
 
 
