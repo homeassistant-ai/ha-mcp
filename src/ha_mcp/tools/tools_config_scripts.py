@@ -363,9 +363,10 @@ class ConfigScriptTools:
         Phase 0); None lets the REST client resolve. Passing the caller id
         separately keeps a renamed script's alias caller-facing (#1935).
         """
-        return await self._client.upsert_script_config(
+        result: dict[str, Any] = await self._client.upsert_script_config(
             config, script_id, resolved_id=resolved_id
         )
+        return result
 
     @staticmethod
     def _validate_script_config(
