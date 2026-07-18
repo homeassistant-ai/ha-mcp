@@ -82,6 +82,28 @@ def _failure_text(payload: dict[str, Any]) -> str:
     return str(error or "read failed")
 
 
+def _parse_error_result(
+    target: str, yaml_path: str, parse_error: str, *, is_glob: bool
+) -> tuple[None, str]:
+    """Decide a file the component could not parse: raise for a single target.
+
+    A single explicit target has no siblings to salvage, so a parse failure
+    raises rather than soft-degrading to a warning that reads as "key absent".
+    Under a glob it stays a per-file warning so one broken file does not sink
+    the whole search.
+    """
+    if not is_glob:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONFIG_INVALID,
+                f"{target} could not be parsed as YAML: {parse_error}",
+                suggestions=[f"Fix the YAML syntax error in {target} and retry."],
+                context={"file": target, "yaml_path": yaml_path},
+            )
+        )
+    return None, f"{target} was not searched: {parse_error}."
+
+
 def _evaluate_read(
     response: Any,
     target: str,
@@ -125,7 +147,7 @@ def _evaluate_read(
 
     parse_error = unwrapped.get("parse_error")
     if parse_error:
-        return None, f"{target} was not searched: {parse_error}."
+        return _parse_error_result(target, yaml_path, str(parse_error), is_glob=is_glob)
 
     if unwrapped.get("subtree") is None:
         return None, None

@@ -470,6 +470,28 @@ async def test_parse_error_warns_instead_of_reading_as_a_non_match():
     ]
 
 
+async def test_single_file_parse_error_raises_instead_of_reporting_no_match():
+    """A single explicit target that will not parse has no siblings to salvage.
+
+    Soft-degrading to a warning would make a real parse failure indistinguishable
+    from "key absent" at the success/count level, so it raises instead.
+    """
+    fn, _ = await _make_tool(
+        {
+            "read_file": {
+                "success": True,
+                "path": "configuration.yaml",
+                "content": "...",
+                "subtree": None,
+                "parse_error": "not valid YAML at line 3, column 5",
+            }
+        }
+    )
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="configuration.yaml")
+
+
 async def test_no_warnings_key_when_nothing_degraded():
     """`warnings` is omitted when empty, per the tool return contract."""
     fn, _ = await _make_tool({"read_file": _read_ok("method: GET\n")})
