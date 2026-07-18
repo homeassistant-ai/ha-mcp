@@ -76,14 +76,18 @@ CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 # ENABLE_YAML_EDIT_CONFIRM, default on); a <0.11.0 component's strict
 # (PREVENT_EXTRA) schema rejects the unknown arg with a raw voluptuous
 # error — the gate surfaces an actionable "update" prompt instead.
-# 1.1.0: the YAML fragment read (#1788) needs two component behaviours that a
-# <1.1.0 component reports no differently from a missing key. ``list_files``
-# only now honours the configured packages folder, so ha_config_get_yaml's
+# 1.2.0: the YAML fragment read (#1788, PR #1882) needs two component
+# behaviours that a component reports no differently from a missing key.
+# ``list_files`` honours the configured packages folder, so ha_config_get_yaml's
 # glob/discovery would otherwise come back "Path not allowed" instead of
 # enumerating packages; and ``include_parsed`` on ``read_file`` is a new arg
 # that an older strict (PREVENT_EXTRA) schema rejects with a raw voluptuous
-# error. The gate turns both into the actionable "update" prompt.
-MIN_COMPONENT_VERSION = "1.1.0"
+# error. The gate turns both into the actionable "update" prompt. The floor is
+# 1.2.0, not the 1.1.0 that was current when #1882 landed: #1882 added these
+# behaviours under an *un-bumped* 1.1.0 component, so 1.1.0 splits into builds
+# with and without them and cannot distinguish the two (#1946). 1.2.0 is the
+# first component version cut after #1882, hence the first that guarantees both.
+MIN_COMPONENT_VERSION = "1.2.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:

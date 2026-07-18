@@ -661,13 +661,21 @@ fully validate a component change before merge.
     go straight to that minor, not an extra patch. Never go past the current
     pending version otherwise; per-revision bumps skip never-shipped numbers and
     desync the version from the release cycle.
-- **When the change adds a service or argument the server depends on**, raise
-  `MIN_COMPONENT_VERSION` in `src/ha_mcp/tools/tools_filesystem.py` to match the
-  pending version in the same PR. `get_caller_token` reports the manifest
-  version and the server gates on it, so without the gate the old and new
-  component are indistinguishable: a caller on the old version passes the check
-  and then hits raw "service not found" errors instead of an actionable
-  "update" prompt.
+- **When the change adds a service or argument the server depends on**, this PR
+  must **open a fresh pending component version** (bump `manifest.json` +
+  `COMPONENT_VERSION`) and raise `MIN_COMPONENT_VERSION` in
+  `src/ha_mcp/tools/tools_filesystem.py` to that same new version. This is the
+  one case that **overrides** the "already ahead of stable → do not bump" rule
+  above: bump here even if a pending version already exists. `get_caller_token`
+  reports the manifest version and the server gates on it, so without the gate
+  the old and new component are indistinguishable: a caller on the old version
+  passes the check and then hits raw "service not found" errors instead of an
+  actionable "update" prompt. **Never floor at a version any build lacking the
+  behaviour also reports** – an already-shipped version, or a pending version
+  that was opened *before* this behaviour landed. Such a build passes the gate
+  yet lacks the behaviour, defeating the gate (#1946: the floor was set to a
+  1.1.0 that had already shipped without the gated behaviours, so 1.1.0 builds
+  split into with/without and the gate could not tell them apart).
 - **Keep the component backward-compatible with the released server.** The
   component (HACS) and the server (add-on / PyPI / Docker) follow the same
   release cycle but are updated independently per install, so a new component
