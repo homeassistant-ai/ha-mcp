@@ -1617,10 +1617,16 @@ class TestCallServiceHappyPath:
 
 
 class _AmbiguousBool:
-    """A truth value that raises when coerced to bool — numpy's array-bool behavior."""
+    """A truth value that raises when coerced to bool — like numpy's array-bool.
+
+    numpy itself raises ``ValueError`` ("truth value ... is ambiguous"); we raise
+    ``TypeError`` (the conventional ``__bool__``-failure type) since the exact type
+    is immaterial to the code under test — ``_values_differ`` catches any exception
+    and falls back to a ``repr`` compare.
+    """
 
     def __bool__(self):
-        raise ValueError(
+        raise TypeError(
             "truth value of an array with more than one element is ambiguous"
         )
 
