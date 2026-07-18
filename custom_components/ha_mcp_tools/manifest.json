@@ -6,7 +6,8 @@
         "cloud",
         "frontend",
         "http",
-        "lovelace"
+        "lovelace",
+        "network"
     ],
     "codeowners": [
         "@homeassistant-ai"

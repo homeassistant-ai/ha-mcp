@@ -169,7 +169,16 @@ class TestBringUp:
             is True
         )
 
-    async def test_success_starts_registers_and_surfaces(self, fake_manager):
+    async def test_success_starts_registers_and_surfaces(
+        self, fake_manager, monkeypatch
+    ):
+        # The enumerated adapter hosts must be forwarded into the connect-URL
+        # surfacing, or the startup log (the feature's primary surface) silently
+        # loses the per-interface URLs while every other test stays green
+        # (#1862). Mirrors the config-flow forwarding assertion.
+        monkeypatch.setattr(
+            esetup, "async_get_lan_hosts", AsyncMock(return_value=["10.0.1.3"])
+        )
         hass = _make_hass()
         entry = _make_entry()
 
@@ -178,6 +187,9 @@ class TestBringUp:
         fake_manager.async_start.assert_awaited_once()
         esetup.async_register_webhook.assert_awaited_once()
         esetup._surface_connect_urls.assert_called_once()
+        assert esetup._surface_connect_urls.call_args.kwargs["extra_hosts"] == [
+            "10.0.1.3"
+        ]
         assert isinstance(hass.data[DOMAIN][DATA_MANAGER], fake_manager)
         esetup.ir.async_create_issue.assert_not_called()
         # Conversation-agent LLM API (#1745): registered with the running
@@ -424,6 +436,28 @@ def _install_network_cloud(*, cloud_url=None, local_url=None):
     sys.modules["homeassistant.components.cloud"] = cloud
 
 
+def _install_adapters(adapters=None, *, error=None):
+    """Install a fake ``homeassistant.components.network.async_get_adapters``.
+
+    ``error`` set ⇒ the lookup raises it (the degrade-to-empty branch). The
+    parent-package attribute is set too: ``homeassistant.components`` is a
+    MagicMock here, so ``from homeassistant.components import network`` reads the
+    child attribute rather than the ``sys.modules`` entry alone.
+    """
+
+    net = ModuleType("homeassistant.components.network")
+
+    async def async_get_adapters(hass):
+        if error is not None:
+            raise error
+        return adapters or []
+
+    net.async_get_adapters = async_get_adapters
+    sys.modules["homeassistant.components.network"] = net
+    sys.modules["homeassistant.components"].network = net
+    return net
+
+
 class TestSurfaceConnectUrls:
     @pytest.fixture(autouse=True)
     def _restore_surface(self, monkeypatch, _spy):
@@ -461,6 +495,32 @@ class TestSurfaceConnectUrls:
         assert "Configure" in message
         assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in caplog.text
         assert "http://192.168.1.5:8123/api/webhook/mcp_id" in caplog.text
+
+    def test_notification_excludes_multi_interface_urls(self, caplog):
+        # #1862: the per-interface expansion multiplies the secret-bearing
+        # direct-access lines; none of the extra hosts (or the secret path) may
+        # leak into the all-users persistent notification - they belong to the
+        # admin-only log only.
+        import logging
+
+        _install_network_cloud(cloud_url=None, local_url="http://10.0.2.3:8123")
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/private_x"},
+            options={esetup.OPT_BIND_HOST: esetup.BIND_HOST_ALL},
+        )
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(
+                hass, entry, "none", extra_hosts=["10.0.2.3", "10.0.1.3"]
+            )
+        message = self._message()
+        assert "10.0.1.3" not in message
+        assert "10.0.2.3" not in message
+        assert "/private_x" not in message
+        # Both interfaces' URLs DID reach the admin-only log.
+        assert "http://10.0.2.3:8123/api/webhook/mcp_id" in caplog.text
+        assert "http://10.0.1.3:8123/api/webhook/mcp_id" in caplog.text
+        assert "http://10.0.1.3:9584/private_x" in caplog.text
 
     def test_external_url_option_leads_the_list(self, caplog):
         # Owner request (webhook-proxy app parity): a configured external URL
@@ -781,6 +841,116 @@ class TestBuildConnectUrls:
         )
         urls = esetup.build_connect_urls(hass, entry, webhook_enabled=False)
         assert not any("/api/webhook/" in u for u in urls)
+
+    def test_multiple_interfaces_expand_both_lines(self):
+        # #1862: a multi-interface / multi-VLAN host surfaces one webhook and one
+        # direct-access URL per enabled LAN address, canonical get_url host first.
+        _install_network_cloud(cloud_url=None, local_url="http://10.0.2.3:8123")
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/private_x"},
+            options={esetup.OPT_BIND_HOST: esetup.BIND_HOST_ALL},
+        )
+        urls = esetup.build_connect_urls(
+            hass, entry, extra_hosts=["10.0.2.3", "10.0.1.3"]
+        )
+        webhook = [u for u in urls if "/api/webhook/" in u]
+        direct = [u for u in urls if "(direct access)" in u]
+        assert webhook == [
+            "http://10.0.2.3:8123/api/webhook/mcp_id",
+            "http://10.0.1.3:8123/api/webhook/mcp_id",
+        ]
+        assert direct == [
+            "http://10.0.2.3:9584/private_x (direct access)",
+            "http://10.0.1.3:9584/private_x (direct access)",
+        ]
+
+    def test_extra_hosts_deduped_against_get_url_host(self):
+        # The get_url host repeated in the adapter list must not double-list.
+        _install_network_cloud(cloud_url=None, local_url="http://10.0.2.3:8123")
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/private_x"},
+            options={esetup.OPT_BIND_HOST: esetup.BIND_HOST_ALL},
+        )
+        urls = esetup.build_connect_urls(hass, entry, extra_hosts=["10.0.2.3"])
+        assert sum("(direct access)" in u for u in urls) == 1
+        assert sum("/api/webhook/" in u for u in urls) == 1
+
+    def test_extra_hosts_surface_direct_line_without_get_url(self):
+        # get_url unavailable but adapters known: the direct-access line still
+        # lists the real adapter hosts rather than only a placeholder.
+        _install_network_cloud(cloud_url=None, local_url=None)
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/private_x"},
+            options={esetup.OPT_BIND_HOST: esetup.BIND_HOST_ALL},
+        )
+        urls = esetup.build_connect_urls(hass, entry, extra_hosts=["10.0.1.3"])
+        direct = [u for u in urls if "(direct access)" in u]
+        assert direct == ["http://10.0.1.3:9584/private_x (direct access)"]
+
+    def test_portless_internal_url_swaps_host_without_a_port(self):
+        # A reverse-proxied internal URL has no port; _swap_url_host must keep it
+        # port-less for the extra adapter host rather than inventing one.
+        _install_network_cloud(cloud_url=None, local_url="https://ha.internal")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"})
+        urls = esetup.build_connect_urls(hass, entry, extra_hosts=["10.0.1.3"])
+        webhook = [u for u in urls if "/api/webhook/" in u]
+        assert webhook == [
+            "https://ha.internal/api/webhook/mcp_id",
+            "https://10.0.1.3/api/webhook/mcp_id",
+        ]
+
+    def test_direct_line_uses_placeholder_when_no_host_resolves(self):
+        # bind-all + secret present but no get_url host and no adapters: the
+        # direct line falls back to the <home-assistant-ip> placeholder rather
+        # than dropping the line or rendering a host-less URL.
+        _install_network_cloud(cloud_url=None, local_url=None)
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
+            options={esetup.OPT_BIND_HOST: esetup.BIND_HOST_ALL},
+        )
+        urls = esetup.build_connect_urls(hass, entry)
+        direct = [u for u in urls if "(direct access)" in u]
+        assert direct == ["http://<home-assistant-ip>:9584/priv (direct access)"]
+
+
+class TestAsyncGetLanHosts:
+    """Coverage of ``async_get_lan_hosts`` — the per-interface IPv4 enumeration
+    that feeds ``build_connect_urls`` ``extra_hosts`` (#1862)."""
+
+    async def test_lists_enabled_adapter_ipv4_in_order(self):
+        _install_adapters(
+            [
+                {"enabled": True, "ipv4": [{"address": "10.0.2.3"}]},
+                {
+                    "enabled": True,
+                    "ipv4": [{"address": "10.0.1.3"}, {"address": "10.0.1.4"}],
+                },
+                {"enabled": False, "ipv4": [{"address": "10.9.9.9"}]},
+            ]
+        )
+        hosts = await esetup.async_get_lan_hosts(_make_hass())
+        # Disabled adapter dropped; enabled addresses kept in adapter order.
+        assert hosts == ["10.0.2.3", "10.0.1.3", "10.0.1.4"]
+
+    async def test_degrades_to_empty_on_error(self):
+        # A lookup failure must yield [] so URL surfacing (and bring-up) never
+        # breaks for a display-only enumeration.
+        _install_adapters(error=RuntimeError("no network component"))
+        hosts = await esetup.async_get_lan_hosts(_make_hass())
+        assert hosts == []
+
+    async def test_degrades_to_empty_on_malformed_adapter(self):
+        # A malformed adapter entry (missing keys) must also degrade to [] rather
+        # than escaping the loop into async_bring_up_server's handler, which would
+        # tear the running server down for a display-only lookup.
+        _install_adapters([{"enabled": True}])  # no "ipv4" key
+        hosts = await esetup.async_get_lan_hosts(_make_hass())
+        assert hosts == []
 
 
 # ---------------------------------------------------------------------------
