@@ -9,6 +9,15 @@ history from before the fork.
 -->
 
 
+## v2.0.3.dev2 (2026-07-18)
+
+### Refactoring
+
+- Reduce cyclomatic complexity in `start.py` and `mcp_proxy_dev/__init__.py`
+  below the C901 threshold by extracting private helpers (issue #925). No
+  behavior change.
+
+
 ## v2.0.3.dev1 (2026-07-18)
 
 Version line re-based onto the stable series (stable is 2.0.2, so dev now

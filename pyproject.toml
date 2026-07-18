@@ -167,8 +167,6 @@ ignore = [
 # already exceeded the threshold. Remove a line once its functions are
 # refactored below threshold -- do not add new files here.
 "homeassistant-addon/start.py" = ["C901"]
-"homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py" = ["C901"]
-"homeassistant-addon-webhook-proxy-dev/start.py" = ["C901"]
 "homeassistant-addon-webhook-proxy/mcp_proxy/__init__.py" = ["C901"]
 "homeassistant-addon-webhook-proxy/start.py" = ["C901"]
 "scripts/extract_tools.py" = ["C901"]
