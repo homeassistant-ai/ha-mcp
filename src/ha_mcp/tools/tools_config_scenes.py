@@ -828,8 +828,11 @@ class ConfigSceneTools:
                 if category:
                     await self._validate_category_id(category)
 
+                # ``resolved_id`` is the storage key (write target); ``scene_id``
+                # stays the caller id so a missing ``name`` defaults caller-facing
+                # rather than to the storage key (#1935).
                 result = await self._client.upsert_scene_config(
-                    transformed_config, resolved_id, _resolved=True
+                    transformed_config, scene_id, resolved_id=resolved_id
                 )
 
                 # Re-fetch to get authoritative hash (HA may normalise after save).
@@ -960,9 +963,12 @@ class ConfigSceneTools:
             )
 
             # ``resolved_id`` is already the storage key (from the hash-verify
-            # fetch or the resolve above), so skip the redundant re-resolve.
+            # fetch or the resolve above) — pass it as the write target to skip
+            # the redundant re-resolve. ``scene_id`` stays the caller id so a
+            # missing ``name`` defaults caller-facing, not to the storage key
+            # (#1935).
             result = await self._client.upsert_scene_config(
-                config_dict, resolved_id, _resolved=True
+                config_dict, scene_id, resolved_id=resolved_id
             )
 
             # Resolve actual entity_id via registry — HA derives scene

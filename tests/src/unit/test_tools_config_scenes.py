@@ -987,8 +987,8 @@ class TestSceneResolutionDedup:
                 },
             }
 
-        async def _upsert(config, scene_id, *, _resolved=False):
-            rid = scene_id if _resolved else await resolve(scene_id)
+        async def _upsert(config, scene_id, *, resolved_id=None):
+            rid = resolved_id if resolved_id is not None else await resolve(scene_id)
             return {"success": True, "scene_id": rid, "result": "ok"}
 
         async def _delete(scene_id, *, _resolved=False):
@@ -1034,8 +1034,10 @@ class TestSceneResolutionDedup:
         assert result["success"] is True
         assert result["scene_id"] == "test_scene"
         assert client.resolve_scene_id.await_count == 1
-        _, kwargs = client.upsert_scene_config.call_args
-        assert kwargs.get("_resolved") is True
+        args, kwargs = client.upsert_scene_config.call_args
+        # Caller id passed as scene_id; resolved storage key as resolved_id.
+        assert args[1] == "test_scene"
+        assert kwargs.get("resolved_id") == "test_scene"
 
     async def test_remove_scene_resolves_once(self, monkeypatch):
         client = self._dedup_client()
@@ -1072,6 +1074,55 @@ class TestSceneResolutionDedup:
         assert result["action"] == "python_transform"
         # One resolution total despite hash-verify fetch + upsert + re-fetch.
         assert client.resolve_scene_id.await_count == 1
+
+    async def test_renamed_scene_config_hash_no_name_forwards_caller_id(
+        self, monkeypatch
+    ):
+        """#1935: a renamed scene (caller slug != storage key) updated with
+        config_hash + a config omitting ``name`` forwards the CALLER's id as
+        ``scene_id`` (the REST name-default source) and the resolved storage key
+        as ``resolved_id`` (write target) — so the name is not reset to the
+        storage key."""
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        client = MagicMock()
+        client.resolve_scene_id = AsyncMock(return_value="storage_key")
+        fetched = {"name": "Old Name", "entities": {"light.kitchen": {"state": "on"}}}
+        client.get_scene_config = AsyncMock(
+            return_value={
+                "success": True,
+                "scene_id": "storage_key",
+                "config": fetched,
+            }
+        )
+        client.upsert_scene_config = AsyncMock(
+            return_value={"success": True, "scene_id": "storage_key", "result": "ok"}
+        )
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client.get_entity_state = AsyncMock(
+            return_value={"state": "on", "entity_id": "scene.renamed_scene"}
+        )
+        tools = self._tools(client, monkeypatch)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="renamed_scene",
+            config={"entities": {"light.kitchen": {"state": "on"}}},  # no name
+            config_hash=compute_config_hash(fetched),
+            wait=False,
+        )
+
+        assert result["success"] is True
+        args, kwargs = client.upsert_scene_config.call_args
+        # Caller id is the name-default source; storage key is the write target.
+        assert args[1] == "renamed_scene"
+        assert kwargs.get("resolved_id") == "storage_key"
+        # The config forwarded still has no name — the default is applied inside
+        # upsert_scene_config from scene_id (proven at the REST level).
+        assert "name" not in args[0]
 
 
 @pytest.mark.asyncio

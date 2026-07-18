@@ -1755,20 +1755,34 @@ class HomeAssistantClient:
             raise
 
     async def upsert_scene_config(
-        self, config: dict[str, Any], scene_id: str, *, _resolved: bool = False
+        self,
+        config: dict[str, Any],
+        scene_id: str,
+        *,
+        resolved_id: str | None = None,
     ) -> dict[str, Any]:
         """Create or update Home Assistant scene configuration.
 
-        ``_resolved=True`` signals ``scene_id`` is already the resolved storage
-        key, skipping the redundant registry lookup (``resolve_scene_id`` is
-        idempotent, so the endpoint id is unchanged).
+        ``resolved_id``, when provided, is the already-resolved storage key used
+        as the write target (the caller ran :meth:`resolve_scene_id`), skipping
+        the redundant registry lookup. ``scene_id`` stays the CALLER's identifier
+        and is used only to default a missing ``name`` — a renamed scene (whose
+        storage key differs from the slug the caller passed) keeps its
+        caller-facing name rather than resetting to the stale storage key
+        (#1935, mirrors the script fix).
         """
-        resolved_id = scene_id if _resolved else await self.resolve_scene_id(scene_id)
+        write_id = (
+            resolved_id
+            if resolved_id is not None
+            else await self.resolve_scene_id(scene_id)
+        )
         try:
-            endpoint = f"config/scene/config/{resolved_id}"
+            endpoint = f"config/scene/config/{write_id}"
 
-            # Default a name when missing — mirrors the script upsert behaviour
-            # so a bare config dict is still acceptable.
+            # Default a name when missing from the CALLER's ``scene_id`` (not
+            # ``write_id``) — mirrors the script upsert behaviour so a bare
+            # config dict is acceptable, without resetting a renamed scene's
+            # name to the storage key.
             if "name" not in config:
                 config["name"] = scene_id
 
@@ -1790,7 +1804,7 @@ class HomeAssistantClient:
             # activity should diff before/after via ``ha_config_get_scene``.
             return {
                 "success": True,
-                "scene_id": resolved_id,
+                "scene_id": write_id,
                 "result": response.get("result", "ok"),
             }
         except Exception as e:
