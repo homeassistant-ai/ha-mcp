@@ -820,42 +820,58 @@ def _install_integration() -> IntegrationInstall:
     return IntegrationInstall(first_install, version_changed)
 
 
+def _config_entry_exists(entries: list | dict) -> bool:
+    """True when the entries list already holds an mcp_proxy config entry."""
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy":
+            return True
+    return False
+
+
+def _create_config_entry_attempt(attempt: int, retries: int, delay: int) -> bool | None:
+    """Create the mcp_proxy config entry via the config flow (one attempt).
+
+    Returns True when the entry is ready/created, False when the caller should
+    retry WITHOUT its between-attempt sleep (no/unexpected flow response), or
+    None to fall through to the caller's retry sleep.
+    """
+    # Create via config flow
+    log_info(f"Creating config entry (attempt {attempt}/{retries})...")
+    flow = _ha_core_api("POST", "/config/config_entries/flow", {"handler": "mcp_proxy"})
+    if flow is None:
+        if attempt < retries:
+            time.sleep(delay)
+        return False
+    if not isinstance(flow, dict):
+        return False
+
+    rtype = flow.get("type")
+    if rtype in ("abort", "create_entry"):
+        log_info("Config entry ready")
+        return True
+    if rtype == "form" and flow.get("flow_id"):
+        complete = _ha_core_api(
+            "POST", f"/config/config_entries/flow/{flow['flow_id']}", {}
+        )
+        if isinstance(complete, dict) and complete.get("type") == "create_entry":
+            log_info("Config entry created")
+            return True
+    return None
+
+
 def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
     """Ensure a config entry exists for mcp_proxy. Creates one if missing."""
     for attempt in range(1, retries + 1):
         entries = _ha_core_api("GET", "/config/config_entries/entry")
         if entries is not None:
-            for entry in entries:
-                if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy":
-                    log_info("mcp_proxy config entry exists")
-                    return True
-
-            # Create via config flow
-            log_info(f"Creating config entry (attempt {attempt}/{retries})...")
-            flow = _ha_core_api(
-                "POST", "/config/config_entries/flow", {"handler": "mcp_proxy"}
-            )
-            if flow is None:
-                if attempt < retries:
-                    time.sleep(delay)
-                continue
-            if not isinstance(flow, dict):
-                continue
-
-            rtype = flow.get("type")
-            if rtype in ("abort", "create_entry"):
-                log_info("Config entry ready")
+            if _config_entry_exists(entries):
+                log_info("mcp_proxy config entry exists")
                 return True
-            if rtype == "form" and flow.get("flow_id"):
-                complete = _ha_core_api(
-                    "POST", f"/config/config_entries/flow/{flow['flow_id']}", {}
-                )
-                if (
-                    isinstance(complete, dict)
-                    and complete.get("type") == "create_entry"
-                ):
-                    log_info("Config entry created")
-                    return True
+            result = _create_config_entry_attempt(attempt, retries, delay)
+            if result is True:
+                return True
+            if result is False:
+                continue
 
         if attempt < retries:
             log_info(f"HA not ready, retrying in {delay}s...")
@@ -1079,20 +1095,18 @@ def _shutdown_cleanup(reason: str | None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def main() -> int:
-    log_info("Starting Webhook Proxy for HA MCP...")
+def _read_addon_options(config_file: Path) -> dict | None:
+    """Read the add-on options from ``config_file`` (``/data/options.json``).
 
-    # Refuse to start if the sibling (dev/stable) webhook proxy is running.
-    if _refuse_if_sibling_running():
-        return 1
-
+    Returns a dict of the parsed option values (defaults filled in for anything
+    absent), or None when the file is present but unreadable/corrupt — a
+    fail-closed signal the caller turns into a non-zero exit.
+    """
     # Read config. Supervisor always writes /data/options.json, so the outer
     # existence check stays best-effort for the (unreachable) absent-file case.
     # A present-but-unreadable/corrupt file, however, is FATAL (fail closed
     # below): we can't tell whether the user enabled OAuth, and silently
     # falling back to the unauthenticated defaults would betray that intent.
-    config_file = Path("/data/options.json")
-    data_dir = Path("/data")
     remote_url = ""
     mcp_server_url = ""
     mcp_port = 9583
@@ -1143,8 +1157,107 @@ def main() -> int:
             log_error("  Configuration tab and check the system's storage.")
             log_error("=" * 70)
             log_error("")
-            return 1
+            return None
 
+    return {
+        "remote_url": remote_url,
+        "mcp_server_url": mcp_server_url,
+        "mcp_port": mcp_port,
+        "enable_oauth": enable_oauth,
+        "oauth_client_id": oauth_client_id,
+        "oauth_client_secret": oauth_client_secret,
+        "oauth_mode_option": oauth_mode_option,
+        "regenerate_oauth_creds": regenerate_oauth_creds,
+        "debug_logging": debug_logging,
+        "config": config,
+    }
+
+
+def _resolve_legacy_oauth_settings(
+    oauth_mode: str,
+    oauth_client_id: str,
+    oauth_client_secret: str,
+    regenerate_oauth_creds: bool,
+    data_dir: Path,
+    config: dict,
+) -> tuple[str, str, str] | None:
+    """Resolve/persist the legacy OAuth client id + secret.
+
+    Returns ``(oauth_mode, oauth_client_id, oauth_client_secret)``, or None on
+    an unrecoverable error the caller turns into a non-zero exit.
+    """
+    if regenerate_oauth_creds:
+        _regenerate_oauth_creds(data_dir)
+        # Force fresh generation: ignore any user-supplied values in this
+        # run since the user explicitly asked for new random ones.
+        oauth_client_id = ""
+        oauth_client_secret = ""
+        # Flip the toggle back to off via Supervisor self-options API.
+        # Failure is fatal: if we proceed with the toggle still on, the
+        # next restart would regenerate AGAIN — the user's MCP client
+        # would lose access on every restart with no explanation. We
+        # surface a persistent_notification + return non-zero so the
+        # user can't miss the manual fix.
+        if not _clear_regenerate_toggle(config):
+            log_error(
+                "Could not auto-clear the 'Regenerate OAuth Credentials' "
+                "toggle via the Supervisor API. Refusing to start to "
+                "avoid an infinite-regeneration loop. Flip the toggle "
+                "back to OFF manually in the addon configuration, then "
+                "start the addon again."
+            )
+            _ha_core_api(
+                "POST",
+                "/services/persistent_notification/create",
+                {
+                    "title": ("MCP Webhook Proxy: manual action required"),
+                    "message": (
+                        "The Webhook Proxy addon could not "
+                        "automatically clear the 'Regenerate OAuth "
+                        "Credentials on Next Start' toggle via the "
+                        "Supervisor API. To avoid regenerating "
+                        "credentials on every restart, please flip "
+                        "the toggle back to OFF in the addon "
+                        "configuration and start the addon again."
+                    ),
+                    "notification_id": "mcp_proxy_regen_stuck",
+                },
+            )
+            return None
+
+    oauth_client_id, oauth_client_secret = _resolve_oauth_creds(
+        data_dir, oauth_client_id, oauth_client_secret
+    )
+    if not oauth_client_id or not oauth_client_secret:
+        log_error(
+            "Failed to resolve OAuth credentials. Check addon log "
+            "for prior errors and disk permissions on /data."
+        )
+        return None
+    if len(oauth_client_id) < 16:
+        log_error(
+            f"OAuth Client ID is too short (got {len(oauth_client_id)} "
+            "characters, need >= 16). Clear the field to let the addon "
+            "generate one, or pick a longer string."
+        )
+        return None
+    return oauth_mode, oauth_client_id, oauth_client_secret
+
+
+def _resolve_oauth_settings(
+    enable_oauth: bool,
+    oauth_mode_option: str,
+    oauth_client_id: str,
+    oauth_client_secret: str,
+    regenerate_oauth_creds: bool,
+    data_dir: Path,
+    config: dict,
+) -> tuple[str, str, str] | None:
+    """Resolve the OAuth mode and (for legacy mode) the client credentials.
+
+    Returns ``(oauth_mode, oauth_client_id, oauth_client_secret)``, or None on
+    an unrecoverable OAuth-setup error the caller turns into a non-zero exit.
+    """
     # OAuth mode + credential resolution. ha_auth (HA-native) needs no add-on
     # credentials at all; legacy resolves/persists a client id + secret (user
     # value wins, else a persisted /data file, else auto-generated) so the happy
@@ -1169,97 +1282,70 @@ def main() -> int:
                 "regenerate."
             )
     elif enable_oauth:
-        if regenerate_oauth_creds:
-            _regenerate_oauth_creds(data_dir)
-            # Force fresh generation: ignore any user-supplied values in this
-            # run since the user explicitly asked for new random ones.
-            oauth_client_id = ""
-            oauth_client_secret = ""
-            # Flip the toggle back to off via Supervisor self-options API.
-            # Failure is fatal: if we proceed with the toggle still on, the
-            # next restart would regenerate AGAIN — the user's MCP client
-            # would lose access on every restart with no explanation. We
-            # surface a persistent_notification + return non-zero so the
-            # user can't miss the manual fix.
-            if not _clear_regenerate_toggle(config):
-                log_error(
-                    "Could not auto-clear the 'Regenerate OAuth Credentials' "
-                    "toggle via the Supervisor API. Refusing to start to "
-                    "avoid an infinite-regeneration loop. Flip the toggle "
-                    "back to OFF manually in the addon configuration, then "
-                    "start the addon again."
-                )
-                _ha_core_api(
-                    "POST",
-                    "/services/persistent_notification/create",
-                    {
-                        "title": ("MCP Webhook Proxy: manual action required"),
-                        "message": (
-                            "The Webhook Proxy addon could not "
-                            "automatically clear the 'Regenerate OAuth "
-                            "Credentials on Next Start' toggle via the "
-                            "Supervisor API. To avoid regenerating "
-                            "credentials on every restart, please flip "
-                            "the toggle back to OFF in the addon "
-                            "configuration and start the addon again."
-                        ),
-                        "notification_id": "mcp_proxy_regen_stuck",
-                    },
-                )
-                return 1
-
-        oauth_client_id, oauth_client_secret = _resolve_oauth_creds(
-            data_dir, oauth_client_id, oauth_client_secret
+        return _resolve_legacy_oauth_settings(
+            oauth_mode,
+            oauth_client_id,
+            oauth_client_secret,
+            regenerate_oauth_creds,
+            data_dir,
+            config,
         )
-        if not oauth_client_id or not oauth_client_secret:
-            log_error(
-                "Failed to resolve OAuth credentials. Check addon log "
-                "for prior errors and disk permissions on /data."
-            )
-            return 1
-        if len(oauth_client_id) < 16:
-            log_error(
-                f"OAuth Client ID is too short (got {len(oauth_client_id)} "
-                "characters, need >= 16). Clear the field to let the addon "
-                "generate one, or pick a longer string."
-            )
-            return 1
+    return oauth_mode, oauth_client_id, oauth_client_secret
 
+
+def _resolve_target_url(mcp_server_url: str, mcp_port: int) -> str | None:
+    """Resolve the MCP server target URL (configured value, else auto-discovery).
+
+    Returns the target URL, or None on an unrecoverable discovery failure the
+    caller turns into a non-zero exit.
+    """
     # Resolve the MCP server target URL
-    target_url = None
-
     if mcp_server_url and mcp_server_url.strip():
         target_url = mcp_server_url.strip()
         log_info(f"Using configured mcp_server_url: {target_url}")
-    else:
-        # Auto-discover running MCP addon
-        slug, ip, info = _discover_addon()
-        if slug is None:
-            log_error(
-                "No running MCP addon found. Install and start the "
-                "'Home Assistant MCP Server' addon first, or set "
-                "'mcp_server_url' manually."
-            )
-            return 1
+        return target_url
 
-        if info is None:
-            log_error("Internal error: addon discovered without info dict")
-            return 1
-        secret_path = _discover_secret_path(slug, info)
-        if secret_path is None:
-            log_error(
-                f"Could not discover secret path for {slug}. "
-                "Set 'mcp_server_url' manually in addon config."
-            )
-            return 1
+    # Auto-discover running MCP addon
+    slug, ip, info = _discover_addon()
+    if slug is None:
+        log_error(
+            "No running MCP addon found. Install and start the "
+            "'Home Assistant MCP Server' addon first, or set "
+            "'mcp_server_url' manually."
+        )
+        return None
 
-        target_url = f"http://{ip}:{mcp_port}{secret_path}"
-        log_info(f"Auto-discovered MCP server: {target_url}")
+    if info is None:
+        log_error("Internal error: addon discovered without info dict")
+        return None
+    secret_path = _discover_secret_path(slug, info)
+    if secret_path is None:
+        log_error(
+            f"Could not discover secret path for {slug}. "
+            "Set 'mcp_server_url' manually in addon config."
+        )
+        return None
 
-    # Get or create webhook ID
-    webhook_id = _get_or_create_webhook_id(data_dir)
-    webhook_path = f"/api/webhook/{webhook_id}"
+    target_url = f"http://{ip}:{mcp_port}{secret_path}"
+    log_info(f"Auto-discovered MCP server: {target_url}")
+    return target_url
 
+
+def _build_proxy_config(
+    target_url: str,
+    webhook_id: str,
+    enable_oauth: bool,
+    oauth_mode: str,
+    oauth_client_id: str,
+    oauth_client_secret: str,
+    remote_url: str,
+    debug_logging: bool,
+) -> tuple[dict, str | None]:
+    """Build the proxy config dict written for the mcp_proxy integration.
+
+    Returns ``(proxy_config, resolved_remote)`` where resolved_remote is the
+    legacy-OAuth public base URL (None outside legacy mode or when unresolved).
+    """
     # Write proxy config for the mcp_proxy integration. The OFF (no-OAuth)
     # path writes exactly the same two keys that v1.0.2 wrote — no extra
     # fields, no shape change. The new keys (`public_base_url`, `oauth`)
@@ -1297,12 +1383,17 @@ def main() -> int:
     # who leave it off.
     if debug_logging:
         proxy_config["debug_logging"] = True
+    return proxy_config, resolved_remote
+
+
+def _write_proxy_config(proxy_config: dict) -> bool:
+    """Write the proxy config file (0600, atomic). Returns False on OSError."""
     proxy_config_file = Path("/config/.mcp_proxy_config.json")
     proxy_config_json = json.dumps(proxy_config)
     try:
         if not _atomic_write_0600(proxy_config_file, proxy_config_json.encode("utf-8")):
             # False = the restricted-mode create OR the write/replace failed —
-            # same degradation semantics as the OAuth creds path above. The
+            # same degradation semantics as the OAuth creds path in main(). The
             # file carries the OAuth keys when auth is enabled, so it gets the
             # same 0600-first treatment; a mode-only limitation falls back to
             # a plain write rather than breaking startup.
@@ -1314,8 +1405,13 @@ def main() -> int:
             )
     except OSError as e:
         log_error(f"Failed to write proxy config: {e}")
-        return 1
+        return False
+    return True
 
+
+def _install_integration_and_handle_restart() -> None:
+    """Install/refresh the integration and run the first-install / version-change
+    restart flows (notifications, Repairs, and config-entry setup)."""
     # Install the mcp_proxy custom component
     first_install, version_changed = _install_integration()
 
@@ -1447,6 +1543,11 @@ def main() -> int:
                 {"notification_id": "mcp_proxy_restart"},
             )
 
+
+def _enforce_oauth_or_disable(enable_oauth: bool) -> None:
+    """Fail-closed OAuth gate: if OAuth is enabled but the loaded integration
+    code doesn't enforce it (stale module after an update), disable the webhook
+    and drive the restart/recovery flow."""
     # OAuth fail-closed gate. If the user enabled OAuth but the integration
     # code currently loaded in HA's Python module cache is the old (no-auth)
     # version, the webhook would happily serve unauthenticated requests
@@ -1578,6 +1679,19 @@ def main() -> int:
                 },
             )
 
+
+def _log_startup_urls(
+    target_url: str,
+    resolved_remote: str | None,
+    remote_url: str,
+    webhook_path: str,
+    enable_oauth: bool,
+    oauth_mode: str,
+    oauth_client_id: str,
+    oauth_client_secret: str,
+    debug_logging: bool,
+) -> None:
+    """Log the local/remote MCP URLs and any OAuth / debug-logging hints."""
     # Log URLs. resolved_remote may already have been computed above for
     # the OAuth path; fall back to the same lookup for the no-OAuth path
     # so the log line still shows the right URL when OAuth is off.
@@ -1626,10 +1740,9 @@ def main() -> int:
     log_info("=" * 70)
     log_info("")
 
-    # Install SIGTERM/SIGINT handlers so a Supervisor "stop" shuts down through
-    # the cleanup below instead of being killed mid-loop.
-    shutdown_reason = _install_shutdown_handlers()
 
+def _dismiss_mutex_notifications() -> None:
+    """Dismiss any stale 'refused to start' mutex banners (ours and the sibling's)."""
     # Clear any stale "refused to start" mutex banner from a prior blocked
     # start — both our own id and the sibling's (the user may have resolved the
     # conflict by keeping THIS flavor, leaving the sibling's banner up).
@@ -1650,6 +1763,26 @@ def main() -> int:
                 "'refused to start' banner is showing it may need manual dismissal."
             )
 
+
+def _run_health_check(target_url: str, consecutive_failures: int) -> int:
+    """Run one MCP-server reachability check; return the updated failure count."""
+    if _health_check(target_url):
+        if consecutive_failures > 0:
+            log_info("MCP server is reachable again")
+        return 0
+    consecutive_failures += 1
+    if consecutive_failures == 1:
+        log_error(f"MCP server unreachable: {target_url}")
+    elif consecutive_failures % 5 == 0:
+        log_error(f"MCP server still unreachable after {consecutive_failures} checks")
+    return consecutive_failures
+
+
+def _keep_alive_loop(
+    target_url: str, debug_logging: bool, shutdown_reason: dict[str, str | None]
+) -> None:
+    """Keep-alive loop: mirror inbound-debug lines and health-check the MCP
+    server until a shutdown signal (SIGTERM/SIGINT) breaks the loop."""
     # Keep-alive loop. A short poll interval keeps inbound-log mirroring
     # responsive when "Log inbound requests" is on; the MCP-server health
     # check runs on its own ~60s cadence regardless of the poll interval.
@@ -1665,19 +1798,9 @@ def main() -> int:
             now = time.monotonic()
             if now - last_health >= 60:
                 last_health = now
-                if _health_check(target_url):
-                    if consecutive_failures > 0:
-                        log_info("MCP server is reachable again")
-                    consecutive_failures = 0
-                else:
-                    consecutive_failures += 1
-                    if consecutive_failures == 1:
-                        log_error(f"MCP server unreachable: {target_url}")
-                    elif consecutive_failures % 5 == 0:
-                        log_error(
-                            "MCP server still unreachable after "
-                            f"{consecutive_failures} checks"
-                        )
+                consecutive_failures = _run_health_check(
+                    target_url, consecutive_failures
+                )
 
             time.sleep(3 if debug_logging else 30)
     except KeyboardInterrupt:
@@ -1685,6 +1808,87 @@ def main() -> int:
         # going through the installed handler (which already set a reason).
         if shutdown_reason["reason"] is None:
             shutdown_reason["reason"] = "KeyboardInterrupt"
+
+
+def main() -> int:
+    log_info("Starting Webhook Proxy for HA MCP...")
+
+    # Refuse to start if the sibling (dev/stable) webhook proxy is running.
+    if _refuse_if_sibling_running():
+        return 1
+
+    data_dir = Path("/data")
+    options = _read_addon_options(Path("/data/options.json"))
+    if options is None:
+        return 1
+    remote_url = options["remote_url"]
+    mcp_server_url = options["mcp_server_url"]
+    mcp_port = options["mcp_port"]
+    enable_oauth = options["enable_oauth"]
+    oauth_client_id = options["oauth_client_id"]
+    oauth_client_secret = options["oauth_client_secret"]
+    oauth_mode_option = options["oauth_mode_option"]
+    regenerate_oauth_creds = options["regenerate_oauth_creds"]
+    debug_logging = options["debug_logging"]
+    config = options["config"]
+
+    oauth = _resolve_oauth_settings(
+        enable_oauth,
+        oauth_mode_option,
+        oauth_client_id,
+        oauth_client_secret,
+        regenerate_oauth_creds,
+        data_dir,
+        config,
+    )
+    if oauth is None:
+        return 1
+    oauth_mode, oauth_client_id, oauth_client_secret = oauth
+
+    target_url = _resolve_target_url(mcp_server_url, mcp_port)
+    if target_url is None:
+        return 1
+
+    # Get or create webhook ID
+    webhook_id = _get_or_create_webhook_id(data_dir)
+    webhook_path = f"/api/webhook/{webhook_id}"
+
+    proxy_config, resolved_remote = _build_proxy_config(
+        target_url,
+        webhook_id,
+        enable_oauth,
+        oauth_mode,
+        oauth_client_id,
+        oauth_client_secret,
+        remote_url,
+        debug_logging,
+    )
+    if not _write_proxy_config(proxy_config):
+        return 1
+
+    _install_integration_and_handle_restart()
+
+    _enforce_oauth_or_disable(enable_oauth)
+
+    _log_startup_urls(
+        target_url,
+        resolved_remote,
+        remote_url,
+        webhook_path,
+        enable_oauth,
+        oauth_mode,
+        oauth_client_id,
+        oauth_client_secret,
+        debug_logging,
+    )
+
+    # Install SIGTERM/SIGINT handlers so a Supervisor "stop" shuts down through
+    # the cleanup below instead of being killed mid-loop.
+    shutdown_reason = _install_shutdown_handlers()
+
+    _dismiss_mutex_notifications()
+
+    _keep_alive_loop(target_url, debug_logging, shutdown_reason)
 
     _shutdown_cleanup(shutdown_reason["reason"])
     return 0
