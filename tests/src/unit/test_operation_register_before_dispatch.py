@@ -72,9 +72,10 @@ async def test_dispatch_failure_marks_operation_failed(monkeypatch):
     client.get_entity_state = AsyncMock(return_value={"state": "off"})
 
     tools = DeviceControlTools(client=client)
-    # control_device_smart converts the dispatch failure into a structured
-    # ToolError (via exception_to_structured_error) — the FAILED-cleanup runs
-    # on the way out regardless of which exception type propagates.
+    # A RuntimeError exercises the generic ``except Exception`` dispatch-failure branch
+    # (control_device_smart converts it into a structured ToolError via
+    # exception_to_structured_error). The ``except ToolError`` branch is covered
+    # separately by ``test_dispatch_toolerror_marks_operation_failed``.
     with pytest.raises(ToolError):
         await tools.control_device_smart(
             entity_id="light.kitchen", action="on", validate_first=False
@@ -87,3 +88,59 @@ async def test_dispatch_failure_marks_operation_failed(monkeypatch):
     # A later, unrelated state event for the same entity must NOT complete it.
     update_pending_operations("light.kitchen", {"state": "on", "attributes": {}})
     assert ops[0].status == OperationStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_dispatch_toolerror_marks_operation_failed(monkeypatch):
+    """A dispatch raising ToolError exercises the ``except ToolError`` branch (distinct
+    from the generic ``except Exception``) and also flips the pre-registered op to
+    FAILED, so a later unrelated event can't complete a write that never happened."""
+    manager = get_operation_manager()
+
+    client = MagicMock()
+    client.call_service = AsyncMock(side_effect=ToolError("dispatch rejected"))
+    client.get_entity_state = AsyncMock(return_value={"state": "off"})
+
+    tools = DeviceControlTools(client=client)
+    with pytest.raises(ToolError):
+        await tools.control_device_smart(
+            entity_id="light.kitchen", action="on", validate_first=False
+        )
+
+    ops = list(manager.operations.values())
+    assert len(ops) == 1
+    assert ops[0].status == OperationStatus.FAILED
+    # A later, unrelated state event for the same entity must NOT complete it.
+    update_pending_operations("light.kitchen", {"state": "on", "attributes": {}})
+    assert ops[0].status == OperationStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_landed_write_completed_mid_dispatch_is_not_downgraded(monkeypatch):
+    """M-terminal: register-before-dispatch means the confirming ``state_changed`` can
+    COMPLETE the op mid-dispatch (the write DID land); if ``call_service`` then raises
+    for an unrelated reason, ``fail_pending_operation`` must NOT downgrade the terminal
+    COMPLETED status to FAILED and misreport a landed write."""
+    manager = get_operation_manager()
+
+    client = MagicMock()
+
+    async def _complete_then_raise(domain, service, data, **kwargs):
+        # The confirming event lands and completes the op WHILE the dispatch is in
+        # flight (the write reached HA); THEN the call raises for an unrelated reason.
+        update_pending_operations("light.kitchen", {"state": "on", "attributes": {}})
+        raise RuntimeError("post-landing failure")
+
+    client.call_service = AsyncMock(side_effect=_complete_then_raise)
+    client.get_entity_state = AsyncMock(return_value={"state": "off"})
+
+    tools = DeviceControlTools(client=client)
+    with pytest.raises(ToolError):
+        await tools.control_device_smart(
+            entity_id="light.kitchen", action="on", validate_first=False
+        )
+
+    ops = list(manager.operations.values())
+    assert len(ops) == 1
+    # The op completed mid-dispatch and MUST stay COMPLETED (not downgraded to FAILED).
+    assert ops[0].status == OperationStatus.COMPLETED

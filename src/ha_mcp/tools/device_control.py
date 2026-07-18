@@ -17,6 +17,7 @@ from fastmcp.exceptions import ToolError
 from ..client.rest_client import (
     HomeAssistantClient,
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
 )
 from ..client.websocket_client import get_websocket_client
 from ..client.websocket_listener import start_websocket_listener
@@ -664,11 +665,21 @@ class DeviceControlTools:
                 operations, valid_operations, skipped_operations, parallel
             )
             if component_response is not None:
+                # M-progress-msg: the ambiguous batch response carries a top-level
+                # ``partial`` (dispatched but the batch confirmation never arrived — not
+                # retried); only a fully-served batch is "confirmed inline". The legacy
+                # ``_build_bulk_response`` never sets a top-level ``partial``, so this
+                # flag reliably marks the ambiguous path.
+                component_message = (
+                    "dispatched via component (unconfirmed — not retried)"
+                    if component_response.get("partial")
+                    else "dispatched via component (confirmed inline)"
+                )
                 await safe_progress(
                     ctx,
                     progress=len(valid_operations),
                     total=len(valid_operations),
-                    message="dispatched via component (confirmed inline)",
+                    message=component_message,
                 )
                 return component_response
 
@@ -793,7 +804,10 @@ class DeviceControlTools:
         # exist (HA no-ops the dispatch, then the wait stalls to partial). The legacy
         # path returns a structured ENTITY_NOT_FOUND per-op failure — match it from
         # the pre-state already in the transition (no extra hops), rather than
-        # counting a phantom entity as a successful command.
+        # counting a phantom entity as a successful command. Reachability is
+        # drift-bounded: a missing transition row from a length-drifted batch now routes
+        # to the ambiguous path (I2) before reaching here, so a null old_state here
+        # means a genuinely absent entity, not a dropped row.
         if op.get("validate_first", True) and row.get("entity_ids"):
             old_state = next(
                 (
@@ -830,7 +844,10 @@ class DeviceControlTools:
             "action": action,
             "parameters": op.get("parameters") or {},
             "command_sent": True,
-            "status": "completed" if confirmed else "pending_verification",
+            # M-status: an inline-confirmed op has no operation_id, so a
+            # "pending_verification" status is misleading (nothing will poll it). Use
+            # "dispatched_unconfirmed" — the same label the ambiguous batch path uses.
+            "status": "completed" if confirmed else "dispatched_unconfirmed",
             "confirmed": confirmed,
             "partial": partial,
             "final_state": final_state,
@@ -880,15 +897,20 @@ class DeviceControlTools:
 
         * ``None`` (nothing dispatched → safe legacy first fire): a capability miss,
           an op that could not be resolved server-side, an empty batch, an
-          ``unknown_command`` (caps invalidated), a connection-ESTABLISHMENT failure
-          (the frame never reached the component), or a command-ERROR response — the
-          batch's all-guards-first pass (D1 / ServiceNotFound) raises before ANY
-          ``async_call``, so a command error is provably pre-dispatch.
+          ``unknown_command`` (caps invalidated), a connection-ESTABLISHMENT failure,
+          a ``HomeAssistantCommandNotSent`` (the frame provably never left the process
+          — entry-guard reject or a send that raised before transmit), or a
+          command-ERROR response. A command error is pre-dispatch because the batch's
+          all-guards-first pass (D1 / ServiceNotFound) raises before ANY ``async_call``
+          AND the component's post-dispatch assembly is TOTAL (never raises — I1), so
+          no landed write can surface as a command error.
         * A returned result means the batch dispatched: each op's own ``dispatched``
           flag is authoritative and NOTHING is re-dispatched, even the ops that failed.
-        * A response-wait TIMEOUT or any post-send transport drop is AMBIGUOUS for the
-          WHOLE batch frame (some/all ops may have landed; ``async_call`` under the
-          batch is unbounded). It returns a partial batch response — every op reported
+        * A response-wait TIMEOUT, a post-send transport drop, OR a malformed/unusable
+          SUCCESS envelope (non-dict result or op-list length drift) is AMBIGUOUS for
+          the WHOLE batch frame (some/all ops may have landed; a success frame is built
+          only AFTER every ``async_call`` fired, and ``async_call`` under the batch is
+          unbounded). It returns a partial batch response — every op reported
           dispatched-but-unconfirmed — and is NEVER re-dispatched via legacy (a
           re-dispatch would double-fire every landed op, inverting ``toggle`` ops).
         """
@@ -914,18 +936,39 @@ class DeviceControlTools:
                 exc,
             )
             return None
-        # The batch frame is now sent. A command-ERROR response is pre-dispatch (the
-        # all-guards-first D1 / ServiceNotFound pass raises before any async_call), so
-        # legacy is safe. A response-wait TIMEOUT / post-send drop is AMBIGUOUS for the
-        # WHOLE batch → report every op dispatched-but-unconfirmed, NEVER re-dispatch.
+        # ``send_command`` transmits the batch frame INSIDE itself, AFTER its readiness
+        # guard and the socket write — so exception TYPE marks the send boundary:
+        # ``HomeAssistantCommandNotSent`` is raised ONLY at those two pre-send sites
+        # (never transmitted → safe legacy first fire). A command-ERROR response is
+        # pre-dispatch: the all-guards-first D1 / ServiceNotFound pass raises before any
+        # async_call AND the component's post-dispatch assembly is total (never raises),
+        # so a command error cannot carry a landed write → legacy is safe. A response-
+        # wait TIMEOUT or a post-send transport drop (a mid-await socket close raises
+        # plain ``HomeAssistantConnectionError``) is AMBIGUOUS for the WHOLE batch →
+        # report every op dispatched-but-unconfirmed, NEVER re-dispatch. ``frame_timeout``
+        # honors the per-op ``timeout_seconds`` legacy respects (M-timeout).
+        frame_timeout = self._bulk_frame_timeout(valid_operations)
         try:
             raw = await ws.send_command(
                 WS_BULK_CALL_SERVICE,
                 operations=rows,
                 parallel=parallel,
                 wait=True,
-                timeout=10.0,
+                timeout=frame_timeout,
+                # Keep the response-wait comfortably above the batch confirmation wait
+                # so the component's own bounded wait (not the client) decides the
+                # partial cutoff, preserving the legacy 10s/30s margin at any timeout.
+                _wait_timeout=frame_timeout + 20.0,
             )
+        except HomeAssistantCommandNotSent as exc:
+            # PRE-SEND: the batch frame provably never left the process. Nothing
+            # dispatched, so legacy is a safe first fire.
+            logger.warning(
+                "%s not sent; falling back to legacy: %r",
+                WS_BULK_CALL_SERVICE,
+                exc,
+            )
+            return None
         except HomeAssistantCommandError as exc:
             # unknown_command → invalidate the cached caps so the next call re-probes;
             # any other command error → legacy (provably pre-dispatch per D9 above).
@@ -951,15 +994,17 @@ class DeviceControlTools:
                 operations, valid_operations, rows, skipped_operations, parallel
             )
 
-        result = raw.get("result")
-        if not isinstance(result, dict):
-            return None
-        op_results = result.get("operations")
-        # The component preserves op order and returns exactly one result per row it
-        # was sent; a length drift means an incompatible response — treat as no usable
-        # component result (never reconcile a mismatched batch).
-        if not isinstance(op_results, list) or len(op_results) != len(rows):
-            return None
+        # A SUCCESS result frame is produced ONLY after the batch prep ran to completion
+        # (every op's async_call fired), so a malformed/unusable success envelope (a
+        # non-dict result, or an op-list whose length drifts from the rows we sent)
+        # means the writes already HAPPENED. Report the batch AMBIGUOUS (every op
+        # partial, never re-dispatched) — a ``None`` here would route to the legacy
+        # operation-registry path and double-fire every landed op.
+        op_results = self._component_bulk_op_results(raw, len(rows))
+        if op_results is None:
+            return self._build_ambiguous_bulk_response(
+                operations, valid_operations, rows, skipped_operations, parallel
+            )
 
         results = [
             self._map_component_op_result(op, entity_id, action, row, component_op)
@@ -973,6 +1018,44 @@ class DeviceControlTools:
         return self._build_bulk_response(
             operations, results, [], skipped_operations, parallel
         )
+
+    @staticmethod
+    def _bulk_frame_timeout(
+        valid_operations: list[tuple[int, dict[str, Any], str, str]],
+    ) -> float:
+        """The batch confirmation-wait bound, honoring per-op ``timeout_seconds``.
+
+        Legacy runs each op with its own ``timeout_seconds`` (default 10); the single
+        batch frame shares ONE bounded wait, so use the max over the valid ops (capped
+        at 60s) rather than a hardcoded 10s (M-timeout). ``valid_operations`` is
+        non-empty here (an empty batch returned to legacy before the send).
+        """
+        return min(
+            60.0,
+            max(
+                float(op.get("timeout_seconds") or 10)
+                for _idx, op, _eid, _action in valid_operations
+            ),
+        )
+
+    @staticmethod
+    def _component_bulk_op_results(
+        raw: dict[str, Any], expected_len: int
+    ) -> list[Any] | None:
+        """The per-op results list from a batch frame, or ``None`` if malformed.
+
+        The component preserves op order and returns exactly one result per row it was
+        sent. A non-dict result or an op-list whose length drifts from ``expected_len``
+        is an unusable/incompatible SUCCESS envelope — the caller treats ``None`` as
+        AMBIGUOUS (the writes already landed; never reconcile a mismatched batch).
+        """
+        result = raw.get("result")
+        if not isinstance(result, dict):
+            return None
+        op_results = result.get("operations")
+        if not isinstance(op_results, list) or len(op_results) != expected_len:
+            return None
+        return op_results
 
     def _build_ambiguous_bulk_response(
         self,

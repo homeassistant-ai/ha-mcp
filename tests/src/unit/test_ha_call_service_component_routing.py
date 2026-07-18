@@ -24,7 +24,9 @@ import pytest
 
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, tools_service
 from ha_mcp.tools.tools_service import register_service_tools
@@ -37,13 +39,13 @@ from ._component_routing_helpers import (
 
 _CAPS_CALL = {
     "schema_version": 1,
-    "component_version": "1.3.0",
+    "component_version": "1.2.0",
     "capabilities": ["call_service"],
     "limits": {},
 }
 _CAPS_NONE = {
     "schema_version": 1,
-    "component_version": "1.3.0",
+    "component_version": "1.2.0",
     "capabilities": [],
     "limits": {},
 }
@@ -258,6 +260,26 @@ async def test_non_state_changing_call_uses_legacy_not_component() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verbose_uses_legacy_not_component() -> None:
+    """M-verbose: a verbose call promises the FULL propagation chain (every downstream
+    changed state), which the component route cannot deliver — so it routes to the
+    legacy REST POST and never sends a component frame."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL)
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a", verbose=True
+        )
+
+    assert resp["success"] is True
+    # Legacy REST POST ran once; the component was never routed to.
+    assert len(client.call_service_calls) == 1
+    assert not _call_service_frames(ws)
+
+
+@pytest.mark.asyncio
 async def test_return_response_passed_through() -> None:
     """return_response threads to the component and its service_response is surfaced."""
     result = _confirmed_result("light.a")
@@ -359,9 +381,10 @@ async def test_ws_establish_failure_falls_back_to_legacy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_malformed_envelope_falls_back_to_legacy() -> None:
-    """A component response missing the frozen 'dispatched' key is no usable result →
-    exactly one legacy REST POST (treated as never-reached, never a dropped write)."""
+async def test_malformed_envelope_reports_partial_no_redispatch() -> None:
+    """A SUCCESS envelope without a truthy 'dispatched' is produced ONLY after the
+    single async_call fired, so the write already landed: report it partial and NEVER
+    re-POST (I2 — a legacy re-POST would double-apply)."""
     ws = make_ws(
         "ha_mcp_tools/call_service",
         info_result=_CAPS_CALL,
@@ -376,7 +399,81 @@ async def test_malformed_envelope_falls_back_to_legacy() -> None:
         )
 
     assert resp["success"] is True
+    assert resp["partial"] is True
+    # I2: a malformed SUCCESS envelope is ambiguous-dispatched → ZERO legacy re-POST.
+    assert client.call_service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_dispatched_not_true_reports_partial_no_redispatch() -> None:
+    """A SUCCESS envelope carrying 'dispatched' present but not True is a received
+    post-dispatch envelope we cannot trust to re-fire: ambiguous, ZERO legacy re-POST
+    (I2 — presence of the key is not enough; the value must be True)."""
+    ws = make_ws(
+        "ha_mcp_tools/call_service",
+        info_result=_CAPS_CALL,
+        cmd_result={"domain": "light", "service": "turn_on", "dispatched": None},
+    )
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert resp["success"] is True
+    assert resp["partial"] is True
+    assert client.call_service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_never_sent_falls_to_exactly_one_post() -> None:
+    """C1: a HomeAssistantCommandNotSent from send_command (the frame provably never
+    left the process — entry-guard reject or a send that raised before transmit) →
+    EXACTLY ONE legacy REST POST. The write never happened, so a legacy first fire
+    cannot double-apply."""
+    ws = make_ws(
+        "ha_mcp_tools/call_service",
+        info_result=_CAPS_CALL,
+        cmd_exc=HomeAssistantCommandNotSent("WebSocket not authenticated"),
+    )
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert resp["success"] is True
     assert len(client.call_service_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_post_send_connection_drop_is_ambiguous_no_re_post() -> None:
+    """C1 (the other direction): a PLAIN HomeAssistantConnectionError from send_command
+    is a mid-await socket close AFTER the frame was sent (the close handler sets it on
+    the pending future) — POST-SEND and ambiguous. It must report partial and NEVER
+    re-POST; only HomeAssistantCommandNotSent (a subclass) signals never-sent, so a
+    bare connection error is not misclassified as pre-send."""
+    ws = make_ws(
+        "ha_mcp_tools/call_service",
+        info_result=_CAPS_CALL,
+        cmd_exc=HomeAssistantConnectionError("socket closed mid-await"),
+    )
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert resp["success"] is True
+    assert resp["partial"] is True
+    # THE C1 boundary assertion: a post-send drop is ambiguous → ZERO legacy POST.
+    assert client.call_service_calls == []
 
 
 class TestD9AtMostOnce:

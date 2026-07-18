@@ -139,8 +139,11 @@ class TestCapabilityPresence:
         ):
             assert cap in wsapi.CAPABILITIES
 
-    def test_component_version_bumped(self):
-        assert wsapi.COMPONENT_VERSION == "1.3.0"
+    def test_component_version(self):
+        # Rides under the pending 1.2.0 release: already ahead of the 1.1.0 stable, so
+        # the new write caps are advertised by capability name (not version-inferred),
+        # and no bump is needed for them.
+        assert wsapi.COMPONENT_VERSION == "1.2.0"
 
 
 # =============================================================================
@@ -1613,6 +1616,81 @@ class TestCallServiceHappyPath:
         assert res["confirmed"] is True
 
 
+class _AmbiguousBool:
+    """A truth value that raises when coerced to bool — numpy's array-bool behavior."""
+
+    def __bool__(self):
+        raise ValueError("truth value of an array with more than one element is ambiguous")
+
+
+class _ArrayLike:
+    """An attribute value whose ``!=`` returns a non-bool (``_AmbiguousBool``).
+
+    Exactly the shape (numpy array / pandas value) that makes a naive
+    ``old != new`` blow up inside the attribute diff. ``_values_differ`` must fall
+    back to a ``repr`` compare instead of raising.
+    """
+
+    def __init__(self, values):
+        self._values = list(values)
+
+    def __eq__(self, other):
+        return _AmbiguousBool()
+
+    def __ne__(self, other):
+        return _AmbiguousBool()
+
+    __hash__ = None  # unhashable, like a list/array — never keyed on in the diff
+
+    def __repr__(self):
+        return f"_ArrayLike({self._values!r})"
+
+
+class TestCallServiceArrayLikeAttribute:
+    """I1: an array-like attribute value must NOT make the post-dispatch transition
+    diff raise — a raise there would surface as a command error the server maps to
+    legacy → a re-POST of an already-landed write (double-apply)."""
+
+    def test_values_differ_is_raise_proof(self):
+        # A bare ``!=`` would raise on the ambiguous bool; _values_differ falls back to
+        # a repr compare: equal reprs → not differing, unequal reprs → differing.
+        assert wsapi._values_differ(_ArrayLike([1, 2, 3]), _ArrayLike([1, 2, 3])) is False
+        assert wsapi._values_differ(_ArrayLike([1, 2, 3]), _ArrayLike([9, 9, 9])) is True
+
+    def test_transition_does_not_raise_on_array_like(self):
+        old = FakeState("light.a", state="on", rgb_color=_ArrayLike([0, 0, 0])).as_dict()
+        new = FakeState("light.a", state="on", rgb_color=_ArrayLike([255, 0, 0])).as_dict()
+        transition = wsapi._call_service_transition("light.a", old, new)
+        # The array-like attribute is diffed via repr (no raise) and reported changed.
+        assert transition["attributes_changed"] == ["rgb_color"]
+        assert transition["changed"] is False
+
+    def test_prep_returns_usable_envelope_with_array_like_attr(self):
+        old = FakeState("light.a", state="off", rgb_color=_ArrayLike([0, 0, 0]))
+        new = FakeState("light.a", state="on", rgb_color=_ArrayLike([255, 0, 0]))
+        bus = _FakeBus()
+        services = _FakeCallServices(
+            known={("light", "turn_on")},
+            on_call=lambda: bus.fire("light.a", new),
+        )
+        hass = _call_hass([old], services, bus)
+        res = _run_call_service(
+            hass,
+            {
+                "type": wsapi.WS_CALL_SERVICE,
+                "domain": "light",
+                "service": "turn_on",
+                "entity_ids": ["light.a"],
+            },
+        )
+        # The whole prep ran to a usable confirmed envelope — no propagated raise.
+        assert res["dispatched"] is True
+        assert res["confirmed"] is True
+        assert res["partial"] is False
+        (transition,) = res["transitions"]
+        assert "rgb_color" in transition["attributes_changed"]
+
+
 class TestCallServiceWait:
     def test_timeout_is_partial_not_failure(self):
         old = FakeState("light.a", state="off")
@@ -1657,6 +1735,35 @@ class TestCallServiceWait:
         )
         assert services.call_count == 1  # dispatch happened
         assert res["dispatched"] is True
+        assert res["partial"] is True
+
+
+class TestCallServiceEntityRemovedMidWait:
+    """M-newstate-none: a state_changed carrying new_state=None (the entity was removed
+    mid-wait) is NOT a confirmed transition — it must leave the op partial, never
+    falsely confirmed."""
+
+    def test_none_new_state_is_not_confirmed(self):
+        old = FakeState("light.a", state="on")
+        bus = _FakeBus()
+        services = _FakeCallServices(
+            known={("light", "turn_off")},
+            on_call=lambda: bus.fire("light.a", None),  # entity removed mid-wait
+        )
+        hass = _call_hass([old], services, bus)
+        res = _run_call_service(
+            hass,
+            {
+                "type": wsapi.WS_CALL_SERVICE,
+                "domain": "light",
+                "service": "turn_off",
+                "entity_ids": ["light.a"],
+                "timeout": 0.01,
+            },
+        )
+        assert res["dispatched"] is True
+        # A None new_state must NOT count as confirmation → the op stays partial.
+        assert res["confirmed"] is False
         assert res["partial"] is True
 
 

@@ -5108,6 +5108,16 @@ async def _call_service_prep(
     (the handler may mutate state and THEN raise — the documented D9 at-most-once
     residual, NOT pre-dispatch). A confirmation timeout is caught and reported as
     ``partial`` (never re-raised): the call already landed.
+
+    POST-dispatch formatting (step 7) is wrapped so it never raises past this point
+    (I1): once ``async_call`` fired, a formatting raise that reached the WS handler
+    would be mapped to legacy and re-POST an already-landed write. The attribute diff
+    is raise-proofed (:func:`_values_differ`), and the whole build is caught, degrading
+    to a minimal dispatched-but-unconfirmed envelope. Serialization residual (bounded,
+    no sanitize pass): the transition embeds each state's ``as_dict()`` and the WS
+    transport re-encodes it; HA core enforces JSON-serializable state attributes for
+    its own REST/WS/recorder APIs, so a state that reached the component already
+    serializes — re-encoding it here is safe.
     """
     import asyncio
 
@@ -5157,19 +5167,32 @@ async def _call_service_prep(
         if unsub is not None:
             unsub()
 
-    # 7. Post-state + real pre→post diff, assembled into the response envelope.
-    result = _build_call_service_result(
-        hass,
-        domain,
-        service,
-        entity_ids,
-        pre,
-        captured,
-        should_confirm=should_confirm,
-        dispatched=dispatched,
-        return_response=return_response,
-        response=response,
-    )
+    # 7. Post-state + real pre→post diff. Once dispatched, formatting MUST be total
+    # (I1): the single async_call already fired, so a raise here would surface as a
+    # command error the server maps to legacy → a re-POST of an already-landed write
+    # (double-apply). On any failure return a minimal dispatched-but-unconfirmed
+    # envelope instead of propagating.
+    try:
+        result = _build_call_service_result(
+            hass,
+            domain,
+            service,
+            entity_ids,
+            pre,
+            captured,
+            should_confirm=should_confirm,
+            dispatched=dispatched,
+            return_response=return_response,
+            response=response,
+        )
+    except Exception:
+        _LOGGER.exception(
+            "call_service post-dispatch formatting failed after dispatch; "
+            "returning dispatched-but-unconfirmed envelope (%s.%s)",
+            domain,
+            service,
+        )
+        result = _dispatched_unconfirmed_result(domain, service)
     return {"result": result}
 
 
@@ -5220,7 +5243,11 @@ def _register_transition_waiter(
     def _on_change(event: Any) -> None:
         data = getattr(event, "data", None) or {}
         eid = data.get("entity_id")
-        if eid in target_set:
+        # M-newstate-none: a state_changed with new_state=None means the entity was
+        # REMOVED mid-wait — that is not a confirmed transition, so do NOT capture it
+        # (leaving the target uncaptured keeps the op ``partial``, not falsely
+        # confirmed). ``_post_state`` still re-reads a best-available current state.
+        if eid in target_set and data.get("new_state") is not None:
             captured[eid] = data.get("new_state")
             if target_set <= set(captured):
                 evt.set()
@@ -5284,6 +5311,25 @@ def _build_call_service_result(
     return result
 
 
+def _dispatched_unconfirmed_result(domain: str, service: str) -> dict[str, Any]:
+    """Minimal ``call_service`` envelope when post-dispatch formatting raised (I1).
+
+    The single ``async_call`` already fired; building the rich transition raised (an
+    exotic captured state / serialization edge). Report dispatched-but-unconfirmed with
+    no transitions rather than propagating — a propagated raise would become a command
+    error the server maps to legacy and re-POST an already-landed write (double-apply).
+    Reads only the plain domain/service strings, so it cannot itself raise.
+    """
+    return {
+        "domain": domain,
+        "service": service,
+        "dispatched": True,
+        "confirmed": False,
+        "partial": True,
+        "transitions": [],
+    }
+
+
 def _post_state(
     hass: HomeAssistant, entity_id: str, captured: Mapping[str, Any]
 ) -> Any:
@@ -5303,6 +5349,21 @@ def _post_state(
     return _state_as_dict(_state_get(hass, entity_id))
 
 
+def _values_differ(a: Any, b: Any) -> bool:
+    """Whether two attribute values differ, raise-proof for array-like values.
+
+    A plain ``a != b`` raises "truth value ... is ambiguous" for numpy arrays and
+    other exotic ``__ne__`` results that aren't a bool. Post-dispatch formatting MUST
+    NOT raise (a raise here would surface as a command error the server maps to legacy
+    → a re-POST of an already-landed write), so fall back to a ``repr`` compare when
+    the direct compare's truthiness is not a plain bool.
+    """
+    try:
+        return bool(a != b)
+    except Exception:  # array-like / exotic __ne__ whose result isn't a plain bool
+        return repr(a) != repr(b)
+
+
 def _call_service_transition(
     entity_id: str,
     old_state: dict[str, Any] | None,
@@ -5310,10 +5371,11 @@ def _call_service_transition(
 ) -> dict[str, Any]:
     """The real pre→post transition for one target entity.
 
-    ``changed`` compares the top-level ``state``; ``attributes_changed`` lists the
-    attribute keys whose values differ (added/removed keys included). Both sides
-    may be ``None`` (a stateless or vanished entity), which the ``or {}`` guards
-    fold into an all-``None`` comparison rather than raising.
+    ``changed`` compares the top-level ``state`` (always a plain string — safe);
+    ``attributes_changed`` lists the attribute keys whose values differ (added/removed
+    keys included), compared through :func:`_values_differ` so an array-like attribute
+    value cannot raise. Both sides may be ``None`` (a stateless or vanished entity),
+    which the ``or {}`` guards fold into an all-``None`` comparison rather than raising.
     """
     old = old_state or {}
     new = new_state or {}
@@ -5322,7 +5384,7 @@ def _call_service_transition(
     attributes_changed = sorted(
         key
         for key in set(old_attrs) | set(new_attrs)
-        if old_attrs.get(key) != new_attrs.get(key)
+        if _values_differ(old_attrs.get(key), new_attrs.get(key))
     )
     return {
         "entity_id": entity_id,
@@ -5406,8 +5468,20 @@ async def _bulk_call_service_prep(
         for unsub in unsubs:
             unsub()
 
-    # 6./7. Per-op pre→post diff + batch counts.
-    return {"result": _build_bulk_result(hass, ops)}
+    # 6./7. Per-op pre→post diff + batch counts. Post-dispatch assembly MUST be total
+    # (I1): the ops already fired, so a raise here would be mapped to legacy and
+    # re-dispatch every landed op (double-fire). On any failure return a minimal
+    # envelope reporting each op dispatched-but-unconfirmed (its real dispatched/error
+    # preserved) instead of propagating.
+    try:
+        result = _build_bulk_result(hass, ops)
+    except Exception:
+        _LOGGER.exception(
+            "bulk_call_service post-dispatch assembly failed after dispatch; "
+            "returning dispatched-but-unconfirmed batch envelope"
+        )
+        result = _dispatched_unconfirmed_bulk_result(ops)
+    return {"result": result}
 
 
 def _bulk_op_record(
@@ -5593,6 +5667,41 @@ def _build_bulk_result(
     size, so ``total - dispatched`` is the refused/failed-before-landing count.
     """
     op_results = [_build_bulk_op_result(hass, op) for op in ops]
+    return {
+        "operations": op_results,
+        "total": len(op_results),
+        "dispatched": sum(1 for r in op_results if r["dispatched"]),
+        "failed": sum(1 for r in op_results if r.get("error") is not None),
+    }
+
+
+def _dispatched_unconfirmed_bulk_result(
+    ops: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Minimal batch envelope when post-dispatch assembly raised (I1 total-formatting).
+
+    Every op already fired (or recorded a pre-landing ``error``); building the rich
+    transition rows raised (an exotic attribute value / serialization edge). Report
+    each op with empty transitions rather than propagating — a propagated raise would
+    become a command error the server maps to legacy and re-dispatch every landed op
+    (double-fire). Reads only each record's plain ``domain``/``service``/``entity_ids``
+    /``dispatched``/``should_confirm``/``error`` fields (never the rich captured
+    state), so it cannot itself raise; the real per-op ``dispatched``/``error`` are
+    preserved so a genuinely-failed op is not misreported as landed.
+    """
+    op_results = [
+        {
+            "domain": op["domain"],
+            "service": op["service"],
+            "entity_ids": list(op["entity_ids"]),
+            "dispatched": op["dispatched"],
+            "confirmed": False,
+            "partial": bool(op["should_confirm"] and op["dispatched"]),
+            "transitions": [],
+            **({"error": op["error"]} if op["error"] is not None else {}),
+        }
+        for op in ops
+    ]
     return {
         "operations": op_results,
         "total": len(op_results),

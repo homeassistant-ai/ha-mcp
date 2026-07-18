@@ -15,6 +15,7 @@ from pydantic import Field
 
 from ..client.rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
@@ -722,10 +723,14 @@ class ServiceTools:
                 exc,
             )
             return None
-        # The frame is now sent. Distinguish a command-ERROR response (pre-dispatch by
-        # the component's guards / the documented mutate-then-raise residual → legacy)
-        # from a response-wait TIMEOUT or any post-send transport drop (AMBIGUOUS →
-        # partial, never retried).
+        # ``send_command`` transmits the frame INSIDE itself, AFTER its readiness guard
+        # and the actual socket write — so exception TYPE marks the send boundary:
+        # ``HomeAssistantCommandNotSent`` is raised ONLY at those two pre-send sites
+        # (never transmitted → safe legacy first fire); a command-ERROR response is
+        # pre-dispatch by the component's guards / the documented mutate-then-raise
+        # residual → legacy; a response-wait TIMEOUT or a post-send transport drop
+        # (a mid-await socket close raises plain ``HomeAssistantConnectionError``) is
+        # POST-SEND and AMBIGUOUS → partial, never retried.
         try:
             raw = await ws.send_command(
                 WS_CALL_SERVICE,
@@ -737,6 +742,16 @@ class ServiceTools:
                 timeout=timeout,
                 return_response=return_response,
             )
+        except HomeAssistantCommandNotSent as exc:
+            # PRE-SEND: the frame provably never left the process (entry-guard reject
+            # or a send that raised before transmit). The write never happened, so
+            # legacy REST is a safe first fire.
+            logger.warning(
+                "%s not sent; falling back to legacy: %r",
+                WS_CALL_SERVICE,
+                exc,
+            )
+            return None
         except HomeAssistantCommandError as exc:
             # unknown_command means the command vanished: invalidate the cached caps so
             # the next call re-probes. Any other command error → legacy re-POST (the
@@ -762,11 +777,15 @@ class ServiceTools:
             )
             return _COMPONENT_DISPATCH_AMBIGUOUS
         result = raw.get("result")
-        # ``dispatched`` is the frozen sentinel key every ``_do_call_service`` envelope
-        # carries; its absence means no usable component response (treated as
-        # never-reached → legacy), never a silently-dropped write.
-        if not isinstance(result, dict) or "dispatched" not in result:
-            return None
+        # A SUCCESS result frame is produced ONLY after the prep ran to completion (the
+        # single async_call fired), so a malformed/unusable success envelope means the
+        # write already HAPPENED. Report it AMBIGUOUS (partial, never re-POSTed) — a
+        # ``None`` here would route to the legacy REST path and DOUBLE-APPLY. The
+        # happy-path envelope is a dict whose ``dispatched`` is True: presence of the
+        # key is not enough, since a received post-dispatch envelope whose
+        # ``dispatched`` isn't True is one we cannot trust to re-fire.
+        if not isinstance(result, dict) or result.get("dispatched") is not True:
+            return _COMPONENT_DISPATCH_AMBIGUOUS
         return result
 
     @staticmethod
@@ -890,8 +909,13 @@ class ServiceTools:
         legacy timeout path builds, NEVER re-POSTed (D9 at-most-once). Returns ``None``
         when the component was not used or provably never dispatched, so the caller
         runs the legacy REST path as a safe first fire.
+
+        ``verbose`` routes to legacy too: it promises the FULL propagation chain
+        (every downstream changed state), which the component path cannot deliver — it
+        returns only the confirmation targets' ``new_state``s — so the richer legacy
+        POST serves it instead.
         """
-        if not should_wait:
+        if not should_wait or verbose:
             return None
         component_result = await self._call_service_via_component(
             domain=domain,

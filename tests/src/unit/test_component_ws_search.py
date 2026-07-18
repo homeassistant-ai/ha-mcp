@@ -5,7 +5,7 @@ Mirrors the established component-test pattern (``test_caller_token_auth.py`` /
 stubbed with ``MagicMock`` and the pure ``_do_*`` functions are exercised with
 fake hass / registry objects injected through the ``_resolve_registries`` seam.
 
-Covers the v1.3.0 command surface (info / search / overview / helpers_list /
+Covers the v1.2.0 command surface (info / search / overview / helpers_list /
 states / blueprint_get / device_get / device_list / entity_enrich / exposure;
 config_get was withdrawn pre-release). Highlights:
 * ``_do_info`` handshake shape + manifest/const version parity (drift guard);
@@ -767,7 +767,7 @@ class TestInfo:
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "1.3.0"
+        assert manifest["version"] == COMPONENT_VERSION == "1.2.0"
 
 
 # =============================================================================

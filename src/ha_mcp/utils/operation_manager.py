@@ -429,8 +429,20 @@ def fail_pending_operation(operation_id: str, error_message: str) -> bool:
     PENDING operation the caller never got to await. Flip it to FAILED so a
     later, unrelated ``state_changed`` for the same entity can't spuriously
     complete it, and so its status read reports the real dispatch failure.
+
+    Only flip an operation that is still PENDING (M-terminal): register-before-
+    dispatch means the confirming ``state_changed`` can complete the op mid-dispatch
+    (the write DID land), and if ``call_service`` then raises for an unrelated reason
+    we must NOT downgrade that terminal COMPLETED status to FAILED and misreport a
+    landed write. Returns ``False`` when the op is missing or already terminal.
     """
     manager = get_operation_manager()
+    # Read the raw record (not ``get_operation``, whose expiry side effect would flip
+    # a still-PENDING-but-expired op to TIMEOUT); a terminal status must not be
+    # overwritten by this failure path.
+    operation = manager.operations.get(operation_id)
+    if operation is None or operation.status != OperationStatus.PENDING:
+        return False
     return manager.update_operation_status(
         operation_id, OperationStatus.FAILED, error_message=error_message
     )

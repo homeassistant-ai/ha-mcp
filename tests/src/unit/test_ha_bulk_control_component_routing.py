@@ -25,7 +25,9 @@ import pytest
 
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, device_control
 from ha_mcp.tools.device_control import DeviceControlTools
@@ -38,13 +40,13 @@ from ._component_routing_helpers import (
 
 _CAPS_BULK = {
     "schema_version": 1,
-    "component_version": "1.3.0",
+    "component_version": "1.2.0",
     "capabilities": ["bulk_call_service"],
     "limits": {},
 }
 _CAPS_NONE = {
     "schema_version": 1,
-    "component_version": "1.3.0",
+    "component_version": "1.2.0",
     "capabilities": [],
     "limits": {},
 }
@@ -404,9 +406,11 @@ async def test_validate_first_false_allows_null_prestate_op() -> None:
 
 
 @pytest.mark.asyncio
-async def test_malformed_envelope_length_drift_falls_back_to_legacy() -> None:
-    """A batch response whose op count drifts from the rows sent is no usable result
-    → legacy dispatch (a mismatched batch is never reconciled)."""
+async def test_malformed_envelope_length_drift_reports_partial_no_redispatch() -> None:
+    """A batch SUCCESS response whose op count drifts from the rows sent is produced
+    ONLY after every op's async_call fired, so the writes already landed: report the
+    batch partial (every op dispatched-but-unconfirmed) and NEVER re-dispatch (I2 — a
+    legacy re-dispatch would double-fire every landed op, inverting toggles)."""
     ws = make_ws(
         "ha_mcp_tools/bulk_call_service",
         info_result=_CAPS_BULK,
@@ -417,10 +421,83 @@ async def test_malformed_envelope_length_drift_falls_back_to_legacy() -> None:
     tools = DeviceControlTools(client)
 
     with patch_ws(ws, device_control):
+        resp = await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
+
+    # I2: drift → ambiguous partial batch, ZERO legacy re-dispatch.
+    assert resp["partial"] is True
+    assert resp["total_operations"] == 2
+    for op_result in resp["results"]:
+        assert op_result["partial"] is True
+        assert op_result["status"] == "dispatched_unconfirmed"
+    assert client.call_service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_malformed_non_dict_result_reports_partial_no_redispatch() -> None:
+    """A batch response whose ``result`` is not a dict is an unusable SUCCESS envelope
+    → ambiguous partial batch, ZERO legacy re-dispatch (I2 — the writes already
+    landed once the frame returned)."""
+    ws = make_ws(
+        "ha_mcp_tools/bulk_call_service",
+        info_result=_CAPS_BULK,
+        cmd_result=["not", "a", "dict"],  # unusable result shape
+    )
+    client = BulkRoutingClient()
+    tools = DeviceControlTools(client)
+
+    with patch_ws(ws, device_control):
+        resp = await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
+
+    assert resp["partial"] is True
+    assert resp["total_operations"] == 2
+    assert client.call_service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_never_sent_falls_back_to_legacy() -> None:
+    """C1: a HomeAssistantCommandNotSent on the batch frame (the frame provably never
+    left the process) → legacy per-op dispatch. Nothing landed, so a legacy first fire
+    cannot double-fire."""
+    ws = make_ws(
+        "ha_mcp_tools/bulk_call_service",
+        info_result=_CAPS_BULK,
+        cmd_exc=HomeAssistantCommandNotSent("WebSocket not authenticated"),
+    )
+    client = BulkRoutingClient()
+    tools = DeviceControlTools(client)
+
+    with patch_ws(ws, device_control):
         await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
 
-    # Drift → None → legacy re-dispatch of both ops.
+    # Never-sent → legacy re-dispatch of both ops (a safe first fire).
     assert len(client.call_service_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_post_send_connection_drop_is_ambiguous_no_re_dispatch() -> None:
+    """C1 (the other direction): a PLAIN HomeAssistantConnectionError on the batch
+    frame is a mid-await socket close AFTER the frame was sent — POST-SEND and
+    ambiguous for the whole batch. It reports a partial batch and NEVER re-dispatches;
+    only HomeAssistantCommandNotSent (a subclass) signals never-sent, so a bare
+    connection error is not misclassified as pre-send."""
+    ws = make_ws(
+        "ha_mcp_tools/bulk_call_service",
+        info_result=_CAPS_BULK,
+        cmd_exc=HomeAssistantConnectionError("socket closed mid-await"),
+    )
+    client = BulkRoutingClient()
+    tools = DeviceControlTools(client)
+
+    with patch_ws(ws, device_control):
+        resp = await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
+
+    assert resp["partial"] is True
+    assert resp["total_operations"] == 2
+    for op_result in resp["results"]:
+        assert op_result["partial"] is True
+        assert op_result["status"] == "dispatched_unconfirmed"
+    # THE C1 boundary assertion: a post-send drop is ambiguous → ZERO legacy dispatch.
+    assert client.call_service_calls == []
 
 
 class TestD9AtMostOnce:
