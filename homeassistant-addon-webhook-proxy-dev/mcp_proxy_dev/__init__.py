@@ -17,6 +17,8 @@ by the proxy addon's startup script. No manual configuration is needed — the
 addon creates the config entry automatically via the HA API.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import logging
@@ -24,7 +26,7 @@ import re
 import threading
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import aiohttp
@@ -38,6 +40,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.typing import ConfigType
+
+if TYPE_CHECKING:
+    from .oauth import OAuthProvider
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -321,7 +326,7 @@ def _resolve_public_base_url(proxy_config: dict) -> str | None:
 
 def _bind_legacy_oauth_views(
     hass: HomeAssistant,
-    oauth_provider: object,
+    oauth_provider: OAuthProvider,
     route_owner: str | None,
     fingerprint: str,
 ) -> bool:
@@ -359,7 +364,7 @@ def _bind_legacy_oauth_views(
     hass.data[OAUTH_ROUTE_KEY_FINGERPRINT] = fingerprint
     # A first registration happening mid-session isn't live until a
     # full HA restart; flag it. At HA boot it binds cleanly.
-    return hass.is_running
+    return bool(hass.is_running)
 
 
 async def _setup_ha_auth_oauth(
@@ -800,7 +805,7 @@ def _forward_headers(request: web.Request) -> dict[str, str]:
 
 async def _relay_upstream_response(
     request: web.Request,
-    upstream_resp: object,
+    upstream_resp: aiohttp.ClientResponse,
     debug: bool | None,
     hass: HomeAssistant,
 ) -> web.StreamResponse:
