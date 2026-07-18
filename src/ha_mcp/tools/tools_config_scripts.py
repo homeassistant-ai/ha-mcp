@@ -302,7 +302,7 @@ class ConfigScriptTools:
 
     async def _get_script_config_internal(
         self, script_id: str
-    ) -> tuple[dict[str, Any], str, str]:
+    ) -> tuple[dict[str, Any], str, str | None]:
         """Fetch script config without logging or category injection.
 
         Returns ``(actual_config, config_hash, resolved_id)`` where
@@ -312,25 +312,32 @@ class ConfigScriptTools:
         upsert call site skip the redundant re-resolve (issue #1813 Phase 0).
         Used internally by _fetch_and_verify_hash and ha_config_get_script.
 
+        ``resolved_id`` is ``None`` when the envelope omits ``script_id`` — the
+        write target must then be re-resolved from the caller's input rather
+        than defaulting to the (unresolved) caller slug, which for a renamed
+        script would target the wrong storage key. This is a structural
+        invariant, not a live path: ``get_script_config`` always sets the key.
+
         404 responses from the REST client are mapped to a structured
         ``RESOURCE_NOT_FOUND`` ToolError via ``_fetch_script_config_envelope``.
         """
         config_result = await self._fetch_script_config_envelope(script_id)
         actual_config = config_result.get("config", config_result)
         config_hash_value = compute_config_hash(actual_config)
-        resolved_id = config_result.get("script_id", script_id)
+        resolved_id = config_result.get("script_id")
         return actual_config, config_hash_value, resolved_id
 
     async def _fetch_and_verify_hash(
         self, script_id: str, config_hash: str, action: str
-    ) -> tuple[dict[str, Any], str]:
+    ) -> tuple[dict[str, Any], str | None]:
         """Fetch current script config and verify config_hash for optimistic locking.
 
         Returns ``(actual_config, resolved_id)`` — the inner script body and the
         storage key the REST client resolved the input to. Threading
         ``resolved_id`` lets the upsert call site skip the redundant re-resolve
-        (issue #1813 Phase 0). Raises ToolError if the hash does not match
-        (conflict).
+        (issue #1813 Phase 0); it is ``None`` when the envelope omitted the key,
+        so the upsert re-resolves rather than writing to the caller slug. Raises
+        ToolError if the hash does not match (conflict).
         """
         (
             actual_config,

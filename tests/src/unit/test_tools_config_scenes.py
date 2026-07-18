@@ -1124,6 +1124,90 @@ class TestSceneResolutionDedup:
         # upsert_scene_config from scene_id (proven at the REST level).
         assert "name" not in args[0]
 
+    async def test_python_transform_forwards_caller_id_and_resolved_id(
+        self, monkeypatch
+    ):
+        """The python_transform call site is discriminated on a RENAMED scene
+        (caller slug != storage key): it forwards the CALLER id as ``scene_id``
+        and the resolved storage key as ``resolved_id``. With caller == storage
+        (as in test_python_transform_resolves_once) re-passing the storage key
+        as scene_id would slip through — this pins it."""
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        client = MagicMock()
+        client.resolve_scene_id = AsyncMock(return_value="storage_key")
+        fetched = {"name": "Old", "entities": {"light.kitchen": {"state": "on"}}}
+        client.get_scene_config = AsyncMock(
+            return_value={
+                "success": True,
+                "scene_id": "storage_key",
+                "config": fetched,
+            }
+        )
+        client.upsert_scene_config = AsyncMock(
+            return_value={"success": True, "scene_id": "storage_key", "result": "ok"}
+        )
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client.get_entity_state = AsyncMock(
+            return_value={"state": "on", "entity_id": "scene.renamed_scene"}
+        )
+        tools = self._tools(client, monkeypatch)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="renamed_scene",
+            python_transform="config['entities']['light.kitchen']['state'] = 'off'",
+            config_hash=compute_config_hash(fetched),
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "python_transform"
+        args, kwargs = client.upsert_scene_config.call_args
+        assert args[1] == "renamed_scene"  # caller id (transform site)
+        assert kwargs.get("resolved_id") == "storage_key"  # storage-key write target
+
+    async def test_missing_envelope_key_reresolves_not_caller_slug(self, monkeypatch):
+        """Structural invariant: if the REST envelope omits ``scene_id`` (never
+        happens today — ``get_scene_config`` always sets it), the tool passes
+        ``resolved_id=None`` so the upsert RE-RESOLVES rather than threading the
+        caller's unresolved slug as the write target."""
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        client = MagicMock()
+        client.resolve_scene_id = AsyncMock(return_value="storage_key")
+        fetched = {"name": "Old", "entities": {"light.kitchen": {"state": "on"}}}
+        client.get_scene_config = AsyncMock(
+            return_value={"success": True, "config": fetched}  # no scene_id key
+        )
+        client.upsert_scene_config = AsyncMock(
+            return_value={"success": True, "scene_id": "storage_key", "result": "ok"}
+        )
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client.get_entity_state = AsyncMock(
+            return_value={"state": "on", "entity_id": "scene.renamed_scene"}
+        )
+        tools = self._tools(client, monkeypatch)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="renamed_scene",
+            config={"entities": {"light.kitchen": {"state": "on"}}},
+            config_hash=compute_config_hash(fetched),
+            wait=False,
+        )
+
+        assert result["success"] is True
+        args, kwargs = client.upsert_scene_config.call_args
+        assert kwargs.get("resolved_id") is None  # re-resolve, not the caller slug
+        assert args[1] == "renamed_scene"
+
 
 @pytest.mark.asyncio
 class TestPythonTransformOrphanMetadata:

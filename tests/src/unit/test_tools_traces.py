@@ -505,6 +505,23 @@ class TestResolveTraceItemIdPooled:
 
         assert item_id == "fallback_obj"
 
+    @pytest.mark.asyncio
+    async def test_falls_back_to_object_id_when_pooled_call_raises(self):
+        """The pooled call may RAISE rather than collapse to ``{success:False}``;
+        the best-effort resolve still falls back to object_id — matching the
+        helper's comment that it works whether the pooled client collapses OR
+        raises."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=RuntimeError("pooled connect exploded")
+        )
+
+        item_id = await _resolve_trace_item_id(
+            client, "automation.test", "fallback_obj"
+        )
+
+        assert item_id == "fallback_obj"
+
 
 class TestTraceFetchPooledClient:
     """`ha_get_automation_traces` drives the pooled client end-to-end (issue

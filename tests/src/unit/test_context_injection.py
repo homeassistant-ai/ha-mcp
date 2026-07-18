@@ -239,10 +239,12 @@ async def test_ha_get_automation_traces_emits_progress_with_ctx() -> None:
 
     assert result["success"] is True
     ctx.info.assert_awaited()
-    # Three events: connect (0), fetch list (1), final listed-N (3).
+    # Three events: resolve target (0), fetch list (1), final listed-N (3).
     assert ctx.report_progress.await_count == 3
     calls = ctx.report_progress.await_args_list
-    _assert_progress_call(calls[0], progress=0, total=3, message_contains="connecting")
+    _assert_progress_call(
+        calls[0], progress=0, total=3, message_contains="resolving trace target"
+    )
     _assert_progress_call(
         calls[1], progress=1, total=3, message_contains="fetching trace list"
     )

@@ -357,6 +357,30 @@ class TestScriptUpsertResolvedThreading:
         assert kwargs.get("resolved_id") is None
         assert args[1] == "renamed_script"
 
+    async def test_missing_envelope_key_reresolves_not_caller_slug(
+        self, tools, mock_client
+    ):
+        """Structural invariant: if the REST envelope omits ``script_id`` (never
+        happens today — ``get_script_config`` always sets it), the tool passes
+        ``resolved_id=None`` so the upsert RE-RESOLVES rather than threading the
+        caller's unresolved slug as the write target (which for a renamed script
+        would hit the wrong storage key)."""
+        mock_client.get_script_config = AsyncMock(
+            return_value={"success": True, "config": dict(self.INNER_CONFIG)}  # no key
+        )
+
+        result = await tools.ha_config_set_script(
+            script_id="renamed_script",
+            config={"alias": "Morning", "sequence": [{"delay": {"seconds": 5}}]},
+            config_hash=self._seed_hash(),
+            wait=False,
+        )
+
+        assert result["success"] is True
+        args, kwargs = mock_client.upsert_script_config.call_args
+        assert kwargs.get("resolved_id") is None  # re-resolve, not the caller slug
+        assert args[1] == "renamed_script"
+
 
 class TestStripEmptyScriptFields:
     """Test the _strip_empty_script_fields helper function."""

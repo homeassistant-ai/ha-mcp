@@ -197,7 +197,7 @@ class TraceTools:
                 ctx,
                 progress=0,
                 total=3,
-                message="connecting to Home Assistant WebSocket",
+                message="resolving trace target",
             )
 
             # Route through the shared pooled WebSocket (issue #1813) instead of
