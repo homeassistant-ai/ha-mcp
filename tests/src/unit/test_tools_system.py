@@ -269,6 +269,30 @@ class TestFetchRepairs:
         assert result["dismissed_count"] == 1
 
     @pytest.mark.asyncio
+    async def test_inactive_stub_not_counted_as_dismissed(self):
+        """Inactive registry stubs (#1905) are neither listed nor miscounted
+        as dismissed, in both ``include_dismissed`` modes.
+        """
+        ws = _ws_client_with_issues(
+            [
+                {"issue_id": "active", "ignored": False},
+                {"issue_id": "ghost", "ignored": False, "active": False},
+                {"issue_id": "ghost_dismissed", "ignored": True, "active": False},
+            ]
+        )
+
+        result = await SystemTools._fetch_repairs(ws)
+
+        assert result["count"] == 1
+        assert [i["issue_id"] for i in result["issues"]] == ["active"]
+        assert "dismissed_count" not in result
+
+        result = await SystemTools._fetch_repairs(ws, include_dismissed=True)
+
+        assert result["count"] == 1
+        assert [i["issue_id"] for i in result["issues"]] == ["active"]
+
+    @pytest.mark.asyncio
     async def test_include_dismissed_returns_all(self):
         ws = _ws_client_with_issues(
             [

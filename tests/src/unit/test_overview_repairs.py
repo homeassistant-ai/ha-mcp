@@ -175,6 +175,7 @@ class TestHaGetOverviewRepairs:
             {**_active_issue("active_one"), "active": True},
             ghost,
             {**_ignored_issue("dismissed_one"), "active": True},
+            {**_ignored_issue("ghost_dismissed"), "active": False},
         ]
         client = self._make_client(issues)
         tool = self._build_tool(mock_mcp, client, mock_smart_tools)
@@ -183,7 +184,8 @@ class TestHaGetOverviewRepairs:
 
         assert result["repair_count"] == 1
         assert [r["issue_id"] for r in result["repairs"]] == ["active_one"]
-        # The inactive ghost is not a dismissed repair either
+        # Neither inactive ghost counts as dismissed — only the active
+        # dismissed_one does
         assert result["dismissed_repair_count"] == 1
 
         # Opting into dismissed repairs still never surfaces inactive stubs
