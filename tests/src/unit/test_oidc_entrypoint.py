@@ -1239,3 +1239,93 @@ class TestOIDCProxySignatureSubset:
             f"_run_oidc_server passes kwargs not accepted by OIDCProxy.__init__: "
             f"{run_oidc_server_kwargs - oidc_proxy_params}"
         )
+
+
+class TestRunOidcServerSettingsUI:
+    """OIDC mode serves the settings UI behind a dedicated secret path — a
+    deliberate feature addition (it registered none before) — never the
+    OIDC-known MCP path where custom routes bypass auth (GHSA-mx64-982r-65vg)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_settings_globals(self):
+        from ha_mcp import settings_ui as _su
+
+        sp, sm = _su._http_settings_prefix, _su._http_settings_mounted
+        _su._http_settings_prefix = None
+        _su._http_settings_mounted = False
+        yield
+        _su._http_settings_prefix, _su._http_settings_mounted = sp, sm
+
+    async def _run(self):
+        import ha_mcp.__main__ as main_module
+
+        MockOIDCProxy = _make_mock_oidc_proxy({})
+        mock_mcp = MagicMock()
+        mock_mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        mock_mcp.get_tools = AsyncMock(return_value=[])
+
+        async def fake_run_async(**kwargs):
+            pass
+
+        mock_mcp.run_async = MagicMock(
+            side_effect=lambda **kwargs: fake_run_async(**kwargs)
+        )
+        mock_server = MagicMock()
+        mock_server.mcp = mock_mcp
+
+        async def noop_shutdown(coro):
+            coro.close()
+
+        with (
+            patch(
+                "ha_mcp.__main__.OIDCProxy"
+                if hasattr(main_module, "OIDCProxy")
+                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                MockOIDCProxy,
+            ),
+            patch(
+                "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
+            ),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
+        return mock_mcp
+
+    @pytest.mark.asyncio
+    async def test_settings_mounted_off_secret_path(self, monkeypatch):
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.delenv("MCP_SETTINGS_SECRET_PATH", raising=False)
+
+        mock_mcp = await self._run()
+        paths = [c.args[0] for c in mock_mcp.custom_route.call_args_list]
+
+        assert any(p.startswith("/private_") and p.endswith("/settings") for p in paths)
+        assert not any(p.startswith("/mcp/") and "settings" in p for p in paths)
+
+        from ha_mcp.settings_ui import (
+            get_http_settings_prefix,
+            is_http_settings_mounted,
+        )
+
+        assert get_http_settings_prefix() is None
+        assert is_http_settings_mounted() is True
+
+    @pytest.mark.asyncio
+    async def test_disable_env_mounts_no_settings(self, monkeypatch):
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
+        monkeypatch.delenv("MCP_SETTINGS_SECRET_PATH", raising=False)
+
+        mock_mcp = await self._run()
+        paths = [c.args[0] for c in mock_mcp.custom_route.call_args_list]
+
+        assert not any("settings" in p for p in paths)

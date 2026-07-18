@@ -87,7 +87,9 @@ uvx --from=ha-mcp@latest ha-mcp-oauth
 | `HOMEASSISTANT_URL` | **Required.** URL of the Home Assistant instance | None |
 | `MCP_BASE_URL` | **Required.** Public URL where this server is accessible | None |
 | `MCP_PORT` | Server port | `8086` |
-| `MCP_SECRET_PATH` | MCP endpoint path | `/mcp` |
+| `MCP_SECRET_PATH` | MCP endpoint path (does **not** gate the settings UI in this mode) | `/mcp` |
+| `MCP_SETTINGS_SECRET_PATH` | Dedicated secret path for the web settings UI. In OAuth mode the settings UI never shares the MCP path (its custom routes bypass OAuth auth), so it is served under this separate secret. Auto-generated and printed in the startup log when unset. | Auto-generated `/private_<token>` |
+| `HA_MCP_DISABLE_SETTINGS_UI` | Set truthy (`1`/`true`/`yes`/`on`) to not serve the web settings UI at all. | unset (UI served) |
 
 > **Note:** `HOMEASSISTANT_TOKEN` is NOT required in OAuth mode. Each user provides their own Long-Lived Access Token via the consent form.
 

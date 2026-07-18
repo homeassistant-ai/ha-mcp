@@ -520,16 +520,34 @@ def get_http_settings_prefix() -> str | None:
     """Return the settings-UI mount prefix for HTTP transports, or None.
 
     Set by :func:`register_settings_routes` when the page is mounted on a
-    long-lived HTTP server. ``ha_get_overview`` reads it to hint at the
-    settings page when there is no stdio sidecar URL to hand the user.
+    long-lived HTTP server *and* advertising is enabled. ``ha_get_overview``
+    reads it to hint at the settings page when there is no stdio sidecar URL to
+    hand the user. It is None when the mount is deliberately not advertised
+    (OAuth/OIDC dedicated-secret mode) — use :func:`is_http_settings_mounted`,
+    not this, to tell HTTP from the stdio sidecar.
     """
     return _http_settings_prefix
+
+
+# Whether the settings UI is served over HTTP (add-on / Docker / OAuth / OIDC)
+# as opposed to the stdio sidecar. Distinct from _http_settings_prefix, which is
+# the *advertised* URL and is None when a mount is deliberately hidden from MCP
+# clients (advertise_prefix=False). Consumers that only need "is this stdio?"
+# must read this, not the prefix (GHSA-mx64-982r-65vg fix left the prefix None
+# on a real HTTP mount).
+_http_settings_mounted: bool = False
+
+
+def is_http_settings_mounted() -> bool:
+    """Return True when the settings UI is HTTP-mounted (not the stdio sidecar)."""
+    return _http_settings_mounted
 
 
 def register_settings_routes(
     mcp: FastMCP,
     server: HomeAssistantSmartMCPServer,
     secret_path: str = "",
+    advertise_prefix: bool = True,
 ) -> None:
     """Register the settings UI HTTP routes on the FastMCP Starlette app.
 
@@ -550,9 +568,27 @@ def register_settings_routes(
             ``/mcp``). Required for non-add-on HTTP modes; if empty in
             non-add-on mode, the function logs a warning and registers
             nothing rather than expose the routes publicly.
+        advertise_prefix: When True (default), record the secret-path mount in
+            ``_http_settings_prefix`` so ``ha_get_overview`` can hint at the
+            settings URL. OAuth/OIDC modes pass False: there the settings UI
+            sits under a *dedicated* secret path that must never be handed to
+            MCP clients (GHSA-mx64-982r-65vg), so the mount happens but the
+            prefix is not recorded.
     """
     handlers = build_settings_handlers(server)
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
+    if secret_prefix and ("{" in secret_prefix or "}" in secret_prefix):
+        # Starlette compiles {name} into a [^/]+ wildcard capture, so a braced
+        # secret path (e.g. an unrendered /private_{token} template) would mount
+        # these routes at a publicly-matching wildcard. Drop the secret mount
+        # rather than expose it (GHSA-mx64-982r-65vg); the add-on root mount below
+        # is unaffected.
+        logger.error(
+            "settings UI secret path %r contains route-template characters "
+            "('{{'/'}}'); not mounting under it (it would become a wildcard route).",
+            secret_prefix,
+        )
+        secret_prefix = ""
     is_addon = is_running_in_addon()
 
     if not is_addon and not secret_prefix:
@@ -562,6 +598,12 @@ def register_settings_routes(
             "be publicly reachable). Pass MCP_SECRET_PATH or run as add-on."
         )
         return
+
+    # Past this point at least one HTTP mount happens (add-on root and/or the
+    # secret path). Record that so consumers can distinguish HTTP from the stdio
+    # sidecar even when the prefix itself is not advertised (advertise_prefix=False).
+    global _http_settings_mounted
+    _http_settings_mounted = True
 
     # Every route this function mounts except the add-on-only root mount is defined
     # once in this table and mounted under each active prefix below: at root
@@ -636,7 +678,10 @@ def register_settings_routes(
         # need the same secret to reach the UI as they do for the MCP
         # endpoint.
         _mount(secret_prefix)
-        # Record the mount so ha_get_overview can point users at the settings
-        # page in HTTP transports that have no stdio sidecar URL file (#1458).
-        global _http_settings_prefix
-        _http_settings_prefix = secret_prefix
+        if advertise_prefix:
+            # Record the mount so ha_get_overview can point users at the
+            # settings page in HTTP transports that have no stdio sidecar URL
+            # file (#1458). Suppressed in OAuth/OIDC modes, where the dedicated
+            # secret path must not leak to MCP clients (GHSA-mx64-982r-65vg).
+            global _http_settings_prefix
+            _http_settings_prefix = secret_prefix
