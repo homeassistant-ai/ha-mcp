@@ -66,6 +66,119 @@ def _extract_field_info(annotation: ast.expr | None) -> dict:
     return info
 
 
+def _tool_name_from_tool_decorator(
+    dec: ast.Call, node: ast.AsyncFunctionDef
+) -> str | None:
+    """Resolve the tool name from a Pattern 2 ``@tool(name="ha_*")`` decorator."""
+    for kw in dec.keywords:
+        if (
+            kw.arg == "name"
+            and isinstance(kw.value, ast.Constant)
+            and str(kw.value.value).startswith("ha_")
+        ):
+            return str(kw.value.value)
+    # Fallback: @tool() without name= on ha_* function
+    if node.name.startswith("ha_"):
+        return node.name
+    return None
+
+
+def _find_tool_decorator(
+    node: ast.AsyncFunctionDef,
+) -> tuple[ast.Call | None, str | None]:
+    """Find the @mcp.tool / @tool decorator on a function and its tool name."""
+    for dec in node.decorator_list:
+        if not isinstance(dec, ast.Call):
+            continue
+        func = dec.func
+        # Pattern 1: @mcp.tool(...) — closure pattern, function named ha_*
+        if isinstance(func, ast.Attribute) and func.attr == "tool":
+            if node.name.startswith("ha_"):
+                return dec, node.name
+        # Pattern 2: @tool(name="ha_*") — class method pattern
+        if isinstance(func, ast.Name) and func.id == "tool":
+            tool_name = _tool_name_from_tool_decorator(dec, node)
+            if tool_name is not None:
+                return dec, tool_name
+    return None, None
+
+
+def _extract_tool_metadata(dec: ast.Call) -> tuple[set[str], str, dict[str, bool]]:
+    """Extract tags, title, and annotation hints from a tool decorator call."""
+    tags: set[str] = set()
+    title = ""
+    annotations: dict[str, bool] = {}
+
+    for kw in dec.keywords:
+        if kw.arg == "tags" and isinstance(kw.value, ast.Set):
+            tags = {
+                str(elt.value) for elt in kw.value.elts if isinstance(elt, ast.Constant)
+            }
+        elif kw.arg == "annotations" and isinstance(kw.value, ast.Dict):
+            for k, v in zip(kw.value.keys, kw.value.values, strict=True):
+                if isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
+                    key = str(k.value)
+                    if key == "title":
+                        title = str(v.value)
+                    elif key in ANNOTATION_KEYS:
+                        annotations[key] = bool(v.value)
+
+    return tags, title, annotations
+
+
+def _extract_tool_params(
+    node: ast.AsyncFunctionDef,
+) -> tuple[dict[str, dict], list[str]]:
+    """Extract parameter properties and required-field names from a tool function."""
+    properties: dict[str, dict] = {}
+    required: list[str] = []
+    defaults_offset = len(node.args.args) - len(node.args.defaults)
+
+    for i, arg in enumerate(node.args.args):
+        if arg.arg in ("self", "ctx"):
+            continue
+        p = _extract_field_info(arg.annotation)
+        def_idx = i - defaults_offset
+        if def_idx >= 0 and def_idx < len(node.args.defaults):
+            def_node = node.args.defaults[def_idx]
+            if isinstance(def_node, ast.Constant):
+                p.setdefault("default", def_node.value)
+        else:
+            required.append(arg.arg)
+        if p:
+            properties[arg.arg] = p
+
+    return properties, required
+
+
+def _extract_tool_from_node(
+    node: ast.AsyncFunctionDef, source_file: str
+) -> dict | None:
+    """Build the tool-metadata dict for one function node, or None if not a tool."""
+    tool_dec, tool_name = _find_tool_decorator(node)
+    if tool_dec is None or tool_name is None:
+        return None
+
+    tags, title, annotations = _extract_tool_metadata(tool_dec)
+    properties, required = _extract_tool_params(node)
+
+    input_schema: dict = {}
+    if properties:
+        input_schema = {"properties": properties}
+        if required:
+            input_schema["required"] = required
+
+    return {
+        "name": tool_name,
+        "title": title,
+        "description": ast.get_docstring(node) or "",
+        "inputSchema": input_schema,
+        "annotations": annotations,
+        "tags": sorted(tags),
+        "source_file": source_file,
+    }
+
+
 def extract_tools() -> list[dict]:
     """Extract all tool metadata from source files via AST parsing."""
     tools = []
@@ -78,98 +191,9 @@ def extract_tools() -> list[dict]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
-
-            # Find the @tool or @mcp.tool decorator
-            tool_dec = None
-            tool_name = None
-            for dec in node.decorator_list:
-                if not isinstance(dec, ast.Call):
-                    continue
-                func = dec.func
-                # Pattern 1: @mcp.tool(...) — closure pattern, function named ha_*
-                if isinstance(func, ast.Attribute) and func.attr == "tool":
-                    if node.name.startswith("ha_"):
-                        tool_dec = dec
-                        tool_name = node.name
-                        break
-                # Pattern 2: @tool(name="ha_*") — class method pattern
-                if isinstance(func, ast.Name) and func.id == "tool":
-                    for kw in dec.keywords:
-                        if (
-                            kw.arg == "name"
-                            and isinstance(kw.value, ast.Constant)
-                            and str(kw.value.value).startswith("ha_")
-                        ):
-                            tool_dec = dec
-                            tool_name = str(kw.value.value)
-                            break
-                    # Fallback: @tool() without name= on ha_* function
-                    if tool_dec is None and node.name.startswith("ha_"):
-                        tool_dec = dec
-                        tool_name = node.name
-                    if tool_dec:
-                        break
-
-            if tool_dec is None or tool_name is None:
-                continue
-
-            dec = tool_dec
-            tags: set[str] = set()
-            title = ""
-            annotations: dict[str, bool] = {}
-
-            for kw in dec.keywords:
-                if kw.arg == "tags" and isinstance(kw.value, ast.Set):
-                    tags = {
-                        str(elt.value)
-                        for elt in kw.value.elts
-                        if isinstance(elt, ast.Constant)
-                    }
-                elif kw.arg == "annotations" and isinstance(kw.value, ast.Dict):
-                    for k, v in zip(kw.value.keys, kw.value.values, strict=True):
-                        if isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
-                            key = str(k.value)
-                            if key == "title":
-                                title = str(v.value)
-                            elif key in ANNOTATION_KEYS:
-                                annotations[key] = bool(v.value)
-
-            # Extract params with types, descriptions, defaults
-            properties: dict[str, dict] = {}
-            required: list[str] = []
-            defaults_offset = len(node.args.args) - len(node.args.defaults)
-
-            for i, arg in enumerate(node.args.args):
-                if arg.arg in ("self", "ctx"):
-                    continue
-                p = _extract_field_info(arg.annotation)
-                def_idx = i - defaults_offset
-                if def_idx >= 0 and def_idx < len(node.args.defaults):
-                    def_node = node.args.defaults[def_idx]
-                    if isinstance(def_node, ast.Constant):
-                        p.setdefault("default", def_node.value)
-                else:
-                    required.append(arg.arg)
-                if p:
-                    properties[arg.arg] = p
-
-            input_schema: dict = {}
-            if properties:
-                input_schema = {"properties": properties}
-                if required:
-                    input_schema["required"] = required
-
-            tools.append(
-                {
-                    "name": tool_name,
-                    "title": title,
-                    "description": ast.get_docstring(node) or "",
-                    "inputSchema": input_schema,
-                    "annotations": annotations,
-                    "tags": sorted(tags),
-                    "source_file": f.name,
-                }
-            )
+            tool = _extract_tool_from_node(node, f.name)
+            if tool is not None:
+                tools.append(tool)
 
     # Detect duplicate tool names
     seen: dict[str, str] = {}

@@ -351,6 +351,171 @@ def cleanup_stale_migration_marker(data_dir: Path) -> None:
         )
 
 
+def _apply_yaml_beta_env(
+    *,
+    yaml_config_in_config: bool,
+    enable_yaml_config_editing: bool,
+    yaml_packages_automation_in_config: bool,
+    enable_yaml_packages_automation: bool,
+    yaml_packages_script_in_config: bool,
+    enable_yaml_packages_script: bool,
+    yaml_packages_scene_in_config: bool,
+    enable_yaml_packages_scene: bool,
+    yaml_edit_confirm_in_config: bool,
+    enable_yaml_edit_confirm: bool,
+) -> None:
+    """Write the YAML-editing beta sub-flag env vars that are present in options.
+
+    See ``main`` for the presence-gating rationale (stable-addon installs omit
+    these keys, so writing them unconditionally would mislabel the field as
+    Supervisor-managed in the web UI).
+    """
+    if yaml_config_in_config:
+        os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(
+            enable_yaml_config_editing
+        ).lower()
+    if yaml_packages_automation_in_config:
+        os.environ["ENABLE_YAML_PACKAGES_AUTOMATION"] = str(
+            enable_yaml_packages_automation
+        ).lower()
+    if yaml_packages_script_in_config:
+        os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = str(
+            enable_yaml_packages_script
+        ).lower()
+    if yaml_packages_scene_in_config:
+        os.environ["ENABLE_YAML_PACKAGES_SCENE"] = str(
+            enable_yaml_packages_scene
+        ).lower()
+    if yaml_edit_confirm_in_config:
+        os.environ["ENABLE_YAML_EDIT_CONFIRM"] = str(enable_yaml_edit_confirm).lower()
+
+
+def _apply_tool_beta_env(
+    *,
+    filesystem_tools_in_config: bool,
+    enable_filesystem_tools: bool,
+    dashboard_screenshot_in_config: bool,
+    enable_dashboard_screenshot: bool,
+    code_mode_in_config: bool,
+    enable_code_mode: bool,
+    lite_docstrings_in_config: bool,
+    enable_lite_docstrings: bool,
+) -> None:
+    """Write the tool-gating beta sub-flag env vars that are present in options.
+
+    Same presence-gating rationale as ``_apply_yaml_beta_env``.
+    """
+    if filesystem_tools_in_config:
+        os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(
+            enable_filesystem_tools
+        ).lower()
+    if dashboard_screenshot_in_config:
+        os.environ["HAMCP_ENABLE_DASHBOARD_SCREENSHOT"] = str(
+            enable_dashboard_screenshot
+        ).lower()
+    if code_mode_in_config:
+        os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
+    if lite_docstrings_in_config:
+        os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
+
+
+def _warn_gated_off_beta_subflags(
+    beta_master_in_config: bool,
+    enable_beta_features: bool,
+    subflags: list[tuple[str, bool, bool]],
+) -> None:
+    """Warn when the beta master is OFF but truthy sub-flags remain in options.
+
+    Dev-upgrade silent-disable warning: if the master is in options.json and is
+    False, but any sub-flag is truthy, the runtime gate will force the sub-flag
+    off. Log loudly so an operator who had beta tools on before the
+    master-in-schema rollout, then toggled the master off after the update, can
+    see why their tools went away. ``subflags`` carries ``(name, present,
+    value)`` for each sub-flag.
+    """
+    if not (beta_master_in_config and enable_beta_features is False):
+        return
+    gated_off = [name for name, present, value in subflags if present and value]
+    if gated_off:
+        log_info(
+            "Master beta toggle is OFF but these sub-flags are set "
+            f"to true in options.json — they will be force-disabled "
+            f"at runtime by the master gate: {', '.join(gated_off)}. "
+            "Re-enable the master toggle in the addon Configuration "
+            "tab (or the web settings UI) to use them."
+        )
+
+
+def _arm_kill_signal_diagnostics_if_debug(effective_log_level: int) -> None:
+    """Install kill-signal diagnostics when DEBUG logging is active."""
+    import logging
+
+    if effective_log_level != logging.DEBUG:
+        return
+    log_info("Debug log level active — arming kill-signal diagnostics")
+    # Defers SA_SIGINFO install until uvicorn's capture_signals has
+    # run. Otherwise uvicorn's signal.signal() call would overwrite
+    # our handler before any signal arrived.
+    # Wrapped because diagnostics must never block addon startup.
+    try:
+        from ha_mcp.utils.kill_signal_diagnostics import (
+            schedule_install_after_uvicorn,
+        )
+
+        schedule_install_after_uvicorn()
+    except Exception as e:
+        log_error(f"kill-signal diagnostics install failed: {e!r}; continuing")
+
+
+def _run_mcp_server(
+    mcp: Any,
+    bind_host: str,
+    port: int,
+    secret_path: str,
+    uvicorn_config: dict[str, Any],
+) -> int:
+    """Run the FastMCP HTTP server, returning the process exit code."""
+    try:
+        log_info("Starting MCP server...")
+        if bind_host != "0.0.0.0":
+            log_info(f"Bind host overridden via MCP_HOST: {bind_host}")
+        # Do not pass log_level here: fastmcp's temporary_log_level would
+        # rebuild its rich log handlers at the default 80-column width,
+        # undoing widen_fastmcp_log_console (#1918).
+        mcp.run(
+            transport="http",
+            host=bind_host,
+            port=port,
+            path=secret_path,
+            stateless_http=True,
+            uvicorn_config=uvicorn_config,
+        )
+    except KeyboardInterrupt:
+        log_info("Interrupted, exiting")
+        return 0
+    except BaseException as e:
+        # Top-level crash handler: intentionally catch ANY exit (including
+        # SystemExit, translated to its code below) so the add-on supervisor
+        # always sees a clean process exit code instead of a traceback.
+        import traceback
+
+        log_error(f"MCP server crashed: {e}")
+        traceback.print_exc(file=sys.stderr)
+        # Log the root cause if this exception was chained
+        cause = e.__cause__ or e.__context__
+        if cause:
+            log_error(f"Caused by: {cause}")
+            traceback.print_exception(
+                type(cause), cause, cause.__traceback__, file=sys.stderr
+            )
+        if isinstance(e, SystemExit):
+            return int(e.code) if isinstance(e.code, int) else 1
+        return 1
+
+    log_info("MCP server stopped")
+    return 0
+
+
 def main() -> int:
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
@@ -624,78 +789,56 @@ def main() -> int:
     # and Supervisor would reject the eventual save because the key
     # is not in stable's schema. Skip the write so the standalone
     # file/default origin chain applies.
-    if yaml_config_in_config:
-        os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(
-            enable_yaml_config_editing
-        ).lower()
-    if yaml_packages_automation_in_config:
-        os.environ["ENABLE_YAML_PACKAGES_AUTOMATION"] = str(
-            enable_yaml_packages_automation
-        ).lower()
-    if yaml_packages_script_in_config:
-        os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = str(
-            enable_yaml_packages_script
-        ).lower()
-    if yaml_packages_scene_in_config:
-        os.environ["ENABLE_YAML_PACKAGES_SCENE"] = str(
-            enable_yaml_packages_scene
-        ).lower()
-    if yaml_edit_confirm_in_config:
-        os.environ["ENABLE_YAML_EDIT_CONFIRM"] = str(enable_yaml_edit_confirm).lower()
-    if filesystem_tools_in_config:
-        os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(
-            enable_filesystem_tools
-        ).lower()
-    if dashboard_screenshot_in_config:
-        os.environ["HAMCP_ENABLE_DASHBOARD_SCREENSHOT"] = str(
-            enable_dashboard_screenshot
-        ).lower()
-    if code_mode_in_config:
-        os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
-    if lite_docstrings_in_config:
-        os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
-    # Dev-upgrade silent-disable warning: if the master is in
-    # options.json and is False, but any sub-flag is truthy, the
-    # runtime gate will force the sub-flag off. Log loudly so an
-    # operator who had beta tools on before the master-in-schema
-    # rollout, then toggled the master off after the update, can see
-    # why their tools went away.
-    if beta_master_in_config and enable_beta_features is False:
-        gated_off = [
-            name
-            for name, present, value in (
-                (
-                    "enable_yaml_config_editing",
-                    yaml_config_in_config,
-                    enable_yaml_config_editing,
-                ),
-                (
-                    "enable_filesystem_tools",
-                    filesystem_tools_in_config,
-                    enable_filesystem_tools,
-                ),
-                (
-                    "enable_dashboard_screenshot",
-                    dashboard_screenshot_in_config,
-                    enable_dashboard_screenshot,
-                ),
-                ("enable_code_mode", code_mode_in_config, enable_code_mode),
-                (
-                    "enable_lite_docstrings",
-                    lite_docstrings_in_config,
-                    enable_lite_docstrings,
-                ),
-            )
-            if present and value
-        ]
-        if gated_off:
-            log_info(
-                "Master beta toggle is OFF but these sub-flags are set "
-                f"to true in options.json — they will be force-disabled "
-                f"at runtime by the master gate: {', '.join(gated_off)}. "
-                "Re-enable the master toggle in the addon Configuration "
-                "tab (or the web settings UI) to use them."
-            )
+    _apply_yaml_beta_env(
+        yaml_config_in_config=yaml_config_in_config,
+        enable_yaml_config_editing=enable_yaml_config_editing,
+        yaml_packages_automation_in_config=yaml_packages_automation_in_config,
+        enable_yaml_packages_automation=enable_yaml_packages_automation,
+        yaml_packages_script_in_config=yaml_packages_script_in_config,
+        enable_yaml_packages_script=enable_yaml_packages_script,
+        yaml_packages_scene_in_config=yaml_packages_scene_in_config,
+        enable_yaml_packages_scene=enable_yaml_packages_scene,
+        yaml_edit_confirm_in_config=yaml_edit_confirm_in_config,
+        enable_yaml_edit_confirm=enable_yaml_edit_confirm,
+    )
+    _apply_tool_beta_env(
+        filesystem_tools_in_config=filesystem_tools_in_config,
+        enable_filesystem_tools=enable_filesystem_tools,
+        dashboard_screenshot_in_config=dashboard_screenshot_in_config,
+        enable_dashboard_screenshot=enable_dashboard_screenshot,
+        code_mode_in_config=code_mode_in_config,
+        enable_code_mode=enable_code_mode,
+        lite_docstrings_in_config=lite_docstrings_in_config,
+        enable_lite_docstrings=enable_lite_docstrings,
+    )
+    # Dev-upgrade silent-disable warning (see _warn_gated_off_beta_subflags).
+    _warn_gated_off_beta_subflags(
+        beta_master_in_config,
+        enable_beta_features,
+        [
+            (
+                "enable_yaml_config_editing",
+                yaml_config_in_config,
+                enable_yaml_config_editing,
+            ),
+            (
+                "enable_filesystem_tools",
+                filesystem_tools_in_config,
+                enable_filesystem_tools,
+            ),
+            (
+                "enable_dashboard_screenshot",
+                dashboard_screenshot_in_config,
+                enable_dashboard_screenshot,
+            ),
+            ("enable_code_mode", code_mode_in_config, enable_code_mode),
+            (
+                "enable_lite_docstrings",
+                lite_docstrings_in_config,
+                enable_lite_docstrings,
+            ),
+        ],
+    )
     # Master beta toggle: write env var only when the key exists in
     # the addon's options.json. Dev addon's schema declares it (so
     # the key is always present, value follows the user's toggle).
@@ -798,20 +941,7 @@ def main() -> int:
         "Debug logging active (log_level applied from settings)"
     )
 
-    if effective_log_level == logging.DEBUG:
-        log_info("Debug log level active — arming kill-signal diagnostics")
-        # Defers SA_SIGINFO install until uvicorn's capture_signals has
-        # run. Otherwise uvicorn's signal.signal() call would overwrite
-        # our handler before any signal arrived.
-        # Wrapped because diagnostics must never block addon startup.
-        try:
-            from ha_mcp.utils.kill_signal_diagnostics import (
-                schedule_install_after_uvicorn,
-            )
-
-            schedule_install_after_uvicorn()
-        except Exception as e:
-            log_error(f"kill-signal diagnostics install failed: {e!r}; continuing")
+    _arm_kill_signal_diagnostics_if_debug(effective_log_level)
 
     register_browser_landing(mcp, secret_path)
     # Mount settings UI routes both at root (for HA ingress proxy) and
@@ -837,45 +967,13 @@ def main() -> int:
     # parity with the standard CLI entry points (see issue #1434).
     bind_host = os.getenv("MCP_HOST", "0.0.0.0")
 
-    try:
-        log_info("Starting MCP server...")
-        if bind_host != "0.0.0.0":
-            log_info(f"Bind host overridden via MCP_HOST: {bind_host}")
-        # Do not pass log_level here: fastmcp's temporary_log_level would
-        # rebuild its rich log handlers at the default 80-column width,
-        # undoing widen_fastmcp_log_console (#1918).
-        mcp.run(
-            transport="http",
-            host=bind_host,
-            port=port,
-            path=secret_path,
-            stateless_http=True,
-            uvicorn_config={"log_config": _get_timestamped_uvicorn_log_config()},
-        )
-    except KeyboardInterrupt:
-        log_info("Interrupted, exiting")
-        return 0
-    except BaseException as e:
-        # Top-level crash handler: intentionally catch ANY exit (including
-        # SystemExit, translated to its code below) so the add-on supervisor
-        # always sees a clean process exit code instead of a traceback.
-        import traceback
-
-        log_error(f"MCP server crashed: {e}")
-        traceback.print_exc(file=sys.stderr)
-        # Log the root cause if this exception was chained
-        cause = e.__cause__ or e.__context__
-        if cause:
-            log_error(f"Caused by: {cause}")
-            traceback.print_exception(
-                type(cause), cause, cause.__traceback__, file=sys.stderr
-            )
-        if isinstance(e, SystemExit):
-            return int(e.code) if isinstance(e.code, int) else 1
-        return 1
-
-    log_info("MCP server stopped")
-    return 0
+    return _run_mcp_server(
+        mcp,
+        bind_host,
+        port,
+        secret_path,
+        {"log_config": _get_timestamped_uvicorn_log_config()},
+    )
 
 
 if __name__ == "__main__":
