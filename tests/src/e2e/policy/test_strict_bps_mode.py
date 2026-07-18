@@ -25,9 +25,10 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from test_constants import TEST_TOKEN
 
+from ha_mcp import strict_bps
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.server import HomeAssistantSmartMCPServer
-from ha_mcp.strict_bps import STRICT_BPS_ACK_KEY
+from ha_mcp.strict_bps import current_strict_bps_ack_key
 from ha_mcp.utils.data_paths import get_data_dir
 from ha_mcp.utils.skill_loader import get_skills_dir
 
@@ -187,7 +188,7 @@ async def test_keyless_write_blocked_with_structured_error(strict_bps_mcp):
         client, "ha_config_set_automation", {"config": config}
     )
     # The block error must guide recovery without leaking the key.
-    assert STRICT_BPS_ACK_KEY not in str(body)
+    assert current_strict_bps_ack_key() not in str(body)
     assert body.get("strict_mandatory_bps") is True
     suggestion = body["error"].get("suggestion", "")
     assert "ha_get_skill_guide" in suggestion
@@ -203,7 +204,11 @@ async def test_skill_guide_publishes_ack_key(strict_bps_mcp):
     )
     body = parse_mcp_result(result)
     assert body.get("success") is True, body
-    assert STRICT_BPS_ACK_KEY in body.get("content", ""), (
+    # Accept either currently-valid key: content generation and this
+    # assertion derive the key independently, and an hour-boundary straddle
+    # between them would otherwise flake an exact-match check.
+    content = body.get("content", "")
+    assert any(key in content for key in strict_bps._valid_ack_keys()), (
         "strict mode ON: the Tier-3 best-practices content must publish the "
         "acknowledgment key"
     )
@@ -218,7 +223,7 @@ async def test_write_with_key_succeeds(strict_bps_mcp):
     result = await safe_call_tool(
         client,
         "ha_config_set_automation",
-        {"config": config, "BestPracticeKey": STRICT_BPS_ACK_KEY},
+        {"config": config, "BestPracticeKey": current_strict_bps_ack_key()},
     )
     assert result.get("success"), f"keyed write should succeed: {result}"
 
@@ -267,7 +272,7 @@ async def test_proxy_dispatched_keyless_write_blocked(strict_bps_toolsearch_mcp)
     assert body.get("tool_name") == "ha_config_set_automation", body
     assert body.get("strict_mandatory_bps") is True, body
     # The block error must still not leak the key through the proxy path.
-    assert STRICT_BPS_ACK_KEY not in str(body)
+    assert current_strict_bps_ack_key() not in str(body)
 
 
 @pytest.mark.asyncio
@@ -284,7 +289,10 @@ async def test_proxy_dispatched_keyed_write_succeeds(strict_bps_toolsearch_mcp):
         "ha_call_write_tool",
         {
             "name": "ha_config_set_automation",
-            "arguments": {"config": config, "BestPracticeKey": STRICT_BPS_ACK_KEY},
+            "arguments": {
+                "config": config,
+                "BestPracticeKey": current_strict_bps_ack_key(),
+            },
         },
     )
     assert result.get("success"), f"keyed proxied write should succeed: {result}"

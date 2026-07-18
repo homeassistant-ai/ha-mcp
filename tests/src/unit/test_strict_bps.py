@@ -8,7 +8,10 @@ Covers, without a FastMCP boot:
   ``call_next`` (mirrors ``test_read_only.py``): keyless / wrong-key
   blocks on a gated tool, correct-key passes, non-gated tools pass
   untouched, strict-off passthrough. Asserts the structured error never
-  contains the key literal.
+  contains the key value.
+* Ack-key shape (#1924): attestation prefix, hourly salted-suffix
+  rotation with previous-bucket grace, non-string key degradation, and
+  the schema-as-protocol framing on ``BestPracticeKeyParam``.
 * Wiring: every ``STRICT_BPS_GATED_TOOLS`` tool declares a
   ``BestPracticeKey`` parameter and maps to the FIRST entry of its
   module's canonical ``_*_SKILL_FILES`` constant.
@@ -25,6 +28,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -34,10 +38,10 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.errors import ErrorCode
 from ha_mcp.strict_bps import (
-    STRICT_BPS_ACK_KEY,
     STRICT_BPS_GATED_TOOLS,
     STRICT_BPS_KEY_PARAM,
     StrictBpsMiddleware,
+    current_strict_bps_ack_key,
     strict_bps_ack_line,
     strict_bps_effective,
 )
@@ -122,6 +126,91 @@ class TestStrictBpsEffective:
 
 
 # ---------------------------------------------------------------------------
+# Acknowledgment key shape + schema-published protocol framing (#1924)
+# ---------------------------------------------------------------------------
+
+
+class TestAckKeyShape:
+    """#1924: a static opaque ``bps-ack-*`` token invited two failure modes —
+    an agent misread the extract-and-replay round-trip as a credential
+    exfiltration ("prompt injection") and refused it until the user disabled
+    strict mode, and a static literal in a public repo (or an agent's own
+    persistent memory) can satisfy the gate without any actual read. The key
+    is therefore a plain-English attestation phrase whose suffix rotates
+    hourly, derived from a per-process salt."""
+
+    def test_key_is_attestation_phrase_with_rotating_suffix(self):
+        from ha_mcp.strict_bps import STRICT_BPS_ACK_KEY_PREFIX
+
+        assert STRICT_BPS_ACK_KEY_PREFIX == "I-HAVE-READ-THE-BEST-PRACTICES-GUIDE"
+        assert re.fullmatch(
+            re.escape(STRICT_BPS_ACK_KEY_PREFIX) + r"-[0-9a-f]{8}",
+            current_strict_bps_ack_key(),
+        )
+
+    def test_key_stable_within_a_bucket_and_rotates_across(self, monkeypatch):
+        """Salt pinned so the cross-bucket inequality is deterministic, not
+        a per-process dice roll on a suffix hash collision."""
+        from ha_mcp import strict_bps
+
+        monkeypatch.setattr(strict_bps, "_ACK_KEY_SALT", "fixed-test-salt")
+        # The prose everywhere says "rotates hourly" — pin the period so a
+        # silent change to the constant can't make that claim false.
+        assert strict_bps._ACK_KEY_ROTATION_SECONDS == 3600
+
+        base = 1_000_000_000.0
+        start = base - (base % strict_bps._ACK_KEY_ROTATION_SECONDS)
+        assert strict_bps._current_ack_key(start) == strict_bps._current_ack_key(
+            start + 100
+        )
+        assert strict_bps._current_ack_key(start) != strict_bps._current_ack_key(
+            start + strict_bps._ACK_KEY_ROTATION_SECONDS
+        )
+
+    def test_key_salted_per_process(self, monkeypatch):
+        """Without the process salt the suffix is not derivable — a key
+        computed by one process (or reconstructed from the public formula)
+        does not satisfy another process's gate. Both salts pinned for
+        determinism."""
+        from ha_mcp import strict_bps
+
+        monkeypatch.setattr(strict_bps, "_ACK_KEY_SALT", "fixed-test-salt")
+        k1 = strict_bps._current_ack_key(1_000_000_000.0)
+        monkeypatch.setattr(strict_bps, "_ACK_KEY_SALT", "different-salt")
+        k2 = strict_bps._current_ack_key(1_000_000_000.0)
+        assert k1 != k2
+
+    def test_param_schema_documents_protocol_not_a_secret(self):
+        """The tool schema (trusted metadata, unlike tool output) must carry
+        the full protocol: the value is a public read-receipt, not a secret,
+        obtained by reading the skill via ha_get_skill_guide. An agent
+        following the declared schema is then not 'obeying instructions
+        found in fetched content' when it replays the key."""
+        from ha_mcp.strict_bps import BestPracticeKeyParam
+
+        field = BestPracticeKeyParam.__metadata__[0]
+        desc = field.description
+        assert "not a secret" in desc.lower()
+        assert "ha_get_skill_guide" in desc
+        assert "read" in desc.lower()
+        # The key VALUE must never live in the schema — only how to get it.
+        assert current_strict_bps_ack_key() not in desc
+
+    def test_ack_line_frames_key_as_read_receipt(self, monkeypatch):
+        from ha_mcp import strict_bps
+
+        # Freeze the clock: the line and the assertion each derive the key,
+        # and an hour-boundary straddle between the two would flake.
+        monkeypatch.setattr(
+            strict_bps, "time", SimpleNamespace(time=lambda: 1_000_000_000.0)
+        )
+        line = strict_bps_ack_line()
+        assert current_strict_bps_ack_key() in line
+        assert STRICT_BPS_KEY_PARAM in line
+        assert "not a secret" in line.lower()
+
+
+# ---------------------------------------------------------------------------
 # StrictBpsMiddleware
 # ---------------------------------------------------------------------------
 
@@ -176,8 +265,14 @@ class TestStrictBpsMiddleware:
         assert body["error"]["code"] == ErrorCode.BPS_ACKNOWLEDGMENT_REQUIRED.value
         assert body["strict_mandatory_bps"] is True
         assert body["tool_name"] == "ha_config_set_automation"
-        # The key literal must NEVER appear in the block error.
-        assert STRICT_BPS_ACK_KEY not in raw
+        # The message must say the key rotates and must be refreshed by
+        # re-reading — an agent holding an expired key would otherwise
+        # replay the stale value in a loop (#1924's failure class).
+        message = body["error"]["message"]
+        assert "rotates" in message
+        assert "re-read" in message
+        # The key value must NEVER appear in the block error.
+        assert current_strict_bps_ack_key() not in raw
         # The suggestion names the exact recovery call for this tool.
         suggestion = body["error"]["suggestion"]
         assert "ha_get_skill_guide" in suggestion
@@ -217,15 +312,61 @@ class TestStrictBpsMiddleware:
         # Names the client-side error verbatim so the model can match it.
         assert "must NOT have additional properties" in stale_hint
         assert "Developer: Reload Window" in stale_hint
-        # The key literal must still never appear anywhere in the error.
-        assert STRICT_BPS_ACK_KEY not in raw
+        # The key value must still never appear anywhere in the error.
+        assert current_strict_bps_ack_key() not in raw
+
+    async def test_previous_rotation_key_accepted_as_grace(
+        self, strict_on, monkeypatch
+    ):
+        """A key obtained just before an hourly rotation must not strand
+        the agent mid-workflow — the previous bucket's key stays valid for
+        one rotation period."""
+        from ha_mcp import strict_bps
+
+        fixed = 1_000_000_000.0
+        monkeypatch.setattr(strict_bps, "_ACK_KEY_SALT", "fixed-test-salt")
+        monkeypatch.setattr(strict_bps, "time", SimpleNamespace(time=lambda: fixed))
+        prev_key = strict_bps._current_ack_key(
+            fixed - strict_bps._ACK_KEY_ROTATION_SECONDS
+        )
+        mw = StrictBpsMiddleware()
+        call_next = AsyncMock(return_value="ok")
+        ctx = make_context(
+            "ha_config_set_automation",
+            {"config": {}, "BestPracticeKey": prev_key},
+        )
+        assert await mw.on_call_tool(ctx, call_next) == "ok"
+        call_next.assert_awaited_once()
+
+    async def test_key_two_rotations_old_rejected(self, strict_on, monkeypatch):
+        """A key held past the grace window is stale — an agent that saved
+        the key to persistent memory must re-read the guide. Salt pinned so
+        a suffix collision with a valid bucket can't spuriously pass the
+        stale key."""
+        from ha_mcp import strict_bps
+
+        fixed = 1_000_000_000.0
+        monkeypatch.setattr(strict_bps, "_ACK_KEY_SALT", "fixed-test-salt")
+        monkeypatch.setattr(strict_bps, "time", SimpleNamespace(time=lambda: fixed))
+        stale = strict_bps._current_ack_key(
+            fixed - 2 * strict_bps._ACK_KEY_ROTATION_SECONDS
+        )
+        mw = StrictBpsMiddleware()
+        call_next = AsyncMock(return_value="ok")
+        ctx = make_context(
+            "ha_config_set_automation",
+            {"config": {}, "BestPracticeKey": stale},
+        )
+        with pytest.raises(ToolError):
+            await mw.on_call_tool(ctx, call_next)
+        call_next.assert_not_awaited()
 
     async def test_gated_with_correct_key_passes_and_strips_key(self, strict_on):
         mw = StrictBpsMiddleware()
         call_next = AsyncMock(return_value="ok")
         ctx = make_context(
             "ha_config_set_automation",
-            {"config": {"alias": "x"}, "BestPracticeKey": STRICT_BPS_ACK_KEY},
+            {"config": {"alias": "x"}, "BestPracticeKey": current_strict_bps_ack_key()},
         )
         result = await mw.on_call_tool(ctx, call_next)
         assert result == "ok"
@@ -245,7 +386,7 @@ class TestStrictBpsMiddleware:
         call_next = AsyncMock(return_value="ok")
         ctx = make_context(
             "ha_config_set_automation",
-            {"config": {}, "BestPracticeKey": STRICT_BPS_ACK_KEY},
+            {"config": {}, "BestPracticeKey": current_strict_bps_ack_key()},
         )
         result = await mw.on_call_tool(ctx, call_next)
         assert result == "ok"
@@ -269,6 +410,23 @@ class TestStrictBpsMiddleware:
         result = await mw.on_call_tool(ctx, call_next)
         assert result == "ok"
         call_next.assert_awaited_once()
+
+    async def test_non_string_key_treated_as_missing(self, strict_on):
+        """A malformed (non-string) BestPracticeKey from an off-spec client
+        must degrade to the actionable block error, not a TypeError — the
+        middleware reads raw transport arguments before pydantic validation,
+        and an unhashable value must not crash the set-membership check."""
+        mw = StrictBpsMiddleware()
+        call_next = AsyncMock(return_value="ok")
+        ctx = make_context(
+            "ha_config_set_automation",
+            {"config": {}, "BestPracticeKey": {"nested": "object"}},
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(ctx, call_next)
+        call_next.assert_not_awaited()
+        body = json.loads(excinfo.value.args[0])
+        assert body["error"]["code"] == ErrorCode.BPS_ACKNOWLEDGMENT_REQUIRED.value
 
     async def test_none_arguments_treated_as_empty(self, strict_on):
         """A gated call with arguments=None is blocked, not a crash."""
@@ -403,7 +561,12 @@ def test_gated_tool_declares_key_and_maps_first_canonical_file(tool_name: str):
         f"{tool_name} must declare {STRICT_BPS_KEY_PARAM} so FastMCP accepts "
         f"the middleware's acknowledgment kwarg and clients can send it"
     )
-    assert "description" in props[STRICT_BPS_KEY_PARAM]
+    # The per-tool derived schema must carry the shared protocol framing —
+    # a tool diverging from BestPracticeKeyParam with its own stale
+    # description would silently drop the not-a-secret protocol (#1924).
+    tool_desc = props[STRICT_BPS_KEY_PARAM].get("description", "")
+    assert "not a secret" in tool_desc.lower()
+    assert "ha_get_skill_guide" in tool_desc
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +641,14 @@ def _best_practices_skills_dir(tmp_path: Path) -> Path:
 
 class TestSkillGuideKeyInjection:
     def test_ack_line_prepended_when_strict_effective(self, monkeypatch, tmp_path):
+        from ha_mcp import strict_bps
+
         monkeypatch.setattr("ha_mcp.strict_bps.strict_bps_effective", lambda: True)
+        # Freeze the clock: content generation and the assertions each
+        # derive the key; an hour-boundary straddle between them would flake.
+        monkeypatch.setattr(
+            strict_bps, "time", SimpleNamespace(time=lambda: 1_000_000_000.0)
+        )
         srv = _make_bare_server()
         skills_dir = _best_practices_skills_dir(tmp_path)
         result = srv._handle_skill_guide_call(
@@ -486,7 +656,7 @@ class TestSkillGuideKeyInjection:
         )
         assert result["success"] is True
         assert result["content"].startswith(strict_bps_ack_line())
-        assert STRICT_BPS_ACK_KEY in result["content"]
+        assert current_strict_bps_ack_key() in result["content"]
         # Original body still follows the injected line.
         assert "Real content here." in result["content"]
 
@@ -498,7 +668,7 @@ class TestSkillGuideKeyInjection:
             skills_dir, "home-assistant-best-practices", "SKILL.md"
         )
         assert result["success"] is True
-        assert STRICT_BPS_ACK_KEY not in result["content"]
+        assert current_strict_bps_ack_key() not in result["content"]
 
     def test_ack_line_absent_for_other_skill_even_if_strict(
         self, monkeypatch, tmp_path
@@ -511,4 +681,4 @@ class TestSkillGuideKeyInjection:
         (other / "SKILL.md").write_text("# Other\nUnrelated.\n")
         result = srv._handle_skill_guide_call(tmp_path, "some-other-skill", "SKILL.md")
         assert result["success"] is True
-        assert STRICT_BPS_ACK_KEY not in result["content"]
+        assert current_strict_bps_ack_key() not in result["content"]
