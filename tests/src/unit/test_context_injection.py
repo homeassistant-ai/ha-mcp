@@ -188,21 +188,16 @@ async def test_ha_get_automation_traces_works_without_ctx() -> None:
     client.get_entity_state = AsyncMock(
         return_value={"state": "on", "attributes": {"id": "abc"}}
     )
+    # Pooled transport (#1813): the trace commands ride the shared client's
+    # send_websocket_message; there is no per-call dedicated connect/disconnect.
+    client.send_websocket_message = AsyncMock(
+        return_value={"success": True, "result": []}
+    )
     trace_tool = TraceTools(client).ha_get_automation_traces
 
-    fake_ws = AsyncMock()
-    fake_ws.disconnect = AsyncMock()
-    fake_ws.send_command = AsyncMock(return_value={"success": True, "result": []})
-
-    with (
-        patch(
-            "ha_mcp.tools.tools_traces.get_connected_ws_client",
-            new=AsyncMock(return_value=(fake_ws, None)),
-        ),
-        patch(
-            "ha_mcp.tools.tools_traces._resolve_trace_item_id",
-            new=AsyncMock(return_value="abc"),
-        ),
+    with patch(
+        "ha_mcp.tools.tools_traces._resolve_trace_item_id",
+        new=AsyncMock(return_value="abc"),
     ):
         result = await trace_tool(automation_id="automation.demo")
 
@@ -217,15 +212,11 @@ async def test_ha_get_automation_traces_emits_progress_with_ctx() -> None:
     client.get_entity_state = AsyncMock(
         return_value={"state": "on", "attributes": {"id": "abc"}}
     )
-    trace_tool = TraceTools(client).ha_get_automation_traces
-    ctx = _make_ctx()
-
-    fake_ws = AsyncMock()
-    fake_ws.disconnect = AsyncMock()
     # Return a non-empty trace list so we follow the standard "list" branch
     # and skip the diagnostics gather, keeping the progress-event count
-    # deterministic at the expected 3.
-    fake_ws.send_command = AsyncMock(
+    # deterministic at the expected 3. Pooled transport (#1813): the trace
+    # command rides the shared client's send_websocket_message.
+    client.send_websocket_message = AsyncMock(
         return_value={
             "success": True,
             "result": [
@@ -237,16 +228,12 @@ async def test_ha_get_automation_traces_emits_progress_with_ctx() -> None:
             ],
         }
     )
+    trace_tool = TraceTools(client).ha_get_automation_traces
+    ctx = _make_ctx()
 
-    with (
-        patch(
-            "ha_mcp.tools.tools_traces.get_connected_ws_client",
-            new=AsyncMock(return_value=(fake_ws, None)),
-        ),
-        patch(
-            "ha_mcp.tools.tools_traces._resolve_trace_item_id",
-            new=AsyncMock(return_value="abc"),
-        ),
+    with patch(
+        "ha_mcp.tools.tools_traces._resolve_trace_item_id",
+        new=AsyncMock(return_value="abc"),
     ):
         result = await trace_tool(automation_id="automation.demo", ctx=ctx)
 
@@ -523,20 +510,15 @@ async def test_ha_get_automation_traces_run_id_detail_emits_progress() -> None:
     client.get_entity_state = AsyncMock(
         return_value={"state": "on", "attributes": {"id": "abc"}}
     )
+    # Pooled transport (#1813): trace/get rides the shared client's
+    # send_websocket_message.
+    client.send_websocket_message = AsyncMock(
+        return_value={"success": True, "result": {"trace": "data"}}
+    )
     trace_tool = TraceTools(client).ha_get_automation_traces
     ctx = _make_ctx()
 
-    fake_ws = AsyncMock()
-    fake_ws.disconnect = AsyncMock()
-    fake_ws.send_command = AsyncMock(
-        return_value={"success": True, "result": {"trace": "data"}}
-    )
-
     with (
-        patch(
-            "ha_mcp.tools.tools_traces.get_connected_ws_client",
-            new=AsyncMock(return_value=(fake_ws, None)),
-        ),
         patch(
             "ha_mcp.tools.tools_traces._resolve_trace_item_id",
             new=AsyncMock(return_value="abc"),
@@ -565,19 +547,15 @@ async def test_ha_get_automation_traces_empty_diagnostics_emits_progress() -> No
     client.get_entity_state = AsyncMock(
         return_value={"state": "on", "attributes": {"id": "abc"}}
     )
+    # Empty trace list triggers the diagnostics branch. Pooled transport
+    # (#1813): trace/list rides the shared client's send_websocket_message.
+    client.send_websocket_message = AsyncMock(
+        return_value={"success": True, "result": []}
+    )
     trace_tool = TraceTools(client).ha_get_automation_traces
     ctx = _make_ctx()
 
-    fake_ws = AsyncMock()
-    fake_ws.disconnect = AsyncMock()
-    # Empty trace list triggers the diagnostics branch.
-    fake_ws.send_command = AsyncMock(return_value={"success": True, "result": []})
-
     with (
-        patch(
-            "ha_mcp.tools.tools_traces.get_connected_ws_client",
-            new=AsyncMock(return_value=(fake_ws, None)),
-        ),
         patch(
             "ha_mcp.tools.tools_traces._resolve_trace_item_id",
             new=AsyncMock(return_value="abc"),
