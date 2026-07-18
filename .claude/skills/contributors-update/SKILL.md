@@ -19,7 +19,7 @@ git -C "$PRIMARY_CHECKOUT" status --short
 cd "$PRIMARY_CHECKOUT"
 ```
 
-Stop if the primary checkout is dirty. Do not stash, overwrite, or mix the contributor update with other changes. This skill is the narrow exception in `AGENTS.md` that permits an approved `README.md` contributor-list update to be committed directly to `master` without a PR.
+Stop if the primary checkout is dirty. Do not stash, overwrite, or mix the contributor update with other changes. This workflow qualifies for the documentation-only exception in `AGENTS.md`, allowing the approved `README.md` change to be committed directly to `master` without a PR.
 
 ### 2. Find the cutoff date
 

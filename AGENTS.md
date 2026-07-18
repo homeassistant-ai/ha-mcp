@@ -178,11 +178,15 @@ The `/my-pr-checker` skill carries the exact commands (the inline-reply
 
 ## Git & PR Policies
 
-**CRITICAL - Never commit directly to master, except for approved contributor-list maintenance.**
+**CRITICAL - Never commit directly to master, except for approved documentation-only adjustments.**
 
 You are STRICTLY PROHIBITED from committing to `master` or `main` branch. Always use worktrees for feature work.
 
-The sole exception is `/contributors-update`: updates limited to the `README.md` contributor list may be committed and pushed directly to `master` after the skill previews the exact additions and the user explicitly approves both the edit and direct push. Confirm that `master` is clean and up to date immediately before editing. Do not create a PR for this administrative documentation update.
+Documentation-only adjustments may be committed and pushed directly to `master` without a PR when all of the following are true:
+- Every changed file is documentation (`*.md`); no code, configuration, generated artifact, or workflow file is included.
+- The exact diff is shown to the user before committing.
+- The user explicitly approves both the change and direct push.
+- `master` is clean and updated with `git pull --ff-only` immediately before editing and again before committing.
 
 For all other work:
 
@@ -196,11 +200,11 @@ cd worktree/<branch-name>
 1. Current branch: `git rev-parse --abbrev-ref HEAD` (must NOT be master/main)
 2. In worktree: `pwd` (must be in `worktree/` subdirectory)
 
-For the `/contributors-update` exception, instead verify that the only staged change is the approved `README.md` contributor-list edit.
+For an approved documentation-only direct commit, instead verify that every staged path ends in `.md` and that the staged diff exactly matches what the user approved.
 
 **Never push or create PRs without user permission.**
 
-**Always create PRs as draft.** Use `gh pr create --draft`. Only mark a PR as ready for review (`gh pr ready <PR>`) when explicitly requested by the user. **Before marking ready, update the PR description** to reflect all changes made since the PR was created.
+**For non-exempt work, always create PRs as draft.** Use `gh pr create --draft`. Only mark a PR as ready for review (`gh pr ready <PR>`) when explicitly requested by the user. **Before marking ready, update the PR description** to reflect all changes made since the PR was created.
 
 ### PR Workflow
 
