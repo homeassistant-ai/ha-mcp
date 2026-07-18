@@ -153,6 +153,16 @@ class RoutingClient:
         return {"success": False, "error": "unexpected list type"}
 
 
+class RegistryFailingClient(RoutingClient):
+    """Legacy ``{type}/list`` works, but the entity-registry read fails, so
+    ``_enrich_helpers_with_current_registry`` degrades open with a warning."""
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        if msg.get("type") == "config/entity_registry/list":
+            return {"success": False, "error": "registry unavailable"}
+        return await super().send_websocket_message(msg)
+
+
 def _build_list_helpers(client: Any) -> Any:
     registered: dict[str, Any] = {}
 
@@ -320,6 +330,13 @@ async def test_raised_command_falls_back_with_warning() -> None:
     assert resp["success"] is True
     assert client.list_calls == 1
     assert any("served via legacy path" in w for w in resp["warnings"])
+    # The fallback record is registry-joined like the inline path (issue #1945):
+    # a renamed helper carries its current entity_id and display name, not the
+    # stale storage values.
+    record = resp["helpers"][0]
+    assert record["entity_id"] == "input_boolean.foo"
+    assert record["name"] == "New Name"
+    assert record["original_name"] == "Old Name"
 
 
 @pytest.mark.asyncio
@@ -342,6 +359,12 @@ async def test_ws_establish_failure_storage_type_falls_back_with_warning() -> No
     assert resp["success"] is True
     assert client.list_calls == 1
     assert any("served via legacy path" in w for w in resp["warnings"])
+    # The transport-failure fallback joins the registry too (issue #1945): the
+    # same _legacy_helper_list serves both this branch and the command-error one.
+    record = resp["helpers"][0]
+    assert record["entity_id"] == "input_boolean.foo"
+    assert record["name"] == "New Name"
+    assert record["original_name"] == "Old Name"
 
 
 @pytest.mark.asyncio
@@ -376,6 +399,34 @@ async def test_raised_command_fallback_flattens_the_person_split_shape() -> None
     assert resp["total_count"] == 2
     assert resp["has_more"] is False
     assert resp["next_offset"] is None
+
+
+@pytest.mark.asyncio
+async def test_all_types_merge_surfaces_legacy_enrichment_warning() -> None:
+    """all-types: an uncovered type served via legacy whose registry read fails
+    surfaces the stale-join warning instead of dropping it (issue #1945).
+
+    The component covers every type except ``tag``, so the merge falls to
+    ``_legacy_helper_list("tag")``; its registry read then fails, and the
+    degrade-open warning must reach the merged response rather than vanish.
+    """
+    covered = sorted(
+        (tools_config_helpers.SIMPLE_HELPER_TYPES - {"tag"})
+        | tools_config_helpers.FLOW_HELPER_TYPES
+    )
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result={"helpers": [], "count": 0, "covered_types": covered},
+    )
+    client = RegistryFailingClient()
+    list_helpers = _build_list_helpers(client)
+
+    with patch_ws(ws, tools_config_helpers):
+        resp = await list_helpers(helper_type="all")
+
+    assert resp["success"] is True
+    assert tools_config_helpers._REGISTRY_JOIN_STALE_WARNING in resp.get("warnings", [])
 
 
 @pytest.mark.asyncio
