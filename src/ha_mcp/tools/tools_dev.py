@@ -1161,6 +1161,12 @@ class DevTools:
             raw = await ws.send_command(WS_SERVER_ENTRY_UPDATE, **deltas)
         except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             if is_unknown_command(exc):
+                logger.warning(
+                    "%s unknown_command; invalidating caps and falling back to "
+                    "legacy: %r",
+                    WS_SERVER_ENTRY_UPDATE,
+                    exc,
+                )
                 invalidate_caps(self._client)
             else:
                 logger.warning(

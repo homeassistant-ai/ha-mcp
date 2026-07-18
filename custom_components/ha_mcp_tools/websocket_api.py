@@ -292,6 +292,8 @@ from homeassistant.helpers import (
 )
 
 from .const import (
+    CHANNEL_DEV,
+    CHANNEL_STABLE,
     COMPONENT_VERSION,
     CONF_ENTRY_TYPE,
     DEFAULT_PIP_SPEC,
@@ -816,11 +818,12 @@ def _single_line_pip_spec(value: str) -> str:
 def _server_entry_update_schema() -> dict[Any, Any]:
     # Both fields are optional at the schema level (voluptuous cannot cleanly express
     # "at least one of"); ``_server_entry_update_prep`` raises when NEITHER is present.
-    # ``channel`` stays a bare ``str`` — the SERVER validates it against its channel
-    # set (D6); ``pip_spec`` gets the length + single-line defence-in-depth cap.
+    # ``channel`` is gated to the known set and ``pip_spec`` gets the length +
+    # single-line cap — schema-level defence-in-depth over (and symmetric with) the
+    # server's own channel validation (D6) and pip-spec normalization.
     return {
         vol.Required("type"): WS_SERVER_ENTRY_UPDATE,
-        vol.Optional("channel"): str,
+        vol.Optional("channel"): vol.In((CHANNEL_STABLE, CHANNEL_DEV)),
         vol.Optional("pip_spec"): vol.All(
             str,
             vol.Length(max=SERVER_ENTRY_UPDATE_MAX_PIP_SPEC),

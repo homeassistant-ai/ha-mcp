@@ -362,6 +362,20 @@ class TestServerEntryUpdateSchema:
         assert out["channel"] == "dev"
         assert out["pip_spec"] == "ha-mcp==1.0.0"
 
+    def test_accepts_stable_channel(self, monkeypatch: Any) -> None:
+        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
+        schema = _REAL_VOL.Schema(wsapi._server_entry_update_schema())
+        out = schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "stable"})
+        assert out["channel"] == "stable"
+
+    def test_rejects_bogus_channel(self, monkeypatch: Any) -> None:
+        # channel is gated to the known set (defence-in-depth over the server's own
+        # validation) — a bogus channel is rejected by the schema itself.
+        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
+        schema = _REAL_VOL.Schema(wsapi._server_entry_update_schema())
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "nightly"})
+
     def test_type_only_validates_prep_enforces_at_least_one(
         self, monkeypatch: Any
     ) -> None:

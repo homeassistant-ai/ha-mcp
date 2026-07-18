@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -337,6 +337,45 @@ async def test_component_write_succeeds_when_find_would_raise(
     assert result["data"]["entry_id"] == "srv1"
     assert client.submit_calls == []
     assert client.start_options_flow_calls == []
+
+
+@pytest.mark.asyncio
+async def test_component_write_threads_verify_ssl_into_get_websocket_client() -> None:
+    """The direct-write frame's ``get_websocket_client`` receives the client's
+    ``verify_ssl``, so a ``verify_ssl=False`` client never establishes (or keys) a
+    default-verification pooled socket. A regression dropping the kwarg fails here.
+
+    The write resolves its WS through ``tools_dev.get_websocket_client`` while the caps
+    probe resolves through ``component_api.get_websocket_client`` — patched with
+    SEPARATE factories so the write factory's single call can be pinned to the exact
+    kwargs delivered."""
+    ws = _update_ws(
+        caps=_CAPS_FULL,
+        update_result={
+            "scheduled": True,
+            "entry_id": "srv1",
+            "applying": {"channel": "dev"},
+            "previous": {"channel": "stable", "pip_spec": None},
+        },
+    )
+    client = UpdateClient()
+    client.verify_ssl = False
+
+    caps_factory = AsyncMock(return_value=ws)
+    write_factory = AsyncMock(return_value=ws)
+    with (
+        patch.object(component_api, "get_websocket_client", caps_factory),
+        patch.object(tools_dev, "get_websocket_client", write_factory),
+    ):
+        result = await DevTools(client).ha_dev_manage_server(
+            action="update_source", channel="dev"
+        )
+
+    assert result["data"]["scheduled"] is True
+    # The write frame resolved its WS with the client's verify_ssl (=False), passed
+    # as an explicit kwarg — not omitted.
+    assert write_factory.call_count == 1
+    assert write_factory.call_args.kwargs["verify_ssl"] is False
 
 
 @pytest.mark.asyncio

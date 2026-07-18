@@ -86,7 +86,13 @@ def _real_update_ws(component_hass: _ComponentHass) -> AsyncMock:
 
 
 class _ContractClient:
-    """Credentialed client: opens the (unused) legacy flow; submit is a tripwire."""
+    """Credentialed client whose legacy surface is a tripwire.
+
+    Component-first: on the fast path the consumer routes through the component write
+    BEFORE find_server_config_entry, so no options flow is opened here — the
+    start/abort methods exist only for the fallback path, and the submit / legacy
+    config_entries/get methods raise if the component route is ever bypassed.
+    """
 
     def __init__(self) -> None:
         self.base_url = "http://ha.local:8123"
@@ -167,8 +173,9 @@ async def test_real_component_write_maps_and_defers_merged_apply() -> None:
 @pytest.mark.asyncio
 async def test_real_component_no_entry_falls_back_to_component_not_installed() -> None:
     """When the component reports no server entry AND the legacy probe also finds
-    none, the consumer surfaces COMPONENT_NOT_INSTALLED (the primary mapping is the
-    server-side find_server_config_entry that runs first)."""
+    none, the consumer surfaces COMPONENT_NOT_INSTALLED. Component-first: the
+    component write is attempted first and returns None (no entry), so
+    find_server_config_entry runs SECOND and, also finding none, is what raises."""
     from fastmcp.exceptions import ToolError
 
     component_hass = _ComponentHass([])  # no server entry anywhere
