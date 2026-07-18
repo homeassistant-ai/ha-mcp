@@ -2,16 +2,57 @@
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
 
+from ...client.rest_client import HomeAssistantAPIError
 from ._config import INDIVIDUAL_FETCH_BATCH_SIZE
 from ._scoring import ScoringMixin
 
 logger = logging.getLogger(__name__)
+
+# The REST client's own message prefix ("API error: <code> - "); stripped by
+# ``summarize_fetch_error`` so the summary doesn't state the status twice.
+_API_ERROR_PREFIX = re.compile(r"^API error:\s*\d+\s*-\s*")
+
+# Hard cap on a ``summarize_fetch_error`` summary. partial_reason fragments
+# are read inline by agents; one representative error needs a first line,
+# not a body dump.
+_ERROR_SAMPLE_MAX_LEN = 160
+
+
+def summarize_fetch_error(exc: BaseException) -> str:
+    """One-line, length-capped summary of a per-id config-fetch failure.
+
+    The generic ``failed`` bucket collapses every non-404, non-timeout
+    exception into one opaque partial_reason fragment ("per-id fetch raised
+    a non-404 error"), with the real exception visible only at debug-level
+    logging. The follow-up report on issue #1784 showed what that hides: a
+    box where every per-id script fetch returns a fast HTTP 500 because
+    ``scripts.yaml`` contains a ``!secret`` reference (HA core's config view
+    file-loads the YAML per request and rejects secrets before the id
+    lookup) — a five-minute diagnosis if the response named the error, a
+    log dive otherwise. This summary rides the fragment as an ``e.g.``.
+
+    HTTP errors render as ``HTTP <code>: <first line of the message>`` (the
+    client's own ``API error: <code> - `` prefix is stripped rather than
+    duplicated); everything else as ``<ExceptionType>: <first line>``.
+    """
+    lines = str(exc).strip().splitlines()
+    text = lines[0].strip() if lines else ""
+    if isinstance(exc, HomeAssistantAPIError) and exc.status_code is not None:
+        text = _API_ERROR_PREFIX.sub("", text)
+        prefix = f"HTTP {exc.status_code}"
+    else:
+        prefix = type(exc).__name__
+    summary = f"{prefix}: {text}" if text else prefix
+    if len(summary) > _ERROR_SAMPLE_MAX_LEN:
+        summary = summary[: _ERROR_SAMPLE_MAX_LEN - 1] + "…"
+    return summary
 
 
 def is_timeout_error(exc: BaseException) -> bool:

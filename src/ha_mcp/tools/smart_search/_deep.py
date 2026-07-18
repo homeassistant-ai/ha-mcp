@@ -21,7 +21,7 @@ from ._config import (
     INDIVIDUAL_FETCH_BATCH_SIZE,
     SCRIPT_CONFIG_TIME_BUDGET,
 )
-from ._fetch import is_timeout_error
+from ._fetch import is_timeout_error, summarize_fetch_error
 from ._scenes import SceneSearchMixin
 
 logger = logging.getLogger(__name__)
@@ -136,6 +136,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 "timeout": 0,
                 "integration_skipped": 0,
                 "registry_failed": False,
+                "failed_sample": None,
             }
 
             # Diagnostic counters for the Attempt-C path on automations/
@@ -149,10 +150,12 @@ class DeepSearchMixin(SceneSearchMixin):
             automation_failed = 0
             automation_yaml_skipped = 0
             automation_timeout = 0
+            automation_failed_sample: str | None = None
             script_skipped = 0
             script_failed = 0
             script_yaml_skipped = 0
             script_timeout = 0
+            script_failed_sample: str | None = None
             helper_failed = 0
             dashboard_failed = 0
 
@@ -163,6 +166,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     automation_failed,
                     automation_yaml_skipped,
                     automation_timeout,
+                    automation_failed_sample,
                 ) = await self._deep_search_automations(
                     all_entities,
                     automation_unique_id_map,
@@ -185,6 +189,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     script_failed,
                     script_yaml_skipped,
                     script_timeout,
+                    script_failed_sample,
                 ) = await self._deep_search_scripts(
                     all_entities,
                     query_lower,
@@ -207,6 +212,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     scene_stats["integration_skipped"],
                     scene_stats["registry_failed"],
                     scene_stats["timeout"],
+                    scene_stats["failed_sample"],
                 ) = await self._deep_search_scenes(
                     all_entities,
                     query_lower,
@@ -268,10 +274,12 @@ class DeepSearchMixin(SceneSearchMixin):
                 automation_failed=automation_failed,
                 automation_yaml_skipped=automation_yaml_skipped,
                 automation_timeout=automation_timeout,
+                automation_failed_sample=automation_failed_sample,
                 script_skipped=script_skipped,
                 script_failed=script_failed,
                 script_yaml_skipped=script_yaml_skipped,
                 script_timeout=script_timeout,
+                script_failed_sample=script_failed_sample,
                 helper_failed=helper_failed,
                 dashboard_failed=dashboard_failed,
             )
@@ -318,11 +326,11 @@ class DeepSearchMixin(SceneSearchMixin):
         exact_match: bool,
         *,
         config_time_budget: float | None = None,
-    ) -> tuple[list[dict[str, Any]], int, int, int, int]:
+    ) -> tuple[list[dict[str, Any]], int, int, int, int, str | None]:
         """Deep-search automations: two-tier config fetch (REST bulk -> budgeted individual).
 
         Returns ``(matches, skipped_count, failed_count, yaml_skipped_count,
-        timeout_count)``. ``skipped_count`` is non-zero only when bulk fetch
+        timeout_count, failed_sample)``. ``skipped_count`` is non-zero only when bulk fetch
         fell back to the per-id Attempt-C path AND its wall-clock budget
         exhausted before all configs were fetched; ``failed_count`` is
         non-zero when individual config fetches raised a non-404, non-timeout
@@ -338,6 +346,11 @@ class DeepSearchMixin(SceneSearchMixin):
         distinguish a complete zero-result from an incomplete one —
         skipped/failed ids carry their score-without-config through the
         merge and fall below the match threshold silently otherwise.
+        ``failed_sample`` is one representative
+        ``summarize_fetch_error`` summary of a ``failed``-class exception
+        (``None`` when none occurred), surfaced in the failed fragment so
+        the response names WHAT raised instead of pointing at debug logs
+        (#1784 follow-up).
         """
         automation_entities = [
             e for e in all_entities if e.get("entity_id", "").startswith("automation.")
@@ -376,6 +389,10 @@ class DeepSearchMixin(SceneSearchMixin):
         failed_count = 0
         yaml_skipped_count = 0
         timeout_count = 0
+        # One representative summary per ``failed``-class exception, appended
+        # by the fetch closure below; the first entry rides partial_reason as
+        # an ``e.g.`` (#1784 follow-up). List membership tracks failed_count.
+        failed_errors: list[str] = []
         if not bulk_fetched:
             uids_to_fetch = [
                 uid for _, _, uid, _ in scored if uid and uid not in configs
@@ -405,6 +422,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     logger.debug(
                         f"Automation individual config fetch ({uid}) failed: {e}"
                     )
+                    failed_errors.append(summarize_fetch_error(e))
                     return (uid, None, "failed")
                 except TimeoutError:
                     # asyncio.wait_for hit INDIVIDUAL_CONFIG_TIMEOUT. Classify
@@ -430,6 +448,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     logger.debug(
                         f"Automation individual config fetch ({uid}) failed: {e}"
                     )
+                    failed_errors.append(summarize_fetch_error(e))
                     return (uid, None, "failed")
 
             (
@@ -463,7 +482,14 @@ class DeepSearchMixin(SceneSearchMixin):
                 scored, configs, query_lower, exact_match
             )
         ]
-        return matches, skipped_count, failed_count, yaml_skipped_count, timeout_count
+        return (
+            matches,
+            skipped_count,
+            failed_count,
+            yaml_skipped_count,
+            timeout_count,
+            failed_errors[0] if failed_errors else None,
+        )
 
     async def _deep_search_scripts(
         self,
@@ -472,11 +498,11 @@ class DeepSearchMixin(SceneSearchMixin):
         exact_match: bool,
         *,
         config_time_budget: float | None = None,
-    ) -> tuple[list[dict[str, Any]], int, int, int, int]:
+    ) -> tuple[list[dict[str, Any]], int, int, int, int, str | None]:
         """Deep-search scripts: same two-tier strategy as automations.
 
         Returns ``(matches, skipped_count, failed_count, yaml_skipped_count,
-        timeout_count)``; semantics identical to ``_deep_search_automations``
+        timeout_count, failed_sample)``; semantics identical to ``_deep_search_automations``
         — the 404 path catches YAML-defined scripts (which
         ``client.get_script_config`` re-raises as
         ``HomeAssistantAPIError(status_code=404)``).
@@ -514,6 +540,10 @@ class DeepSearchMixin(SceneSearchMixin):
         failed_count = 0
         yaml_skipped_count = 0
         timeout_count = 0
+        # One representative summary per ``failed``-class exception, appended
+        # by the fetch closure below; the first entry rides partial_reason as
+        # an ``e.g.`` (#1784 follow-up). List membership tracks failed_count.
+        failed_errors: list[str] = []
         if not bulk_fetched:
             sids_to_fetch = [
                 sid for _, _, sid, _ in scored if sid and sid not in configs
@@ -540,6 +570,7 @@ class DeepSearchMixin(SceneSearchMixin):
                         )
                         return (sid, None, "yaml_skipped")
                     logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
+                    failed_errors.append(summarize_fetch_error(e))
                     return (sid, None, "failed")
                 except TimeoutError:
                     # See _fetch_automation_config: per-request timeout under
@@ -559,6 +590,7 @@ class DeepSearchMixin(SceneSearchMixin):
                         )
                         return (sid, None, "timeout")
                     logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
+                    failed_errors.append(summarize_fetch_error(e))
                     return (sid, None, "failed")
 
             (
@@ -593,7 +625,14 @@ class DeepSearchMixin(SceneSearchMixin):
                 scored, configs, query_lower, exact_match
             )
         ]
-        return matches, skipped_count, failed_count, yaml_skipped_count, timeout_count
+        return (
+            matches,
+            skipped_count,
+            failed_count,
+            yaml_skipped_count,
+            timeout_count,
+            failed_errors[0] if failed_errors else None,
+        )
 
     @staticmethod
     def _build_helper_registry_map(
@@ -966,6 +1005,8 @@ class DeepSearchMixin(SceneSearchMixin):
         script_yaml_skipped: int = 0,
         automation_timeout: int = 0,
         script_timeout: int = 0,
+        automation_failed_sample: str | None = None,
+        script_failed_sample: str | None = None,
         helper_failed: int = 0,
         dashboard_failed: int = 0,
     ) -> dict[str, Any]:
@@ -1028,6 +1069,8 @@ class DeepSearchMixin(SceneSearchMixin):
             script_yaml_skipped=script_yaml_skipped,
             automation_timeout=automation_timeout,
             script_timeout=script_timeout,
+            automation_failed_sample=automation_failed_sample,
+            script_failed_sample=script_failed_sample,
             helper_failed=helper_failed,
             dashboard_failed=dashboard_failed,
         )
@@ -1045,6 +1088,8 @@ class DeepSearchMixin(SceneSearchMixin):
         script_yaml_skipped: int = 0,
         automation_timeout: int = 0,
         script_timeout: int = 0,
+        automation_failed_sample: str | None = None,
+        script_failed_sample: str | None = None,
         helper_failed: int = 0,
         dashboard_failed: int = 0,
     ) -> None:
@@ -1077,6 +1122,12 @@ class DeepSearchMixin(SceneSearchMixin):
         rationalised away by blind agents who reported the result as
         complete; the harder phrasing closes that gap.
 
+        ``automation_failed_sample`` / ``script_failed_sample`` carry one
+        representative ``summarize_fetch_error`` summary for the generic
+        ``failed`` class, appended to its fragment as an ``e.g.`` so the
+        response names WHAT raised instead of pointing at debug logs
+        (#1784 follow-up). ``None`` keeps the fragment wording unchanged.
+
         Append-safe: the existing ``partial_reason`` (if any) is preserved
         and the new reasons are concatenated with ``" ; "``.
         """
@@ -1084,7 +1135,16 @@ class DeepSearchMixin(SceneSearchMixin):
         # The automation and script fragments are symmetric (noun, per-id
         # endpoint, budget env var); loop rather than duplicating the four
         # per-class fragments per type.
-        for noun, endpoint, budget_env, skipped, failed, yaml_skipped, timeout in (
+        for (
+            noun,
+            endpoint,
+            budget_env,
+            skipped,
+            failed,
+            yaml_skipped,
+            timeout,
+            failed_sample,
+        ) in (
             (
                 "automation",
                 "/config/automation/config",
@@ -1093,6 +1153,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 automation_failed,
                 automation_yaml_skipped,
                 automation_timeout,
+                automation_failed_sample,
             ),
             (
                 "script",
@@ -1102,6 +1163,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 script_failed,
                 script_yaml_skipped,
                 script_timeout,
+                script_failed_sample,
             ),
         ):
             if skipped:
@@ -1114,10 +1176,16 @@ class DeepSearchMixin(SceneSearchMixin):
                     "the web Settings UI's Advanced section)."
                 )
             if failed:
+                # Name ONE representative error inline when the fetch path
+                # captured one — the opaque bucket alone sent users on a
+                # debug-log dive for trivially-diagnosable server errors
+                # (#1784 follow-up: every per-id script fetch 500ing on a
+                # ``!secret`` reference in scripts.yaml).
+                sample_suffix = f"; e.g. {failed_sample}" if failed_sample else ""
                 reasons.append(
                     f"{failed} {noun}(s) not scanned (per-id fetch raised "
-                    "a non-404 error) — their match status is unknown; this "
-                    "result is not exhaustive."
+                    f"a non-404 error{sample_suffix}) — their match status "
+                    "is unknown; this result is not exhaustive."
                 )
             if yaml_skipped:
                 reasons.append(

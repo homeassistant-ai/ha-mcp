@@ -18,7 +18,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.smart_search._fetch import is_timeout_error
+from ha_mcp.tools.smart_search._fetch import is_timeout_error, summarize_fetch_error
 
 
 def _make_tools(client):
@@ -460,6 +460,7 @@ class TestYamlSkippedClassification:
             failed_count,
             yaml_skipped_count,
             _timeout_count,
+            _failed_sample,
         ) = await smart_tools._deep_search_automations(
             automations,
             {
@@ -523,6 +524,7 @@ class TestYamlSkippedClassification:
             failed_count,
             yaml_skipped_count,
             _timeout_count,
+            _failed_sample,
         ) = await smart_tools._deep_search_automations(
             automations,
             {
@@ -572,6 +574,7 @@ class TestYamlSkippedClassification:
             failed_count,
             yaml_skipped_count,
             _timeout_count,
+            _failed_sample,
         ) = await smart_tools._deep_search_automations(
             automations,
             {"automation.none_status": "uid_none"},
@@ -618,6 +621,7 @@ class TestYamlSkippedClassification:
             failed_count,
             yaml_skipped_count,
             _timeout_count,
+            _failed_sample,
         ) = await smart_tools._deep_search_scripts(
             scripts,
             query_lower="anything",
@@ -684,6 +688,7 @@ class TestYamlSkippedClassification:
             failed_count,
             yaml_skipped_count,
             _timeout_count,
+            _failed_sample,
         ) = await smart_tools._deep_search_automations(
             automations,
             {
@@ -915,6 +920,7 @@ class TestTimeoutClassification:
                 failed_count,
                 yaml_skipped_count,
                 timeout_count,
+                _failed_sample,
             ) = await smart_tools._deep_search_automations(
                 automations,
                 {
@@ -962,6 +968,7 @@ class TestTimeoutClassification:
                 failed_count,
                 yaml_skipped_count,
                 timeout_count,
+                _failed_sample,
             ) = await smart_tools._deep_search_scripts(
                 scripts,
                 query_lower="anything",
@@ -1101,6 +1108,7 @@ class TestSceneTimeoutClassification:
                 _integration_skipped,
                 registry_failed,
                 timeout_count,
+                _failed_sample,
             ) = await smart_tools._deep_search_scenes(
                 scenes,
                 query_lower="anything",
@@ -1228,6 +1236,7 @@ class TestWrappedClientTimeoutClassification:
             failed_count,
             yaml_skipped_count,
             timeout_count,
+            _failed_sample,
         ) = await smart_tools._deep_search_automations(
             automations,
             {"automation.capped": "uid_capped"},
@@ -1272,6 +1281,7 @@ class TestWrappedClientTimeoutClassification:
             failed_count,
             yaml_skipped_count,
             timeout_count,
+            _failed_sample,
         ) = await smart_tools._deep_search_automations(
             automations,
             {"automation.down": "uid_down"},
@@ -1359,3 +1369,294 @@ class TestBudgetedFetchCountArithmetic:
             f"skipped must exclude fetched AND timed-out ids; got "
             f"skipped={skipped_count}"
         )
+
+
+class TestSummarizeFetchError:
+    """Unit coverage of ``summarize_fetch_error`` — the one-line summary the
+    generic ``failed`` bucket attaches to ``partial_reason`` (#1784
+    follow-up: the opaque "raised a non-404 error" hid a trivially-
+    diagnosable per-id 500 — a ``!secret`` reference in scripts.yaml —
+    behind a debug-log dive)."""
+
+    def test_api_error_strips_client_prefix_and_names_status(self):
+        exc = HomeAssistantAPIError(
+            "API error: 500 - Secrets not supported in this YAML file",
+            status_code=500,
+        )
+        assert (
+            summarize_fetch_error(exc)
+            == "HTTP 500: Secrets not supported in this YAML file"
+        )
+
+    def test_api_error_without_prefix_keeps_message(self):
+        exc = HomeAssistantAPIError("Script not found: foo", status_code=502)
+        assert summarize_fetch_error(exc) == "HTTP 502: Script not found: foo"
+
+    def test_api_error_status_none_falls_back_to_exception_form(self):
+        """``status_code=None`` means we can't claim an HTTP code — render
+        as a plain exception summary instead of ``HTTP None``."""
+        exc = HomeAssistantAPIError("connection reset")
+        assert summarize_fetch_error(exc) == ("HomeAssistantAPIError: connection reset")
+
+    def test_generic_exception_names_type(self):
+        assert (
+            summarize_fetch_error(RuntimeError("generic explosion"))
+            == "RuntimeError: generic explosion"
+        )
+
+    def test_empty_message_yields_bare_type(self):
+        assert summarize_fetch_error(RuntimeError()) == "RuntimeError"
+
+    def test_multiline_body_keeps_first_line_only(self):
+        exc = HomeAssistantAPIError(
+            "API error: 500 - Secrets not supported in this YAML file\n"
+            "Traceback (most recent call last):\n  boom",
+            status_code=500,
+        )
+        assert (
+            summarize_fetch_error(exc)
+            == "HTTP 500: Secrets not supported in this YAML file"
+        )
+
+    def test_long_message_truncated(self):
+        out = summarize_fetch_error(RuntimeError("x" * 500))
+        assert len(out) == 160
+        assert out.endswith("…")
+
+
+class TestFailedSampleThroughDeepSearch:
+    """Component + seam coverage of the representative-error sample on the
+    generic ``failed`` bucket (#1784 follow-up).
+
+    ``_deep_search_automations`` / ``_deep_search_scripts`` return the
+    sample in a new 6th tuple slot (scenes: 7th), ``deep_search`` forwards
+    it via ``_paginate_and_build_response`` into
+    ``_apply_per_type_partial_flag`` (scenes: ``scene_stats["failed_sample"]``
+    into ``_apply_scene_partial_flag``), and the failed fragment carries it
+    as an ``e.g.``. Without the sample the response can't explain WHAT
+    raised: the follow-up report on #1784 was a box where every per-id
+    script fetch 500s on a ``!secret`` reference in scripts.yaml —
+    indistinguishable from any other failure without a debug-log dive."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        # Bulk fetch fails (triggers Tier 3 per-id fallback).
+        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client.send_websocket_message = AsyncMock(
+            side_effect=Exception("WebSocket unavailable")
+        )
+        return client
+
+    @pytest.fixture
+    def smart_tools(self, mock_client):
+        return _make_tools(mock_client)
+
+    @staticmethod
+    def _automation_entities() -> list[dict]:
+        return [
+            {
+                "entity_id": "automation.secret_one",
+                "state": "on",
+                "attributes": {"friendly_name": "Secret One", "id": "uid_one"},
+            },
+            {
+                "entity_id": "automation.secret_two",
+                "state": "on",
+                "attributes": {"friendly_name": "Secret Two", "id": "uid_two"},
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_automation_500_sample_lands_in_sixth_slot(
+        self, mock_client, smart_tools
+    ):
+        """A per-id 500 must both count as ``failed`` AND surface its
+        summary in the new 6th slot."""
+        automations = self._automation_entities()
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _per_id_500(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            raise HomeAssistantAPIError(
+                "API error: 500 - Secrets not supported in this YAML file",
+                status_code=500,
+            )
+
+        mock_client._request = AsyncMock(side_effect=_per_id_500)
+
+        (
+            _matches,
+            _skipped_count,
+            failed_count,
+            _yaml_skipped_count,
+            _timeout_count,
+            failed_sample,
+        ) = await smart_tools._deep_search_automations(
+            automations,
+            {"automation.secret_one": "uid_one", "automation.secret_two": "uid_two"},
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert failed_count == 2
+        assert failed_sample == "HTTP 500: Secrets not supported in this YAML file"
+
+    @pytest.mark.asyncio
+    async def test_automation_generic_exception_sample_names_type(
+        self, mock_client, smart_tools
+    ):
+        """The generic ``except Exception`` branch captures a
+        ``Type: message`` summary."""
+        automations = self._automation_entities()[:1]
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _per_id_boom(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            raise RuntimeError("generic explosion")
+
+        mock_client._request = AsyncMock(side_effect=_per_id_boom)
+
+        (
+            _matches,
+            _skipped_count,
+            failed_count,
+            _yaml_skipped_count,
+            _timeout_count,
+            failed_sample,
+        ) = await smart_tools._deep_search_automations(
+            automations,
+            {"automation.secret_one": "uid_one"},
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert failed_count == 1
+        assert failed_sample == "RuntimeError: generic explosion"
+
+    @pytest.mark.asyncio
+    async def test_automation_404_and_timeout_produce_no_sample(
+        self, mock_client, smart_tools
+    ):
+        """Only the generic ``failed`` class captures a sample: 404s
+        (yaml_skipped) and per-request timeouts have their own dedicated
+        fragments and must leave the 6th slot at ``None``."""
+        automations = self._automation_entities()
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _per_id_mixed(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            if url.endswith("uid_one"):
+                raise HomeAssistantAPIError(
+                    "API error: 404 - Not Found", status_code=404
+                )
+            await asyncio.sleep(0.2)
+            return {}
+
+        mock_client._request = AsyncMock(side_effect=_per_id_mixed)
+
+        with patch("ha_mcp.tools.smart_search._deep.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+            (
+                _matches,
+                _skipped_count,
+                failed_count,
+                yaml_skipped_count,
+                timeout_count,
+                failed_sample,
+            ) = await smart_tools._deep_search_automations(
+                automations,
+                {
+                    "automation.secret_one": "uid_one",
+                    "automation.secret_two": "uid_two",
+                },
+                query_lower="anything",
+                exact_match=False,
+            )
+        assert failed_count == 0
+        assert yaml_skipped_count == 1
+        assert timeout_count == 1
+        assert failed_sample is None
+
+    @pytest.mark.asyncio
+    async def test_script_500_sample_surfaces_through_deep_search(
+        self, mock_client, smart_tools
+    ):
+        """The reporter's exact scenario: every per-id script fetch 500s on
+        a ``!secret`` reference. The fragment must carry the count AND the
+        representative error through the public entrypoint."""
+        scripts = [
+            {
+                "entity_id": "script.secret_one",
+                "state": "off",
+                "attributes": {"friendly_name": "Secret One"},
+            },
+            {
+                "entity_id": "script.secret_two",
+                "state": "off",
+                "attributes": {"friendly_name": "Secret Two"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=scripts)
+
+        async def _script_500(sid: str) -> dict:
+            raise HomeAssistantAPIError(
+                "API error: 500 - Secrets not supported in this YAML file",
+                status_code=500,
+            )
+
+        mock_client.get_script_config = AsyncMock(side_effect=_script_500)
+
+        result = await smart_tools.deep_search(
+            query="anything",
+            search_types=["script"],
+            limit=10,
+        )
+
+        assert result["partial"] is True
+        reason = result["partial_reason"]
+        assert (
+            "2 script(s) not scanned (per-id fetch raised a non-404 error; "
+            "e.g. HTTP 500: Secrets not supported in this YAML file)" in reason
+        ), f"failed fragment must carry the representative error; got {reason!r}"
+
+    @pytest.mark.asyncio
+    async def test_scene_500_sample_surfaces_through_deep_search(
+        self, mock_client, smart_tools
+    ):
+        """Scene mirror: the sample rides ``scene_stats["failed_sample"]``
+        into ``_apply_scene_partial_flag``'s failed fragment."""
+        scenes = [
+            {
+                "entity_id": "scene.broken_one",
+                "state": "scening",
+                "attributes": {"friendly_name": "Broken One"},
+            },
+            {
+                "entity_id": "scene.broken_two",
+                "state": "scening",
+                "attributes": {"friendly_name": "Broken Two"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=scenes)
+
+        async def _scene_500(sid: str) -> dict:
+            raise HomeAssistantAPIError(
+                "API error: 500 - Internal Server Error", status_code=500
+            )
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_scene_500)
+
+        result = await smart_tools.deep_search(
+            query="anything",
+            search_types=["scene"],
+            limit=10,
+        )
+
+        assert result["partial"] is True
+        reason = result["partial_reason"]
+        assert (
+            "2 scene(s) not scanned (per-id fetch raised; "
+            "e.g. HTTP 500: Internal Server Error)" in reason
+        ), f"scene failed fragment must carry the representative error; got {reason!r}"
