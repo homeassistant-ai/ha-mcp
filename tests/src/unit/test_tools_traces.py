@@ -610,3 +610,40 @@ class TestTraceFetchPooledClient:
         error = json.loads(str(exc_info.value))
         assert error["success"] is False
         assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_detail_connection_error_maps_to_connection_failed(self):
+        """The DETAIL path (run_id set) routes a connection-shaped pooled failure
+        through the same ``_raise_trace_ws_failure`` classifier → CONNECTION_FAILED."""
+        detail_result = {
+            "success": False,
+            "error": "Failed to connect to Home Assistant",
+        }
+        client = _make_pooled_client(self._dispatch(detail_result=detail_result))
+        tools = TraceTools(client)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_get_automation_traces(
+                automation_id="automation.test", run_id="r1"
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["success"] is False
+        assert error["error"]["code"] == "CONNECTION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_detail_command_error_maps_to_service_call_failed(self):
+        """The DETAIL path keeps a non-connection pooled failure as
+        SERVICE_CALL_FAILED."""
+        detail_result = {"success": False, "error": "unknown_command"}
+        client = _make_pooled_client(self._dispatch(detail_result=detail_result))
+        tools = TraceTools(client)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_get_automation_traces(
+                automation_id="automation.test", run_id="r1"
+            )
+
+        error = json.loads(str(exc_info.value))
+        assert error["success"] is False
+        assert error["error"]["code"] == "SERVICE_CALL_FAILED"
