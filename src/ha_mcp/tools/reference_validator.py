@@ -69,6 +69,55 @@ class ValidationWarning(TypedDict):
     reason: str
 
 
+def _extract_service_ref(
+    sub_path: str,
+    value: str,
+    refs: list[ExtractedRef],
+    unvalidated_templates: list[int],
+) -> None:
+    """Record a service ref at *sub_path*, counting templates instead."""
+    if _is_template(value):
+        unvalidated_templates[0] += 1
+    else:
+        refs.append({"path": sub_path, "value": value, "kind": "service"})
+
+
+def _extract_entity_refs(
+    sub_path: str,
+    value: Any,
+    refs: list[ExtractedRef],
+    unvalidated_templates: list[int],
+) -> bool:
+    """Record entity ref(s) from a str or list *value*; return True if handled.
+
+    Returns False when *value* is neither a str nor a list so the caller can
+    keep recursing into it (an ``entity_id`` mapped to a nested structure).
+    """
+    if isinstance(value, str):
+        if _is_template(value):
+            unvalidated_templates[0] += 1
+        else:
+            refs.append({"path": sub_path, "value": value, "kind": "entity"})
+        return True
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            if not isinstance(item, str):
+                continue
+            item_path = f"{sub_path}[{i}]"
+            if _is_template(item):
+                unvalidated_templates[0] += 1
+            else:
+                refs.append(
+                    {
+                        "path": item_path,
+                        "value": item,
+                        "kind": "entity",
+                    }
+                )
+        return True
+    return False
+
+
 def extract_refs(config: Any) -> WalkerResult:
     """Pull every literal service/entity reference out of *config*.
 
@@ -97,43 +146,17 @@ def extract_refs(config: Any) -> WalkerResult:
                 sub_path = f"{path}.{key}" if path else key
 
                 if key in _SERVICE_KEYS and isinstance(value, str):
-                    if _is_template(value):
-                        unvalidated_templates[0] += 1
-                    else:
-                        refs.append(
-                            {"path": sub_path, "value": value, "kind": "service"}
-                        )
+                    _extract_service_ref(sub_path, value, refs, unvalidated_templates)
                     continue
 
-                if key in _ENTITY_KEYS:
-                    if isinstance(value, str):
-                        if _is_template(value):
-                            unvalidated_templates[0] += 1
-                        else:
-                            refs.append(
-                                {"path": sub_path, "value": value, "kind": "entity"}
-                            )
-                        continue
-                    if isinstance(value, list):
-                        for i, item in enumerate(value):
-                            if not isinstance(item, str):
-                                continue
-                            item_path = f"{sub_path}[{i}]"
-                            if _is_template(item):
-                                unvalidated_templates[0] += 1
-                            else:
-                                refs.append(
-                                    {
-                                        "path": item_path,
-                                        "value": item,
-                                        "kind": "entity",
-                                    }
-                                )
-                        continue
+                if key in _ENTITY_KEYS and _extract_entity_refs(
+                    sub_path, value, refs, unvalidated_templates
+                ):
+                    continue
 
-                # Neither a service nor an entity key: recurse so deeply
-                # nested action blocks (choose/if/parallel/repeat) still
-                # get walked.
+                # Neither a service nor an entity key (or an entity key whose
+                # value is neither str nor list): recurse so deeply nested
+                # action blocks (choose/if/parallel/repeat) still get walked.
                 _walk(value, sub_path)
 
         elif isinstance(node, list):

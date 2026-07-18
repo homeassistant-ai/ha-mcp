@@ -174,6 +174,13 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         result = await client.call_service("zwave_js", "ping", {"device_id": device_id})
         return ok("zwave", "ping", result=result)
 
+    return await _handle_zwave_inclusion(client, action, args, device_id)
+
+
+async def _handle_zwave_inclusion(
+    client: Any, action: str, args: dict[str, Any], device_id: Any
+) -> dict[str, Any]:
+    """Continuation of :func:`handle` for Z-Wave inclusion/exclusion actions."""
     if action == "add":
         entry_id = await _zwave_entry_id(client)
         if not entry_id:
@@ -289,6 +296,13 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
             long_running=True,
         )
 
+    return await _handle_zwave_maintenance(client, action, args, device_id)
+
+
+async def _handle_zwave_maintenance(
+    client: Any, action: str, args: dict[str, Any], device_id: Any
+) -> dict[str, Any]:
+    """Continuation of :func:`handle` for Z-Wave node maintenance actions."""
     if action == "reinterview":
         result = await ws_call(
             client,

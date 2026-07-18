@@ -145,6 +145,13 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         # Returns setup_pin_code, setup_manual_code, setup_qr_code.
         return ok("matter", "share_out", commissioning=commissioning)
 
+    return await _handle_matter_more(client, action, args, device_id)
+
+
+async def _handle_matter_more(
+    client: Any, action: str, args: dict[str, Any], device_id: Any
+) -> dict[str, Any]:
+    """Continuation of :func:`handle` for the remaining Matter actions."""
     if action == "interview":
         result = await ws_call(
             client,
