@@ -178,9 +178,13 @@ The `/my-pr-checker` skill carries the exact commands (the inline-reply
 
 ## Git & PR Policies
 
-**CRITICAL - Never commit directly to master.**
+**CRITICAL - Never commit directly to master, except for approved contributor-list maintenance.**
 
-You are STRICTLY PROHIBITED from committing to `master` or `main` branch. Always use worktrees for feature work:
+You are STRICTLY PROHIBITED from committing to `master` or `main` branch. Always use worktrees for feature work.
+
+The sole exception is `/contributors-update`: updates limited to the `README.md` contributor list may be committed and pushed directly to `master` after the skill previews the exact additions and the user explicitly approves both the edit and direct push. Confirm that `master` is clean and up to date immediately before editing. Do not create a PR for this administrative documentation update.
+
+For all other work:
 
 ```bash
 # Use /wt skill or manually:
@@ -188,9 +192,11 @@ git worktree add worktree/<branch-name> -b <branch-name>
 cd worktree/<branch-name>
 ```
 
-**Before any commit, verify:**
+**Before any non-exempt commit, verify:**
 1. Current branch: `git rev-parse --abbrev-ref HEAD` (must NOT be master/main)
 2. In worktree: `pwd` (must be in `worktree/` subdirectory)
+
+For the `/contributors-update` exception, instead verify that the only staged change is the approved `README.md` contributor-list edit.
 
 **Never push or create PRs without user permission.**
 

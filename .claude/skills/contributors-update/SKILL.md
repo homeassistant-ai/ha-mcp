@@ -7,20 +7,19 @@ description: Find merged PR authors missing from README and update the contribut
 
 ## Workflow
 
-### 1. Ensure an up-to-date worktree
+### 1. Ensure a clean, up-to-date master
 
-Locate the primary checkout even when the skill is invoked from another worktree, update `master`, and create a dedicated worktree:
+Locate the primary checkout even when the skill is invoked from a worktree, then update and inspect `master`:
 
 ```bash
 PRIMARY_CHECKOUT="$(git worktree list --porcelain | grep -m1 '^worktree ' | cut -d' ' -f2-)"
 git -C "$PRIMARY_CHECKOUT" checkout master
-git -C "$PRIMARY_CHECKOUT" pull origin master
+git -C "$PRIMARY_CHECKOUT" pull --ff-only origin master
 git -C "$PRIMARY_CHECKOUT" status --short
-git -C "$PRIMARY_CHECKOUT" worktree add "$PRIMARY_CHECKOUT/worktree/contributors-update" -b contributors-update
-cd "$PRIMARY_CHECKOUT/worktree/contributors-update"
+cd "$PRIMARY_CHECKOUT"
 ```
 
-If the branch or worktree already exists, inspect it and reuse it only when it belongs to this workflow. Never nest a worktree inside another worktree, and never commit directly to `master` or `main`.
+Stop if the primary checkout is dirty. Do not stash, overwrite, or mix the contributor update with other changes. This skill is the narrow exception in `AGENTS.md` that permits an approved `README.md` contributor-list update to be committed directly to `master` without a PR.
 
 ### 2. Find the cutoff date
 
@@ -72,9 +71,9 @@ New contributors to add:
 - **[@username](https://github.com/username)** — Brief description of contribution.
 ```
 
-**Ask the user:** "Does this look correct? Should I add these to README.md?"
+**Ask the user:** "Does this look correct? Should I add these to README.md, commit, and push the update directly to master without a PR?"
 
-Wait for explicit approval before proceeding.
+Wait for explicit approval of both the edit and direct push before proceeding.
 
 ### 6. Apply and commit after approval
 
@@ -88,29 +87,15 @@ README format to match:
 
 Keep descriptions factual and concise — what they added or fixed, not praise.
 
-Commit with the marker in the message:
+Immediately before committing, pull `master` again with `--ff-only` and confirm that the only staged change is the approved `README.md` contributor-list edit:
 
 ```bash
+git pull --ff-only origin master
 git add README.md
+test "$(git diff --cached --name-only)" = "README.md"
+git diff --cached --check
 git commit -m "docs: update contributors list [contributors-updated]"
+git push origin master
 ```
 
-Before pushing or creating a PR, ask the user for explicit permission. When approved, push the worktree branch and create a draft PR:
-
-```bash
-git push -u origin contributors-update
-gh pr create --draft --base master --head contributors-update
-```
-
-### 7. Validate the draft PR
-
-After creating or updating the PR, follow the repository PR workflow:
-
-1. Wait for CI and inspect every check with `gh pr checks <PR> --watch`.
-2. Fetch PR-level comments, inline review comments, reviews, and unresolved review threads.
-3. Assess bot suggestions rather than treating them as commands; prioritize human feedback.
-4. Fix accepted findings, then commit and push the changes.
-5. Reply to every addressed inline thread and resolve it. Leave a thread open only when asking for clarification.
-6. Repeat until all checks pass and no unresolved feedback remains.
-
-Do not remove the worktree until the user asks or the branch is no longer needed.
+Do not create a branch or PR for this administrative documentation update. If `master` moved in a way that conflicts with the approved edit, stop, recompute the additions, and request approval again.
