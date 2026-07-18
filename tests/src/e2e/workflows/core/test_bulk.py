@@ -30,6 +30,16 @@ def create_operations(
     return ops
 
 
+def _extract_bulk_boolean_entity_id(data: dict) -> str | None:
+    """Extract the input_boolean entity_id from a set_helper response."""
+    entity_id = data.get("entity_id")
+    if not entity_id:
+        helper_id = data.get("data", {}).get("id")
+        if helper_id:
+            entity_id = f"input_boolean.{helper_id}"
+    return entity_id
+
+
 @pytest.mark.asyncio
 @pytest.mark.core
 class TestBulkControl:
@@ -389,15 +399,6 @@ async def test_bulk_control_with_input_booleans(mcp_client, cleanup_tracker):
     """Test bulk_control with input_boolean helpers."""
     logger.info("Testing ha_bulk_control with input_boolean helpers")
 
-    # Helper function to extract entity_id
-    def get_entity_id(data: dict) -> str | None:
-        entity_id = data.get("entity_id")
-        if not entity_id:
-            helper_id = data.get("data", {}).get("id")
-            if helper_id:
-                entity_id = f"input_boolean.{helper_id}"
-        return entity_id
-
     # Create two test input_booleans
     entity_ids = []
     for i in range(2):
@@ -411,7 +412,7 @@ async def test_bulk_control_with_input_booleans(mcp_client, cleanup_tracker):
         )
         create_data = parse_mcp_result(create_result)
         if create_data.get("success"):
-            entity_id = get_entity_id(create_data)
+            entity_id = _extract_bulk_boolean_entity_id(create_data)
             if entity_id:
                 entity_ids.append(entity_id)
                 cleanup_tracker.track("input_boolean", entity_id)

@@ -16,6 +16,7 @@ production-level functionality and compatibility.
 Tests are designed for Docker Home Assistant test environment at localhost:8124.
 """
 
+import ast
 import asyncio
 import json
 import logging
@@ -51,8 +52,8 @@ def enhanced_parse_mcp_result(result) -> dict[str, Any]:
                         .replace("false", "False")
                         .replace("null", "None")
                     )
-                    return eval(fixed_text)
-                except (SyntaxError, NameError, ValueError):
+                    return ast.literal_eval(fixed_text)
+                except (SyntaxError, NameError, ValueError, TypeError):
                     # Return raw response if parsing fails
                     return {"raw_response": response_text, "parse_error": True}
 
@@ -237,6 +238,33 @@ def create_test_script_config(
     config.update(kwargs)
 
     return config
+
+
+async def _verify_bulk_scripts(mcp, created_scripts):
+    """Fetch and validate each created script's config; return those verified."""
+    logger.info("🔍 Verifying all scripts exist...")
+    verified_scripts = []
+    for script_id, script_entity in created_scripts:
+        try:
+            get_data = await mcp.call_tool_success(
+                "ha_config_get_script", {"script_id": script_id}
+            )
+
+            config = extract_script_config(get_data)
+            assert "alias" in config, f"Alias missing for {script_entity}: {config}"
+            assert "sequence" in config, (
+                f"Sequence missing for {script_entity}: {config}"
+            )
+            assert validate_script_sequence(
+                config.get("sequence", []), len(config.get("sequence", []))
+            ), f"Invalid sequence for {script_entity}"
+
+            verified_scripts.append((script_id, script_entity))
+            logger.info(f"✅ Verified: {script_entity} - {config.get('alias')}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to verify {script_entity}: {e}")
+    return verified_scripts
 
 
 @pytest.mark.script
@@ -915,30 +943,7 @@ class TestScriptOrchestration:
 
             # 2. VERIFY: All successfully created scripts exist and have correct configurations
 
-            logger.info("🔍 Verifying all scripts exist...")
-            verified_scripts = []
-            for script_id, script_entity in created_scripts:
-                try:
-                    get_data = await mcp.call_tool_success(
-                        "ha_config_get_script", {"script_id": script_id}
-                    )
-
-                    config = extract_script_config(get_data)
-                    assert "alias" in config, (
-                        f"Alias missing for {script_entity}: {config}"
-                    )
-                    assert "sequence" in config, (
-                        f"Sequence missing for {script_entity}: {config}"
-                    )
-                    assert validate_script_sequence(
-                        config.get("sequence", []), len(config.get("sequence", []))
-                    ), f"Invalid sequence for {script_entity}"
-
-                    verified_scripts.append((script_id, script_entity))
-                    logger.info(f"✅ Verified: {script_entity} - {config.get('alias')}")
-
-                except Exception as e:
-                    logger.error(f"❌ Failed to verify {script_entity}: {e}")
+            verified_scripts = await _verify_bulk_scripts(mcp, created_scripts)
 
             # 3. EXECUTE: Bulk execution of verified scripts
             logger.info(
