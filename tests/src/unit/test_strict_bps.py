@@ -35,10 +35,10 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.errors import ErrorCode
 from ha_mcp.strict_bps import (
-    STRICT_BPS_ACK_KEY,
     STRICT_BPS_GATED_TOOLS,
     STRICT_BPS_KEY_PARAM,
     StrictBpsMiddleware,
+    current_strict_bps_ack_key,
     strict_bps_ack_line,
     strict_bps_effective,
 )
@@ -131,10 +131,10 @@ class TestAckKeyShape:
     """#1924: a static opaque ``bps-ack-*`` token invited two failure modes —
     an agent misread the extract-and-replay round-trip as a credential
     exfiltration ("prompt injection") and refused it until the user disabled
-    strict mode, and a static literal in a public repo can satisfy the gate
-    from training data or a stale session summary without any actual read.
-    The key is therefore a plain-English attestation phrase with a
-    per-process random suffix."""
+    strict mode, and a static literal in a public repo (or an agent's own
+    persistent memory) can satisfy the gate without any actual read. The key
+    is therefore a plain-English attestation phrase whose suffix rotates
+    hourly, derived from a per-process salt."""
 
     def test_key_is_attestation_phrase_with_rotating_suffix(self):
         from ha_mcp.strict_bps import STRICT_BPS_ACK_KEY_PREFIX
@@ -142,21 +142,29 @@ class TestAckKeyShape:
         assert STRICT_BPS_ACK_KEY_PREFIX == "I-HAVE-READ-THE-BEST-PRACTICES-GUIDE"
         assert re.fullmatch(
             re.escape(STRICT_BPS_ACK_KEY_PREFIX) + r"-[0-9a-f]{4}",
-            STRICT_BPS_ACK_KEY,
+            current_strict_bps_ack_key(),
         )
 
-    def test_generated_keys_rotate(self):
-        """The suffix is random per generation (bound once per process), so
-        a key memorized from source, training data, or an earlier process
-        cannot satisfy a later process's gate."""
-        from ha_mcp.strict_bps import _generate_ack_key
+    def test_key_stable_within_a_bucket_and_rotates_across(self):
+        from ha_mcp.strict_bps import _ACK_KEY_ROTATION_SECONDS, _current_ack_key
 
-        keys = {_generate_ack_key() for _ in range(8)}
-        assert len(keys) > 1
-        assert all(
-            re.fullmatch(r"I-HAVE-READ-THE-BEST-PRACTICES-GUIDE-[0-9a-f]{4}", k)
-            for k in keys
+        base = 1_000_000_000.0
+        start = base - (base % _ACK_KEY_ROTATION_SECONDS)
+        assert _current_ack_key(start) == _current_ack_key(start + 100)
+        assert _current_ack_key(start) != _current_ack_key(
+            start + _ACK_KEY_ROTATION_SECONDS
         )
+
+    def test_key_salted_per_process(self, monkeypatch):
+        """Without the process salt the suffix is not derivable — a key
+        computed by one process (or reconstructed from the public formula)
+        does not satisfy another process's gate."""
+        from ha_mcp import strict_bps
+
+        k1 = strict_bps._current_ack_key(1_000_000_000.0)
+        monkeypatch.setattr(strict_bps, "_ACK_KEY_SALT", "different-salt")
+        k2 = strict_bps._current_ack_key(1_000_000_000.0)
+        assert k1 != k2
 
     def test_param_schema_documents_protocol_not_a_secret(self):
         """The tool schema (trusted metadata, unlike tool output) must carry
@@ -172,11 +180,11 @@ class TestAckKeyShape:
         assert "ha_get_skill_guide" in desc
         assert "read" in desc.lower()
         # The key VALUE must never live in the schema — only how to get it.
-        assert STRICT_BPS_ACK_KEY not in desc
+        assert current_strict_bps_ack_key() not in desc
 
     def test_ack_line_frames_key_as_read_receipt(self):
         line = strict_bps_ack_line()
-        assert STRICT_BPS_ACK_KEY in line
+        assert current_strict_bps_ack_key() in line
         assert STRICT_BPS_KEY_PARAM in line
         assert "not a secret" in line.lower()
 
@@ -237,7 +245,7 @@ class TestStrictBpsMiddleware:
         assert body["strict_mandatory_bps"] is True
         assert body["tool_name"] == "ha_config_set_automation"
         # The key literal must NEVER appear in the block error.
-        assert STRICT_BPS_ACK_KEY not in raw
+        assert current_strict_bps_ack_key() not in raw
         # The suggestion names the exact recovery call for this tool.
         suggestion = body["error"]["suggestion"]
         assert "ha_get_skill_guide" in suggestion
@@ -278,14 +286,56 @@ class TestStrictBpsMiddleware:
         assert "must NOT have additional properties" in stale_hint
         assert "Developer: Reload Window" in stale_hint
         # The key literal must still never appear anywhere in the error.
-        assert STRICT_BPS_ACK_KEY not in raw
+        assert current_strict_bps_ack_key() not in raw
+
+    async def test_previous_rotation_key_accepted_as_grace(
+        self, strict_on, monkeypatch
+    ):
+        """A key obtained just before an hourly rotation must not strand
+        the agent mid-workflow — the previous bucket's key stays valid for
+        one rotation period."""
+        from ha_mcp import strict_bps
+
+        fixed = 1_000_000_000.0
+        monkeypatch.setattr(strict_bps, "time", SimpleNamespace(time=lambda: fixed))
+        prev_key = strict_bps._current_ack_key(
+            fixed - strict_bps._ACK_KEY_ROTATION_SECONDS
+        )
+        mw = StrictBpsMiddleware()
+        call_next = AsyncMock(return_value="ok")
+        ctx = make_context(
+            "ha_config_set_automation",
+            {"config": {}, "BestPracticeKey": prev_key},
+        )
+        assert await mw.on_call_tool(ctx, call_next) == "ok"
+        call_next.assert_awaited_once()
+
+    async def test_key_two_rotations_old_rejected(self, strict_on, monkeypatch):
+        """A key held past the grace window is stale — an agent that saved
+        the key to persistent memory must re-read the guide."""
+        from ha_mcp import strict_bps
+
+        fixed = 1_000_000_000.0
+        monkeypatch.setattr(strict_bps, "time", SimpleNamespace(time=lambda: fixed))
+        stale = strict_bps._current_ack_key(
+            fixed - 2 * strict_bps._ACK_KEY_ROTATION_SECONDS
+        )
+        mw = StrictBpsMiddleware()
+        call_next = AsyncMock(return_value="ok")
+        ctx = make_context(
+            "ha_config_set_automation",
+            {"config": {}, "BestPracticeKey": stale},
+        )
+        with pytest.raises(ToolError):
+            await mw.on_call_tool(ctx, call_next)
+        call_next.assert_not_awaited()
 
     async def test_gated_with_correct_key_passes_and_strips_key(self, strict_on):
         mw = StrictBpsMiddleware()
         call_next = AsyncMock(return_value="ok")
         ctx = make_context(
             "ha_config_set_automation",
-            {"config": {"alias": "x"}, "BestPracticeKey": STRICT_BPS_ACK_KEY},
+            {"config": {"alias": "x"}, "BestPracticeKey": current_strict_bps_ack_key()},
         )
         result = await mw.on_call_tool(ctx, call_next)
         assert result == "ok"
@@ -305,7 +355,7 @@ class TestStrictBpsMiddleware:
         call_next = AsyncMock(return_value="ok")
         ctx = make_context(
             "ha_config_set_automation",
-            {"config": {}, "BestPracticeKey": STRICT_BPS_ACK_KEY},
+            {"config": {}, "BestPracticeKey": current_strict_bps_ack_key()},
         )
         result = await mw.on_call_tool(ctx, call_next)
         assert result == "ok"
@@ -546,7 +596,7 @@ class TestSkillGuideKeyInjection:
         )
         assert result["success"] is True
         assert result["content"].startswith(strict_bps_ack_line())
-        assert STRICT_BPS_ACK_KEY in result["content"]
+        assert current_strict_bps_ack_key() in result["content"]
         # Original body still follows the injected line.
         assert "Real content here." in result["content"]
 
@@ -558,7 +608,7 @@ class TestSkillGuideKeyInjection:
             skills_dir, "home-assistant-best-practices", "SKILL.md"
         )
         assert result["success"] is True
-        assert STRICT_BPS_ACK_KEY not in result["content"]
+        assert current_strict_bps_ack_key() not in result["content"]
 
     def test_ack_line_absent_for_other_skill_even_if_strict(
         self, monkeypatch, tmp_path
@@ -571,4 +621,4 @@ class TestSkillGuideKeyInjection:
         (other / "SKILL.md").write_text("# Other\nUnrelated.\n")
         result = srv._handle_skill_guide_call(tmp_path, "some-other-skill", "SKILL.md")
         assert result["success"] is True
-        assert STRICT_BPS_ACK_KEY not in result["content"]
+        assert current_strict_bps_ack_key() not in result["content"]

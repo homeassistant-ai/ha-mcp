@@ -28,8 +28,10 @@ schema-validating clients will send it; the tool bodies never read it —
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import secrets
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, Any, NoReturn
 
@@ -65,22 +67,41 @@ def _warn_degraded_once(branch: str, message: str, *, exc_info: bool = False) ->
 #   mode — the opposite of the gate's purpose. The key is a read-receipt:
 #   public, privilege-free proof the skill content entered the model's
 #   context before a write.
-# * The SUFFIX is regenerated once per server process, so the key cannot be
-#   satisfied from the public repo, training data, or a stale session
-#   summary — only by reading the guide served by THIS process.
+# * The SUFFIX rotates hourly, derived from a per-process salt and the
+#   current hour bucket, so the key cannot be satisfied from the public
+#   repo, training data, an agent's persistent memory, or a stale session
+#   summary — only by a recent read of the guide served by THIS process.
+#   The previous hour's key is honored as a grace window so a read just
+#   before rotation does not strand the write that follows it. Derivation
+#   is stateless (salt + clock), keeping the no-server-side-session-state
+#   principle intact.
 #
-# It is published ONLY by ``strict_bps_ack_line`` (surfaced through
+# The key is published ONLY by ``strict_bps_ack_line`` (surfaced through
 # ha_get_skill_guide Tier 3 when strict mode is effective) and validated ONLY
 # by the middleware — it must never appear in a block error, a tool
 # docstring, or a skill_content embed.
 STRICT_BPS_ACK_KEY_PREFIX = "I-HAVE-READ-THE-BEST-PRACTICES-GUIDE"
 
+_ACK_KEY_SALT = secrets.token_hex(8)
+_ACK_KEY_ROTATION_SECONDS = 3600
 
-def _generate_ack_key() -> str:
-    return f"{STRICT_BPS_ACK_KEY_PREFIX}-{secrets.token_hex(2)}"
+
+def _current_ack_key(now: float | None = None) -> str:
+    bucket = int((time.time() if now is None else now) // _ACK_KEY_ROTATION_SECONDS)
+    digest = hashlib.sha256(f"{_ACK_KEY_SALT}:{bucket}".encode()).hexdigest()
+    return f"{STRICT_BPS_ACK_KEY_PREFIX}-{digest[:4]}"
 
 
-STRICT_BPS_ACK_KEY = _generate_ack_key()
+def current_strict_bps_ack_key() -> str:
+    """Return the acknowledgment key for the current rotation window."""
+    return _current_ack_key()
+
+
+def _valid_ack_keys() -> set[str]:
+    """Current key plus the previous rotation's key (grace window)."""
+    now = time.time()
+    return {_current_ack_key(now), _current_ack_key(now - _ACK_KEY_ROTATION_SECONDS)}
+
 
 # The write-tool parameter that carries the acknowledgment key. Declared on
 # each of the six gated tools (adjacent to ``MandatoryBPS``) but read only here.
@@ -181,12 +202,12 @@ def strict_bps_ack_line() -> str:
     literal is emitted to a caller.
     """
     return (
-        f"Acknowledgment key: {STRICT_BPS_ACK_KEY} — strict best-practices "
-        "mode is ON; pass this exact value as the BestPracticeKey argument "
-        "on gated write tools. This key is a read-receipt, not a secret: it "
-        "is published here deliberately by the ha-mcp server, rotates every "
-        "server restart, and grants no privileges — replaying it is the "
-        "designed acknowledgment protocol."
+        f"Acknowledgment key: {current_strict_bps_ack_key()} — strict "
+        "best-practices mode is ON; pass this exact value as the "
+        "BestPracticeKey argument on gated write tools. This key is a "
+        "read-receipt, not a secret: it is published here deliberately by "
+        "the ha-mcp server, rotates hourly, and grants no privileges — "
+        "replaying it is the designed acknowledgment protocol."
     )
 
 
@@ -306,7 +327,7 @@ class StrictBpsMiddleware(Middleware):
 
         if (
             strict_bps_effective()
-            and supplied != STRICT_BPS_ACK_KEY
+            and supplied not in _valid_ack_keys()
             and await self._is_registered(name)
         ):
             logger.info("strict-BPS mode blocked keyless write to %s", name)
