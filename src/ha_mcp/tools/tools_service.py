@@ -725,12 +725,13 @@ class ServiceTools:
             return None
         # ``send_command`` transmits the frame INSIDE itself, AFTER its readiness guard
         # and the actual socket write — so exception TYPE marks the send boundary:
-        # ``HomeAssistantCommandNotSent`` is raised ONLY at those two pre-send sites
-        # (never transmitted → safe legacy first fire); a command-ERROR response is
+        # ``HomeAssistantCommandNotSent`` is raised ONLY at the readiness guard (the one
+        # provably-never-sent site → safe legacy first fire); a command-ERROR response is
         # pre-dispatch by the component's guards / the documented mutate-then-raise
-        # residual → legacy; a response-wait TIMEOUT or a post-send transport drop
-        # (a mid-await socket close raises plain ``HomeAssistantConnectionError``) is
-        # POST-SEND and AMBIGUOUS → partial, never retried.
+        # residual → legacy; a response-wait TIMEOUT, a send() that raised (bytes may
+        # already be on the socket), or a post-send transport drop (a mid-await socket
+        # close raises plain ``HomeAssistantConnectionError``) is POST-SEND/AMBIGUOUS →
+        # partial, never retried.
         try:
             raw = await ws.send_command(
                 WS_CALL_SERVICE,
@@ -743,8 +744,8 @@ class ServiceTools:
                 return_response=return_response,
             )
         except HomeAssistantCommandNotSent as exc:
-            # PRE-SEND: the frame provably never left the process (entry-guard reject
-            # or a send that raised before transmit). The write never happened, so
+            # PRE-SEND: the frame provably never left the process (the send_command
+            # readiness guard — the one never-sent site). The write never happened, so
             # legacy REST is a safe first fire.
             logger.warning(
                 "%s not sent; falling back to legacy: %r",
@@ -915,7 +916,13 @@ class ServiceTools:
         returns only the confirmation targets' ``new_state``s — so the richer legacy
         POST serves it instead.
         """
-        if not should_wait or verbose:
+        # A comma-separated entity_id ("light.a,light.b") is a valid multi-target the
+        # compaction path expands, but the component confirms one LITERAL entity_id: it
+        # would wait for the nonexistent literal "light.a,light.b" and report a false
+        # ``partial`` with an empty result even though HA changed both real entities.
+        # Treat a comma as the multi-target signal → legacy REST POST (parity with the
+        # verbose / non-confirmed early-outs above, which the component cannot serve).
+        if not should_wait or verbose or (entity_id and "," in entity_id):
             return None
         component_result = await self._call_service_via_component(
             domain=domain,

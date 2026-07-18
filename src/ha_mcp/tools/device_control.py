@@ -896,14 +896,15 @@ class DeviceControlTools:
         **D9 (at-most-once, per batch).** The boundary is PRE-SEND vs POST-SEND:
 
         * ``None`` (nothing dispatched → safe legacy first fire): a capability miss,
-          an op that could not be resolved server-side, an empty batch, an
-          ``unknown_command`` (caps invalidated), a connection-ESTABLISHMENT failure,
-          a ``HomeAssistantCommandNotSent`` (the frame provably never left the process
-          — entry-guard reject or a send that raised before transmit), or a
-          command-ERROR response. A command error is pre-dispatch because the batch's
-          all-guards-first pass (D1 / ServiceNotFound) raises before ANY ``async_call``
-          AND the component's post-dispatch assembly is TOTAL (never raises — I1), so
-          no landed write can surface as a command error.
+          an op that could not be resolved server-side, an empty batch, a batch whose
+          entity_ids are not all distinct (the component's per-entity waiter cannot
+          confirm a repeated entity), an ``unknown_command`` (caps invalidated), a
+          connection-ESTABLISHMENT failure, a ``HomeAssistantCommandNotSent`` (the
+          frame provably never left the process — the send_command readiness guard),
+          or a command-ERROR response. A command error is pre-dispatch because the
+          batch's all-guards-first pass (D1 / ServiceNotFound) raises before ANY
+          ``async_call`` AND the component's post-dispatch assembly is TOTAL (never
+          raises — I1), so no landed write can surface as a command error.
         * A returned result means the batch dispatched: each op's own ``dispatched``
           flag is authoritative and NOTHING is re-dispatched, even the ops that failed.
         * A response-wait TIMEOUT, a post-send transport drop, OR a malformed/unusable
@@ -919,7 +920,14 @@ class DeviceControlTools:
             return None
 
         rows = self._resolve_component_rows(valid_operations)
-        if rows is None:
+        # PRE-SEND, route the WHOLE batch to legacy (nothing dispatched yet → safe first
+        # fire, D9) when either: an op could not be resolved server-side (``rows`` None),
+        # or the batch targets the same entity_id twice. The component keys ONE
+        # entity-keyed transition waiter per entity, so the first ``state_changed``
+        # satisfies every op for that entity — both would report the same
+        # transition/final_state (e.g. `light.a on` then `light.a off` both read as the
+        # first). The legacy sequential path confirms each op independently.
+        if rows is None or self._has_duplicate_entity_ids(valid_operations):
             return None
 
         # PRE-SEND: an establishment failure means the batch frame provably never
@@ -938,14 +946,15 @@ class DeviceControlTools:
             return None
         # ``send_command`` transmits the batch frame INSIDE itself, AFTER its readiness
         # guard and the socket write — so exception TYPE marks the send boundary:
-        # ``HomeAssistantCommandNotSent`` is raised ONLY at those two pre-send sites
-        # (never transmitted → safe legacy first fire). A command-ERROR response is
+        # ``HomeAssistantCommandNotSent`` is raised ONLY at the readiness guard (the one
+        # provably-never-sent site → safe legacy first fire). A command-ERROR response is
         # pre-dispatch: the all-guards-first D1 / ServiceNotFound pass raises before any
         # async_call AND the component's post-dispatch assembly is total (never raises),
         # so a command error cannot carry a landed write → legacy is safe. A response-
-        # wait TIMEOUT or a post-send transport drop (a mid-await socket close raises
-        # plain ``HomeAssistantConnectionError``) is AMBIGUOUS for the WHOLE batch →
-        # report every op dispatched-but-unconfirmed, NEVER re-dispatch. ``frame_timeout``
+        # wait TIMEOUT, a send() that raised (bytes may already be on the socket), OR a
+        # post-send transport drop (a mid-await socket close raises plain
+        # ``HomeAssistantConnectionError``) is AMBIGUOUS for the WHOLE batch → report
+        # every op dispatched-but-unconfirmed, NEVER re-dispatch. ``frame_timeout``
         # honors the per-op ``timeout_seconds`` legacy respects (M-timeout).
         frame_timeout = self._bulk_frame_timeout(valid_operations)
         try:
@@ -1020,6 +1029,21 @@ class DeviceControlTools:
         )
 
     @staticmethod
+    def _has_duplicate_entity_ids(
+        valid_operations: list[tuple[int, dict[str, Any], str, str]],
+    ) -> bool:
+        """True when two+ ops in the batch target the same entity_id.
+
+        The component keys ONE transition waiter per entity_id, so the first
+        ``state_changed`` satisfies every op sharing that entity — both would report the
+        same transition/final_state. The legacy sequential path confirms each op
+        independently, so ``_bulk_via_component`` routes the WHOLE batch to legacy when
+        this returns True.
+        """
+        entity_ids = [entity_id for _idx, _op, entity_id, _action in valid_operations]
+        return len(entity_ids) != len(set(entity_ids))
+
+    @staticmethod
     def _bulk_frame_timeout(
         valid_operations: list[tuple[int, dict[str, Any], str, str]],
     ) -> float:
@@ -1028,12 +1052,14 @@ class DeviceControlTools:
         Legacy runs each op with its own ``timeout_seconds`` (default 10); the single
         batch frame shares ONE bounded wait, so use the max over the valid ops (capped
         at 60s) rather than a hardcoded 10s (M-timeout). ``valid_operations`` is
-        non-empty here (an empty batch returned to legacy before the send).
+        non-empty here (an empty batch returned to legacy before the send). An explicit
+        ``timeout_seconds`` of 0 is honored (parity with legacy and the component
+        schema); only an ABSENT key defaults to 10.
         """
         return min(
             60.0,
             max(
-                float(op.get("timeout_seconds") or 10)
+                float(v) if (v := op.get("timeout_seconds")) is not None else 10.0
                 for _idx, op, _eid, _action in valid_operations
             ),
         )

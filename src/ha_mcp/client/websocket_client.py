@@ -617,10 +617,11 @@ class HomeAssistantWebSocketClient:
             Response from Home Assistant
         """
         if not self._state.is_ready:
-            # PRE-SEND: nothing is transmitted at this entry guard. Raise the
-            # never-sent subtype so an at-most-once write consumer can fall back to
-            # legacy safely (a subclass of HomeAssistantConnectionError, so every
-            # existing broad handler is unaffected).
+            # PRE-SEND and the ONLY provably-never-sent site: nothing is transmitted at
+            # this entry guard. Raise the never-sent subtype so an at-most-once write
+            # consumer can fall back to legacy safely (a subclass of
+            # HomeAssistantConnectionError, so every existing broad handler is
+            # unaffected). A later send() failure is NOT never-sent (see below).
             raise HomeAssistantCommandNotSent("WebSocket not authenticated")
 
         # Pull the wait timeout out of kwargs rather than making it a positional
@@ -639,15 +640,16 @@ class HomeAssistantWebSocketClient:
 
         try:
             await self.send_json_message(message)
-        except Exception as e:
-            # PRE-SEND: the frame write itself raised (a stale pooled socket dropped
-            # between the is_connected check and websocket.send), so nothing was
-            # transmitted. Surface the never-sent subtype so an at-most-once write
-            # consumer falls back to legacy safely; a post-send drop instead closes
-            # the socket mid-await and raises a plain HomeAssistantConnectionError on
-            # the pending future below (ambiguous — never retried).
+        except Exception:
+            # AMBIGUOUS, not never-sent: websocket.send() raising (e.g. a
+            # ConnectionClosed detected mid-write) does NOT prove the frame was not
+            # transmitted — bytes may already be on the socket when the close surfaces.
+            # Re-raise the ORIGINAL exception unchanged so an at-most-once write
+            # consumer treats it like a post-send drop (ambiguous -> partial, never
+            # re-fired), NOT as never-sent; only the readiness guard above is provably
+            # never-sent. Still cancel the pending future so it cannot leak.
             self.cancel_pending_response(message_id)
-            raise HomeAssistantCommandNotSent("Failed to send WebSocket frame") from e
+            raise
 
         # Wait for response outside the lock.
         try:

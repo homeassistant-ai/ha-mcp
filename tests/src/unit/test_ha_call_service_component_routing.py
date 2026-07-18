@@ -280,6 +280,27 @@ async def test_verbose_uses_legacy_not_component() -> None:
 
 
 @pytest.mark.asyncio
+async def test_comma_multi_target_uses_legacy_not_component() -> None:
+    """A comma-separated entity_id ("light.a,light.b") is a valid multi-target, but the
+    component confirms one LITERAL entity_id — it would wait for the nonexistent literal
+    and report a false partial. So a comma routes to the legacy REST POST and never
+    sends a component frame."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL)
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a,light.b"
+        )
+
+    assert resp["success"] is True
+    # Legacy REST POST ran once; the component was never routed to.
+    assert len(client.call_service_calls) == 1
+    assert not _call_service_frames(ws)
+
+
+@pytest.mark.asyncio
 async def test_return_response_passed_through() -> None:
     """return_response threads to the component and its service_response is surfaced."""
     result = _confirmed_result("light.a")
@@ -430,9 +451,10 @@ async def test_dispatched_not_true_reports_partial_no_redispatch() -> None:
 @pytest.mark.asyncio
 async def test_never_sent_falls_to_exactly_one_post() -> None:
     """C1: a HomeAssistantCommandNotSent from send_command (the frame provably never
-    left the process — entry-guard reject or a send that raised before transmit) →
-    EXACTLY ONE legacy REST POST. The write never happened, so a legacy first fire
-    cannot double-apply."""
+    left the process — the readiness entry-guard, the one never-sent site) → EXACTLY
+    ONE legacy REST POST. The write never happened, so a legacy first fire cannot
+    double-apply. A send() failure is NOT this subtype (it is ambiguous — see
+    test_post_send_connection_drop_is_ambiguous_no_re_post)."""
     ws = make_ws(
         "ha_mcp_tools/call_service",
         info_result=_CAPS_CALL,

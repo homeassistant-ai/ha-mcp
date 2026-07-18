@@ -160,6 +160,11 @@ _TWO_OPS = [
     {"entity_id": "switch.b", "action": "on"},
 ]
 
+_DUP_OPS = [
+    {"entity_id": "light.a", "action": "on"},
+    {"entity_id": "light.a", "action": "off"},
+]
+
 
 def _bulk_frames(ws: Any) -> list[Any]:
     return [
@@ -498,6 +503,51 @@ async def test_post_send_connection_drop_is_ambiguous_no_re_dispatch() -> None:
         assert op_result["status"] == "dispatched_unconfirmed"
     # THE C1 boundary assertion: a post-send drop is ambiguous → ZERO legacy dispatch.
     assert client.call_service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_duplicate_entity_ids_route_to_legacy() -> None:
+    """A batch with the SAME entity_id twice cannot be confirmed by the component's ONE
+    entity-keyed transition waiter (the first state_changed satisfies BOTH ops, so both
+    would report the same transition), so the WHOLE batch routes to legacy per-op
+    dispatch — no component frame is sent (nothing dispatched → safe first fire)."""
+    ws = make_ws(
+        "ha_mcp_tools/bulk_call_service",
+        info_result=_CAPS_BULK,
+        cmd_result=_bulk_result(
+            [
+                _op_result("light", "turn_on", "light.a"),
+                _op_result("light", "turn_off", "light.a"),
+            ]
+        ),
+    )
+    client = BulkRoutingClient()
+    tools = DeviceControlTools(client)
+
+    with patch_ws(ws, device_control):
+        await tools.bulk_device_control(operations=list(_DUP_OPS), parallel=True)
+
+    # No component batch frame sent; both ops dispatched via the legacy path instead.
+    assert not _bulk_frames(ws)
+    assert len(client.call_service_calls) == 2
+
+
+def test_bulk_frame_timeout_honors_explicit_zero() -> None:
+    """An explicit ``timeout_seconds`` of 0 is preserved (parity with legacy and the
+    component schema), NOT coerced to the 10s default — while an absent key still
+    defaults to 10."""
+    zero_ops: list[tuple[int, dict[str, Any], str, str]] = [
+        (0, {"timeout_seconds": 0}, "light.a", "on"),
+        (1, {"timeout_seconds": 0}, "switch.b", "on"),
+    ]
+    assert DeviceControlTools._bulk_frame_timeout(zero_ops) == 0.0
+
+    # An absent key still defaults to 10 (max over the batch).
+    default_ops: list[tuple[int, dict[str, Any], str, str]] = [
+        (0, {}, "light.a", "on"),
+        (1, {"timeout_seconds": 0}, "switch.b", "on"),
+    ]
+    assert DeviceControlTools._bulk_frame_timeout(default_ops) == 10.0
 
 
 class TestD9AtMostOnce:
