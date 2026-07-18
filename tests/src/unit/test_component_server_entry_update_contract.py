@@ -24,7 +24,14 @@ from typing import Any
 import pytest
 
 from . import test_component_ws_search as _base
-from .test_component_ws_search import FakeConfigEntry, wsapi
+from .test_component_ws_search import (
+    FakeConfigEntry,
+    FakeHass,
+    _FakeConnection,
+    _FakeWSApi,
+    _Unauthorized,
+    wsapi,
+)
 
 _REAL_VOL = _base._REAL_VOL
 
@@ -144,6 +151,33 @@ async def test_prep_pip_spec_applied_preserves_channel() -> None:
 
 
 @pytest.mark.asyncio
+async def test_apply_time_merge_preserves_concurrent_change() -> None:
+    """TOCTOU: the delta is merged against the LIVE ``entry.options`` at APPLY time,
+    so a concurrent change to a DIFFERENT key AFTER prep (but before the deferred
+    task runs) survives — it is NOT clobbered by a prep-time options snapshot."""
+    entry = _server_entry(options={"channel": "stable", "pip_spec": ""})
+    hass = _BgHass([entry])
+
+    extra = await wsapi._server_entry_update_prep(
+        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "dev"}
+    )
+    assert extra["result"]["scheduled"] is True
+    # A concurrent options write lands in the flush window, adding a key the delta
+    # never touched (e.g. the options flow rewriting the server_url override).
+    entry.options = {**entry.options, "server_url": "http://changed:8123"}
+
+    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
+    _entry, applied = hass.config_entries.update_calls[0]
+    # The concurrently-added key survived the merge; the delta still applied. A
+    # prep-time snapshot would have dropped ``server_url``.
+    assert applied == {
+        "channel": "dev",
+        "pip_spec": "",
+        "server_url": "http://changed:8123",
+    }
+
+
+@pytest.mark.asyncio
 async def test_prep_noop_returns_unchanged_without_scheduling() -> None:
     """Setting channel to its current value is a no-op: unchanged, nothing
     scheduled, async_update_entry never called."""
@@ -209,6 +243,40 @@ async def test_prep_clearing_pip_spec_from_absent_schedules() -> None:
     assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
     _entry, applied = hass.config_entries.update_calls[0]
     assert applied == {"channel": "dev", "pip_spec": ""}
+
+
+# =============================================================================
+# admin gate (the registered handler, through _build_handler's @require_admin)
+# =============================================================================
+class TestServerEntryUpdateAdminGate:
+    """The registered ``server_entry_update`` handler is admin-gated.
+
+    The prep tests above drive ``_server_entry_update_prep`` DIRECTLY, bypassing the
+    ``_build_handler`` decorator stack (``@require_admin`` over ``@async_response``).
+    This registers the real handler through a functional ``websocket_api`` fake and
+    asserts a non-admin / no-user connection is rejected BEFORE the prep runs — the
+    admin-gate coverage the ``test_component_ws_search`` registration drift note
+    points here for.
+    """
+
+    def _handler(self, monkeypatch: Any) -> Any:
+        fake = _FakeWSApi()
+        monkeypatch.setattr(wsapi, "websocket_api", fake)
+        monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
+        wsapi.async_register_commands(FakeHass())
+        return fake.registered[wsapi.WS_SERVER_ENTRY_UPDATE]
+
+    def test_non_admin_rejected(self, monkeypatch: Any) -> None:
+        handler = self._handler(monkeypatch)
+        conn = _FakeConnection(is_admin=False)
+        with pytest.raises(_Unauthorized):
+            handler(FakeHass(), conn, {"id": 1, "type": wsapi.WS_SERVER_ENTRY_UPDATE})
+
+    def test_no_user_rejected(self, monkeypatch: Any) -> None:
+        handler = self._handler(monkeypatch)
+        conn = _FakeConnection(has_user=False)
+        with pytest.raises(_Unauthorized):
+            handler(FakeHass(), conn, {"id": 2, "type": wsapi.WS_SERVER_ENTRY_UPDATE})
 
 
 # =============================================================================

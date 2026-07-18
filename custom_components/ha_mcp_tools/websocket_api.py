@@ -122,9 +122,10 @@ and ``info`` itself carries no capability entry):
   applies a ``channel`` / ``pip_spec`` delta to the server entry via
   ``hass.config_entries.async_update_entry`` DIRECTLY (what core's finish-flow
   does), collapsing ``ha_dev_manage_server(update_source)``'s options-flow start +
-  submit round-trip in embedded mode. The new options are MERGED against the LIVE
-  ``entry.options`` (every existing key preserved, no TOCTOU, no blanking of the
-  URL/secret overrides), so no preserved-key resend is needed. The
+  submit round-trip in embedded mode. The delta is MERGED against the LIVE
+  ``entry.options`` AT APPLY time (every existing key preserved — a concurrent
+  change to another key during the flush window is not clobbered — no blanking of
+  the URL/secret overrides), so no preserved-key resend is needed. The
   ``async_update_entry`` fires the entry's own update listener → reload → the
   hardened reinstall; because that reload tears down the very server thread
   answering this frame, the call is NOT made inline — it is scheduled on a
@@ -5182,16 +5183,22 @@ async def _server_entry_update_prep(
        its legacy options-flow submit.
     2. Require at least one of ``channel`` / ``pip_spec`` (the server always sends
        one — this is defence-in-depth).
-    3. MERGE the provided fields onto a COPY of the LIVE ``entry.options`` (read once,
-       here) so every existing key is preserved — no TOCTOU, and none of the
+    3. Snapshot the ``delta`` (the provided fields, keyed by the OPT_* option keys)
+       and the CURRENT ``entry.options`` — used ONLY for the no-op check and the
+       ``previous``/``applying`` response envelope. Every UNtouched key is preserved
+       because the actual write MERGES the delta against the LIVE ``entry.options``
+       at APPLY time (step 5), NOT against this snapshot — so a concurrent change to
+       another key during the flush window is not clobbered, and none of the
        URL/secret overrides get blanked (which is why the server drops its
        preserved-key resend on this path).
-    4. No-op short-circuit: if the merged options equal the current ones, return
-       ``{scheduled: False, unchanged: True, ...}`` WITHOUT scheduling. (The update
-       listener's own ``DATA_LAST_OPTIONS`` guard would also make such an update not
-       reload, but skipping the schedule keeps it explicit.)
-    5. Otherwise schedule the ``async_update_entry`` on a HASS-owned background task
-       after :data:`SERVER_ENTRY_UPDATE_FLUSH_DELAY_S` and return
+    4. No-op short-circuit: if the delta applied to the snapshot equals the current
+       options, return ``{scheduled: False, unchanged: True, ...}`` WITHOUT
+       scheduling. (The update listener's own ``DATA_LAST_OPTIONS`` guard would also
+       make such an update not reload, but skipping the schedule keeps it explicit.)
+    5. Otherwise schedule the deferred ``_apply`` — which re-reads the LIVE
+       ``entry.options`` and merges the delta against THAT before calling
+       ``async_update_entry`` — on a HASS-owned background task after
+       :data:`SERVER_ENTRY_UPDATE_FLUSH_DELAY_S`, and return
        ``{scheduled: True, ...}`` immediately.
 
     **The deferred-reload crux.** ``async_update_entry`` fires the server entry's
@@ -5226,14 +5233,18 @@ async def _server_entry_update_prep(
 
     options = getattr(entry, "options", None)
     current = dict(options) if isinstance(options, Mapping) else {}
-    new_options = dict(current)
+    # ``delta`` is the applied write (merged against the LIVE options at APPLY time);
+    # ``applying`` is its response-envelope view. The prep-time ``new_options`` is a
+    # snapshot used ONLY for the no-op check below, never for the write.
+    delta: dict[str, Any] = {}
     applying: dict[str, Any] = {}
     if has_channel:
-        new_options[OPT_CHANNEL] = msg["channel"]
+        delta[OPT_CHANNEL] = msg["channel"]
         applying["channel"] = msg["channel"]
     if has_pip_spec:
-        new_options[OPT_PIP_SPEC] = msg["pip_spec"]
+        delta[OPT_PIP_SPEC] = msg["pip_spec"]
         applying["pip_spec"] = msg["pip_spec"]
+    new_options = {**current, **delta}
 
     entry_id = getattr(entry, "entry_id", None)
     previous = {
@@ -5254,10 +5265,27 @@ async def _server_entry_update_prep(
 
     async def _apply() -> None:
         # Deferred so the WS response flushes before the reload this triggers tears
-        # down the serving thread. See the docstring for why it is hass-owned.
+        # down the serving thread. See the docstring for why it is hass-owned. The
+        # delta is merged against the LIVE ``entry.options`` HERE (not at prep) so a
+        # concurrent change to another key during the flush window is preserved.
         await asyncio.sleep(SERVER_ENTRY_UPDATE_FLUSH_DELAY_S)
         try:
-            hass.config_entries.async_update_entry(entry, options=new_options)
+            live = getattr(entry, "options", None)
+            merged = {**(dict(live) if isinstance(live, Mapping) else {}), **delta}
+            applied = hass.config_entries.async_update_entry(entry, options=merged)
+            if applied is False:
+                # ``async_update_entry`` returns False when the merged options already
+                # match (e.g. a concurrent write applied the same delta first). No
+                # caller is left to answer, so surface the no-apply in the log.
+                _LOGGER.warning(
+                    "server_entry_update: no change applied to entry %s (options "
+                    "already current)",
+                    entry_id,
+                )
+            else:
+                _LOGGER.info(
+                    "server_entry_update applied %s to entry %s", applying, entry_id
+                )
         except Exception:  # pragma: no cover - defensive; no caller left to raise to
             _LOGGER.exception("server_entry_update deferred apply failed")
 

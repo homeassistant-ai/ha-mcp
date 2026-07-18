@@ -1135,8 +1135,14 @@ class DevTools:
         if not component_supports(caps, "server_entry_update"):
             return None
         try:
+            # verify_ssl included so a verify_ssl=False client never establishes (or
+            # keys) a default-verification pooled connection (mirrors the pooled
+            # ``send_websocket_message`` path). ``getattr`` guards duck-typed clients
+            # that omit the attribute — falling back to the pool's global default.
             ws = await get_websocket_client(
-                url=self._client.base_url, token=self._client.token
+                url=self._client.base_url,
+                token=self._client.token,
+                verify_ssl=getattr(self._client, "verify_ssl", None),
             )
         except Exception as exc:
             logger.warning(

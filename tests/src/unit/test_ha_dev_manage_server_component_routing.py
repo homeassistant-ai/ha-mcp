@@ -84,6 +84,23 @@ def _update_ws(
     return ws
 
 
+def _update_frame_kwargs(ws: AsyncMock) -> dict[str, Any]:
+    """The kwargs delivered on the single ``server_entry_update`` frame.
+
+    The delta reaches the wire as ``send_command`` KWARGS (the security-relevant
+    channel/pip_spec fields), so the routing tests inspect ``.kwargs`` — not just
+    that the command TYPE reached ``.args[0]`` — to catch a dropped / wrong-keyed
+    field.
+    """
+    calls = [
+        c
+        for c in ws.send_command.call_args_list
+        if c.args[0] == "ha_mcp_tools/server_entry_update"
+    ]
+    assert len(calls) == 1
+    return calls[0].kwargs
+
+
 class UpdateClient:
     """Credentialed client: options-flow surface + the legacy config_entries bridge.
 
@@ -180,7 +197,11 @@ async def test_embedded_capability_present_routes_to_component_write() -> None:
     assert data["entry_id"] == "srv1"
     assert data["applying"] == {"channel": "dev"}
     assert data["previous"] == {"channel": "stable", "pip_spec": None}
-    assert "note" in data
+    assert data["note"] == (
+        "The in-process server will reinstall and restart now; this "
+        "connection will drop. Reconnect in 1-5 minutes and verify with "
+        "ha_dev_manage_server('info')."
+    )
     # Preserves the #1929 target field on the component path (embedded phrasing).
     assert data["target"] == "this server (the embedded ha_mcp_tools in-process entry)"
     # The component write was used; the legacy options-flow submit was NOT.
@@ -188,9 +209,8 @@ async def test_embedded_capability_present_routes_to_component_write() -> None:
     # The flow find_server_config_entry opened (for the unused legacy path) was
     # aborted rather than leaked.
     assert client.abort_options_flow_calls == ["flow-srv1"]
-    # The server_entry_update frame was actually sent.
-    sent = [c.args[0] for c in ws.send_command.call_args_list]
-    assert "ha_mcp_tools/server_entry_update" in sent
+    # The server_entry_update frame carried EXACTLY the channel delta as kwargs.
+    assert _update_frame_kwargs(ws) == {"channel": "dev"}
 
 
 @pytest.mark.asyncio
@@ -217,6 +237,68 @@ async def test_embedded_unchanged_reply_maps_without_submit() -> None:
     data = result["data"]
     assert data["scheduled"] is False
     assert data["unchanged"] is True
+    assert data["previous"] == {"channel": "stable", "pip_spec": None}
+    assert data["note"] == (
+        "No change: the requested channel/pip_spec already matches the "
+        "current in-process server source."
+    )
+    assert client.submit_calls == []
+
+
+@pytest.mark.asyncio
+async def test_embedded_pip_spec_delta_delivers_pip_spec_kwargs() -> None:
+    """A pip_spec-only update sends EXACTLY {"pip_spec": ...} on the frame (the
+    security-relevant field is neither dropped nor mis-keyed) and maps the scheduled
+    reply — note text and the embedded target preserved."""
+    ws = _update_ws(
+        caps=_CAPS_FULL,
+        update_result={
+            "scheduled": True,
+            "entry_id": "srv1",
+            "applying": {"pip_spec": "ha-mcp==2.0.0"},
+            "previous": {"channel": "stable", "pip_spec": None},
+        },
+    )
+    client = UpdateClient()
+
+    with patch_ws(ws, tools_dev):
+        result = await DevTools(client).ha_dev_manage_server(
+            action="update_source", pip_spec="ha-mcp==2.0.0"
+        )
+
+    assert _update_frame_kwargs(ws) == {"pip_spec": "ha-mcp==2.0.0"}
+    data = result["data"]
+    assert data["scheduled"] is True
+    assert data["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
+    assert data["target"] == "this server (the embedded ha_mcp_tools in-process entry)"
+    assert data["note"] == (
+        "The in-process server will reinstall and restart now; this "
+        "connection will drop. Reconnect in 1-5 minutes and verify with "
+        "ha_dev_manage_server('info')."
+    )
+    assert client.submit_calls == []
+
+
+@pytest.mark.asyncio
+async def test_embedded_channel_and_pip_spec_delta_delivers_both_kwargs() -> None:
+    """channel AND pip_spec set → the frame carries EXACTLY both fields as kwargs."""
+    ws = _update_ws(
+        caps=_CAPS_FULL,
+        update_result={
+            "scheduled": True,
+            "entry_id": "srv1",
+            "applying": {"channel": "dev", "pip_spec": "ha-mcp==2.0.0"},
+            "previous": {"channel": "stable", "pip_spec": None},
+        },
+    )
+    client = UpdateClient()
+
+    with patch_ws(ws, tools_dev):
+        await DevTools(client).ha_dev_manage_server(
+            action="update_source", channel="dev", pip_spec="ha-mcp==2.0.0"
+        )
+
+    assert _update_frame_kwargs(ws) == {"channel": "dev", "pip_spec": "ha-mcp==2.0.0"}
     assert client.submit_calls == []
 
 
