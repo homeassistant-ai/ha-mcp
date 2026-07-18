@@ -570,8 +570,9 @@ def filter_active_repairs(
 
     Entries with ``active=False`` are always dropped, regardless of
     ``include_dismissed``: HA core's ``ws_list_issues`` never emits them
-    (the issue registry keeps inactive stubs for every non-persistent issue
-    it has ever stored), but the component's raw registry dump does.
+    (on restart the registry reloads each stored non-persistent issue as an
+    inactive stub until it is re-raised or deleted), but the component's
+    raw registry dump does.
     """
     if include_dismissed:
         return [r for r in issues if r.get("active") is not False]

@@ -5,7 +5,7 @@ Mirrors the established component-test pattern (``test_caller_token_auth.py`` /
 stubbed with ``MagicMock`` and the pure ``_do_*`` functions are exercised with
 fake hass / registry objects injected through the ``_resolve_registries`` seam.
 
-Covers the v1.2.0 command surface (info / search / overview / helpers_list /
+Covers the v1.2.1 command surface (info / search / overview / helpers_list /
 states / blueprint_get / device_get / device_list / entity_enrich / exposure;
 config_get was withdrawn pre-release). Highlights:
 * ``_do_info`` handshake shape + manifest/const version parity (drift guard);
@@ -767,7 +767,7 @@ class TestInfo:
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "1.2.0"
+        assert manifest["version"] == COMPONENT_VERSION == "1.2.1"
 
 
 # =============================================================================
@@ -2842,6 +2842,27 @@ class TestOverview:
         assert by_id["active_issue"]["severity"] == "warning"
         assert by_id["old_issue"]["ignored"] is True
         assert by_id["old_issue"]["dismissed_version"] == "2026.1.0"
+
+    def test_inactive_registry_stubs_skipped(self, monkeypatch):
+        """Reloaded non-persistent stubs (``active=False``) are skipped at the
+        source, mirroring HA core's ``ws_list_issues`` filter (#1905).
+        """
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
+        registry = FakeIssueRegistry(
+            [
+                FakeIssue("active_issue", "mqtt"),
+                FakeIssue("ghost", "hacs", active=False),
+                FakeIssue(
+                    "ghost_dismissed",
+                    "hacs",
+                    dismissed_version="2026.1.0",
+                    active=False,
+                ),
+            ]
+        )
+        monkeypatch.setattr(wsapi, "ir", FakeIssueRegModule(registry))
+        res = wsapi._do_overview(self._hass(), {})
+        assert [r["issue_id"] for r in res["repairs"]] == ["active_issue"]
 
     def test_include_flags_skip_sections(self, monkeypatch):
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: self._view())
