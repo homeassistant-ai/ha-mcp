@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Parse a CodeQL code-quality SARIF file, report findings, and gate on them.
+"""Parse a CodeQL SARIF file, report findings, and gate on them.
 
 CodeQL's Code Quality preview (the GitHub Settings → Security → Code quality
 page) is only available to Team/Enterprise Cloud org plans, so it cannot be
 enabled on this repo's free org. This script provides an equivalent gate by
-running the ``python-code-quality.qls`` suite via the CodeQL CLI in CI and
-failing the job when any finding remains.
+running the ``<language>-code-quality.qls`` suite via the CodeQL CLI in CI
+and failing the job when any finding remains. The workflow also feeds the
+default ``<language>-code-scanning.qls`` security suite through the same
+gate, because GitHub default setup only analyzes master post-merge and does
+not block PRs (see the header of codeql-quality.yml).
 
 Usage:
     codeql_quality_gate.py <quality.sarif>
