@@ -166,8 +166,6 @@ ignore = [
 # C901 (mccabe complexity) grandfathered debt: newly enabled rule, these files
 # already exceeded the threshold. Remove a line once its functions are
 # refactored below threshold -- do not add new files here.
-"custom_components/ha_mcp_tools/__init__.py" = ["C901"]
-"custom_components/ha_mcp_tools/mcp_webhook.py" = ["C901"]
 "homeassistant-addon/start.py" = ["C901"]
 "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py" = ["C901"]
 "homeassistant-addon-webhook-proxy-dev/start.py" = ["C901"]

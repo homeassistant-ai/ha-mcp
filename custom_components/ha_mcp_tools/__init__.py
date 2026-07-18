@@ -1351,6 +1351,702 @@ async def _run_config_check(hass: HomeAssistant, rel_path: str) -> dict[str, Any
     return {"config_check": "ok"}
 
 
+async def _classify_edit_yaml_target(
+    hass: HomeAssistant, rel_path: str, normalized: str
+) -> tuple[bool, bool, dict[str, Any] | None]:
+    """Validate the edit target path and classify it as package/theme.
+
+    Returns (is_package, is_theme, error). On rejection the bools are False and
+    error is the response dict; on success error is None.
+    """
+    # Validate file path — only configuration.yaml, packages/*.yaml, and themes/*.yaml
+    if normalized.startswith("..") or normalized.startswith("/"):
+        return (
+            False,
+            False,
+            {
+                "success": False,
+                "error": "Path traversal is not allowed.",
+            },
+        )
+
+    is_config_yaml = normalized in ALLOWED_YAML_CONFIG_FILES
+    is_theme = fnmatch.fnmatch(normalized, "themes/*.yaml")
+    # Package files may live under any folder the user binds via
+    # ``homeassistant: packages: !include_dir_named <folder>`` — not just the
+    # default ``packages`` (issue #1854). The configured folder(s) are
+    # detected at runtime (parsing configuration.yaml), so only do that work
+    # when the target isn't already a config-root or theme file. The set
+    # always includes ``"packages"`` as a fallback.
+    package_dirs: set[str] = set()
+    is_package = False
+    if not is_config_yaml and not is_theme:
+        package_dirs = await _detect_package_dirs(hass)
+        is_package = _path_in_package_dir(normalized, package_dirs)
+    if not is_config_yaml and not is_package and not is_theme:
+        allowed_pkg = ", ".join(f"{folder}/*.yaml" for folder in sorted(package_dirs))
+        return (
+            False,
+            False,
+            {
+                "success": False,
+                "error": (
+                    f"File '{rel_path}' is not allowed. "
+                    f"Only {', '.join(ALLOWED_YAML_CONFIG_FILES)}, {allowed_pkg}, and themes/*.yaml are supported."
+                ),
+            },
+        )
+    return is_package, is_theme, None
+
+
+def _check_edit_yaml_containment(
+    config_dir: Path, rel_path: str, normalized: str, is_theme: bool
+) -> dict[str, Any] | None:
+    """Reject an edit target that escapes the config dir or is a hidden theme path."""
+    # Symlink-safe containment (parity with the read path, issue #1586): the
+    # write target is ``config_dir / normalized``, so a package/theme folder
+    # that is (or contains) a symlink escaping the config dir — or a path
+    # resolving into the deny floor (.storage / secrets.yaml) — must be
+    # rejected before writing, exactly as read_file already does.
+    if _violates_deny_floor(config_dir, normalized) or not _resolves_within(
+        config_dir, rel_path
+    ):
+        _LOGGER.warning("Rejected YAML edit escaping the config dir: %s", rel_path)
+        return {
+            "success": False,
+            "error": (
+                f"Path '{rel_path}' resolves outside the config directory or "
+                "into a protected location and cannot be edited."
+            ),
+        }
+
+    # ``themes/*.yaml`` matches dot-prefixed paths (fnmatch's ``*`` matches a
+    # leading ``.`` and spans ``/``), but HA's ``!include_dir_merge_named``
+    # loader skips them: ``annotatedyaml``'s ``_find_files`` filters every
+    # walked directory AND file basename through ``_is_file_valid`` (which
+    # is ``return not name.startswith(".")``), so a dot-prefixed file
+    # (``themes/.hidden.yaml``) OR directory (``themes/.foo/bar.yaml``) is
+    # pruned and the theme never loads — a phantom ``reload_performed``.
+    # Reject if any path segment is dot-prefixed, mirroring the loader,
+    # rather than only checking the basename.
+    if is_theme and any(seg.startswith(".") for seg in normalized.split("/")):
+        return {
+            "success": False,
+            "error": (
+                f"Theme path '{rel_path}' has a dot-prefixed file or "
+                "directory segment. Home Assistant's !include_dir_merge_named "
+                "skips any path segment whose name starts with '.', so it "
+                "would never load. Use a path with no dot-prefixed segment."
+            ),
+        }
+    return None
+
+
+def _check_packages_key_gate(
+    call: ServiceCall, yaml_path: str, is_package: bool
+) -> dict[str, Any] | None:
+    """Reject a package-only yaml_path key disabled by the caller's runtime config.
+
+    Returns an error response when the top-level key of a packages/*.yaml write
+    is in the caller's disabled set, else None.
+    """
+    # Caller-provided per-key opt-out for PACKAGES_ONLY_YAML_KEYS.
+    # Filter to the recognised set so a caller that types
+    # ``automatoin`` doesn't accidentally pass through; only
+    # actually-known keys count.
+    disabled_packages_keys = {
+        key
+        for key in call.data.get("disabled_packages_keys", [])
+        if key in PACKAGES_ONLY_YAML_KEYS
+    }
+    # Per-key gate fires only for packages/*.yaml writes. Writes to
+    # configuration.yaml fall through to ``_parse_and_validate_yaml_path``
+    # which rejects PACKAGES_ONLY_YAML_KEYS with the storage-mode-
+    # tools advisory regardless of this flag.
+    top_segment = yaml_path.split(".", 1)[0] if yaml_path else ""
+    if is_package and top_segment in disabled_packages_keys:
+        return {
+            "success": False,
+            "error": (
+                f"yaml_path key {top_segment!r} is disabled by the "
+                f"caller's runtime configuration. Re-enable it in the "
+                f"caller (the ha-mcp Server Settings → YAML config "
+                f"editing → 'Allow {top_segment} in packages/*.yaml' "
+                f"toggle), or use the storage-mode equivalent."
+            ),
+        }
+    return None
+
+
+async def _apply_replace_file(
+    hass: HomeAssistant,
+    config_dir: Path,
+    rel_path: str,
+    normalized: str,
+    action: str,
+    yaml_path: str,
+    content: str | None,
+) -> dict[str, Any]:
+    """Handle action='replace_file': validate and atomically write the whole file."""
+    if not content:
+        return {
+            "success": False,
+            "error": "'content' is required for action 'replace_file'.",
+        }
+    try:
+        whole = await hass.async_add_executor_job(
+            lambda: make_yaml().load(StringIO(content))
+        )
+    except YAMLError as err:
+        return {"success": False, "error": f"Invalid YAML content: {err}"}
+    if not isinstance(whole, dict):
+        return {
+            "success": False,
+            "error": "Whole-file content must be a YAML mapping at the root.",
+        }
+    target_file = config_dir / normalized
+    try:
+        # Write the backup content verbatim (faithful restore). Bundles
+        # mkdir + atomic temp-write+rename + stat into one offload, like
+        # _write_file_sync.
+        write_meta = await hass.async_add_executor_job(
+            _replace_file_sync, target_file, content
+        )
+    except PermissionError:
+        _LOGGER.error("Permission denied editing: %s", rel_path)
+        return {
+            "success": False,
+            "error": f"Permission denied: {rel_path}",
+        }
+    except OSError as err:
+        _LOGGER.error("Error editing YAML config %s: %s", rel_path, err)
+        return {"success": False, "error": str(err)}
+
+    _LOGGER.info("YAML config restored whole-file: %s", rel_path)
+    restore_result: dict[str, Any] = {
+        "success": True,
+        "file": rel_path,
+        "action": action,
+        "yaml_path": yaml_path,
+        # Verbatim whole-file write; shares the write-path response
+        # shape so ``written`` stays a reliable discriminator.
+        "written": True,
+        "size": write_meta["size"],
+        "modified": datetime.fromtimestamp(write_meta["mtime"]).isoformat(),
+        # A whole-file restore can touch any number of keys; a restart
+        # is the always-correct activation path.
+        "post_action": "restart_required",
+    }
+    restore_result.update(await _run_config_check(hass, rel_path))
+    return restore_result
+
+
+async def _parse_edit_content(
+    hass: HomeAssistant, action: str, content: str | None, kind: str
+) -> tuple[Any, dict[str, Any] | None]:
+    """Validate content is valid YAML for add/replace.
+
+    Returns (parsed_content, error). For other actions parsed_content is None.
+    """
+    parsed_content: Any = None
+    if action in ("add", "replace"):
+        if not content:
+            return None, {
+                "success": False,
+                "error": f"'content' is required for action '{action}'.",
+            }
+        try:
+            parsed_content = await hass.async_add_executor_job(
+                lambda: make_yaml().load(StringIO(content))
+            )
+        except YAMLError as err:
+            return None, {
+                "success": False,
+                "error": f"Invalid YAML content: {err}",
+            }
+        if parsed_content is None:
+            return None, {
+                "success": False,
+                "error": "Content parsed as null/empty. Provide non-empty YAML.",
+            }
+        # Theme content must be a YAML mapping (theme variables)
+        if kind == "theme" and not isinstance(parsed_content, dict):
+            return None, {
+                "success": False,
+                "error": "Theme content must be a YAML mapping (theme variables).",
+            }
+    return parsed_content, None
+
+
+async def _load_edit_target_data(
+    hass: HomeAssistant, target_file: Path, action: str, rel_path: str
+) -> tuple[dict[str, Any], str, dict[str, Any] | None]:
+    """Read + parse the existing YAML file, or start empty.
+
+    Returns (data, raw_content, error).
+    """
+    # Read existing file content (or start with empty dict)
+    target_exists = await hass.async_add_executor_job(target_file.exists)
+    if target_exists:
+        raw_content = await hass.async_add_executor_job(target_file.read_text)
+        try:
+            data = await hass.async_add_executor_job(
+                lambda: make_yaml().load(StringIO(raw_content)) or {}
+            )
+        except YAMLError as err:
+            return (
+                {},
+                "",
+                {
+                    "success": False,
+                    "error": f"Cannot parse existing file '{rel_path}': {err}",
+                },
+            )
+        if not isinstance(data, dict):
+            return (
+                {},
+                "",
+                {
+                    "success": False,
+                    "error": f"File '{rel_path}' root is not a YAML mapping.",
+                },
+            )
+    else:
+        if action == "remove":
+            return (
+                {},
+                "",
+                {
+                    "success": False,
+                    "error": f"File does not exist: {rel_path}",
+                },
+            )
+        data = {}
+        raw_content = ""
+    return data, raw_content, None
+
+
+def _walk_lovelace_dashboards(
+    data: dict[str, Any], action: str, parsed_content: Any
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    """Validate dashboard content and walk/create lovelace.dashboards in ``data``.
+
+    Returns (lovelace, dashboards, error). On error the mappings are empty dicts.
+    """
+    # filename validation for add/replace
+    if action in ("add", "replace"):
+        if not isinstance(parsed_content, dict):
+            return (
+                {},
+                {},
+                {
+                    "success": False,
+                    "error": "lovelace.dashboards.<url_path> content must be a YAML mapping",
+                },
+            )
+        fn_err = _validate_dashboard_filename(parsed_content.get("filename", ""))
+        if fn_err is not None:
+            return {}, {}, {"success": False, "error": fn_err}
+
+    # Walk/create lovelace.dashboards
+    lovelace = data.setdefault("lovelace", {})
+    if not isinstance(lovelace, dict):
+        return (
+            {},
+            {},
+            {
+                "success": False,
+                "error": "Existing 'lovelace' key is not a YAML mapping",
+            },
+        )
+    dashboards = lovelace.setdefault("dashboards", {})
+    if not isinstance(dashboards, dict):
+        return (
+            {},
+            {},
+            {
+                "success": False,
+                "error": "Existing 'lovelace.dashboards' is not a YAML mapping",
+            },
+        )
+    return lovelace, dashboards, None
+
+
+def _apply_lovelace_dashboard_action(
+    data: dict[str, Any],
+    lovelace: dict[str, Any],
+    dashboards: dict[str, Any],
+    action: str,
+    url_path: str,
+    parsed_content: Any,
+) -> dict[str, Any] | None:
+    """Apply add/replace/remove for a single lovelace dashboard in ``data``."""
+    if action == "add":
+        if url_path in dashboards:
+            existing = dashboards[url_path]
+            if isinstance(existing, dict) and isinstance(parsed_content, dict):
+                existing.update(parsed_content)
+            else:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Type mismatch for dashboard '{url_path}': use 'replace' "
+                        "to overwrite."
+                    ),
+                }
+        else:
+            dashboards[url_path] = parsed_content
+    elif action == "replace":
+        dashboards[url_path] = parsed_content
+    elif action == "remove":
+        if url_path not in dashboards:
+            return {
+                "success": False,
+                "error": (
+                    f"Dashboard '{url_path}' not found under lovelace.dashboards."
+                ),
+            }
+        del dashboards[url_path]
+        # Clean up empty parent containers to keep the file tidy
+        if not dashboards:
+            del lovelace["dashboards"]
+        if not lovelace:
+            del data["lovelace"]
+    return None
+
+
+def _apply_lovelace_dashboard_edit(
+    data: dict[str, Any], action: str, url_path: str, parsed_content: Any
+) -> dict[str, Any] | None:
+    """Apply an add/replace/remove to lovelace.dashboards.<url_path> in ``data``."""
+    lovelace, dashboards, walk_err = _walk_lovelace_dashboards(
+        data, action, parsed_content
+    )
+    if walk_err is not None:
+        return walk_err
+    return _apply_lovelace_dashboard_action(
+        data, lovelace, dashboards, action, url_path, parsed_content
+    )
+
+
+def _apply_single_key_edit(
+    data: dict[str, Any],
+    action: str,
+    yaml_key: str,
+    label: str,
+    parsed_content: Any,
+    rel_path: str,
+) -> dict[str, Any] | None:
+    """Apply add/replace/remove for a single top-level key (or theme) in ``data``."""
+    # Single-key apply logic, shared by plain config keys and
+    # theme names (kind == "theme"): a theme file is a mapping of
+    # theme-name -> variables, and theme content is pre-validated
+    # as a mapping above, so the list-merge arm never fires for it.
+    if action == "add":
+        if yaml_key in data:
+            existing = data[yaml_key]
+            # Merge: list extends list, dict merges dict
+            if isinstance(existing, list) and isinstance(parsed_content, list):
+                data[yaml_key] = existing + parsed_content
+            elif isinstance(existing, dict) and isinstance(parsed_content, dict):
+                existing.update(parsed_content)
+            else:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Type mismatch for {label.lower()} '{yaml_key}': "
+                        f"existing is {type(existing).__name__}, "
+                        f"new content is {type(parsed_content).__name__}. "
+                        "Use action='replace' to overwrite."
+                    ),
+                }
+        else:
+            data[yaml_key] = parsed_content
+    elif action == "replace":
+        data[yaml_key] = parsed_content
+    elif action == "remove":
+        if yaml_key not in data:
+            return {
+                "success": False,
+                "error": f"{label} '{yaml_key}' not found in '{rel_path}'.",
+            }
+        del data[yaml_key]
+    return None
+
+
+def _apply_edit_action(
+    data: dict[str, Any],
+    action: str,
+    kind: str,
+    path_parts: tuple[str, ...],
+    parsed_content: Any,
+    rel_path: str,
+) -> dict[str, Any] | None:
+    """Apply the requested edit action to ``data`` in place, returning an error or None."""
+    if kind == "lovelace_dashboard":
+        return _apply_lovelace_dashboard_edit(
+            data, action, path_parts[2], parsed_content
+        )
+    label = "Theme" if kind == "theme" else "Key"
+    return _apply_single_key_edit(
+        data, action, path_parts[0], label, parsed_content, rel_path
+    )
+
+
+async def _serialize_and_validate_edit(
+    hass: HomeAssistant, data: dict[str, Any], raw_content: str
+) -> tuple[str, dict[str, Any] | None]:
+    """Serialize ``data`` to YAML and verify it round-trips unchanged.
+
+    Returns (new_content, error); new_content is "" when error is set.
+    """
+    # Serialize back to YAML, keeping the file's dominant top-level
+    # sequence-dash style (#1720: "changed indentation I didn't ask
+    # to change"). ruamel supports only ONE sequence style per dump,
+    # so in a MIXED-style file the minority-style sequences are
+    # normalized to the first-detected style — that collateral is
+    # counted below and surfaced as a warning + visible in ``diff``.
+    seq_style = detect_seq_indent(raw_content)
+
+    def _dump() -> str:
+        ry = make_yaml()
+        apply_seq_indent(ry, seq_style)
+        return yaml_dumps(ry, data)
+
+    try:
+        new_content = await hass.async_add_executor_job(_dump)
+    except YAMLError as err:
+        return "", {
+            "success": False,
+            "error": f"Failed to serialize YAML: {err}",
+        }
+
+    # Validate the result parses cleanly AND round-trips to the
+    # same data we intend to write. The emitter must not alter any
+    # parsed value (e.g. by re-wrapping a long line inside a folded
+    # scalar, which embeds a literal newline in an untouched string
+    # — #1720); if it would, refuse to write rather than corrupt
+    # the file silently.
+    try:
+        reparsed = await hass.async_add_executor_job(
+            lambda: make_yaml().load(StringIO(new_content))
+        )
+    except YAMLError as err:
+        return "", {
+            "success": False,
+            "error": f"Generated YAML failed validation: {err}",
+        }
+    if reparsed != data:
+        return "", {
+            "success": False,
+            "error": (
+                "Aborted: re-serializing the file would have altered "
+                "content outside the requested edit (the YAML "
+                "serializer changed at least one value elsewhere in "
+                "the file). The file was NOT modified."
+            ),
+        }
+    return new_content, None
+
+
+def _maybe_build_confirm_preview(
+    call: ServiceCall,
+    normalized: str,
+    new_content: str,
+    rel_path: str,
+    action: str,
+    yaml_path: str,
+    diff_text: str,
+    reindent_count: int,
+) -> dict[str, Any] | None:
+    """Return a preview response when confirmation is required but unconfirmed."""
+    require_confirm = bool(call.data.get("require_confirm", False))
+    supplied_token = call.data.get("confirm_token")
+    expected_token = _confirm_token(normalized, new_content)
+    if not (require_confirm and supplied_token != expected_token):
+        return None
+    preview: dict[str, Any] = {
+        "success": True,
+        "preview": True,
+        "written": False,
+        "file": rel_path,
+        "action": action,
+        "yaml_path": yaml_path,
+        "diff": diff_text,
+        "confirm_token": expected_token,
+        "message": (
+            "Preview only — NOTHING was written. Review the diff "
+            "for unintended changes outside the requested edit, "
+            "then repeat the exact same call with confirm_token "
+            "to apply."
+        ),
+    }
+    if reindent_count:
+        preview["warnings"] = [_reindent_warning(reindent_count)]
+    if supplied_token is not None:
+        preview["confirm_token_mismatch"] = True
+        preview["message"] = (
+            "confirm_token did not match — the file changed "
+            "since the preview (or the token was wrong). NOTHING "
+            "was written. Review the fresh diff and retry with "
+            "the new confirm_token."
+        )
+    return preview
+
+
+async def _resolve_post_action(
+    hass: HomeAssistant, kind: str, path_parts: tuple[str, ...]
+) -> dict[str, Any]:
+    """Return the post-edit activation info (restart/reload) for the edit kind."""
+    # Surface the post-edit action required to activate the change
+    post_info: dict[str, Any]
+    if kind == "lovelace_dashboard":
+        post_info = {"post_action": "restart_required"}
+    elif kind == "theme":
+        # Trigger frontend.reload_themes to load the theme change
+        try:
+            await hass.services.async_call(
+                "frontend",
+                "reload_themes",
+                {},
+                blocking=True,
+            )
+            post_info = {
+                "post_action": "reload_performed",
+                "reload_service": "frontend.reload_themes",
+            }
+        except Exception as reload_err:
+            post_info = {
+                "post_action": "reload_available",
+                "reload_service": "frontend.reload_themes",
+                "reload_error": str(reload_err),
+            }
+            _LOGGER.warning(
+                "frontend.reload_themes failed after theme edit: %s",
+                reload_err,
+            )
+    else:
+        post_info = YAML_KEY_POST_ACTIONS.get(
+            path_parts[0], YAML_KEY_DEFAULT_POST_ACTION
+        )
+    return post_info
+
+
+async def _apply_yaml_key_edit(
+    hass: HomeAssistant,
+    config_dir: Path,
+    call: ServiceCall,
+    rel_path: str,
+    normalized: str,
+    action: str,
+    yaml_path: str,
+    kind: str,
+    path_parts: tuple[str, ...],
+    parsed_content: Any,
+) -> dict[str, Any]:
+    """Read, edit, serialize, and atomically write the requested YAML key change."""
+    target_file = config_dir / normalized
+
+    try:
+        data, raw_content, load_err = await _load_edit_target_data(
+            hass, target_file, action, rel_path
+        )
+        if load_err is not None:
+            return load_err
+
+        # Pre-write backups are captured MCP-side by ha-mcp's shared
+        # auto-backup layer (#1579): ha_config_set_yaml snapshots the
+        # prior key state before calling this service, so the edit is
+        # restorable via ha_manage_backup(scope="edits"). The component
+        # no longer writes its own .ha_mcp_tools_backups/ copy. (Pre-fix
+        # backups already on disk there stay readable; the separate
+        # GHSA-g39v-cvjh-8fpf startup migration is unaffected.)
+
+        # Perform the action — branch on kind
+        apply_err = _apply_edit_action(
+            data, action, kind, path_parts, parsed_content, rel_path
+        )
+        if apply_err is not None:
+            return apply_err
+
+        new_content, ser_err = await _serialize_and_validate_edit(
+            hass, data, raw_content
+        )
+        if ser_err is not None:
+            return ser_err
+
+        diff_text = _unified_diff(raw_content, new_content, rel_path)
+        reindent_count = _count_reindented_lines(diff_text)
+
+        preview = _maybe_build_confirm_preview(
+            call,
+            normalized,
+            new_content,
+            rel_path,
+            action,
+            yaml_path,
+            diff_text,
+            reindent_count,
+        )
+        if preview is not None:
+            return preview
+
+        # Create parent directories if needed (for new package files).
+        # mkdir(exist_ok=True) is idempotent so no pre-check is required.
+        await hass.async_add_executor_job(
+            lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
+        )
+
+        # Atomic write: write to temp file, then rename into place
+        def _atomic_write() -> None:
+            tmp_file = target_file.with_suffix(".tmp")
+            tmp_file.write_text(new_content)
+            os.replace(str(tmp_file), str(target_file))
+
+        await hass.async_add_executor_job(_atomic_write)
+
+        stat = await hass.async_add_executor_job(target_file.stat)
+        modified_dt = datetime.fromtimestamp(stat.st_mtime)
+
+        _LOGGER.info(
+            "YAML config edited: %s (action=%s, key=%s)",
+            rel_path,
+            action,
+            yaml_path,
+        )
+
+        result: dict[str, Any] = {
+            "success": True,
+            "file": rel_path,
+            "action": action,
+            "yaml_path": yaml_path,
+            "size": stat.st_size,
+            "modified": modified_dt.isoformat(),
+            "written": True,
+            "diff": diff_text,
+        }
+        if reindent_count:
+            result["warnings"] = [_reindent_warning(reindent_count)]
+
+        # Surface the post-edit action required to activate the change
+        result.update(await _resolve_post_action(hass, kind, path_parts))
+        result.update(await _run_config_check(hass, rel_path))
+        return result
+
+    except PermissionError:
+        _LOGGER.error("Permission denied editing: %s", rel_path)
+        return {
+            "success": False,
+            "error": f"Permission denied: {rel_path}",
+        }
+    except OSError as err:
+        _LOGGER.error("Error editing YAML config %s: %s", rel_path, err)
+        return {
+            "success": False,
+            "error": str(err),
+        }
+
+
 def _build_edit_yaml_config_handler(
     hass: HomeAssistant,
 ) -> Callable[[ServiceCall], Awaitable[dict[str, Any]]]:
@@ -1369,85 +2065,18 @@ def _build_edit_yaml_config_handler(
         action = call.data["action"]
         yaml_path = call.data["yaml_path"]
         content = call.data.get("content")
-        # Caller-provided per-key opt-out for PACKAGES_ONLY_YAML_KEYS.
-        # Filter to the recognised set so a caller that types
-        # ``automatoin`` doesn't accidentally pass through; only
-        # actually-known keys count.
-        disabled_packages_keys = {
-            key
-            for key in call.data.get("disabled_packages_keys", [])
-            if key in PACKAGES_ONLY_YAML_KEYS
-        }
 
-        # Validate file path — only configuration.yaml, packages/*.yaml, and themes/*.yaml
         normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
-        if normalized.startswith("..") or normalized.startswith("/"):
-            return {
-                "success": False,
-                "error": "Path traversal is not allowed.",
-            }
-
-        is_config_yaml = normalized in ALLOWED_YAML_CONFIG_FILES
-        is_theme = fnmatch.fnmatch(normalized, "themes/*.yaml")
-        # Package files may live under any folder the user binds via
-        # ``homeassistant: packages: !include_dir_named <folder>`` — not just the
-        # default ``packages`` (issue #1854). The configured folder(s) are
-        # detected at runtime (parsing configuration.yaml), so only do that work
-        # when the target isn't already a config-root or theme file. The set
-        # always includes ``"packages"`` as a fallback.
-        package_dirs: set[str] = set()
-        is_package = False
-        if not is_config_yaml and not is_theme:
-            package_dirs = await _detect_package_dirs(hass)
-            is_package = _path_in_package_dir(normalized, package_dirs)
-        if not is_config_yaml and not is_package and not is_theme:
-            allowed_pkg = ", ".join(
-                f"{folder}/*.yaml" for folder in sorted(package_dirs)
-            )
-            return {
-                "success": False,
-                "error": (
-                    f"File '{rel_path}' is not allowed. "
-                    f"Only {', '.join(ALLOWED_YAML_CONFIG_FILES)}, {allowed_pkg}, and themes/*.yaml are supported."
-                ),
-            }
-
-        # Symlink-safe containment (parity with the read path, issue #1586): the
-        # write target is ``config_dir / normalized``, so a package/theme folder
-        # that is (or contains) a symlink escaping the config dir — or a path
-        # resolving into the deny floor (.storage / secrets.yaml) — must be
-        # rejected before writing, exactly as read_file already does.
-        if _violates_deny_floor(config_dir, normalized) or not _resolves_within(
-            config_dir, rel_path
-        ):
-            _LOGGER.warning("Rejected YAML edit escaping the config dir: %s", rel_path)
-            return {
-                "success": False,
-                "error": (
-                    f"Path '{rel_path}' resolves outside the config directory or "
-                    "into a protected location and cannot be edited."
-                ),
-            }
-
-        # ``themes/*.yaml`` matches dot-prefixed paths (fnmatch's ``*`` matches a
-        # leading ``.`` and spans ``/``), but HA's ``!include_dir_merge_named``
-        # loader skips them: ``annotatedyaml``'s ``_find_files`` filters every
-        # walked directory AND file basename through ``_is_file_valid`` (which
-        # is ``return not name.startswith(".")``), so a dot-prefixed file
-        # (``themes/.hidden.yaml``) OR directory (``themes/.foo/bar.yaml``) is
-        # pruned and the theme never loads — a phantom ``reload_performed``.
-        # Reject if any path segment is dot-prefixed, mirroring the loader,
-        # rather than only checking the basename.
-        if is_theme and any(seg.startswith(".") for seg in normalized.split("/")):
-            return {
-                "success": False,
-                "error": (
-                    f"Theme path '{rel_path}' has a dot-prefixed file or "
-                    "directory segment. Home Assistant's !include_dir_merge_named "
-                    "skips any path segment whose name starts with '.', so it "
-                    "would never load. Use a path with no dot-prefixed segment."
-                ),
-            }
+        is_package, is_theme, target_err = await _classify_edit_yaml_target(
+            hass, rel_path, normalized
+        )
+        if target_err is not None:
+            return target_err
+        containment_err = _check_edit_yaml_containment(
+            config_dir, rel_path, normalized, is_theme
+        )
+        if containment_err is not None:
+            return containment_err
 
         # Whole-file replace (restore a legacy .bak wholesale, #1579). The
         # content IS the entire file, so this bypasses the per-key merge — but
@@ -1455,74 +2084,13 @@ def _build_edit_yaml_config_handler(
         # validation, the atomic temp-write+rename, and the post-write config
         # check. No new files become writable; yaml_path is ignored here.
         if action == "replace_file":
-            if not content:
-                return {
-                    "success": False,
-                    "error": "'content' is required for action 'replace_file'.",
-                }
-            try:
-                whole = await hass.async_add_executor_job(
-                    lambda: make_yaml().load(StringIO(content))
-                )
-            except YAMLError as err:
-                return {"success": False, "error": f"Invalid YAML content: {err}"}
-            if not isinstance(whole, dict):
-                return {
-                    "success": False,
-                    "error": "Whole-file content must be a YAML mapping at the root.",
-                }
-            target_file = config_dir / normalized
-            try:
-                # Write the backup content verbatim (faithful restore). Bundles
-                # mkdir + atomic temp-write+rename + stat into one offload, like
-                # _write_file_sync.
-                write_meta = await hass.async_add_executor_job(
-                    _replace_file_sync, target_file, content
-                )
-            except PermissionError:
-                _LOGGER.error("Permission denied editing: %s", rel_path)
-                return {
-                    "success": False,
-                    "error": f"Permission denied: {rel_path}",
-                }
-            except OSError as err:
-                _LOGGER.error("Error editing YAML config %s: %s", rel_path, err)
-                return {"success": False, "error": str(err)}
+            return await _apply_replace_file(
+                hass, config_dir, rel_path, normalized, action, yaml_path, content
+            )
 
-            _LOGGER.info("YAML config restored whole-file: %s", rel_path)
-            restore_result: dict[str, Any] = {
-                "success": True,
-                "file": rel_path,
-                "action": action,
-                "yaml_path": yaml_path,
-                # Verbatim whole-file write; shares the write-path response
-                # shape so ``written`` stays a reliable discriminator.
-                "written": True,
-                "size": write_meta["size"],
-                "modified": datetime.fromtimestamp(write_meta["mtime"]).isoformat(),
-                # A whole-file restore can touch any number of keys; a restart
-                # is the always-correct activation path.
-                "post_action": "restart_required",
-            }
-            restore_result.update(await _run_config_check(hass, rel_path))
-            return restore_result
-
-        # Per-key gate fires only for packages/*.yaml writes. Writes to
-        # configuration.yaml fall through to ``_parse_and_validate_yaml_path``
-        # which rejects PACKAGES_ONLY_YAML_KEYS with the storage-mode-
-        # tools advisory regardless of this flag.
-        top_segment = yaml_path.split(".", 1)[0] if yaml_path else ""
-        if is_package and top_segment in disabled_packages_keys:
-            return {
-                "success": False,
-                "error": (
-                    f"yaml_path key {top_segment!r} is disabled by the "
-                    f"caller's runtime configuration. Re-enable it in the "
-                    f"caller (the ha-mcp Server Settings → YAML config "
-                    f"editing → 'Allow {top_segment} in packages/*.yaml' "
-                    f"toggle), or use the storage-mode equivalent."
-                ),
-            }
+        gate_err = _check_packages_key_gate(call, yaml_path, is_package)
+        if gate_err is not None:
+            return gate_err
 
         # Parse and validate yaml_path (replaces the old ALLOWED_YAML_KEYS check)
         kind, path_parts, path_err = _parse_and_validate_yaml_path(
@@ -1531,344 +2099,24 @@ def _build_edit_yaml_config_handler(
         if path_err is not None:
             return {"success": False, "error": path_err}
 
-        # Validate content is valid YAML for add/replace
-        parsed_content: Any = None
-        if action in ("add", "replace"):
-            if not content:
-                return {
-                    "success": False,
-                    "error": f"'content' is required for action '{action}'.",
-                }
-            try:
-                parsed_content = await hass.async_add_executor_job(
-                    lambda: make_yaml().load(StringIO(content))
-                )
-            except YAMLError as err:
-                return {
-                    "success": False,
-                    "error": f"Invalid YAML content: {err}",
-                }
-            if parsed_content is None:
-                return {
-                    "success": False,
-                    "error": "Content parsed as null/empty. Provide non-empty YAML.",
-                }
-            # Theme content must be a YAML mapping (theme variables)
-            if kind == "theme" and not isinstance(parsed_content, dict):
-                return {
-                    "success": False,
-                    "error": "Theme content must be a YAML mapping (theme variables).",
-                }
+        parsed_content, content_err = await _parse_edit_content(
+            hass, action, content, kind
+        )
+        if content_err is not None:
+            return content_err
 
-        target_file = config_dir / normalized
-
-        try:
-            # Read existing file content (or start with empty dict)
-            target_exists = await hass.async_add_executor_job(target_file.exists)
-            if target_exists:
-                raw_content = await hass.async_add_executor_job(target_file.read_text)
-                try:
-                    data = await hass.async_add_executor_job(
-                        lambda: make_yaml().load(StringIO(raw_content)) or {}
-                    )
-                except YAMLError as err:
-                    return {
-                        "success": False,
-                        "error": f"Cannot parse existing file '{rel_path}': {err}",
-                    }
-                if not isinstance(data, dict):
-                    return {
-                        "success": False,
-                        "error": f"File '{rel_path}' root is not a YAML mapping.",
-                    }
-            else:
-                if action == "remove":
-                    return {
-                        "success": False,
-                        "error": f"File does not exist: {rel_path}",
-                    }
-                data = {}
-                raw_content = ""
-
-            # Pre-write backups are captured MCP-side by ha-mcp's shared
-            # auto-backup layer (#1579): ha_config_set_yaml snapshots the
-            # prior key state before calling this service, so the edit is
-            # restorable via ha_manage_backup(scope="edits"). The component
-            # no longer writes its own .ha_mcp_tools_backups/ copy. (Pre-fix
-            # backups already on disk there stay readable; the separate
-            # GHSA-g39v-cvjh-8fpf startup migration is unaffected.)
-
-            # Perform the action — branch on kind
-            if kind == "lovelace_dashboard":
-                url_path = path_parts[2]
-
-                # filename validation for add/replace
-                if action in ("add", "replace"):
-                    if not isinstance(parsed_content, dict):
-                        return {
-                            "success": False,
-                            "error": "lovelace.dashboards.<url_path> content must be a YAML mapping",
-                        }
-                    fn_err = _validate_dashboard_filename(
-                        parsed_content.get("filename", "")
-                    )
-                    if fn_err is not None:
-                        return {"success": False, "error": fn_err}
-
-                # Walk/create lovelace.dashboards
-                lovelace = data.setdefault("lovelace", {})
-                if not isinstance(lovelace, dict):
-                    return {
-                        "success": False,
-                        "error": "Existing 'lovelace' key is not a YAML mapping",
-                    }
-                dashboards = lovelace.setdefault("dashboards", {})
-                if not isinstance(dashboards, dict):
-                    return {
-                        "success": False,
-                        "error": "Existing 'lovelace.dashboards' is not a YAML mapping",
-                    }
-
-                if action == "add":
-                    if url_path in dashboards:
-                        existing = dashboards[url_path]
-                        if isinstance(existing, dict) and isinstance(
-                            parsed_content, dict
-                        ):
-                            existing.update(parsed_content)
-                        else:
-                            return {
-                                "success": False,
-                                "error": (
-                                    f"Type mismatch for dashboard '{url_path}': use 'replace' "
-                                    "to overwrite."
-                                ),
-                            }
-                    else:
-                        dashboards[url_path] = parsed_content
-                elif action == "replace":
-                    dashboards[url_path] = parsed_content
-                elif action == "remove":
-                    if url_path not in dashboards:
-                        return {
-                            "success": False,
-                            "error": (
-                                f"Dashboard '{url_path}' not found under lovelace.dashboards."
-                            ),
-                        }
-                    del dashboards[url_path]
-                    # Clean up empty parent containers to keep the file tidy
-                    if not dashboards:
-                        del lovelace["dashboards"]
-                    if not lovelace:
-                        del data["lovelace"]
-
-            else:
-                # Single-key apply logic, shared by plain config keys and
-                # theme names (kind == "theme"): a theme file is a mapping of
-                # theme-name -> variables, and theme content is pre-validated
-                # as a mapping above, so the list-merge arm never fires for it.
-                yaml_key = path_parts[0]
-                label = "Theme" if kind == "theme" else "Key"
-                if action == "add":
-                    if yaml_key in data:
-                        existing = data[yaml_key]
-                        # Merge: list extends list, dict merges dict
-                        if isinstance(existing, list) and isinstance(
-                            parsed_content, list
-                        ):
-                            data[yaml_key] = existing + parsed_content
-                        elif isinstance(existing, dict) and isinstance(
-                            parsed_content, dict
-                        ):
-                            existing.update(parsed_content)
-                        else:
-                            return {
-                                "success": False,
-                                "error": (
-                                    f"Type mismatch for {label.lower()} '{yaml_key}': "
-                                    f"existing is {type(existing).__name__}, "
-                                    f"new content is {type(parsed_content).__name__}. "
-                                    "Use action='replace' to overwrite."
-                                ),
-                            }
-                    else:
-                        data[yaml_key] = parsed_content
-                elif action == "replace":
-                    data[yaml_key] = parsed_content
-                elif action == "remove":
-                    if yaml_key not in data:
-                        return {
-                            "success": False,
-                            "error": f"{label} '{yaml_key}' not found in '{rel_path}'.",
-                        }
-                    del data[yaml_key]
-
-            # Serialize back to YAML, keeping the file's dominant top-level
-            # sequence-dash style (#1720: "changed indentation I didn't ask
-            # to change"). ruamel supports only ONE sequence style per dump,
-            # so in a MIXED-style file the minority-style sequences are
-            # normalized to the first-detected style — that collateral is
-            # counted below and surfaced as a warning + visible in ``diff``.
-            seq_style = detect_seq_indent(raw_content)
-
-            def _dump() -> str:
-                ry = make_yaml()
-                apply_seq_indent(ry, seq_style)
-                return yaml_dumps(ry, data)
-
-            try:
-                new_content = await hass.async_add_executor_job(_dump)
-            except YAMLError as err:
-                return {
-                    "success": False,
-                    "error": f"Failed to serialize YAML: {err}",
-                }
-
-            # Validate the result parses cleanly AND round-trips to the
-            # same data we intend to write. The emitter must not alter any
-            # parsed value (e.g. by re-wrapping a long line inside a folded
-            # scalar, which embeds a literal newline in an untouched string
-            # — #1720); if it would, refuse to write rather than corrupt
-            # the file silently.
-            try:
-                reparsed = await hass.async_add_executor_job(
-                    lambda: make_yaml().load(StringIO(new_content))
-                )
-            except YAMLError as err:
-                return {
-                    "success": False,
-                    "error": f"Generated YAML failed validation: {err}",
-                }
-            if reparsed != data:
-                return {
-                    "success": False,
-                    "error": (
-                        "Aborted: re-serializing the file would have altered "
-                        "content outside the requested edit (the YAML "
-                        "serializer changed at least one value elsewhere in "
-                        "the file). The file was NOT modified."
-                    ),
-                }
-
-            diff_text = _unified_diff(raw_content, new_content, rel_path)
-            reindent_count = _count_reindented_lines(diff_text)
-
-            require_confirm = bool(call.data.get("require_confirm", False))
-            supplied_token = call.data.get("confirm_token")
-            expected_token = _confirm_token(normalized, new_content)
-            if require_confirm and supplied_token != expected_token:
-                preview: dict[str, Any] = {
-                    "success": True,
-                    "preview": True,
-                    "written": False,
-                    "file": rel_path,
-                    "action": action,
-                    "yaml_path": yaml_path,
-                    "diff": diff_text,
-                    "confirm_token": expected_token,
-                    "message": (
-                        "Preview only — NOTHING was written. Review the diff "
-                        "for unintended changes outside the requested edit, "
-                        "then repeat the exact same call with confirm_token "
-                        "to apply."
-                    ),
-                }
-                if reindent_count:
-                    preview["warnings"] = [_reindent_warning(reindent_count)]
-                if supplied_token is not None:
-                    preview["confirm_token_mismatch"] = True
-                    preview["message"] = (
-                        "confirm_token did not match — the file changed "
-                        "since the preview (or the token was wrong). NOTHING "
-                        "was written. Review the fresh diff and retry with "
-                        "the new confirm_token."
-                    )
-                return preview
-
-            # Create parent directories if needed (for new package files).
-            # mkdir(exist_ok=True) is idempotent so no pre-check is required.
-            await hass.async_add_executor_job(
-                lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
-            )
-
-            # Atomic write: write to temp file, then rename into place
-            def _atomic_write() -> None:
-                tmp_file = target_file.with_suffix(".tmp")
-                tmp_file.write_text(new_content)
-                os.replace(str(tmp_file), str(target_file))
-
-            await hass.async_add_executor_job(_atomic_write)
-
-            stat = await hass.async_add_executor_job(target_file.stat)
-            modified_dt = datetime.fromtimestamp(stat.st_mtime)
-
-            _LOGGER.info(
-                "YAML config edited: %s (action=%s, key=%s)",
-                rel_path,
-                action,
-                yaml_path,
-            )
-
-            result: dict[str, Any] = {
-                "success": True,
-                "file": rel_path,
-                "action": action,
-                "yaml_path": yaml_path,
-                "size": stat.st_size,
-                "modified": modified_dt.isoformat(),
-                "written": True,
-                "diff": diff_text,
-            }
-            if reindent_count:
-                result["warnings"] = [_reindent_warning(reindent_count)]
-
-            # Surface the post-edit action required to activate the change
-            if kind == "lovelace_dashboard":
-                post_info = {"post_action": "restart_required"}
-            elif kind == "theme":
-                # Trigger frontend.reload_themes to load the theme change
-                try:
-                    await hass.services.async_call(
-                        "frontend",
-                        "reload_themes",
-                        {},
-                        blocking=True,
-                    )
-                    post_info = {
-                        "post_action": "reload_performed",
-                        "reload_service": "frontend.reload_themes",
-                    }
-                except Exception as reload_err:
-                    post_info = {
-                        "post_action": "reload_available",
-                        "reload_service": "frontend.reload_themes",
-                        "reload_error": str(reload_err),
-                    }
-                    _LOGGER.warning(
-                        "frontend.reload_themes failed after theme edit: %s",
-                        reload_err,
-                    )
-            else:
-                post_info = YAML_KEY_POST_ACTIONS.get(
-                    path_parts[0], YAML_KEY_DEFAULT_POST_ACTION
-                )
-            result.update(post_info)
-            result.update(await _run_config_check(hass, rel_path))
-            return result
-
-        except PermissionError:
-            _LOGGER.error("Permission denied editing: %s", rel_path)
-            return {
-                "success": False,
-                "error": f"Permission denied: {rel_path}",
-            }
-        except OSError as err:
-            _LOGGER.error("Error editing YAML config %s: %s", rel_path, err)
-            return {
-                "success": False,
-                "error": str(err),
-            }
+        return await _apply_yaml_key_edit(
+            hass,
+            config_dir,
+            call,
+            rel_path,
+            normalized,
+            action,
+            yaml_path,
+            kind,
+            path_parts,
+            parsed_content,
+        )
 
     return handle_edit_yaml_config
 
@@ -1931,6 +2179,42 @@ def _extract_yaml_subtree(content: str, yaml_path: str) -> str | None:
     """
     subtree: str | None = _extract_yaml_views(content, yaml_path)["subtree"]
     return subtree
+
+
+def _validate_lovelace_dashboard_path(
+    yaml_path: str, parts: tuple[str, ...]
+) -> tuple[str, tuple[str, ...], str | None]:
+    """Validate a 'lovelace.dashboards.<url_path>' yaml_path (shape 2).
+
+    Returns (kind, parts, error); on error kind is '' and parts is ().
+    """
+    if parts[:2] != ("lovelace", "dashboards") or len(parts) != 3:
+        return (
+            "",
+            (),
+            (
+                f"Dotted yaml_path '{yaml_path}' is not supported. "
+                "The only accepted dotted form is 'lovelace.dashboards.<url_path>'."
+            ),
+        )
+
+    url_path = parts[2]
+    if url_path in RESERVED_DASHBOARD_URL_PATHS:
+        return (
+            "",
+            (),
+            f"url_path '{url_path}' is reserved by Home Assistant and cannot be used.",
+        )
+    if not DASHBOARD_URL_PATH_PATTERN.fullmatch(url_path):
+        return (
+            "",
+            (),
+            (
+                f"url_path '{url_path}' is invalid. Must be lowercase letters/digits "
+                "separated by hyphens (e.g., 'energy-dashboard')."
+            ),
+        )
+    return "lovelace_dashboard", parts, None
 
 
 def _parse_and_validate_yaml_path(
@@ -2008,33 +2292,7 @@ def _parse_and_validate_yaml_path(
         )
 
     # Shape 2: lovelace.dashboards.<url_path>
-    if parts[:2] != ("lovelace", "dashboards") or len(parts) != 3:
-        return (
-            "",
-            (),
-            (
-                f"Dotted yaml_path '{yaml_path}' is not supported. "
-                "The only accepted dotted form is 'lovelace.dashboards.<url_path>'."
-            ),
-        )
-
-    url_path = parts[2]
-    if url_path in RESERVED_DASHBOARD_URL_PATHS:
-        return (
-            "",
-            (),
-            f"url_path '{url_path}' is reserved by Home Assistant and cannot be used.",
-        )
-    if not DASHBOARD_URL_PATH_PATTERN.fullmatch(url_path):
-        return (
-            "",
-            (),
-            (
-                f"url_path '{url_path}' is invalid. Must be lowercase letters/digits "
-                "separated by hyphens (e.g., 'energy-dashboard')."
-            ),
-        )
-    return "lovelace_dashboard", parts, None
+    return _validate_lovelace_dashboard_path(yaml_path, parts)
 
 
 def _migrate_legacy_backup_dir(config_dir: Path) -> tuple[int, int]:
@@ -2152,92 +2410,21 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         await async_remove_server_entry(hass, entry)
 
 
-async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up the File & YAML services (tools entry) from a config entry."""
+def _current_extra_dirs(hass: HomeAssistant) -> list[str]:
+    """Return the live user-configured extra directories from hass.data."""
+    domain_data = hass.data.get(DOMAIN)
+    if isinstance(domain_data, dict):
+        paths = domain_data.get(_HASS_DATA_ALLOWED_PATHS_KEY)
+        if isinstance(paths, list):
+            return paths
+    return []
+
+
+def _build_list_files_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+    """Build the handle_list_files service handler."""
     config_dir = Path(hass.config.config_dir)
-
-    # Bootstrap the caller-auth token. Generated on first setup, persisted
-    # to .storage/ha_mcp_tools_auth, cached in hass.data for fast handler
-    # access. ha-mcp fetches it via the get_caller_token service.
-    caller_token = await _load_or_create_caller_token(hass)
-    hass.data.setdefault(DOMAIN, {})[_HASS_DATA_TOKEN_KEY] = caller_token
-
-    # Load the user-configurable extra read/write directories (issue #1567)
-    # into hass.data so the file handlers read them with no I/O. set_allowed_paths
-    # updates this in place, so changes apply live (no HA restart).
-    hass.data.setdefault(DOMAIN, {})[
-        _HASS_DATA_ALLOWED_PATHS_KEY
-    ] = await _load_allowed_paths(hass)
-
-    def _current_extra_dirs() -> list[str]:
-        """Return the live user-configured extra directories from hass.data."""
-        domain_data = hass.data.get(DOMAIN)
-        if isinstance(domain_data, dict):
-            paths = domain_data.get(_HASS_DATA_ALLOWED_PATHS_KEY)
-            if isinstance(paths, list):
-                return paths
-        return []
-
-    # One-time migration of pre-fix YAML backups out of the publicly-served
-    # www/ directory (GHSA-g39v-cvjh-8fpf). Wrapped so a migration failure
-    # cannot prevent the integration from loading — the integration's
-    # normal value (file ops, edit_yaml_config) is unaffected by this.
-    try:
-        moved, failed = await hass.async_add_executor_job(
-            _migrate_legacy_backup_dir, config_dir
-        )
-    except Exception as err:
-        # Defensive: a migration failure must not block setup_entry, since
-        # the integration's normal value (file ops, edit_yaml_config) is
-        # unaffected by whether old backups got relocated.
-        _LOGGER.error(
-            "GHSA-g39v-cvjh-8fpf migration failed: %s. Pre-fix backups "
-            "may still be present in www/yaml_backups/ and reachable "
-            "via /local/yaml_backups/ — manual cleanup required.",
-            err,
-        )
-        moved, failed = 0, 0
-
-    if moved or failed:
-        if failed:
-            heading = (
-                f"Migrated {moved} YAML backup file(s); **{failed} could "
-                "not be moved** and remain in `www/yaml_backups/`, still "
-                "reachable without authentication via `/local/yaml_backups/`. "
-                "Move or delete them manually before continuing."
-            )
-        else:
-            heading = (
-                f"Moved {moved} YAML backup file(s) from `www/yaml_backups/` "
-                "to `.ha_mcp_tools_backups/`. The previous location was "
-                "reachable without authentication via `/local/yaml_backups/`."
-            )
-        message = (
-            f"{heading} See "
-            "[GHSA-g39v-cvjh-8fpf](https://github.com/homeassistant-ai/ha-mcp/security/advisories/GHSA-g39v-cvjh-8fpf). "
-            "**Rotate any secrets** that appeared in those YAML files "
-            "(MQTT/REST credentials, webhook IDs, `shell_command` "
-            "definitions, geofence coordinates). If you version-control "
-            "your Home Assistant config, also add `.ha_mcp_tools_backups/` "
-            "to your `.gitignore` so future backups are not committed."
-        )
-        _LOGGER.error(message)
-        try:
-            persistent_notification.async_create(
-                hass,
-                message,
-                title="HA MCP Tools — credential exposure (GHSA-g39v-cvjh-8fpf)",
-                notification_id="ha_mcp_tools_ghsa_g39v_cvjh_8fpf",
-            )
-        except Exception as err:
-            # Defensive: log line above is the source of truth; the
-            # notification is best-effort UX and must not block setup.
-            _LOGGER.warning(
-                "Could not create persistent notification for "
-                "GHSA-g39v-cvjh-8fpf migration: [%s] %s",
-                type(err).__name__,
-                err,
-            )
 
     async def handle_list_files(call: ServiceCall) -> ServiceResponse:
         """Handle the list_files service call."""
@@ -2251,7 +2438,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         # folder(s), so the lister does too — otherwise a packages folder is
         # readable file-by-file but cannot be enumerated, which is what
         # ha_config_get_yaml's cross-file key discovery needs (issue #1788).
-        extra_dirs = _current_extra_dirs()
+        extra_dirs = _current_extra_dirs(hass)
         package_dirs = await _detect_package_dirs(hass)
         if not _is_path_allowed_for_dir(
             config_dir, rel_path, ALLOWED_READ_DIRS, extra_dirs, package_dirs
@@ -2308,6 +2495,87 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             "count": len(files),
         }
 
+    return handle_list_files
+
+
+async def _shape_read_file_response(
+    hass: HomeAssistant,
+    rel_path: str,
+    result: dict[str, Any],
+    *,
+    tail_lines: int | None,
+    yaml_path: str | None,
+    include_parsed: bool,
+) -> dict[str, Any]:
+    """Shape a successful _read_file_sync result into the read_file response.
+
+    Applies secrets masking, log tailing, optional tail, and yaml_path
+    subtree extraction.
+    """
+    modified_dt = datetime.fromtimestamp(result["mtime"])
+    content = result["content"]
+    stat_size = result["size"]
+
+    # Apply special handling for specific files
+    normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
+
+    # Mask secrets.yaml
+    if normalized == "secrets.yaml":
+        content = _mask_secrets_content(content)
+
+    # Apply tail for log files
+    if normalized == "home-assistant.log":
+        lines = content.split("\n")
+        limit = tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES
+        if len(lines) > limit:
+            content = "\n".join(lines[-limit:])
+            truncated = True
+        else:
+            truncated = False
+
+        return {
+            "success": True,
+            "path": rel_path,
+            "content": content,
+            "size": stat_size,
+            "modified": modified_dt.isoformat(),
+            "lines_returned": min(len(lines), limit),
+            "total_lines": len(lines),
+            "truncated": truncated,
+        }
+
+    # Apply tail for other files if requested
+    full_content = content
+    if tail_lines:
+        lines = content.split("\n")
+        if len(lines) > tail_lines:
+            content = "\n".join(lines[-tail_lines:])
+
+    response: dict[str, Any] = {
+        "success": True,
+        "path": rel_path,
+        "content": content,
+        "size": stat_size,
+        "modified": modified_dt.isoformat(),
+    }
+    if yaml_path:
+        # Extract from the UNTAILED text: tailing is a display concern, and
+        # the retained tail is both likely to exclude the key and likely to
+        # be invalid YAML on its own, which would report the key as absent.
+        response.update(
+            await hass.async_add_executor_job(
+                _extract_yaml_views, full_content, yaml_path, include_parsed
+            )
+        )
+    return response
+
+
+def _build_read_file_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+    """Build the handle_read_file service handler."""
+    config_dir = Path(hass.config.config_dir)
+
     async def handle_read_file(call: ServiceCall) -> ServiceResponse:
         """Handle the read_file service call."""
         if not _caller_token_ok(hass, call):
@@ -2321,7 +2589,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         # (issue #1854), so resolve the configured folder(s) — the same way the
         # YAML editor does — and honour them here too, otherwise the pre-write
         # backup snapshot (a read of the target) blocks edits to those files.
-        extra_dirs = _current_extra_dirs()
+        extra_dirs = _current_extra_dirs(hass)
         package_dirs = await _detect_package_dirs(hass)
         if not _is_path_allowed_for_read(
             config_dir, rel_path, extra_dirs, package_dirs
@@ -2374,62 +2642,23 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
                 "error": f"Path is not a file: {rel_path}",
             }
 
-        modified_dt = datetime.fromtimestamp(result["mtime"])
-        content = result["content"]
-        stat_size = result["size"]
+        return await _shape_read_file_response(
+            hass,
+            rel_path,
+            result,
+            tail_lines=tail_lines,
+            yaml_path=yaml_path,
+            include_parsed=include_parsed,
+        )
 
-        # Apply special handling for specific files
-        normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
+    return handle_read_file
 
-        # Mask secrets.yaml
-        if normalized == "secrets.yaml":
-            content = _mask_secrets_content(content)
 
-        # Apply tail for log files
-        if normalized == "home-assistant.log":
-            lines = content.split("\n")
-            limit = tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES
-            if len(lines) > limit:
-                content = "\n".join(lines[-limit:])
-                truncated = True
-            else:
-                truncated = False
-
-            return {
-                "success": True,
-                "path": rel_path,
-                "content": content,
-                "size": stat_size,
-                "modified": modified_dt.isoformat(),
-                "lines_returned": min(len(lines), limit),
-                "total_lines": len(lines),
-                "truncated": truncated,
-            }
-
-        # Apply tail for other files if requested
-        full_content = content
-        if tail_lines:
-            lines = content.split("\n")
-            if len(lines) > tail_lines:
-                content = "\n".join(lines[-tail_lines:])
-
-        response: dict[str, Any] = {
-            "success": True,
-            "path": rel_path,
-            "content": content,
-            "size": stat_size,
-            "modified": modified_dt.isoformat(),
-        }
-        if yaml_path:
-            # Extract from the UNTAILED text: tailing is a display concern, and
-            # the retained tail is both likely to exclude the key and likely to
-            # be invalid YAML on its own, which would report the key as absent.
-            response.update(
-                await hass.async_add_executor_job(
-                    _extract_yaml_views, full_content, yaml_path, include_parsed
-                )
-            )
-        return response
+def _build_write_file_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+    """Build the handle_write_file service handler."""
+    config_dir = Path(hass.config.config_dir)
 
     async def handle_write_file(call: ServiceCall) -> ServiceResponse:
         """Handle the write_file service call."""
@@ -2441,7 +2670,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         create_dirs = call.data.get("create_dirs", True)
 
         # Security check - only allow writes to specific directories
-        extra_dirs = _current_extra_dirs()
+        extra_dirs = _current_extra_dirs(hass)
         if not _is_path_allowed_for_dir(
             config_dir, rel_path, ALLOWED_WRITE_DIRS, extra_dirs
         ):
@@ -2502,6 +2731,15 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             "message": f"File {'created' if is_new else 'updated'} successfully",
         }
 
+    return handle_write_file
+
+
+def _build_delete_file_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+    """Build the handle_delete_file service handler."""
+    config_dir = Path(hass.config.config_dir)
+
     async def handle_delete_file(call: ServiceCall) -> ServiceResponse:
         """Handle the delete_file service call."""
         if not _caller_token_ok(hass, call):
@@ -2509,7 +2747,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         rel_path = call.data["path"]
 
         # Security check - only allow deletes from specific directories
-        extra_dirs = _current_extra_dirs()
+        extra_dirs = _current_extra_dirs(hass)
         if not _is_path_allowed_for_dir(
             config_dir, rel_path, ALLOWED_WRITE_DIRS, extra_dirs
         ):
@@ -2558,7 +2796,13 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             "message": f"File deleted successfully: {rel_path}",
         }
 
-    handle_edit_yaml_config = _build_edit_yaml_config_handler(hass)
+    return handle_delete_file
+
+
+def _build_get_caller_token_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+    """Build the handle_get_caller_token service handler."""
 
     async def handle_get_caller_token(call: ServiceCall) -> ServiceResponse:
         """Return the caller-auth token to the ha-mcp bootstrap caller.
@@ -2621,6 +2865,14 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             "version": version,
         }
 
+    return handle_get_caller_token
+
+
+def _build_get_allowed_paths_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+    """Build the handle_get_allowed_paths service handler."""
+
     async def handle_get_allowed_paths(call: ServiceCall) -> ServiceResponse:
         """Return the user-configurable extra directories plus the built-in
         allowlists and the non-overridable deny floor (issue #1567).
@@ -2640,11 +2892,20 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             }
         return {
             "success": True,
-            "paths": _current_extra_dirs(),
+            "paths": _current_extra_dirs(hass),
             "builtin_read_dirs": list(ALLOWED_READ_DIRS),
             "builtin_write_dirs": list(ALLOWED_WRITE_DIRS),
             "deny_floor": sorted(DENY_PATH_SEGMENTS | DENY_READ_BASENAMES),
         }
+
+    return handle_get_allowed_paths
+
+
+def _build_set_allowed_paths_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+    """Build the handle_set_allowed_paths service handler."""
+    config_dir = Path(hass.config.config_dir)
 
     async def handle_set_allowed_paths(call: ServiceCall) -> ServiceResponse:
         """Replace the user-configurable extra directories (issues #1567, #1586).
@@ -2690,6 +2951,14 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             "rejected": rejected,
         }
 
+    return handle_set_allowed_paths
+
+
+def _build_list_legacy_backups_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+    """Build the handle_list_legacy_backups service handler."""
+    config_dir = Path(hass.config.config_dir)
     legacy_backup_dir = config_dir / _LEGACY_BACKUP_DIRNAME
 
     async def handle_list_legacy_backups(call: ServiceCall) -> ServiceResponse:
@@ -2704,6 +2973,16 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             _LOGGER.error("Error listing legacy backups: %s", err)
             return {"success": False, "error": str(err), "backups": []}
         return {"success": True, "backups": backups, "count": len(backups)}
+
+    return handle_list_legacy_backups
+
+
+def _build_read_legacy_backup_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+    """Build the handle_read_legacy_backup service handler."""
+    config_dir = Path(hass.config.config_dir)
+    legacy_backup_dir = config_dir / _LEGACY_BACKUP_DIRNAME
 
     async def handle_read_legacy_backup(call: ServiceCall) -> ServiceResponse:
         """Read one pre-#1579 YAML backup by filename (read-only)."""
@@ -2762,6 +3041,98 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             "size": result["size"],
             "modified": modified_dt.isoformat(),
         }
+
+    return handle_read_legacy_backup
+
+
+async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up the File & YAML services (tools entry) from a config entry."""
+    config_dir = Path(hass.config.config_dir)
+
+    # Bootstrap the caller-auth token. Generated on first setup, persisted
+    # to .storage/ha_mcp_tools_auth, cached in hass.data for fast handler
+    # access. ha-mcp fetches it via the get_caller_token service.
+    caller_token = await _load_or_create_caller_token(hass)
+    hass.data.setdefault(DOMAIN, {})[_HASS_DATA_TOKEN_KEY] = caller_token
+
+    # Load the user-configurable extra read/write directories (issue #1567)
+    # into hass.data so the file handlers read them with no I/O. set_allowed_paths
+    # updates this in place, so changes apply live (no HA restart).
+    hass.data.setdefault(DOMAIN, {})[
+        _HASS_DATA_ALLOWED_PATHS_KEY
+    ] = await _load_allowed_paths(hass)
+
+    # One-time migration of pre-fix YAML backups out of the publicly-served
+    # www/ directory (GHSA-g39v-cvjh-8fpf). Wrapped so a migration failure
+    # cannot prevent the integration from loading — the integration's
+    # normal value (file ops, edit_yaml_config) is unaffected by this.
+    try:
+        moved, failed = await hass.async_add_executor_job(
+            _migrate_legacy_backup_dir, config_dir
+        )
+    except Exception as err:
+        # Defensive: a migration failure must not block setup_entry, since
+        # the integration's normal value (file ops, edit_yaml_config) is
+        # unaffected by whether old backups got relocated.
+        _LOGGER.error(
+            "GHSA-g39v-cvjh-8fpf migration failed: %s. Pre-fix backups "
+            "may still be present in www/yaml_backups/ and reachable "
+            "via /local/yaml_backups/ — manual cleanup required.",
+            err,
+        )
+        moved, failed = 0, 0
+
+    if moved or failed:
+        if failed:
+            heading = (
+                f"Migrated {moved} YAML backup file(s); **{failed} could "
+                "not be moved** and remain in `www/yaml_backups/`, still "
+                "reachable without authentication via `/local/yaml_backups/`. "
+                "Move or delete them manually before continuing."
+            )
+        else:
+            heading = (
+                f"Moved {moved} YAML backup file(s) from `www/yaml_backups/` "
+                "to `.ha_mcp_tools_backups/`. The previous location was "
+                "reachable without authentication via `/local/yaml_backups/`."
+            )
+        message = (
+            f"{heading} See "
+            "[GHSA-g39v-cvjh-8fpf](https://github.com/homeassistant-ai/ha-mcp/security/advisories/GHSA-g39v-cvjh-8fpf). "
+            "**Rotate any secrets** that appeared in those YAML files "
+            "(MQTT/REST credentials, webhook IDs, `shell_command` "
+            "definitions, geofence coordinates). If you version-control "
+            "your Home Assistant config, also add `.ha_mcp_tools_backups/` "
+            "to your `.gitignore` so future backups are not committed."
+        )
+        _LOGGER.error(message)
+        try:
+            persistent_notification.async_create(
+                hass,
+                message,
+                title="HA MCP Tools — credential exposure (GHSA-g39v-cvjh-8fpf)",
+                notification_id="ha_mcp_tools_ghsa_g39v_cvjh_8fpf",
+            )
+        except Exception as err:
+            # Defensive: log line above is the source of truth; the
+            # notification is best-effort UX and must not block setup.
+            _LOGGER.warning(
+                "Could not create persistent notification for "
+                "GHSA-g39v-cvjh-8fpf migration: [%s] %s",
+                type(err).__name__,
+                err,
+            )
+
+    handle_list_files = _build_list_files_handler(hass)
+    handle_read_file = _build_read_file_handler(hass)
+    handle_write_file = _build_write_file_handler(hass)
+    handle_delete_file = _build_delete_file_handler(hass)
+    handle_edit_yaml_config = _build_edit_yaml_config_handler(hass)
+    handle_get_caller_token = _build_get_caller_token_handler(hass)
+    handle_get_allowed_paths = _build_get_allowed_paths_handler(hass)
+    handle_set_allowed_paths = _build_set_allowed_paths_handler(hass)
+    handle_list_legacy_backups = _build_list_legacy_backups_handler(hass)
+    handle_read_legacy_backup = _build_read_legacy_backup_handler(hass)
 
     # Register all services with response support
     hass.services.async_register(

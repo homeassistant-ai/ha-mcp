@@ -464,15 +464,10 @@ def _build_unauthorized_response(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------------------
 
 
-async def _async_handle_webhook(
-    hass: HomeAssistant, webhook_id: str, request: web.Request
-) -> web.StreamResponse:
-    """Forward an MCP request to the loopback server and stream the reply back."""
-    domain_data = hass.data.get(DOMAIN)
-    cfg = domain_data.get(DATA_WEBHOOK) if isinstance(domain_data, dict) else None
-    if not isinstance(cfg, dict):
-        return web.Response(status=503, text="MCP server is not available")
-
+async def _check_webhook_auth(
+    request: web.Request, cfg: dict[str, Any]
+) -> web.StreamResponse | None:
+    """Return a 401 challenge response if the request fails the auth gate, else None."""
     # Auth gate. ``none`` = the secret webhook URL is the credential; ``ha_auth``
     # validates the bearer via HA core; ``legacy`` validates it against this
     # module's own opaque tokens. Either failure emits the same 401 discovery
@@ -489,6 +484,21 @@ async def _async_handle_webhook(
     oauth_provider: LegacyOAuthProvider | None = cfg.get("oauth_provider")
     if oauth_provider is not None and not oauth_provider.validate_bearer(request):
         return _build_unauthorized_response(request)
+    return None
+
+
+async def _async_handle_webhook(
+    hass: HomeAssistant, webhook_id: str, request: web.Request
+) -> web.StreamResponse:
+    """Forward an MCP request to the loopback server and stream the reply back."""
+    domain_data = hass.data.get(DOMAIN)
+    cfg = domain_data.get(DATA_WEBHOOK) if isinstance(domain_data, dict) else None
+    if not isinstance(cfg, dict):
+        return web.Response(status=503, text="MCP server is not available")
+
+    auth_response = await _check_webhook_auth(request, cfg)
+    if auth_response is not None:
+        return auth_response
 
     target_url: str = cfg["target_url"]
     session: aiohttp.ClientSession = cfg["session"]

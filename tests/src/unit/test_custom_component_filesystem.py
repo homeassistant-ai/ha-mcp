@@ -884,9 +884,12 @@ class TestLegacyBackupServiceWiring:
 
         # The tools setup/unload bodies live in the ``_async_*_tools_entry``
         # helpers; the public entry points now dispatch on entry type to them.
+        # The legacy-backup handlers are built by module-level builders.
         from custom_components.ha_mcp_tools import (
             _async_setup_tools_entry,
             _async_unload_tools_entry,
+            _build_list_legacy_backups_handler,
+            _build_read_legacy_backup_handler,
         )
 
         setup_src = inspect.getsource(_async_setup_tools_entry)
@@ -895,7 +898,10 @@ class TestLegacyBackupServiceWiring:
         # Both handlers must token-gate before any FS access.
         assert "handle_list_legacy_backups" in setup_src
         assert "handle_read_legacy_backup" in setup_src
-        assert setup_src.count("_caller_token_ok") >= 2
+        handler_src = inspect.getsource(
+            _build_list_legacy_backups_handler
+        ) + inspect.getsource(_build_read_legacy_backup_handler)
+        assert handler_src.count("_caller_token_ok") >= 2
 
         unload_src = inspect.getsource(_async_unload_tools_entry)
         assert "SERVICE_LIST_LEGACY_BACKUPS" in unload_src
@@ -905,25 +911,22 @@ class TestLegacyBackupServiceWiring:
 class TestReadFileSecretsMaskingOrder:
     """secrets.yaml masking must survive the yaml_path/include_parsed views.
 
-    The masking holds only because ``handle_read_file`` captures
+    The masking holds only because ``_shape_read_file_response`` captures
     ``full_content`` AFTER ``_mask_secrets_content`` and extracts the views
     from that. Nothing else pins the ordering, so a future reorder that
     captured ``full_content`` from the raw text would leak plaintext secrets
     through ``subtree``/``parsed`` — the two views that did not exist when the
     masking was written. Source-level guard, per the file's existing wiring
-    guards: the handler is a closure inside the setup entry, so it cannot be
-    called directly from a unit test. The behavioural half runs e2e
+    guards. The behavioural half runs e2e
     (test_yaml_read.py::TestSecretsMasking).
     """
 
     def _handler_source(self) -> str:
         import inspect
 
-        from custom_components.ha_mcp_tools import _async_setup_tools_entry
+        from custom_components.ha_mcp_tools import _shape_read_file_response
 
-        src = inspect.getsource(_async_setup_tools_entry)
-        start = src.index("async def handle_read_file")
-        return src[start : src.index("async def handle_", start + 1)]
+        return inspect.getsource(_shape_read_file_response)
 
     def test_full_content_is_captured_after_masking(self):
         src = self._handler_source()
