@@ -117,7 +117,7 @@ async def test_prep_schedules_merged_update_preserving_other_keys() -> None:
     assert len(hass.scheduled) == 1
 
     # Drive the deferred task: now the merged options are applied, other keys kept.
-    await hass.scheduled[0]
+    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
     assert len(hass.config_entries.update_calls) == 1
     _applied_entry, applied_options = hass.config_entries.update_calls[0]
     assert applied_options == {
@@ -138,7 +138,7 @@ async def test_prep_pip_spec_applied_preserves_channel() -> None:
         {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "ha-mcp==2.0.0"},
     )
     assert extra["result"]["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
-    await hass.scheduled[0]
+    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
     _entry, applied = hass.config_entries.update_calls[0]
     assert applied == {"channel": "dev", "pip_spec": "ha-mcp==2.0.0"}
 
@@ -169,7 +169,13 @@ async def test_prep_no_server_entry_raises() -> None:
         domain="ha_mcp_tools", data={"entry_type": "tools"}, entry_id="tools1"
     )
     hass = _BgHass([tools])
-    with pytest.raises(_base._StubHomeAssistantError):
+    # Resolve HomeAssistantError at call time from whatever ``homeassistant.exceptions``
+    # is installed now — the prep's function-local import resolves the same stub, but a
+    # different test's ``_embedded_stubs.install()`` may have replaced the module since
+    # ``_base`` cached ``_StubHomeAssistantError`` (full-suite ordering).
+    from homeassistant.exceptions import HomeAssistantError
+
+    with pytest.raises(HomeAssistantError):
         await wsapi._server_entry_update_prep(
             hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "dev"}
         )
@@ -181,7 +187,9 @@ async def test_prep_requires_at_least_one_field() -> None:
     """A frame with neither channel nor pip_spec raises (defence-in-depth over the
     server, which always sends at least one)."""
     hass = _BgHass([_server_entry(options={"channel": "stable"})])
-    with pytest.raises(_base._StubHomeAssistantError):
+    from homeassistant.exceptions import HomeAssistantError
+
+    with pytest.raises(HomeAssistantError):
         await wsapi._server_entry_update_prep(
             hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE}
         )
@@ -198,7 +206,7 @@ async def test_prep_clearing_pip_spec_from_absent_schedules() -> None:
         hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": ""}
     )
     assert extra["result"]["scheduled"] is True
-    await hass.scheduled[0]
+    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
     _entry, applied = hass.config_entries.update_calls[0]
     assert applied == {"channel": "dev", "pip_spec": ""}
 
