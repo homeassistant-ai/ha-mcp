@@ -479,6 +479,17 @@ class TestRouteRegistration:
         # Nothing mounted → no hint prefix recorded (stays None, not "")
         assert get_http_settings_prefix() is None
 
+    def test_route_template_chars_not_mounted(self, monkeypatch):
+        # A braced secret path (e.g. an unrendered /private_{token} template)
+        # would compile to a Starlette wildcard route — drop the secret mount
+        # rather than expose it (GHSA-mx64-982r-65vg).
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        register_settings_routes(mcp, MagicMock(), secret_path="/private_{x}")
+        assert mcp.custom_route.call_count == 0
+        assert get_http_settings_prefix() is None
+
     def test_advertise_prefix_false_mounts_but_does_not_record(self, monkeypatch):
         # OAuth/OIDC dedicated-secret mount: routes are served, but the secret
         # prefix must NOT be recorded — otherwise ha_get_overview would leak it

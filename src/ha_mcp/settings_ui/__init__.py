@@ -577,6 +577,18 @@ def register_settings_routes(
     """
     handlers = build_settings_handlers(server)
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
+    if secret_prefix and ("{" in secret_prefix or "}" in secret_prefix):
+        # Starlette compiles {name} into a [^/]+ wildcard capture, so a braced
+        # secret path (e.g. an unrendered /private_{token} template) would mount
+        # these routes at a publicly-matching wildcard. Drop the secret mount
+        # rather than expose it (GHSA-mx64-982r-65vg); the add-on root mount below
+        # is unaffected.
+        logger.error(
+            "settings UI secret path %r contains route-template characters "
+            "('{{'/'}}'); not mounting under it (it would become a wildcard route).",
+            secret_prefix,
+        )
+        secret_prefix = ""
     is_addon = is_running_in_addon()
 
     if not is_addon and not secret_prefix:

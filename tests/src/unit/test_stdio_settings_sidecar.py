@@ -166,6 +166,14 @@ class TestSidecarDisableGates:
         monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "0")
         assert sidecar._is_disabled() is False
 
+    def test_env_var_unrecognized_disables(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Fail closed on a mistyped value — parity with the HTTP transports'
+        # _settings_ui_disabled.
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "disable")
+        assert sidecar._is_disabled() is True
+
     def test_sentinel_file_disables(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

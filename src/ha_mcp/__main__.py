@@ -1058,6 +1058,7 @@ def _log_settings_url(
     *,
     level: int = logging.INFO,
     note_autogen: bool = False,
+    base_url: str | None = None,
 ) -> None:
     """Log the web settings-UI URL at HTTP startup.
 
@@ -1069,8 +1070,24 @@ def _log_settings_url(
     ``level`` and ``note_autogen`` let the OAuth/OIDC dedicated-secret path log
     an auto-generated URL at WARNING (visible even when internet-facing
     deployments run at ``LOG_LEVEL=WARNING``), since that path rotates each
-    restart and is the only way for the admin to find it.
+    restart and is the only way for the admin to find it. ``base_url``, when
+    given (OAuth/OIDC modes, where it is the required public front), is used
+    verbatim instead of the local ``host:port`` — those deployments are reached
+    through a tunnel/proxy, not the bind address.
     """
+    if base_url:
+        url = f"{base_url.rstrip('/')}{path.rstrip('/')}/settings"
+        logger.log(
+            level,
+            f"Settings UI available at: {url}"
+            + (
+                "  [auto-generated, rotates each restart; "
+                "set MCP_SETTINGS_SECRET_PATH for a stable URL]"
+                if note_autogen
+                else ""
+            ),
+        )
+        return
     is_wildcard = host in ("0.0.0.0", "::")
     if is_wildcard:
         display_host = "<host>"
@@ -1091,7 +1108,9 @@ def _log_settings_url(
 
 # Truthy / falsy env-var spellings for HA_MCP_DISABLE_SETTINGS_UI, matching the
 # parsing in stdio_settings_sidecar.py so the toggle behaves the same across
-# transports. Values in neither set are unrecognized (warned about, UI served).
+# transports. A value in neither set is unrecognized: fail closed (disable) with
+# a warning, since this is a security kill switch and failing open on a typo
+# would leave an unauthenticated surface up.
 _SETTINGS_TRUTHY = {"1", "true", "yes", "on"}
 _SETTINGS_FALSY = {"0", "false", "no", "off", ""}
 
@@ -1100,22 +1119,26 @@ def _settings_ui_disabled() -> bool:
     """Return True when ``HA_MCP_DISABLE_SETTINGS_UI`` turns the settings UI off.
 
     Honored by every long-lived HTTP transport (standard ``ha-mcp-web`` /
-    ``ha-mcp-sse`` as well as OAuth/OIDC) and by the stdio sidecar, so the kill
-    switch behaves the same everywhere. Warns — rather than silently leaving the
-    UI served — on an unrecognized value, since a mistyped kill switch failing
-    open is the dangerous direction.
+    ``ha-mcp-sse`` as well as OAuth/OIDC) and, with matching semantics, by the
+    stdio sidecar. As a security kill switch it fails **closed**: any value that
+    is neither a recognized truthy nor falsy spelling disables the UI and warns
+    (so the operator learns why it vanished), rather than leaving an
+    unauthenticated surface up on a typo. Unset — or an explicit falsy value —
+    keeps the UI served.
     """
     disable = os.getenv("HA_MCP_DISABLE_SETTINGS_UI", "").strip().lower()
-    if disable in _SETTINGS_TRUTHY:
-        return True
-    if disable not in _SETTINGS_FALSY:
+    if disable in _SETTINGS_FALSY:
+        return False
+    if disable not in _SETTINGS_TRUTHY:
         logger.warning(
-            "HA_MCP_DISABLE_SETTINGS_UI=%r is not a recognized on/off value; the "
-            "settings UI remains served. Use one of %s to disable it.",
+            "HA_MCP_DISABLE_SETTINGS_UI=%r is not a recognized on/off value; "
+            "disabling the settings UI (fail-closed). Use one of %s to disable, "
+            "or one of %s to keep it served.",
             disable,
             ", ".join(sorted(_SETTINGS_TRUTHY)),
+            ", ".join(sorted(s for s in _SETTINGS_FALSY if s)),
         )
-    return False
+    return True
 
 
 def _resolve_settings_secret_path() -> str | None:
@@ -1145,6 +1168,7 @@ def _register_settings_ui_secret_path(
     host: str,
     port: int,
     mcp_path: str,
+    base_url: str,
 ) -> None:
     """Register the settings UI behind a dedicated secret path (OAuth/OIDC modes).
 
@@ -1181,6 +1205,19 @@ def _register_settings_ui_secret_path(
             "/" + settings_path,
         )
         settings_path = "/" + settings_path
+    if "{" in settings_path or "}" in settings_path:
+        # Starlette compiles {name} into a wildcard capture, so a braced path
+        # (an unrendered /private_{token} template, or a literal paste of the
+        # docs' /private_<token> convention) would mount the settings routes as a
+        # publicly-matching wildcard — the exact exposure this guards against.
+        logger.error(
+            "MCP_SETTINGS_SECRET_PATH (%r) contains route-template characters "
+            "('{{'/'}}'), which Starlette would turn into a wildcard route, "
+            "re-exposing the settings UI (GHSA-mx64-982r-65vg). Use a literal path "
+            "or unset it to auto-generate; settings UI not registered.",
+            settings_path,
+        )
+        return
     if not settings_path.rstrip("/"):
         logger.error(
             "MCP_SETTINGS_SECRET_PATH must be a non-empty absolute path like "
@@ -1203,13 +1240,15 @@ def _register_settings_ui_secret_path(
     )
     # Auto-generated paths rotate each restart and are the only way the admin can
     # find the UI, so log them at WARNING to survive LOG_LEVEL=WARNING; an
-    # explicit path the admin already knows stays at INFO.
+    # explicit path the admin already knows stays at INFO. OAuth/OIDC are fronted
+    # by MCP_BASE_URL (a public HTTPS tunnel/proxy), so log that, not host:port.
     _log_settings_url(
         host,
         port,
         settings_path,
         level=logging.INFO if explicit else logging.WARNING,
         note_autogen=not explicit,
+        base_url=base_url,
     )
 
 
@@ -1401,7 +1440,7 @@ async def _run_oauth_server(
 
     # The settings UI must not sit at the OAuth-known MCP path (custom routes
     # bypass the OAuth auth middleware); mount it behind a dedicated secret path.
-    _register_settings_ui_secret_path(mcp, _server, host, port, path)
+    _register_settings_ui_secret_path(mcp, _server, host, port, path, base_url)
 
     tools = await mcp.list_tools()
     logger.info(
@@ -1597,7 +1636,7 @@ async def _run_oidc_server(
     # The settings UI *is* served, but only behind a dedicated secret path
     # (never the OIDC-known MCP path, whose custom routes bypass the auth
     # middleware — GHSA-mx64-982r-65vg).
-    _register_settings_ui_secret_path(mcp_instance, _server, host, port, path)
+    _register_settings_ui_secret_path(mcp_instance, _server, host, port, path, base_url)
     if _healthz_enabled():
         _register_healthz_route(mcp_instance)
     logger.info(f"Starting OIDC-enabled MCP server at {base_url}{path}")

@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 # importing from the tools subpackage because this module is loaded
 # during early stdio startup, before any tool code is touched.
 _TRUTHY = {"1", "true", "yes", "on"}
+_FALSY = {"0", "false", "no", "off", ""}
 
 
 def _sidecar_dir() -> Path:
@@ -109,7 +110,18 @@ def read_sidecar_url() -> str | None:
 
 def _is_disabled() -> bool:
     """Check whether the sidecar should be skipped."""
-    if os.environ.get("HA_MCP_DISABLE_SETTINGS_UI", "").strip().lower() in _TRUTHY:
+    val = os.environ.get("HA_MCP_DISABLE_SETTINGS_UI", "").strip().lower()
+    if val in _TRUTHY:
+        return True
+    if val and val not in _FALSY:
+        # Fail closed on an unrecognized value (same semantics as the HTTP
+        # transports' _settings_ui_disabled), and warn so the operator sees why
+        # the settings UI never came up.
+        logger.warning(
+            "HA_MCP_DISABLE_SETTINGS_UI=%r is not a recognized on/off value; "
+            "skipping the settings-UI sidecar (fail-closed).",
+            val,
+        )
         return True
     return _disabled_sentinel().exists()
 
