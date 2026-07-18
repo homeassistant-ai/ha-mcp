@@ -56,6 +56,12 @@ COMPONENT_DOMAIN = "ha_mcp_tools"
 # ha_mcp_tools-domain entry's options-flow schema from the outside.
 WS_SERVER_ENTRY = "ha_mcp_tools/server_entry"
 
+# The WRITE counterpart: applies a channel / pip_spec delta to the server entry via
+# ``async_update_entry`` directly (embedded mode only — see
+# ``_update_source_via_component``), collapsing update_source's options-flow start +
+# submit round-trip. Gated on the ``server_entry_update`` capability.
+WS_SERVER_ENTRY_UPDATE = "ha_mcp_tools/server_entry_update"
+
 # Options-flow field names of the component's server entry
 # (custom_components/ha_mcp_tools/const.py OPT_CHANNEL / OPT_PIP_SPEC).
 _OPT_CHANNEL = "channel"
@@ -1012,6 +1018,23 @@ class DevTools:
                 )
             )
         entry_id, flow, current = found
+
+        if is_embedded():
+            # Embedded self-reload: prefer the component's one-hop direct write
+            # (async_update_entry) over the options-flow start+submit. On ANY
+            # component error this returns None and we fall through to the legacy
+            # submit below (unchanged). Non-embedded deployments never route here —
+            # they reload the SEPARATE in-process server entry synchronously and
+            # keep this connection, so the collapse buys nothing there.
+            component_result = await self._update_source_via_component(
+                channel, pip_spec
+            )
+            if component_result is not None:
+                # The component located and will update the entry itself; the flow
+                # find_server_config_entry opened for the legacy path is unused.
+                await abort_options_flow_quietly(self._client, flow)
+                return component_result
+
         # Resend the user's current overrides (see _PRESERVED_OPTION_KEYS) so a
         # channel/pip-spec change here does not blank them — an omitted optional
         # field reads as "cleared", not "unchanged".
@@ -1086,6 +1109,108 @@ class DevTools:
                 ),
             },
         }
+
+    async def _update_source_via_component(
+        self, channel: str | None, pip_spec: str | None
+    ) -> dict[str, Any] | None:
+        """Apply the channel/pip_spec delta via the component's direct write.
+
+        Embedded-only fast path: when the component advertises
+        ``server_entry_update``, one ``ha_mcp_tools/server_entry_update`` frame
+        applies the delta through ``async_update_entry`` directly — the component
+        merges it against its LIVE ``entry.options`` (so no preserved-key resend is
+        needed) and schedules the resulting self-reload after a flush delay. Returns
+        the final ``{success, data}`` envelope, or ``None`` to fall back to the
+        legacy options-flow submit.
+
+        The write is IDEMPOTENT (it targets a specific merged options set), so —
+        unlike ``ha_call_service`` — a post-send ambiguity is harmless: EVERY
+        component error (capability miss, unknown_command, connection/timeout, or a
+        malformed reply) returns ``None``, and the legacy submit then re-applies the
+        SAME delta, which the entry's ``DATA_LAST_OPTIONS`` guard collapses to a
+        no-op reload if the component's write already landed. ``unknown_command``
+        additionally invalidates the cached caps so the next call re-probes.
+        """
+        caps = await get_component_caps(self._client)
+        if not component_supports(caps, "server_entry_update"):
+            return None
+        try:
+            ws = await get_websocket_client(
+                url=self._client.base_url, token=self._client.token
+            )
+        except Exception as exc:
+            logger.warning(
+                "%s establishment failed; falling back to legacy: %r",
+                WS_SERVER_ENTRY_UPDATE,
+                exc,
+            )
+            return None
+        deltas: dict[str, Any] = {}
+        if channel is not None:
+            deltas[_OPT_CHANNEL] = channel
+        if pip_spec is not None:
+            deltas[_OPT_PIP_SPEC] = pip_spec
+        try:
+            raw = await ws.send_command(WS_SERVER_ENTRY_UPDATE, **deltas)
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+            if is_unknown_command(exc):
+                invalidate_caps(self._client)
+            else:
+                logger.warning(
+                    "%s command error; falling back to legacy: %r",
+                    WS_SERVER_ENTRY_UPDATE,
+                    exc,
+                )
+            return None
+        except Exception as exc:
+            # HomeAssistantConnectionError (pooled-WS drop) or a plain post-send
+            # transport failure. The write is idempotent, so a legacy re-apply is
+            # safe (see docstring) — fall back rather than report a phantom error.
+            logger.warning(
+                "%s connection error; falling back to legacy: %r",
+                WS_SERVER_ENTRY_UPDATE,
+                exc,
+            )
+            return None
+        result = raw.get("result")
+        if not isinstance(result, dict) or not (
+            result.get("scheduled") or result.get("unchanged")
+        ):
+            logger.warning(
+                "%s returned an unusable result; falling back to legacy: %r",
+                WS_SERVER_ENTRY_UPDATE,
+                result,
+            )
+            return None
+        return {"success": True, "data": self._component_update_data(result)}
+
+    @staticmethod
+    def _component_update_data(result: dict[str, Any]) -> dict[str, Any]:
+        """Map a ``server_entry_update`` component reply into update_source's data.
+
+        Mirrors the legacy embedded branch's ``scheduled:true`` shape
+        (entry_id/applying/previous/note); a no-op reply carries ``unchanged`` and
+        its own note instead.
+        """
+        data: dict[str, Any] = {
+            "scheduled": bool(result.get("scheduled")),
+            "entry_id": result.get("entry_id"),
+            "applying": result.get("applying"),
+            "previous": result.get("previous"),
+        }
+        if result.get("unchanged"):
+            data["unchanged"] = True
+            data["note"] = (
+                "No change: the requested channel/pip_spec already matches the "
+                "current in-process server source."
+            )
+        else:
+            data["note"] = (
+                "The in-process server will reinstall and restart now; this "
+                "connection will drop. Reconnect in 1-5 minutes and verify with "
+                "ha_dev_manage_server('info')."
+            )
+        return data
 
     async def _restart_server(self) -> dict[str, Any]:
         if is_embedded():
