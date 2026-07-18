@@ -250,12 +250,10 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "py/clear-text-storage-sensitive-data",
         "homeassistant-addon-webhook-proxy/start.py",
         "as clear text",
-        "Stable flavor pending promote: the creds file uses _atomic_write_0600 "
-        "with a warned plain-write fallback; the proxy-config handoff write "
-        "gained the same 0600-first treatment on the dev flavor (v2.0.3.dev1) "
-        "and reaches this tree via the promote workflow — the stable-guard "
-        "blocks editing it directly here. Remove the plain-write half of this "
-        "reason after the next promote.",
+        "Warned fallbacks: both the creds file and the proxy-config handoff "
+        "file write via _atomic_write_0600; the flagged plain writes only run "
+        "when the filesystem cannot honor 0600 and each logs a warning. "
+        "Persistence is the feature.",
     ),
     (
         "py/clear-text-storage-sensitive-data",
