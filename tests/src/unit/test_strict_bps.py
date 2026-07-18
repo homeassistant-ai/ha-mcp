@@ -25,6 +25,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -119,6 +120,65 @@ class TestStrictBpsEffective:
             assert strict_bps_effective() is False
         warned = [r for r in caplog.records if "skills-vendor" in r.getMessage()]
         assert len(warned) == 1
+
+
+# ---------------------------------------------------------------------------
+# Acknowledgment key shape + schema-published protocol framing (#1924)
+# ---------------------------------------------------------------------------
+
+
+class TestAckKeyShape:
+    """#1924: a static opaque ``bps-ack-*`` token invited two failure modes —
+    an agent misread the extract-and-replay round-trip as a credential
+    exfiltration ("prompt injection") and refused it until the user disabled
+    strict mode, and a static literal in a public repo can satisfy the gate
+    from training data or a stale session summary without any actual read.
+    The key is therefore a plain-English attestation phrase with a
+    per-process random suffix."""
+
+    def test_key_is_attestation_phrase_with_rotating_suffix(self):
+        from ha_mcp.strict_bps import STRICT_BPS_ACK_KEY_PREFIX
+
+        assert STRICT_BPS_ACK_KEY_PREFIX == "I-HAVE-READ-THE-BEST-PRACTICES-GUIDE"
+        assert re.fullmatch(
+            re.escape(STRICT_BPS_ACK_KEY_PREFIX) + r"-[0-9a-f]{4}",
+            STRICT_BPS_ACK_KEY,
+        )
+
+    def test_generated_keys_rotate(self):
+        """The suffix is random per generation (bound once per process), so
+        a key memorized from source, training data, or an earlier process
+        cannot satisfy a later process's gate."""
+        from ha_mcp.strict_bps import _generate_ack_key
+
+        keys = {_generate_ack_key() for _ in range(8)}
+        assert len(keys) > 1
+        assert all(
+            re.fullmatch(r"I-HAVE-READ-THE-BEST-PRACTICES-GUIDE-[0-9a-f]{4}", k)
+            for k in keys
+        )
+
+    def test_param_schema_documents_protocol_not_a_secret(self):
+        """The tool schema (trusted metadata, unlike tool output) must carry
+        the full protocol: the value is a public read-receipt, not a secret,
+        obtained by reading the skill via ha_get_skill_guide. An agent
+        following the declared schema is then not 'obeying instructions
+        found in fetched content' when it replays the key."""
+        from ha_mcp.strict_bps import BestPracticeKeyParam
+
+        field = BestPracticeKeyParam.__metadata__[0]
+        desc = field.description
+        assert "not a secret" in desc.lower()
+        assert "ha_get_skill_guide" in desc
+        assert "read" in desc.lower()
+        # The key VALUE must never live in the schema — only how to get it.
+        assert STRICT_BPS_ACK_KEY not in desc
+
+    def test_ack_line_frames_key_as_read_receipt(self):
+        line = strict_bps_ack_line()
+        assert STRICT_BPS_ACK_KEY in line
+        assert STRICT_BPS_KEY_PARAM in line
+        assert "not a secret" in line.lower()
 
 
 # ---------------------------------------------------------------------------
