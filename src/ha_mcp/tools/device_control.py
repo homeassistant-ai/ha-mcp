@@ -41,6 +41,7 @@ from .helpers import (
     safe_info,
     safe_progress,
 )
+from .util_helpers import _SERVICE_TO_STATE
 
 logger = logging.getLogger(__name__)
 
@@ -734,9 +735,10 @@ class DeviceControlTools:
         Verb resolution stays server-side (D6): reuses the SAME
         ``get_domain_handler`` / ``_resolve_service_name`` / ``_build_service_call``
         the legacy path uses, so the component receives only a fully-resolved
-        ``{domain, service, service_data, entity_ids}`` row and never guesses a
-        service name. ``entity_ids`` is the confirmation target; ``service_data``
-        already folds in the entity_id so the dispatch targets it.
+        ``{domain, service, service_data, entity_ids, expected_state}`` row and never
+        guesses a service name. ``entity_ids`` is the confirmation target;
+        ``service_data`` already folds in the entity_id so the dispatch targets it;
+        ``expected_state`` is the per-op confirmation hint (``_SERVICE_TO_STATE``).
 
         Returns ``None`` for any op the legacy path would reject with a structured
         per-op error (a malformed entity_id, an action outside the domain handler, or
@@ -763,6 +765,11 @@ class DeviceControlTools:
             "service": service_call["service"],
             "service_data": service_call["data"],
             "entity_ids": [entity_id],
+            # Confirmation HINT (see util_helpers._SERVICE_TO_STATE): the expected
+            # primary state after this op's service, or None. The component confirms
+            # only on REACHING it (skipping intermediate/noise events) and immediate-
+            # matches an idempotent no-op; a None hint keeps any-first-event behavior.
+            "expected_state": _SERVICE_TO_STATE.get(service_call["service"]),
         }
 
     def _map_component_op_result(

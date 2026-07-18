@@ -122,8 +122,12 @@ and ``info`` itself carries no capability entry):
   ``hass.services.async_call`` in-process and returns the REAL pre→post state
   transition for the target ``entity_ids`` — event-confirmed via an
   ``EVENT_STATE_CHANGED`` listener registered BEFORE the dispatch (closing the
-  fast-entity race), not a hardcoded service→state guess. All awaiting work (the
-  dispatch, the bounded confirmation wait) runs in :func:`_call_service_prep`;
+  fast-entity race). The server's optional ``expected_state`` hint governs only WHEN
+  the confirming state is settled — the waiter confirms on reaching it (skipping a
+  multi-phase service's intermediate states and attribute-only noise) and immediate-
+  matches an idempotent no-op — but the RETURNED transition is always the real
+  observed one, never the hint. All awaiting work (the dispatch, the immediate-match,
+  the bounded confirmation wait) runs in :func:`_call_service_prep`;
   :func:`_do_call_service` is a pure formatter. An AUTHORITATIVE component-side
   domain block refuses ``domain == "ha_mcp_tools"`` (case/whitespace-normalized)
   BEFORE any ``has_service``/dispatch, independent of (and in addition to) the
@@ -774,6 +778,14 @@ def _call_service_schema() -> dict[Any, Any]:
             vol.Any(int, float), vol.Range(min=0, max=CALL_SERVICE_MAX_TIMEOUT)
         ),
         vol.Optional("return_response", default=False): bool,
+        # Optional confirmation HINT (the server's ``_SERVICE_TO_STATE.get(service)``,
+        # or None): the expected primary state the waiter confirms on REACHING —
+        # skipping a multi-phase service's intermediate states and attribute-only
+        # noise — and immediate-matches for an idempotent no-op. Optional/default-None
+        # so a server that does not send it (or a non-mapped service) keeps today's
+        # any-first-event confirmation. It governs confirmation TIMING only; the
+        # returned transition is always the REAL observed one.
+        vol.Optional("expected_state"): vol.Any(str, None),
     }
 
 
@@ -792,6 +804,10 @@ def _bulk_call_service_schema() -> dict[Any, Any]:
         vol.Required("service"): str,
         vol.Optional("service_data", default=dict): dict,
         vol.Optional("entity_ids", default=list): [str],
+        # Per-op confirmation HINT (see ``_call_service_schema``): optional/default-
+        # None so an older server (or a non-mapped service) keeps any-first-event
+        # confirmation for that op.
+        vol.Optional("expected_state"): vol.Any(str, None),
     }
     return {
         vol.Required("type"): WS_BULK_CALL_SERVICE,
@@ -5065,12 +5081,13 @@ def _do_call_service(
     """Pure sync formatter for ``call_service``.
 
     ALL of the work — the authoritative domain block, the ``ServiceNotFound``
-    check, the pre-state capture, the register-before-fire listener, the single
-    ``async_call`` dispatch, and the bounded confirmation wait — happens in the
-    async :func:`_call_service_prep`, which hands the finished result dict in as
-    ``result``. This function only returns that envelope (mirroring every other
-    ``_do_*``: the WS wrapper's ``send_result`` adds the outer success frame), so
-    no awaiting / blocking work ever runs in a ``_do_*`` step (D2).
+    check, the pre-state capture, the expected-aware register-before-fire listener,
+    the single ``async_call`` dispatch, the immediate-match, and the bounded
+    confirmation wait — happens in the async :func:`_call_service_prep`, which hands
+    the finished result dict in as ``result``. This function only returns that
+    envelope (mirroring every other ``_do_*``: the WS wrapper's ``send_result`` adds
+    the outer success frame), so no awaiting / blocking work ever runs in a ``_do_*``
+    step (D2).
     """
     return result
 
@@ -5093,13 +5110,18 @@ async def _call_service_prep(
     2. **ServiceNotFound** before dispatch, so an unknown service is a clean
        ``SERVICE_NOT_FOUND`` and never a landed-but-unreported write.
     3. Pre-state capture for each ``entity_id`` (a synchronous in-memory read).
-    4. Register the ``EVENT_STATE_CHANGED`` listener BEFORE the dispatch (D5) so a
-       fast entity's event can't arrive before the listener exists.
+    4. Register the expected-aware ``EVENT_STATE_CHANGED`` waiter BEFORE the dispatch
+       (D5) so a fast entity's event can't arrive before the listener exists. The
+       waiter confirms only on reaching the server's ``expected_state`` hint (skipping
+       intermediate/noise events); a ``None`` hint keeps any-first-event confirmation.
     5. Fire exactly ONE ``async_call`` (``blocking=True``); flip ``dispatched``
        immediately after so a post-dispatch problem is never retried as a failed
        call (D3/D9).
-    6. Bounded wait for the target transitions (D4); expiry is ``partial``.
-    7. Diff pre→post into the real transition(s).
+    6. Immediate-match (:func:`_match_immediate`) for an idempotent no-op — a target
+       whose CURRENT state already equals its hint confirms with NO wait — then a
+       bounded wait for whatever is still unconfirmed (D4); expiry is ``partial``.
+    7. Diff pre→post into the real transition(s) — the REAL observed transition, never
+       the hint value.
 
     Raised exceptions PROPAGATE — the WS handler turns them into a command error the
     server maps (D7). Two distinct classes propagate: the D1 domain block and
@@ -5109,18 +5131,19 @@ async def _call_service_prep(
     residual, NOT pre-dispatch). A confirmation timeout is caught and reported as
     ``partial`` (never re-raised): the call already landed.
 
-    POST-dispatch formatting (step 7) is wrapped so it never raises past this point
-    (I1): once ``async_call`` fired, a formatting raise that reached the WS handler
-    would be mapped to legacy and re-POST an already-landed write. The attribute diff
-    is raise-proofed (:func:`_values_differ`), and the whole build is caught, degrading
-    to a minimal dispatched-but-unconfirmed envelope. Serialization residual (bounded,
-    no sanitize pass): the transition embeds each state's ``as_dict()`` and the WS
-    transport re-encodes it; HA core enforces JSON-serializable state attributes for
-    its own REST/WS/recorder APIs, so a state that reached the component already
-    serializes — re-encoding it here is safe.
+    The whole POST-dispatch section — the immediate-match re-read, the wait, and the
+    pre→post diff — runs inside ONE ``try`` that, once ``dispatched`` is True, never
+    lets a raise escape (I1): a raise mapped to a command error would re-POST an
+    already-landed write. A pre-confirmation ``async_call`` failure (``dispatched``
+    still False) re-raises so the server can map it; any post-dispatch failure degrades
+    to a minimal dispatched-but-unconfirmed envelope. The immediate-match re-read is
+    itself raise-proof (:func:`_match_immediate`), the attribute diff is raise-proofed
+    (:func:`_values_differ`), and ``unsub`` always runs in the ``finally``.
+    Serialization residual (bounded, no sanitize pass): the transition embeds each
+    state's ``as_dict()`` and the WS transport re-encodes it; HA core enforces
+    JSON-serializable state attributes for its own REST/WS/recorder APIs, so a state
+    that reached the component already serializes — re-encoding it here is safe.
     """
-    import asyncio
-
     domain = msg["domain"]
     service = msg["service"]
 
@@ -5135,6 +5158,10 @@ async def _call_service_prep(
     timeout = msg.get("timeout", CALL_SERVICE_DEFAULT_TIMEOUT)
     return_response = msg.get("return_response", False)
     should_confirm = bool(wait and entity_ids)
+    # The server's confirmation HINT (``_SERVICE_TO_STATE.get(service)``), applied to
+    # every confirmation target. Absent / None keeps any-first-event confirmation.
+    expected_state = msg.get("expected_state")
+    expected_by_entity = {eid: expected_state for eid in entity_ids}
 
     # 3. Pre-state capture (synchronous in-memory reads, guarded against drift).
     pre = {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids}
@@ -5144,11 +5171,17 @@ async def _call_service_prep(
     captured: dict[str, Any] = {}
     unsub: Any = None
     if should_confirm:
-        evt, captured, unsub = _register_transition_waiter(hass, set(entity_ids))
+        evt, captured, unsub = _register_transition_waiter(
+            hass, set(entity_ids), expected_by_entity
+        )
 
-    # 5. Dispatch exactly once; 6. bounded confirmation wait. ``unsub`` always runs.
+    # 5. Dispatch exactly once. 6. Immediate-match + bounded wait. 7. Build the diff.
+    # Everything after ``dispatched = True`` is inside this ONE try so no post-dispatch
+    # raise (a drifted re-read, an exotic-attribute diff) escapes (I1) — that would be
+    # mapped to legacy and re-POST an already-landed write. ``unsub`` always runs.
     response: Any = None
     dispatched = False
+    result: dict[str, Any]
     try:
         response = await hass.services.async_call(
             domain,
@@ -5159,20 +5192,9 @@ async def _call_service_prep(
         )
         dispatched = True
         if should_confirm:
-            try:
-                await asyncio.wait_for(evt.wait(), timeout)
-            except TimeoutError:
-                pass  # partial confirmation, not a failure (D4)
-    finally:
-        if unsub is not None:
-            unsub()
-
-    # 7. Post-state + real pre→post diff. Once dispatched, formatting MUST be total
-    # (I1): the single async_call already fired, so a raise here would surface as a
-    # command error the server maps to legacy → a re-POST of an already-landed write
-    # (double-apply). On any failure return a minimal dispatched-but-unconfirmed
-    # envelope instead of propagating.
-    try:
+            await _await_confirmation(
+                hass, entity_ids, expected_by_entity, captured, evt, timeout
+            )
         result = _build_call_service_result(
             hass,
             domain,
@@ -5186,13 +5208,21 @@ async def _call_service_prep(
             response=response,
         )
     except Exception:
+        # PRE-confirmation ``async_call`` failure (never dispatched) → re-raise so the
+        # server maps it (D7/D9 MID-dispatch residual). Any POST-dispatch failure →
+        # degrade to a minimal dispatched-but-unconfirmed envelope (never re-POSTed).
+        if not dispatched:
+            raise
         _LOGGER.exception(
-            "call_service post-dispatch formatting failed after dispatch; "
-            "returning dispatched-but-unconfirmed envelope (%s.%s)",
+            "call_service post-dispatch step failed after dispatch; returning "
+            "dispatched-but-unconfirmed envelope (%s.%s)",
             domain,
             service,
         )
         result = _dispatched_unconfirmed_result(domain, service)
+    finally:
+        if unsub is not None:
+            unsub()
     return {"result": result}
 
 
@@ -5222,16 +5252,40 @@ def _guard_call_service_target(hass: HomeAssistant, domain: str, service: str) -
         raise ServiceNotFound(domain, service)
 
 
+def _event_state_value(state: Any) -> Any:
+    """The primary state string from a ``State`` object OR an ``as_dict()`` mapping.
+
+    Raise-proof: an exotic/stub shape (or a ``.state`` accessor that raises) degrades
+    to ``None`` so the expected-aware waiter and the post-dispatch immediate-match can
+    never propagate past the dispatch (I1). ``None`` never equals a (str) expected
+    hint, so an unreadable state simply does not confirm — it keeps waiting.
+    """
+    try:
+        if isinstance(state, Mapping):
+            return state.get("state")
+        return getattr(state, "state", None)
+    except Exception:  # pragma: no cover - defensive; exotic/stub shapes
+        return None
+
+
 def _register_transition_waiter(
-    hass: HomeAssistant, target_set: set[str]
+    hass: HomeAssistant, target_set: set[str], expected_by_entity: Mapping[str, Any]
 ) -> tuple[Any, dict[str, Any], Any]:
     """Register the ``EVENT_STATE_CHANGED`` listener BEFORE the dispatch (D5).
 
     Returns ``(evt, captured, unsub)``: ``evt`` is set once every id in
-    ``target_set`` has reported a ``new_state``; ``captured`` maps each id to its
-    raw new_state; ``unsub`` tears the listener down. Registering before the
+    ``target_set`` has reported a CONFIRMING ``new_state``; ``captured`` maps each id
+    to its raw new_state; ``unsub`` tears the listener down. Registering before the
     dispatch closes the race where a fast entity's event arrives before the
     listener exists.
+
+    ``expected_by_entity`` supplies each target's server-computed expected-state HINT
+    (``_SERVICE_TO_STATE``). With a hint, ONLY the event that reaches that state
+    confirms — a multi-phase service's intermediate states (``lock``:
+    unlocked→locking→locked) and attribute-only noise (a ``media_player`` position
+    tick while ``state`` stays "playing") are skipped, NOT captured. With no hint
+    (``None``, e.g. ``set_temperature``) any first ``new_state`` confirms — today's
+    unchanged behavior.
     """
     import asyncio
 
@@ -5243,14 +5297,19 @@ def _register_transition_waiter(
     def _on_change(event: Any) -> None:
         data = getattr(event, "data", None) or {}
         eid = data.get("entity_id")
+        new = data.get("new_state")
         # M-newstate-none: a state_changed with new_state=None means the entity was
         # REMOVED mid-wait — that is not a confirmed transition, so do NOT capture it
         # (leaving the target uncaptured keeps the op ``partial``, not falsely
         # confirmed). ``_post_state`` still re-reads a best-available current state.
-        if eid in target_set and data.get("new_state") is not None:
-            captured[eid] = data.get("new_state")
-            if target_set <= set(captured):
-                evt.set()
+        if eid in target_set and new is not None:
+            exp = expected_by_entity.get(eid)
+            # Hint present → confirm ONLY on reaching the expected state (skip
+            # intermediate/noise events). Hint None → any first event confirms.
+            if exp is None or _event_state_value(new) == exp:
+                captured[eid] = new
+                if target_set <= set(captured):
+                    evt.set()
 
     # Mark the listener a HA callback so ``EventBus.async_listen`` classifies its
     # ``HassJob`` as ``HassJobType.Callback`` and runs it INLINE on the event loop
@@ -5268,6 +5327,65 @@ def _register_transition_waiter(
 
     unsub = hass.bus.async_listen(EVENT_STATE_CHANGED, _on_change)
     return evt, captured, unsub
+
+
+def _match_immediate(
+    hass: HomeAssistant,
+    entity_ids: list[str],
+    expected_by_entity: Mapping[str, Any],
+    captured: dict[str, Any],
+) -> None:
+    """Capture a target whose CURRENT state already equals its expected hint.
+
+    Mirrors legacy's "sample current state first": for each not-yet-captured target
+    with a known expected state, re-read the live state right after ``async_call``
+    returns and, if it already equals the expected value, capture it as confirmation
+    so NO wait is needed — a ``turn_on`` on an already-on light confirms instantly
+    (pre == expected == "on") instead of timing out to a false ``partial``. No-hint
+    targets (``exp is None``) are left for the any-first-event waiter — unchanged.
+
+    Called AFTER the dispatch, so it MUST be raise-proof (I1): a re-read that raised
+    and reached the WS handler would be mapped to legacy and re-POST an already-landed
+    write. ``_state_get`` is guarded (``None`` on drift) and ``_event_state_value`` is
+    raise-proof, so this never propagates past dispatch. ``captured`` is mutated in
+    place with the raw ``State`` (``_post_state``/``_state_as_dict`` normalize it, the
+    same shape the waiter captures).
+    """
+    for eid in entity_ids:
+        exp = expected_by_entity.get(eid)
+        if exp is None or eid in captured:
+            continue
+        cur = _state_get(hass, eid)
+        if cur is not None and _event_state_value(cur) == exp:
+            captured[eid] = cur
+
+
+async def _await_confirmation(
+    hass: HomeAssistant,
+    entity_ids: list[str],
+    expected_by_entity: Mapping[str, Any],
+    captured: dict[str, Any],
+    evt: Any,
+    timeout: float,
+) -> None:
+    """Immediate-match the idempotent no-ops, then bounded-wait whatever remains (D4).
+
+    Runs AFTER the single ``async_call``: :func:`_match_immediate` captures a target
+    whose current state already equals its hint (a ``turn_on`` on an already-on light)
+    with NO wait; the bounded wait runs only if some target is still unconfirmed and
+    its expiry is swallowed (``partial``, never a failure). Kept as its own helper so
+    :func:`_call_service_prep` stays under the complexity gate; raise-proof re-read
+    (``_match_immediate``), so nothing here escapes past the dispatch (I1).
+    """
+    import asyncio
+
+    _match_immediate(hass, entity_ids, expected_by_entity, captured)
+    if set(entity_ids) <= set(captured):
+        return  # every target confirmed by the immediate-match — no wait needed
+    try:
+        await asyncio.wait_for(evt.wait(), timeout)
+    except TimeoutError:
+        pass  # partial confirmation, not a failure (D4)
 
 
 def _build_call_service_result(
@@ -5404,10 +5522,10 @@ def _do_bulk_call_service(
     """Pure sync formatter for ``bulk_call_service``.
 
     Like :func:`_do_call_service`, ALL of the work — the per-op D1 domain block,
-    the ``ServiceNotFound`` checks, the register-before-fire pass, the dispatches,
-    and the one bounded batch wait — happens in the async
-    :func:`_bulk_call_service_prep`, which hands the finished envelope in as
-    ``result``. This function only returns it, so no awaiting / blocking work runs
+    the ``ServiceNotFound`` checks, the expected-aware register-before-fire pass, the
+    dispatches, the per-op immediate-match, and the one bounded batch wait — happens
+    in the async :func:`_bulk_call_service_prep`, which hands the finished envelope in
+    as ``result``. This function only returns it, so no awaiting / blocking work runs
     in a ``_do_*`` step (D2).
     """
     return result
@@ -5431,7 +5549,8 @@ async def _bulk_call_service_prep(
        through in a batch (register-before-fire + all-guards-first means a refused
        op aborts before any real write lands).
     2. Pre-state capture for every op's ``entity_ids`` (synchronous in-memory).
-    3. Register ALL confirmation listeners in one pass BEFORE any dispatch; every
+    3. Register ALL expected-aware confirmation listeners in one pass BEFORE any
+       dispatch (each op's ``expected_state`` hint governs its waiter); every
        ``unsub`` is torn down in the ``finally``.
     4. Dispatch: ``parallel`` fans the ``async_call``s out through
        :func:`asyncio.gather` with ``return_exceptions=True`` so one op's failure
@@ -5439,8 +5558,10 @@ async def _bulk_call_service_prep(
        UNLIKE the step-1 guards, which DO raise the whole frame pre-dispatch);
        ``parallel=False`` awaits them in order. Each op flips its own ``dispatched``
        flag the moment its ``async_call`` returns.
-    5. Bounded wait (D4): ONE shared deadline across the batch (not per-op serial
-       timeouts) for every confirmable, dispatched op's transition.
+    5. Immediate-match per dispatched op (:func:`_bulk_match_immediate`) — an
+       idempotent no-op whose current state already equals its hint confirms with no
+       wait — then ONE shared bounded deadline (D4, not per-op serial timeouts) for
+       every op still unconfirmed.
     6. Per-op pre→post diff, reusing the single-call transition/build helpers.
     7. Return every op's result plus batch counts.
     """
@@ -5463,7 +5584,8 @@ async def _bulk_call_service_prep(
     unsubs = _bulk_register_all(hass, ops)
     try:
         await _bulk_dispatch_all(hass, ops, parallel=parallel)  # 4
-        await _bulk_wait_all(ops, timeout)  # 5 (one shared deadline; expiry=partial)
+        _bulk_match_immediate(hass, ops)  # 5a immediate-match idempotent no-ops
+        await _bulk_wait_all(ops, timeout)  # 5b (one shared deadline; expiry=partial)
     finally:
         for unsub in unsubs:
             unsub()
@@ -5489,19 +5611,23 @@ def _bulk_op_record(
 ) -> dict[str, Any]:
     """A mutable working record for one batch operation (incl. its pre-state).
 
-    Reads the resolved ``{domain, service, service_data?, entity_ids?}`` row
-    defensively (the direct-prep tests pass raw dicts that never went through the
-    schema, so the mutable defaults are re-applied here). ``pre`` is the synchronous
-    in-memory pre-state per target; ``dispatched`` / ``error`` / ``response`` start
-    empty and are filled during dispatch; ``should_confirm`` is true only when the
-    batch is waiting AND this op names targets to confirm.
+    Reads the resolved ``{domain, service, service_data?, entity_ids?,
+    expected_state?}`` row defensively (the direct-prep tests pass raw dicts that
+    never went through the schema, so the mutable defaults are re-applied here).
+    ``pre`` is the synchronous in-memory pre-state per target; ``expected_by_entity``
+    maps every target to this op's confirmation hint (``_SERVICE_TO_STATE``) so the
+    waiter + immediate-match key off it; ``dispatched`` / ``error`` / ``response``
+    start empty and are filled during dispatch; ``should_confirm`` is true only when
+    the batch is waiting AND this op names targets to confirm.
     """
     entity_ids = list(op.get("entity_ids") or [])
+    expected_state = op.get("expected_state")
     return {
         "domain": op["domain"],
         "service": op["service"],
         "service_data": op.get("service_data") or {},
         "entity_ids": entity_ids,
+        "expected_by_entity": {eid: expected_state for eid in entity_ids},
         "should_confirm": bool(wait and entity_ids),
         "pre": {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids},
         "evt": None,
@@ -5548,7 +5674,7 @@ def _bulk_register_all(hass: HomeAssistant, ops: list[dict[str, Any]]) -> list[A
         for op in ops:
             if op["should_confirm"]:
                 evt, captured, unsub = _register_transition_waiter(
-                    hass, set(op["entity_ids"])
+                    hass, set(op["entity_ids"]), op["expected_by_entity"]
                 )
                 op["evt"] = evt
                 op["captured"] = captured
@@ -5590,18 +5716,42 @@ async def _bulk_dispatch_all(
                 op["error"] = _bulk_op_error(err)
 
 
+def _bulk_match_immediate(hass: HomeAssistant, ops: list[dict[str, Any]]) -> None:
+    """Immediate-match every dispatched, confirmable op (idempotent no-ops).
+
+    Runs the SAME raise-proof :func:`_match_immediate` per op AFTER the batch
+    dispatch and BEFORE the shared wait: an op whose target already sits at its
+    expected hint (a ``turn_on`` on an already-on light) is captured here so
+    :func:`_bulk_wait_all` skips it — no full-timeout stall for a batch of no-ops.
+    Raise-proof (``_match_immediate`` guards each re-read), so it cannot propagate
+    past the batch dispatch (I1).
+    """
+    for op in ops:
+        if op["should_confirm"] and op["dispatched"]:
+            _match_immediate(
+                hass, op["entity_ids"], op["expected_by_entity"], op["captured"]
+            )
+
+
 async def _bulk_wait_all(ops: list[dict[str, Any]], timeout: float) -> None:
     """Bounded confirmation wait for the batch: ONE shared deadline (D4).
 
-    Waits up to ``timeout`` for EVERY dispatched, confirmable op's transition on a
-    single shared deadline (not per-op serial timeouts). Expiry is swallowed —
-    whichever ops did not report are ``partial`` (never a failure); the ops that did
-    report stay confirmed. A batch with nothing to confirm returns immediately.
+    Waits up to ``timeout`` for every dispatched, confirmable op's transition on a
+    single shared deadline (not per-op serial timeouts). An op already FULLY captured
+    by the immediate-match (:func:`_bulk_match_immediate`) is skipped — its ``evt`` was
+    never ``set`` (the match populates ``captured`` directly), so waiting on it would
+    stall the whole batch to the timeout. Expiry is swallowed — whichever ops did not
+    report are ``partial`` (never a failure); the ops that did report stay confirmed.
+    A batch with nothing left to confirm returns immediately.
     """
     import asyncio
 
     waiters = [
-        op["evt"].wait() for op in ops if op["should_confirm"] and op["dispatched"]
+        op["evt"].wait()
+        for op in ops
+        if op["should_confirm"]
+        and op["dispatched"]
+        and not (set(op["entity_ids"]) <= set(op["captured"]))
     ]
     if not waiters:
         return

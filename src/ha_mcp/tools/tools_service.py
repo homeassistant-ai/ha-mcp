@@ -37,6 +37,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .util_helpers import (
+    _SERVICE_TO_STATE,
     BLOCKED_WS_WRITE_COMMANDS,
     JSON_STRING_COERCION,
     compact_service_result,
@@ -150,15 +151,10 @@ _NON_STATE_CHANGING_DOMAINS = {
     "system_log",
 }
 
-# Mapping from service name to the expected resulting state
-_SERVICE_TO_STATE: dict[str, str] = {
-    "turn_on": "on",
-    "turn_off": "off",
-    "open": "open",
-    "close": "closed",
-    "lock": "locked",
-    "unlock": "unlocked",
-}
+# ``_SERVICE_TO_STATE`` (the service -> expected primary-state map) is the single
+# source of truth in ``util_helpers`` — imported above and shared with the bulk
+# consumer (``device_control``) so both write paths hand the component the same
+# confirmation hint.
 
 
 # WebSocket commands that stream events or reply in two phases (an initial ack
@@ -732,6 +728,13 @@ class ServiceTools:
         # already be on the socket), or a post-send transport drop (a mid-await socket
         # close raises plain ``HomeAssistantConnectionError``) is POST-SEND/AMBIGUOUS →
         # partial, never retried.
+        # The confirmation HINT: the expected primary state after ``service`` (or
+        # ``None`` for a service with no known primary state). The component confirms
+        # only on REACHING this state — skipping a multi-phase service's intermediate
+        # states / attribute-only noise — and immediate-matches an idempotent no-op; a
+        # ``None`` hint keeps its any-first-event confirmation. It governs confirmation
+        # TIMING only; the component still returns the REAL observed transition.
+        expected_state = _SERVICE_TO_STATE.get(service)
         try:
             raw = await ws.send_command(
                 WS_CALL_SERVICE,
@@ -742,6 +745,7 @@ class ServiceTools:
                 wait=wait,
                 timeout=timeout,
                 return_response=return_response,
+                expected_state=expected_state,
             )
         except HomeAssistantCommandNotSent as exc:
             # PRE-SEND: the frame provably never left the process (the send_command
@@ -824,8 +828,9 @@ class ServiceTools:
     ) -> dict[str, Any]:
         """Map the component ``call_service`` result into ha_call_service's shape.
 
-        The component's real pre->post transition replaces BOTH the hardcoded
-        ``_SERVICE_TO_STATE`` guess and the WS-subscribe-and-sample verification: the
+        The component's real pre->post transition replaces the WS-subscribe-and-sample
+        verification (``_SERVICE_TO_STATE`` is now handed to the component as a
+        confirmation-timing HINT, not read here as the returned value): the
         transition ``new_state`` records are the same ``State.as_dict()`` shape the
         legacy REST POST returns, so they feed the SAME ``_project_service_result``
         projection; the confirmed target's ``new_state.state`` becomes

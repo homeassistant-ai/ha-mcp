@@ -224,6 +224,35 @@ async def test_capability_hit_routes_and_maps_shape() -> None:
     assert kwargs["entity_ids"] == ["light.a"]
     assert kwargs["wait"] is True
     assert kwargs["return_response"] is False
+    # The server hands the component its expected-state confirmation hint
+    # (``_SERVICE_TO_STATE.get("turn_on") == "on"``).
+    assert kwargs["expected_state"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_unmapped_service_sends_none_hint() -> None:
+    """A state-changing service with no primary-state mapping (climate.set_temperature)
+    is routed to the component with ``expected_state`` None — the component then keeps
+    its any-first-event confirmation for that call."""
+    ws = make_ws(
+        "ha_mcp_tools/call_service",
+        info_result=_CAPS_CALL,
+        cmd_result=_confirmed_result("climate.a"),
+    )
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        await call_service(
+            domain="climate",
+            service="set_temperature",
+            entity_id="climate.a",
+            data={"temperature": 21},
+        )
+
+    frames = _call_service_frames(ws)
+    assert len(frames) == 1
+    assert frames[0].kwargs["expected_state"] is None
 
 
 @pytest.mark.asyncio

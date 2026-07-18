@@ -221,9 +221,13 @@ async def test_capability_hit_routes_and_maps_shape() -> None:
         "service": "turn_on",
         "service_data": {"entity_id": "light.a"},
         "entity_ids": ["light.a"],
+        # Each resolved row carries its per-op confirmation hint
+        # (``_SERVICE_TO_STATE.get("turn_on") == "on"``).
+        "expected_state": "on",
     }
     assert rows[1]["service"] == "turn_on"
     assert rows[1]["entity_ids"] == ["switch.b"]
+    assert rows[1]["expected_state"] == "on"
 
 
 @pytest.mark.asyncio

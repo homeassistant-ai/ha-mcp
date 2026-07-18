@@ -1783,6 +1783,135 @@ class TestCallServiceEntityRemovedMidWait:
         assert res["partial"] is True
 
 
+class TestCallServiceExpectedStateHint:
+    """The server's ``expected_state`` hint governs confirmation TIMING only.
+
+    The waiter confirms ONLY on reaching the hint (skipping a multi-phase service's
+    intermediate states and attribute-only noise), and an idempotent no-op whose
+    current state already equals the hint confirms with NO wait. A ``None`` hint keeps
+    today's any-first-event confirmation. The RETURNED transition is always the REAL
+    observed one — the hint is never the returned value.
+    """
+
+    def test_waiter_skips_intermediate_state(self):
+        # lock.lock: unlocked -> locking -> locked. With expected "locked", the
+        # intermediate "locking" event must NOT confirm; only "locked" does.
+        bus = _FakeBus()
+        hass = _call_hass([], _FakeCallServices(), bus)
+        evt, captured, unsub = wsapi._register_transition_waiter(
+            hass, {"lock.front"}, {"lock.front": "locked"}
+        )
+        bus.fire("lock.front", FakeState("lock.front", state="locking"))
+        assert captured == {}  # intermediate state skipped, not captured
+        assert not evt.is_set()
+        bus.fire("lock.front", FakeState("lock.front", state="locked"))
+        assert set(captured) == {"lock.front"}
+        assert evt.is_set()
+        unsub()
+
+    def test_waiter_skips_noise_event(self):
+        # An attribute-only tick (state stays "playing") must be ignored when the
+        # hint is "paused"; a later real "paused" confirms — no premature confirm.
+        bus = _FakeBus()
+        hass = _call_hass([], _FakeCallServices(), bus)
+        evt, captured, unsub = wsapi._register_transition_waiter(
+            hass, {"media_player.a"}, {"media_player.a": "paused"}
+        )
+        bus.fire(
+            "media_player.a",
+            FakeState("media_player.a", state="playing", media_position=5),
+        )
+        assert captured == {}  # noise skipped, no false positive
+        assert not evt.is_set()
+        bus.fire("media_player.a", FakeState("media_player.a", state="paused"))
+        assert set(captured) == {"media_player.a"}
+        assert evt.is_set()
+        unsub()
+
+    def test_waiter_no_hint_captures_first_event(self):
+        # No hint (None) => any first new_state confirms (unchanged legacy behavior).
+        bus = _FakeBus()
+        hass = _call_hass([], _FakeCallServices(), bus)
+        evt, captured, unsub = wsapi._register_transition_waiter(
+            hass, {"climate.a"}, {"climate.a": None}
+        )
+        bus.fire("climate.a", FakeState("climate.a", state="heat", temperature=21))
+        assert set(captured) == {"climate.a"}
+        assert evt.is_set()
+        unsub()
+
+    def test_hint_confirms_on_expected_through_prep(self):
+        # Full prep: lock.lock fires "locking" then "locked" mid-dispatch; only the
+        # "locked" event confirms and drives the REAL verified transition.
+        old = FakeState("lock.front", state="unlocked")
+        bus = _FakeBus()
+
+        def _lock_phases():
+            bus.fire("lock.front", FakeState("lock.front", state="locking"))
+            bus.fire("lock.front", FakeState("lock.front", state="locked"))
+
+        services = _FakeCallServices(known={("lock", "lock")}, on_call=_lock_phases)
+        hass = _call_hass([old], services, bus)
+        res = _run_call_service(
+            hass,
+            {
+                "type": wsapi.WS_CALL_SERVICE,
+                "domain": "lock",
+                "service": "lock",
+                "entity_ids": ["lock.front"],
+                "expected_state": "locked",
+            },
+        )
+        assert res["confirmed"] is True
+        assert res["partial"] is False
+        (transition,) = res["transitions"]
+        assert transition["old_state"]["state"] == "unlocked"
+        # The REAL reached state, not the intermediate "locking".
+        assert transition["new_state"]["state"] == "locked"
+        assert transition["changed"] is True
+
+    def test_idempotent_no_op_confirms_instantly(self, monkeypatch):
+        # A turn_on on an already-on light: HA emits NO state_changed. With expected
+        # "on", the immediate-match confirms instantly (pre == expected) — no wait,
+        # no false partial, no full-timeout stall.
+        old = FakeState("light.a", state="on", brightness=255)
+        bus = _FakeBus()
+        services = _FakeCallServices(known={("light", "turn_on")})  # no event fired
+        hass = _call_hass([old], services, bus)
+
+        # Track the bounded wait: the immediate-match must short-circuit it, so
+        # wait_for is never awaited. A small timeout keeps a regression from hanging.
+        real_wait_for = asyncio.wait_for
+        waited = {"n": 0}
+
+        async def _tracking_wait_for(*args, **kwargs):
+            waited["n"] += 1
+            return await real_wait_for(*args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "wait_for", _tracking_wait_for)
+
+        res = _run_call_service(
+            hass,
+            {
+                "type": wsapi.WS_CALL_SERVICE,
+                "domain": "light",
+                "service": "turn_on",
+                "entity_ids": ["light.a"],
+                "expected_state": "on",
+                "timeout": 0.01,
+            },
+        )
+        assert res["dispatched"] is True
+        assert res["confirmed"] is True  # immediate-match confirmed with no event
+        assert res["partial"] is False
+        (transition,) = res["transitions"]
+        assert transition["new_state"]["state"] == "on"
+        assert transition["changed"] is False  # already on -> on
+        # The bounded wait was never entered — the pre==expected match skipped it.
+        assert waited["n"] == 0
+        assert bus.unsub_count == 1
+
+
 class TestCallServiceReturnResponse:
     def test_present_when_requested_and_nonnull(self):
         old = FakeState("light.a", state="off")
@@ -2008,6 +2137,16 @@ class TestCallServiceSchema:
         )
         assert out["timeout"] == 60
 
+    def test_expected_state_hint_optional(self, monkeypatch):
+        schema = self._schema(monkeypatch)
+        base = {"type": wsapi.WS_CALL_SERVICE, "domain": "light", "service": "turn_on"}
+        # Absent: optional with no default → not present in the validated output, so
+        # ``msg.get("expected_state")`` is None (any-first-event confirmation).
+        assert "expected_state" not in schema(dict(base))
+        # A string hint and an explicit None both validate.
+        assert schema({**base, "expected_state": "on"})["expected_state"] == "on"
+        assert schema({**base, "expected_state": None})["expected_state"] is None
+
 
 # =============================================================================
 # bulk_call_service (Phase 3, D5a — the BATCH write capability, issue #1813)
@@ -2184,6 +2323,102 @@ class TestBulkCallServiceHappyPath:
         assert services.calls[0]["service_data"] == {"brightness": 255}
         # Every register-before-fire listener torn down.
         assert bus.unsub_count == 2
+
+
+class TestBulkCallServiceExpectedStateHint:
+    """Per-op ``expected_state`` hint in a batch: each op confirms on its OWN expected
+    state (a multi-phase op skips its intermediate states), and an idempotent no-op op
+    confirms via the immediate-match without stalling the shared batch wait."""
+
+    def test_per_op_expected_confirmation(self):
+        # Op1 lock.lock (expected "locked") fires "locking" then "locked": only the
+        # "locked" event confirms. Op2 light.turn_on (expected "on") fires "on".
+        old_lock = FakeState("lock.front", state="unlocked")
+        old_light = FakeState("light.a", state="off")
+        bus = _FakeBus()
+
+        def _lock_phases():
+            bus.fire("lock.front", FakeState("lock.front", state="locking"))
+            bus.fire("lock.front", FakeState("lock.front", state="locked"))
+
+        services = _FakeBulkServices(
+            behaviors={
+                ("lock", "lock"): {"on_call": _lock_phases},
+                ("light", "turn_on"): {
+                    "on_call": lambda: bus.fire(
+                        "light.a", FakeState("light.a", state="on")
+                    )
+                },
+            }
+        )
+        hass = _call_hass([old_lock, old_light], services, bus)
+        res = _run_bulk_call_service(
+            hass,
+            {
+                "type": wsapi.WS_BULK_CALL_SERVICE,
+                "operations": [
+                    {
+                        "domain": "lock",
+                        "service": "lock",
+                        "entity_ids": ["lock.front"],
+                        "expected_state": "locked",
+                    },
+                    {
+                        "domain": "light",
+                        "service": "turn_on",
+                        "entity_ids": ["light.a"],
+                        "expected_state": "on",
+                    },
+                ],
+                "parallel": True,
+            },
+        )
+        op1, op2 = res["operations"]
+        assert op1["confirmed"] is True
+        # The REAL reached state, not the intermediate "locking".
+        assert op1["transitions"][0]["new_state"]["state"] == "locked"
+        assert op2["confirmed"] is True
+        assert op2["transitions"][0]["new_state"]["state"] == "on"
+        assert res["failed"] == 0
+
+    def test_idempotent_no_op_confirms_without_wait(self, monkeypatch):
+        # A batch whose only op is a no-op (light already on, expected "on", NO event)
+        # confirms via the immediate-match — the shared wait is never awaited.
+        old = FakeState("light.a", state="on")
+        bus = _FakeBus()
+        services = _FakeBulkServices(behaviors={("light", "turn_on"): {}})  # no event
+        hass = _call_hass([old], services, bus)
+
+        real_wait_for = asyncio.wait_for
+        waited = {"n": 0}
+
+        async def _tracking_wait_for(*args, **kwargs):
+            waited["n"] += 1
+            return await real_wait_for(*args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "wait_for", _tracking_wait_for)
+
+        res = _run_bulk_call_service(
+            hass,
+            {
+                "type": wsapi.WS_BULK_CALL_SERVICE,
+                "operations": [
+                    {
+                        "domain": "light",
+                        "service": "turn_on",
+                        "entity_ids": ["light.a"],
+                        "expected_state": "on",
+                    },
+                ],
+                "timeout": 0.01,
+            },
+        )
+        (op,) = res["operations"]
+        assert op["dispatched"] is True
+        assert op["confirmed"] is True  # immediate-match confirmed with no event
+        assert op["partial"] is False
+        # The shared batch wait was never entered — no full-timeout stall.
+        assert waited["n"] == 0
 
 
 class TestBulkCallServiceSequential:
@@ -2412,3 +2647,17 @@ class TestBulkCallServiceSchema:
     def test_malformed_rejected(self, monkeypatch, bad):
         with pytest.raises(_REAL_VOL.Invalid):
             self._schema(monkeypatch)(bad)
+
+    def test_operation_expected_state_optional(self, monkeypatch):
+        out = self._schema(monkeypatch)(
+            {
+                "type": wsapi.WS_BULK_CALL_SERVICE,
+                "operations": [
+                    {"domain": "lock", "service": "lock", "expected_state": "locked"},
+                    {"domain": "climate", "service": "set_temperature"},
+                ],
+            }
+        )
+        # A per-op hint validates; an op without one omits the key (any-first-event).
+        assert out["operations"][0]["expected_state"] == "locked"
+        assert "expected_state" not in out["operations"][1]
