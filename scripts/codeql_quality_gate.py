@@ -223,6 +223,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "py/clear-text-logging-sensitive-data",
+        "src/ha_mcp/__main__.py",
+        "as clear text",
+        "Deliberate: _log_settings_url prints the settings-UI URL (which "
+        "includes the secret path) to the server's own startup log so the "
+        "operator can find the page. Startup log only — the path is never "
+        "returned to MCP clients (advertise_prefix=False) and is redacted from "
+        "ha_report_issue output.",
+    ),
+    (
+        "py/clear-text-logging-sensitive-data",
         "tests/test_env_manager.py",
         "as clear text",
         "Interactive test-environment helper printing the seeded throwaway "
