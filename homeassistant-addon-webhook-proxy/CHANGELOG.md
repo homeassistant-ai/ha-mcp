@@ -3,6 +3,15 @@
 <!-- version list -->
 
 
+## v2.0.4 (2026-07-18)
+
+### Refactoring
+
+- Reduce cyclomatic complexity in `start.py` and `mcp_proxy/__init__.py`
+  below the C901 threshold by extracting private helpers (issue #925),
+  synced from the dev flavor's 2.0.3.dev2. No behavior change.
+
+
 ## v2.0.3 (2026-07-18)
 
 ### Bug Fixes
