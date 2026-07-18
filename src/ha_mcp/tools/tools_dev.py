@@ -1001,6 +1001,23 @@ class DevTools:
                 )
             )
 
+        if is_embedded():
+            # Embedded self-reload: prefer the component's one-hop direct write
+            # (async_update_entry) over the options-flow start+submit — and try it
+            # BEFORE find_server_config_entry opens the legacy options flow, so the
+            # fast path is NOT gated behind (or delayed/broken by) the very flow-open
+            # it exists to bypass. The component locates the entry in-process itself,
+            # so it needs no find. On ANY component error this returns None and we
+            # fall through to the legacy find + options-flow submit below (unchanged).
+            # Non-embedded deployments never route here — they reload the SEPARATE
+            # in-process server entry synchronously and keep this connection, so the
+            # collapse buys nothing there.
+            component_result = await self._update_source_via_component(
+                channel, pip_spec
+            )
+            if component_result is not None:
+                return component_result
+
         found = await find_server_config_entry(self._client)
         if found is None:
             raise_tool_error(
@@ -1018,22 +1035,6 @@ class DevTools:
                 )
             )
         entry_id, flow, current = found
-
-        if is_embedded():
-            # Embedded self-reload: prefer the component's one-hop direct write
-            # (async_update_entry) over the options-flow start+submit. On ANY
-            # component error this returns None and we fall through to the legacy
-            # submit below (unchanged). Non-embedded deployments never route here —
-            # they reload the SEPARATE in-process server entry synchronously and
-            # keep this connection, so the collapse buys nothing there.
-            component_result = await self._update_source_via_component(
-                channel, pip_spec
-            )
-            if component_result is not None:
-                # The component located and will update the entry itself; the flow
-                # find_server_config_entry opened for the legacy path is unused.
-                await abort_options_flow_quietly(self._client, flow)
-                return component_result
 
         # Resend the user's current overrides (see _PRESERVED_OPTION_KEYS) so a
         # channel/pip-spec change here does not blank them — an omitted optional

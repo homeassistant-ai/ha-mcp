@@ -294,6 +294,7 @@ from homeassistant.helpers import (
 from .const import (
     COMPONENT_VERSION,
     CONF_ENTRY_TYPE,
+    DEFAULT_PIP_SPEC,
     DOMAIN,
     ENTRY_TYPE_SERVER,
     OPT_CHANNEL,
@@ -5242,8 +5243,17 @@ async def _server_entry_update_prep(
         delta[OPT_CHANNEL] = msg["channel"]
         applying["channel"] = msg["channel"]
     if has_pip_spec:
-        delta[OPT_PIP_SPEC] = msg["pip_spec"]
-        applying["pip_spec"] = msg["pip_spec"]
+        # Normalize like the options flow's ``_normalize`` (config_flow.py): a
+        # whitespace-only value OR the default unpinned dist (``DEFAULT_PIP_SPEC``)
+        # means "no override" — collapse it to "" so the channel keeps
+        # auto-updating. Persisting it verbatim would read as an intentional
+        # override and disable auto-updates. This keeps the no-op check honest: a
+        # frame that normalizes to the stored value is unchanged, not a schedule.
+        pip_spec = msg["pip_spec"]
+        if str(pip_spec).strip() in ("", DEFAULT_PIP_SPEC):
+            pip_spec = ""
+        delta[OPT_PIP_SPEC] = pip_spec
+        applying["pip_spec"] = pip_spec
     new_options = {**current, **delta}
 
     entry_id = getattr(entry, "entry_id", None)

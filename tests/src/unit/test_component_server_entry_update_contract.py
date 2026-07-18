@@ -245,6 +245,72 @@ async def test_prep_clearing_pip_spec_from_absent_schedules() -> None:
     assert applied == {"channel": "dev", "pip_spec": ""}
 
 
+@pytest.mark.asyncio
+async def test_prep_clearing_existing_pip_spec_override_schedules() -> None:
+    """Clearing an EXISTING pip_spec override to "" is a real change — it schedules
+    and persists "" (no override)."""
+    entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
+    hass = _BgHass([entry])
+    extra = await wsapi._server_entry_update_prep(
+        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": ""}
+    )
+    assert extra["result"]["scheduled"] is True
+    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
+    _entry, applied = hass.config_entries.update_calls[0]
+    assert applied == {"channel": "dev", "pip_spec": ""}
+
+
+@pytest.mark.asyncio
+async def test_prep_normalizes_whitespace_pip_spec_to_empty() -> None:
+    """A whitespace-only pip_spec means "no override" — it normalizes to "" (matches
+    the options flow's _normalize) so the channel keeps auto-updating, and both the
+    applied options AND the response envelope reflect the collapsed value."""
+    entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
+    hass = _BgHass([entry])
+    extra = await wsapi._server_entry_update_prep(
+        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "   "}
+    )
+    assert extra["result"]["scheduled"] is True
+    assert extra["result"]["applying"] == {"pip_spec": ""}
+    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
+    _entry, applied = hass.config_entries.update_calls[0]
+    assert applied == {"channel": "dev", "pip_spec": ""}
+
+
+@pytest.mark.asyncio
+async def test_prep_normalizes_default_dist_pip_spec_to_empty() -> None:
+    """pip_spec == DEFAULT_PIP_SPEC (the unpinned dist) means "no override" — it
+    persists as "" rather than a verbatim value that would read as an intentional
+    override and disable auto-updates."""
+    entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
+    hass = _BgHass([entry])
+    extra = await wsapi._server_entry_update_prep(
+        hass,
+        {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": wsapi.DEFAULT_PIP_SPEC},
+    )
+    assert extra["result"]["applying"] == {"pip_spec": ""}
+    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
+    _entry, applied = hass.config_entries.update_calls[0]
+    assert applied == {"channel": "dev", "pip_spec": ""}
+
+
+@pytest.mark.asyncio
+async def test_prep_pip_spec_normalizing_to_stored_value_is_noop() -> None:
+    """A pip_spec that NORMALIZES to the currently-stored value is unchanged, not a
+    spurious schedule — the no-op check sees the post-normalization delta."""
+    entry = _server_entry(options={"channel": "dev", "pip_spec": ""})
+    hass = _BgHass([entry])
+    extra = await wsapi._server_entry_update_prep(
+        hass,
+        {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": wsapi.DEFAULT_PIP_SPEC},
+    )
+    result = extra["result"]
+    assert result["scheduled"] is False
+    assert result["unchanged"] is True
+    assert hass.scheduled == []
+    assert hass.config_entries.update_calls == []
+
+
 # =============================================================================
 # admin gate (the registered handler, through _build_handler's @require_admin)
 # =============================================================================

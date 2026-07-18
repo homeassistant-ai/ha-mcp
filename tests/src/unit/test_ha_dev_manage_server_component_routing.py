@@ -175,7 +175,9 @@ def _embedded_env(monkeypatch: Any) -> Any:
 @pytest.mark.asyncio
 async def test_embedded_capability_present_routes_to_component_write() -> None:
     """capability present → component direct write; scheduled reply mapped; the
-    legacy submit is never called; the opened flow is aborted."""
+    legacy submit is never called; and find_server_config_entry never runs, so NO
+    options flow is opened (the fast path is not gated behind the flow-open it
+    bypasses)."""
     ws = _update_ws(
         caps=_CAPS_FULL,
         update_result={
@@ -206,9 +208,10 @@ async def test_embedded_capability_present_routes_to_component_write() -> None:
     assert data["target"] == "this server (the embedded ha_mcp_tools in-process entry)"
     # The component write was used; the legacy options-flow submit was NOT.
     assert client.submit_calls == []
-    # The flow find_server_config_entry opened (for the unused legacy path) was
-    # aborted rather than leaked.
-    assert client.abort_options_flow_calls == ["flow-srv1"]
+    # find_server_config_entry never ran on the component-served path, so NO options
+    # flow was opened (nor aborted) — the fast path bypasses the flow-open entirely.
+    assert client.start_options_flow_calls == []
+    assert client.abort_options_flow_calls == []
     # The server_entry_update frame carried EXACTLY the channel delta as kwargs.
     assert _update_frame_kwargs(ws) == {"channel": "dev"}
 
@@ -303,6 +306,40 @@ async def test_embedded_channel_and_pip_spec_delta_delivers_both_kwargs() -> Non
 
 
 @pytest.mark.asyncio
+async def test_component_write_succeeds_when_find_would_raise(
+    monkeypatch: Any,
+) -> None:
+    """The component route runs BEFORE find_server_config_entry, so a legacy find
+    that would raise (a slow/broken options flow) is never even reached on the fast
+    path — the component write still succeeds."""
+    ws = _update_ws(
+        caps=_CAPS_FULL,
+        update_result={
+            "scheduled": True,
+            "entry_id": "srv1",
+            "applying": {"channel": "dev"},
+            "previous": {"channel": "stable", "pip_spec": None},
+        },
+    )
+    client = UpdateClient()
+
+    async def _boom(_client: Any) -> Any:
+        raise AssertionError("find_server_config_entry must not run on the fast path")
+
+    monkeypatch.setattr(tools_dev, "find_server_config_entry", _boom)
+
+    with patch_ws(ws, tools_dev):
+        result = await DevTools(client).ha_dev_manage_server(
+            action="update_source", channel="dev"
+        )
+
+    assert result["data"]["scheduled"] is True
+    assert result["data"]["entry_id"] == "srv1"
+    assert client.submit_calls == []
+    assert client.start_options_flow_calls == []
+
+
+@pytest.mark.asyncio
 async def test_embedded_capability_absent_falls_back_to_options_flow() -> None:
     """No server_entry_update capability → legacy (deferred) options-flow submit,
     resending the preserved server_url override alongside the channel change."""
@@ -327,14 +364,33 @@ async def test_embedded_capability_absent_falls_back_to_options_flow() -> None:
 
 
 @pytest.mark.asyncio
-async def test_embedded_unknown_command_invalidates_caps_and_falls_back() -> None:
+async def test_embedded_unknown_command_invalidates_caps_and_falls_back(
+    monkeypatch: Any,
+) -> None:
     """server_entry_update advertised but returns unknown_command → invalidate the
-    cached caps and fall back to the legacy submit."""
+    cached caps and fall back to the legacy submit.
+
+    The invalidation is asserted via a spy on ``invalidate_caps`` (which delegates to
+    the real one), NOT the end-state cache: with the component write now tried BEFORE
+    the legacy find, the fallback's own ``find_server_config_entry`` legitimately
+    RE-probes ``info`` and re-populates the cache within the SAME call (with the
+    current-real caps — the desirable behaviour), so a post-call cache-empty check
+    would be a false negative.
+    """
     ws = _update_ws(
         caps=_CAPS_FULL,
         update_exc=HomeAssistantCommandError("gone", "unknown_command"),
     )
     client = UpdateClient()
+
+    invalidated: list[Any] = []
+    real_invalidate = tools_dev.invalidate_caps
+
+    def _spy(c: Any) -> None:
+        invalidated.append(c)
+        real_invalidate(c)
+
+    monkeypatch.setattr(tools_dev, "invalidate_caps", _spy)
 
     with patch_ws(ws, tools_dev):
         await DevTools(client).ha_dev_manage_server(
@@ -343,7 +399,7 @@ async def test_embedded_unknown_command_invalidates_caps_and_falls_back() -> Non
         await _drain_background_tasks()
 
     assert len(client.submit_calls) == 1
-    assert client not in component_api._CAPS_CACHE
+    assert invalidated == [client]
 
 
 @pytest.mark.asyncio
