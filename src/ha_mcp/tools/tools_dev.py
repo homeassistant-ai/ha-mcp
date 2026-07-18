@@ -1189,12 +1189,15 @@ class DevTools:
         """Map a ``server_entry_update`` component reply into update_source's data.
 
         Mirrors the legacy embedded branch's ``scheduled:true`` shape
-        (entry_id/applying/previous/note); a no-op reply carries ``unchanged`` and
-        its own note instead.
+        (entry_id/target/applying/previous/note); a no-op reply carries ``unchanged``
+        and its own note instead. This route is embedded-only, so ``target`` is
+        always the embedded-server phrasing (matches the legacy embedded branch and
+        preserves the #1929 target field).
         """
         data: dict[str, Any] = {
             "scheduled": bool(result.get("scheduled")),
             "entry_id": result.get("entry_id"),
+            "target": "this server (the embedded ha_mcp_tools in-process entry)",
             "applying": result.get("applying"),
             "previous": result.get("previous"),
         }

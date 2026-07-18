@@ -85,11 +85,22 @@ def _update_ws(
 
 
 class UpdateClient:
-    """Credentialed client: options-flow surface + a legacy-probe tripwire."""
+    """Credentialed client: options-flow surface + the legacy config_entries bridge.
 
-    def __init__(self) -> None:
+    ``config_entries`` is what ``config_entries/get`` returns for the legacy
+    ``find_server_config_entry`` fallback. Empty by default: the component
+    ``server_entry`` read short-circuits find in the component-served tests, so the
+    legacy probe is never reached. A test drives find DOWN the legacy path by
+    supplying the server entry here — e.g. the establishment-failure case, where the
+    SHARED ``tools_dev.get_websocket_client`` is broken for BOTH the component read
+    and the write, so find must locate the entry through this bridge (which rides
+    ``send_websocket_message``, a different transport that stays up).
+    """
+
+    def __init__(self, config_entries: list[dict[str, Any]] | None = None) -> None:
         self.base_url = "http://ha.local:8123"
         self.token = "tok"
+        self._config_entries = list(config_entries or [])
         self.start_options_flow_calls: list[str] = []
         self.abort_options_flow_calls: list[str] = []
         self.submit_calls: list[tuple[str, dict[str, Any]]] = []
@@ -98,7 +109,7 @@ class UpdateClient:
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
         if msg.get("type") == "config_entries/get":
             self.config_entries_get_calls += 1
-            return {"success": True, "result": []}
+            return {"success": True, "result": list(self._config_entries)}
         raise AssertionError(f"unexpected ws message {msg!r}")
 
     async def start_options_flow(self, entry_id: str) -> dict[str, Any]:
@@ -170,6 +181,8 @@ async def test_embedded_capability_present_routes_to_component_write() -> None:
     assert data["applying"] == {"channel": "dev"}
     assert data["previous"] == {"channel": "stable", "pip_spec": None}
     assert "note" in data
+    # Preserves the #1929 target field on the component path (embedded phrasing).
+    assert data["target"] == "this server (the embedded ha_mcp_tools in-process entry)"
     # The component write was used; the legacy options-flow submit was NOT.
     assert client.submit_calls == []
     # The flow find_server_config_entry opened (for the unused legacy path) was
@@ -303,10 +316,21 @@ async def test_embedded_malformed_reply_falls_back() -> None:
 
 @pytest.mark.asyncio
 async def test_embedded_establishment_failure_falls_back() -> None:
-    """A plain establish Exception from get_websocket_client (after caps cached)
-    for the write frame falls back to the legacy submit."""
+    """A plain establish Exception from get_websocket_client falls back to the
+    legacy submit.
+
+    ``patch_ws_establish_failure`` breaks the SHARED ``tools_dev.get_websocket_client``
+    for BOTH the component ``server_entry`` read AND the write frame (one binding
+    serves both), exactly as a real broken pooled socket would. So
+    ``find_server_config_entry``'s component read fails over to the legacy
+    ``config_entries/get`` bridge — which rides ``send_websocket_message``, a
+    different transport that stays up — and locates the entry there; THEN the write
+    frame's establishment fails and the tool falls back to the legacy options-flow
+    submit. The caps probe (``component_api``'s binding) still succeeds, so the write
+    route is attempted and its establishment failure is what triggers the fallback.
+    """
     caps_ws = _update_ws(caps=_CAPS_FULL)
-    client = UpdateClient()
+    client = UpdateClient(config_entries=[{"entry_id": "srv1"}])
 
     with patch_ws_establish_failure(
         caps_ws, tools_dev, Exception("Failed to connect to HA WebSocket")
@@ -317,6 +341,9 @@ async def test_embedded_establishment_failure_falls_back() -> None:
         await _drain_background_tasks()
 
     assert len(client.submit_calls) == 1
+    # find used the legacy config_entries/get bridge (the pooled read socket was
+    # down), not the in-process component server_entry read.
+    assert client.config_entries_get_calls == 1
 
 
 @pytest.mark.asyncio
