@@ -239,6 +239,33 @@ def create_test_script_config(
     return config
 
 
+async def _verify_bulk_scripts(mcp, created_scripts):
+    """Fetch and validate each created script's config; return those verified."""
+    logger.info("🔍 Verifying all scripts exist...")
+    verified_scripts = []
+    for script_id, script_entity in created_scripts:
+        try:
+            get_data = await mcp.call_tool_success(
+                "ha_config_get_script", {"script_id": script_id}
+            )
+
+            config = extract_script_config(get_data)
+            assert "alias" in config, f"Alias missing for {script_entity}: {config}"
+            assert "sequence" in config, (
+                f"Sequence missing for {script_entity}: {config}"
+            )
+            assert validate_script_sequence(
+                config.get("sequence", []), len(config.get("sequence", []))
+            ), f"Invalid sequence for {script_entity}"
+
+            verified_scripts.append((script_id, script_entity))
+            logger.info(f"✅ Verified: {script_entity} - {config.get('alias')}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to verify {script_entity}: {e}")
+    return verified_scripts
+
+
 @pytest.mark.script
 @pytest.mark.cleanup
 class TestScriptOrchestration:
@@ -915,30 +942,7 @@ class TestScriptOrchestration:
 
             # 2. VERIFY: All successfully created scripts exist and have correct configurations
 
-            logger.info("🔍 Verifying all scripts exist...")
-            verified_scripts = []
-            for script_id, script_entity in created_scripts:
-                try:
-                    get_data = await mcp.call_tool_success(
-                        "ha_config_get_script", {"script_id": script_id}
-                    )
-
-                    config = extract_script_config(get_data)
-                    assert "alias" in config, (
-                        f"Alias missing for {script_entity}: {config}"
-                    )
-                    assert "sequence" in config, (
-                        f"Sequence missing for {script_entity}: {config}"
-                    )
-                    assert validate_script_sequence(
-                        config.get("sequence", []), len(config.get("sequence", []))
-                    ), f"Invalid sequence for {script_entity}"
-
-                    verified_scripts.append((script_id, script_entity))
-                    logger.info(f"✅ Verified: {script_entity} - {config.get('alias')}")
-
-                except Exception as e:
-                    logger.error(f"❌ Failed to verify {script_entity}: {e}")
+            verified_scripts = await _verify_bulk_scripts(mcp, created_scripts)
 
             # 3. EXECUTE: Bulk execution of verified scripts
             logger.info(

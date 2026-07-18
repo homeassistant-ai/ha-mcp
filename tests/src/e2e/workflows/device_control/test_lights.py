@@ -102,6 +102,71 @@ async def wait_for_entity_state(
     return False
 
 
+def _log_bulk_operation_results(actual_data: dict[str, Any]) -> None:
+    """Log individual operation results for debugging."""
+    if "entities" in actual_data:
+        for i, result in enumerate(actual_data["entities"]):
+            if isinstance(result, dict):
+                entity_id = result.get("entity_id", "unknown")
+                status = "success" if result.get("command_sent") else "failed"
+                error = result.get("error", "")
+                logger.debug(f"Operation {i + 1}: {entity_id} - {status} {error}")
+
+
+async def _monitor_bulk_operation_status(mcp_client: Client, operation_ids) -> None:
+    """Fetch and log the status of each bulk operation (informational only)."""
+    if operation_ids:
+        logger.info("📊 Monitoring operation status...")
+
+        for i, operation_id in enumerate(operation_ids):
+            try:
+                # Status here is purely informational (asserted nowhere
+                # below). WS-resolvable ops complete sub-second; an op
+                # whose target equals the light's current state never emits
+                # a state_changed event and would otherwise sit PENDING for
+                # the full timeout. 3s caps that waste without losing the
+                # informational snapshot (#1515).
+                status_result = await mcp_client.call_tool(
+                    "ha_get_operation_status",
+                    {"operation_id": operation_id, "timeout_seconds": 3},
+                )
+
+                status_data = parse_mcp_result(status_result)
+                status = status_data.get("status", "unknown")
+                logger.info(f"📊 Operation {i + 1} status: {status}")
+
+                # Status monitoring is informational in test environment
+                # WebSocket verification may not work consistently in Docker
+
+            except Exception as e:
+                logger.warning(f"⚠️ Could not get status for operation {i + 1}: {e}")
+
+
+async def _verify_bulk_final_states(mcp_client: Client, test_lights) -> None:
+    """Read back and log each controlled light's final state (informational only)."""
+    logger.info("🔍 Verifying final states...")
+
+    for i, light_entity in enumerate(test_lights):
+        try:
+            state_result = await mcp_client.call_tool(
+                "ha_get_state", {"entity_id": light_entity}
+            )
+            state_data = parse_mcp_result(state_result)
+            entity_data = validate_entity_state(state_data, light_entity)
+            current_state = entity_data["state"]
+
+            expected_state = "on" if i % 2 == 0 else "off"
+            logger.info(
+                f"💡 {light_entity}: {current_state} (expected: {expected_state})"
+            )
+
+            # In test environment, state consistency is informational only
+            # Don't fail test due to Docker environment limitations
+
+        except Exception as e:
+            logger.warning(f"⚠️ Could not verify state for {light_entity}: {e}")
+
+
 @pytest.mark.device
 class TestDeviceControl:
     """Test device control operations with WebSocket verification."""
@@ -276,14 +341,7 @@ class TestDeviceControl:
             f"📊 Bulk operation results: {successful_commands}/{total_operations} successful, {failed_commands} failed"
         )
 
-        # Log individual operation results for debugging
-        if "entities" in actual_data:
-            for i, result in enumerate(actual_data["entities"]):
-                if isinstance(result, dict):
-                    entity_id = result.get("entity_id", "unknown")
-                    status = "success" if result.get("command_sent") else "failed"
-                    error = result.get("error", "")
-                    logger.debug(f"Operation {i + 1}: {entity_id} - {status} {error}")
+        _log_bulk_operation_results(actual_data)
 
         # Assert that at least one operation succeeded
         if successful_commands == 0:
@@ -307,54 +365,10 @@ class TestDeviceControl:
         )
 
         # 3. Monitor operation status
-        if operation_ids:
-            logger.info("📊 Monitoring operation status...")
-
-            for i, operation_id in enumerate(operation_ids):
-                try:
-                    # Status here is purely informational (asserted nowhere
-                    # below). WS-resolvable ops complete sub-second; an op
-                    # whose target equals the light's current state never emits
-                    # a state_changed event and would otherwise sit PENDING for
-                    # the full timeout. 3s caps that waste without losing the
-                    # informational snapshot (#1515).
-                    status_result = await mcp_client.call_tool(
-                        "ha_get_operation_status",
-                        {"operation_id": operation_id, "timeout_seconds": 3},
-                    )
-
-                    status_data = parse_mcp_result(status_result)
-                    status = status_data.get("status", "unknown")
-                    logger.info(f"📊 Operation {i + 1} status: {status}")
-
-                    # Status monitoring is informational in test environment
-                    # WebSocket verification may not work consistently in Docker
-
-                except Exception as e:
-                    logger.warning(f"⚠️ Could not get status for operation {i + 1}: {e}")
+        await _monitor_bulk_operation_status(mcp_client, operation_ids)
 
         # 4. Verify final states of controlled lights
-        logger.info("🔍 Verifying final states...")
-
-        for i, light_entity in enumerate(test_lights):
-            try:
-                state_result = await mcp_client.call_tool(
-                    "ha_get_state", {"entity_id": light_entity}
-                )
-                state_data = parse_mcp_result(state_result)
-                entity_data = validate_entity_state(state_data, light_entity)
-                current_state = entity_data["state"]
-
-                expected_state = "on" if i % 2 == 0 else "off"
-                logger.info(
-                    f"💡 {light_entity}: {current_state} (expected: {expected_state})"
-                )
-
-                # In test environment, state consistency is informational only
-                # Don't fail test due to Docker environment limitations
-
-            except Exception as e:
-                logger.warning(f"⚠️ Could not verify state for {light_entity}: {e}")
+        await _verify_bulk_final_states(mcp_client, test_lights)
 
     async def test_climate_control(self, mcp_client: Client) -> None:
         """

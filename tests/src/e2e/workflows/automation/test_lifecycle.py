@@ -29,6 +29,60 @@ from ...utilities.wait_helpers import (
 logger = logging.getLogger(__name__)
 
 
+async def _trigger_and_verify_automation(
+    mcp_client, automation_entity, automation_name
+):
+    """Trigger the automation and confirm it ran via the automation_triggered WS
+    event, falling back to a short logbook poll when the event is missed."""
+
+    async def _fire_trigger():
+        trigger_result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "automation",
+                "service": "trigger",
+                "entity_id": automation_entity,
+            },
+        )
+        assert_mcp_success(trigger_result, "automation trigger")
+
+    triggered_event = await wait_for_ha_event(
+        "automation_triggered",
+        _fire_trigger,
+        predicate=lambda ev: (
+            (ev.get("data") or {}).get("entity_id") == automation_entity
+        ),
+        timeout=5.0,
+    )
+
+    if triggered_event:
+        logger.info(f"✅ automation_triggered event observed for {automation_entity}")
+    else:
+        # Belt-and-suspenders fallback: even though the WS event
+        # missed, the trigger service call succeeded. Try the
+        # logbook path with a SHORT timeout so we don't burn the
+        # full 10s the previous flow did. Failure here is logged
+        # but doesn't fail the test — matches the original
+        # informational-only intent.
+        logger.warning(
+            "⚠️ automation_triggered event not observed within 5s — "
+            "falling back to logbook poll (2s budget)"
+        )
+        try:
+            automation_logged = await wait_for_logbook_entry(
+                mcp_client, automation_name, timeout=2, poll_interval=0.5
+            )
+            if automation_logged:
+                logger.info("📋 Automation execution verified via logbook fallback")
+            else:
+                logger.info(
+                    "📋 Logbook fallback also timed out — trigger service call "
+                    "succeeded, treating as informational"
+                )
+        except Exception as e:
+            logger.warning(f"Logbook fallback failed: {e} - continuing with test")
+
+
 @pytest.mark.automation
 @pytest.mark.cleanup
 class TestAutomationLifecycle:
@@ -182,54 +236,9 @@ class TestAutomationLifecycle:
             "🚀 Triggering automation + waiting for automation_triggered event..."
         )
 
-        async def _fire_trigger():
-            trigger_result = await mcp_client.call_tool(
-                "ha_call_service",
-                {
-                    "domain": "automation",
-                    "service": "trigger",
-                    "entity_id": automation_entity,
-                },
-            )
-            assert_mcp_success(trigger_result, "automation trigger")
-
-        triggered_event = await wait_for_ha_event(
-            "automation_triggered",
-            _fire_trigger,
-            predicate=lambda ev: (
-                (ev.get("data") or {}).get("entity_id") == automation_entity
-            ),
-            timeout=5.0,
+        await _trigger_and_verify_automation(
+            mcp_client, automation_entity, automation_name
         )
-
-        if triggered_event:
-            logger.info(
-                f"✅ automation_triggered event observed for {automation_entity}"
-            )
-        else:
-            # Belt-and-suspenders fallback: even though the WS event
-            # missed, the trigger service call succeeded. Try the
-            # logbook path with a SHORT timeout so we don't burn the
-            # full 10s the previous flow did. Failure here is logged
-            # but doesn't fail the test — matches the original
-            # informational-only intent.
-            logger.warning(
-                "⚠️ automation_triggered event not observed within 5s — "
-                "falling back to logbook poll (2s budget)"
-            )
-            try:
-                automation_logged = await wait_for_logbook_entry(
-                    mcp_client, automation_name, timeout=2, poll_interval=0.5
-                )
-                if automation_logged:
-                    logger.info("📋 Automation execution verified via logbook fallback")
-                else:
-                    logger.info(
-                        "📋 Logbook fallback also timed out — trigger service call "
-                        "succeeded, treating as informational"
-                    )
-            except Exception as e:
-                logger.warning(f"Logbook fallback failed: {e} - continuing with test")
 
         # 6. UPDATE: Modify automation to add delay and different time
         logger.info("📝 Updating automation configuration...")

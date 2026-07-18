@@ -96,6 +96,33 @@ def assert_state_response_success(data, operation_description="state operation")
         assert False, f"{operation_description} failed: {data}"
 
 
+def _build_datetime_create_params(
+    helper_name: str, has_date: bool, has_time: bool
+) -> dict[str, Any]:
+    """Build the ha_config_set_helper params for an input_datetime helper."""
+    create_params = {
+        "helper_type": "input_datetime",
+        "name": helper_name,
+        "icon": "mdi:calendar-clock",
+    }
+
+    # Set explicit date/time parameters (at least one required)
+    if has_date:
+        create_params["has_date"] = True
+    if has_time:
+        create_params["has_time"] = True
+
+    # Add appropriate initial values
+    if has_date and has_time:
+        create_params["initial"] = "2025-01-01 12:00:00"
+    elif has_date:
+        create_params["initial"] = "2025-01-01"
+    elif has_time:
+        create_params["initial"] = "12:00:00"
+
+    return create_params
+
+
 @pytest.mark.helper
 @pytest.mark.cleanup
 class TestHelperIntegration:
@@ -631,25 +658,9 @@ class TestHelperIntegration:
             logger.info(f"📅 Testing datetime mode: {description}")
 
             # 1. CREATE: DateTime helper with specific mode
-            create_params = {
-                "helper_type": "input_datetime",
-                "name": helper_name,
-                "icon": "mdi:calendar-clock",
-            }
-
-            # Set explicit date/time parameters (at least one required)
-            if has_date:
-                create_params["has_date"] = True
-            if has_time:
-                create_params["has_time"] = True
-
-            # Add appropriate initial values
-            if has_date and has_time:
-                create_params["initial"] = "2025-01-01 12:00:00"
-            elif has_date:
-                create_params["initial"] = "2025-01-01"
-            elif has_time:
-                create_params["initial"] = "12:00:00"
+            create_params = _build_datetime_create_params(
+                helper_name, has_date, has_time
+            )
 
             create_result = await mcp_client.call_tool(
                 "ha_config_set_helper", create_params

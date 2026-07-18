@@ -562,130 +562,11 @@ class TestErrorHandling:
 
         entities = search_data["entities"][:3]
 
-        # 1. CONCURRENT INDIVIDUAL OPERATIONS: Multiple simultaneous service calls
-        logger.info("🔄 Testing concurrent individual operations...")
+        await _run_concurrent_individual_operations(mcp_client, entities)
 
-        async def call_service_for_entity(entity):
-            """Helper function to call service for an entity."""
-            try:
-                result = await _safe_tool_call_standalone(
-                    mcp_client,
-                    "ha_call_service",
-                    {
-                        "domain": "homeassistant",
-                        "service": "update_entity",
-                        "entity_id": entity["entity_id"],
-                    },
-                )
-                return parse_mcp_result(result)
-            except Exception as e:
-                logger.warning(
-                    f"Service call failed for {entity.get('entity_id', 'unknown')}: {e}"
-                )
-                return {"success": False, "error": str(e)}
+        await _run_concurrent_bulk_operations(mcp_client, entities)
 
-        # Execute concurrent operations
-        concurrent_tasks = [call_service_for_entity(entity) for entity in entities]
-        concurrent_results = await asyncio.gather(
-            *concurrent_tasks, return_exceptions=True
-        )
-
-        successful_ops = sum(
-            1
-            for result in concurrent_results
-            if isinstance(result, dict) and result.get("success")
-        )
-        logger.info(
-            f"  ✅ {successful_ops}/{len(entities)} concurrent operations succeeded"
-        )
-
-        # 2. CONCURRENT BULK OPERATIONS: Multiple bulk operations simultaneously
-        logger.info("📦 Testing concurrent bulk operations...")
-
-        entity_groups = [
-            [entities[0]["entity_id"]] if len(entities) > 0 else [],
-            [entities[1]["entity_id"]] if len(entities) > 1 else [],
-        ]
-
-        async def bulk_operation(entity_list, action):
-            """Helper function for bulk operation."""
-            if not entity_list:
-                return {"success": False, "error": "No entities"}
-            try:
-                result = await _safe_tool_call_standalone(
-                    mcp_client,
-                    "ha_bulk_control",
-                    {
-                        "operations": [
-                            {"entity_id": entity_id, "action": action}
-                            for entity_id in entity_list
-                        ]
-                    },
-                )
-                return parse_mcp_result(result)
-            except Exception as e:
-                logger.warning(f"Bulk operation failed for action {action}: {e}")
-                return {"success": False, "error": str(e)}
-
-        bulk_tasks = [
-            bulk_operation(entity_groups[0], "turn_on"),
-            bulk_operation(
-                entity_groups[1] if len(entity_groups) > 1 else [], "turn_off"
-            ),
-        ]
-
-        bulk_results = await asyncio.gather(*bulk_tasks, return_exceptions=True)
-
-        successful_bulk = sum(
-            1
-            for result in bulk_results
-            if isinstance(result, dict) and result.get("success")
-        )
-        logger.info(
-            f"  ✅ {successful_bulk}/{len(bulk_tasks)} concurrent bulk operations succeeded"
-        )
-
-        # 3. CONCURRENT HELPER CREATION: Create multiple helpers simultaneously
-        logger.info("🔧 Testing concurrent helper creation...")
-
-        async def create_helper(helper_name, helper_type):
-            """Helper function to create a helper."""
-            try:
-                result = await _safe_tool_call_standalone(
-                    mcp_client,
-                    "ha_config_set_helper",
-                    {"helper_type": helper_type, "name": helper_name},
-                )
-                data = parse_mcp_result(result)
-                if data.get("success"):
-                    # Track for cleanup
-                    entity_id = (
-                        data.get("entity_id")
-                        or f"{helper_type}.{helper_name.lower().replace(' ', '_')}"
-                    )
-                    if hasattr(cleanup_tracker, "track"):
-                        cleanup_tracker.track("helper", entity_id)
-                return data
-            except Exception as e:
-                logger.warning(f"Helper creation failed for {helper_name}: {e}")
-                return {"success": False, "error": str(e)}
-
-        helper_tasks = [
-            create_helper("Concurrent Test 1", "input_boolean"),
-            create_helper("Concurrent Test 2", "input_boolean"),
-            create_helper("Concurrent Test 3", "input_text"),
-        ]
-
-        helper_results = await asyncio.gather(*helper_tasks, return_exceptions=True)
-
-        successful_helpers = sum(
-            1
-            for result in helper_results
-            if isinstance(result, dict) and result.get("success")
-        )
-        logger.info(
-            f"  ✅ {successful_helpers}/{len(helper_tasks)} concurrent helper creations succeeded"
-        )
+        await _run_concurrent_helper_creation(mcp_client, cleanup_tracker)
 
         logger.info("✅ Concurrent operation handling test completed")
 
@@ -706,6 +587,133 @@ async def _safe_tool_call_standalone(
     except Exception as e:
         logger.warning(f"Tool call {tool_name} failed: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def _run_concurrent_individual_operations(mcp_client, entities):
+    """Fire simultaneous update_entity service calls and log the success count."""
+    logger.info("🔄 Testing concurrent individual operations...")
+
+    async def call_service_for_entity(entity):
+        """Helper function to call service for an entity."""
+        try:
+            result = await _safe_tool_call_standalone(
+                mcp_client,
+                "ha_call_service",
+                {
+                    "domain": "homeassistant",
+                    "service": "update_entity",
+                    "entity_id": entity["entity_id"],
+                },
+            )
+            return parse_mcp_result(result)
+        except Exception as e:
+            logger.warning(
+                f"Service call failed for {entity.get('entity_id', 'unknown')}: {e}"
+            )
+            return {"success": False, "error": str(e)}
+
+    # Execute concurrent operations
+    concurrent_tasks = [call_service_for_entity(entity) for entity in entities]
+    concurrent_results = await asyncio.gather(*concurrent_tasks, return_exceptions=True)
+
+    successful_ops = sum(
+        1
+        for result in concurrent_results
+        if isinstance(result, dict) and result.get("success")
+    )
+    logger.info(
+        f"  ✅ {successful_ops}/{len(entities)} concurrent operations succeeded"
+    )
+
+
+async def _run_concurrent_bulk_operations(mcp_client, entities):
+    """Run multiple bulk operations simultaneously and log the success count."""
+    logger.info("📦 Testing concurrent bulk operations...")
+
+    entity_groups = [
+        [entities[0]["entity_id"]] if len(entities) > 0 else [],
+        [entities[1]["entity_id"]] if len(entities) > 1 else [],
+    ]
+
+    async def bulk_operation(entity_list, action):
+        """Helper function for bulk operation."""
+        if not entity_list:
+            return {"success": False, "error": "No entities"}
+        try:
+            result = await _safe_tool_call_standalone(
+                mcp_client,
+                "ha_bulk_control",
+                {
+                    "operations": [
+                        {"entity_id": entity_id, "action": action}
+                        for entity_id in entity_list
+                    ]
+                },
+            )
+            return parse_mcp_result(result)
+        except Exception as e:
+            logger.warning(f"Bulk operation failed for action {action}: {e}")
+            return {"success": False, "error": str(e)}
+
+    bulk_tasks = [
+        bulk_operation(entity_groups[0], "turn_on"),
+        bulk_operation(entity_groups[1] if len(entity_groups) > 1 else [], "turn_off"),
+    ]
+
+    bulk_results = await asyncio.gather(*bulk_tasks, return_exceptions=True)
+
+    successful_bulk = sum(
+        1
+        for result in bulk_results
+        if isinstance(result, dict) and result.get("success")
+    )
+    logger.info(
+        f"  ✅ {successful_bulk}/{len(bulk_tasks)} concurrent bulk operations succeeded"
+    )
+
+
+async def _run_concurrent_helper_creation(mcp_client, cleanup_tracker):
+    """Create multiple helpers simultaneously and log the success count."""
+    logger.info("🔧 Testing concurrent helper creation...")
+
+    async def create_helper(helper_name, helper_type):
+        """Helper function to create a helper."""
+        try:
+            result = await _safe_tool_call_standalone(
+                mcp_client,
+                "ha_config_set_helper",
+                {"helper_type": helper_type, "name": helper_name},
+            )
+            data = parse_mcp_result(result)
+            if data.get("success"):
+                # Track for cleanup
+                entity_id = (
+                    data.get("entity_id")
+                    or f"{helper_type}.{helper_name.lower().replace(' ', '_')}"
+                )
+                if hasattr(cleanup_tracker, "track"):
+                    cleanup_tracker.track("helper", entity_id)
+            return data
+        except Exception as e:
+            logger.warning(f"Helper creation failed for {helper_name}: {e}")
+            return {"success": False, "error": str(e)}
+
+    helper_tasks = [
+        create_helper("Concurrent Test 1", "input_boolean"),
+        create_helper("Concurrent Test 2", "input_boolean"),
+        create_helper("Concurrent Test 3", "input_text"),
+    ]
+
+    helper_results = await asyncio.gather(*helper_tasks, return_exceptions=True)
+
+    successful_helpers = sum(
+        1
+        for result in helper_results
+        if isinstance(result, dict) and result.get("success")
+    )
+    logger.info(
+        f"  ✅ {successful_helpers}/{len(helper_tasks)} concurrent helper creations succeeded"
+    )
 
 
 @pytest.mark.error_handling

@@ -81,6 +81,45 @@ async def _build_readonly_server(
     return server, ha_client
 
 
+async def _restore_read_only_and_warm_client(
+    set_read_only, await_read_only, mcp_client, transient
+) -> None:
+    """Restore read-only mode to off, then warm the shared session client.
+
+    Runs in the inaddon test's ``finally`` so a leaked read-only never cascades
+    into the worker's remaining tests.
+    """
+    import asyncio
+    import time
+
+    # Restore read-only OFF: this worker's remaining tests share the add-on
+    # and need writes, so a leaked read-only would cascade READ_ONLY_MODE into
+    # all of them. Retry the whole set+restart until it's confirmed off.
+    restore_deadline = time.monotonic() + 300.0
+    while True:
+        try:
+            await set_read_only(False)
+            await await_read_only(False)
+            break
+        except transient:
+            if time.monotonic() >= restore_deadline:
+                raise
+            await asyncio.sleep(3)
+    # The dev-add-on restarts above dropped the SHARED session mcp_client's
+    # connection. Warm it back up so the next test loadscope schedules on this
+    # worker gets a live session rather than a stale one (a read tool is enough
+    # to force re-establishment; retry while the add-on finishes coming up).
+    warm_deadline = time.monotonic() + 120.0
+    while True:
+        try:
+            await mcp_client.call_tool("ha_get_overview", {})
+            break
+        except transient:
+            if time.monotonic() >= warm_deadline:
+                raise
+            await asyncio.sleep(3)
+
+
 @pytest.fixture
 async def readonly_mcp(ha_container_with_fresh_config, monkeypatch, tmp_path):
     """Read-only server with the default full catalog (tool search off)."""
@@ -524,29 +563,6 @@ async def test_inaddon_read_only_mode_blocks_radio_writes(
             )
             assert blocked.get("tool_name") == "ha_manage_radio", blocked
     finally:
-        # Restore read-only OFF: this worker's remaining tests share the add-on
-        # and need writes, so a leaked read-only would cascade READ_ONLY_MODE into
-        # all of them. Retry the whole set+restart until it's confirmed off.
-        restore_deadline = time.monotonic() + 300.0
-        while True:
-            try:
-                await _set_read_only(False)
-                await _await_read_only(False)
-                break
-            except _transient:
-                if time.monotonic() >= restore_deadline:
-                    raise
-                await asyncio.sleep(3)
-        # The dev-add-on restarts above dropped the SHARED session mcp_client's
-        # connection. Warm it back up so the next test loadscope schedules on this
-        # worker gets a live session rather than a stale one (a read tool is enough
-        # to force re-establishment; retry while the add-on finishes coming up).
-        warm_deadline = time.monotonic() + 120.0
-        while True:
-            try:
-                await mcp_client.call_tool("ha_get_overview", {})
-                break
-            except _transient:
-                if time.monotonic() >= warm_deadline:
-                    raise
-                await asyncio.sleep(3)
+        await _restore_read_only_and_warm_client(
+            _set_read_only, _await_read_only, mcp_client, _transient
+        )
