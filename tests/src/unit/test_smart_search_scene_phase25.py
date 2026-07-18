@@ -383,8 +383,13 @@ class TestSceneIntegrationFilter:
         reason = result.get("partial_reason", "")
         # The real failure is named (so the operator knows something broke).
         # Wording strengthened in PR #1529 R5 — every per-type/scene
-        # incompleteness fragment carries the "not scanned" triad.
-        assert "scene(s) not scanned (per-id fetch raised)" in reason
+        # incompleteness fragment carries the "not scanned" triad — and the
+        # #1784 follow-up added the representative-error ``e.g.`` so the
+        # response itself says WHAT raised.
+        assert (
+            "scene(s) not scanned (per-id fetch raised; "
+            "e.g. RuntimeError: REST 500 on movie_night)" in reason
+        )
         assert "match status is unknown" in reason.lower()
         # Integration-managed scenes are surfaced separately so their
         # 100+ count on Hue installs doesn't read as "everything broken".
@@ -608,6 +613,57 @@ class TestApplyScenePartialFlag:
         # automation/script paths in PR #1529 R5.
         assert "match status is unknown" in reason
         assert "not exhaustive" in reason
+
+    def test_failed_fragment_carries_error_sample_when_provided(self) -> None:
+        """The scene failed fragment names ONE representative error when
+        Attempt C captured one (#1784 follow-up) — mirrors the
+        automation/script ``e.g.`` sample so the response itself carries
+        the diagnosis instead of pointing at a debug-log dive. An HTTP 500's
+        body is aiohttp's generic placeholder, so the static HA-log hint
+        rides alongside the sample (also mirroring the automation/script
+        path)."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 2,
+                "skipped": 0,
+                "integration_skipped": 0,
+                "registry_failed": False,
+                "failed_sample": "HTTP 500: 500 Internal Server Error",
+            },
+        )
+        assert response["partial"] is True
+        reason = response["partial_reason"]
+        assert (
+            "2 scene(s) not scanned (per-id fetch raised; "
+            "e.g. HTTP 500: 500 Internal Server Error)" in reason
+        )
+        assert "match status is unknown" in reason
+        assert "not exhaustive" in reason
+        assert "in the Home Assistant log" in reason
+
+    def test_stats_dict_without_failed_sample_key_is_tolerated(self) -> None:
+        """``failed_sample`` is read with ``.get()`` — older stats-dict
+        builders without the key keep the exact prior wording, with no
+        dangling ``e.g.``."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 3,
+                "skipped": 0,
+                "integration_skipped": 0,
+                "registry_failed": False,
+            },
+        )
+        reason = response["partial_reason"]
+        assert "3 scene(s) not scanned (per-id fetch raised)" in reason
+        assert "e.g." not in reason
 
     def test_timeout_sets_partial_pointing_at_concurrency_knobs(self) -> None:
         """Per-request timeouts (issue #1784) must surface as their own

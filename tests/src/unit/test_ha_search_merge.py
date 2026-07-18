@@ -967,6 +967,85 @@ def test_budget_partial_flag_distinguishes_timeout_from_failed() -> None:
     assert reason.count(" ; ") == 1
 
 
+def test_failed_fragment_carries_error_sample_when_provided() -> None:
+    """The generic non-404 fragment names ONE representative error when the
+    fetch path captured one (#1784 follow-up): the opaque "raised a non-404
+    error" hid a trivially-diagnosable server-side failure — every per-id
+    script fetch 500ing on a ``!secret`` reference in scripts.yaml —
+    behind a debug-log dive. The sample makes the response itself carry the
+    diagnosis; because an HTTP 500's body is aiohttp's generic placeholder
+    (the ``!secret`` cause is HA-log-only), the static HA-log hint rides
+    alongside the sample."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(
+        response,
+        script_failed=27,
+        script_failed_sample="HTTP 500: 500 Internal Server Error",
+    )
+    assert response["partial"] is True
+    reason = response["partial_reason"]
+    assert (
+        "27 script(s) not scanned (per-id fetch raised a non-404 error; "
+        "e.g. HTTP 500: 500 Internal Server Error)" in reason
+    )
+    assert "match status is unknown" in reason
+    assert "not exhaustive" in reason
+    assert "`!secret` reference in the config file HA loads" in reason
+    assert "in the Home Assistant log" in reason
+
+
+def test_failed_fragment_unchanged_without_sample() -> None:
+    """No captured sample → the exact prior wording, with no dangling
+    ``e.g.`` (pins backward compatibility of the fragment)."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(response, automation_failed=4)
+    reason = response["partial_reason"]
+    assert "4 automation(s) not scanned (per-id fetch raised a non-404 error)" in reason
+    assert "e.g." not in reason
+
+
+def test_failed_sample_is_per_type() -> None:
+    """Automation and script samples ride their own fragments — no
+    cross-type bleed."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(
+        response,
+        automation_failed=1,
+        automation_failed_sample="RuntimeError: automation boom",
+        script_failed=2,
+        script_failed_sample="HTTP 500: script boom",
+    )
+    reason = response["partial_reason"]
+    assert "non-404 error; e.g. RuntimeError: automation boom)" in reason
+    assert "non-404 error; e.g. HTTP 500: script boom)" in reason
+    # The static HA-log hint is scoped to HTTP-500 samples: the 500 script
+    # fragment carries it, the RuntimeError automation fragment does not.
+    assert reason.count("in the Home Assistant log") == 1
+
+
+def test_http_500_hint_only_on_http_500_sample() -> None:
+    """The static HA-log hint rides an HTTP-500 sample (whose body can't name
+    the cause) but not a non-500 sample, which already names its own type +
+    message. Scoping it keeps every non-500 fragment byte-identical."""
+    http500: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(
+        http500, automation_failed=1, automation_failed_sample="HTTP 500: boom"
+    )
+    assert "in the Home Assistant log" in http500["partial_reason"]
+
+    non500: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(
+        non500,
+        automation_failed=1,
+        automation_failed_sample="HTTP 502: Bad Gateway",
+    )
+    assert "in the Home Assistant log" not in non500["partial_reason"]
+
+    no_sample: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(no_sample, automation_failed=1)
+    assert "in the Home Assistant log" not in no_sample["partial_reason"]
+
+
 def test_budget_partial_flag_set_when_helper_type_lists_failed() -> None:
     """Helpers run on every default ha_search call; silent per-type-list
     failures previously left callers unable to distinguish a clean
