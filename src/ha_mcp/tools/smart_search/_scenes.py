@@ -273,10 +273,12 @@ class SceneSearchMixin(ConfigFetchMixin):
         skipped_count = 0
         integration_skipped = 0
         timeout_count = 0
-        # One representative summary — only the FIRST ``failed``-class
-        # exception is kept (the fetch closure guards the append); it rides
-        # partial_reason as an ``e.g.`` (#1784 follow-up). The remaining
-        # failures are counted (``failed_count``) but not summarized.
+        # One representative summary — ``record_first_failure`` (which holds
+        # the guard) keeps the first ``failed``-class exception, upgrading
+        # once to the first HTTP 500 so a fast-failing outlier can't suppress
+        # the 500 diagnosis hint; it rides partial_reason as an ``e.g.``
+        # (#1784 follow-up). The remaining failures are counted
+        # (``failed_count``) but not summarized.
         failed_errors: list[str] = []
 
         # Attempt C: parallel per-id fetch with a wall-clock budget so a few
