@@ -139,6 +139,10 @@ def transform_tools(tools):
     bypassed so tests don't have to compute matching `compute_config_hash`
     values — the parity key under test depends only on the post-upsert
     `entity_id` resolution, not on the hash arithmetic.
+
+    `_fetch_and_verify_hash` returns ``(config, resolved_id)`` since #1813
+    Phase 0 — the second element is the already-resolved storage key the tool
+    threads into the upsert.
     """
     canonical_config = {
         "alias": "Morning Routine",
@@ -147,7 +151,9 @@ def transform_tools(tools):
             {"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}
         ],
     }
-    tools._fetch_and_verify_hash = AsyncMock(return_value=dict(canonical_config))
+    tools._fetch_and_verify_hash = AsyncMock(
+        return_value=(dict(canonical_config), "abc123unique")
+    )
     tools._get_automation_config_internal = AsyncMock(
         return_value=(dict(canonical_config), "post_transform_hash")
     )
@@ -307,6 +313,103 @@ class TestFullConfigSetAutomationIdKey:
 
         assert result["success"] is True
         assert "automation_id" not in result
+
+
+class TestAutomationUpsertResolvedThreading:
+    """Issue #1813 Phase 0 item #6: when the tool pre-resolves the identifier
+    (its hash-verify fetch already resolved the storage key), it threads
+    ``_resolved=True`` and the resolved unique_id into
+    ``upsert_automation_config`` so the REST client skips the redundant second
+    resolve. The no-pre-resolve paths (create, no-hash update) stay unthreaded.
+    """
+
+    @pytest.fixture
+    def canonical_config(self):
+        return {
+            "alias": "Morning Routine",
+            "trigger": [{"platform": "time", "at": "07:00:00"}],
+            "action": [
+                {"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}
+            ],
+        }
+
+    async def test_python_transform_threads_resolved_id(
+        self, transform_tools, mock_client
+    ):
+        """python_transform always hash-verifies first → upsert gets the resolved
+        id with ``_resolved=True``."""
+        result = await transform_tools.ha_config_set_automation(
+            identifier="automation.morning_routine",
+            python_transform="config['mode'] = 'single'",
+            config_hash="prior_hash",
+        )
+
+        assert result["success"] is True
+        args, kwargs = mock_client.upsert_automation_config.call_args
+        assert kwargs.get("_resolved") is True
+        # ``_fetch_and_verify_hash`` (stubbed) resolved to "abc123unique".
+        assert args[1] == "abc123unique"
+
+    async def test_full_config_with_hash_threads_resolved_id(
+        self, tools, mock_client, canonical_config
+    ):
+        """A full-config update that supplies ``config_hash`` pre-resolves via the
+        hash-verify fetch (config['id']), so the upsert is threaded."""
+        import copy
+
+        from ha_mcp.tools.tools_config_automations import (
+            _normalize_config_for_roundtrip,
+        )
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        # The hash-verify fetch normalizes the stub's returned config; the caller
+        # hash must match that to clear the optimistic-locking gate. Deep-copy
+        # before normalizing so the shared mock return_value the tool re-reads
+        # stays pristine.
+        fetched = await mock_client.get_automation_config("automation.morning_routine")
+        seed_hash = compute_config_hash(
+            _normalize_config_for_roundtrip(copy.deepcopy(fetched))
+        )
+
+        result = await tools.ha_config_set_automation(
+            identifier="automation.morning_routine",
+            config=canonical_config,
+            config_hash=seed_hash,
+            wait=False,
+        )
+
+        assert result["success"] is True
+        args, kwargs = mock_client.upsert_automation_config.call_args
+        assert kwargs.get("_resolved") is True
+        assert args[1] == "abc123unique"
+
+    async def test_full_config_without_hash_is_not_threaded(
+        self, tools, mock_client, canonical_config
+    ):
+        """No ``config_hash`` → no pre-resolve → the raw identifier is passed and
+        the REST client resolves once (``_resolved`` stays False/absent)."""
+        result = await tools.ha_config_set_automation(
+            identifier="automation.morning_routine",
+            config=canonical_config,
+            wait=False,
+        )
+
+        assert result["success"] is True
+        args, kwargs = mock_client.upsert_automation_config.call_args
+        assert kwargs.get("_resolved", False) is False
+        assert args[1] == "automation.morning_routine"
+
+    async def test_create_is_not_threaded(self, tools, mock_client, canonical_config):
+        """Create (identifier omitted) never pre-resolves — upsert gets
+        identifier=None with no ``_resolved`` flag."""
+        result = await tools.ha_config_set_automation(
+            config=canonical_config, wait=False
+        )
+
+        assert result["success"] is True
+        args, kwargs = mock_client.upsert_automation_config.call_args
+        assert kwargs.get("_resolved", False) is False
+        assert args[1] is None
 
 
 class TestDeleteAutomationIdKey:

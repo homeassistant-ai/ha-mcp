@@ -293,6 +293,104 @@ class TestUpsertAutomationConfigIdMismatch:
         assert result["entity_id"] == "automation.new"
 
 
+class TestUpsertAutomationResolvedShortCircuit:
+    """``_resolved=True`` skips the redundant ``_resolve_automation_id`` lookup
+    on ``upsert_automation_config`` (issue #1813 Phase 0 item #6).
+
+    The tool pre-resolves the identifier during its hash-verify fetch and
+    threads the resolved unique_id through, so the second resolve inside the
+    upsert is pure waste. These tests pin that ``_resolved=True`` uses the
+    passed id directly and never consults the resolver, while the default path
+    still resolves — and that the #1404 mismatch guard is unaffected either way.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
+            client = HomeAssistantClient()
+            client.base_url = "http://test.local:8123"
+            client.token = "test-token"
+            client.timeout = 30
+            client.httpx_client = MagicMock()
+            return client
+
+    @pytest.mark.asyncio
+    async def test_resolved_skips_lookup(self, mock_client):
+        """``_resolved=True`` uses ``identifier`` directly as the unique_id and
+        does not consult the entity_id→unique_id resolver."""
+        mock_client._resolve_automation_id = AsyncMock()
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        result = await mock_client.upsert_automation_config(
+            {"alias": "x", "trigger": [], "action": []},
+            identifier="AAA",
+            _resolved=True,
+        )
+
+        assert result["unique_id"] == "AAA"
+        assert result["operation"] == "updated"
+        mock_client._resolve_automation_id.assert_not_called()
+        method, url = mock_client._request.call_args.args
+        assert url == "/config/automation/config/AAA"
+        # The resolved id is injected into the body just like the default path.
+        assert mock_client._request.call_args.kwargs["json"]["id"] == "AAA"
+
+    @pytest.mark.asyncio
+    async def test_default_still_resolves(self, mock_client):
+        """Contrast: without ``_resolved`` the entity_id→unique_id resolver is
+        consulted (the pre-#1813 behaviour on a raw identifier)."""
+        mock_client._resolve_automation_id = AsyncMock(return_value="AAA")
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        result = await mock_client.upsert_automation_config(
+            {"alias": "x", "trigger": [], "action": []},
+            identifier="automation.foo",
+        )
+
+        assert result["unique_id"] == "AAA"
+        mock_client._resolve_automation_id.assert_awaited_once_with("automation.foo")
+
+    @pytest.mark.asyncio
+    async def test_resolved_still_enforces_id_mismatch_guard(self, mock_client):
+        """``_resolved=True`` must not bypass the #1404 mismatch guard: a config
+        ``id`` disagreeing with the threaded unique_id is still rejected before
+        any POST reaches HA."""
+        mock_client._resolve_automation_id = AsyncMock()
+        mock_client._request = AsyncMock()
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.upsert_automation_config(
+                {"id": "BBB", "alias": "x", "trigger": [], "action": []},
+                identifier="AAA",
+                _resolved=True,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "Mismatched" in str(exc_info.value)
+        # The resolver is never touched and the offending POST never fires.
+        mock_client._resolve_automation_id.assert_not_called()
+        mock_client._request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_path_ignores_resolved_flag(self, mock_client):
+        """On the create path (``identifier is None``) ``_resolved`` is a no-op —
+        a fresh timestamp unique_id is still generated, resolver untouched."""
+        mock_client._resolve_automation_id = AsyncMock()
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+        mock_client._poll_for_automation_entity = AsyncMock(
+            return_value="automation.new"
+        )
+
+        result = await mock_client.upsert_automation_config(
+            {"alias": "x", "trigger": [], "action": []},
+            identifier=None,
+            _resolved=True,
+        )
+
+        assert result["operation"] == "created"
+        mock_client._resolve_automation_id.assert_not_called()
+
+
 class TestPollForAutomationEntity:
     """Tests for ``_poll_for_automation_entity`` (issues #1152, #1380, #1395).
 

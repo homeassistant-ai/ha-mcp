@@ -267,10 +267,13 @@ class TestResolveSceneId:
 
 
 class TestSceneResolvedShortCircuit:
-    """``_resolved=True`` skips the redundant ``resolve_scene_id`` lookup on the
-    get/upsert/delete scene methods (issue #1813 P5 item 3). ``_make_mock_client``
-    makes ``send_websocket_message`` raise, so ``assert_not_called`` proves the
-    resolver was skipped rather than merely falling back."""
+    """Skipping the redundant ``resolve_scene_id`` lookup on get/upsert/delete
+    scene methods (issue #1813 P5 item 3). ``get``/``delete`` take
+    ``_resolved=True``; ``upsert`` takes a separate ``resolved_id`` write-target
+    (so ``scene_id`` stays the caller's id for the missing-``name`` default —
+    #1935). ``_make_mock_client`` makes ``send_websocket_message`` raise, so
+    ``assert_not_called`` proves the resolver was skipped rather than merely
+    falling back."""
 
     @pytest.fixture
     def mock_client(self):
@@ -289,16 +292,54 @@ class TestSceneResolvedShortCircuit:
         )
 
     @pytest.mark.asyncio
-    async def test_upsert_scene_resolved_skips_lookup(self, mock_client):
+    async def test_upsert_scene_resolved_id_skips_lookup(self, mock_client):
         mock_client._request = AsyncMock(return_value={"result": "ok"})
 
         result = await mock_client.upsert_scene_config(
-            {"entities": {"light.k": {"state": "on"}}}, "storage_key", _resolved=True
+            {"name": "S", "entities": {"light.k": {"state": "on"}}},
+            "renamed_scene",
+            resolved_id="storage_key",
         )
 
         assert result["scene_id"] == "storage_key"
         mock_client.send_websocket_message.assert_not_called()
         assert mock_client._request.call_args[0][1] == "config/scene/config/storage_key"
+
+    @pytest.mark.asyncio
+    async def test_upsert_scene_resolved_id_name_defaults_to_caller_scene_id(
+        self, mock_client
+    ):
+        """#1935 regression: with ``resolved_id`` provided (renamed scene), a
+        missing ``name`` defaults to the CALLER's ``scene_id`` — NOT the storage
+        key — while the write still targets the resolved key with no re-resolve."""
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        config = {"entities": {"light.k": {"state": "on"}}}  # no name
+        result = await mock_client.upsert_scene_config(
+            config, "new_slug", resolved_id="old_storage_key"
+        )
+
+        # Write targets the resolved storage key; resolver never consulted.
+        assert result["scene_id"] == "old_storage_key"
+        mock_client.send_websocket_message.assert_not_called()
+        method, endpoint = mock_client._request.call_args.args
+        assert endpoint == "config/scene/config/old_storage_key"
+        # Name defaulted from the caller's id, not the stale storage key.
+        assert mock_client._request.call_args.kwargs["json"]["name"] == "new_slug"
+
+    @pytest.mark.asyncio
+    async def test_upsert_scene_name_default_strips_entity_prefix(self, mock_client):
+        """A caller-facing ``scene.<slug>`` id must NOT become the scene name
+        verbatim — HA derives the entity_id from the name slug, so a prefixed
+        default would rename the scene and change its entity_id on a plain update."""
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        config = {"entities": {"light.k": {"state": "on"}}}  # no name
+        await mock_client.upsert_scene_config(
+            config, "scene.movie_night", resolved_id="movie_night"
+        )
+
+        assert mock_client._request.call_args.kwargs["json"]["name"] == "movie_night"
 
     @pytest.mark.asyncio
     async def test_delete_scene_resolved_skips_lookup(self, mock_client):

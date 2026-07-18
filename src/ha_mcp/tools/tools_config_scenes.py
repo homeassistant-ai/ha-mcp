@@ -386,7 +386,7 @@ class ConfigSceneTools:
 
     async def _get_scene_config_internal(
         self, scene_id: str, *, _resolved: bool = False
-    ) -> tuple[dict[str, Any], str, str]:
+    ) -> tuple[dict[str, Any], str, str | None]:
         """Fetch scene config without logging or category injection.
 
         Returns ``(actual_config, config_hash, resolved_id)`` where
@@ -394,27 +394,36 @@ class ConfigSceneTools:
         ``resolved_id`` is the storage key the rest-client resolved the input
         to (issue #1168 R3 blocker 6). Used by ``_fetch_and_verify_hash``.
 
+        ``resolved_id`` is ``None`` when the envelope omits ``scene_id`` — the
+        write target must then be re-resolved from the caller's input rather
+        than defaulting to the (unresolved) caller slug, which for a renamed
+        scene would target the wrong storage key. This is a structural
+        invariant, not a live path: ``get_scene_config`` always sets the key.
+
         ``_resolved=True`` forwards to ``get_scene_config`` that ``scene_id`` is
         already a resolved storage key, so the redundant registry lookup is
         skipped (e.g. the python_transform re-fetch, which already resolved).
         """
         envelope = await self._client.get_scene_config(scene_id, _resolved=_resolved)
         actual_config = envelope.get("config", envelope)
-        resolved_id = envelope.get("scene_id", scene_id.removeprefix("scene."))
+        resolved_id = envelope.get("scene_id")
         config_hash_value = compute_config_hash(actual_config)
         return actual_config, config_hash_value, resolved_id
 
     async def _fetch_and_verify_hash(
         self, scene_id: str, config_hash: str, action: str
-    ) -> tuple[dict[str, Any], str]:
+    ) -> tuple[dict[str, Any], str | None]:
         """Fetch current scene config and verify config_hash for optimistic locking.
 
         Returns ``(actual_config, resolved_id)`` — the inner scene body and
-        the storage key the rest-client resolved the input to. Raises
-        ``ToolError`` if the hash does not match (conflict). Issue #1168 R3
-        blocker 6: callers thread ``resolved_id`` into responses so the
-        outer ``scene_id`` matches the inner body's ``id`` regardless of
-        whether the caller passed the entity_id slug or the storage key.
+        the storage key the rest-client resolved the input to. ``resolved_id``
+        is ``None`` when the envelope omitted the key, so the upsert re-resolves
+        rather than writing to the caller slug; the caller then re-binds it from
+        the upsert result. Raises ``ToolError`` if the hash does not match
+        (conflict). Issue #1168 R3 blocker 6: callers thread ``resolved_id`` into
+        responses so the outer ``scene_id`` matches the inner body's ``id``
+        regardless of whether the caller passed the entity_id slug or the
+        storage key.
         """
         (
             actual_config,
@@ -691,6 +700,12 @@ class ConfigSceneTools:
                 actual_config, resolved_id = await self._fetch_and_verify_hash(
                     scene_id, config_hash, "python_transform"
                 )
+                # Capture the scene's own ``id`` BEFORE the transform mutates the
+                # config in place — it is the stable identity the id-change guard
+                # compares against (in production it equals ``resolved_id``; it is
+                # also correct when ``resolved_id`` is None because the envelope
+                # omitted ``scene_id``).
+                original_id = actual_config.get("id")
 
                 try:
                     transformed_config = safe_execute(python_transform, actual_config)
@@ -773,23 +788,26 @@ class ConfigSceneTools:
                 # legitimate (HA treats ``id`` as optional) and should pass
                 # through. R7 blocker 24: ``transformed_config["id"] = None``
                 # is the in-place equivalent of ``del`` — normalise both
-                # by checking against ``(None, resolved_id)``, so only an
-                # explicit non-None mismatch triggers the reject.
+                # by checking against ``(None, original_id)``, so only an
+                # explicit non-None mismatch triggers the reject. Compare against
+                # the scene's own captured ``id`` (not ``resolved_id``, which may
+                # be None on the structural-invariant path) — in production the
+                # two are equal.
                 if "id" in transformed_config and transformed_config["id"] not in (
                     None,
-                    resolved_id,
+                    original_id,
                 ):
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_FAILED,
                             "Transform must not change ``config['id']``",
                             suggestions=[
-                                f"Original scene_id is {resolved_id!r} — keep it unchanged",
+                                f"Original scene_id is {original_id!r} — keep it unchanged",
                                 "To rename a scene, use ha_config_remove_scene + ha_config_set_scene",
                             ],
                             context={
                                 "action": "python_transform",
-                                "scene_id": resolved_id,
+                                "scene_id": original_id,
                                 "attempted_id": transformed_config.get("id"),
                             },
                         )
@@ -828,9 +846,17 @@ class ConfigSceneTools:
                 if category:
                     await self._validate_category_id(category)
 
+                # ``resolved_id`` is the storage key (write target); ``scene_id``
+                # stays the caller id so a missing ``name`` defaults caller-facing
+                # rather than to the storage key (#1935).
                 result = await self._client.upsert_scene_config(
-                    transformed_config, resolved_id, _resolved=True
+                    transformed_config, scene_id, resolved_id=resolved_id
                 )
+                # The upsert re-resolves when ``resolved_id`` was None (envelope
+                # omitted the key); re-bind to the authoritative write target it
+                # returned so the re-fetch, entity resolution, and response all
+                # use the resolved storage key rather than a possible None.
+                resolved_id = result.get("scene_id", resolved_id)
 
                 # Re-fetch to get authoritative hash (HA may normalise after save).
                 # ``resolved_id`` is already the storage key, so skip the re-resolve.
@@ -960,10 +986,18 @@ class ConfigSceneTools:
             )
 
             # ``resolved_id`` is already the storage key (from the hash-verify
-            # fetch or the resolve above), so skip the redundant re-resolve.
+            # fetch or the resolve above) — pass it as the write target to skip
+            # the redundant re-resolve. ``scene_id`` stays the caller id so a
+            # missing ``name`` defaults caller-facing, not to the storage key
+            # (#1935).
             result = await self._client.upsert_scene_config(
-                config_dict, resolved_id, _resolved=True
+                config_dict, scene_id, resolved_id=resolved_id
             )
+            # The upsert re-resolves when ``resolved_id`` was None (envelope
+            # omitted the key); re-bind to the authoritative write target it
+            # returned so entity resolution and the response use the resolved
+            # storage key rather than a possible None.
+            resolved_id = result.get("scene_id", resolved_id)
 
             # Resolve actual entity_id via registry — HA derives scene
             # entity_ids from the 'name' slug, not the scene_id storage key,
