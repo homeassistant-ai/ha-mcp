@@ -1620,7 +1620,9 @@ class _AmbiguousBool:
     """A truth value that raises when coerced to bool — numpy's array-bool behavior."""
 
     def __bool__(self):
-        raise ValueError("truth value of an array with more than one element is ambiguous")
+        raise ValueError(
+            "truth value of an array with more than one element is ambiguous"
+        )
 
 
 class _ArrayLike:
@@ -1654,12 +1656,20 @@ class TestCallServiceArrayLikeAttribute:
     def test_values_differ_is_raise_proof(self):
         # A bare ``!=`` would raise on the ambiguous bool; _values_differ falls back to
         # a repr compare: equal reprs → not differing, unequal reprs → differing.
-        assert wsapi._values_differ(_ArrayLike([1, 2, 3]), _ArrayLike([1, 2, 3])) is False
-        assert wsapi._values_differ(_ArrayLike([1, 2, 3]), _ArrayLike([9, 9, 9])) is True
+        assert (
+            wsapi._values_differ(_ArrayLike([1, 2, 3]), _ArrayLike([1, 2, 3])) is False
+        )
+        assert (
+            wsapi._values_differ(_ArrayLike([1, 2, 3]), _ArrayLike([9, 9, 9])) is True
+        )
 
     def test_transition_does_not_raise_on_array_like(self):
-        old = FakeState("light.a", state="on", rgb_color=_ArrayLike([0, 0, 0])).as_dict()
-        new = FakeState("light.a", state="on", rgb_color=_ArrayLike([255, 0, 0])).as_dict()
+        old = FakeState(
+            "light.a", state="on", rgb_color=_ArrayLike([0, 0, 0])
+        ).as_dict()
+        new = FakeState(
+            "light.a", state="on", rgb_color=_ArrayLike([255, 0, 0])
+        ).as_dict()
         transition = wsapi._call_service_transition("light.a", old, new)
         # The array-like attribute is diffed via repr (no raise) and reported changed.
         assert transition["attributes_changed"] == ["rgb_color"]
