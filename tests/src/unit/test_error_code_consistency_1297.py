@@ -263,9 +263,12 @@ class TestLabelMutationRoutesNotFoundToResourceNotFound:
         return LabelTools(mock_ws_client)
 
     async def test_set_update_with_missing_label_id(self, tools, mock_ws_client):
+        # set_label lists the registry first (issue #1860); "missing" is absent,
+        # so the existence pre-check short-circuits to RESOURCE_NOT_FOUND before
+        # any label_registry/update call is dispatched.
         mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Label not found",
+            "success": True,
+            "result": [{"label_id": "other", "name": "Other"}],
         }
 
         with pytest.raises(ToolError) as exc_info:
