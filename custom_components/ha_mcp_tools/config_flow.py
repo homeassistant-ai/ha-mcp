@@ -447,7 +447,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             data_schema=schema,
             description_placeholders={
                 "versions": await self._versions_hint(),
-                "connect_url": self._connect_url_hint(),
+                "connect_url": await self._connect_url_hint(),
                 "oauth_creds": self._oauth_creds_hint(),
                 "llm_api_docs_url": LLM_API_DOCS_URL,
                 "panel_hint": panel_hint,
@@ -535,7 +535,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             f"Server ha-mcp {server_version} ({channel} channel)"
         )
 
-    def _connect_url_hint(self) -> str:
+    async def _connect_url_hint(self) -> str:
         """Return the connect URLs for the options form.
 
         The Configure screen is admin-only, so it shows the real resolved
@@ -555,10 +555,13 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         hass = getattr(self, "hass", None)
         if hass is not None:
             try:
-                from .embedded_setup import build_connect_urls
+                from .embedded_setup import async_get_lan_hosts, build_connect_urls
 
                 urls = build_connect_urls(
-                    hass, self.config_entry, webhook_enabled=webhook_enabled
+                    hass,
+                    self.config_entry,
+                    webhook_enabled=webhook_enabled,
+                    extra_hosts=await async_get_lan_hosts(hass),
                 )
                 if urls:
                     return "Connect URL(s):\n" + "\n".join(f"- {u}" for u in urls)

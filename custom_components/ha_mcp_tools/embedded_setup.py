@@ -156,6 +156,7 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
             entry,
             auth_mode,
             webhook_enabled=webhook_enabled,
+            extra_hosts=await async_get_lan_hosts(hass),
             oauth_client_id=oauth_client_id,
             oauth_client_secret=oauth_client_secret,
             oauth_creds_active=oauth_creds_active,
@@ -229,11 +230,85 @@ async def async_revoke_credentials_on_remove(
     ir.async_delete_issue(hass, DOMAIN, ISSUE_LEGACY_OAUTH_RESTART)
 
 
+async def async_get_lan_hosts(hass: HomeAssistant) -> list[str]:
+    """Every IPv4 address on an enabled network adapter, in adapter order (#1862).
+
+    Lets the connect-URL surfaces list one entry per interface on a
+    multi-interface / multi-VLAN host, instead of only the single address
+    ``get_url`` resolves. IPv4 only: adapter IPv6 addresses carry a
+    ``%scope_id`` zone suffix that is not a usable URL host, and the reported
+    setups are IPv4. Best-effort: any failure yields an empty list so URL
+    surfacing degrades to the single ``get_url`` host rather than taking down
+    the caller (bring-up would otherwise file a repair issue for a display-only
+    lookup).
+    """
+    try:
+        from homeassistant.components import network
+
+        adapters = await network.async_get_adapters(hass)
+        # The whole extraction is inside the try (not just the fetch): a
+        # malformed adapter entry must degrade to the single get_url host too,
+        # never escape into async_bring_up_server's handler, which would tear
+        # the running server down and file a start-failure for a display-only
+        # lookup.
+        return [
+            ipv4["address"]
+            for adapter in adapters
+            if adapter["enabled"]
+            for ipv4 in adapter["ipv4"]
+        ]
+    except Exception:  # display-only enumeration; must never fail the caller
+        _LOGGER.warning(
+            "Adapter enumeration failed; using the single resolved host",
+            exc_info=True,
+        )
+        return []
+
+
+def _swap_url_host(base: str, host: str) -> str:
+    """Return ``base`` with its host replaced by ``host`` (scheme/port/path kept)."""
+    parsed = urlparse(base)
+    netloc = host if parsed.port is None else f"{host}:{parsed.port}"
+    return parsed._replace(netloc=netloc).geturl()
+
+
+def _dedup_hosts(primary: str | None, extra: list[str] | None) -> list[str]:
+    """Ordered unique hosts, ``primary`` (the canonical get_url host) first."""
+    ordered: list[str] = []
+    for host in (primary, *(extra or [])):
+        if host and host not in ordered:
+            ordered.append(host)
+    return ordered
+
+
+def _resolve_local_url(hass: HomeAssistant) -> tuple[str | None, str | None]:
+    """The get_url internal base URL and its host, or ``(None, None)``."""
+    from homeassistant.helpers.network import NoURLAvailableError, get_url
+
+    try:
+        base = get_url(hass, allow_external=False, prefer_external=False)
+    except NoURLAvailableError:
+        return None, None  # No internal/local URL configured - hint form instead.
+    return base, urlparse(base).hostname
+
+
+def _local_webhook_urls(
+    local_base: str, local_host: str | None, lan_hosts: list[str], webhook_id: str
+) -> list[str]:
+    """One local webhook URL per LAN host (canonical ``local_base`` verbatim)."""
+    return [
+        f"{local_base if host == local_host else _swap_url_host(local_base, host)}"
+        f"/api/webhook/{webhook_id}"
+        for host in lan_hosts
+    ]
+
+
 def build_connect_urls(
     hass: HomeAssistant,
     entry: ConfigEntry,
     *,
     webhook_enabled: bool = True,
+    extra_hosts: list[str] | None = None,
 ) -> list[str]:
     """Resolve the entry's connect URLs (webhook forms first, then direct).
 
@@ -241,9 +316,13 @@ def build_connect_urls(
     log on start-up and the entry's Configure screen (the notification
     deliberately carries none - it is visible to every signed-in user). Each
     source is best-effort: a URL that cannot be resolved is omitted.
-    """
-    from homeassistant.helpers.network import NoURLAvailableError, get_url
 
+    ``extra_hosts`` (from :func:`async_get_lan_hosts`) adds one webhook and one
+    direct-access URL per additional LAN address, so a multi-interface /
+    multi-VLAN host surfaces every reachable interface rather than only the
+    single host ``get_url`` picks (#1862). The ``get_url`` host stays canonical
+    and first; any repeat of it in ``extra_hosts`` is deduped away.
+    """
     webhook_id = entry.data.get(DATA_WEBHOOK_ID)
     urls: list[str] = []
     external = str(entry.options.get(OPT_EXTERNAL_URL) or "").rstrip("/")
@@ -272,14 +351,15 @@ def build_connect_urls(
     except ImportError:
         pass  # Cloud integration not installed (e.g. HA Core) - local URL only.
 
-    local_host: str | None = None
-    try:
-        local_base = get_url(hass, allow_external=False, prefer_external=False)
-        local_host = urlparse(local_base).hostname
-        if webhook_id:
-            urls.append(f"{local_base}/api/webhook/{webhook_id}")
-    except NoURLAvailableError:
-        pass  # No internal/local URL configured - fall through to the hint form.
+    local_base, local_host = _resolve_local_url(hass)
+
+    # One entry per enabled LAN address so a multi-interface / multi-VLAN host
+    # surfaces every reachable interface rather than get_url's single pick
+    # (#1862). The get_url host stays canonical and first.
+    lan_hosts = _dedup_hosts(local_host, extra_hosts)
+
+    if local_base and webhook_id:
+        urls.extend(_local_webhook_urls(local_base, local_host, lan_hosts, webhook_id))
 
     if not urls and webhook_id:
         urls.append(f"/api/webhook/{webhook_id}  (prefix with your Home Assistant URL)")
@@ -291,9 +371,9 @@ def build_connect_urls(
         # Direct-access URL: admin-gated surfaces only (log + Configure screen).
         # Guarded on the secret path so a missing one omits the line instead of
         # rendering a valid-looking URL without its credential segment.
-        urls.append(
-            f"http://{local_host or '<home-assistant-ip>'}:{port}{secret_path}"
-            " (direct access)"
+        urls.extend(
+            f"http://{host}:{port}{secret_path} (direct access)"
+            for host in lan_hosts or ["<home-assistant-ip>"]
         )
     return urls
 
@@ -304,13 +384,16 @@ def _surface_connect_urls(
     auth_mode: str,
     *,
     webhook_enabled: bool = True,
+    extra_hosts: list[str] | None = None,
     oauth_client_id: str | None = None,
     oauth_client_secret: str | None = None,
     oauth_creds_active: bool = True,
     oauth_restart_pending: bool = False,
 ) -> None:
     """Log the connect URLs and (re)create a persistent notification."""
-    urls = build_connect_urls(hass, entry, webhook_enabled=webhook_enabled)
+    urls = build_connect_urls(
+        hass, entry, webhook_enabled=webhook_enabled, extra_hosts=extra_hosts
+    )
     if not webhook_enabled:
         auth_note = "Webhook access is disabled (local-only mode)."
     elif auth_mode == WEBHOOK_AUTH_NONE:
