@@ -9,6 +9,15 @@ history from before the fork.
 -->
 
 
+## v1.2.3.dev8 (2026-07-18)
+
+### Bug Fixes
+
+- Write the proxy-config handoff file with restricted (0600) permissions like
+  the OAuth creds file, falling back to a plain write with a logged warning
+  when the filesystem cannot honor the mode.
+
+
 ## v1.2.3.dev6 (2026-07-05)
 
 ### Documentation

@@ -2063,7 +2063,7 @@ function renderFeatureFlags(flags) {
         `${escapeHtml(ORIGIN_INFO_NOTE[f.origin])}</div>`
       : '';
     info.innerHTML =
-      `<div class="feature-name" id="label-feature-${fieldName}">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-name" id="label-feature-${escapeHtml(fieldName)}">${escapeHtml(meta.label)}</div>` +
       `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
       lockedNote + infoNote;
 
@@ -2237,7 +2237,7 @@ function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByG
         `${escapeHtml(ORIGIN_INFO_NOTE[f.origin])}</div>`
       : '';
     info.innerHTML =
-      `<div class="feature-name" id="label-feature-${fieldName}">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-name" id="label-feature-${escapeHtml(fieldName)}">${escapeHtml(meta.label)}</div>` +
       `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
       lockedNote + infoNote;
 
@@ -2323,7 +2323,7 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
         `<div class="feature-locked-note">${envLockedNoteHtml(f.env_var, f.field)}</div>`;
     }
     info.innerHTML =
-      `<div class="feature-name" id="label-feature-${f.field}">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-name" id="label-feature-${escapeHtml(f.field)}">${escapeHtml(meta.label)}</div>` +
       `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
       lockedNote;
 

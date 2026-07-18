@@ -86,7 +86,12 @@ _COOKIE_PATH = f"{_UI_BASE}/app"
 # Keep in sync with ``ha_mcp.settings_ui._i18n.LOCALE_COOKIE`` without
 # importing the separately installed server package into the HA component.
 _LOCALE_COOKIE_NAME = "ha_mcp_locale"
-_LOCALE_COOKIE_VALUE_RE = re.compile(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*\Z")
+# Each iteration consumes one optional separator plus exactly one
+# alphanumeric, so the pattern is unambiguous (linear-time, no
+# polynomial backtracking) while accepting the same language as
+# ``[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*``: no leading/trailing/doubled
+# separators.
+_LOCALE_COOKIE_VALUE_RE = re.compile(r"[A-Za-z0-9](?:[-_]?[A-Za-z0-9])*\Z")
 
 # Session lifetime. Short by design; the panel re-mints well within it while open.
 _SESSION_TTL_SECONDS = 8 * 60 * 60

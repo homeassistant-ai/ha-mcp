@@ -163,6 +163,171 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "heuristic to have correctly caught. mypy already confirms this file is "
         "clean under that typing.",
     ),
+    # ---- Security-suite entries (the workflow also gates the default
+    # <language>-code-scanning suites; see codeql-quality.yml header). Entries
+    # whose message substring is generic ("as clear text", "hashing algorithm")
+    # are PATH-WIDE for that rule+file — a future finding of the same rule in
+    # the same file would be suppressed too. Accepted for the same reason as
+    # the quality entries above: the files are small and each reason names the
+    # exact intended pattern. Re-audit when one of these files grows.
+    (
+        "py/clear-text-logging-sensitive-data",
+        "custom_components/ha_mcp_tools/embedded_setup.py",
+        "as clear text",
+        "Deliberate admin-only connect instructions: the startup log prints the "
+        "legacy-OAuth Client ID/Secret so the admin can paste them into an MCP "
+        "client. The SECURITY note from the #1880 review in this file governs "
+        "the pattern: credentials are withheld while a rotation is pending and "
+        "never placed in the persistent notification all users can see.",
+    ),
+    (
+        "py/clear-text-logging-sensitive-data",
+        "homeassistant-addon-webhook-proxy/mcp_proxy/__init__.py",
+        "as clear text",
+        "False positive: the log line emits oauth_provider.client_id_masked(), "
+        "not the raw value; CodeQL tracks taint through the masking helper.",
+    ),
+    (
+        "py/clear-text-logging-sensitive-data",
+        "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py",
+        "as clear text",
+        "False positive (dev flavor, identical code to stable): the log line "
+        "emits client_id_masked(), not the raw value; CodeQL tracks taint "
+        "through the masking helper.",
+    ),
+    (
+        "py/clear-text-logging-sensitive-data",
+        "homeassistant-addon-webhook-proxy/start.py",
+        "as clear text",
+        "Deliberate add-on startup log: prints the connect URL and legacy-OAuth "
+        "credentials to the Supervisor add-on log (admin-only) as the user's "
+        "setup instructions — the add-on-side mirror of embedded_setup.py's "
+        "admin-only connect log.",
+    ),
+    (
+        "py/clear-text-logging-sensitive-data",
+        "homeassistant-addon-webhook-proxy-dev/start.py",
+        "as clear text",
+        "Deliberate add-on startup log (dev flavor, identical code to stable): "
+        "prints the connect URL and legacy-OAuth credentials to the Supervisor "
+        "add-on log (admin-only) as the user's setup instructions.",
+    ),
+    (
+        "py/clear-text-logging-sensitive-data",
+        "src/ha_mcp/stdio_settings_sidecar.py",
+        "as clear text",
+        "Deliberate: logs the sidecar's own loopback settings URL "
+        "(http://127.0.0.1:<port><secret_path>/settings) so the local operator "
+        "can open it. Local-process log/stderr only; the URL is unreachable off "
+        "the host.",
+    ),
+    (
+        "py/clear-text-logging-sensitive-data",
+        "tests/test_env_manager.py",
+        "as clear text",
+        "Interactive test-environment helper printing the seeded throwaway "
+        "credentials of the disposable HA test container (tests/test_constants.py). "
+        "Printing them for copy-paste is the tool's purpose.",
+    ),
+    (
+        "py/clear-text-storage-sensitive-data",
+        "homeassistant-addon-webhook-proxy/mcp_proxy/oauth.py",
+        "as clear text",
+        "Warned fallback: the primary path writes the signing key via "
+        "_atomic_write_0600; the flagged plain write only runs when the "
+        "filesystem cannot honor 0600 and it logs a warning. Persisting the key "
+        "is the feature (it must survive restarts).",
+    ),
+    (
+        "py/clear-text-storage-sensitive-data",
+        "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py",
+        "as clear text",
+        "Warned fallback (dev flavor, identical code to stable): plain write of "
+        "the signing key only when the filesystem cannot honor 0600, with a "
+        "warning. Persistence is the feature.",
+    ),
+    (
+        "py/clear-text-storage-sensitive-data",
+        "homeassistant-addon-webhook-proxy/start.py",
+        "as clear text",
+        "Stable flavor pending promote: the creds file uses _atomic_write_0600 "
+        "with a warned plain-write fallback; the proxy-config handoff write "
+        "gained the same 0600-first treatment on the dev flavor (v1.2.3.dev8) "
+        "and reaches this tree via the promote workflow — the stable-guard "
+        "blocks editing it directly here. Remove the plain-write half of this "
+        "reason after the next promote.",
+    ),
+    (
+        "py/clear-text-storage-sensitive-data",
+        "homeassistant-addon-webhook-proxy-dev/start.py",
+        "as clear text",
+        "Warned fallbacks (dev flavor): both the creds file and the "
+        "proxy-config handoff file write via _atomic_write_0600; the flagged "
+        "plain writes only run when the filesystem cannot honor 0600 and each "
+        "logs a warning. Persistence is the feature.",
+    ),
+    (
+        "py/weak-sensitive-data-hashing",
+        "custom_components/ha_mcp_tools/oauth_legacy.py",
+        "hashing algorithm (SHA256)",
+        "Not password storage: SHA256 builds a change-detection fingerprint of "
+        "the OAuth identity bound to the root views (machine-generated client "
+        "secret + 256-bit signing key) to decide when routes must be rebound. "
+        "KDFs exist to slow guessing of low-entropy human passwords; a "
+        "fingerprint of high-entropy random material has no guessing surface.",
+    ),
+    (
+        "py/weak-sensitive-data-hashing",
+        "homeassistant-addon-webhook-proxy/mcp_proxy/__init__.py",
+        "hashing algorithm (SHA256)",
+        "Not password storage: same _oauth_route_fingerprint helper as "
+        "oauth_legacy.py — a SHA256 change-detection fingerprint of "
+        "machine-generated high-entropy credentials, not a stored password hash.",
+    ),
+    (
+        "py/weak-sensitive-data-hashing",
+        "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py",
+        "hashing algorithm (SHA256)",
+        "Not password storage (dev flavor, identical code to stable): SHA256 "
+        "change-detection fingerprint of machine-generated high-entropy "
+        "credentials, not a stored password hash.",
+    ),
+    (
+        "py/bad-tag-filter",
+        "tests/src/unit/_js_harness.py",
+        "does not match upper case",
+        "Not a sanitizer: the JSDOM harness extracts <script> bodies from "
+        "repo-authored, lowercase templates for parse/behaviour testing; "
+        "untrusted HTML never flows through it.",
+    ),
+    (
+        "py/incomplete-url-substring-sanitization",
+        "tests/src/unit/test_best_practice_checker.py",
+        "may be at an arbitrary position",
+        "Test assertion, not URL validation: checks that a warning message "
+        "mentions the configured skill-prefix host.",
+    ),
+    (
+        "py/incomplete-url-substring-sanitization",
+        "tests/src/unit/test_browser_landing.py",
+        "may be at an arbitrary position",
+        "Test assertion, not URL validation: checks that the landing page's "
+        "help copy mentions dash.cloudflare.com.",
+    ),
+    (
+        "py/incomplete-url-substring-sanitization",
+        "tests/src/unit/test_oauth.py",
+        "may be at an arbitrary position",
+        "Test assertion, not URL validation: checks that the consent HTML "
+        "displays the redirect host to the user.",
+    ),
+    (
+        "py/incomplete-url-substring-sanitization",
+        "tests/src/unit/test_oauth_legacy_component.py",
+        "may be at an arbitrary position",
+        "Test assertion, not URL validation: the XSS-escape test checks the "
+        "redirect host appears (escaped) in the response body.",
+    ),
 )
 
 

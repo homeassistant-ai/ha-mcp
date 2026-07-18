@@ -1298,8 +1298,20 @@ def main() -> int:
     if debug_logging:
         proxy_config["debug_logging"] = True
     proxy_config_file = Path("/config/.mcp_proxy_dev_config.json")
+    proxy_config_json = json.dumps(proxy_config)
     try:
-        proxy_config_file.write_text(json.dumps(proxy_config))
+        if not _atomic_write_0600(proxy_config_file, proxy_config_json.encode("utf-8")):
+            # False = the restricted-mode create OR the write/replace failed —
+            # same degradation semantics as the OAuth creds path above. The
+            # file carries the OAuth keys when auth is enabled, so it gets the
+            # same 0600-first treatment; a mode-only limitation falls back to
+            # a plain write rather than breaking startup.
+            proxy_config_file.write_text(proxy_config_json)
+            log_error(
+                f"Could not create the proxy config file with restricted "
+                f"permissions at {proxy_config_file}. It may have wider "
+                f"permissions than intended."
+            )
     except OSError as e:
         log_error(f"Failed to write proxy config: {e}")
         return 1
