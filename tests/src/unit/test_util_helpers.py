@@ -389,6 +389,25 @@ class TestFilterActiveRepairs:
         assert filter_active_repairs([]) == []
         assert filter_active_repairs([], include_dismissed=True) == []
 
+    def test_inactive_entries_always_dropped(self):
+        """Registry stubs with ``active=False`` never surface — HA core's
+        ``ws_list_issues`` hides them, so the component's raw registry dump
+        must be trimmed the same way. ``include_dismissed`` does not opt
+        back in; entries without an ``active`` key (live WS path) pass.
+        """
+        issues = [
+            {"issue_id": "live", "ignored": False, "active": True},
+            {"issue_id": "ghost", "ignored": False, "active": False},
+            {"issue_id": "ghost_dismissed", "ignored": True, "active": False},
+            {"issue_id": "no_key", "ignored": False},
+        ]
+        assert [r["issue_id"] for r in filter_active_repairs(issues)] == [
+            "live",
+            "no_key",
+        ]
+        out = filter_active_repairs(issues, include_dismissed=True)
+        assert [r["issue_id"] for r in out] == ["live", "no_key"]
+
 
 class TestProjectRepairFields:
     """Projection keeps dismissal-state fields and drops verbose ones."""

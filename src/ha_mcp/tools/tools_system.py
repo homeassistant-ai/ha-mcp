@@ -1225,7 +1225,11 @@ class SystemTools:
                     "count": len(visible_issues),
                 }
                 if not include_dismissed:
-                    dismissed_count = len(all_issues) - len(visible_issues)
+                    # Baseline excludes inactive registry stubs so they are
+                    # not miscounted as dismissed.
+                    dismissed_count = len(
+                        filter_active_repairs(all_issues, include_dismissed=True)
+                    ) - len(visible_issues)
                     if dismissed_count:
                         repairs["dismissed_count"] = dismissed_count
             else:

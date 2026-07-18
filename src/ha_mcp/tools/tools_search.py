@@ -3449,7 +3449,11 @@ class SearchTools:
                 )
                 result["repair_count"] = len(visible_issues)
                 if not include_dismissed_repairs_bool:
-                    dismissed_count = len(all_issues) - len(visible_issues)
+                    # Baseline excludes inactive registry stubs so they are
+                    # not miscounted as dismissed.
+                    dismissed_count = len(
+                        filter_active_repairs(all_issues, include_dismissed=True)
+                    ) - len(visible_issues)
                     if dismissed_count:
                         result["dismissed_repair_count"] = dismissed_count
                 result["repairs"] = [project_repair_fields(r) for r in visible_issues]
