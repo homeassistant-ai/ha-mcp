@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import enum
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -433,6 +434,67 @@ def _pin_llm_on_helpers() -> None:
         helpers.llm = llm_mod
 
 
+def _install_frontend_and_selector_stubs(
+    setmod: Callable[..., ModuleType],
+) -> None:
+    """Install the frontend-panel and options-flow selector ``sys.modules`` stubs."""
+    # frontend fakes for the settings-UI panel. Registration state
+    # is kept in ``hass.data`` so it is isolated per test (each test builds a
+    # fresh hass), unlike a module-level registry that would leak across tests.
+    _FAKE_PANELS_KEY = "_fake_frontend_panels"
+
+    def _panels(hass: Any) -> dict[str, Any]:
+        return hass.data.setdefault(_FAKE_PANELS_KEY, {})
+
+    def _async_panel_exists(hass: Any, frontend_url_path: str) -> bool:
+        return frontend_url_path in _panels(hass)
+
+    def _async_remove_panel(
+        hass: Any, frontend_url_path: str, *, warn_if_unknown: bool = True
+    ) -> None:
+        _panels(hass).pop(frontend_url_path, None)
+
+    def _async_register_built_in_panel(
+        hass: Any, component_name: str, **kwargs: Any
+    ) -> None:
+        _panels(hass)[kwargs["frontend_url_path"]] = {
+            "component_name": component_name,
+            **kwargs,
+        }
+
+    setmod(
+        "homeassistant.components.frontend",
+        async_panel_exists=_async_panel_exists,
+        async_remove_panel=_async_remove_panel,
+        async_register_built_in_panel=_async_register_built_in_panel,
+    )
+
+    # Selector stubs for the options-flow dropdowns. Inert pass-through:
+    # unit tests hand user_input straight to the flow handler, so the
+    # selector never validates; it only needs to construct.
+    class _SelectSelectorConfig:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    class _SelectSelector:
+        def __init__(self, config: Any = None) -> None:
+            self.config = config
+
+        def __call__(self, value: Any) -> Any:
+            return value
+
+    class _SelectSelectorMode:
+        DROPDOWN = "dropdown"
+        LIST = "list"
+
+    setmod(
+        "homeassistant.helpers.selector",
+        SelectSelector=_SelectSelector,
+        SelectSelectorConfig=_SelectSelectorConfig,
+        SelectSelectorMode=_SelectSelectorMode,
+    )
+
+
 def install() -> None:
     """Install the stub modules into ``sys.modules`` once.
 
@@ -501,61 +563,7 @@ def install() -> None:
         async_register=MagicMock(name="async_register"),
         async_unregister=MagicMock(name="async_unregister"),
     )
-    # frontend fakes for the settings-UI panel. Registration state
-    # is kept in ``hass.data`` so it is isolated per test (each test builds a
-    # fresh hass), unlike a module-level registry that would leak across tests.
-    _FAKE_PANELS_KEY = "_fake_frontend_panels"
-
-    def _panels(hass: Any) -> dict[str, Any]:
-        return hass.data.setdefault(_FAKE_PANELS_KEY, {})
-
-    def _async_panel_exists(hass: Any, frontend_url_path: str) -> bool:
-        return frontend_url_path in _panels(hass)
-
-    def _async_remove_panel(
-        hass: Any, frontend_url_path: str, *, warn_if_unknown: bool = True
-    ) -> None:
-        _panels(hass).pop(frontend_url_path, None)
-
-    def _async_register_built_in_panel(
-        hass: Any, component_name: str, **kwargs: Any
-    ) -> None:
-        _panels(hass)[kwargs["frontend_url_path"]] = {
-            "component_name": component_name,
-            **kwargs,
-        }
-
-    setmod(
-        "homeassistant.components.frontend",
-        async_panel_exists=_async_panel_exists,
-        async_remove_panel=_async_remove_panel,
-        async_register_built_in_panel=_async_register_built_in_panel,
-    )
-
-    # Selector stubs for the options-flow dropdowns. Inert pass-through:
-    # unit tests hand user_input straight to the flow handler, so the
-    # selector never validates; it only needs to construct.
-    class _SelectSelectorConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            self.__dict__.update(kwargs)
-
-    class _SelectSelector:
-        def __init__(self, config: Any = None) -> None:
-            self.config = config
-
-        def __call__(self, value: Any) -> Any:
-            return value
-
-    class _SelectSelectorMode:
-        DROPDOWN = "dropdown"
-        LIST = "list"
-
-    setmod(
-        "homeassistant.helpers.selector",
-        SelectSelector=_SelectSelector,
-        SelectSelectorConfig=_SelectSelectorConfig,
-        SelectSelectorMode=_SelectSelectorMode,
-    )
+    _install_frontend_and_selector_stubs(setmod)
     setmod(
         "homeassistant.helpers.issue_registry",
         async_create_issue=MagicMock(name="async_create_issue"),

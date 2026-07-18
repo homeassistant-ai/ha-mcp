@@ -757,21 +757,22 @@ _EXEMPT_GATED_OR_READ_ARGS = {
 }
 
 
+def _is_tool_decorated(node: ast.AST) -> bool:
+    for dec in node.decorator_list:
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        if isinstance(target, ast.Attribute) and target.attr == "tool":
+            return True
+        if isinstance(target, ast.Name) and target.id == "tool":
+            return True
+    return False
+
+
 def _decorated_tool_param_names(module_path: Path, tool_name: str) -> set[str]:
     """Return the parameter names of the ``@tool``-decorated function that
     backs ``tool_name`` (both the ``@tool(name=...)`` class-method pattern
     and the ``@mcp.tool(...)`` closure pattern, where the function name IS
     the tool name)."""
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
-
-    def _is_tool_decorated(node: ast.AST) -> bool:
-        for dec in node.decorator_list:
-            target = dec.func if isinstance(dec, ast.Call) else dec
-            if isinstance(target, ast.Attribute) and target.attr == "tool":
-                return True
-            if isinstance(target, ast.Name) and target.id == "tool":
-                return True
-        return False
 
     def _names_match(node: ast.AST) -> bool:
         # @tool(name="ha_...") explicit name kwarg.

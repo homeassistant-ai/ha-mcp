@@ -279,6 +279,44 @@ def show_menu() -> str:
         print("❌ Invalid choice. Please enter 1, 2, or 3.")
 
 
+def _run_non_interactive(env: HomeAssistantTestEnvironment) -> None:
+    # Non-interactive mode: wait for interrupt, and exit if the container dies
+    # so systemd's Restart=on-failure kicks in with a fresh instance.
+    logger.info("🔄 Running in non-interactive mode. Press Ctrl+C to stop.")
+    try:
+        while True:
+            time.sleep(30)
+            if env.container:
+                wrapped = env.container.get_wrapped_container()
+                wrapped.reload()
+                if wrapped.status not in ("running",):
+                    logger.error(
+                        f"❌ Container stopped unexpectedly "
+                        f"(status: {wrapped.status}), exiting for restart..."
+                    )
+                    sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("\n🛑 Received interrupt signal")
+    except (OSError, RuntimeError, docker.errors.DockerException) as e:
+        logger.error(f"❌ Watchdog failure: {e}, exiting for restart...")
+        sys.exit(1)
+
+
+def _run_interactive_menu(env: HomeAssistantTestEnvironment) -> None:
+    # Interactive menu loop
+    while True:
+        choice = show_menu()
+
+        if choice == "1":
+            env.run_tests()
+        elif choice == "2":
+            env.stop_container()
+            print("👋 Goodbye!")
+            break
+        elif choice == "3":
+            env.print_status()
+
+
 def main():
     """Main entry point for the test environment manager."""
     import argparse
@@ -304,39 +342,9 @@ def main():
         env.print_status()
 
         if args.no_interactive:
-            # Non-interactive mode: wait for interrupt, and exit if the container dies
-            # so systemd's Restart=on-failure kicks in with a fresh instance.
-            logger.info("🔄 Running in non-interactive mode. Press Ctrl+C to stop.")
-            try:
-                while True:
-                    time.sleep(30)
-                    if env.container:
-                        wrapped = env.container.get_wrapped_container()
-                        wrapped.reload()
-                        if wrapped.status not in ("running",):
-                            logger.error(
-                                f"❌ Container stopped unexpectedly "
-                                f"(status: {wrapped.status}), exiting for restart..."
-                            )
-                            sys.exit(1)
-            except KeyboardInterrupt:
-                logger.info("\n🛑 Received interrupt signal")
-            except (OSError, RuntimeError, docker.errors.DockerException) as e:
-                logger.error(f"❌ Watchdog failure: {e}, exiting for restart...")
-                sys.exit(1)
+            _run_non_interactive(env)
         else:
-            # Interactive menu loop
-            while True:
-                choice = show_menu()
-
-                if choice == "1":
-                    env.run_tests()
-                elif choice == "2":
-                    env.stop_container()
-                    print("👋 Goodbye!")
-                    break
-                elif choice == "3":
-                    env.print_status()
+            _run_interactive_menu(env)
 
     except KeyboardInterrupt:
         print("\n🛑 Interrupted by user")
