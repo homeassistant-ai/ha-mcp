@@ -235,9 +235,12 @@ async def async_get_lan_hosts(hass: HomeAssistant) -> list[str]:
 
     Lets the connect-URL surfaces list one entry per interface on a
     multi-interface / multi-VLAN host, instead of only the single address
-    ``get_url`` resolves. IPv4 only: adapter IPv6 addresses carry a
-    ``%scope_id`` zone suffix that is not a usable URL host, and the reported
-    setups are IPv4. Best-effort: any failure yields an empty list so URL
+    ``get_url`` resolves. IPv4 only: ``async_get_adapters`` returns a bare
+    IPv6 ``address`` with a separate ``scope_id`` int, so a link-local adapter
+    address is not a usable URL host without rejoining that zone id (and every
+    IPv6 host additionally needs bracket-wrapping) – building those correctly
+    is out of scope, and the reported setups are IPv4. Best-effort: any failure
+    yields an empty list so URL
     surfacing degrades to the single ``get_url`` host rather than taking down
     the caller (bring-up would otherwise file a repair issue for a display-only
     lookup).

@@ -169,7 +169,16 @@ class TestBringUp:
             is True
         )
 
-    async def test_success_starts_registers_and_surfaces(self, fake_manager):
+    async def test_success_starts_registers_and_surfaces(
+        self, fake_manager, monkeypatch
+    ):
+        # The enumerated adapter hosts must be forwarded into the connect-URL
+        # surfacing, or the startup log – the feature's primary surface – silently
+        # loses the per-interface URLs while every other test stays green
+        # (#1862). Mirrors the config-flow forwarding assertion.
+        monkeypatch.setattr(
+            esetup, "async_get_lan_hosts", AsyncMock(return_value=["10.0.1.3"])
+        )
         hass = _make_hass()
         entry = _make_entry()
 
@@ -178,6 +187,9 @@ class TestBringUp:
         fake_manager.async_start.assert_awaited_once()
         esetup.async_register_webhook.assert_awaited_once()
         esetup._surface_connect_urls.assert_called_once()
+        assert esetup._surface_connect_urls.call_args.kwargs["extra_hosts"] == [
+            "10.0.1.3"
+        ]
         assert isinstance(hass.data[DOMAIN][DATA_MANAGER], fake_manager)
         esetup.ir.async_create_issue.assert_not_called()
         # Conversation-agent LLM API (#1745): registered with the running
@@ -877,6 +889,33 @@ class TestBuildConnectUrls:
         urls = esetup.build_connect_urls(hass, entry, extra_hosts=["10.0.1.3"])
         direct = [u for u in urls if "(direct access)" in u]
         assert direct == ["http://10.0.1.3:9584/private_x (direct access)"]
+
+    def test_portless_internal_url_swaps_host_without_a_port(self):
+        # A reverse-proxied internal URL has no port; _swap_url_host must keep it
+        # port-less for the extra adapter host rather than inventing one.
+        _install_network_cloud(cloud_url=None, local_url="https://ha.internal")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"})
+        urls = esetup.build_connect_urls(hass, entry, extra_hosts=["10.0.1.3"])
+        webhook = [u for u in urls if "/api/webhook/" in u]
+        assert webhook == [
+            "https://ha.internal/api/webhook/mcp_id",
+            "https://10.0.1.3/api/webhook/mcp_id",
+        ]
+
+    def test_direct_line_uses_placeholder_when_no_host_resolves(self):
+        # bind-all + secret present but no get_url host and no adapters: the
+        # direct line falls back to the <home-assistant-ip> placeholder rather
+        # than dropping the line or rendering a host-less URL.
+        _install_network_cloud(cloud_url=None, local_url=None)
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
+            options={esetup.OPT_BIND_HOST: esetup.BIND_HOST_ALL},
+        )
+        urls = esetup.build_connect_urls(hass, entry)
+        direct = [u for u in urls if "(direct access)" in u]
+        assert direct == ["http://<home-assistant-ip>:9584/priv (direct access)"]
 
 
 class TestAsyncGetLanHosts:
