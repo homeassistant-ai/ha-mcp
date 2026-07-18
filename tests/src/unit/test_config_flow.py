@@ -725,14 +725,14 @@ class TestServerOptionsFlow:
                 const.DATA_SECRET_PATH: "/private_x",
             },
         )
-        hint = flow._connect_url_hint()
+        hint = asyncio.run(flow._connect_url_hint())
         assert "/api/webhook/mcp_abc" in hint
         # The LAN hint uses the CONFIGURED port, not the 9584 default.
         assert ":9999/private_x" in hint
 
     def test_connect_url_hint_before_start_points_at_log(self):
         flow = _make_options_flow(data={})
-        hint = flow._connect_url_hint().lower()
+        hint = asyncio.run(flow._connect_url_hint()).lower()
         assert "once the server has started" in hint
         assert "notification" not in hint
 
@@ -746,15 +746,25 @@ class TestServerOptionsFlow:
         """
         calls: list[dict] = []
 
-        def fake_builder(hass, entry, *, webhook_enabled=True):
-            calls.append({"hass": hass, "webhook_enabled": webhook_enabled})
+        def fake_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
+            calls.append(
+                {
+                    "hass": hass,
+                    "webhook_enabled": webhook_enabled,
+                    "extra_hosts": extra_hosts,
+                }
+            )
             return [
                 "https://example.duckdns.org/api/webhook/mcp_abc",
                 "http://192.168.1.150:9584/private_x (direct access)",
             ]
 
+        async def fake_lan_hosts(hass):
+            return ["10.0.1.3"]
+
         stub = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
         stub.build_connect_urls = fake_builder
+        stub.async_get_lan_hosts = fake_lan_hosts
         flow = _make_options_flow(
             options={const.OPT_ENABLE_WEBHOOK: False},
             data={"webhook_id": "mcp_abc", "secret_path": "/private_x"},
@@ -763,7 +773,7 @@ class TestServerOptionsFlow:
         orig = sys.modules.get("custom_components.ha_mcp_tools.embedded_setup")
         sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = stub
         try:
-            hint = flow._connect_url_hint()
+            hint = asyncio.run(flow._connect_url_hint())
         finally:
             if orig is None:
                 del sys.modules["custom_components.ha_mcp_tools.embedded_setup"]
@@ -774,6 +784,9 @@ class TestServerOptionsFlow:
         assert "<your-home-assistant-url>" not in hint
         # The enable_webhook option is forwarded to the builder.
         assert calls and calls[0]["webhook_enabled"] is False
+        # The enumerated adapter hosts are forwarded so per-interface URLs
+        # surface on the Configure screen too (#1862).
+        assert calls[0]["extra_hosts"] == ["10.0.1.3"]
 
     def _hint_with_stub_builder(self, builder, *, data, options=None):
         """Call ``_connect_url_hint`` with ``build_connect_urls`` stubbed.
@@ -782,14 +795,19 @@ class TestServerOptionsFlow:
         ``from .embedded_setup import build_connect_urls`` resolves to ``builder``
         without importing the real module (which needs a full HA install).
         """
+
+        async def fake_lan_hosts(hass):
+            return []
+
         stub = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
         stub.build_connect_urls = builder
+        stub.async_get_lan_hosts = fake_lan_hosts
         flow = _make_options_flow(data=data, options=options)
         flow.hass = MagicMock()
         orig = sys.modules.get("custom_components.ha_mcp_tools.embedded_setup")
         sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = stub
         try:
-            return flow._connect_url_hint()
+            return asyncio.run(flow._connect_url_hint())
         finally:
             if orig is None:
                 del sys.modules["custom_components.ha_mcp_tools.embedded_setup"]
@@ -799,7 +817,7 @@ class TestServerOptionsFlow:
     def test_connect_url_hint_falls_back_when_builder_raises(self):
         # A resolution bug in build_connect_urls must not escape and take down
         # the whole options form: the hint degrades to the placeholder form.
-        def boom_builder(hass, entry, *, webhook_enabled=True):
+        def boom_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
             raise RuntimeError("resolution boom")
 
         hint = self._hint_with_stub_builder(
@@ -811,7 +829,7 @@ class TestServerOptionsFlow:
     def test_connect_url_hint_falls_back_when_builder_returns_empty(self):
         # An empty resolver result (nothing resolvable yet) also degrades to the
         # placeholder form rather than an empty "Connect URL(s):" header.
-        def empty_builder(hass, entry, *, webhook_enabled=True):
+        def empty_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
             return []
 
         hint = self._hint_with_stub_builder(
@@ -828,7 +846,7 @@ class TestServerOptionsFlow:
         loopback direct URL instead of rendering a webhook URL that 404s.
         """
 
-        def empty_builder(hass, entry, *, webhook_enabled=True):
+        def empty_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
             return []
 
         hint = self._hint_with_stub_builder(
@@ -848,7 +866,7 @@ class TestServerOptionsFlow:
         — a resolution error must not resurrect a webhook URL that 404s.
         """
 
-        def boom_builder(hass, entry, *, webhook_enabled=True):
+        def boom_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
             raise RuntimeError("resolution boom")
 
         hint = self._hint_with_stub_builder(
