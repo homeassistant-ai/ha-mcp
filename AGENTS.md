@@ -178,9 +178,9 @@ The `/my-pr-checker` skill carries the exact commands (the inline-reply
 
 ## Git & PR Policies
 
-**CRITICAL - Never commit directly to master, except for approved documentation-only adjustments.**
+**CRITICAL - Never commit directly to master, except for documentation-only adjustments.**
 
-You are STRICTLY PROHIBITED from committing to `master` or `main`. The sole exception is a documentation-only (`*.md`) adjustment whose exact diff and direct push the user explicitly approved; update clean `master` with `git pull --ff-only`, then commit and push without a PR. For all other work, always use worktrees:
+You are STRICTLY PROHIBITED from committing to `master` or `main` branch. Always use worktrees for feature work:
 
 ```bash
 # Use /wt skill or manually:
@@ -188,13 +188,13 @@ git worktree add worktree/<branch-name> -b <branch-name>
 cd worktree/<branch-name>
 ```
 
-**Before any non-exempt commit, verify:**
+**Before any commit, verify:**
 1. Current branch: `git rev-parse --abbrev-ref HEAD` (must NOT be master/main)
 2. In worktree: `pwd` (must be in `worktree/` subdirectory)
 
 **Never push or create PRs without user permission.**
 
-**For non-exempt work, always create PRs as draft.** Use `gh pr create --draft`. Only mark a PR as ready for review (`gh pr ready <PR>`) when explicitly requested by the user. **Before marking ready, update the PR description** to reflect all changes made since the PR was created.
+**Always create PRs as draft.** Use `gh pr create --draft`. Only mark a PR as ready for review (`gh pr ready <PR>`) when explicitly requested by the user. **Before marking ready, update the PR description** to reflect all changes made since the PR was created.
 
 ### PR Workflow
 
