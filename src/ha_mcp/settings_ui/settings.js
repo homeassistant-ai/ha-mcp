@@ -23,6 +23,27 @@ function t(key, params = {}, fallback = key) {
   return value;
 }
 
+// Translation for HTML contexts (innerHTML sinks). Catalog strings are data,
+// not markup: the whole value is HTML-escaped first, then only the allowlist
+// of inline formatting tags the catalogs use (<code>, <strong>, and the
+// internal tab links) is restored, so a translated string can never
+// contribute any other markup. Placeholders are substituted AFTER escaping:
+// params are trusted HTML fragments built by the caller (escape any dynamic
+// text inside them with escapeHtml at the call site).
+function tHtml(key, params = {}, fallback = key) {
+  const raw = Object.prototype.hasOwnProperty.call(I18N_PAYLOAD.messages || {}, key)
+    ? I18N_PAYLOAD.messages[key]
+    : fallback;
+  let value = escapeHtml(raw)
+    .replace(/&lt;(\/?)(code|strong)&gt;/g, '<$1$2>')
+    .replace(/&lt;a href=&quot;#&quot; data-panel-link=&quot;([a-z][a-z-]*)&quot;&gt;/g, '<a href="#" data-panel-link="$1">')
+    .replace(/&lt;\/a&gt;/g, '</a>');
+  Object.keys(params).forEach(name => {
+    value = value.replaceAll(`{${name}}`, String(params[name]));
+  });
+  return value;
+}
+
 function localizeMeta(section, field, meta) {
   return {
     ...meta,
@@ -76,7 +97,14 @@ function applyStaticTranslations(root = document) {
     el.textContent = t(el.dataset.i18n, {}, el.textContent);
   });
   root.querySelectorAll('[data-i18n-html]').forEach(el => {
-    el.innerHTML = t(el.dataset.i18nHtml, {}, el.innerHTML);
+    // Rewrite only from the catalog: the server-rendered markup already is
+    // the English copy, and routing it back through the escape+allowlist
+    // pipeline would depend on attribute serialization being round-trip
+    // stable, which it is not guaranteed to be.
+    const key = el.dataset.i18nHtml;
+    if (Object.prototype.hasOwnProperty.call(I18N_PAYLOAD.messages || {}, key)) {
+      el.innerHTML = tHtml(key);
+    }
   });
   for (const attribute of ['placeholder', 'title', 'aria-label']) {
     const dataName = `i18n${attribute.split('-').map(part => part[0].toUpperCase() + part.slice(1)).join('')}`;
@@ -908,17 +936,17 @@ function render() {
       else badges += `<span class="badge unknown">${escapeHtml(category) || '?'}</span>`;
 
       const gatedNote = disabledBy
-        ? `<div class="disabled-by-note">${tr(
+        ? `<div class="disabled-by-note">${tHtml(
             'tools.notes.beta_disabled',
             {setting: `<code>${escapeHtml(disabledBy)}</code>`},
-            `Beta. Set <code>${escapeHtml(disabledBy)}</code> in the dev App (add-on) config or the matching env var (see docs/beta.md).`
+            'Beta. Set {setting} in the dev App (add-on) config or the matching env var (see docs/beta.md).'
           )}</div>`
         : '';
       const envPinnedNote = isEnvPinned
-        ? `<div class="feature-locked-note">${tr(
+        ? `<div class="feature-locked-note">${tHtml(
             'tools.notes.env_pinned',
             {variable: `<code>${escapeHtml(envPinVar)}</code>`},
-            `env-pinned via <code>${envPinVar}</code>. Unset the env var to edit here.`
+            'Pinned by {variable}. Unset the environment variable to edit here.'
           )}</div>`
         : '';
       const bpsLockedNote = isBpsLocked
@@ -1277,10 +1305,10 @@ const BACKUP_FIELD_LABELS = {
 };
 
 const BACKUP_ORIGIN_LABELS = {
-  addon: t('backup.origins.addon', {}, 'Synced to Supervisor. Restart required after save.'),
+  addon: escapeHtml(t('backup.origins.addon', {}, 'Synced to Supervisor. Restart required after save.')),
   env: null,  // banner generated dynamically with the env var name
-  file: t('backup.origins.file', {}, 'Persisted locally; takes effect immediately.'),
-  default: t('backup.origins.default', {}, 'Using default; first save creates a local override file.'),
+  file: escapeHtml(t('backup.origins.file', {}, 'Persisted locally; takes effect immediately.')),
+  default: escapeHtml(t('backup.origins.default', {}, 'Using default; first save creates a local override file.')),
 };
 
 async function loadBackupConfig() {
@@ -1476,8 +1504,8 @@ function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
       : '.storage, secrets.yaml';
   info.innerHTML =
     `<div class="feature-name">${escapeHtml(t('filesystem.custom.title', {}, 'Custom filesystem directories (advanced)'))}</div>` +
-    `<div class="feature-help">${t('filesystem.custom.help', {}, 'Extra directories (one per line) that the file tools may READ and WRITE, either relative to your config dir or an absolute allowed HAOS sibling volume. Each entry grants both read and write. Applies immediately; no restart needed.')}</div>` +
-    `<div class="feature-help">${t('filesystem.custom.blocked', {paths: `<code>${escapeHtml(denyList)}</code>`}, `Always blocked (cannot be added): <code>${escapeHtml(denyList)}</code>, path traversal (<code>..</code>), and any absolute path outside the HAOS sibling volumes.`)}</div>`;
+    `<div class="feature-help">${tHtml('filesystem.custom.help', {}, 'Extra directories (one per line) that the file tools may READ and WRITE, either relative to your config dir or an absolute allowed HAOS sibling volume. Each entry grants both read and write. Applies immediately; no restart needed.')}</div>` +
+    `<div class="feature-help">${tHtml('filesystem.custom.blocked', {paths: `<code>${escapeHtml(denyList)}</code>`}, 'Always blocked (cannot be added): {paths}, path traversal (<code>..</code>), and any absolute path outside the HAOS sibling volumes.')}</div>`;
 
   const control = document.createElement('div');
   control.className = 'feature-control';
@@ -1922,19 +1950,19 @@ const ORIGIN_INFO_NOTE = {
 function envLockedNoteHtml(envVar, fieldName) {
   const envVarTag = `<code>${escapeHtml(envVar)}</code>`;
   if (!IS_ADDON_MODE) {
-    return t('origins.env_var_unset', {variable: envVarTag}, `Set via env var ${envVarTag}; unset it to edit here.`);
+    return tHtml('origins.env_var_unset', {variable: envVarTag}, 'Set via env var {variable}; unset it to edit here.');
   }
   if (fieldName === 'enable_beta_features') {
-    return t(
+    return tHtml(
       'origins.beta_legacy_bridge',
       {variable: envVarTag},
-      `Auto-enabled in App (add-on) mode (legacy bridge; your options.json predates the master toggle schema entry). Set <code>enable_beta_features</code> explicitly in the App (add-on) Configuration tab to take direct control. (env: ${envVarTag})`
+      'Auto-enabled in App (add-on) mode (legacy bridge; your options.json predates the master toggle schema entry). Set <code>enable_beta_features</code> explicitly in the App (add-on) Configuration tab to take direct control. (env: {variable})'
     );
   }
-  return t(
+  return tHtml(
     'origins.addon_runtime',
     {variable: envVarTag},
-    `Set by the App (add-on) runtime environment, managed by Home Assistant Supervisor; cannot be changed from this web UI. (env: ${envVarTag})`
+    'Set by the App (add-on) runtime environment, managed by Home Assistant Supervisor; cannot be changed from this web UI. (env: {variable})'
   );
 }
 
@@ -2035,7 +2063,7 @@ function renderFeatureFlags(flags) {
         `${escapeHtml(ORIGIN_INFO_NOTE[f.origin])}</div>`
       : '';
     info.innerHTML =
-      `<div class="feature-name" id="label-feature-${fieldName}">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-name" id="label-feature-${escapeHtml(fieldName)}">${escapeHtml(meta.label)}</div>` +
       `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
       lockedNote + infoNote;
 
@@ -2209,7 +2237,7 @@ function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByG
         `${escapeHtml(ORIGIN_INFO_NOTE[f.origin])}</div>`
       : '';
     info.innerHTML =
-      `<div class="feature-name" id="label-feature-${fieldName}">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-name" id="label-feature-${escapeHtml(fieldName)}">${escapeHtml(meta.label)}</div>` +
       `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
       lockedNote + infoNote;
 
@@ -2275,7 +2303,7 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
     let lockedNote = '';
     if (f.field === 'code_mode_saved_tools_path') {
       if (IS_ADDON_MODE) {
-        lockedNote = `<div class="feature-locked-note">${t(
+        lockedNote = `<div class="feature-locked-note">${tHtml(
           'advanced.code_mode_saved_tools_path.addon_locked',
           {},
           'Hardcoded to <code>/data/saved_tools.json</code> in App (add-on) mode and cannot be changed (fixed here so saved tools survive App (add-on) updates).'
@@ -2295,7 +2323,7 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
         `<div class="feature-locked-note">${envLockedNoteHtml(f.env_var, f.field)}</div>`;
     }
     info.innerHTML =
-      `<div class="feature-name" id="label-feature-${f.field}">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-name" id="label-feature-${escapeHtml(f.field)}">${escapeHtml(meta.label)}</div>` +
       `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
       lockedNote;
 
@@ -2472,7 +2500,7 @@ function renderPolicyCards(policy) {
   // see/edit them all.
   const byTool = {};
   rules.forEach((r, idx) => {
-    const key = r.tool_name + ' ' + idx;
+    const key = r.tool_name + '\0' + idx;
     byTool[key] = {tool_name: r.tool_name, rule: r, originalIndex: idx};
   });
   Object.keys(byTool).forEach(key => {

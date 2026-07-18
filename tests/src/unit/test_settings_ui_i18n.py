@@ -192,3 +192,36 @@ def test_de_catalog_loads_and_is_registered() -> None:
     assert "de" in CATALOGS
     assert CATALOGS["de"]["meta"]["native_name"] == "Deutsch"
     assert CATALOGS["de"]["meta"]["dir"] == "ltr"
+
+
+def test_disallowed_inline_markup_is_rejected(tmp_path: Path) -> None:
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"note": "Use <code>x</code>"},
+    )
+    _write_catalog(
+        tmp_path,
+        "de",
+        native_name="Deutsch",
+        messages={"note": "Nutze <Code >x</Code>"},
+    )
+    with pytest.raises(ValueError, match="inline markup"):
+        load_catalogs(tmp_path)
+
+
+def test_allowlisted_inline_markup_loads(tmp_path: Path) -> None:
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={
+            "note": (
+                "See <strong>docs</strong>, <code>x</code> or the "
+                '<a href="#" data-panel-link="tools">Tools</a> tab; 1 < 5 is prose.'
+            )
+        },
+    )
+    catalogs = load_catalogs(tmp_path)
+    assert "note" in catalogs["en"]["messages"]

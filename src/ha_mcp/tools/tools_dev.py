@@ -834,7 +834,9 @@ class DevTools:
             Field(
                 description=(
                     "info: deployment/version report; update_source: point the "
-                    "in-process server at a channel or pip spec and reinstall; "
+                    "ha_mcp_tools component's separate in-process server at a "
+                    "channel or pip spec and reinstall it (never changes the "
+                    "server serving this connection, unless embedded); "
                     "restart: restart this server"
                 )
             ),
@@ -871,14 +873,21 @@ class DevTools:
         as a PR tarball, and restarting the server so config or code
         changes take effect.
 
-        Caveats: restart interrupts this MCP connection in embedded and
-        add-on deployments (the reply arrives just before the server
-        goes down); update_source only self-interrupts in embedded mode
-        — elsewhere it reloads the separate in-process server entry
-        without dropping this connection. Reinstalls can take minutes.
-        update_source requires the ha_mcp_tools component's in-process
-        server entry; restart supports embedded and add-on deployments
-        only (standalone processes must be restarted externally).
+        Caveats: update_source changes ONLY the ha_mcp_tools custom
+        component's separate in-process server entry — it never updates
+        the add-on, Docker, standalone, or PyPI server that may be
+        serving this connection (update those via ha_manage_addon /
+        docker pull / pip). In embedded mode that entry IS this server,
+        so the update self-interrupts; elsewhere this connection is
+        untouched and keeps its current version. Success means the
+        entry's options were applied — the component then reinstalls in
+        the background, which can take minutes and can still fail
+        (check HA logs). update_source requires the component's
+        in-process server entry to exist. restart interrupts this MCP
+        connection in embedded and add-on deployments (the reply
+        arrives just before the server goes down) and supports those
+        two deployments only (standalone processes must be restarted
+        externally).
 
         EXAMPLES:
         ha_dev_manage_server("info")
@@ -936,6 +945,17 @@ class DevTools:
                     "entry_id": entry_id,
                     "channel": options.get(_OPT_CHANNEL),
                     "pip_spec": options.get(_OPT_PIP_SPEC),
+                    "role": (
+                        "this server (embedded)"
+                        if mode == "embedded"
+                        else (
+                            "separate in-process server run by the "
+                            "ha_mcp_tools component; the update_source "
+                            "target. server_version above describes the "
+                            f"{mode} server handling this connection, not "
+                            "this entry."
+                        )
+                    ),
                 }
         except Exception as exc:
             # Best-effort probe: a failure here (including the ToolError the
@@ -1020,6 +1040,9 @@ class DevTools:
                 "data": {
                     "scheduled": True,
                     "entry_id": entry_id,
+                    "target": (
+                        "this server (the embedded ha_mcp_tools in-process entry)"
+                    ),
                     "applying": user_input,
                     "previous": {
                         _OPT_CHANNEL: current.get(_OPT_CHANNEL),
@@ -1047,14 +1070,19 @@ class DevTools:
             "success": True,
             "data": {
                 "entry_id": entry_id,
+                "target": "ha_mcp_tools in-process server entry",
                 "applied": user_input,
                 "previous": {
                     _OPT_CHANNEL: current.get(_OPT_CHANNEL),
                     _OPT_PIP_SPEC: current.get(_OPT_PIP_SPEC),
                 },
                 "note": (
-                    "The component is reloading the in-process server with "
-                    "the new source; installs can take a few minutes."
+                    "Applied to the ha_mcp_tools component's SEPARATE "
+                    "in-process server entry, which is now reinstalling in "
+                    "the background (can take minutes and can still fail — "
+                    "check HA logs). The server handling this connection is "
+                    "NOT affected and keeps its current version; verify the "
+                    "in-process server on its own connect URL, not here."
                 ),
             },
         }
