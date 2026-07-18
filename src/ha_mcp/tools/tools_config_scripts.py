@@ -362,11 +362,14 @@ class ConfigScriptTools:
         Phase 0). Otherwise fall back to the raw ``script_id`` and let the REST
         client resolve — the no-hash update path lands here unchanged.
         """
+        result: dict[str, Any]
         if resolved_id is not None:
-            return await self._client.upsert_script_config(
+            result = await self._client.upsert_script_config(
                 config, resolved_id, _resolved=True
             )
-        return await self._client.upsert_script_config(config, script_id)
+        else:
+            result = await self._client.upsert_script_config(config, script_id)
+        return result
 
     @staticmethod
     def _validate_script_config(
@@ -802,9 +805,9 @@ class ConfigScriptTools:
             # resolves ``script_id`` to the storage key — thread that through so
             # the upsert doesn't re-resolve (issue #1813 Phase 0). Stays None on
             # the no-hash path (raw script_id resolved once, inside upsert).
-            resolved_id: str | None = None
+            resolved_key: str | None = None
             if config_hash:
-                _, resolved_id = await self._fetch_and_verify_hash(
+                _, resolved_key = await self._fetch_and_verify_hash(
                     script_id, config_hash, "set"
                 )
 
@@ -818,7 +821,7 @@ class ConfigScriptTools:
                 self._client, config_dict
             )
 
-            result = await self._upsert_script(config_dict, script_id, resolved_id)
+            result = await self._upsert_script(config_dict, script_id, resolved_key)
 
             # Wait for script to be queryable
             entity_id = f"script.{script_id}"

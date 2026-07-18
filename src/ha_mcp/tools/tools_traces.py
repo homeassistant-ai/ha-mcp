@@ -333,9 +333,7 @@ class TraceTools:
                 total=3,
                 message="no traces; gathering diagnostics",
             )
-            diagnostics = await _gather_diagnostics(
-                self._client, automation_id, domain
-            )
+            diagnostics = await _gather_diagnostics(self._client, automation_id, domain)
             await safe_progress(
                 ctx, progress=3, total=3, message="diagnostics complete"
             )

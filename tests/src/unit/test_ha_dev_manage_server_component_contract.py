@@ -35,7 +35,9 @@ class _RecordingConfigEntries:
     def async_entries(self) -> list[Any]:
         return list(self._entries)
 
-    def async_update_entry(self, entry: Any, *, options: Any = None, **_kw: Any) -> bool:
+    def async_update_entry(
+        self, entry: Any, *, options: Any = None, **_kw: Any
+    ) -> bool:
         self.update_calls.append(
             (entry, dict(options) if options is not None else None)
         )

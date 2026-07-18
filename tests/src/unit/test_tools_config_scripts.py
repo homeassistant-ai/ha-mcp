@@ -7,6 +7,7 @@ especially for blueprint-based scripts (issue #466).
 
 import json
 import logging
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -250,7 +251,10 @@ class TestScriptUpsertResolvedThreading:
 
     # The inner script body the stubbed envelope carries; its hash is the
     # optimistic-locking token the tool verifies before writing.
-    INNER_CONFIG = {"alias": "Morning", "sequence": [{"delay": {"seconds": 1}}]}
+    INNER_CONFIG: ClassVar[dict[str, Any]] = {
+        "alias": "Morning",
+        "sequence": [{"delay": {"seconds": 1}}],
+    }
 
     @pytest.fixture
     def mock_client(self):
@@ -281,9 +285,7 @@ class TestScriptUpsertResolvedThreading:
     def _seed_hash():
         from ha_mcp.utils.config_hash import compute_config_hash
 
-        return compute_config_hash(
-            dict(TestScriptUpsertResolvedThreading.INNER_CONFIG)
-        )
+        return compute_config_hash(dict(TestScriptUpsertResolvedThreading.INNER_CONFIG))
 
     async def test_full_config_with_hash_threads_resolved_id(self, tools, mock_client):
         """A full-config update supplying ``config_hash`` pre-resolves via the

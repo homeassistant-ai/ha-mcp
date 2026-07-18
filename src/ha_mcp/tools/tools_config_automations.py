@@ -896,11 +896,14 @@ class AutomationConfigTools:
         client resolve — the create path (``identifier is None``) and the
         no-hash update path both land here unchanged.
         """
+        result: dict[str, Any]
         if resolved_id is not None:
-            return await self._client.upsert_automation_config(
+            result = await self._client.upsert_automation_config(
                 config, resolved_id, _resolved=True
             )
-        return await self._client.upsert_automation_config(config, identifier)
+        else:
+            result = await self._client.upsert_automation_config(config, identifier)
+        return result
 
     async def _run_python_transform(
         self,

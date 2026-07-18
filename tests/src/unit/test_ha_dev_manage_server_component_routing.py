@@ -338,7 +338,10 @@ async def test_non_embedded_never_routes_to_component_write(
         )
 
     # Synchronous legacy submit (non-embedded returns "applied", not "scheduled").
-    assert result["data"]["applied"] == {"server_url": "http://ha:8123", "channel": "dev"}
+    assert result["data"]["applied"] == {
+        "server_url": "http://ha:8123",
+        "channel": "dev",
+    }
     assert len(client.submit_calls) == 1
     sent = [c.args[0] for c in ws.send_command.call_args_list]
     assert "ha_mcp_tools/server_entry_update" not in sent
