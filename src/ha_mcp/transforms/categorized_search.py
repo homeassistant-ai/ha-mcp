@@ -18,7 +18,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
@@ -188,6 +188,105 @@ def _categorize_tool(tool: Tool) -> Capability:
     )
 
 
+def _coerce_proxy_arguments(
+    arguments: dict[str, Any] | str | None,
+    proxy_name: str,
+    name: str,
+) -> dict[str, Any] | None:
+    """Coerce a proxy call's ``arguments`` to a dict, tolerating a JSON string.
+
+    Small models sometimes serialize ``arguments`` before sending. Parse once up
+    front so downstream logic can assume a dict (or None).
+    """
+    if not isinstance(arguments, str):
+        return arguments
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError as e:
+        raise ToolError(
+            json.dumps(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_JSON,
+                    message=f"'arguments' is a string but not valid JSON: {e}",
+                    suggestions=[
+                        "Pass 'arguments' as an object, not a JSON string.",
+                    ],
+                    context={"proxy_used": proxy_name, "tool_name": name},
+                )
+            )
+        ) from e
+    if not isinstance(parsed, dict):
+        raise ToolError(
+            json.dumps(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=(
+                        "'arguments' must be a JSON object "
+                        f"(got {type(parsed).__name__})."
+                    ),
+                    suggestions=[
+                        "Pass 'arguments' as an object (dict), not a list or scalar.",
+                    ],
+                    context={"proxy_used": proxy_name, "tool_name": name},
+                )
+            )
+        )
+    logger.warning(
+        "Proxy %s received 'arguments' as a JSON string for tool %s — parsed as fallback",
+        proxy_name,
+        name,
+    )
+    return parsed
+
+
+def _raise_wrong_category_error(
+    name: str,
+    transform: CategorizedSearchTransform,
+    proxy_name: str,
+) -> NoReturn:
+    """Raise a ToolError naming the correct proxy for *name* (or not-found)."""
+    # Provide a helpful error with the correct proxy name.
+    # actual_category/correct_proxy are assigned in every branch below that
+    # reaches the raise (the else branch raises early), so no initial sentinel
+    # value is needed.
+    correct_proxy = ""
+    if name in transform._read_tools:
+        actual_category: Capability = "read"
+        correct_proxy = transform._call_read_name
+    elif name in transform._write_tools:
+        actual_category = "write"
+        correct_proxy = transform._call_write_name
+    elif name in transform._delete_tools:
+        actual_category = "delete"
+        correct_proxy = transform._call_delete_name
+    else:
+        raise ToolError(
+            json.dumps(
+                create_error_response(
+                    code=ErrorCode.RESOURCE_NOT_FOUND,
+                    message=f"Tool '{name}' not found. Use ha_search_tools to discover available tools.",
+                    context={"tool_name": name},
+                )
+            )
+        )
+    raise ToolError(
+        json.dumps(
+            create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message=f"Tool '{name}' is a {actual_category} tool. Use {correct_proxy} instead of {proxy_name}.",
+                suggestions=[
+                    f"Use '{correct_proxy}' for {actual_category} operations."
+                ],
+                context={
+                    "tool_name": name,
+                    "proxy_used": proxy_name,
+                    "correct_proxy": correct_proxy,
+                },
+            )
+        )
+    )
+
+
 class CategorizedSearchTransform(BM25SearchTransform):
     """BM25 search with categorized call proxies.
 
@@ -332,44 +431,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
             # Tolerate `arguments` passed as a JSON string — small models
             # sometimes serialize it before sending. Parse once up front so
             # downstream logic can assume a dict (or None).
-            if isinstance(arguments, str):
-                try:
-                    parsed = json.loads(arguments)
-                except json.JSONDecodeError as e:
-                    raise ToolError(
-                        json.dumps(
-                            create_error_response(
-                                code=ErrorCode.VALIDATION_INVALID_JSON,
-                                message=f"'arguments' is a string but not valid JSON: {e}",
-                                suggestions=[
-                                    "Pass 'arguments' as an object, not a JSON string.",
-                                ],
-                                context={"proxy_used": proxy_name, "tool_name": name},
-                            )
-                        )
-                    ) from e
-                if not isinstance(parsed, dict):
-                    raise ToolError(
-                        json.dumps(
-                            create_error_response(
-                                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                message=(
-                                    "'arguments' must be a JSON object "
-                                    f"(got {type(parsed).__name__})."
-                                ),
-                                suggestions=[
-                                    "Pass 'arguments' as an object (dict), not a list or scalar.",
-                                ],
-                                context={"proxy_used": proxy_name, "tool_name": name},
-                            )
-                        )
-                    )
-                logger.warning(
-                    "Proxy %s received 'arguments' as a JSON string for tool %s — parsed as fallback",
-                    proxy_name,
-                    name,
-                )
-                arguments = parsed
+            arguments = _coerce_proxy_arguments(arguments, proxy_name, name)
 
             # Determine which category set to check
             if category == "read":
@@ -407,46 +469,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 arguments = arguments.get("arguments") or {}
 
             if name not in allowed:
-                # Provide a helpful error with the correct proxy name.
-                # actual_category/correct_proxy are assigned in every branch
-                # below that reaches the raise (the else branch raises early),
-                # so no initial sentinel value is needed.
-                correct_proxy = ""
-                if name in transform._read_tools:
-                    actual_category: Capability = "read"
-                    correct_proxy = transform._call_read_name
-                elif name in transform._write_tools:
-                    actual_category = "write"
-                    correct_proxy = transform._call_write_name
-                elif name in transform._delete_tools:
-                    actual_category = "delete"
-                    correct_proxy = transform._call_delete_name
-                else:
-                    raise ToolError(
-                        json.dumps(
-                            create_error_response(
-                                code=ErrorCode.RESOURCE_NOT_FOUND,
-                                message=f"Tool '{name}' not found. Use ha_search_tools to discover available tools.",
-                                context={"tool_name": name},
-                            )
-                        )
-                    )
-                raise ToolError(
-                    json.dumps(
-                        create_error_response(
-                            code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            message=f"Tool '{name}' is a {actual_category} tool. Use {correct_proxy} instead of {proxy_name}.",
-                            suggestions=[
-                                f"Use '{correct_proxy}' for {actual_category} operations."
-                            ],
-                            context={
-                                "tool_name": name,
-                                "proxy_used": proxy_name,
-                                "correct_proxy": correct_proxy,
-                            },
-                        )
-                    )
-                )
+                _raise_wrong_category_error(name, transform, proxy_name)
 
             return await ctx.fastmcp.call_tool(name, arguments)
 

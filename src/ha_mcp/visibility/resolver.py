@@ -180,6 +180,127 @@ def _is_assist_exposed(
     return False
 
 
+def _index_registry_by_id(entries: list[Any]) -> dict[str, dict[str, Any]]:
+    """Index registry entries by entity_id, skipping malformed rows."""
+    registry_by_id: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("entity_id"):
+            registry_by_id[entry["entity_id"]] = entry
+    return registry_by_id
+
+
+def _index_state_device_class(states_result: object | None) -> dict[str, str | None]:
+    """Index the live states list as entity_id -> effective device_class."""
+    state_device_class: dict[str, str | None] = {}
+    if isinstance(states_result, list):
+        for state in states_result:
+            if isinstance(state, dict) and state.get("entity_id"):
+                attrs = state.get("attributes")
+                dc = attrs.get("device_class") if isinstance(attrs, dict) else None
+                state_device_class[state["entity_id"]] = dc
+    return state_device_class
+
+
+def _excluded_by_dimensions(
+    registry_by_id: dict[str, dict[str, Any]],
+    denied: set[str],
+    categories: set[str],
+    config: VisibilityConfig,
+    areas: set[str],
+    labels: set[str],
+    device_area: dict[str, str],
+    device_labels: dict[str, list[str]],
+) -> set[str]:
+    """Return registry entities hidden by a category/hidden/area/label exclude.
+
+    Exclude dimensions are registry-derived: they hide an entity that *has* a
+    matching category/hidden flag/area/label. A states-only entity has none of
+    these, so (correctly) is never excluded - the loop stays registry-based.
+    """
+    excluded: set[str] = set()
+    for eid, entry in registry_by_id.items():
+        if eid in denied:
+            continue  # already hidden via the seed
+        if categories and entry.get("entity_category") in categories:
+            excluded.add(eid)
+            continue
+        if config.exclude_hidden and entry.get("hidden_by") is not None:
+            excluded.add(eid)
+            continue
+        if areas and _effective_area(entry, device_area) in areas:
+            excluded.add(eid)
+            continue
+        if labels and labels.intersection(_effective_labels(entry, device_labels)):
+            excluded.add(eid)
+    return excluded
+
+
+def _build_assist_overrides(
+    registry_by_id: dict[str, dict[str, Any]],
+    assist_overrides: dict[str, bool] | None,
+    assist_active: bool,
+) -> dict[str, bool]:
+    """Effective explicit-override map for the Assist dimension.
+
+    Start with the True-only exposures from expose_entity/list (the only source
+    for states-only entities), then layer each registry entry's explicit
+    should_expose (True *or* False) read from the payload options — it is
+    authoritative and wins over the list's True-only view.
+    """
+    overrides: dict[str, bool] = {}
+    if assist_active:
+        overrides.update(assist_overrides or {})
+        for eid, entry in registry_by_id.items():
+            explicit = _registry_assist_override(entry)
+            if explicit is not None:
+                overrides[eid] = explicit
+    return overrides
+
+
+def _candidate_hidden(
+    candidate_ids: set[str],
+    hidden: set[str],
+    registry_by_id: dict[str, dict[str, Any]],
+    state_device_class: dict[str, str | None],
+    allow_active: bool,
+    allow_entity_ids: set[str],
+    allow_areas: set[str],
+    allow_labels: set[str],
+    device_area: dict[str, str],
+    device_labels: dict[str, list[str]],
+    assist_active: bool,
+    overrides: dict[str, bool],
+    expose_new: bool,
+) -> set[str]:
+    """Return candidates hidden by the allowlist or the Assist-exposure dimension."""
+    newly_hidden: set[str] = set()
+    for eid in candidate_ids:
+        if eid in hidden:
+            continue
+        entry = registry_by_id.get(eid)
+        if allow_active and not (
+            eid in allow_entity_ids
+            or (
+                entry is not None and _effective_area(entry, device_area) in allow_areas
+            )
+            or (
+                entry is not None
+                and allow_labels.intersection(_effective_labels(entry, device_labels))
+            )
+        ):
+            newly_hidden.add(eid)
+            continue
+        if assist_active:
+            # Effective device_class: a registry override wins, else the live
+            # entity's (from state attributes) - matching get_device_class.
+            device_class = (
+                entry.get("device_class") if entry is not None else None
+            ) or state_device_class.get(eid)
+            if not _is_assist_exposed(eid, entry, device_class, overrides, expose_new):
+                newly_hidden.add(eid)
+    return newly_hidden
+
+
 def hidden_entity_ids(
     registry_result: object,
     config: VisibilityConfig,
@@ -265,18 +386,8 @@ def hidden_entity_ids(
     # lookups (Assist reads the effective device_class from the entity, not the
     # registry) plus the states-only entity universe (allowlist/Assist must be
     # able to hide YAML/template entities that have no registry entry).
-    registry_by_id: dict[str, dict[str, Any]] = {}
-    for entry in entries:
-        if isinstance(entry, dict) and entry.get("entity_id"):
-            registry_by_id[entry["entity_id"]] = entry
-
-    state_device_class: dict[str, str | None] = {}
-    if isinstance(states_result, list):
-        for state in states_result:
-            if isinstance(state, dict) and state.get("entity_id"):
-                attrs = state.get("attributes")
-                dc = attrs.get("device_class") if isinstance(attrs, dict) else None
-                state_device_class[state["entity_id"]] = dc
+    registry_by_id = _index_registry_by_id(entries)
+    state_device_class = _index_state_device_class(states_result)
 
     # Device-inherited area/labels: HA resolves an entity's effective area as its
     # own area_id else its device's, and device labels apply to its entities. A
@@ -313,24 +424,16 @@ def hidden_entity_ids(
     # (fail-fully-open was not the goal); only the registry-derived dimensions
     # degrade to open on a bad read.
     hidden: set[str] = set(denied)
-
-    # Exclude dimensions are registry-derived: they hide an entity that *has* a
-    # matching category/hidden flag/area/label. A states-only entity has none of
-    # these, so (correctly) is never excluded - the loop stays registry-based.
-    for eid, entry in registry_by_id.items():
-        if eid in denied:
-            continue  # already hidden via the seed above
-        if categories and entry.get("entity_category") in categories:
-            hidden.add(eid)
-            continue
-        if config.exclude_hidden and entry.get("hidden_by") is not None:
-            hidden.add(eid)
-            continue
-        if areas and _effective_area(entry, device_area) in areas:
-            hidden.add(eid)
-            continue
-        if labels and labels.intersection(_effective_labels(entry, device_labels)):
-            hidden.add(eid)
+    hidden |= _excluded_by_dimensions(
+        registry_by_id,
+        denied,
+        categories,
+        config,
+        areas,
+        labels,
+        device_area,
+        device_labels,
+    )
 
     # Allowlist + Assist are conjunctive filters that must also reach states-only
     # entities, so they iterate the full candidate universe (registry ∪ states)
@@ -344,47 +447,24 @@ def hidden_entity_ids(
             # The seam could not supply Assist data; skip that dimension rather
             # than hide everything, and tell the operator.
             warnings.append(_ASSIST_UNAVAILABLE_WARNING)
-        # Effective explicit-override map for the Assist dimension. Start with the
-        # True-only exposures from expose_entity/list (the only source for
-        # states-only entities), then layer each registry entry's explicit
-        # should_expose (True *or* False) read from the payload options — it is
-        # authoritative and wins over the list's True-only view.
-        overrides: dict[str, bool] = {}
-        if assist_active:
-            overrides.update(assist_overrides or {})
-            for eid, entry in registry_by_id.items():
-                explicit = _registry_assist_override(entry)
-                if explicit is not None:
-                    overrides[eid] = explicit
-        for eid in candidate_ids:
-            if eid in hidden:
-                continue
-            entry = registry_by_id.get(eid)
-            if allow_active and not (
-                eid in allow_entity_ids
-                or (
-                    entry is not None
-                    and _effective_area(entry, device_area) in allow_areas
-                )
-                or (
-                    entry is not None
-                    and allow_labels.intersection(
-                        _effective_labels(entry, device_labels)
-                    )
-                )
-            ):
-                hidden.add(eid)
-                continue
-            if assist_active:
-                # Effective device_class: a registry override wins, else the live
-                # entity's (from state attributes) - matching get_device_class.
-                device_class = (
-                    entry.get("device_class") if entry is not None else None
-                ) or state_device_class.get(eid)
-                if not _is_assist_exposed(
-                    eid, entry, device_class, overrides, expose_new
-                ):
-                    hidden.add(eid)
+        overrides = _build_assist_overrides(
+            registry_by_id, assist_overrides, assist_active
+        )
+        hidden |= _candidate_hidden(
+            candidate_ids,
+            hidden,
+            registry_by_id,
+            state_device_class,
+            allow_active,
+            allow_entity_ids,
+            allow_areas,
+            allow_labels,
+            device_area,
+            device_labels,
+            assist_active,
+            overrides,
+            expose_new,
+        )
 
     return hidden, warnings
 
