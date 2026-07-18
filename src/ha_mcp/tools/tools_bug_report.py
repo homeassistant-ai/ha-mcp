@@ -448,7 +448,10 @@ def _sanitize_log_text(text: str) -> str:
     # value the same way. The auto-generated /private_<token> form is caught by
     # the generic pattern below.
     for env_name in ("MCP_SECRET_PATH", "MCP_SETTINGS_SECRET_PATH"):
-        configured = os.getenv(env_name, "").rstrip("/")
+        # Strip before rstrip: the resolver strips MCP_SETTINGS_SECRET_PATH before
+        # mounting, so a whitespace-bearing value mounts at the stripped path — the
+        # redaction pattern must match that, not the raw value (GHSA-mx64-982r-65vg).
+        configured = os.getenv(env_name, "").strip().rstrip("/")
         if configured and configured != "/mcp":
             # Anchor on a path-segment boundary so a short/substring-prone
             # configured value (e.g. "/ha") cannot corrupt unrelated text

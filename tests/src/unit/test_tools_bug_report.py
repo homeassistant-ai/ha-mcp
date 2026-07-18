@@ -436,6 +436,19 @@ class TestBugReportTool:
         assert "/admin_ui" not in out
         assert "[REDACTED_SECRET_PATH]" in out
 
+    def test_sanitize_log_text_redacts_settings_path_with_whitespace(self, monkeypatch):
+        """The resolver strips MCP_SETTINGS_SECRET_PATH before mounting, so a
+        value with stray whitespace mounts at the stripped path; the sanitizer
+        must strip too or it redacts the wrong string and leaks the secret
+        (GHSA-mx64-982r-65vg)."""
+        monkeypatch.delenv("MCP_SECRET_PATH", raising=False)
+        monkeypatch.setenv("MCP_SETTINGS_SECRET_PATH", "/admin_ui ")
+        out = _sanitize_log_text(
+            "Settings UI available at: http://ha.local:8086/admin_ui/settings"
+        )
+        assert "/admin_ui" not in out
+        assert "[REDACTED_SECRET_PATH]" in out
+
     def test_sanitize_log_text_keeps_default_mcp_path(self, monkeypatch):
         """The low-entropy ``/mcp`` default is left intact (avoids noise)."""
         monkeypatch.delenv("MCP_SECRET_PATH", raising=False)
