@@ -180,15 +180,7 @@ The `/my-pr-checker` skill carries the exact commands (the inline-reply
 
 **CRITICAL - Never commit directly to master, except for approved documentation-only adjustments.**
 
-You are STRICTLY PROHIBITED from committing to `master` or `main` branch. Always use worktrees for feature work.
-
-Documentation-only adjustments may be committed and pushed directly to `master` without a PR when all of the following are true:
-- Every changed file is documentation (`*.md`); no code, configuration, generated artifact, or workflow file is included.
-- The exact diff is shown to the user before committing.
-- The user explicitly approves both the change and direct push.
-- `master` is clean and updated with `git pull --ff-only` immediately before editing and again before committing.
-
-For all other work:
+You are STRICTLY PROHIBITED from committing to `master` or `main`. The sole exception is a documentation-only (`*.md`) adjustment whose exact diff and direct push the user explicitly approved; update clean `master` with `git pull --ff-only`, then commit and push without a PR. For all other work, always use worktrees:
 
 ```bash
 # Use /wt skill or manually:
@@ -199,8 +191,6 @@ cd worktree/<branch-name>
 **Before any non-exempt commit, verify:**
 1. Current branch: `git rev-parse --abbrev-ref HEAD` (must NOT be master/main)
 2. In worktree: `pwd` (must be in `worktree/` subdirectory)
-
-For an approved documentation-only direct commit, instead verify that every staged path ends in `.md` and that the staged diff exactly matches what the user approved.
 
 **Never push or create PRs without user permission.**
 
