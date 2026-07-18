@@ -232,6 +232,36 @@ async def wait_for_condition(
     return False
 
 
+async def _rest_poll_for_state_change(
+    sample: Callable[[], Any],
+    entity_id: str,
+    initial_state: str | None,
+    rest_budget: float,
+    poll_interval: float,
+    timeout: int,
+) -> str | None:
+    """REST-poll ``sample`` until it reports a changed state or the budget elapses."""
+    rest_start = time.monotonic()
+    while time.monotonic() - rest_start < rest_budget:
+        try:
+            current = await sample()
+            if current is not None:
+                elapsed = time.monotonic() - rest_start
+                logger.info(
+                    f"✅ {entity_id} changed: '{initial_state}' → '{current}' "
+                    f"after {elapsed:.1f}s (REST)"
+                )
+                return current
+        except _POLLING_TRANSIENT_ERRORS as e:
+            logger.debug(f"⚠️ Error checking state change for {entity_id}: {e}")
+        await asyncio.sleep(poll_interval)
+
+    logger.warning(
+        f"⚠️ {entity_id} did not change from '{initial_state}' within {timeout}s (REST)"
+    )
+    return None
+
+
 async def wait_for_state_change(
     mcp_client, entity_id: str, timeout: int = 10, poll_interval: float = 0.5
 ) -> str | None:
@@ -311,25 +341,9 @@ async def wait_for_state_change(
         )
         rest_budget = max(0.0, float(timeout) - e.elapsed)
 
-    rest_start = time.monotonic()
-    while time.monotonic() - rest_start < rest_budget:
-        try:
-            current = await sample()
-            if current is not None:
-                elapsed = time.monotonic() - rest_start
-                logger.info(
-                    f"✅ {entity_id} changed: '{initial_state}' → '{current}' "
-                    f"after {elapsed:.1f}s (REST)"
-                )
-                return current
-        except _POLLING_TRANSIENT_ERRORS as e:
-            logger.debug(f"⚠️ Error checking state change for {entity_id}: {e}")
-        await asyncio.sleep(poll_interval)
-
-    logger.warning(
-        f"⚠️ {entity_id} did not change from '{initial_state}' within {timeout}s (REST)"
+    return await _rest_poll_for_state_change(
+        sample, entity_id, initial_state, rest_budget, poll_interval, timeout
     )
-    return None
 
 
 async def wait_for_tool_result(
@@ -571,6 +585,75 @@ _SAMPLE_TRANSIENT_ERRORS = (
 )
 
 
+async def _ws_backstop_resample(sample: Callable[[], Any], entity_id: str) -> Any:
+    """Sample once on a backstop tick; return its truthy result or None."""
+    try:
+        result = await sample()
+        if result is not None:
+            return result
+    except _SAMPLE_TRANSIENT_ERRORS as e:
+        logger.debug(f"backstop sample raised transient for {entity_id}: {e!r}")
+    return None
+
+
+async def _ws_post_event_resample(sample: Callable[[], Any], entity_id: str) -> Any:
+    """Sample once after a matching event; return its truthy result or None."""
+    try:
+        result = await sample()
+        if result is not None:
+            return result
+    except _SAMPLE_TRANSIENT_ERRORS as e:
+        logger.debug(f"post-event sample raised transient for {entity_id}: {e!r}")
+    return None
+
+
+async def _ws_event_wait_loop(
+    ws,
+    sample: Callable[[], Any],
+    entity_id: str,
+    *,
+    timeout: float,
+    backstop_interval: float,
+) -> Any:
+    """Event-driven wait loop: return ``sample``'s truthy result or None on timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        wait_budget = min(remaining, backstop_interval)
+
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=wait_budget)
+        except TimeoutError:
+            # Backstop tick — sample anyway. A silent-broken
+            # subscription degrades to slow REST polling rather than
+            # a 10s hang.
+            result = await _ws_backstop_resample(sample, entity_id)
+            if result is not None:
+                return result
+            continue
+
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        if payload.get("type") != "event":
+            continue
+        event = payload.get("event") or {}
+        data = event.get("data") or {}
+        evt_entity = data.get("entity_id") or event.get("entity_id")
+        if evt_entity != entity_id:
+            continue
+
+        # Event matched our entity — re-sample. The sample is the
+        # source of truth; the event just nudges us to look.
+        result = await _ws_post_event_resample(sample, entity_id)
+        if result is not None:
+            return result
+
+    return None
+
+
 async def _ws_wait_for_predicate(
     sample: Callable[[], Any],
     entity_id: str,
@@ -664,52 +747,13 @@ async def _ws_wait_for_predicate(
         except _SAMPLE_TRANSIENT_ERRORS as e:
             logger.debug(f"sample raised transient for {entity_id}: {e!r}")
 
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            remaining = deadline - time.monotonic()
-            wait_budget = min(remaining, backstop_interval)
-
-            try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=wait_budget)
-            except TimeoutError:
-                # Backstop tick — sample anyway. A silent-broken
-                # subscription degrades to slow REST polling rather than
-                # a 10s hang.
-                try:
-                    result = await sample()
-                    if result is not None:
-                        return result
-                except _SAMPLE_TRANSIENT_ERRORS as e:
-                    logger.debug(
-                        f"backstop sample raised transient for {entity_id}: {e!r}"
-                    )
-                continue
-
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-
-            if payload.get("type") != "event":
-                continue
-            event = payload.get("event") or {}
-            data = event.get("data") or {}
-            evt_entity = data.get("entity_id") or event.get("entity_id")
-            if evt_entity != entity_id:
-                continue
-
-            # Event matched our entity — re-sample. The sample is the
-            # source of truth; the event just nudges us to look.
-            try:
-                result = await sample()
-                if result is not None:
-                    return result
-            except _SAMPLE_TRANSIENT_ERRORS as e:
-                logger.debug(
-                    f"post-event sample raised transient for {entity_id}: {e!r}"
-                )
-
-        return None
+        return await _ws_event_wait_loop(
+            ws,
+            sample,
+            entity_id,
+            timeout=timeout,
+            backstop_interval=backstop_interval,
+        )
     except (websockets.exceptions.WebSocketException, OSError) as e:
         # Transport died mid-wait. Signal unavailable so the caller can
         # complete via REST. ``json.JSONDecodeError`` on a single frame
@@ -727,6 +771,32 @@ async def _ws_wait_for_predicate(
             await ws.close()
         except (websockets.exceptions.WebSocketException, OSError):
             pass
+
+
+async def _read_until_event_match(
+    ws,
+    event_type: str,
+    predicate: Callable[[dict[str, Any]], bool] | None,
+    timeout: float,
+) -> dict[str, Any] | None:
+    """Read events until one matches ``event_type`` + ``predicate``, or timeout."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+        except TimeoutError:
+            return None
+        payload = json.loads(raw)
+        if payload.get("type") != "event":
+            continue
+        event = payload.get("event") or {}
+        if event.get("event_type") != event_type:
+            continue
+        if predicate is None or predicate(event):
+            return event
 
 
 async def wait_for_ha_event(
@@ -781,23 +851,7 @@ async def wait_for_ha_event(
         if asyncio.iscoroutine(trigger_result):
             await trigger_result
 
-        deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return None
-            try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-            except TimeoutError:
-                return None
-            payload = json.loads(raw)
-            if payload.get("type") != "event":
-                continue
-            event = payload.get("event") or {}
-            if event.get("event_type") != event_type:
-                continue
-            if predicate is None or predicate(event):
-                return event
+        return await _read_until_event_match(ws, event_type, predicate, timeout)
     except (
         websockets.exceptions.WebSocketException,
         ConnectionError,
@@ -817,6 +871,75 @@ async def wait_for_ha_event(
             # Close errors on an already-broken socket — don't mask the
             # caller's outcome with them.
             pass
+
+
+def _resolve_ha_ws_url_and_token(
+    ha_url: str | None, token: str | None
+) -> tuple[str, str]:
+    """Resolve the HA WebSocket URL + token from args or env for the WS wait."""
+    if ha_url is None:
+        ha_url = os.environ.get("HOMEASSISTANT_URL")
+    if not ha_url:
+        raise RuntimeError(
+            "wait_for_entities_registered_via_ws: no ha_url and "
+            "$HOMEASSISTANT_URL is unset"
+        )
+    if token is None:
+        token = os.environ.get("HOMEASSISTANT_TOKEN")
+    if not token:
+        # Fall back to the test constant for tiers where the env var
+        # isn't set by the fixture (kept centralized in test_constants).
+        from test_constants import TEST_TOKEN as _DEFAULT_TOKEN
+
+        token = _DEFAULT_TOKEN
+
+    ws_url = ha_url.replace("http://", "ws://", 1).replace("https://", "wss://", 1)
+    ws_url = ws_url.rstrip("/") + "/api/websocket"
+    return ws_url, token
+
+
+def _mark_seen_from_states(states: list, expected: set[str], seen: set[str]) -> None:
+    """Mark expected entities already present in a ``get_states`` result as seen."""
+    for state in states:
+        eid = state.get("entity_id") if isinstance(state, dict) else None
+        if eid in expected:
+            seen.add(eid)
+
+
+async def _drain_registration_events(
+    ws,
+    expected: set[str],
+    seen: set[str],
+    states_msg_id: int,
+    deadline: float,
+) -> None:
+    """Read state/event frames, adding registered ids to ``seen`` in place.
+
+    Returns when ``seen == expected`` or the deadline passes.
+    """
+    while seen != expected:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+        except TimeoutError:
+            break
+        payload = json.loads(raw)
+        ptype = payload.get("type")
+        if ptype == "result" and payload.get("id") == states_msg_id:
+            # Response to our post-subscribe ``get_states``. Mark every
+            # expected entity already in the state machine as seen so a
+            # before-subscribe registration doesn't stall the wait.
+            _mark_seen_from_states(payload.get("result") or [], expected, seen)
+            continue
+        if ptype != "event":
+            continue
+        event = payload.get("event") or {}
+        data = event.get("data") or {}
+        entity_id = data.get("entity_id")
+        if entity_id in expected:
+            seen.add(entity_id)
 
 
 async def wait_for_entities_registered_via_ws(
@@ -869,24 +992,7 @@ async def wait_for_entities_registered_via_ws(
     if not expected:
         return set()
 
-    if ha_url is None:
-        ha_url = os.environ.get("HOMEASSISTANT_URL")
-    if not ha_url:
-        raise RuntimeError(
-            "wait_for_entities_registered_via_ws: no ha_url and "
-            "$HOMEASSISTANT_URL is unset"
-        )
-    if token is None:
-        token = os.environ.get("HOMEASSISTANT_TOKEN")
-    if not token:
-        # Fall back to the test constant for tiers where the env var
-        # isn't set by the fixture (kept centralized in test_constants).
-        from test_constants import TEST_TOKEN as _DEFAULT_TOKEN
-
-        token = _DEFAULT_TOKEN
-
-    ws_url = ha_url.replace("http://", "ws://", 1).replace("https://", "wss://", 1)
-    ws_url = ws_url.rstrip("/") + "/api/websocket"
+    ws_url, token = _resolve_ha_ws_url_and_token(ha_url, token)
 
     seen: set[str] = set()
     deadline = time.monotonic() + timeout
@@ -943,34 +1049,9 @@ async def wait_for_entities_registered_via_ws(
             states_msg_id = 2
             await ws.send(json.dumps({"id": states_msg_id, "type": "get_states"}))
 
-            while seen != expected:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-                except TimeoutError:
-                    break
-                payload = json.loads(raw)
-                ptype = payload.get("type")
-                if ptype == "result" and payload.get("id") == states_msg_id:
-                    # Response to our post-subscribe ``get_states``. Mark every
-                    # expected entity already in the state machine as seen so a
-                    # before-subscribe registration doesn't stall the wait.
-                    for state in payload.get("result") or []:
-                        eid = (
-                            state.get("entity_id") if isinstance(state, dict) else None
-                        )
-                        if eid in expected:
-                            seen.add(eid)
-                    continue
-                if ptype != "event":
-                    continue
-                event = payload.get("event") or {}
-                data = event.get("data") or {}
-                entity_id = data.get("entity_id")
-                if entity_id in expected:
-                    seen.add(entity_id)
+            await _drain_registration_events(
+                ws, expected, seen, states_msg_id, deadline
+            )
     except (
         websockets.exceptions.WebSocketException,
         ConnectionError,
