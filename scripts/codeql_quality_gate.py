@@ -252,7 +252,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "as clear text",
         "Stable flavor pending promote: the creds file uses _atomic_write_0600 "
         "with a warned plain-write fallback; the proxy-config handoff write "
-        "gained the same 0600-first treatment on the dev flavor (v1.2.3.dev8) "
+        "gained the same 0600-first treatment on the dev flavor (v2.0.3.dev1) "
         "and reaches this tree via the promote workflow — the stable-guard "
         "blocks editing it directly here. Remove the plain-write half of this "
         "reason after the next promote.",
