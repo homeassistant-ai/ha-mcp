@@ -743,6 +743,7 @@ class TestInfo:
             "reference_data",
             "search_visibility",
             "server_entry",
+            "server_entry_update",
             "call_service",
             "bulk_call_service",
         ]
@@ -1850,6 +1851,10 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_SERVICES_LIST,
             wsapi.WS_REFERENCE_DATA,
             wsapi.WS_SERVER_ENTRY,
+            # Phase 3 server-entry WRITE capability; its prep + admin-gate coverage
+            # lives in test_component_server_entry_update_contract.py (this set only
+            # guards drift).
+            wsapi.WS_SERVER_ENTRY_UPDATE,
             # Phase 3 write capability; its prep + admin-gate coverage lives in
             # test_component_ws_phase2_async.py (this set only guards drift).
             wsapi.WS_CALL_SERVICE,

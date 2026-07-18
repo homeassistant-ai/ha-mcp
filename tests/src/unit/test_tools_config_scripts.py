@@ -7,6 +7,7 @@ especially for blueprint-based scripts (issue #466).
 
 import json
 import logging
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -238,6 +239,147 @@ class TestGetScriptCanonicalId:
         ), (
             f"Expected contract-violation warning, got: {[r.message for r in caplog.records]}"
         )
+
+
+class TestScriptUpsertResolvedThreading:
+    """Issue #1813 Phase 0 item #6: when the tool pre-resolves the storage key
+    (its hash-verify fetch already resolved it via the REST envelope), it passes
+    that key as ``resolved_id`` to ``upsert_script_config`` so the REST client
+    skips the redundant second registry lookup — while ``script_id`` stays the
+    CALLER's identifier so a renamed script's alias is not reset to the storage
+    key (#1935). The no-hash path passes ``resolved_id=None`` (resolved once,
+    inside the upsert).
+    """
+
+    # The inner script body the stubbed envelope carries; its hash is the
+    # optimistic-locking token the tool verifies before writing.
+    INNER_CONFIG: ClassVar[dict[str, Any]] = {
+        "alias": "Morning",
+        "sequence": [{"delay": {"seconds": 1}}],
+    }
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        # get_script_config resolves the alias "renamed_script" to storage key
+        # "storage_key" (mirrors a UI-renamed script), returning the REST
+        # envelope shape ha_config_set_script's fetch consumes.
+        client.get_script_config = AsyncMock(
+            return_value={
+                "success": True,
+                "script_id": "storage_key",
+                "config": dict(self.INNER_CONFIG),
+            }
+        )
+        client.upsert_script_config = AsyncMock(
+            return_value={"success": True, "script_id": "storage_key"}
+        )
+        # Reference validator (#940) walks these during set_script.
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        return ConfigScriptTools(mock_client)
+
+    @staticmethod
+    def _seed_hash():
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        return compute_config_hash(dict(TestScriptUpsertResolvedThreading.INNER_CONFIG))
+
+    async def test_full_config_with_hash_threads_resolved_id(self, tools, mock_client):
+        """A full-config update supplying ``config_hash`` pre-resolves via the
+        hash-verify fetch → the resolved storage key is passed as ``resolved_id``
+        (write target) while ``script_id`` stays the caller's id."""
+        result = await tools.ha_config_set_script(
+            script_id="renamed_script",
+            config={"alias": "Morning", "sequence": [{"delay": {"seconds": 5}}]},
+            config_hash=self._seed_hash(),
+            wait=False,
+        )
+
+        assert result["success"] is True
+        args, kwargs = mock_client.upsert_script_config.call_args
+        assert kwargs.get("resolved_id") == "storage_key"
+        assert args[1] == "renamed_script"
+
+    async def test_python_transform_threads_resolved_id(self, tools, mock_client):
+        """python_transform always hash-verifies first → threaded the same way."""
+        result = await tools.ha_config_set_script(
+            script_id="renamed_script",
+            python_transform="config['mode'] = 'single'",
+            config_hash=self._seed_hash(),
+        )
+
+        assert result["success"] is True
+        args, kwargs = mock_client.upsert_script_config.call_args
+        assert kwargs.get("resolved_id") == "storage_key"
+        assert args[1] == "renamed_script"
+
+    async def test_renamed_config_hash_no_alias_forwards_caller_id_for_alias(
+        self, tools, mock_client
+    ):
+        """#1935: a renamed script updated with config_hash + a config omitting
+        ``alias`` forwards the CALLER's id as ``script_id`` (the REST client's
+        alias-default source) and the resolved storage key as ``resolved_id``
+        (write target) — so the alias is not reset to the storage key, and the
+        resolver runs only once (in the hash-verify fetch)."""
+        result = await tools.ha_config_set_script(
+            script_id="renamed_script",
+            config={"sequence": [{"delay": {"seconds": 5}}]},  # no alias
+            config_hash=self._seed_hash(),
+            wait=False,
+        )
+
+        assert result["success"] is True
+        args, kwargs = mock_client.upsert_script_config.call_args
+        # Caller id is the alias-default source; storage key is the write target.
+        assert args[1] == "renamed_script"
+        assert kwargs.get("resolved_id") == "storage_key"
+        # The config forwarded to the REST client still has no alias — the
+        # default is applied inside upsert_script_config from ``script_id``
+        # (proven by TestUpsertScriptResolvedShortCircuit at the REST level).
+        assert "alias" not in args[0]
+
+    async def test_full_config_without_hash_is_not_threaded(self, tools, mock_client):
+        """No ``config_hash`` → no pre-resolve → ``resolved_id=None``, the REST
+        client resolves once from the caller ``script_id``."""
+        result = await tools.ha_config_set_script(
+            script_id="renamed_script",
+            config={"alias": "Morning", "sequence": [{"delay": {"seconds": 5}}]},
+            wait=False,
+        )
+
+        assert result["success"] is True
+        args, kwargs = mock_client.upsert_script_config.call_args
+        assert kwargs.get("resolved_id") is None
+        assert args[1] == "renamed_script"
+
+    async def test_missing_envelope_key_reresolves_not_caller_slug(
+        self, tools, mock_client
+    ):
+        """Structural invariant: if the REST envelope omits ``script_id`` (never
+        happens today — ``get_script_config`` always sets it), the tool passes
+        ``resolved_id=None`` so the upsert RE-RESOLVES rather than threading the
+        caller's unresolved slug as the write target (which for a renamed script
+        would hit the wrong storage key)."""
+        mock_client.get_script_config = AsyncMock(
+            return_value={"success": True, "config": dict(self.INNER_CONFIG)}  # no key
+        )
+
+        result = await tools.ha_config_set_script(
+            script_id="renamed_script",
+            config={"alias": "Morning", "sequence": [{"delay": {"seconds": 5}}]},
+            config_hash=self._seed_hash(),
+            wait=False,
+        )
+
+        assert result["success"] is True
+        args, kwargs = mock_client.upsert_script_config.call_args
+        assert kwargs.get("resolved_id") is None  # re-resolve, not the caller slug
+        assert args[1] == "renamed_script"
 
 
 class TestStripEmptyScriptFields:

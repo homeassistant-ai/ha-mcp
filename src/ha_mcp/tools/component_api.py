@@ -273,9 +273,17 @@ async def get_component_caps(client: Any) -> ComponentCaps | None:
         if not base_url or not token:
             # Not a credentialed HA client — no WS connection to negotiate over.
             return None
+        # Thread verify_ssl so a verify_ssl=False client keys (and can establish)
+        # its own pooled connection rather than failing the probe or colliding with
+        # a default-verification entry — otherwise EVERY component capability is
+        # silently unreachable on an HTTPS + verify_ssl=False install. ``None`` is
+        # the pool's settings default, so a client without the attr is unchanged.
+        verify_ssl = getattr(client, "verify_ssl", None)
 
         try:
-            ws = await get_websocket_client(url=base_url, token=token)
+            ws = await get_websocket_client(
+                url=base_url, token=token, verify_ssl=verify_ssl
+            )
             response = await ws.send_command(INFO_COMMAND)
         except HomeAssistantCommandError:
             # Old component (unknown_command) or an info handler bug: the

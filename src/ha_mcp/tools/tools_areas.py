@@ -34,6 +34,116 @@ from .util_helpers import (
 logger = logging.getLogger(__name__)
 
 
+def _parse_projection_params(
+    fields: str | list[str] | None,
+    area_fields: str | list[str] | None,
+) -> tuple[list[str] | None, list[str] | None]:
+    """Validate the fields/area_fields projection params, raising on a bad shape."""
+    parsed_fields: list[str] | None = None
+    if fields is not None:
+        try:
+            parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+            if parsed_fields is not None and len(parsed_fields) == 0:
+                raise ValueError("fields must contain at least one key")
+        except ValueError as exc:
+            raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+    parsed_area_fields: list[str] | None = None
+    if area_fields is not None:
+        try:
+            parsed_area_fields = parse_string_list_param(
+                area_fields, "area_fields", allow_csv=True
+            )
+            if parsed_area_fields is not None and len(parsed_area_fields) == 0:
+                raise ValueError("area_fields must contain at least one key")
+        except ValueError as exc:
+            raise_tool_error(create_validation_error(str(exc), parameter="area_fields"))
+    return parsed_fields, parsed_area_fields
+
+
+def _partition_areas_by_floor(
+    areas: list[dict[str, Any]], valid_floor_ids: set[Any]
+) -> tuple[
+    dict[str, list[dict[str, Any]]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    """Partition areas into (floor_map, unassigned_areas, orphaned_areas).
+
+    Partitions areas into three disjoint sets:
+      - nested:    floor_id present AND points to a known floor
+      - orphaned:  floor_id present BUT points to a non-existent floor
+                   (race between the concurrent reads, or manual
+                   .storage inconsistency)
+      - unassigned: no floor_id at all
+    Orphaned is surfaced as a separate key so the LLM can diagnose
+    registry drift without introspecting individual area fields.
+    Use `is None` rather than falsy-check so that a floor_id of ""
+    (valid but unusual) is treated as orphaned if it does not resolve,
+    not as unassigned.
+    """
+    floor_map: dict[str, list[dict[str, Any]]] = {}
+    unassigned_areas: list[dict[str, Any]] = []
+    orphaned_areas: list[dict[str, Any]] = []
+    for area in areas:
+        fid = area.get("floor_id")
+        if fid is None:
+            unassigned_areas.append(area)
+        elif fid in valid_floor_ids:
+            floor_map.setdefault(fid, []).append(area)
+        else:
+            orphaned_areas.append(area)
+    return floor_map, unassigned_areas, orphaned_areas
+
+
+# Sort by level ascending; coerce defensively so a malformed
+# string `level` cannot raise TypeError mid-sort and get
+# flattened by the broad `except Exception` in the caller.
+def _floor_sort_key(floor: dict[str, Any]) -> int:
+    raw = floor.get("level")
+    if raw is None:
+        return 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"Floor {floor.get('floor_id')!r} has non-numeric "
+            f"level {raw!r}; treating as 0 for sort"
+        )
+        return 0
+
+
+def _validate_cross_kind_params(
+    kind: str,
+    level: int | None,
+    floor_id: str | None,
+    picture: str | None,
+) -> None:
+    """Reject params that don't belong to *kind* before building a set message."""
+    # Reject cross-kind params loudly so silent intent loss can't happen
+    # (e.g., kind='floor' with picture='...' previously dropped the picture
+    # without a diagnostic).
+    cross_kind_params: list[str] = []
+    if kind == "area" and level is not None:
+        cross_kind_params.append("level")
+    elif kind == "floor":
+        if floor_id is not None:
+            cross_kind_params.append("floor_id")
+        if picture is not None:
+            cross_kind_params.append("picture")
+    if cross_kind_params:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Parameter(s) {cross_kind_params} are not valid for kind={kind!r}",
+                context={"kind": kind, "invalid_parameters": cross_kind_params},
+                suggestions=[
+                    "For kind='area' use: name, id, floor_id, icon, aliases, picture",
+                    "For kind='floor' use: name, id, level, icon, aliases",
+                ],
+            )
+        )
+
+
 class AreaTools:
     """Area and floor management tools for Home Assistant."""
 
@@ -188,28 +298,9 @@ class AreaTools:
         """
         # Validate projection params before any WS round-trips so a bad shape
         # fails fast without burning two registry reads.
-        parsed_fields: list[str] | None = None
-        if fields is not None:
-            try:
-                parsed_fields = parse_string_list_param(
-                    fields, "fields", allow_csv=True
-                )
-                if parsed_fields is not None and len(parsed_fields) == 0:
-                    raise ValueError("fields must contain at least one key")
-            except ValueError as exc:
-                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
-        parsed_area_fields: list[str] | None = None
-        if area_fields is not None:
-            try:
-                parsed_area_fields = parse_string_list_param(
-                    area_fields, "area_fields", allow_csv=True
-                )
-                if parsed_area_fields is not None and len(parsed_area_fields) == 0:
-                    raise ValueError("area_fields must contain at least one key")
-            except ValueError as exc:
-                raise_tool_error(
-                    create_validation_error(str(exc), parameter="area_fields")
-                )
+        parsed_fields, parsed_area_fields = _parse_projection_params(
+            fields, area_fields
+        )
 
         progress: dict[str, Any] = {
             "operation": "list_floors_areas",
@@ -218,31 +309,12 @@ class AreaTools:
         try:
             areas, floors = await self._fetch_area_floor_registries(progress)
 
-            # Partition areas into three disjoint sets:
-            #   - nested:    floor_id present AND points to a known floor
-            #   - orphaned:  floor_id present BUT points to a non-existent floor
-            #                (race between the concurrent reads, or manual
-            #                .storage inconsistency)
-            #   - unassigned: no floor_id at all
-            # Orphaned is surfaced as a separate key so the LLM can diagnose
-            # registry drift without introspecting individual area fields.
-            # Use `is None` rather than falsy-check so that a floor_id of ""
-            # (valid but unusual) is treated as orphaned if it does not resolve,
-            # not as unassigned.
             valid_floor_ids = {
                 f.get("floor_id") for f in floors if f.get("floor_id") is not None
             }
-            floor_map: dict[str, list[dict[str, Any]]] = {}
-            unassigned_areas: list[dict[str, Any]] = []
-            orphaned_areas: list[dict[str, Any]] = []
-            for area in areas:
-                fid = area.get("floor_id")
-                if fid is None:
-                    unassigned_areas.append(area)
-                elif fid in valid_floor_ids:
-                    floor_map.setdefault(fid, []).append(area)
-                else:
-                    orphaned_areas.append(area)
+            floor_map, unassigned_areas, orphaned_areas = _partition_areas_by_floor(
+                areas, valid_floor_ids
+            )
             progress["phase"] = "partitioned"
 
             # Build nested hierarchy, preserving all floor-registry fields for
@@ -256,22 +328,6 @@ class AreaTools:
                 }
                 for floor in floors
             ]
-
-            # Sort by level ascending; coerce defensively so a malformed
-            # string `level` cannot raise TypeError mid-sort and get
-            # flattened by the broad `except Exception` below.
-            def _floor_sort_key(floor: dict[str, Any]) -> int:
-                raw = floor.get("level")
-                if raw is None:
-                    return 0
-                try:
-                    return int(raw)
-                except (TypeError, ValueError):
-                    logger.warning(
-                        f"Floor {floor.get('floor_id')!r} has non-numeric "
-                        f"level {raw!r}; treating as 0 for sort"
-                    )
-                    return 0
 
             topology.sort(key=_floor_sort_key)
             progress["phase"] = "sorted"
@@ -408,6 +464,82 @@ class AreaTools:
 
         return areas_result["result"], floors_result["result"]
 
+    def _build_area_or_floor_message(
+        self,
+        kind: str,
+        identifier: str | None,
+        name: str | None,
+        floor_id: str | None,
+        level: int | None,
+        icon: str | None,
+        parsed_aliases: list[str] | None,
+        picture: str | None,
+    ) -> tuple[dict[str, Any], str, str, str, str | None]:
+        """Build the WS message plus (result_key, id_key, operation, name) for a set.
+
+        ``name`` is returned because the create branches narrow it from
+        ``str | None`` to ``str`` via ``validate_identifier_not_empty``.
+        """
+        if kind == "area":
+            if identifier:
+                message = self._build_area_update_message(
+                    identifier,
+                    name,
+                    floor_id,
+                    icon,
+                    parsed_aliases,
+                    picture,
+                )
+                operation = "update"
+            else:
+                # Reassignment narrows ``name`` from ``str | None`` to
+                # ``str`` for the build-message call below.
+                name = validate_identifier_not_empty(
+                    name,
+                    "name",
+                    message="name is required when creating a new area",
+                    context={"operation": "create_area"},
+                    suggestions=["Provide a non-empty name for the new area"],
+                )
+                message = self._build_area_create_message(
+                    name,
+                    floor_id,
+                    icon,
+                    parsed_aliases,
+                    picture,
+                )
+                operation = "create"
+            result_key = "area"
+            id_key = "area_id"
+        else:  # kind == "floor"
+            if identifier:
+                message = self._build_floor_update_message(
+                    identifier,
+                    name,
+                    level,
+                    icon,
+                    parsed_aliases,
+                )
+                operation = "update"
+            else:
+                name = validate_identifier_not_empty(
+                    name,
+                    "name",
+                    message="name is required when creating a new floor",
+                    context={"operation": "create_floor"},
+                    suggestions=["Provide a non-empty name for the new floor"],
+                )
+                message = self._build_floor_create_message(
+                    name,
+                    level,
+                    icon,
+                    parsed_aliases,
+                )
+                operation = "create"
+            result_key = "floor"
+            id_key = "floor_id"
+        return message, result_key, id_key, operation, name
+
     # ============================================================
     # COMBINED SET / REMOVE
     # ============================================================
@@ -514,29 +646,7 @@ class AreaTools:
                     )
                 )
 
-            # Reject cross-kind params loudly so silent intent loss can't happen
-            # (e.g., kind='floor' with picture='...' previously dropped the picture
-            # without a diagnostic).
-            cross_kind_params: list[str] = []
-            if kind == "area" and level is not None:
-                cross_kind_params.append("level")
-            elif kind == "floor":
-                if floor_id is not None:
-                    cross_kind_params.append("floor_id")
-                if picture is not None:
-                    cross_kind_params.append("picture")
-            if cross_kind_params:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Parameter(s) {cross_kind_params} are not valid for kind={kind!r}",
-                        context={"kind": kind, "invalid_parameters": cross_kind_params},
-                        suggestions=[
-                            "For kind='area' use: name, id, floor_id, icon, aliases, picture",
-                            "For kind='floor' use: name, id, level, icon, aliases",
-                        ],
-                    )
-                )
+            _validate_cross_kind_params(kind, level, floor_id, picture)
 
             # ``None`` stays the documented "create-new" sentinel; explicit
             # empty/whitespace would silently route to the ``if id:`` create
@@ -552,64 +662,18 @@ class AreaTools:
                     context={"kind": kind},
                 )
 
-            if kind == "area":
-                if id:
-                    message = self._build_area_update_message(
-                        id,
-                        name,
-                        floor_id,
-                        icon,
-                        parsed_aliases,
-                        picture,
-                    )
-                    operation = "update"
-                else:
-                    # Reassignment narrows ``name`` from ``str | None`` to
-                    # ``str`` for the build-message call below.
-                    name = validate_identifier_not_empty(
-                        name,
-                        "name",
-                        message="name is required when creating a new area",
-                        context={"operation": "create_area"},
-                        suggestions=["Provide a non-empty name for the new area"],
-                    )
-                    message = self._build_area_create_message(
-                        name,
-                        floor_id,
-                        icon,
-                        parsed_aliases,
-                        picture,
-                    )
-                    operation = "create"
-                result_key = "area"
-                id_key = "area_id"
-            else:  # kind == "floor"
-                if id:
-                    message = self._build_floor_update_message(
-                        id,
-                        name,
-                        level,
-                        icon,
-                        parsed_aliases,
-                    )
-                    operation = "update"
-                else:
-                    name = validate_identifier_not_empty(
-                        name,
-                        "name",
-                        message="name is required when creating a new floor",
-                        context={"operation": "create_floor"},
-                        suggestions=["Provide a non-empty name for the new floor"],
-                    )
-                    message = self._build_floor_create_message(
-                        name,
-                        level,
-                        icon,
-                        parsed_aliases,
-                    )
-                    operation = "create"
-                result_key = "floor"
-                id_key = "floor_id"
+            message, result_key, id_key, operation, name = (
+                self._build_area_or_floor_message(
+                    kind,
+                    id,
+                    name,
+                    floor_id,
+                    level,
+                    icon,
+                    parsed_aliases,
+                    picture,
+                )
+            )
 
             result = await self._client.send_websocket_message(message)
 

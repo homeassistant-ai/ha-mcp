@@ -14,17 +14,16 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
-    get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
     safe_info,
     safe_progress,
 )
+from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -198,64 +197,50 @@ class TraceTools:
                 ctx,
                 progress=0,
                 total=3,
-                message="connecting to Home Assistant WebSocket",
+                message="resolving trace target",
             )
 
-            # Connect to WebSocket
-            ws_client, error = await get_connected_ws_client(
-                self._client.base_url,
-                self._client.token,
-                verify_ssl=self._client.verify_ssl,
+            # Route through the shared pooled WebSocket (issue #1813) instead of
+            # a dedicated connect/auth/disconnect handshake per call. Every trace
+            # command below is a single request/response — no subscription or
+            # streaming needs a dedicated socket — so the pooled client owns the
+            # connection lifecycle. A connection-shaped failure on the fetch
+            # surfaces as CONNECTION_FAILED, the same structured error the old
+            # up-front connect check raised.
+
+            # Home Assistant stores traces by unique_id, not entity_id.
+            # We need to resolve entity_id -> unique_id via entity registry.
+            item_id = await _resolve_trace_item_id(
+                self._client, automation_id, object_id
             )
-            if error or ws_client is None:
-                raise_tool_error(
-                    error
-                    or create_error_response(
-                        ErrorCode.CONNECTION_FAILED,
-                        "Failed to connect to Home Assistant WebSocket",
-                        context={"automation_id": automation_id},
-                    )
-                )
 
-            try:
-                # Home Assistant stores traces by unique_id, not entity_id.
-                # We need to resolve entity_id -> unique_id via entity registry.
-                item_id = await _resolve_trace_item_id(
-                    ws_client, automation_id, object_id
-                )
+            await safe_progress(
+                ctx,
+                progress=1,
+                total=3,
+                message=f"fetching trace {'detail' if run_id else 'list'}",
+            )
 
-                await safe_progress(
-                    ctx,
-                    progress=1,
-                    total=3,
-                    message=f"fetching trace {'detail' if run_id else 'list'}",
-                )
-
-                if run_id:
-                    return await self._fetch_trace_detail(
-                        ws_client,
-                        domain,
-                        item_id,
-                        automation_id,
-                        run_id,
-                        deduplicate=deduplicate,
-                        detailed=detailed,
-                        sections=sections,
-                        ctx=ctx,
-                    )
-                return await self._fetch_trace_list(
-                    ws_client,
+            if run_id:
+                return await self._fetch_trace_detail(
                     domain,
                     item_id,
                     automation_id,
-                    limit=limit,
-                    offset=offset,
-                    order=order,
+                    run_id,
+                    deduplicate=deduplicate,
+                    detailed=detailed,
+                    sections=sections,
                     ctx=ctx,
                 )
-
-            finally:
-                await ws_client.disconnect()
+            return await self._fetch_trace_list(
+                domain,
+                item_id,
+                automation_id,
+                limit=limit,
+                offset=offset,
+                order=order,
+                ctx=ctx,
+            )
 
         except ToolError:
             raise
@@ -276,7 +261,6 @@ class TraceTools:
 
     async def _fetch_trace_detail(
         self,
-        ws_client: Any,
         domain: str,
         item_id: str,
         automation_id: str,
@@ -288,20 +272,19 @@ class TraceTools:
         ctx: Context | None,
     ) -> dict[str, Any]:
         """Retrieve and format a single trace by run_id."""
-        result = await ws_client.send_command(
-            "trace/get",
-            domain=domain,
-            item_id=item_id,
-            run_id=run_id,
+        result = await self._client.send_websocket_message(
+            {
+                "type": "trace/get",
+                "domain": domain,
+                "item_id": item_id,
+                "run_id": run_id,
+            }
         )
 
         if not result.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    result.get("error", "Failed to retrieve trace"),
-                    context={"automation_id": automation_id, "run_id": run_id},
-                )
+            _raise_trace_ws_failure(
+                result.get("error", "Failed to retrieve trace"),
+                {"automation_id": automation_id, "run_id": run_id},
             )
 
         trace_data = result.get("result", {})
@@ -317,7 +300,6 @@ class TraceTools:
 
     async def _fetch_trace_list(
         self,
-        ws_client: Any,
         domain: str,
         item_id: str,
         automation_id: str,
@@ -328,19 +310,18 @@ class TraceTools:
         ctx: Context | None,
     ) -> dict[str, Any]:
         """List recent traces, attaching diagnostics when none are stored."""
-        result = await ws_client.send_command(
-            "trace/list",
-            domain=domain,
-            item_id=item_id,
+        result = await self._client.send_websocket_message(
+            {
+                "type": "trace/list",
+                "domain": domain,
+                "item_id": item_id,
+            }
         )
 
         if not result.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    result.get("error", "Failed to list traces"),
-                    context={"automation_id": automation_id},
-                )
+            _raise_trace_ws_failure(
+                result.get("error", "Failed to list traces"),
+                {"automation_id": automation_id},
             )
 
         traces_data = result.get("result", [])
@@ -352,9 +333,7 @@ class TraceTools:
                 total=3,
                 message="no traces; gathering diagnostics",
             )
-            diagnostics = await _gather_diagnostics(
-                ws_client, self._client, automation_id, domain
-            )
+            diagnostics = await _gather_diagnostics(self._client, automation_id, domain)
             await safe_progress(
                 ctx, progress=3, total=3, message="diagnostics complete"
             )
@@ -387,8 +366,39 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     register_tool_methods(mcp, TraceTools(client))
 
 
+def _raise_trace_ws_failure(error_msg: Any, context: dict[str, Any]) -> None:
+    """Raise the structured error for a failed trace WS command.
+
+    The pooled ``send_websocket_message`` collapses transport failures into
+    ``{"success": False, "error": ...}`` — classify connection-shaped errors as
+    CONNECTION_FAILED (the same code the removed dedicated-socket connect check
+    raised) instead of a generic SERVICE_CALL_FAILED during an HA restart. A
+    genuine trace-command failure (unknown item, no such run) keeps its
+    SERVICE_CALL_FAILED shape unchanged.
+    """
+    if is_connection_error_message(error_msg):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
+                str(error_msg),
+                context=context,
+                suggestions=[
+                    "Home Assistant may be restarting or unreachable — retry shortly",
+                    "Check the connection to Home Assistant",
+                ],
+            )
+        )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            error_msg,
+            context=context,
+        )
+    )
+
+
 async def _resolve_trace_item_id(
-    ws_client: Any, entity_id: str, fallback_object_id: str
+    client: Any, entity_id: str, fallback_object_id: str
 ) -> str:
     """
     Resolve entity_id to the unique_id used for trace storage.
@@ -398,7 +408,7 @@ async def _resolve_trace_item_id(
     entity registry and falls back to object_id if not found.
 
     Args:
-        ws_client: Connected WebSocket client
+        client: Pooled REST client exposing ``send_websocket_message``
         entity_id: Full entity_id (e.g., 'automation.morning_routine')
         fallback_object_id: Object ID to use if unique_id lookup fails
 
@@ -406,10 +416,12 @@ async def _resolve_trace_item_id(
         The unique_id for trace lookup, or fallback_object_id
     """
     try:
-        # Query entity registry to get unique_id
-        result = await ws_client.send_command(
-            "config/entity_registry/get",
-            entity_id=entity_id,
+        # Query entity registry to get unique_id. Best-effort: the pooled client
+        # collapses a failure into ``{"success": False, ...}`` (or, for a
+        # programming bug, raises) — either way we fall back to object_id and let
+        # the subsequent trace fetch surface the real error.
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": entity_id}
         )
 
         if result.get("success") and result.get("result"):
@@ -434,7 +446,6 @@ async def _resolve_trace_item_id(
 
 
 async def _gather_diagnostics(
-    ws_client: HomeAssistantWebSocketClient,
     client: Any,
     automation_id: str,
     domain: str,
@@ -446,8 +457,7 @@ async def _gather_diagnostics(
     an automation or script.
 
     Args:
-        ws_client: Connected WebSocket client
-        client: REST API client
+        client: Pooled REST client (REST reads + ``send_websocket_message``)
         automation_id: Full entity_id (e.g., 'automation.motion_light')
         domain: Either 'automation' or 'script'
 
@@ -488,7 +498,7 @@ async def _gather_diagnostics(
             # (scripts always store traces when enabled)
             if domain == "automation":
                 diagnostics["trace_storage_enabled"] = await _is_trace_storage_enabled(
-                    ws_client, automation_id, attributes
+                    client, automation_id, attributes
                 )
 
             diagnostics["suggestion"] = _diagnostic_suggestion(diagnostics, domain)
@@ -505,7 +515,7 @@ async def _gather_diagnostics(
 
 
 async def _is_trace_storage_enabled(
-    ws_client: HomeAssistantWebSocketClient,
+    client: Any,
     automation_id: str,
     attributes: dict[str, Any],
 ) -> bool:
@@ -513,9 +523,8 @@ async def _is_trace_storage_enabled(
     try:
         unique_id = attributes.get("id")
         if unique_id:
-            config_result = await ws_client.send_command(
-                "automation/config",
-                entity_id=automation_id,
+            config_result = await client.send_websocket_message(
+                {"type": "automation/config", "entity_id": automation_id}
             )
             if config_result.get("success"):
                 config = config_result.get("result", {})

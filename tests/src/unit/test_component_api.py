@@ -40,9 +40,15 @@ _INFO_OK = {
 class _FakeClient:
     """Weakref-able credentialed client stand-in (real REST client is a class)."""
 
-    def __init__(self, base_url: str = "http://ha.local:8123", token: str = "tok"):
+    def __init__(
+        self,
+        base_url: str = "http://ha.local:8123",
+        token: str = "tok",
+        verify_ssl: bool | None = None,
+    ):
         self.base_url = base_url
         self.token = token
+        self.verify_ssl = verify_ssl
 
 
 class _BareClient:
@@ -90,6 +96,22 @@ async def test_info_probe_parses_capabilities() -> None:
     assert caps.limits == {"max_results": 500}
     # _INFO_OK carries no timezone (a component too old to report it): None.
     assert caps.timezone is None
+
+
+@pytest.mark.asyncio
+async def test_info_probe_threads_verify_ssl() -> None:
+    """The caps probe threads the client's ``verify_ssl`` into
+    ``get_websocket_client`` so a ``verify_ssl=False`` client can establish (and key)
+    its own pooled connection — otherwise every component capability is silently
+    unreachable on an HTTPS + verify_ssl=False install."""
+    ws = _make_ws(info_result=_INFO_OK)
+    factory = AsyncMock(return_value=ws)
+    with patch.object(component_api, "get_websocket_client", factory):
+        caps = await get_component_caps(_FakeClient(verify_ssl=False))
+
+    assert isinstance(caps, ComponentCaps)
+    assert factory.await_args is not None
+    assert factory.await_args.kwargs.get("verify_ssl") is False
 
 
 @pytest.mark.asyncio

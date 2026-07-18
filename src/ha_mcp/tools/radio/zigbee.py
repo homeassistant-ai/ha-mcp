@@ -272,6 +272,13 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
             long_running=True,
         )
 
+    return await _handle_zigbee_groups(client, action, args, device_id)
+
+
+async def _handle_zigbee_groups(
+    client: Any, action: str, args: dict[str, Any], device_id: Any
+) -> dict[str, Any]:
+    """Continuation of :func:`handle` for Zigbee group and binding actions."""
     # --- groups ------------------------------------------------------------ #
     if action == "group_add":
         group = await ws_call(
@@ -340,6 +347,14 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         )
         return ok("zigbee", "unbind", result=result)
 
+    return await _handle_zigbee_clusters(client, action, args, device_id)
+
+
+async def _handle_zigbee_clusters(
+    client: Any, action: str, args: dict[str, Any], device_id: Any
+) -> dict[str, Any]:
+    """Continuation of :func:`handle` for Zigbee cluster-write and network actions."""
+    cluster_type = args.get("cluster_type", "in")
     # --- cluster writes (service-only) ------------------------------------- #
     if action == "cluster_write":
         ieee = await _resolve_ieee(client, device_id)

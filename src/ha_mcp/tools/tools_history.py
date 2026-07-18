@@ -641,37 +641,10 @@ async def _fetch_history(
     return history_data
 
 
-async def _fetch_statistics(
-    client: Any,
-    entity_id_list: list[str],
-    start_dt: datetime,
-    end_dt: datetime,
-    period: str,
+def _parse_statistic_types(
     statistic_types: str | list[str] | None,
-    limit: int | None,
-    offset: int | None,
-) -> dict[str, Any]:
-    """Execute the recorder/statistics_during_period WebSocket call.
-
-    Returns the unwrapped statistics dict; the caller is responsible for projection
-    and wrapping with ``add_timezone_metadata``.
-    """
-    effective_limit = limit if limit is not None else _DEFAULT_HISTORY_LIMIT
-    effective_offset = offset if offset is not None else 0
-
-    # Validate period
-    valid_periods = ["5minute", "hour", "day", "week", "month", "year"]
-    if period not in valid_periods:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid period: {period}",
-                context={"period": period, "valid_periods": valid_periods},
-                suggestions=[f"Use one of: {', '.join(valid_periods)}"],
-            )
-        )
-
-    # Parse statistic_types
+) -> list[str] | None:
+    """Parse and validate the statistic_types param into a list (or None for all)."""
     stat_types_list: list[str] | None = None
     if statistic_types is not None:
         if isinstance(statistic_types, str):
@@ -713,36 +686,19 @@ async def _fetch_statistics(
                     suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
                 )
             )
+    return stat_types_list
 
-    command_params: dict[str, Any] = {
-        "start_time": start_dt.isoformat(),
-        "end_time": end_dt.isoformat(),
-        "statistic_ids": entity_id_list,
-        "period": period,
-    }
-    if stat_types_list is not None:
-        command_params["types"] = stat_types_list
 
-    response = await client.send_websocket_message(
-        {"type": "recorder/statistics_during_period", **command_params}
-    )
-
-    if not response.get("success"):
-        _raise_recorder_ws_failure(
-            "statistics",
-            response.get("error", "Unknown error"),
-            entity_id_list,
-            suggestions=[
-                "Verify entities have state_class attribute (measurement, total, total_increasing)",
-                "Use ha_search() to check entity attributes",
-                "Statistics are only available for entities that track numeric values",
-            ],
-        )
-
-    result_data = response.get("result", {})
+def _format_entity_statistics(
+    result_data: dict[str, Any],
+    entity_id_list: list[str],
+    all_stat_types: list[str],
+    period: str,
+    effective_offset: int,
+    effective_limit: int,
+) -> list[dict[str, Any]]:
+    """Format the per-entity statistics rows from a statistics_during_period result."""
     entities_statistics = []
-    all_stat_types = stat_types_list or ["mean", "min", "max", "sum", "state", "change"]
-
     for entity_id in entity_id_list:
         entity_stats = result_data.get(entity_id, [])
         paged_stats = entity_stats[
@@ -775,6 +731,76 @@ async def _fetch_statistics(
                 **pagination,
             }
         )
+    return entities_statistics
+
+
+async def _fetch_statistics(
+    client: Any,
+    entity_id_list: list[str],
+    start_dt: datetime,
+    end_dt: datetime,
+    period: str,
+    statistic_types: str | list[str] | None,
+    limit: int | None,
+    offset: int | None,
+) -> dict[str, Any]:
+    """Execute the recorder/statistics_during_period WebSocket call.
+
+    Returns the unwrapped statistics dict; the caller is responsible for projection
+    and wrapping with ``add_timezone_metadata``.
+    """
+    effective_limit = limit if limit is not None else _DEFAULT_HISTORY_LIMIT
+    effective_offset = offset if offset is not None else 0
+
+    # Validate period
+    valid_periods = ["5minute", "hour", "day", "week", "month", "year"]
+    if period not in valid_periods:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid period: {period}",
+                context={"period": period, "valid_periods": valid_periods},
+                suggestions=[f"Use one of: {', '.join(valid_periods)}"],
+            )
+        )
+
+    stat_types_list = _parse_statistic_types(statistic_types)
+
+    command_params: dict[str, Any] = {
+        "start_time": start_dt.isoformat(),
+        "end_time": end_dt.isoformat(),
+        "statistic_ids": entity_id_list,
+        "period": period,
+    }
+    if stat_types_list is not None:
+        command_params["types"] = stat_types_list
+
+    response = await client.send_websocket_message(
+        {"type": "recorder/statistics_during_period", **command_params}
+    )
+
+    if not response.get("success"):
+        _raise_recorder_ws_failure(
+            "statistics",
+            response.get("error", "Unknown error"),
+            entity_id_list,
+            suggestions=[
+                "Verify entities have state_class attribute (measurement, total, total_increasing)",
+                "Use ha_search() to check entity attributes",
+                "Statistics are only available for entities that track numeric values",
+            ],
+        )
+
+    result_data = response.get("result", {})
+    all_stat_types = stat_types_list or ["mean", "min", "max", "sum", "state", "change"]
+    entities_statistics = _format_entity_statistics(
+        result_data,
+        entity_id_list,
+        all_stat_types,
+        period,
+        effective_offset,
+        effective_limit,
+    )
 
     empty_entities: list[str] = [
         str(e["entity_id"]) for e in entities_statistics if e["count"] == 0

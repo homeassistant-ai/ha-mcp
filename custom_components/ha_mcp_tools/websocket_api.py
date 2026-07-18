@@ -118,6 +118,25 @@ and ``info`` itself carries no capability entry):
   from ``entry.data``) and returns ``{entry_id, channel, pip_spec}`` (channel /
   pip_spec from ``entry.options``), so ``ha_dev_manage_server`` need not probe
   every ``ha_mcp_tools``-domain entry's options-flow schema from the outside.
+* ``ha_mcp_tools/server_entry_update`` — the WRITE counterpart of ``server_entry``:
+  applies a ``channel`` / ``pip_spec`` delta to the server entry via
+  ``hass.config_entries.async_update_entry`` DIRECTLY (what core's finish-flow
+  does), collapsing ``ha_dev_manage_server(update_source)``'s options-flow start +
+  submit round-trip in embedded mode. The delta is MERGED against the LIVE
+  ``entry.options`` AT APPLY time (every existing key preserved — a concurrent
+  change to another key during the flush window is not clobbered — no blanking of
+  the URL/secret overrides), so no preserved-key resend is needed. The
+  ``async_update_entry`` fires the entry's own update listener → reload → the
+  hardened reinstall; because that reload tears down the very server thread
+  answering this frame, the call is NOT made inline — it is scheduled on a
+  HASS-level background task (:func:`hass.async_create_background_task`, NOT the
+  entry's, so the reload can't cancel it) after :data:`SERVER_ENTRY_UPDATE_FLUSH_DELAY_S`,
+  and the prep returns ``{scheduled: True, ...}`` immediately so the WS response
+  flushes first. A no-op (merged options equal the current ones) returns
+  ``{scheduled: False, unchanged: True, ...}`` without scheduling; no server entry
+  raises ``HomeAssistantError`` (→ the server's command-error fallback to its legacy
+  options-flow path). All awaiting-adjacent work (the deferred apply) lives in
+  :func:`_server_entry_update_prep`; :func:`_do_server_entry_update` is a pure formatter.
 * ``ha_mcp_tools/call_service`` — the FIRST write capability. Fires exactly one
   ``hass.services.async_call`` in-process and returns the REAL pre→post state
   transition for the target ``entity_ids`` — event-confirmed via an
@@ -273,8 +292,11 @@ from homeassistant.helpers import (
 )
 
 from .const import (
+    CHANNEL_DEV,
+    CHANNEL_STABLE,
     COMPONENT_VERSION,
     CONF_ENTRY_TYPE,
+    DEFAULT_PIP_SPEC,
     DOMAIN,
     ENTRY_TYPE_SERVER,
     OPT_CHANNEL,
@@ -305,6 +327,7 @@ WS_DASHBOARDS = f"{WS_API_PREFIX}/dashboards"
 WS_SERVICES_LIST = f"{WS_API_PREFIX}/services_list"
 WS_REFERENCE_DATA = f"{WS_API_PREFIX}/reference_data"
 WS_SERVER_ENTRY = f"{WS_API_PREFIX}/server_entry"
+WS_SERVER_ENTRY_UPDATE = f"{WS_API_PREFIX}/server_entry_update"
 WS_CALL_SERVICE = f"{WS_API_PREFIX}/call_service"
 WS_BULK_CALL_SERVICE = f"{WS_API_PREFIX}/bulk_call_service"
 
@@ -342,6 +365,11 @@ CAPABILITIES: list[str] = [
     # routing; the CAPABILITIES flag is what the server gates on).
     "search_visibility",
     "server_entry",
+    # The WRITE counterpart of ``server_entry`` (Phase 3). The server gates its
+    # ``ha_dev_manage_server(update_source)`` embedded-mode direct-write on this; an
+    # old component that lacks it is never sent the frame and the server stays on its
+    # legacy options-flow submit.
+    "server_entry_update",
     # The first WRITE capability (Phase 3). The server gates its ``ha_call_service``
     # component route on this; an old component that lacks it is never sent a
     # component write and stays on the legacy REST path.
@@ -377,6 +405,17 @@ DEFAULT_LIMIT = 10
 # so the wait is bounded and its expiry is ``partial``, never a failure (D4).
 CALL_SERVICE_DEFAULT_TIMEOUT = 10.0
 CALL_SERVICE_MAX_TIMEOUT = 60.0
+
+# Delay before ``server_entry_update``'s deferred ``async_update_entry`` fires, so
+# the WS ``{scheduled: True}`` response flushes to the calling (embedded) server
+# BEFORE the resulting entry reload tears that server's thread down. Mirrors the
+# server side's ``tools_dev._SELF_ACTION_FLUSH_DELAY_S`` (its legacy options-flow
+# self-restart uses the same headroom for the ingress/webhook hop).
+SERVER_ENTRY_UPDATE_FLUSH_DELAY_S = 1.0
+
+# pip_spec defence-in-depth cap (the SERVER already validates per D6): a single-line
+# requirement string under this many chars. Mirrors ``tools_dev._update_source``.
+SERVER_ENTRY_UPDATE_MAX_PIP_SPEC = 500
 
 # Fuzzy floor + hidden penalty, mirrored from the server so the two scorers do
 # not drift (guarded by the golden parity test).
@@ -523,6 +562,15 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_services_list_schema(), _do_services_list, _services_list_prep),
         (_reference_data_schema(), _do_reference_data, None),
         (_server_entry_schema(), _do_server_entry, None),
+        # The WRITE counterpart of server_entry: the deferred ``async_update_entry``
+        # scheduling is inherently async, so it lives in ``_server_entry_update_prep``
+        # and ``_do_server_entry_update`` is a pure formatter (same seam as the
+        # call_service write below).
+        (
+            _server_entry_update_schema(),
+            _do_server_entry_update,
+            _server_entry_update_prep,
+        ),
         # The first WRITE command: the dispatch + the bounded confirmation wait are
         # inherently async, so ALL of the work lives in the ``_call_service_prep``
         # async pre-step and ``_do_call_service`` is a pure response formatter.
@@ -758,6 +806,30 @@ def _reference_data_schema() -> dict[Any, Any]:
 
 def _server_entry_schema() -> dict[Any, Any]:
     return {vol.Required("type"): WS_SERVER_ENTRY}
+
+
+def _single_line_pip_spec(value: str) -> str:
+    """Reject a multi-line / control-char ``pip_spec`` (defence-in-depth over D6)."""
+    if any(ord(c) < 32 for c in value):
+        raise vol.Invalid("pip_spec must be a single-line string")
+    return value
+
+
+def _server_entry_update_schema() -> dict[Any, Any]:
+    # Both fields are optional at the schema level (voluptuous cannot cleanly express
+    # "at least one of"); ``_server_entry_update_prep`` raises when NEITHER is present.
+    # ``channel`` is gated to the known set and ``pip_spec`` gets the length +
+    # single-line cap — schema-level defence-in-depth over (and symmetric with) the
+    # server's own channel validation (D6) and pip-spec normalization.
+    return {
+        vol.Required("type"): WS_SERVER_ENTRY_UPDATE,
+        vol.Optional("channel"): vol.In((CHANNEL_STABLE, CHANNEL_DEV)),
+        vol.Optional("pip_spec"): vol.All(
+            str,
+            vol.Length(max=SERVER_ENTRY_UPDATE_MAX_PIP_SPEC),
+            _single_line_pip_spec,
+        ),
+    }
 
 
 def _call_service_schema() -> dict[Any, Any]:
@@ -5045,30 +5117,43 @@ def _assist_exposure_available(hass: HomeAssistant) -> bool:
 # =============================================================================
 # ha_mcp_tools/server_entry
 # =============================================================================
-def _do_server_entry(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
-    """Locate the component's OWN server config entry and return its identity.
+def _find_server_config_entry(hass: HomeAssistant) -> Any | None:
+    """Return the component's OWN server config entry, or ``None`` if absent.
 
-    Iterates the component's ``DOMAIN`` config entries and picks the server-type
-    one by the explicit ``entry.data[CONF_ENTRY_TYPE] == ENTRY_TYPE_SERVER`` marker
-    the component's own config flow stamps — the single ``entry.data`` key this
-    reads (the documented data-minimization exception; nothing else from
-    ``entry.data`` is emitted). ``channel`` / ``pip_spec`` come from
-    ``entry.options`` (``None`` when absent); ``entry_id`` is ``None`` when no
-    server entry exists.
+    Picks the single ``DOMAIN`` entry stamped with
+    ``entry.data[CONF_ENTRY_TYPE] == ENTRY_TYPE_SERVER`` (the one ``entry.data``
+    key the component reads — the documented data-minimization exception). Shared
+    by the ``server_entry`` READ cap (:func:`_do_server_entry`) and the
+    ``server_entry_update`` WRITE cap (:func:`_server_entry_update_prep`), so both
+    discriminate the entry identically.
     """
     for entry in _iter_config_entries(hass):
         if getattr(entry, "domain", None) != DOMAIN:
             continue
         if _entry_marker_type(entry) != ENTRY_TYPE_SERVER:
             continue
-        options = getattr(entry, "options", None)
-        opts = options if isinstance(options, Mapping) else {}
-        return {
-            "entry_id": getattr(entry, "entry_id", None),
-            "channel": opts.get(OPT_CHANNEL),
-            "pip_spec": opts.get(OPT_PIP_SPEC),
-        }
-    return {"entry_id": None, "channel": None, "pip_spec": None}
+        return entry
+    return None
+
+
+def _do_server_entry(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Locate the component's OWN server config entry and return its identity.
+
+    Discriminates the server-type entry via :func:`_find_server_config_entry`
+    (the ``entry.data[CONF_ENTRY_TYPE] == ENTRY_TYPE_SERVER`` marker). ``channel`` /
+    ``pip_spec`` come from ``entry.options`` (``None`` when absent); ``entry_id`` is
+    ``None`` when no server entry exists.
+    """
+    entry = _find_server_config_entry(hass)
+    if entry is None:
+        return {"entry_id": None, "channel": None, "pip_spec": None}
+    options = getattr(entry, "options", None)
+    opts = options if isinstance(options, Mapping) else {}
+    return {
+        "entry_id": getattr(entry, "entry_id", None),
+        "channel": opts.get(OPT_CHANNEL),
+        "pip_spec": opts.get(OPT_PIP_SPEC),
+    }
 
 
 def _entry_marker_type(entry: Any) -> Any:
@@ -5077,6 +5162,164 @@ def _entry_marker_type(entry: Any) -> Any:
     if isinstance(data, Mapping):
         return data.get(CONF_ENTRY_TYPE)
     return None
+
+
+# =============================================================================
+# ha_mcp_tools/server_entry_update  (the server_entry WRITE counterpart — Phase 3)
+# =============================================================================
+def _do_server_entry_update(
+    hass: HomeAssistant, params: dict[str, Any], *, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Pure sync formatter for ``server_entry_update``.
+
+    ALL of the work — locating the entry, merging the delta against the LIVE
+    options, and (unless it is a no-op) scheduling the deferred
+    ``async_update_entry`` — happens in the async :func:`_server_entry_update_prep`,
+    which hands the finished envelope in as ``result``. This only returns it (the WS
+    wrapper's ``send_result`` adds the outer success frame), so no scheduling /
+    awaiting work ever runs in a ``_do_*`` step.
+    """
+    return result
+
+
+async def _server_entry_update_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply a ``channel`` / ``pip_spec`` delta to the server entry, DEFERRED.
+
+    Returns ``{"result": <envelope>}``. The order is load-bearing:
+
+    1. Locate the server entry (:func:`_find_server_config_entry`); a missing entry
+       raises ``HomeAssistantError`` so the server's command-error path falls back to
+       its legacy options-flow submit.
+    2. Require at least one of ``channel`` / ``pip_spec`` (the server always sends
+       one — this is defence-in-depth).
+    3. Snapshot the ``delta`` (the provided fields, keyed by the OPT_* option keys)
+       and the CURRENT ``entry.options`` — used ONLY for the no-op check and the
+       ``previous``/``applying`` response envelope. Every UNtouched key is preserved
+       because the actual write MERGES the delta against the LIVE ``entry.options``
+       at APPLY time (step 5), NOT against this snapshot — so a concurrent change to
+       another key during the flush window is not clobbered, and none of the
+       URL/secret overrides get blanked (which is why the server drops its
+       preserved-key resend on this path).
+    4. No-op short-circuit: if the delta applied to the snapshot equals the current
+       options, return ``{scheduled: False, unchanged: True, ...}`` WITHOUT
+       scheduling. (The update listener's own ``DATA_LAST_OPTIONS`` guard would also
+       make such an update not reload, but skipping the schedule keeps it explicit.)
+    5. Otherwise schedule the deferred ``_apply`` — which re-reads the LIVE
+       ``entry.options`` and merges the delta against THAT before calling
+       ``async_update_entry`` — on a HASS-owned background task after
+       :data:`SERVER_ENTRY_UPDATE_FLUSH_DELAY_S`, and return
+       ``{scheduled: True, ...}`` immediately.
+
+    **The deferred-reload crux.** ``async_update_entry`` fires the server entry's
+    update listener, which reloads the entry — tearing down the very in-process
+    server thread answering THIS frame. Calling it inline would kill that thread
+    before the WS ``{scheduled: True}`` response flushed, so the caller would never
+    get its confirmation. It is therefore scheduled after a flush delay. The task is
+    created with :func:`hass.async_create_background_task` (hass-owned), NOT
+    ``entry.async_create_background_task``: an entry-owned task is cancelled by the
+    unload the reload performs, so it could cancel itself before firing — the exact
+    trap ``embedded_entry._on_version_update`` documents. Being hass-owned, the task
+    survives to invoke ``async_update_entry`` (a synchronous ``@callback`` that
+    returns as soon as it schedules the listener), then completes; the reload it
+    triggers runs as its own hass task after the response has flushed.
+    """
+    import asyncio
+
+    from homeassistant.exceptions import HomeAssistantError
+
+    entry = _find_server_config_entry(hass)
+    if entry is None:
+        raise HomeAssistantError(
+            "no ha_mcp_tools in-process server config entry to update"
+        )
+
+    has_channel = "channel" in msg
+    has_pip_spec = "pip_spec" in msg
+    if not has_channel and not has_pip_spec:
+        raise HomeAssistantError(
+            "server_entry_update needs at least one of channel / pip_spec"
+        )
+
+    options = getattr(entry, "options", None)
+    current = dict(options) if isinstance(options, Mapping) else {}
+    # ``delta`` is the applied write (merged against the LIVE options at APPLY time);
+    # ``applying`` is its response-envelope view. The prep-time ``new_options`` is a
+    # snapshot used ONLY for the no-op check below, never for the write.
+    delta: dict[str, Any] = {}
+    applying: dict[str, Any] = {}
+    if has_channel:
+        delta[OPT_CHANNEL] = msg["channel"]
+        applying["channel"] = msg["channel"]
+    if has_pip_spec:
+        # Normalize like the options flow's ``_normalize`` (config_flow.py): a
+        # whitespace-only value OR the default unpinned dist (``DEFAULT_PIP_SPEC``)
+        # means "no override" — collapse it to "" so the channel keeps
+        # auto-updating. Persisting it verbatim would read as an intentional
+        # override and disable auto-updates. This keeps the no-op check honest: a
+        # frame that normalizes to the stored value is unchanged, not a schedule.
+        pip_spec = msg["pip_spec"]
+        if str(pip_spec).strip() in ("", DEFAULT_PIP_SPEC):
+            pip_spec = ""
+        delta[OPT_PIP_SPEC] = pip_spec
+        applying["pip_spec"] = pip_spec
+    new_options = {**current, **delta}
+
+    entry_id = getattr(entry, "entry_id", None)
+    previous = {
+        "channel": current.get(OPT_CHANNEL),
+        "pip_spec": current.get(OPT_PIP_SPEC),
+    }
+
+    if new_options == current:
+        return {
+            "result": {
+                "scheduled": False,
+                "unchanged": True,
+                "entry_id": entry_id,
+                "applying": applying,
+                "previous": previous,
+            }
+        }
+
+    async def _apply() -> None:
+        # Deferred so the WS response flushes before the reload this triggers tears
+        # down the serving thread. See the docstring for why it is hass-owned. The
+        # delta is merged against the LIVE ``entry.options`` HERE (not at prep) so a
+        # concurrent change to another key during the flush window is preserved.
+        await asyncio.sleep(SERVER_ENTRY_UPDATE_FLUSH_DELAY_S)
+        try:
+            live = getattr(entry, "options", None)
+            merged = {**(dict(live) if isinstance(live, Mapping) else {}), **delta}
+            applied = hass.config_entries.async_update_entry(entry, options=merged)
+            if applied is False:
+                # ``async_update_entry`` returns False when the merged options already
+                # match (e.g. a concurrent write applied the same delta first). No
+                # caller is left to answer, so surface the no-apply in the log.
+                _LOGGER.warning(
+                    "server_entry_update: no change applied to entry %s (options "
+                    "already current)",
+                    entry_id,
+                )
+            else:
+                _LOGGER.info(
+                    "server_entry_update applied %s to entry %s", applying, entry_id
+                )
+        except Exception:  # pragma: no cover - defensive; no caller left to raise to
+            _LOGGER.exception("server_entry_update deferred apply failed")
+
+    hass.async_create_background_task(
+        _apply(), name=f"{WS_API_PREFIX} server_entry_update"
+    )
+    return {
+        "result": {
+            "scheduled": True,
+            "entry_id": entry_id,
+            "applying": applying,
+            "previous": previous,
+        }
+    }
 
 
 # =============================================================================
