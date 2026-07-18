@@ -48,6 +48,24 @@ class HomeAssistantConnectionError(HomeAssistantError):
     """Connection error to Home Assistant."""
 
 
+class HomeAssistantCommandNotSent(HomeAssistantConnectionError):
+    """A WS command that provably never left the process.
+
+    Raised by ``HomeAssistantWebSocketClient.send_command`` ONLY at its single
+    provably-never-sent site: the entry-guard reject (socket not authenticated), where
+    nothing is transmitted. Subclass of ``HomeAssistantConnectionError`` so every
+    existing broad handler is unaffected, yet a write consumer can catch this type
+    FIRST to fall back to the legacy path safely — the write provably never happened,
+    so a legacy first fire cannot double-apply. A ``send_json_message`` failure is NOT
+    this type: ``websocket.send()`` raising does not prove the frame was untransmitted
+    (bytes may already be on the socket when the close surfaces), so send_command
+    re-raises the original exception and the consumer treats it as ambiguous. A
+    post-send socket close (mid-await) likewise raises a plain
+    ``HomeAssistantConnectionError`` (the close handler sets it on the pending future),
+    so type alone distinguishes never-sent from sent-then-dropped/ambiguous.
+    """
+
+
 class HomeAssistantAuthError(HomeAssistantError):
     """Authentication error with Home Assistant.
 

@@ -120,3 +120,35 @@ def _restore_fastmcp_host_origin_guard():
         os.environ[env_key] = prev_env
     if has_attr:
         setattr(settings, attr, prev_setting)
+
+
+@pytest.fixture(autouse=True)
+def _ensure_event_state_changed_const():
+    """Guarantee ``homeassistant.const.EVENT_STATE_CHANGED`` for every unit test.
+
+    The ``ha_mcp_tools`` component's ``call_service`` confirmation-waiter imports
+    ``EVENT_STATE_CHANGED`` from ``homeassistant.const`` function-locally. Home
+    Assistant is not a unit-test dependency, so that submodule is whatever a test
+    module stubbed — and under full-suite collection an earlier module can install
+    a ``homeassistant.const`` stub lacking that name, making the waiter's import
+    raise (component tests + the write-path contract/routing tests then fail only
+    in the full suite, never in isolation). This adds the one constant — always
+    present in real HA — onto whatever stub is live, preserving its other
+    attributes; it never replaces a populated stub.
+    """
+    import sys
+    from types import SimpleNamespace
+
+    mod = sys.modules.get("homeassistant.const")
+    if mod is None:
+        sys.modules["homeassistant.const"] = SimpleNamespace(
+            EVENT_STATE_CHANGED="state_changed"
+        )
+    elif not getattr(mod, "EVENT_STATE_CHANGED", None):
+        try:
+            mod.EVENT_STATE_CHANGED = "state_changed"
+        except (AttributeError, TypeError):
+            sys.modules["homeassistant.const"] = SimpleNamespace(
+                EVENT_STATE_CHANGED="state_changed"
+            )
+    yield

@@ -32,6 +32,26 @@ logger = logging.getLogger(__name__)
 # Strips ANSI terminal escape codes from container/log output.
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
+# Mapping from service name to the expected resulting primary state. The single
+# source of truth (imported by both ``tools_service`` and ``device_control``): it
+# is the confirmation HINT the server hands the component's ``call_service`` /
+# ``bulk_call_service`` capability so the component confirms only on REACHING that
+# state (skipping a multi-phase service's intermediate states and attribute-only
+# noise) and short-circuits an idempotent no-op. ``.get(service)`` is ``None`` for
+# every service without a known primary state (``set_temperature`` /
+# ``set_fan_mode`` / …) — a ``None`` hint keeps today's any-first-event
+# confirmation. Lives here (a low-level module both consumers already import from)
+# so the two write paths share one map with no import cycle. The legacy
+# WS-subscribe verifier (``tools_service._verify_state_change``) reads it too.
+_SERVICE_TO_STATE: dict[str, str] = {
+    "turn_on": "on",
+    "turn_off": "off",
+    "open": "open",
+    "close": "closed",
+    "lock": "locked",
+    "unlock": "unlocked",
+}
+
 
 def websocket_error_message(error: Any) -> str:
     """Extract a readable message from a Home Assistant websocket error."""

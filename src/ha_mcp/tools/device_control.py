@@ -14,20 +14,44 @@ from typing import Any, ClassVar
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
-from ..client.rest_client import HomeAssistantClient
+from ..client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
+)
+from ..client.websocket_client import get_websocket_client
 from ..client.websocket_listener import start_websocket_listener
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from ..utils.domain_handlers import get_domain_handler
-from ..utils.operation_manager import get_operation_from_memory, store_pending_operation
+from ..utils.operation_manager import (
+    fail_pending_operation,
+    get_operation_from_memory,
+    store_pending_operation,
+)
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .helpers import (
     exception_to_structured_error,
     raise_tool_error,
     safe_info,
     safe_progress,
 )
+from .util_helpers import _SERVICE_TO_STATE
 
 logger = logging.getLogger(__name__)
+
+# The ha_mcp_tools/bulk_call_service WS command (Phase 3, D5a): the BATCH write
+# capability. When the component advertises ``bulk_call_service`` the consumer
+# resolves every op's domain/service server-side (D6), sends one register-before-fire
+# batch frame, and maps the inline-confirmed per-op transitions back into the legacy
+# bulk response shape — no operation-id polling needed. Named once so the routing
+# helper and its tests agree on the wire string.
+WS_BULK_CALL_SERVICE = "ha_mcp_tools/bulk_call_service"
 
 
 class DeviceControlTools:
@@ -139,23 +163,28 @@ class DeviceControlTools:
                 current_state if validate_first else None, action, parameters, domain
             )
 
+            # Register the pending operation BEFORE dispatching the service so a
+            # fast entity's state_changed event can't arrive (and be dropped for
+            # having no matching op) in the window between the call returning and
+            # the operation being stored. On a dispatch failure the operation is
+            # flipped to FAILED so it can't be spuriously completed by a later,
+            # unrelated event for the same entity.
+            operation_id = store_pending_operation(
+                entity_id=entity_id,
+                action=action,
+                service_domain=service_call["domain"],
+                service_name=service_call["service"],
+                service_data=service_call["data"],
+                expected_state=expected_state,
+                timeout_ms=timeout_seconds * 1000,
+            )
+
             # Execute service call
             try:
                 await self.client.call_service(
                     service_call["domain"],
                     service_call["service"],
                     service_call["data"],
-                )
-
-                # Store operation for async verification
-                operation_id = store_pending_operation(
-                    entity_id=entity_id,
-                    action=action,
-                    service_domain=service_call["domain"],
-                    service_name=service_call["service"],
-                    service_data=service_call["data"],
-                    expected_state=expected_state,
-                    timeout_ms=timeout_seconds * 1000,
                 )
 
                 return {
@@ -179,8 +208,10 @@ class DeviceControlTools:
                 }
 
             except ToolError:
+                fail_pending_operation(operation_id, "Service dispatch failed")
                 raise
             except Exception as e:
+                fail_pending_operation(operation_id, f"Service dispatch failed: {e}")
                 exception_to_structured_error(
                     e,
                     context={"entity_id": entity_id, "action": action},
@@ -624,6 +655,35 @@ class DeviceControlTools:
                 f"{len(skipped_operations)} skipped, "
                 f"mode={'parallel' if parallel else 'sequential'}",
             )
+
+            # Route through the component's bulk_call_service capability when
+            # advertised (D5a): one register-before-fire batch frame confirms every
+            # op inline, so ops return already-verified (no operation-id polling). A
+            # None return means nothing dispatched (capability miss / unresolvable op
+            # / transport failure), so the legacy path below is a safe first fire
+            # (D9 at-most-once).
+            component_response = await self._bulk_via_component(
+                operations, valid_operations, skipped_operations, parallel
+            )
+            if component_response is not None:
+                # M-progress-msg: the ambiguous batch response carries a top-level
+                # ``partial`` (dispatched but the batch confirmation never arrived — not
+                # retried); only a fully-served batch is "confirmed inline". The legacy
+                # ``_build_bulk_response`` never sets a top-level ``partial``, so this
+                # flag reliably marks the ambiguous path.
+                component_message = (
+                    "dispatched via component (unconfirmed — not retried)"
+                    if component_response.get("partial")
+                    else "dispatched via component (confirmed inline)"
+                )
+                await safe_progress(
+                    ctx,
+                    progress=len(valid_operations),
+                    total=len(valid_operations),
+                    message=component_message,
+                )
+                return component_response
+
             await safe_progress(
                 ctx,
                 progress=0,
@@ -663,6 +723,426 @@ class DeviceControlTools:
                 suggestions=["Check operation parameters and try again"],
             )
             raise  # unreachable: exception_to_structured_error always raises
+
+    def _resolve_component_op(
+        self,
+        entity_id: str,
+        action: str,
+        parameters: Any,
+    ) -> dict[str, Any] | None:
+        """Resolve one bulk op into a fully-formed component operation row.
+
+        Verb resolution stays server-side (D6): reuses the SAME
+        ``get_domain_handler`` / ``_resolve_service_name`` / ``_build_service_call``
+        the legacy path uses, so the component receives only a fully-resolved
+        ``{domain, service, service_data, entity_ids, expected_state}`` row and never
+        guesses a service name. ``entity_ids`` is the confirmation target;
+        ``service_data`` already folds in the entity_id so the dispatch targets it;
+        ``expected_state`` is the per-op confirmation hint (``_SERVICE_TO_STATE``).
+
+        Returns ``None`` for any op the legacy path would reject with a structured
+        per-op error (a malformed entity_id, an action outside the domain handler, or
+        unparseable parameters). A ``None`` aborts the WHOLE batch back to the legacy
+        path (nothing has dispatched yet), which then produces the proper per-op error
+        — cleaner than half-resolving a batch.
+        """
+        try:
+            if "." not in entity_id:
+                return None
+            domain = entity_id.split(".")[0]
+            handler = get_domain_handler(domain)
+            valid_actions = handler.get("valid_actions", ["on", "off", "toggle"])
+            if action not in valid_actions:
+                return None
+            parsed = self._parse_parameters(parameters, entity_id, action)
+            service_call = self._build_service_call(entity_id, domain, action, parsed)
+        except Exception:
+            # Any resolution failure (incl. a ToolError from _parse_parameters on
+            # invalid JSON) → abort the batch to legacy, which surfaces the error.
+            return None
+        return {
+            "domain": service_call["domain"],
+            "service": service_call["service"],
+            "service_data": service_call["data"],
+            "entity_ids": [entity_id],
+            # Confirmation HINT (see util_helpers._SERVICE_TO_STATE): the expected
+            # primary state after this op's service, or None. The component confirms
+            # only on REACHING it (skipping intermediate/noise events) and immediate-
+            # matches an idempotent no-op; a None hint keeps any-first-event behavior.
+            "expected_state": _SERVICE_TO_STATE.get(service_call["service"]),
+        }
+
+    def _map_component_op_result(
+        self,
+        op: dict[str, Any],
+        entity_id: str,
+        action: str,
+        row: dict[str, Any],
+        component_op: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Map one component op result into the legacy per-op result shape.
+
+        The component confirms inline, so the op returns already-verified with a
+        synthesized terminal status instead of the legacy ``pending_verification`` +
+        operation-id handle. A ``command_sent: True`` result is counted ``successful``
+        by ``_build_bulk_response`` exactly as the legacy dispatch result is; an op
+        whose ``async_call`` raised under the batch (``error`` set / not dispatched)
+        maps to a structured ``SERVICE_CALL_FAILED`` error and is NOT re-dispatched
+        (D9). When ``validate_first`` (the default) is set and the target's captured
+        pre-state is null (the entity does not exist), the op maps to a structured
+        ``ENTITY_NOT_FOUND`` failure — parity with the legacy per-op validation.
+        """
+        service_call = {
+            "domain": row["domain"],
+            "service": row["service"],
+            "data": row["service_data"],
+        }
+        if component_op.get("error") is not None or not component_op.get("dispatched"):
+            err = create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                str(component_op.get("error") or "Operation failed to dispatch"),
+                context={"entity_id": entity_id, "action": action},
+            )
+            err["service_call"] = service_call
+            return err
+        transitions = component_op.get("transitions") or []
+        # I3: honor validate_first (default). The component captured each target's
+        # pre-state; a null old_state on a confirmable op means the entity does not
+        # exist (HA no-ops the dispatch, then the wait stalls to partial). The legacy
+        # path returns a structured ENTITY_NOT_FOUND per-op failure — match it from
+        # the pre-state already in the transition (no extra hops), rather than
+        # counting a phantom entity as a successful command. Reachability is
+        # drift-bounded: a missing transition row from a length-drifted batch now routes
+        # to the ambiguous path (I2) before reaching here, so a null old_state here
+        # means a genuinely absent entity, not a dropped row.
+        if op.get("validate_first", True) and row.get("entity_ids"):
+            old_state = next(
+                (
+                    t.get("old_state")
+                    for t in transitions
+                    if isinstance(t, dict) and t.get("entity_id") == entity_id
+                ),
+                None,
+            )
+            if old_state is None:
+                err = create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Entity not found: {entity_id}",
+                    suggestions=[
+                        "Use ha_search to find the correct entity",
+                        "Check the entity is not disabled in Home Assistant",
+                    ],
+                    context={"entity_id": entity_id, "action": action},
+                )
+                err["service_call"] = service_call
+                return err
+        final_state = next(
+            (
+                t["new_state"].get("state")
+                for t in transitions
+                if isinstance(t, dict) and isinstance(t.get("new_state"), dict)
+            ),
+            None,
+        )
+        confirmed = bool(component_op.get("confirmed"))
+        partial = bool(component_op.get("partial"))
+        return {
+            "entity_id": entity_id,
+            "action": action,
+            "parameters": op.get("parameters") or {},
+            "command_sent": True,
+            # M-status: an inline-confirmed op has no operation_id, so a
+            # "pending_verification" status is misleading (nothing will poll it). Use
+            # "dispatched_unconfirmed" — the same label the ambiguous batch path uses.
+            "status": "completed" if confirmed else "dispatched_unconfirmed",
+            "confirmed": confirmed,
+            "partial": partial,
+            "final_state": final_state,
+            "transitions": transitions,
+            "service_call": service_call,
+            "verification_method": "component_state_change",
+            "message": (
+                f"{entity_id} {action} " + ("confirmed" if confirmed else "dispatched")
+            ),
+        }
+
+    def _resolve_component_rows(
+        self,
+        valid_operations: list[tuple[int, dict[str, Any], str, str]],
+    ) -> list[dict[str, Any]] | None:
+        """Resolve every valid op into a component row (server-side, D6).
+
+        Returns ``None`` — abort the WHOLE batch to legacy BEFORE any dispatch — when
+        any op cannot be resolved (the legacy path then surfaces the proper per-op
+        error, and no partial batch lands) or when nothing resolvable remains (an
+        empty batch; the component's schema rejects it anyway).
+        """
+        rows: list[dict[str, Any]] = []
+        for _idx, op, entity_id, action in valid_operations:
+            row = self._resolve_component_op(entity_id, action, op.get("parameters"))
+            if row is None:
+                return None
+            rows.append(row)
+        return rows or None
+
+    async def _bulk_via_component(
+        self,
+        operations: list[dict[str, Any]],
+        valid_operations: list[tuple[int, dict[str, Any], str, str]],
+        skipped_operations: list[dict[str, Any]],
+        parallel: bool,
+    ) -> dict[str, Any] | None:
+        """Route the batch through the component ``bulk_call_service`` capability.
+
+        Returns a legacy-shaped bulk response (built by the SAME
+        ``_build_bulk_response`` the legacy path uses, with ``operation_ids`` empty
+        and ``follow_up`` None since ops are confirmed inline) when the component
+        advertises ``bulk_call_service`` and the frame lands, else ``None`` so the
+        caller runs the unchanged legacy operation-registry path.
+
+        **D9 (at-most-once, per batch).** The boundary is PRE-SEND vs POST-SEND:
+
+        * ``None`` (nothing dispatched → safe legacy first fire): a capability miss,
+          an op that could not be resolved server-side, an empty batch, a batch whose
+          entity_ids are not all distinct (the component's per-entity waiter cannot
+          confirm a repeated entity), an ``unknown_command`` (caps invalidated), a
+          connection-ESTABLISHMENT failure, a ``HomeAssistantCommandNotSent`` (the
+          frame provably never left the process — the send_command readiness guard),
+          or a command-ERROR response. A command error is pre-dispatch because the
+          batch's all-guards-first pass (D1 / ServiceNotFound) raises before ANY
+          ``async_call`` AND the component's post-dispatch assembly is TOTAL (never
+          raises — I1), so no landed write can surface as a command error.
+        * A returned result means the batch dispatched: each op's own ``dispatched``
+          flag is authoritative and NOTHING is re-dispatched, even the ops that failed.
+        * A response-wait TIMEOUT, a post-send transport drop, OR a malformed/unusable
+          SUCCESS envelope (non-dict result or op-list length drift) is AMBIGUOUS for
+          the WHOLE batch frame (some/all ops may have landed; a success frame is built
+          only AFTER every ``async_call`` fired, and ``async_call`` under the batch is
+          unbounded). It returns a partial batch response — every op reported
+          dispatched-but-unconfirmed — and is NEVER re-dispatched via legacy (a
+          re-dispatch would double-fire every landed op, inverting ``toggle`` ops).
+        """
+        caps = await get_component_caps(self.client)
+        if not component_supports(caps, "bulk_call_service"):
+            return None
+
+        rows = self._resolve_component_rows(valid_operations)
+        # PRE-SEND, route the WHOLE batch to legacy (nothing dispatched yet → safe first
+        # fire, D9) when either: an op could not be resolved server-side (``rows`` None),
+        # or the batch targets the same entity_id twice. The component keys ONE
+        # entity-keyed transition waiter per entity, so the first ``state_changed``
+        # satisfies every op for that entity — both would report the same
+        # transition/final_state (e.g. `light.a on` then `light.a off` both read as the
+        # first). The legacy sequential path confirms each op independently.
+        if rows is None or self._has_duplicate_entity_ids(valid_operations):
+            return None
+
+        # PRE-SEND: an establishment failure means the batch frame provably never
+        # reached the component → legacy is a safe first fire. Split from the send
+        # below so a POST-SEND failure is never misclassified as pre-send.
+        try:
+            ws = await get_websocket_client(
+                url=self.client.base_url, token=self.client.token
+            )
+        except Exception as exc:
+            logger.warning(
+                "%s establishment failed; falling back to legacy: %r",
+                WS_BULK_CALL_SERVICE,
+                exc,
+            )
+            return None
+        # ``send_command`` transmits the batch frame INSIDE itself, AFTER its readiness
+        # guard and the socket write — so exception TYPE marks the send boundary:
+        # ``HomeAssistantCommandNotSent`` is raised ONLY at the readiness guard (the one
+        # provably-never-sent site → safe legacy first fire). A command-ERROR response is
+        # pre-dispatch: the all-guards-first D1 / ServiceNotFound pass raises before any
+        # async_call AND the component's post-dispatch assembly is total (never raises),
+        # so a command error cannot carry a landed write → legacy is safe. A response-
+        # wait TIMEOUT, a send() that raised (bytes may already be on the socket), OR a
+        # post-send transport drop (a mid-await socket close raises plain
+        # ``HomeAssistantConnectionError``) is AMBIGUOUS for the WHOLE batch → report
+        # every op dispatched-but-unconfirmed, NEVER re-dispatch. ``frame_timeout``
+        # honors the per-op ``timeout_seconds`` legacy respects (M-timeout).
+        frame_timeout = self._bulk_frame_timeout(valid_operations)
+        try:
+            raw = await ws.send_command(
+                WS_BULK_CALL_SERVICE,
+                operations=rows,
+                parallel=parallel,
+                wait=True,
+                timeout=frame_timeout,
+                # Keep the response-wait comfortably above the batch confirmation wait
+                # so the component's own bounded wait (not the client) decides the
+                # partial cutoff, preserving the legacy 10s/30s margin at any timeout.
+                _wait_timeout=frame_timeout + 20.0,
+            )
+        except HomeAssistantCommandNotSent as exc:
+            # PRE-SEND: the batch frame provably never left the process. Nothing
+            # dispatched, so legacy is a safe first fire.
+            logger.warning(
+                "%s not sent; falling back to legacy: %r",
+                WS_BULK_CALL_SERVICE,
+                exc,
+            )
+            return None
+        except HomeAssistantCommandError as exc:
+            # unknown_command → invalidate the cached caps so the next call re-probes;
+            # any other command error → legacy (provably pre-dispatch per D9 above).
+            if is_unknown_command(exc):
+                invalidate_caps(self.client)
+            else:
+                logger.warning(
+                    "%s command error; falling back to legacy: %r",
+                    WS_BULK_CALL_SERVICE,
+                    exc,
+                )
+            return None
+        except Exception as exc:
+            # HomeAssistantCommandTimeout (the response-wait expired — the batch frame
+            # WAS sent) or any post-send transport drop: the batch is ambiguous-
+            # dispatched. Report partial, NEVER re-dispatch (D9 at-most-once).
+            logger.warning(
+                "%s post-send timeout/drop; reporting batch partial (not retried): %r",
+                WS_BULK_CALL_SERVICE,
+                exc,
+            )
+            return self._build_ambiguous_bulk_response(
+                operations, valid_operations, rows, skipped_operations, parallel
+            )
+
+        # A SUCCESS result frame is produced ONLY after the batch prep ran to completion
+        # (every op's async_call fired), so a malformed/unusable success envelope (a
+        # non-dict result, or an op-list whose length drifts from the rows we sent)
+        # means the writes already HAPPENED. Report the batch AMBIGUOUS (every op
+        # partial, never re-dispatched) — a ``None`` here would route to the legacy
+        # operation-registry path and double-fire every landed op.
+        op_results = self._component_bulk_op_results(raw, len(rows))
+        if op_results is None:
+            return self._build_ambiguous_bulk_response(
+                operations, valid_operations, rows, skipped_operations, parallel
+            )
+
+        results = [
+            self._map_component_op_result(op, entity_id, action, row, component_op)
+            for (_idx, op, entity_id, action), row, component_op in zip(
+                valid_operations, rows, op_results, strict=True
+            )
+        ]
+        # Reuse the legacy response builder: operation_ids is empty (ops confirmed
+        # inline, no polling handle) → follow_up is None, and the successful/failed
+        # tallies key off command_sent exactly as the legacy path.
+        return self._build_bulk_response(
+            operations, results, [], skipped_operations, parallel
+        )
+
+    @staticmethod
+    def _has_duplicate_entity_ids(
+        valid_operations: list[tuple[int, dict[str, Any], str, str]],
+    ) -> bool:
+        """True when two+ ops in the batch target the same entity_id.
+
+        The component keys ONE transition waiter per entity_id, so the first
+        ``state_changed`` satisfies every op sharing that entity — both would report the
+        same transition/final_state. The legacy sequential path confirms each op
+        independently, so ``_bulk_via_component`` routes the WHOLE batch to legacy when
+        this returns True.
+        """
+        entity_ids = [entity_id for _idx, _op, entity_id, _action in valid_operations]
+        return len(entity_ids) != len(set(entity_ids))
+
+    @staticmethod
+    def _bulk_frame_timeout(
+        valid_operations: list[tuple[int, dict[str, Any], str, str]],
+    ) -> float:
+        """The batch confirmation-wait bound, honoring per-op ``timeout_seconds``.
+
+        Legacy runs each op with its own ``timeout_seconds`` (default 10); the single
+        batch frame shares ONE bounded wait, so use the max over the valid ops (capped
+        at 60s) rather than a hardcoded 10s (M-timeout). ``valid_operations`` is
+        non-empty here (an empty batch returned to legacy before the send). An explicit
+        ``timeout_seconds`` of 0 is honored (parity with legacy and the component
+        schema); only an ABSENT key defaults to 10.
+        """
+        return min(
+            60.0,
+            max(
+                float(v) if (v := op.get("timeout_seconds")) is not None else 10.0
+                for _idx, op, _eid, _action in valid_operations
+            ),
+        )
+
+    @staticmethod
+    def _component_bulk_op_results(
+        raw: dict[str, Any], expected_len: int
+    ) -> list[Any] | None:
+        """The per-op results list from a batch frame, or ``None`` if malformed.
+
+        The component preserves op order and returns exactly one result per row it was
+        sent. A non-dict result or an op-list whose length drifts from ``expected_len``
+        is an unusable/incompatible SUCCESS envelope — the caller treats ``None`` as
+        AMBIGUOUS (the writes already landed; never reconcile a mismatched batch).
+        """
+        result = raw.get("result")
+        if not isinstance(result, dict):
+            return None
+        op_results = result.get("operations")
+        if not isinstance(op_results, list) or len(op_results) != expected_len:
+            return None
+        return op_results
+
+    def _build_ambiguous_bulk_response(
+        self,
+        operations: list[dict[str, Any]],
+        valid_operations: list[tuple[int, dict[str, Any], str, str]],
+        rows: list[dict[str, Any]],
+        skipped_operations: list[dict[str, Any]],
+        parallel: bool,
+    ) -> dict[str, Any]:
+        """Partial-success bulk response for a post-send batch-frame timeout/drop.
+
+        The batch frame WAS sent, so some/all ops may have dispatched; the batch
+        response never arrived. Per D9 at-most-once every valid op is reported
+        dispatched-but-unconfirmed (``partial``) and the batch is NEVER re-dispatched
+        via legacy. ``rows`` is aligned 1:1 with ``valid_operations`` (both built in
+        order; an unresolvable op returned to legacy earlier, so no ``None`` rows
+        reach here).
+        """
+        results: list[dict[str, Any]] = [
+            {
+                "entity_id": entity_id,
+                "action": action,
+                "parameters": op.get("parameters") or {},
+                "command_sent": True,
+                "status": "dispatched_unconfirmed",
+                "confirmed": False,
+                "partial": True,
+                "final_state": None,
+                "transitions": [],
+                "service_call": {
+                    "domain": row["domain"],
+                    "service": row["service"],
+                    "data": row["service_data"],
+                },
+                "verification_method": "component_state_change",
+                "message": (
+                    f"{entity_id} {action} dispatched but the batch confirmation did "
+                    "not arrive within the timeout; not retried"
+                ),
+            }
+            for (_idx, op, entity_id, action), row in zip(
+                valid_operations, rows, strict=True
+            )
+        ]
+        response = self._build_bulk_response(
+            operations, results, [], skipped_operations, parallel
+        )
+        response["partial"] = True
+        response.setdefault("warnings", []).append(
+            "The bulk operation was dispatched but Home Assistant did not confirm "
+            "within the timeout. Operations were NOT retried (at-most-once). Use "
+            "ha_get_state to verify the affected entities."
+        )
+        return response
 
     @staticmethod
     def _tool_error_to_dict(e: ToolError) -> dict[str, Any]:

@@ -303,6 +303,68 @@ class TestSendCommandErrorContract:
         assert exc_info.value.code is None
 
 
+class TestSendCommandSendBoundary:
+    """Pin the never-sent vs ambiguous boundary ``send_command`` exposes by TYPE.
+
+    Only the readiness entry-guard is provably never-sent (nothing is transmitted), so
+    it raises ``HomeAssistantCommandNotSent`` — the never-sent subtype an at-most-once
+    write consumer catches FIRST to fall back to legacy safely. A ``send_json_message``
+    failure is NOT never-sent: ``websocket.send()`` raising does not prove the frame was
+    untransmitted (bytes may already be on the socket when a close surfaces), so
+    ``send_command`` re-raises the ORIGINAL exception unchanged and the consumer treats
+    it as ambiguous (partial, never re-fired). It must still cancel the pending future.
+    """
+
+    @staticmethod
+    def _prepare_client():
+        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+
+        client = HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123",
+            token="test-token",
+        )
+        client._state.mark_connected()
+        client._state.mark_authenticated()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_send_failure_reraises_original_not_command_not_sent(self):
+        """A send() failure re-raises the ORIGINAL exception (ambiguous), not the
+        never-sent subtype, and cancels the pending future so it cannot leak."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandNotSent
+
+        client = self._prepare_client()
+        boom = ConnectionResetError("frame write dropped mid-send")
+
+        async def _raise(_message: dict) -> None:
+            raise boom
+
+        client.send_json_message = _raise  # type: ignore[method-assign]
+
+        with pytest.raises(ConnectionResetError) as exc_info:
+            await client.send_command("light/turn_on")
+        # The exact original object is propagated — NOT wrapped as never-sent.
+        assert exc_info.value is boom
+        assert not isinstance(exc_info.value, HomeAssistantCommandNotSent)
+        # The pending future was cancelled/dropped (no leak).
+        assert client._state._pending_requests == {}
+
+    @pytest.mark.asyncio
+    async def test_readiness_guard_raises_command_not_sent(self):
+        """The un-authenticated entry-guard is the ONE provably-never-sent site: it
+        raises ``HomeAssistantCommandNotSent`` before any frame is transmitted."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandNotSent
+        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+
+        client = HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123",
+            token="test-token",
+        )
+        # Never marked connected/authenticated → is_ready is False.
+        with pytest.raises(HomeAssistantCommandNotSent):
+            await client.send_command("light/turn_on")
+
+
 class TestSendCommandWaitTimeout:
     """``send_command``'s local await honors the ``_wait_timeout`` argument.
 

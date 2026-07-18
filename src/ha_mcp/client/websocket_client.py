@@ -23,6 +23,7 @@ import websockets
 from ..config import get_global_settings
 from .rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
     _is_ssl_error,
@@ -616,7 +617,12 @@ class HomeAssistantWebSocketClient:
             Response from Home Assistant
         """
         if not self._state.is_ready:
-            raise HomeAssistantConnectionError("WebSocket not authenticated")
+            # PRE-SEND and the ONLY provably-never-sent site: nothing is transmitted at
+            # this entry guard. Raise the never-sent subtype so an at-most-once write
+            # consumer can fall back to legacy safely (a subclass of
+            # HomeAssistantConnectionError, so every existing broad handler is
+            # unaffected). A later send() failure is NOT never-sent (see below).
+            raise HomeAssistantCommandNotSent("WebSocket not authenticated")
 
         # Pull the wait timeout out of kwargs rather than making it a positional
         # parameter: callers unpack a ``dict[str, object]`` via
@@ -635,6 +641,13 @@ class HomeAssistantWebSocketClient:
         try:
             await self.send_json_message(message)
         except Exception:
+            # AMBIGUOUS, not never-sent: websocket.send() raising (e.g. a
+            # ConnectionClosed detected mid-write) does NOT prove the frame was not
+            # transmitted — bytes may already be on the socket when the close surfaces.
+            # Re-raise the ORIGINAL exception unchanged so an at-most-once write
+            # consumer treats it like a post-send drop (ambiguous -> partial, never
+            # re-fired), NOT as never-sent; only the readiness guard above is provably
+            # never-sent. Still cancel the pending future so it cannot leak.
             self.cancel_pending_response(message_id)
             raise
 

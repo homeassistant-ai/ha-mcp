@@ -114,6 +114,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "cross-module import, so the declaration looks dead.",
     ),
     (
+        "py/unused-global-variable",
+        "src/ha_mcp/tools/util_helpers.py",
+        "_SERVICE_TO_STATE",
+        "Cross-module use: util_helpers is the leaf module that owns the single "
+        "_SERVICE_TO_STATE map, imported and read by tools_service.py (ha_call_service) "
+        "and device_control.py (ha_bulk_control) as the confirmation-state hint. "
+        "CodeQL's single-file analysis misses the cross-module import, so the "
+        "declaration looks dead.",
+    ),
+    (
         "py/unused-import",
         "packaging/binary/pyinstaller_hooks/runtime_hook.py",
         "idna",
