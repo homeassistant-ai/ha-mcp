@@ -31,6 +31,73 @@ class LabelTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
+    async def _list_labels(
+        self, context: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """Return all labels from the registry (shared by get/set).
+
+        Raises ToolError (SERVICE_CALL_FAILED) if the list call fails or returns
+        an unexpected non-list envelope — a degraded response must not collapse
+        to an empty registry, or callers would confidently report a real label
+        as missing (mirrors ``backup_manager._require_list``).
+        """
+        result = await self._client.send_websocket_message(
+            {"type": "config/label_registry/list"}
+        )
+        if not result.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Failed to get labels"),
+                    context=context,
+                )
+            )
+        # No ``[]`` default: a success envelope that omits ``result`` (or sends
+        # a non-list) is a degraded response, not an empty registry — defaulting
+        # would let callers confidently report a real label as missing.
+        labels = result.get("result")
+        if not isinstance(labels, list):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Label registry returned a missing or non-list result",
+                    context=context,
+                )
+            )
+        return labels
+
+    async def _require_existing_label(self, label_id: str, name: str) -> None:
+        """Raise RESOURCE_NOT_FOUND if ``label_id`` is not in the registry.
+
+        Enforces the strict update-only contract (issue #1860): update of an
+        unknown id yields an opaque "Unknown error", and create cannot honor a
+        caller-supplied id (HA derives it from the name), so an unknown id is a
+        clear error with a create hint rather than a silently divergent upsert.
+        """
+        existing = await self._list_labels(context={"name": name, "label_id": label_id})
+        if any(lbl.get("label_id") == label_id for lbl in existing):
+            return
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Label not found: {label_id}",
+                context={
+                    "name": name,
+                    "label_id": label_id,
+                    "available_label_ids": [
+                        lbl.get("label_id") for lbl in existing[:10]
+                    ],
+                },
+                suggestions=[
+                    "To create a new label, omit label_id — Home Assistant "
+                    + "derives the id from the name (e.g. 'vendor:tapo' becomes "
+                    + "'vendor_tapo')",
+                    "To update an existing label, pass its exact current "
+                    + "label_id (list all with ha_config_get_label())",
+                ],
+            )
+        )
+
     @tool(
         name="ha_config_get_label",
         tags={"Labels & Categories"},
@@ -82,22 +149,7 @@ class LabelTools:
                     ],
                     context={"action": "get"},
                 )
-            message: dict[str, Any] = {
-                "type": "config/label_registry/list",
-            }
-
-            result = await self._client.send_websocket_message(message)
-
-            if not result.get("success"):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        result.get("error", "Failed to get labels"),
-                        context={"label_id": label_id},
-                    )
-                )
-
-            labels = result.get("result", [])
+            labels = await self._list_labels(context={"label_id": label_id})
 
             if label_id is None:
                 return {
@@ -223,6 +275,13 @@ class LabelTools:
                     ],
                     context={"action": "set", "name": name},
                 )
+                # Strict update-only contract (issue #1860): routing to
+                # label_registry/update with an unknown id returns an opaque
+                # "Unknown error", and label_registry/create cannot honor a
+                # caller-supplied id (HA derives it from the name). Verify the
+                # id exists up front and return actionable guidance instead of
+                # dispatching an update that fails cryptically.
+                await self._require_existing_label(label_id, name)
             action = "update" if label_id else "create"
 
             message: dict[str, Any] = {
@@ -254,6 +313,13 @@ class LabelTools:
                     "message": f"Successfully {action_past} label: {name}",
                 }
             else:
+                # The unknown-id case is caught up front by
+                # _require_existing_label. This substring match only catches HA
+                # error texts containing "not found"/"doesn't exist"; HA's label
+                # update does NOT emit those for an unknown/deleted id (it
+                # surfaces "Unknown error"), so it is a best-effort guard for
+                # other/future phrasings only — the check-then-update delete race
+                # is not handled here and still surfaces as SERVICE_CALL_FAILED.
                 error_str = str(result.get("error", "")).lower()
                 if "not found" in error_str or "doesn't exist" in error_str:
                     raise_tool_error(

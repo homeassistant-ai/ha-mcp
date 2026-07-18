@@ -240,6 +240,42 @@ class TestLabelCRUD:
         )
         logger.info("Non-existent label properly returned error")
 
+    async def test_set_label_with_unknown_id_returns_not_found_1860(self, mcp_client):
+        """Regression for #1860: ha_config_set_label with a label_id that does
+        not exist must return a structured RESOURCE_NOT_FOUND that points at the
+        create path — NOT the opaque "Failed to update label: Command failed:
+        Unknown error" HA emits when label_registry/update receives an unknown
+        id (an agent in the report retried 23 times before finding the create
+        path).
+
+        Source path: tools_labels.py — set_label now verifies the id exists via
+        _list_labels() before routing to update, and raises RESOURCE_NOT_FOUND
+        with an "omit label_id" suggestion when it does not.
+        """
+        logger.info("Testing set_label with unknown label_id (#1860)")
+
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_label",
+            {"name": "vendor:tapo", "label_id": "vendor_nonexistent_1860_xyz"},
+        )
+
+        assert data.get("success") is False, f"Should fail for unknown label_id: {data}"
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND", (
+            f"Expected RESOURCE_NOT_FOUND (not the opaque update failure), "
+            f"got: {data['error']}"
+        )
+        error_msg = data["error"]["message"].lower()
+        assert "unknown error" not in error_msg, (
+            f"The opaque HA update failure must not leak through: {data['error']}"
+        )
+        # Actionable guidance must steer the caller to the create path.
+        suggestion = str(data["error"].get("suggestion", "")).lower()
+        assert "omit label_id" in suggestion, (
+            f"Expected an 'omit label_id' create hint, got: {data['error']}"
+        )
+        logger.info("Unknown label_id returned actionable RESOURCE_NOT_FOUND (#1860)")
+
     async def test_delete_nonexistent_label(self, mcp_client):
         """Test deleting a non-existent label."""
         logger.info("Testing delete non-existent label")
