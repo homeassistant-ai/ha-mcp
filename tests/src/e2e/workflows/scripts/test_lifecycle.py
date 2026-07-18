@@ -16,6 +16,7 @@ production-level functionality and compatibility.
 Tests are designed for Docker Home Assistant test environment at localhost:8124.
 """
 
+import ast
 import asyncio
 import json
 import logging
@@ -51,8 +52,8 @@ def enhanced_parse_mcp_result(result) -> dict[str, Any]:
                         .replace("false", "False")
                         .replace("null", "None")
                     )
-                    return eval(fixed_text)
-                except (SyntaxError, NameError, ValueError):
+                    return ast.literal_eval(fixed_text)
+                except (SyntaxError, NameError, ValueError, TypeError):
                     # Return raw response if parsing fails
                     return {"raw_response": response_text, "parse_error": True}
 

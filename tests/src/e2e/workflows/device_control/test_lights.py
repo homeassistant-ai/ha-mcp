@@ -1,4 +1,3 @@
-# DISABLED DUE TO WEBSOCKET EVENT LOOP ISSUES
 """
 Device Control E2E Tests
 
