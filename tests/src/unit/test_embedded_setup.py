@@ -173,7 +173,7 @@ class TestBringUp:
         self, fake_manager, monkeypatch
     ):
         # The enumerated adapter hosts must be forwarded into the connect-URL
-        # surfacing, or the startup log – the feature's primary surface – silently
+        # surfacing, or the startup log (the feature's primary surface) silently
         # loses the per-interface URLs while every other test stays green
         # (#1862). Mirrors the config-flow forwarding assertion.
         monkeypatch.setattr(
