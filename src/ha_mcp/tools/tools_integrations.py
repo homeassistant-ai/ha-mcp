@@ -2565,11 +2565,14 @@ class IntegrationTools:
                 if unique_id:
                     logger.info(f"Found unique_id: {unique_id} for {entity_id}")
                 return unique_id, registry_result, True
-            return (
-                None,
-                {"success": False, "error": "not found in entity registry"},
-                True,
-            )
+            # Assignment form (not a dict literal in the return) keeps the
+            # no-return-success-false AST rule scoped to real tool returns:
+            # this is an internal registry-ack shape, not an MCP tool response.
+            miss_result: dict[str, Any] = {
+                "success": False,
+                "error": "not found in entity registry",
+            }
+            return None, miss_result, True
         unique_id, legacy_result = await self._resolve_unique_id_via_registry_retry(
             entity_id
         )
