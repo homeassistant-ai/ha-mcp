@@ -66,9 +66,11 @@ class ReadOnlyExemption(NamedTuple):
 def _backup_write(args: dict[str, Any]) -> str | None:
     scope = args.get("scope")
     action = args.get("action")
-    # Read-only-safe: per-edit backup listing/viewing, and snapshot listing
+    # Read-only-safe: per-edit backup listing/viewing/diffing, and snapshot listing
     # (issue #1586 — pure ``backup/info`` read, no tarball mutation).
-    if scope == "edits" and action in ("list", "view"):
+    # ``diff`` (added in #1632) only reads the stored snapshot and fetches
+    # the live config to compare; it never mutates (issue #1944).
+    if scope == "edits" and action in ("list", "view", "diff"):
         return None
     if scope == "snapshot" and action == "list":
         return None
@@ -195,8 +197,9 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
     ),
     "ha_manage_backup": ReadOnlyExemption(
         _backup_write,
-        "listing and viewing per-edit backups (scope='edits', action='list' or "
-        "'view') and listing snapshots (scope='snapshot', action='list')",
+        "listing, viewing, and diffing per-edit backups (scope='edits', "
+        "action='list', 'view', or 'diff') and listing snapshots "
+        "(scope='snapshot', action='list')",
     ),
     "ha_manage_addon": ReadOnlyExemption(
         _addon_write,
