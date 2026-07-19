@@ -163,6 +163,10 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/**/*" = ["E501", "B011"]
+# C901 is enforced repo-wide with no per-file exemptions (the grandfathered
+# list was fully cleared by issue #925). Do NOT add "path" = ["C901"] entries
+# here — extract helpers to bring the function below the threshold instead:
+# "some/path.py" = ["C901"]  <- never this
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

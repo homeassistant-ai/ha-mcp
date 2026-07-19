@@ -378,6 +378,9 @@ uv run hamcp-test-env --no-interactive   # For automation
 Test token centralized in `tests/test_constants.py`.
 
 ### Code Quality
+
+C901 (mccabe complexity ≤10) is enforced repo-wide with zero per-file exemptions (issue #925 cleared the grandfathered list) — never reintroduce a `["C901"]` per-file-ignore; extract helpers instead.
+
 ```bash
 uv run ruff check src/ tests/ --fix
 # Note: --fix removes unused imports from non-__init__ modules (lefthook runs it on commit with
