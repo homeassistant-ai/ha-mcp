@@ -1046,6 +1046,42 @@ def test_http_500_hint_only_on_http_500_sample() -> None:
     assert "in the Home Assistant log" not in no_sample["partial_reason"]
 
 
+def test_bare_http_500_sample_still_carries_hint() -> None:
+    """An empty-bodied 500 renders as colon-less ``HTTP 500`` (see
+    ``summarize_fetch_error``); the hint predicate matches the bare form too,
+    so the one sample the 500 diagnosis exists for can't silently drop it.
+    Near-misses — another status, or a message merely mentioning 500 — must
+    not match."""
+    bare: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(
+        bare, automation_failed=1, automation_failed_sample="HTTP 500"
+    )
+    assert "in the Home Assistant log" in bare["partial_reason"]
+
+    for near_miss_sample in ("HTTP 5000: not a 500", "RuntimeError: REST 500 body"):
+        near_miss: dict = {"success": True}
+        DeepSearchMixin._apply_per_type_partial_flag(
+            near_miss, automation_failed=1, automation_failed_sample=near_miss_sample
+        )
+        assert "in the Home Assistant log" not in near_miss["partial_reason"], (
+            f"hint must not fire on {near_miss_sample!r}"
+        )
+
+
+def test_double_500_hint_rides_each_fragment() -> None:
+    """Both per-type samples being 500s → each fragment carries its own hint
+    (pins the previously-unspecified both-types-500 composition)."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(
+        response,
+        automation_failed=1,
+        automation_failed_sample="HTTP 500: 500 Internal Server Error",
+        script_failed=2,
+        script_failed_sample="HTTP 500: 500 Internal Server Error",
+    )
+    assert response["partial_reason"].count("in the Home Assistant log") == 2
+
+
 def test_budget_partial_flag_set_when_helper_type_lists_failed() -> None:
     """Helpers run on every default ha_search call; silent per-type-list
     failures previously left callers unable to distinguish a clean

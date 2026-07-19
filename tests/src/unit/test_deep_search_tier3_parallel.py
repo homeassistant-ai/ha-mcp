@@ -18,7 +18,11 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.smart_search._fetch import is_timeout_error, summarize_fetch_error
+from ha_mcp.tools.smart_search._fetch import (
+    is_timeout_error,
+    record_first_failure,
+    summarize_fetch_error,
+)
 
 
 def _make_tools(client):
@@ -479,6 +483,7 @@ class TestYamlSkippedClassification:
         )
         assert skipped_count == 0
         assert matches == []
+        assert _failed_sample is None, "yaml_skipped 404s must not capture a sample"
 
     @pytest.mark.asyncio
     async def test_automation_non_404_classifies_as_failed(
@@ -634,6 +639,7 @@ class TestYamlSkippedClassification:
         assert failed_count == 0
         assert skipped_count == 0
         assert matches == []
+        assert _failed_sample is None, "yaml_skipped 404s must not capture a sample"
 
     @pytest.mark.asyncio
     async def test_mixed_404_and_success_only_404s_yaml_skipped(
@@ -704,6 +710,7 @@ class TestYamlSkippedClassification:
         )
         assert failed_count == 0
         assert skipped_count == 0
+        assert _failed_sample is None, "yaml_skipped 404s must not capture a sample"
         # Two-sided: the successful UI-stored automation must land in
         # matches via its config body (the query matches nothing else).
         matched_ids = [m["entity_id"] for m in matches]
@@ -940,6 +947,7 @@ class TestTimeoutClassification:
         assert yaml_skipped_count == 0
         assert skipped_count == 0
         assert matches == []
+        assert _failed_sample is None, "timeouts must not capture a sample"
 
     @pytest.mark.asyncio
     async def test_script_slow_fetch_classifies_as_timeout(
@@ -980,6 +988,7 @@ class TestTimeoutClassification:
         )
         assert failed_count == 0
         assert yaml_skipped_count == 0
+        assert _failed_sample is None, "timeouts must not capture a sample"
 
     @pytest.mark.asyncio
     async def test_timeout_surfaces_partial_through_deep_search(
@@ -1125,6 +1134,7 @@ class TestSceneTimeoutClassification:
         assert skipped_count == 0
         assert registry_failed is True  # fixture kills the registry walk
         assert results == []
+        assert _failed_sample is None, "scene timeouts must not capture a sample"
 
     @pytest.mark.asyncio
     async def test_scene_timeout_surfaces_partial_through_deep_search(
@@ -1249,6 +1259,7 @@ class TestWrappedClientTimeoutClassification:
         )
         assert failed_count == 0
         assert yaml_skipped_count == 0
+        assert _failed_sample is None, "wrapped timeouts must not capture a sample"
 
     @pytest.mark.asyncio
     async def test_plain_connection_error_still_classifies_as_failed(
@@ -1291,6 +1302,9 @@ class TestWrappedClientTimeoutClassification:
         assert failed_count == 1
         assert timeout_count == 0
         assert yaml_skipped_count == 0
+        assert _failed_sample == (
+            "HomeAssistantConnectionError: Failed to connect to Home Assistant: refused"
+        ), "failed-class connectivity errors must capture their sample"
 
 
 class TestBudgetedFetchCountArithmetic:
@@ -1406,6 +1420,15 @@ class TestSummarizeFetchError:
 
     def test_empty_message_yields_bare_type(self):
         assert summarize_fetch_error(RuntimeError()) == "RuntimeError"
+
+    def test_empty_body_500_renders_bare_http_500(self):
+        """An empty-bodied 500 renders the bare colon-less ``HTTP 500`` —
+        the exact form the ``_HTTP_500_SAMPLE`` regex's ``$`` alternative
+        exists to match, so the hint can't silently drop it. Pins the
+        renderer side of that chain (the hint side is pinned in
+        ``test_bare_http_500_sample_still_carries_hint``)."""
+        exc = HomeAssistantAPIError("API error: 500 - ", status_code=500)
+        assert summarize_fetch_error(exc) == "HTTP 500"
 
     def test_multiline_body_keeps_first_line_only(self):
         exc = HomeAssistantAPIError(
@@ -1720,10 +1743,10 @@ class TestFailedSampleThroughDeepSearch:
 
     @pytest.mark.asyncio
     async def test_only_first_failure_is_summarized(self, mock_client, smart_tools):
-        """The fetch closure keeps only the FIRST ``failed``-class sample
-        (``if not failed_errors:`` guard): in the motivating "every per-id
-        fetch 500s" case, ``summarize_fetch_error`` runs once, not once per
-        failure. All failures still COUNT."""
+        """``record_first_failure`` keeps the first ``failed``-class sample:
+        in the motivating "every per-id fetch 500s" case the first failure IS
+        an HTTP 500 (the upgrade never fires), so ``summarize_fetch_error``
+        runs once, not once per failure. All failures still COUNT."""
         scripts = [
             {
                 "entity_id": f"script.secret_{n}",
@@ -1762,4 +1785,185 @@ class TestFailedSampleThroughDeepSearch:
         assert failed_sample == "HTTP 500: 500 Internal Server Error"
         assert spy.call_count == 1, (
             f"guard must summarize only the first failure; got {spy.call_count}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_automation_500_sample_surfaces_through_deep_search(
+        self, mock_client, smart_tools
+    ):
+        """Automation mirror of the script seam test: the sample and the
+        HA-log hint ride the ``automation_failed_sample`` kwarg through
+        ``deep_search`` → ``_paginate_and_build_response`` →
+        ``_apply_per_type_partial_flag``. A forwarding regression on that
+        kwarg alone would pass the component tests."""
+        automations = self._automation_entities()
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _per_id_500(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            raise HomeAssistantAPIError(
+                "API error: 500 - 500 Internal Server Error", status_code=500
+            )
+
+        mock_client._request = AsyncMock(side_effect=_per_id_500)
+
+        result = await smart_tools.deep_search(
+            query="anything",
+            search_types=["automation"],
+            limit=10,
+        )
+
+        assert result["partial"] is True
+        reason = result["partial_reason"]
+        assert (
+            "2 automation(s) not scanned (per-id fetch raised a non-404 error; "
+            "e.g. HTTP 500: 500 Internal Server Error)" in reason
+        ), f"automation failed fragment must carry the sample; got {reason!r}"
+        assert "`!secret` reference in the config file HA loads" in reason, (
+            f"HTTP-500 automation fragment must carry the HA-log hint; got {reason!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_scene_404_sample_surfaces_without_500_hint(
+        self, mock_client, smart_tools
+    ):
+        """Scenes have no ``yaml_skipped`` branch (integration-managed scenes
+        are pre-filtered upstream via the registry walk), so a scene per-id
+        404 falls into the generic ``failed`` class and surfaces as an
+        ``e.g. HTTP 404`` sample — unlike automations/scripts, whose 404s
+        reclassify to their own fragment and never produce one. Pins the
+        asymmetry the #1930 description disclosed, so a future scene 404
+        branch can't change it silently; the 500 hint must not ride a 404."""
+        scenes = [
+            {
+                "entity_id": "scene.yaml_defined",
+                "state": "scening",
+                "attributes": {"friendly_name": "YAML Defined"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=scenes)
+
+        async def _scene_404(sid: str) -> dict:
+            raise HomeAssistantAPIError("API error: 404 - Not Found", status_code=404)
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_scene_404)
+
+        result = await smart_tools.deep_search(
+            query="anything",
+            search_types=["scene"],
+            limit=10,
+        )
+
+        assert result["partial"] is True
+        reason = result["partial_reason"]
+        assert (
+            "1 scene(s) not scanned (per-id fetch raised; "
+            "e.g. HTTP 404: Not Found)" in reason
+        ), f"scene 404 must surface as a failed-class sample; got {reason!r}"
+        assert "in the Home Assistant log" not in reason, (
+            f"the 500 hint must not ride a 404 sample; got {reason!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_500_sample_preferred_over_faster_non_500(
+        self, mock_client, smart_tools
+    ):
+        """Mixed failures: failure order under ``asyncio.gather`` tracks
+        latency, so a fast-failing non-500 outlier would otherwise claim the
+        sample slot and suppress the 500 diagnosis hint. The 500 must own the
+        sample regardless of which failure lands first."""
+        scripts = [
+            {
+                "entity_id": "script.blip_one",
+                "state": "off",
+                "attributes": {"friendly_name": "Blip One"},
+            },
+            {
+                "entity_id": "script.secret_two",
+                "state": "off",
+                "attributes": {"friendly_name": "Secret Two"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=scripts)
+
+        async def _mixed_failure(sid: str) -> dict:
+            if "blip" in sid:
+                raise RuntimeError("fast connection blip")
+            raise HomeAssistantAPIError(
+                "API error: 500 - 500 Internal Server Error", status_code=500
+            )
+
+        mock_client.get_script_config = AsyncMock(side_effect=_mixed_failure)
+
+        (
+            _matches,
+            _skipped_count,
+            failed_count,
+            _yaml_skipped_count,
+            _timeout_count,
+            failed_sample,
+        ) = await smart_tools._deep_search_scripts(
+            scripts,
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert failed_count == 2, "both failures must still be counted"
+        assert failed_sample == "HTTP 500: 500 Internal Server Error", (
+            f"the HTTP 500 must own the sample slot; got {failed_sample!r}"
+        )
+
+
+class TestFailedSamplePreference:
+    """``record_first_failure`` selection semantics: first failure wins the
+    sample slot, except the first HTTP 500 upgrades a non-500 sample, once.
+    Failure order under ``asyncio.gather`` tracks latency, so a fast-failing
+    outlier (e.g. a connection blip) would otherwise claim the slot and
+    suppress the ``http_500_diagnosis_hint`` diagnosis — the case the sample
+    exists for (#1784 follow-up)."""
+
+    @staticmethod
+    def _http_500(body: str = "500 Internal Server Error") -> HomeAssistantAPIError:
+        return HomeAssistantAPIError(f"API error: 500 - {body}", status_code=500)
+
+    def test_first_failure_wins_absent_a_500(self):
+        errs: list[str] = []
+        record_first_failure(errs, RuntimeError("first"))
+        record_first_failure(errs, ValueError("second"))
+        assert errs == ["RuntimeError: first"]
+
+    def test_first_http_500_upgrades_non_500_sample_once(self):
+        errs: list[str] = []
+        record_first_failure(errs, RuntimeError("fast blip"))
+        record_first_failure(errs, self._http_500())
+        assert errs == ["HTTP 500: 500 Internal Server Error"]
+        # Later 500s and non-500s never replace the upgraded sample.
+        record_first_failure(errs, self._http_500("a different body"))
+        record_first_failure(errs, RuntimeError("late blip"))
+        assert errs == ["HTTP 500: 500 Internal Server Error"]
+
+    def test_non_500_http_error_does_not_upgrade(self):
+        errs: list[str] = []
+        record_first_failure(errs, RuntimeError("fast blip"))
+        record_first_failure(
+            errs,
+            HomeAssistantAPIError("API error: 502 - Bad Gateway", status_code=502),
+        )
+        assert errs == ["RuntimeError: fast blip"]
+
+    def test_at_most_two_summaries_per_pass(self):
+        """One capture + one upgrade = two renders, no matter how many
+        failures follow — preserves the N-1 economy the guard bought."""
+        errs: list[str] = []
+        with patch(
+            "ha_mcp.tools.smart_search._fetch.summarize_fetch_error",
+            wraps=summarize_fetch_error,
+        ) as spy:
+            record_first_failure(errs, RuntimeError("fast blip"))
+            for _ in range(3):
+                record_first_failure(errs, self._http_500())
+            record_first_failure(errs, ValueError("late"))
+        assert errs == ["HTTP 500: 500 Internal Server Error"]
+        assert spy.call_count == 2, (
+            f"expected one capture + one upgrade; got {spy.call_count}"
         )

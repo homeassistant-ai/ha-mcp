@@ -393,12 +393,12 @@ class DeepSearchMixin(SceneSearchMixin):
         failed_count = 0
         yaml_skipped_count = 0
         timeout_count = 0
-        # One representative summary — only the FIRST ``failed``-class
-        # exception is kept (the fetch closure guards the append); it rides
-        # partial_reason as an ``e.g.`` (#1784 follow-up). The remaining
-        # failures are counted (``failed_count``) but not summarized, so the
-        # motivating "every per-id fetch 500s" case does N-1 fewer
-        # ``summarize_fetch_error`` calls.
+        # One representative summary — ``record_first_failure`` (which holds
+        # the guard) keeps the first ``failed``-class exception, upgrading
+        # once to the first HTTP 500 so a fast-failing outlier can't suppress
+        # the 500 diagnosis hint; it rides partial_reason as an ``e.g.``
+        # (#1784 follow-up). The remaining failures are counted
+        # (``failed_count``) but not summarized.
         failed_errors: list[str] = []
         if not bulk_fetched:
             uids_to_fetch = [
@@ -547,12 +547,12 @@ class DeepSearchMixin(SceneSearchMixin):
         failed_count = 0
         yaml_skipped_count = 0
         timeout_count = 0
-        # One representative summary — only the FIRST ``failed``-class
-        # exception is kept (the fetch closure guards the append); it rides
-        # partial_reason as an ``e.g.`` (#1784 follow-up). The remaining
-        # failures are counted (``failed_count``) but not summarized, so the
-        # motivating "every per-id fetch 500s" case does N-1 fewer
-        # ``summarize_fetch_error`` calls.
+        # One representative summary — ``record_first_failure`` (which holds
+        # the guard) keeps the first ``failed``-class exception, upgrading
+        # once to the first HTTP 500 so a fast-failing outlier can't suppress
+        # the 500 diagnosis hint; it rides partial_reason as an ``e.g.``
+        # (#1784 follow-up). The remaining failures are counted
+        # (``failed_count``) but not summarized.
         failed_errors: list[str] = []
         if not bulk_fetched:
             sids_to_fetch = [

@@ -40,7 +40,8 @@ def summarize_fetch_error(exc: BaseException) -> str:
 
     HTTP errors render as ``HTTP <code>: <first line of the message>`` (the
     client's own ``API error: <code> - `` prefix is stripped rather than
-    duplicated); everything else as ``<ExceptionType>: <first line>``.
+    duplicated); everything else as ``<ExceptionType>: <first line>``. An
+    empty message renders the bare prefix (``HTTP <code>`` / ``<Type>``).
     """
     lines = str(exc).strip().splitlines()
     text = lines[0].strip() if lines else ""
@@ -55,15 +56,24 @@ def summarize_fetch_error(exc: BaseException) -> str:
     return summary
 
 
-# Marks a rendered ``summarize_fetch_error`` summary whose cause the sample
-# cannot name: an HTTP 500's body is aiohttp's generic "500 Internal Server
-# Error" placeholder, so the real error (a YAMLException the per-id config
-# view raised, most often a ``!secret`` reference it rejects) lives only in
-# the HA log, never in the response.
-_HTTP_500_PREFIX = "HTTP 500:"
+# Matches a rendered ``summarize_fetch_error`` HTTP-500 summary — ``HTTP
+# 500: <text>``, or bare ``HTTP 500`` when the error body was empty. An HTTP
+# 500 is the one sample whose cause the summary cannot name (the body is
+# aiohttp's generic "500 Internal Server Error" placeholder; the real error —
+# most often a ``!secret`` reference the per-id config view rejects — lives
+# only in the HA log). Shared by the sample upgrade in
+# ``record_first_failure`` and by ``http_500_diagnosis_hint`` so the two can
+# never disagree on what counts as a 500.
+_HTTP_500_SAMPLE = re.compile(r"HTTP 500(?::|$)")
+
+
+def _is_http_500_sample(sample: str) -> bool:
+    """True when ``sample`` is a rendered HTTP-500 summary (``_HTTP_500_SAMPLE``)."""
+    return _HTTP_500_SAMPLE.match(sample) is not None
+
 
 # Static diagnosis appended to an HTTP-500 failed fragment. The sample names
-# the status but not the cause (see ``_HTTP_500_PREFIX``); this points the
+# the status but not the cause (see ``_HTTP_500_SAMPLE``); this points the
 # reader at the HA log and the single most common cause, delivering the
 # five-minute diagnosis the #1784 follow-up asked for without claiming a
 # cause the response can't actually confirm. Kept endpoint-agnostic — this
@@ -84,23 +94,35 @@ def http_500_diagnosis_hint(failed_sample: str | None) -> str:
     Returns ``""`` for any other sample (or ``None``), so non-500 fragments
     are byte-identical to before. See ``_HTTP_500_DIAGNOSIS``.
     """
-    if failed_sample and failed_sample.startswith(_HTTP_500_PREFIX):
+    if failed_sample and _is_http_500_sample(failed_sample):
         return _HTTP_500_DIAGNOSIS
     return ""
 
 
 def record_first_failure(failed_errors: list[str], exc: BaseException) -> None:
-    """Capture ``exc``'s summary as the representative ``failed`` sample, once.
+    """Capture ``exc``'s summary as the representative ``failed`` sample.
 
-    Only the FIRST generic-``failed`` exception per fetch pass is summarized
+    The first generic-``failed`` exception per fetch pass is summarized
     (subsequent ones are counted but not summarized) — in the motivating
     "every per-id fetch 500s" case that is N-1 fewer ``summarize_fetch_error``
-    calls. The append is a no-op once ``failed_errors`` is non-empty. Called
-    from the per-id fetch closures, which run under ``asyncio.gather`` but
-    never suspend between the check and the append, so no lock is needed.
+    calls. One exception: the first HTTP 500 upgrades a non-500 sample, once —
+    failure order tracks latency under ``asyncio.gather``, so a fast-failing
+    outlier (e.g. a connection blip losing the race against slower 500
+    round-trips) must not claim the slot and suppress the
+    ``http_500_diagnosis_hint`` diagnosis this sample exists to deliver. At
+    most two summaries are rendered per pass. Called from the per-id fetch
+    closures, which run under ``asyncio.gather`` but never suspend between
+    the check and the write, so no lock is needed.
     """
     if not failed_errors:
         failed_errors.append(summarize_fetch_error(exc))
+        return
+    if (
+        isinstance(exc, HomeAssistantAPIError)
+        and exc.status_code == 500
+        and not _is_http_500_sample(failed_errors[0])
+    ):
+        failed_errors[0] = summarize_fetch_error(exc)
 
 
 def is_timeout_error(exc: BaseException) -> bool:
