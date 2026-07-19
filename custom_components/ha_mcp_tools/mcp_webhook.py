@@ -347,7 +347,18 @@ class _ProtectedResourceMetadataView(HomeAssistantView):
         self._hass = hass
 
     async def get(self, request: web.Request) -> web.Response:
-        """Serve the protected-resource document (or 404 when no OAuth mode is live)."""
+        """Serve the protected-resource document for the bearer-gated modes only.
+
+        SECURITY (#1976 review): this ANONYMOUS, fixed (guessable) path exposes
+        ``resource: <base>/api/webhook/<id>``. In none mode the webhook id is the
+        SOLE credential, so serving it here would leak it to any unauthenticated
+        GET. Serve only for ``ha_auth``/``legacy`` (where the id is not a secret
+        and the 401 ``WWW-Authenticate`` pointer legitimately directs a client
+        here); 404 otherwise. The PATH-SCOPED well-known view still serves in none
+        mode — its caller must already know the id (it is a route parameter).
+        """
+        if active_auth_mode(self._hass) not in (WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY):
+            return _json_not_found()
         webhook_id = _active_webhook_id(self._hass)
         if webhook_id is None:
             return _json_not_found()

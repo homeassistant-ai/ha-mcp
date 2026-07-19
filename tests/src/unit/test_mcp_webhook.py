@@ -774,22 +774,31 @@ class TestNoneModeDiscovery:
         )
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
 
-    async def test_protected_resource_views_live_in_none_mode(self):
+    async def test_fixed_path_protected_resource_404s_in_none_mode(self):
+        # SECURITY (#1976): the fixed, guessable /protected-resource path must
+        # NOT leak the webhook id (the sole credential in none mode) to an
+        # anonymous GET. It 404s in none mode, serving only the bearer-gated
+        # modes (see test_protected_resource_view_payload_when_live for ha_auth).
         hass = _none_live_hass()
         request = make_request(headers={"Host": "abc.ui.nabu.casa"})
         plain = mw._ProtectedResourceMetadataView(hass)
-        plain_resp = await plain.get(request)
-        assert plain_resp.status == 200
-        assert plain_resp.json_body["authorization_servers"] == [
-            f"https://abc.ui.nabu.casa{OAUTH_BASE}"
-        ]
-        # The path-scoped variant claude.ai probes first must also serve.
+        assert (await plain.get(request)).status == 404
+
+    async def test_path_scoped_protected_resource_still_serves_in_none_mode(self):
+        # The path-scoped view claude.ai's none-mode discovery actually uses
+        # KEEPS serving: its URL embeds the id (a route param), so the caller
+        # already knows it — no leak (#1976).
+        hass = _none_live_hass()
+        request = make_request(headers={"Host": "abc.ui.nabu.casa"})
         wellknown = mw._WellKnownProtectedResourceView(hass)
         wk_resp = await wellknown.get(request, webhook_id=WEBHOOK_ID)
         assert wk_resp.status == 200
         assert wk_resp.json_body["resource"] == (
             f"https://abc.ui.nabu.casa/api/webhook/{WEBHOOK_ID}"
         )
+        assert wk_resp.json_body["authorization_servers"] == [
+            f"https://abc.ui.nabu.casa{OAUTH_BASE}"
+        ]
 
     async def test_as_document_switches_on_mode_flip_without_rebinding(self):
         # Hard requirement: with the ONE bound AS view, flipping the live mode

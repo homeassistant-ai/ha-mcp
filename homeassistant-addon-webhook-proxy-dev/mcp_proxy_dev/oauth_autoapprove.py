@@ -58,6 +58,7 @@ from homeassistant.core import HomeAssistant
 
 from .oauth import (
     _PKCE_CHALLENGE_RE,
+    _TOKEN_RESPONSE_HEADERS,
     ACCESS_TOKEN_TTL,
     AUTOAPPROVE_PROVIDER_KEY,
     DOMAIN,
@@ -326,7 +327,8 @@ class AutoApproveTokenView(HomeAssistantView):
                 "access_token": provider.issue_access_token(),
                 "token_type": "Bearer",
                 "expires_in": ACCESS_TOKEN_TTL,
-            }
+            },
+            headers=_TOKEN_RESPONSE_HEADERS,
         )
 
 

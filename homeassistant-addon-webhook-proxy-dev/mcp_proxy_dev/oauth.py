@@ -107,6 +107,12 @@ AUTH_CODE_TTL = 5 * 60  # 5 minutes
 TOKEN_KIND_ACCESS = "access"
 TOKEN_KIND_REFRESH = "refresh"
 
+# RFC 6749 §5.1: a /token response body carries access credentials, so it MUST
+# NOT be cached by any intermediary (reverse proxy, Nabu Casa, etc.). Reused by
+# the none-mode auto-approve token view (oauth_autoapprove) for parity with the
+# component's auto-approve token response (#1976 review).
+_TOKEN_RESPONSE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
 # RFC 7636 §4.1: code_verifier is 43-128 chars from the unreserved URL set.
 PKCE_VERIFIER_MIN = 43
 PKCE_VERIFIER_MAX = 128
@@ -651,24 +657,37 @@ class OAuthProvider:
 
 
 class ProtectedResourceMetadataView(HomeAssistantView):
-    """RFC 9728 Protected Resource Metadata."""
+    """RFC 9728 Protected Resource Metadata (fixed, guessable path)."""
 
     requires_auth = False
     cors_allowed = True
     url = f"{OAUTH_BASE}/protected-resource"
     name = "mcp_proxy_dev:oauth:protected-resource"
 
+    # SECURITY (#1976 review): this fixed path exposes ``resource:
+    # <base>/api/webhook/<id>``. In none-autoapprove mode the webhook id is the
+    # SOLE credential, so this ANONYMOUS, guessable path must NOT serve it there.
+    # The path-scoped subclass flips this True — its URL already embeds the id,
+    # so its caller must already know it (no leak).
+    _serves_in_none_mode = False
+
     def __init__(self, provider: MetadataProvider) -> None:
         self._provider = provider
 
     async def get(self, request: web.Request) -> web.Response:
-        # The protected-resource document has the same shape in both OAuth
-        # modes; only 404 when no mode is live (entry unloaded / OAuth off) so a
+        # The protected-resource document has the same shape in every OAuth
+        # mode; 404 when no mode is live (entry unloaded / OAuth off) so a
         # stale-bound view acts like an unregistered route. URLs are built via
         # the ACTIVE mode's provider, not the instance this view was bound with,
         # so a live mode switch also switches the base-URL policy (legacy:
         # pinned; ha_auth: host-derived).
-        if _active_oauth_mode(self._provider) is None:
+        mode = _active_oauth_mode(self._provider)
+        if mode is None:
+            return _json_not_found()
+        # In none-autoapprove mode only the path-scoped subclass may serve (see
+        # _serves_in_none_mode above); the fixed-path view 404s to avoid leaking
+        # the credential-bearing webhook id anonymously (#1976 review).
+        if mode == MODE_NONE_AUTOAPPROVE and not self._serves_in_none_mode:
             return _json_not_found()
         provider = _active_provider(self._provider)
         base = provider.base_url_for(request)
@@ -760,6 +779,11 @@ class WellKnownProtectedResourceView(ProtectedResourceMetadataView):
     """
 
     name = "mcp_proxy_dev:oauth:wellknown-protected-resource"
+
+    # Path-scoped: the URL already embeds the webhook id, so the caller must
+    # already know it — serving in none-autoapprove mode leaks nothing (#1976).
+    # This is the doc claude.ai's none-mode discovery actually uses.
+    _serves_in_none_mode = True
 
     def __init__(self, provider: MetadataProvider) -> None:
         super().__init__(provider)

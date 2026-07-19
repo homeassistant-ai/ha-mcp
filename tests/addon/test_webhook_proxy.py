@@ -5991,22 +5991,34 @@ class TestNoneAutoApproveMode:
         assert doc["authorization_endpoint"] == f"https://legit.example{base}/authorize"
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
 
-    async def test_protected_resource_serves_in_none_mode(self):
+    async def test_fixed_path_protected_resource_404s_in_none_mode(self):
+        # SECURITY (#1976): the fixed, guessable /protected-resource path must
+        # NOT leak the webhook id (the sole credential in none mode) to an
+        # anonymous GET — it 404s in none-autoapprove mode.
         _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
         hass, provider = self._none_live_hass(oauth, autoapprove)
         request = _make_view_request(headers={"Host": "legit.example"})
         with patch.object(oauth.web, "json_response") as jr:
             await oauth.ProtectedResourceMetadataView(provider).get(request)
-        body = jr.call_args.args[0]
-        base = CURRENT["oauth_base"]
-        assert body["resource"] == "https://legit.example/api/webhook/mcp_test"
-        assert body["authorization_servers"] == [f"https://legit.example{base}"]
-        # The path-scoped variant claude.ai probes first must serve the same doc.
+        assert jr.call_args.kwargs["status"] == 404
+
+    async def test_path_scoped_protected_resource_still_serves_in_none_mode(self):
+        # The path-scoped view (URL embeds the id) KEEPS serving in none mode —
+        # its caller already knows the id, so nothing leaks (#1976). This is the
+        # doc claude.ai's none-mode discovery actually uses.
+        _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass, provider = self._none_live_hass(oauth, autoapprove)
+        request = _make_view_request(headers={"Host": "legit.example"})
         wk = oauth.WellKnownProtectedResourceView(provider)
         assert wk.url == "/.well-known/oauth-protected-resource/api/webhook/mcp_test"
         with patch.object(oauth.web, "json_response") as jr:
             await wk.get(request)
-        assert jr.call_args.args[0] == body
+        body = jr.call_args.args[0]
+        base = CURRENT["oauth_base"]
+        assert body["resource"] == "https://legit.example/api/webhook/mcp_test"
+        assert body["authorization_servers"] == [f"https://legit.example{base}"]
+        # It served (200) rather than 404ing.
+        assert jr.call_args.kwargs.get("status") in (None, 200)
 
     # ---- AutoApproveProvider (PKCE store + cosmetic token) ----
 
@@ -6178,6 +6190,10 @@ class TestNoneAutoApproveMode:
         assert isinstance(body["expires_in"], int)
         # None mode issues no refresh token.
         assert "refresh_token" not in body
+        # RFC 6749 §5.1: the token body carries credentials and must not be
+        # cached — parity with the component's auto-approve token view (#1976).
+        assert jr.call_args.kwargs["headers"] == oauth._TOKEN_RESPONSE_HEADERS
+        assert jr.call_args.kwargs["headers"]["Cache-Control"] == "no-store"
 
     async def test_token_wrong_verifier_is_invalid_grant(self):
         _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
