@@ -112,7 +112,7 @@ class TestNudge:
         legacy.update_repository.assert_awaited_once_with(
             ignore_issues=True, force=True
         )
-        assert hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSION] == "1.2.0"
+        assert "1.2.0" in hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSIONS]
 
     async def test_no_installed_candidate_is_a_clean_no_op(self):
         # A record that is added but not installed has no update entity to
@@ -126,7 +126,9 @@ class TestNudge:
         await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
 
         mirror.update_repository.assert_not_awaited()
-        assert nudge._DATA_HACS_NUDGED_VERSION not in hass.data.get(DOMAIN, {})
+        assert "1.2.0" not in hass.data.get(DOMAIN, {}).get(
+            nudge._DATA_HACS_NUDGED_VERSIONS, set()
+        )
 
     async def test_absent_hacs_is_a_clean_no_op(self):
         hass = _make_hass()  # no hass.data["hacs"]
@@ -134,7 +136,9 @@ class TestNudge:
         await nudge.async_nudge_hacs_refresh(hass, "1.2.0")  # must not raise
 
         # Nothing to throttle on: a later pass (once HACS exists) still refreshes.
-        assert nudge._DATA_HACS_NUDGED_VERSION not in hass.data.get(DOMAIN, {})
+        assert "1.2.0" not in hass.data.get(DOMAIN, {}).get(
+            nudge._DATA_HACS_NUDGED_VERSIONS, set()
+        )
 
     async def test_repo_not_registered_is_a_clean_no_op(self):
         hass = _make_hass()
@@ -143,7 +147,9 @@ class TestNudge:
 
         await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
 
-        assert nudge._DATA_HACS_NUDGED_VERSION not in hass.data.get(DOMAIN, {})
+        assert "1.2.0" not in hass.data.get(DOMAIN, {}).get(
+            nudge._DATA_HACS_NUDGED_VERSIONS, set()
+        )
 
     async def test_exploding_hacs_is_swallowed_and_logged(self, caplog):
         import logging
@@ -160,7 +166,9 @@ class TestNudge:
 
         assert "could not nudge HACS" in caplog.text
         # A failure leaves the throttle unset so the next pass retries.
-        assert nudge._DATA_HACS_NUDGED_VERSION not in hass.data.get(DOMAIN, {})
+        assert "1.2.0" not in hass.data.get(DOMAIN, {}).get(
+            nudge._DATA_HACS_NUDGED_VERSIONS, set()
+        )
 
     async def test_update_repository_failure_is_swallowed(self):
         # A network failure inside the refresh itself must degrade, not raise.
@@ -172,7 +180,9 @@ class TestNudge:
 
         await nudge.async_nudge_hacs_refresh(hass, "1.2.0")  # must not raise
 
-        assert nudge._DATA_HACS_NUDGED_VERSION not in hass.data.get(DOMAIN, {})
+        assert "1.2.0" not in hass.data.get(DOMAIN, {}).get(
+            nudge._DATA_HACS_NUDGED_VERSIONS, set()
+        )
 
     async def test_second_call_for_same_version_is_throttled(self):
         hass = _make_hass()
@@ -186,7 +196,7 @@ class TestNudge:
         # The successful first refresh set the throttle marker; the second call
         # short-circuits before touching HACS again.
         repo.update_repository.assert_awaited_once()
-        assert hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSION] == "1.2.0"
+        assert "1.2.0" in hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSIONS]
 
     async def test_different_version_refreshes_again(self):
         hass = _make_hass()
@@ -197,9 +207,72 @@ class TestNudge:
         await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
         await nudge.async_nudge_hacs_refresh(hass, "1.3.0")
 
-        # A new pending version is a new refresh.
+        # A new pending version is a new refresh; both stay throttled.
         assert repo.update_repository.await_count == 2
-        assert hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSION] == "1.3.0"
+        assert {"1.2.0", "1.3.0"} <= hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSIONS]
+
+    async def test_two_callers_with_different_versions_do_not_thrash(self):
+        # The hold nudges with the shipped version while the outdated check
+        # nudges with the required one; alternating passes must not defeat the
+        # throttle and re-refresh every time (review finding).
+        hass = _make_hass()
+        repo = _fake_repo()
+        hacs, _ = _fake_hacs(repos={HACS_MIRROR_REPO_FULL_NAME: repo})
+        hass.data["hacs"] = hacs
+
+        for version in ("1.2.0", "1.3.0", "1.2.0", "1.3.0"):
+            await nudge.async_nudge_hacs_refresh(hass, version)
+
+        assert repo.update_repository.await_count == 2
+
+    async def test_absent_repositories_attribute_is_a_clean_no_op(self):
+        # The docstring's "wholly different HACS shape returns False cleanly"
+        # branch: hacs exists but has no repositories/get_by_full_name.
+        hass = _make_hass()
+        hass.data["hacs"] = SimpleNamespace()
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")  # must not raise
+
+        assert "1.2.0" not in hass.data.get(DOMAIN, {}).get(
+            nudge._DATA_HACS_NUDGED_VERSIONS, set()
+        )
+
+    async def test_no_op_pass_then_install_retries_same_version(self):
+        # The throttle's load-bearing property end to end: an uninstalled-repo
+        # no-op pass leaves the version unthrottled, and a later pass for the
+        # SAME version (after the install) still gets its one refresh.
+        hass = _make_hass()
+        repo = _fake_repo(installed=False)
+        hacs, _ = _fake_hacs(repos={HACS_MIRROR_REPO_FULL_NAME: repo})
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+        repo.update_repository.assert_not_awaited()
+
+        repo.data.installed = True
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+
+        repo.update_repository.assert_awaited_once()
+        assert "1.2.0" in hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSIONS]
+
+    async def test_listener_push_failure_still_counts_as_refreshed(self):
+        # The network refresh completed; a HACS shape change in the bonus
+        # listener push must not void the throttle and re-run the fetch every
+        # pass (review finding).
+        hass = _make_hass()
+        repo = _fake_repo(category="integration")
+        hacs, coordinator = _fake_hacs(
+            repos={HACS_MIRROR_REPO_FULL_NAME: repo}, category="integration"
+        )
+        coordinator.async_update_listeners = MagicMock(
+            side_effect=RuntimeError("HACS internals changed")
+        )
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")  # must not raise
+
+        repo.update_repository.assert_awaited_once()
+        assert "1.2.0" in hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSIONS]
 
     async def test_missing_coordinator_still_refreshes(self):
         # The listener push is a bonus; a HACS with no coordinator for the
@@ -219,7 +292,7 @@ class TestNudge:
 
         repo.update_repository.assert_awaited_once()
         # The refresh completed, so it is throttled.
-        assert hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSION] == "1.2.0"
+        assert "1.2.0" in hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSIONS]
 
 
 class TestSchedule:

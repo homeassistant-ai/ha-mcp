@@ -334,6 +334,26 @@ class TestReleaseNotesComponentHold:
 
         assert notes == "server notes"
 
+    async def test_both_probes_failing_degrades_to_none(self, monkeypatch):
+        # Both gathered probes failing at once must degrade to None (the UI's
+        # release_url fallback), never propagate out of the gather.
+        monkeypatch.setattr(
+            upd,
+            "_async_update_held_by_component",
+            AsyncMock(side_effect=RuntimeError("gate boom")),
+        )
+        session = _FakeSession(_FakeResp(None, raise_exc=RuntimeError("boom")))
+        monkeypatch.setattr(
+            upd, "async_get_clientsession", MagicMock(return_value=session)
+        )
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(installed="1.0.0", latest="1.2.0"))
+        )
+
+        notes = await entity.async_release_notes()
+
+        assert notes is None
+
 
 class TestAsyncInstall:
     async def test_writes_pending_marker_and_reloads(self):

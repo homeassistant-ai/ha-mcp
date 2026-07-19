@@ -49,6 +49,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     OPT_AUTO_UPDATE,
     OPT_PIP_SPEC,
     OPT_WEBHOOK_AUTH,
+    UPDATE_HOLD_DOCS_URL,
     WEBHOOK_AUTH_HA,
 )
 from custom_components.ha_mcp_tools.coordinator import ServerVersionInfo  # noqa: E402
@@ -1183,6 +1184,8 @@ class TestAutoUpdateComponentGate:
         args = esetup.ir.async_create_issue.call_args.args
         kwargs = esetup.ir.async_create_issue.call_args.kwargs
         assert ISSUE_UPDATE_HELD in args
+        # The learn-more link is the hold-docs section, not the HACS deep link.
+        assert kwargs["learn_more_url"] == UPDATE_HOLD_DOCS_URL
         assert kwargs["translation_placeholders"] == {
             "latest": "7.12.1",
             "shipped": "1.0.9",
@@ -1582,6 +1585,8 @@ class TestComponentCompat:
         kwargs = esetup.ir.async_create_issue.call_args.kwargs
         args = esetup.ir.async_create_issue.call_args.args
         assert ISSUE_COMPONENT_OUTDATED in args
+        # The learn-more link is the hold-docs section, not the HACS deep link.
+        assert kwargs["learn_more_url"] == UPDATE_HOLD_DOCS_URL
         assert kwargs["translation_placeholders"] == {
             "required": "0.15.0",
             "installed": "0.14.0",

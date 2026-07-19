@@ -29,7 +29,7 @@ from .const import (
     DOMAIN,
     OPT_AUTO_UPDATE,
 )
-from .coordinator import ServerVersionCoordinator
+from .coordinator import ServerVersionCoordinator, ServerVersionInfo
 from .embedded_server import _installed_dist_version
 from .embedded_setup import _async_update_held_by_component
 
@@ -174,7 +174,9 @@ class ServerUpdateEntity(CoordinatorEntity[ServerVersionCoordinator], UpdateEnti
             return warning
         return f"{warning}\n\n{notes}"
 
-    async def _async_component_hold_warning(self, data: Any) -> str | None:
+    async def _async_component_hold_warning(
+        self, data: ServerVersionInfo
+    ) -> str | None:
         """Return the markdown component-hold warning, or None when not held.
 
         Reuses the auto-update gate's own held-check so this dialog and the
@@ -185,7 +187,10 @@ class ServerUpdateEntity(CoordinatorEntity[ServerVersionCoordinator], UpdateEnti
         try:
             held = await _async_update_held_by_component(self.hass, data)
         except Exception:
-            _LOGGER.debug(
+            # The gate contains all its expected failures internally, so an
+            # exception escaping it is a bug — logged visibly per the repo's
+            # convention (review finding), still degrading to plain notes.
+            _LOGGER.warning(
                 "HA-MCP release-notes component-hold check failed", exc_info=True
             )
             return None
@@ -194,7 +199,7 @@ class ServerUpdateEntity(CoordinatorEntity[ServerVersionCoordinator], UpdateEnti
         shipped, running = held
         return _COMPONENT_HOLD_WARNING.format(shipped=shipped, running=running)
 
-    async def _async_fetch_release_notes(self, data: Any) -> str | None:
+    async def _async_fetch_release_notes(self, data: ServerVersionInfo) -> str | None:
         """Concatenate GitHub release bodies between installed and latest.
 
         Advisory-only: a GitHub fetch failure, rate limit, or unexpected payload

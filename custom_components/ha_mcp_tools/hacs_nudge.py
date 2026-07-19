@@ -17,8 +17,10 @@ into HACS internals (``hass.data["hacs"]``). Those internals can change under us
 at any HACS release, so EVERY access here is defensive and the whole interaction
 is advisory — any failure degrades to a debug log and never touches the caller's
 update-check path (which runs on bring-up, gating webhook registration, and on
-the version coordinator's listener). Mirrors install_source_check's posture, the
-component's other unsupported reach into ``hass.data["hacs"]``.
+the version coordinator's listener). The same unsupported ``hass.data["hacs"]``
+reach as install_source_check, but deliberately logged at debug where that
+module warns: this path retries on every 6h check, so a persistent HACS shape
+change would otherwise warn forever about an advisory nicety.
 """
 
 from __future__ import annotations
@@ -37,13 +39,15 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# hass.data[DOMAIN] sub-key holding the component version we last asked HACS to
-# refresh for. The hold check runs every 6h; without this the same pending
-# version would force a fresh HACS network refresh on every pass. A plain string
-# (not per-repo): one pending component version means one refresh. Distinct from
-# the other DOMAIN sub-keys (const.py) so both entry types can share
-# hass.data[DOMAIN].
-_DATA_HACS_NUDGED_VERSION = "hacs_nudged_version"
+# hass.data[DOMAIN] sub-key holding the SET of component versions HACS was
+# already asked to refresh for. The hold check runs every 6h; without this the
+# same pending version would force a fresh HACS network refresh on every pass.
+# A set, not a single string: the update hold nudges with the shipped version
+# while the component-outdated check nudges with the required version, and a
+# scalar marker would ping-pong between the two, re-refreshing every pass
+# (review finding). Distinct from the other DOMAIN sub-keys (const.py) so both
+# entry types can share hass.data[DOMAIN].
+_DATA_HACS_NUDGED_VERSIONS = "hacs_nudged_versions"
 
 # The repository full_names (owner/repo) HACS may track this component under, in
 # lookup order: the dedicated mirror first (the current install path), the
@@ -82,12 +86,15 @@ async def async_nudge_hacs_refresh(hass: HomeAssistant, target_version: str) -> 
     unthrottled so a later pass (once HACS is ready) still gets its one refresh.
     """
     domain_data = hass.data.setdefault(DOMAIN, {})
-    if domain_data.get(_DATA_HACS_NUDGED_VERSION) == target_version:
+    nudged_versions: set[str] = domain_data.setdefault(
+        _DATA_HACS_NUDGED_VERSIONS, set()
+    )
+    if target_version in nudged_versions:
         # Already refreshed HACS for this pending component version.
         return
 
     try:
-        nudged = await _async_force_hacs_repo_refresh(hass)
+        refreshed = await _async_force_hacs_repo_refresh(hass)
     except Exception:
         # HACS internals are unsupported and may change shape (missing hacs,
         # renamed attributes, a network failure inside update_repository); any
@@ -98,11 +105,11 @@ async def async_nudge_hacs_refresh(hass: HomeAssistant, target_version: str) -> 
         )
         return
 
-    if nudged:
+    if refreshed:
         # Throttle only on a completed refresh, so a transient miss (HACS not
         # set up yet, repo not registered this pass) is retried next check
         # rather than suppressed for this version forever.
-        domain_data[_DATA_HACS_NUDGED_VERSION] = target_version
+        nudged_versions.add(target_version)
 
 
 async def _async_force_hacs_repo_refresh(hass: HomeAssistant) -> bool:
@@ -148,8 +155,20 @@ async def _async_force_hacs_repo_refresh(hass: HomeAssistant) -> bool:
     # data ignoring cached state, then push the fresh data to HACS's own update
     # entity so Home Assistant advertises the component update immediately.
     await repository.update_repository(ignore_issues=True, force=True)
-    coordinators = getattr(hacs, "coordinators", None) or {}
-    coordinator = coordinators.get(repository.data.category)
-    if coordinator is not None:
-        coordinator.async_update_listeners()
+    # The refresh is complete at this point; the listener push below only
+    # re-publishes the fresh data to HACS's update entity sooner. Guarded
+    # separately so a HACS shape change here cannot void the completed
+    # refresh's throttle and re-run the network fetch every pass (review
+    # finding).
+    try:
+        coordinators = getattr(hacs, "coordinators", None) or {}
+        category = getattr(getattr(repository, "data", None), "category", None)
+        coordinator = coordinators.get(category)
+        if coordinator is not None:
+            coordinator.async_update_listeners()
+    except Exception:
+        _LOGGER.debug(
+            "HA-MCP: HACS listener push after the repository refresh failed",
+            exc_info=True,
+        )
     return True
