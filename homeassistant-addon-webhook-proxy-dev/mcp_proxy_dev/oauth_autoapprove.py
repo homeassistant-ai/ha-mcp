@@ -58,7 +58,6 @@ from homeassistant.core import HomeAssistant
 
 from .oauth import (
     _PKCE_CHALLENGE_RE,
-    _TOKEN_RESPONSE_HEADERS,
     ACCESS_TOKEN_TTL,
     AUTOAPPROVE_PROVIDER_KEY,
     DOMAIN,
@@ -67,6 +66,13 @@ from .oauth import (
     _build_base_url,
     _is_valid_redirect_uri,
 )
+
+# RFC 6749 §5.1: a /token response body carries access credentials, so it MUST
+# NOT be cached by any intermediary (reverse proxy, Nabu Casa, etc.). Defined
+# here — the only user — rather than in oauth.py: the add-on's legacy token views
+# don't set no-store, so a constant living in oauth.py would be flagged unused
+# (#1976 review). Parity with the component's auto-approve token response.
+_TOKEN_RESPONSE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 # TOP-LEVEL hass.data flag recording that the two auto-approve views are bound
 # for this HA session. Not under DOMAIN so it survives async_unload_entry's

@@ -6192,7 +6192,10 @@ class TestNoneAutoApproveMode:
         assert "refresh_token" not in body
         # RFC 6749 §5.1: the token body carries credentials and must not be
         # cached — parity with the component's auto-approve token view (#1976).
-        assert jr.call_args.kwargs["headers"] == oauth._TOKEN_RESPONSE_HEADERS
+        assert jr.call_args.kwargs["headers"] == {
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+        }
         assert jr.call_args.kwargs["headers"]["Cache-Control"] == "no-store"
 
     async def test_token_wrong_verifier_is_invalid_grant(self):

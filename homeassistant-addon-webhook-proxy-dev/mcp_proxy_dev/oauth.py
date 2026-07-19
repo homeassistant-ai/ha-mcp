@@ -107,12 +107,6 @@ AUTH_CODE_TTL = 5 * 60  # 5 minutes
 TOKEN_KIND_ACCESS = "access"
 TOKEN_KIND_REFRESH = "refresh"
 
-# RFC 6749 §5.1: a /token response body carries access credentials, so it MUST
-# NOT be cached by any intermediary (reverse proxy, Nabu Casa, etc.). Reused by
-# the none-mode auto-approve token view (oauth_autoapprove) for parity with the
-# component's auto-approve token response (#1976 review).
-_TOKEN_RESPONSE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
-
 # RFC 7636 §4.1: code_verifier is 43-128 chars from the unreserved URL set.
 PKCE_VERIFIER_MIN = 43
 PKCE_VERIFIER_MAX = 128
