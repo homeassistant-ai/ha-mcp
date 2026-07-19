@@ -2256,7 +2256,7 @@ class TestHomeAssistantConnectionErrorPropagation:
             await SystemTools(client)._fetch_dead_entities()
 
     @pytest.mark.asyncio
-    async def test_connection_marked_entries_envelope_propagates(self):
+    async def test_connection_marked_entries_envelope_propagates(self) -> None:
         """The config-entries fetch degrades to a warning on an ordinary
         failure, but a dead transport is not degradable: it must unwind like
         the registry fetch rather than report ``config_entry_orphans`` as
@@ -2275,7 +2275,7 @@ class TestHomeAssistantConnectionErrorPropagation:
             await SystemTools(client)._fetch_dead_entities()
 
     @pytest.mark.asyncio
-    async def test_soft_envelope_failure_still_degrades(self):
+    async def test_soft_envelope_failure_still_degrades(self) -> None:
         """The marker, not the failed envelope, is what makes a WS failure
         fatal. An unmarked ``{"success": False}`` (HA rejected the command)
         keeps landing as a section error string, so the fix does not turn
