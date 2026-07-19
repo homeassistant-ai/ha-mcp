@@ -398,59 +398,7 @@ class SystemTools:
 
         try:
             if target == "all":
-                # Reload all reloadable components. Fire the calls concurrently
-                # but cap the in-flight count with a semaphore so a large
-                # install doesn't hit HA with ~16 simultaneous service calls.
-                # A single failing target must not cancel its siblings, so the
-                # calls are gathered with ``return_exceptions=True`` and
-                # attributed per target below (preserving RELOAD_TARGETS order).
-                reloadable = [
-                    (name, info)
-                    for name, info in RELOAD_TARGETS.items()
-                    if info is not None
-                ]
-                semaphore = asyncio.Semaphore(4)
-
-                async def _reload_one(domain: str, service: str) -> None:
-                    async with semaphore:
-                        await self._client.call_service(domain, service, {})
-
-                outcomes = await asyncio.gather(
-                    *(
-                        _reload_one(domain, service)
-                        for _, (domain, service) in reloadable
-                    ),
-                    return_exceptions=True,
-                )
-
-                results = []
-                errors = []
-                for (reload_target, _), outcome in zip(
-                    reloadable, outcomes, strict=True
-                ):
-                    if isinstance(outcome, BaseException):
-                        # A non-Exception BaseException (CancelledError,
-                        # KeyboardInterrupt, SystemExit) must still unwind the
-                        # request, exactly as the prior sequential
-                        # ``except Exception`` let it propagate — never demote
-                        # it to a per-target warning.
-                        if not isinstance(outcome, Exception):
-                            raise outcome
-                        # Some services might not be available in all installations
-                        error_msg = str(outcome)
-                        if "not found" not in error_msg.lower():
-                            errors.append(f"{reload_target}: {error_msg}")
-                    else:
-                        results.append(reload_target)
-
-                response: dict[str, Any] = {
-                    "success": True,
-                    "message": f"Reloaded {len(results)} components",
-                    "reloaded": results,
-                }
-                if errors:
-                    response["warnings"] = errors
-                return response
+                return await self._reload_all_targets()
 
             else:
                 # Reload specific component
@@ -486,6 +434,58 @@ class SystemTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+
+    async def _reload_all_targets(self) -> dict[str, Any]:
+        """Reload every reloadable subsystem concurrently, capped by a semaphore.
+
+        Extracted verbatim from ``ha_reload_core``'s ``target == "all"`` branch.
+        """
+        # Reload all reloadable components. Fire the calls concurrently
+        # but cap the in-flight count with a semaphore so a large
+        # install doesn't hit HA with ~16 simultaneous service calls.
+        # A single failing target must not cancel its siblings, so the
+        # calls are gathered with ``return_exceptions=True`` and
+        # attributed per target below (preserving RELOAD_TARGETS order).
+        reloadable = [
+            (name, info) for name, info in RELOAD_TARGETS.items() if info is not None
+        ]
+        semaphore = asyncio.Semaphore(4)
+
+        async def _reload_one(domain: str, service: str) -> None:
+            async with semaphore:
+                await self._client.call_service(domain, service, {})
+
+        outcomes = await asyncio.gather(
+            *(_reload_one(domain, service) for _, (domain, service) in reloadable),
+            return_exceptions=True,
+        )
+
+        results = []
+        errors = []
+        for (reload_target, _), outcome in zip(reloadable, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                # A non-Exception BaseException (CancelledError,
+                # KeyboardInterrupt, SystemExit) must still unwind the
+                # request, exactly as the prior sequential
+                # ``except Exception`` let it propagate — never demote
+                # it to a per-target warning.
+                if not isinstance(outcome, Exception):
+                    raise outcome
+                # Some services might not be available in all installations
+                error_msg = str(outcome)
+                if "not found" not in error_msg.lower():
+                    errors.append(f"{reload_target}: {error_msg}")
+            else:
+                results.append(reload_target)
+
+        response: dict[str, Any] = {
+            "success": True,
+            "message": f"Reloaded {len(results)} components",
+            "reloaded": results,
+        }
+        if errors:
+            response["warnings"] = errors
+        return response
 
     async def _reload_config_entry(self, entry_id: str) -> dict[str, Any]:
         """Reload a single config entry via the REST config-entries endpoint.
@@ -732,23 +732,7 @@ class SystemTools:
                 }
 
             # Warn about unrecognized include values
-            VALID_INCLUDES = {
-                "repairs",
-                "zha_network",
-                "zha_network_full",
-                "zwave_network",
-                "thread_network",
-                "matter_network",
-                "diagnostics",
-                "config_check",
-                "themes",
-                "dead_entities",
-            }
-            unknown = includes - VALID_INCLUDES
-            if unknown:
-                result.setdefault("warnings", []).append(
-                    f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
-                )
+            self._warn_unknown_includes(result, includes)
 
             # Fetch optional sections concurrently. The ws_client serialises
             # outgoing writes via its internal `_send_lock`, but per-message
@@ -774,25 +758,17 @@ class SystemTools:
                 # sub-dict under its own key (same shape the section carries when
                 # the baseline is up but the fetch fails), plus a summary
                 # warning, then skip them so the REST sections below still run.
-                ws_error = "requires the system_health WebSocket, which is unavailable"
-                if want_repairs:
-                    result["repairs"] = {"error": ws_error}
-                if want_zha:
-                    result["zha_network"] = {"error": ws_error}
-                if want_zwave:
-                    result["zwave_network"] = {"error": ws_error}
-                if want_thread:
-                    result["thread_network"] = {"error": ws_error}
-                if want_matter:
-                    result["matter_network"] = {"error": ws_error}
-                if want_themes:
-                    result["themes"] = {"error": ws_error}
-                unavailable = sorted(includes & ws_backed)
-                if unavailable:
-                    result.setdefault("warnings", []).append(
-                        "These sections require the system_health WebSocket, "
-                        f"which is unavailable: {', '.join(unavailable)}"
-                    )
+                self._stub_ws_unavailable(
+                    result,
+                    includes,
+                    ws_backed,
+                    want_repairs=want_repairs,
+                    want_zha=want_zha,
+                    want_zwave=want_zwave,
+                    want_thread=want_thread,
+                    want_matter=want_matter,
+                    want_themes=want_themes,
+                )
                 want_repairs = want_zha = want_zwave = want_thread = want_matter = (
                     want_themes
                 ) = False
@@ -821,159 +797,31 @@ class SystemTools:
                     include_states=want_dead_entities,
                 )
 
-            sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]] = []
-            if want_repairs:
-                sections.append(
-                    (
-                        "repairs",
-                        self._fetch_repairs(
-                            ws_client,
-                            include_dismissed=include_dismissed_repairs_bool,
-                            prefetched_repairs=(snapshot.repairs if snapshot else None),
-                        ),
-                    )
-                )
-            if want_zha:
-                sections.append(
-                    ("zha_network", self._fetch_zha_network(ws_client, full=zha_full))
-                )
-            if want_zwave:
-                sections.append(
-                    (
-                        "zwave_network",
-                        self._fetch_zwave_network(
-                            ws_client,
-                            prefetched_entries=(
-                                snapshot.config_entries if snapshot else None
-                            ),
-                        ),
-                    )
-                )
-            if want_thread:
-                sections.append(
-                    ("thread_network", self._fetch_thread_network(ws_client))
-                )
-            if want_matter:
-                sections.append(
-                    (
-                        "matter_network",
-                        self._fetch_matter_network(
-                            ws_client,
-                            prefetched_entries=(
-                                snapshot.config_entries if snapshot else None
-                            ),
-                        ),
-                    )
-                )
-            if want_themes:
-                sections.append(("themes", self._fetch_themes(ws_client)))
-
-            if sections:
-                gathered = await asyncio.gather(
-                    *[coro for _, coro in sections], return_exceptions=True
-                )
-                # Pre-pass: re-raise anything that must unwind the request
-                # rather than land as an embedded section error. ``gather``
-                # with ``return_exceptions=True`` returns ``CancelledError``
-                # (and any other ``BaseException``) as a result element
-                # instead of propagating, and a ``ToolError`` raised from
-                # inside a helper would otherwise be silently demoted to
-                # ``{"error": "ToolError: …"}`` and break the MCP
-                # ``isError=true`` contract for the whole tool.
-                # ``_reraise_if_fatal`` encapsulates the policy (cancellation,
-                # interpreter-exit, ``ToolError``, and the codebase's transport
-                # ``HomeAssistantConnectionError``) — the single source of
-                # truth shared with each section helper's ``except`` chain.
-                for section_result in gathered:
-                    if isinstance(section_result, BaseException):
-                        _reraise_if_fatal(section_result)
-                for (section_name, _), section_result in zip(
-                    sections, gathered, strict=True
-                ):
-                    if isinstance(section_result, Exception):
-                        # Last-resort fallback: emit a minimal ``{error: ...}``
-                        # dict so an unexpected exception attributes to its
-                        # section instead of bubbling out and dropping siblings.
-                        # The helpers themselves return richer
-                        # ``{<key>: <baseline>, ..., error: ...}`` shapes on
-                        # their own (caught) failures; this branch is the
-                        # belt-and-suspenders path that fires only on a
-                        # helper-edit regression that lets an exception escape.
-                        logger.warning(
-                            "Concurrent fetch for section %r raised: %s: %s",
-                            section_name,
-                            type(section_result).__name__,
-                            section_result,
-                        )
-                        result[section_name] = {
-                            "error": (
-                                f"{type(section_result).__name__}: {section_result}"
-                            )
-                        }
-                    else:
-                        result[section_name] = section_result
-
-            # Diagnostics-related coercions live outside the includes branch
-            # so the orphan-args warning at the ``elif`` after the
-            # ``if "diagnostics" in includes`` block (see below) can see
-            # canonicalised values — passing ``diagnostics_data_offset=20``
-            # without ``include=diagnostics`` would otherwise slip past the gate.
-            fields_list = parse_diagnostics_fields(diagnostics_fields)
-            truncate_bytes = diagnostics_truncate_at_bytes
-            data_offset_int = (
-                diagnostics_data_offset if diagnostics_data_offset is not None else 0
+            sections = self._build_ws_sections(
+                ws_client,
+                snapshot,
+                include_dismissed_repairs_bool,
+                zha_full,
+                want_repairs=want_repairs,
+                want_zha=want_zha,
+                want_zwave=want_zwave,
+                want_thread=want_thread,
+                want_matter=want_matter,
+                want_themes=want_themes,
             )
-            data_limit_int = diagnostics_data_limit
-            # Type-guard ``diagnostics_data_path`` here so a bad caller (dict /
-            # list) surfaces as ``VALIDATION_INVALID_PARAMETER`` instead of
-            # leaking as ``INTERNAL_ERROR`` from the resolver's ``.strip()``
-            # downstream.
-            if diagnostics_data_path is not None and not isinstance(
-                diagnostics_data_path, str
-            ):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "diagnostics_data_path must be a string, got "
-                        f"{type(diagnostics_data_path).__name__}",
-                        context={"parameter": "diagnostics_data_path"},
-                    )
-                )
+            await self._gather_and_attribute(sections, result)
 
-            if "diagnostics" in includes:
-                # ``fetch_integration_diagnostics`` carries the empty-id guard
-                # (returns {"config_entry_id": ..., "error": ...}); calling it
-                # unconditionally keeps the missing-id error shape consistent
-                # with the populated path instead of returning a bare
-                # ``{"error": ...}`` sub-dict on the inline branch. Forward
-                # ``config_entry_id`` as-is (None / "") so the helper's echo
-                # field reflects what the caller actually passed.
-                result["diagnostics"] = await fetch_integration_diagnostics(
-                    self._client,
-                    config_entry_id,
-                    device_id,
-                    fields=fields_list,
-                    truncate_at_bytes=truncate_bytes,
-                    data_path=diagnostics_data_path,
-                    data_offset=data_offset_int,
-                    data_limit=data_limit_int,
-                )
-            elif (
-                config_entry_id
-                or device_id
-                or diagnostics_fields is not None
-                or diagnostics_truncate_at_bytes is not None
-                or diagnostics_data_path is not None
-                or diagnostics_data_limit is not None
-                or data_offset_int > 0
-            ):
-                result.setdefault("warnings", []).append(
-                    "config_entry_id, device_id, diagnostics_fields, "
-                    "diagnostics_truncate_at_bytes, diagnostics_data_path, "
-                    "diagnostics_data_offset, and/or diagnostics_data_limit "
-                    "were provided but ignored because 'diagnostics' is not "
-                    "in include"
-                )
+            await self._run_diagnostics_section(
+                result,
+                includes,
+                config_entry_id,
+                device_id,
+                diagnostics_fields,
+                diagnostics_truncate_at_bytes,
+                diagnostics_data_path,
+                diagnostics_data_offset,
+                diagnostics_data_limit,
+            )
 
             if "config_check" in includes:
                 # REST call on self._client (POST /config/core/check_config),
@@ -983,27 +831,7 @@ class SystemTools:
                 # in one call.
                 result["config_check"] = await self._fetch_config_check()
 
-            if want_dead_entities:
-                # REST + the REST client's own per-client WebSocket bridge
-                # (states via /api/states, registry + config-entries via the
-                # bridge), not the health ws_client — so it runs inline like
-                # config_check and survives a baseline-WS-down install. When
-                # the snapshot fetched above succeeded, its entities/states/
-                # config_entries slices replace all three fetches.
-                dead_section = await self._fetch_dead_entities(
-                    prefetched_states=snapshot.states if snapshot else None,
-                    prefetched_registry=snapshot.registry if snapshot else None,
-                    prefetched_entries=(snapshot.config_entries if snapshot else None),
-                )
-                # Pop the ``_warnings`` sentinel and bubble it to the top-level
-                # ``result["warnings"]`` (the documented contract location).
-                # The section helper uses this sentinel so its return signature
-                # stays uniform with every other section (a plain dict) while
-                # avoiding a collision with the reserved ``warnings`` term.
-                section_warnings = dead_section.pop("_warnings", None)
-                if section_warnings:
-                    result.setdefault("warnings", []).extend(section_warnings)
-                result["dead_entities"] = dead_section
+            await self._run_dead_entities_section(result, snapshot, want_dead_entities)
 
             # Surface the MCP server's own update status so the model can relay
             # it in chat. ``get_update_field`` is best-effort, thread-offloaded,
@@ -1030,6 +858,297 @@ class SystemTools:
             return None  # unreachable: exception_to_structured_error always raises
         finally:
             await self._safe_disconnect(ws_client)
+
+    @staticmethod
+    def _warn_unknown_includes(result: dict[str, Any], includes: set[str]) -> None:
+        """Append a warning to ``result`` for any unrecognized include sections.
+
+        Extracted verbatim from ``ha_get_system_health``.
+        """
+        VALID_INCLUDES = {
+            "repairs",
+            "zha_network",
+            "zha_network_full",
+            "zwave_network",
+            "thread_network",
+            "matter_network",
+            "diagnostics",
+            "config_check",
+            "themes",
+            "dead_entities",
+        }
+        unknown = includes - VALID_INCLUDES
+        if unknown:
+            result.setdefault("warnings", []).append(
+                f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
+            )
+
+    @staticmethod
+    def _stub_ws_unavailable(
+        result: dict[str, Any],
+        includes: set[str],
+        ws_backed: set[str],
+        *,
+        want_repairs: bool,
+        want_zha: bool,
+        want_zwave: bool,
+        want_thread: bool,
+        want_matter: bool,
+        want_themes: bool,
+    ) -> None:
+        """Stub each requested WS-backed section as an error and add a summary
+        warning when the health WebSocket is unavailable.
+
+        Extracted verbatim from ``ha_get_system_health``.
+        """
+        ws_error = "requires the system_health WebSocket, which is unavailable"
+        if want_repairs:
+            result["repairs"] = {"error": ws_error}
+        if want_zha:
+            result["zha_network"] = {"error": ws_error}
+        if want_zwave:
+            result["zwave_network"] = {"error": ws_error}
+        if want_thread:
+            result["thread_network"] = {"error": ws_error}
+        if want_matter:
+            result["matter_network"] = {"error": ws_error}
+        if want_themes:
+            result["themes"] = {"error": ws_error}
+        unavailable = sorted(includes & ws_backed)
+        if unavailable:
+            result.setdefault("warnings", []).append(
+                "These sections require the system_health WebSocket, "
+                f"which is unavailable: {', '.join(unavailable)}"
+            )
+
+    def _build_ws_sections(
+        self,
+        ws_client: Any,
+        snapshot: _SystemSnapshotSlices | None,
+        include_dismissed_repairs_bool: bool,
+        zha_full: bool,
+        *,
+        want_repairs: bool,
+        want_zha: bool,
+        want_zwave: bool,
+        want_thread: bool,
+        want_matter: bool,
+        want_themes: bool,
+    ) -> list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]]:
+        """Build the list of ``(name, coroutine)`` WS-backed sections to gather.
+
+        Extracted verbatim from ``ha_get_system_health``.
+        """
+        sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]] = []
+        if want_repairs:
+            sections.append(
+                (
+                    "repairs",
+                    self._fetch_repairs(
+                        ws_client,
+                        include_dismissed=include_dismissed_repairs_bool,
+                        prefetched_repairs=(snapshot.repairs if snapshot else None),
+                    ),
+                )
+            )
+        if want_zha:
+            sections.append(
+                ("zha_network", self._fetch_zha_network(ws_client, full=zha_full))
+            )
+        if want_zwave:
+            sections.append(
+                (
+                    "zwave_network",
+                    self._fetch_zwave_network(
+                        ws_client,
+                        prefetched_entries=(
+                            snapshot.config_entries if snapshot else None
+                        ),
+                    ),
+                )
+            )
+        if want_thread:
+            sections.append(("thread_network", self._fetch_thread_network(ws_client)))
+        if want_matter:
+            sections.append(
+                (
+                    "matter_network",
+                    self._fetch_matter_network(
+                        ws_client,
+                        prefetched_entries=(
+                            snapshot.config_entries if snapshot else None
+                        ),
+                    ),
+                )
+            )
+        if want_themes:
+            sections.append(("themes", self._fetch_themes(ws_client)))
+        return sections
+
+    @staticmethod
+    async def _gather_and_attribute(
+        sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]],
+        result: dict[str, Any],
+    ) -> None:
+        """Gather the WS-backed section coroutines and attribute each outcome to
+        ``result[<section>]``, re-raising fatal exceptions.
+
+        Extracted verbatim from ``ha_get_system_health``.
+        """
+        if not sections:
+            return
+        gathered = await asyncio.gather(
+            *[coro for _, coro in sections], return_exceptions=True
+        )
+        # Pre-pass: re-raise anything that must unwind the request
+        # rather than land as an embedded section error. ``gather``
+        # with ``return_exceptions=True`` returns ``CancelledError``
+        # (and any other ``BaseException``) as a result element
+        # instead of propagating, and a ``ToolError`` raised from
+        # inside a helper would otherwise be silently demoted to
+        # ``{"error": "ToolError: …"}`` and break the MCP
+        # ``isError=true`` contract for the whole tool.
+        # ``_reraise_if_fatal`` encapsulates the policy (cancellation,
+        # interpreter-exit, ``ToolError``, and the codebase's transport
+        # ``HomeAssistantConnectionError``) — the single source of
+        # truth shared with each section helper's ``except`` chain.
+        for section_result in gathered:
+            if isinstance(section_result, BaseException):
+                _reraise_if_fatal(section_result)
+        for (section_name, _), section_result in zip(sections, gathered, strict=True):
+            if isinstance(section_result, Exception):
+                # Last-resort fallback: emit a minimal ``{error: ...}``
+                # dict so an unexpected exception attributes to its
+                # section instead of bubbling out and dropping siblings.
+                # The helpers themselves return richer
+                # ``{<key>: <baseline>, ..., error: ...}`` shapes on
+                # their own (caught) failures; this branch is the
+                # belt-and-suspenders path that fires only on a
+                # helper-edit regression that lets an exception escape.
+                logger.warning(
+                    "Concurrent fetch for section %r raised: %s: %s",
+                    section_name,
+                    type(section_result).__name__,
+                    section_result,
+                )
+                result[section_name] = {
+                    "error": (f"{type(section_result).__name__}: {section_result}")
+                }
+            else:
+                result[section_name] = section_result
+
+    async def _run_diagnostics_section(
+        self,
+        result: dict[str, Any],
+        includes: set[str],
+        config_entry_id: str | None,
+        device_id: str | None,
+        diagnostics_fields: list[str] | str | None,
+        diagnostics_truncate_at_bytes: int | None,
+        diagnostics_data_path: str | None,
+        diagnostics_data_offset: int | None,
+        diagnostics_data_limit: int | None,
+    ) -> None:
+        """Coerce diagnostics args and run the diagnostics section, or warn when
+        diagnostics-only args were passed without ``include=diagnostics``.
+
+        Extracted verbatim from ``ha_get_system_health``.
+        """
+        # Diagnostics-related coercions live outside the includes branch
+        # so the orphan-args warning at the ``elif`` after the
+        # ``if "diagnostics" in includes`` block (see below) can see
+        # canonicalised values — passing ``diagnostics_data_offset=20``
+        # without ``include=diagnostics`` would otherwise slip past the gate.
+        fields_list = parse_diagnostics_fields(diagnostics_fields)
+        truncate_bytes = diagnostics_truncate_at_bytes
+        data_offset_int = (
+            diagnostics_data_offset if diagnostics_data_offset is not None else 0
+        )
+        data_limit_int = diagnostics_data_limit
+        # Type-guard ``diagnostics_data_path`` here so a bad caller (dict /
+        # list) surfaces as ``VALIDATION_INVALID_PARAMETER`` instead of
+        # leaking as ``INTERNAL_ERROR`` from the resolver's ``.strip()``
+        # downstream.
+        if diagnostics_data_path is not None and not isinstance(
+            diagnostics_data_path, str
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "diagnostics_data_path must be a string, got "
+                    f"{type(diagnostics_data_path).__name__}",
+                    context={"parameter": "diagnostics_data_path"},
+                )
+            )
+
+        if "diagnostics" in includes:
+            # ``fetch_integration_diagnostics`` carries the empty-id guard
+            # (returns {"config_entry_id": ..., "error": ...}); calling it
+            # unconditionally keeps the missing-id error shape consistent
+            # with the populated path instead of returning a bare
+            # ``{"error": ...}`` sub-dict on the inline branch. Forward
+            # ``config_entry_id`` as-is (None / "") so the helper's echo
+            # field reflects what the caller actually passed.
+            result["diagnostics"] = await fetch_integration_diagnostics(
+                self._client,
+                config_entry_id,
+                device_id,
+                fields=fields_list,
+                truncate_at_bytes=truncate_bytes,
+                data_path=diagnostics_data_path,
+                data_offset=data_offset_int,
+                data_limit=data_limit_int,
+            )
+        elif (
+            config_entry_id
+            or device_id
+            or diagnostics_fields is not None
+            or diagnostics_truncate_at_bytes is not None
+            or diagnostics_data_path is not None
+            or diagnostics_data_limit is not None
+            or data_offset_int > 0
+        ):
+            result.setdefault("warnings", []).append(
+                "config_entry_id, device_id, diagnostics_fields, "
+                "diagnostics_truncate_at_bytes, diagnostics_data_path, "
+                "diagnostics_data_offset, and/or diagnostics_data_limit "
+                "were provided but ignored because 'diagnostics' is not "
+                "in include"
+            )
+
+    async def _run_dead_entities_section(
+        self,
+        result: dict[str, Any],
+        snapshot: _SystemSnapshotSlices | None,
+        want_dead_entities: bool,
+    ) -> None:
+        """Run the dead-entities section and bubble its warnings to
+        ``result["warnings"]`` when requested.
+
+        Extracted verbatim from ``ha_get_system_health``.
+        """
+        if not want_dead_entities:
+            return
+        # REST + the REST client's own per-client WebSocket bridge
+        # (states via /api/states, registry + config-entries via the
+        # bridge), not the health ws_client — so it runs inline like
+        # config_check and survives a baseline-WS-down install. When
+        # the snapshot fetched above succeeded, its entities/states/
+        # config_entries slices replace all three fetches.
+        dead_section = await self._fetch_dead_entities(
+            prefetched_states=snapshot.states if snapshot else None,
+            prefetched_registry=snapshot.registry if snapshot else None,
+            prefetched_entries=(snapshot.config_entries if snapshot else None),
+        )
+        # Pop the ``_warnings`` sentinel and bubble it to the top-level
+        # ``result["warnings"]`` (the documented contract location).
+        # The section helper uses this sentinel so its return signature
+        # stays uniform with every other section (a plain dict) while
+        # avoiding a collision with the reserved ``warnings`` term.
+        section_warnings = dead_section.pop("_warnings", None)
+        if section_warnings:
+            result.setdefault("warnings", []).extend(section_warnings)
+        result["dead_entities"] = dead_section
 
     @staticmethod
     def _parse_includes(include: str | None) -> set[str]:
@@ -1553,6 +1672,176 @@ class SystemTools:
             return result, None
         return None, f"unexpected result shape: {type(result).__name__}"
 
+    async def _acquire_dead_entity_sources(
+        self,
+        prefetched_states: list[dict[str, Any]] | None,
+        prefetched_registry: dict[str, Any] | None,
+        prefetched_entries: dict[str, Any] | None,
+        dead: dict[str, Any],
+        bubble_warnings: list[str],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], set[str] | None] | None:
+        """Fetch + validate the states / registry / config-entries sources.
+
+        Returns ``(state_by_id, registry, live_entry_ids)`` on success, or
+        ``None`` after recording a hard-error message on ``dead`` (the caller
+        then returns ``dead``). Degradable config-entries issues append to
+        ``bubble_warnings`` and still return the tuple. Extracted verbatim from
+        ``_fetch_dead_entities``.
+        """
+        # All three slices are supplied together by the caller as one
+        # unit (the ``system_snapshot`` contract guarantees they're
+        # never partial — see ``_build_system_snapshot_slices``), so the
+        # gate requires all three rather than just ``prefetched_registry``
+        # to keep that invariant explicit here rather than relying on the
+        # call site.
+        if (
+            prefetched_states is not None
+            and prefetched_registry is not None
+            and prefetched_entries is not None
+        ):
+            states: Any = prefetched_states
+            registry_raw: Any = prefetched_registry
+            entries_raw: Any = prefetched_entries
+        else:
+            # Index the gather result (rather than tuple-unpack) so mypy
+            # can type each element through the return_exceptions=True
+            # overload; mirrors smart_search/_entities.py::_fetch_search_entities.
+            results = await asyncio.gather(
+                self._client.get_states(),
+                self._client.send_websocket_message(
+                    {"type": "config/entity_registry/list"}
+                ),
+                self._client.send_websocket_message({"type": "config_entries/get"}),
+                return_exceptions=True,
+            )
+            states = results[0]
+            registry_raw = results[1]
+            entries_raw = results[2]
+
+        if isinstance(states, BaseException):
+            # Truly-fatal errors must propagate, not demote to a section
+            # error string (mirrors the ws sections gather pre-pass).
+            _reraise_if_fatal(states)
+            dead["error"] = f"Could not fetch entity states: {states}"
+            return None
+        if not isinstance(states, list):
+            dead["error"] = (
+                "Could not fetch entity states: expected list, got "
+                f"{type(states).__name__}"
+            )
+            return None
+        registry, registry_err = self._ws_result_list(registry_raw)
+        if registry is None:
+            # Preserve the underlying cause (envelope error message,
+            # exception type, or wrong-shape description) so the client
+            # can distinguish auth vs command vs malformed envelope
+            # rather than see a fixed "unavailable" substitute.
+            dead["error"] = (
+                f"Could not fetch entity registry "
+                f"(config/entity_registry/list: {registry_err})"
+            )
+            return None
+
+        # config-entries is the only optional source: without it the
+        # definitive orphan tier can't be computed, but stale_restored still
+        # can — so degrade rather than fail the whole section.
+        entries, entries_err = self._ws_result_list(entries_raw)
+        live_entry_ids: set[str] | None = None
+        if entries is None:
+            # Genuine fetch failure — preserve the cause so a backend
+            # failure isn't reported as "no entries".
+            dead["config_entries_checked"] = False
+            bubble_warnings.append(
+                f"config_entries/get failed ({entries_err}); "
+                "config_entry_orphans tier skipped (cannot distinguish a "
+                "removed integration from a failed fetch). stale_restored "
+                "still computed."
+            )
+        elif not entries:
+            # Real empty list — HA reports no config entries configured.
+            # Distinct from a fetch failure: the message names the actual
+            # state. The orphan tier still skips since there is no live
+            # set to diff against; stale_restored still computed.
+            dead["config_entries_checked"] = False
+            bubble_warnings.append(
+                "config_entries/get returned an empty list (no "
+                "integrations configured); config_entry_orphans tier "
+                "skipped. stale_restored still computed."
+            )
+        else:
+            live_entry_ids = {
+                e["entry_id"]
+                for e in entries
+                if isinstance(e, dict) and e.get("entry_id")
+            }
+            dead["config_entries_checked"] = True
+
+        state_by_id = {
+            s["entity_id"]: s
+            for s in states
+            if isinstance(s, dict) and s.get("entity_id")
+        }
+        return state_by_id, registry, live_entry_ids
+
+    @staticmethod
+    def _classify_registry_entries(
+        registry: list[dict[str, Any]],
+        state_by_id: dict[str, Any],
+        live_entry_ids: set[str] | None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Classify registry entries into ``(orphans, stale_restored)`` buckets.
+
+        Extracted verbatim from ``_fetch_dead_entities``' classification loop.
+        """
+        orphans: list[dict[str, Any]] = []
+        stale: list[dict[str, Any]] = []
+        for entry in registry:
+            if not isinstance(entry, dict):
+                continue
+            eid = entry.get("entity_id")
+            if not eid:
+                continue
+            cfg = entry.get("config_entry_id")
+            disabled_by = entry.get("disabled_by")
+
+            # Tier 1 — config-entry orphan (only when the live set loaded).
+            # Covers disabled leftovers too: a disabled entity whose config
+            # entry is gone is still dead cruft (disabled_by is surfaced on
+            # the item so the client sees why it lingered).
+            if live_entry_ids is not None and cfg and cfg not in live_entry_ids:
+                orphans.append(
+                    {
+                        "entity_id": eid,
+                        "platform": entry.get("platform"),
+                        "config_entry_id": cfg,
+                        "disabled_by": disabled_by,
+                        "has_state": eid in state_by_id,
+                    }
+                )
+                continue
+
+            # Tier 2 — stale restored. Skip intentionally-disabled entries
+            # (they normally have no state object anyway).
+            if disabled_by is not None:
+                continue
+            state_obj = state_by_id.get(eid)
+            if state_obj is None:
+                continue
+            attrs = state_obj.get("attributes")
+            if (
+                state_obj.get("state") == "unavailable"
+                and isinstance(attrs, dict)
+                and attrs.get("restored")
+            ):
+                stale.append(
+                    {
+                        "entity_id": eid,
+                        "platform": entry.get("platform"),
+                        "config_entry_id": cfg,
+                    }
+                )
+        return orphans, stale
+
     async def _fetch_dead_entities(
         self,
         *,
@@ -1617,147 +1906,20 @@ class SystemTools:
         # ``warnings`` key would collide with.
         bubble_warnings: list[str] = []
         try:
-            # All three slices are supplied together by the caller as one
-            # unit (the ``system_snapshot`` contract guarantees they're
-            # never partial — see ``_build_system_snapshot_slices``), so the
-            # gate requires all three rather than just ``prefetched_registry``
-            # to keep that invariant explicit here rather than relying on the
-            # call site.
-            if (
-                prefetched_states is not None
-                and prefetched_registry is not None
-                and prefetched_entries is not None
-            ):
-                states: Any = prefetched_states
-                registry_raw: Any = prefetched_registry
-                entries_raw: Any = prefetched_entries
-            else:
-                # Index the gather result (rather than tuple-unpack) so mypy
-                # can type each element through the return_exceptions=True
-                # overload; mirrors smart_search/_entities.py::_fetch_search_entities.
-                results = await asyncio.gather(
-                    self._client.get_states(),
-                    self._client.send_websocket_message(
-                        {"type": "config/entity_registry/list"}
-                    ),
-                    self._client.send_websocket_message({"type": "config_entries/get"}),
-                    return_exceptions=True,
-                )
-                states = results[0]
-                registry_raw = results[1]
-                entries_raw = results[2]
-
-            if isinstance(states, BaseException):
-                # Truly-fatal errors must propagate, not demote to a section
-                # error string (mirrors the ws sections gather pre-pass).
-                _reraise_if_fatal(states)
-                dead["error"] = f"Could not fetch entity states: {states}"
+            sources = await self._acquire_dead_entity_sources(
+                prefetched_states,
+                prefetched_registry,
+                prefetched_entries,
+                dead,
+                bubble_warnings,
+            )
+            if sources is None:
                 return dead
-            if not isinstance(states, list):
-                dead["error"] = (
-                    "Could not fetch entity states: expected list, got "
-                    f"{type(states).__name__}"
-                )
-                return dead
-            registry, registry_err = self._ws_result_list(registry_raw)
-            if registry is None:
-                # Preserve the underlying cause (envelope error message,
-                # exception type, or wrong-shape description) so the client
-                # can distinguish auth vs command vs malformed envelope
-                # rather than see a fixed "unavailable" substitute.
-                dead["error"] = (
-                    f"Could not fetch entity registry "
-                    f"(config/entity_registry/list: {registry_err})"
-                )
-                return dead
+            state_by_id, registry, live_entry_ids = sources
 
-            # config-entries is the only optional source: without it the
-            # definitive orphan tier can't be computed, but stale_restored still
-            # can — so degrade rather than fail the whole section.
-            entries, entries_err = self._ws_result_list(entries_raw)
-            live_entry_ids: set[str] | None = None
-            if entries is None:
-                # Genuine fetch failure — preserve the cause so a backend
-                # failure isn't reported as "no entries".
-                dead["config_entries_checked"] = False
-                bubble_warnings.append(
-                    f"config_entries/get failed ({entries_err}); "
-                    "config_entry_orphans tier skipped (cannot distinguish a "
-                    "removed integration from a failed fetch). stale_restored "
-                    "still computed."
-                )
-            elif not entries:
-                # Real empty list — HA reports no config entries configured.
-                # Distinct from a fetch failure: the message names the actual
-                # state. The orphan tier still skips since there is no live
-                # set to diff against; stale_restored still computed.
-                dead["config_entries_checked"] = False
-                bubble_warnings.append(
-                    "config_entries/get returned an empty list (no "
-                    "integrations configured); config_entry_orphans tier "
-                    "skipped. stale_restored still computed."
-                )
-            else:
-                live_entry_ids = {
-                    e["entry_id"]
-                    for e in entries
-                    if isinstance(e, dict) and e.get("entry_id")
-                }
-                dead["config_entries_checked"] = True
-
-            state_by_id = {
-                s["entity_id"]: s
-                for s in states
-                if isinstance(s, dict) and s.get("entity_id")
-            }
-
-            orphans: list[dict[str, Any]] = []
-            stale: list[dict[str, Any]] = []
-            for entry in registry:
-                if not isinstance(entry, dict):
-                    continue
-                eid = entry.get("entity_id")
-                if not eid:
-                    continue
-                cfg = entry.get("config_entry_id")
-                disabled_by = entry.get("disabled_by")
-
-                # Tier 1 — config-entry orphan (only when the live set loaded).
-                # Covers disabled leftovers too: a disabled entity whose config
-                # entry is gone is still dead cruft (disabled_by is surfaced on
-                # the item so the client sees why it lingered).
-                if live_entry_ids is not None and cfg and cfg not in live_entry_ids:
-                    orphans.append(
-                        {
-                            "entity_id": eid,
-                            "platform": entry.get("platform"),
-                            "config_entry_id": cfg,
-                            "disabled_by": disabled_by,
-                            "has_state": eid in state_by_id,
-                        }
-                    )
-                    continue
-
-                # Tier 2 — stale restored. Skip intentionally-disabled entries
-                # (they normally have no state object anyway).
-                if disabled_by is not None:
-                    continue
-                state_obj = state_by_id.get(eid)
-                if state_obj is None:
-                    continue
-                attrs = state_obj.get("attributes")
-                if (
-                    state_obj.get("state") == "unavailable"
-                    and isinstance(attrs, dict)
-                    and attrs.get("restored")
-                ):
-                    stale.append(
-                        {
-                            "entity_id": eid,
-                            "platform": entry.get("platform"),
-                            "config_entry_id": cfg,
-                        }
-                    )
+            orphans, stale = self._classify_registry_entries(
+                registry, state_by_id, live_entry_ids
+            )
 
             def _bucket(items: list[dict[str, Any]]) -> dict[str, Any]:
                 total = len(items)

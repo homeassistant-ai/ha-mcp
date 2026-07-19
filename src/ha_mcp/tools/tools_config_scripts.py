@@ -695,99 +695,18 @@ class ConfigScriptTools:
 
             # Handle python_transform mode
             if python_transform is not None:
-                if config_hash is None:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "config_hash is required for python_transform",
-                            suggestions=[
-                                "Call ha_config_get_script() first",
-                                "Use the config_hash from that response",
-                            ],
-                            context={
-                                "action": "python_transform",
-                                "script_id": script_id,
-                            },
-                        )
-                    )
-
-                # Fetch current config and verify hash
-                actual_config, resolved_id = await self._fetch_and_verify_hash(
-                    script_id, config_hash, "python_transform"
+                transformed_config, resolved_id = await self._prepare_script_transform(
+                    script_id, config_hash, python_transform
                 )
-
-                # Apply Python transformation on the actual script config
-                try:
-                    transformed_config = safe_execute(python_transform, actual_config)
-                except PythonSandboxError as e:
-                    message, suggestions = format_sandbox_error(e, python_transform)
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            message,
-                            suggestions=suggestions,
-                            context={
-                                "action": "python_transform",
-                                "script_id": script_id,
-                            },
-                        )
-                    )
-
-                # Validate transformed config
-                if (
-                    "sequence" not in transformed_config
-                    and "use_blueprint" not in transformed_config
-                ):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            "Transformed config must include either 'sequence' or 'use_blueprint'",
-                            suggestions=[
-                                "The transform may have removed required fields",
-                                "Ensure the config still has a 'sequence' or 'use_blueprint' key",
-                            ],
-                            context={
-                                "action": "python_transform",
-                                "script_id": script_id,
-                            },
-                        )
-                    )
                 bp_warnings = _check_best_practices(transformed_config)
-
-                # Save transformed config. ``_fetch_and_verify_hash`` already
-                # resolved the storage key; pass it as the write target so the
-                # upsert skips the redundant re-resolve (issue #1813 Phase 0).
-                # ``script_id`` stays the caller id (the fetched config already
-                # carries an alias here, so the default is a no-op, but keep the
-                # contract consistent — #1935).
-                result = await self._client.upsert_script_config(
-                    transformed_config, script_id, resolved_id=resolved_id
+                return await self._commit_script_transform(
+                    script_id,
+                    transformed_config,
+                    resolved_id,
+                    python_transform,
+                    bp_warnings,
+                    MandatoryBPS,
                 )
-
-                # Re-fetch to get authoritative hash (HA may normalize after save)
-                _, new_config_hash, _ = await self._get_script_config_internal(
-                    script_id
-                )
-
-                response: dict[str, Any] = {
-                    "success": True,
-                    "action": "python_transform",
-                    "script_id": script_id,
-                    "config_hash": new_config_hash,
-                    "python_expression": python_transform,
-                    "message": f"Script {script_id} updated via Python transform",
-                    # Merge upsert result, excluding "success" (we set it ourselves)
-                    **{k: v for k, v in result.items() if k != "success"},
-                }
-                if bp_warnings:
-                    response["best_practice_warnings"] = list(bp_warnings)
-                attach_skill_content(
-                    response,
-                    MandatoryBPS=MandatoryBPS,
-                    canonical_files=_SCRIPT_SKILL_FILES,
-                    referenced_files=bp_warnings.referenced_files,
-                )
-                return response
 
             if config is None:
                 raise_tool_error(
@@ -821,62 +740,15 @@ class ConfigScriptTools:
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(config_dict)
 
-            # Cross-check literal service and entity references against
-            # the live registries. Soft warnings only — the write still
-            # happens, even when references don't resolve (#940).
-            validation_meta = await validate_config_references(
-                self._client, config_dict
+            return await self._commit_script_config(
+                config_dict,
+                script_id,
+                effective_category,
+                resolved_key,
+                wait,
+                bp_warnings,
+                MandatoryBPS,
             )
-
-            result = await self._upsert_script(config_dict, script_id, resolved_key)
-
-            # Wait for script to be queryable
-            entity_id = f"script.{script_id}"
-            if wait:
-                try:
-                    registered = await wait_for_entity_registered(
-                        self._client, entity_id
-                    )
-                    if not registered:
-                        result.setdefault("warnings", []).append(
-                            f"Script saved but {entity_id} not yet queryable. "
-                            "It may take a moment to become available."
-                        )
-                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                    result.setdefault("warnings", []).append(
-                        f"Script saved but verification failed: {e}"
-                    )
-
-            # Apply category to entity registry if provided
-            if effective_category and entity_id:
-                await apply_entity_category(
-                    self._client,
-                    entity_id,
-                    effective_category,
-                    "script",
-                    result,
-                    "script",
-                )
-
-            if bp_warnings:
-                result["best_practice_warnings"] = list(bp_warnings)
-
-            merge_validation_meta(result, validation_meta)
-
-            response = {
-                "success": True,
-                **result,
-            }
-            # attach AFTER the outer dict is built so hint lands at
-            # position 0 of the FINAL response (see BAT history in
-            # util_helpers._SKILL_CONTENT_OPTOUT_HINT).
-            attach_skill_content(
-                response,
-                MandatoryBPS=MandatoryBPS,
-                canonical_files=_SCRIPT_SKILL_FILES,
-                referenced_files=bp_warnings.referenced_files,
-            )
-            return response
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings) from None
@@ -907,6 +779,192 @@ class ConfigScriptTools:
             )
             augment_error_dict_with_skill_content(error, bp_warnings)
             raise_tool_error(error)
+
+    async def _prepare_script_transform(
+        self, script_id: str, config_hash: str | None, python_transform: str
+    ) -> tuple[dict[str, Any], str | None]:
+        """Validate + run a script python_transform.
+
+        Returns ``(transformed_config, resolved_id)``. Extracted verbatim from
+        ``ha_config_set_script``'s python_transform branch (the pre-
+        ``_check_best_practices`` head): enforces config_hash, fetches +
+        hash-verifies, executes the sandboxed transform, and validates the
+        result still has a sequence or blueprint. Raises a structured ToolError
+        on any violation.
+        """
+        if config_hash is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "config_hash is required for python_transform",
+                    suggestions=[
+                        "Call ha_config_get_script() first",
+                        "Use the config_hash from that response",
+                    ],
+                    context={
+                        "action": "python_transform",
+                        "script_id": script_id,
+                    },
+                )
+            )
+
+        # Fetch current config and verify hash
+        actual_config, resolved_id = await self._fetch_and_verify_hash(
+            script_id, config_hash, "python_transform"
+        )
+
+        # Apply Python transformation on the actual script config
+        try:
+            transformed_config = safe_execute(python_transform, actual_config)
+        except PythonSandboxError as e:
+            message, suggestions = format_sandbox_error(e, python_transform)
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    message,
+                    suggestions=suggestions,
+                    context={
+                        "action": "python_transform",
+                        "script_id": script_id,
+                    },
+                )
+            )
+
+        # Validate transformed config
+        if (
+            "sequence" not in transformed_config
+            and "use_blueprint" not in transformed_config
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Transformed config must include either 'sequence' or 'use_blueprint'",
+                    suggestions=[
+                        "The transform may have removed required fields",
+                        "Ensure the config still has a 'sequence' or 'use_blueprint' key",
+                    ],
+                    context={
+                        "action": "python_transform",
+                        "script_id": script_id,
+                    },
+                )
+            )
+        return transformed_config, resolved_id
+
+    async def _commit_script_transform(
+        self,
+        script_id: str,
+        transformed_config: dict[str, Any],
+        resolved_id: str | None,
+        python_transform: str,
+        bp_warnings: BestPracticeCheckResult,
+        MandatoryBPS: bool,
+    ) -> dict[str, Any]:
+        """Upsert a transformed script config and build the tool response.
+
+        Extracted verbatim from ``ha_config_set_script``'s python_transform
+        branch (the post-``_check_best_practices`` tail).
+        """
+        # Save transformed config. ``_fetch_and_verify_hash`` already
+        # resolved the storage key; pass it as the write target so the
+        # upsert skips the redundant re-resolve (issue #1813 Phase 0).
+        # ``script_id`` stays the caller id (the fetched config already
+        # carries an alias here, so the default is a no-op, but keep the
+        # contract consistent — #1935).
+        result = await self._client.upsert_script_config(
+            transformed_config, script_id, resolved_id=resolved_id
+        )
+
+        # Re-fetch to get authoritative hash (HA may normalize after save)
+        _, new_config_hash, _ = await self._get_script_config_internal(script_id)
+
+        response: dict[str, Any] = {
+            "success": True,
+            "action": "python_transform",
+            "script_id": script_id,
+            "config_hash": new_config_hash,
+            "python_expression": python_transform,
+            "message": f"Script {script_id} updated via Python transform",
+            # Merge upsert result, excluding "success" (we set it ourselves)
+            **{k: v for k, v in result.items() if k != "success"},
+        }
+        if bp_warnings:
+            response["best_practice_warnings"] = list(bp_warnings)
+        attach_skill_content(
+            response,
+            MandatoryBPS=MandatoryBPS,
+            canonical_files=_SCRIPT_SKILL_FILES,
+            referenced_files=bp_warnings.referenced_files,
+        )
+        return response
+
+    async def _commit_script_config(
+        self,
+        config_dict: dict[str, Any],
+        script_id: str,
+        effective_category: str | None,
+        resolved_key: str | None,
+        wait: bool,
+        bp_warnings: BestPracticeCheckResult,
+        MandatoryBPS: bool,
+    ) -> dict[str, Any]:
+        """Validate references, upsert, wait, and build the tool response.
+
+        Extracted verbatim from ``ha_config_set_script``'s full-config branch
+        (the post-``_check_best_practices`` tail).
+        """
+        # Cross-check literal service and entity references against
+        # the live registries. Soft warnings only — the write still
+        # happens, even when references don't resolve (#940).
+        validation_meta = await validate_config_references(self._client, config_dict)
+
+        result = await self._upsert_script(config_dict, script_id, resolved_key)
+
+        # Wait for script to be queryable
+        entity_id = f"script.{script_id}"
+        if wait:
+            try:
+                registered = await wait_for_entity_registered(self._client, entity_id)
+                if not registered:
+                    result.setdefault("warnings", []).append(
+                        f"Script saved but {entity_id} not yet queryable. "
+                        "It may take a moment to become available."
+                    )
+            except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                result.setdefault("warnings", []).append(
+                    f"Script saved but verification failed: {e}"
+                )
+
+        # Apply category to entity registry if provided
+        if effective_category and entity_id:
+            await apply_entity_category(
+                self._client,
+                entity_id,
+                effective_category,
+                "script",
+                result,
+                "script",
+            )
+
+        if bp_warnings:
+            result["best_practice_warnings"] = list(bp_warnings)
+
+        merge_validation_meta(result, validation_meta)
+
+        response = {
+            "success": True,
+            **result,
+        }
+        # attach AFTER the outer dict is built so hint lands at
+        # position 0 of the FINAL response (see BAT history in
+        # util_helpers._SKILL_CONTENT_OPTOUT_HINT).
+        attach_skill_content(
+            response,
+            MandatoryBPS=MandatoryBPS,
+            canonical_files=_SCRIPT_SKILL_FILES,
+            referenced_files=bp_warnings.referenced_files,
+        )
+        return response
 
     @tool(
         name="ha_config_remove_script",

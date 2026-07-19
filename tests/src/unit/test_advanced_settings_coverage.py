@@ -238,6 +238,15 @@ def _first_literal(args: list[ast.expr]) -> str | None:
 def _env_reads_in_tree(tree: ast.Module) -> set[str]:
     """Resolve per-file aliases for the ``os`` module and the ``environ`` /
     ``getenv`` names, then collect every literal env var read through them."""
+    os_aliases, environ_aliases, getenv_aliases = _resolve_env_aliases(tree)
+    return _collect_env_reads(tree, os_aliases, environ_aliases, getenv_aliases)
+
+
+def _resolve_env_aliases(
+    tree: ast.Module,
+) -> tuple[set[str], set[str], set[str]]:
+    """Resolve the per-file ``os`` / ``environ`` / ``getenv`` aliases, including
+    the ``from os import ...`` and ``as``-aliased variants."""
     os_aliases: set[str] = set()  # names bound to the ``os`` module
     environ_aliases: set[str] = set()  # names bound to ``os.environ``
     getenv_aliases: set[str] = set()  # names bound to ``os.getenv``
@@ -252,42 +261,60 @@ def _env_reads_in_tree(tree: ast.Module) -> set[str]:
                     environ_aliases.add(alias.asname or "environ")
                 elif alias.name == "getenv":
                     getenv_aliases.add(alias.asname or "getenv")
+    return os_aliases, environ_aliases, getenv_aliases
 
-    def _is_environ(node: ast.expr) -> bool:
-        # ``os.environ`` (attribute on the os module) or a bare ``environ``
-        # imported via ``from os import environ``.
-        if isinstance(node, ast.Name):
-            return node.id in environ_aliases
-        return (
-            isinstance(node, ast.Attribute)
-            and node.attr == "environ"
-            and isinstance(node.value, ast.Name)
-            and node.value.id in os_aliases
-        )
 
-    def _is_getenv(node: ast.expr) -> bool:
-        # ``os.getenv`` or a bare ``getenv`` imported via ``from os import``.
-        if isinstance(node, ast.Name):
-            return node.id in getenv_aliases
-        return (
-            isinstance(node, ast.Attribute)
-            and node.attr == "getenv"
-            and isinstance(node.value, ast.Name)
-            and node.value.id in os_aliases
-        )
+def _is_environ_ref(
+    node: ast.expr, os_aliases: set[str], environ_aliases: set[str]
+) -> bool:
+    # ``os.environ`` (attribute on the os module) or a bare ``environ``
+    # imported via ``from os import environ``.
+    if isinstance(node, ast.Name):
+        return node.id in environ_aliases
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "environ"
+        and isinstance(node.value, ast.Name)
+        and node.value.id in os_aliases
+    )
 
+
+def _is_getenv_ref(
+    node: ast.expr, os_aliases: set[str], getenv_aliases: set[str]
+) -> bool:
+    # ``os.getenv`` or a bare ``getenv`` imported via ``from os import``.
+    if isinstance(node, ast.Name):
+        return node.id in getenv_aliases
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "getenv"
+        and isinstance(node.value, ast.Name)
+        and node.value.id in os_aliases
+    )
+
+
+def _collect_env_reads(
+    tree: ast.Module,
+    os_aliases: set[str],
+    environ_aliases: set[str],
+    getenv_aliases: set[str],
+) -> set[str]:
+    """Collect every literal env var read through the resolved ``os`` /
+    ``environ`` / ``getenv`` aliases in ``tree``."""
     names: set[str] = set()
     for node in ast.walk(tree):
         name: str | None = None
         if isinstance(node, ast.Call):
             fn = node.func
-            if _is_getenv(fn) or (
+            if _is_getenv_ref(fn, os_aliases, getenv_aliases) or (
                 isinstance(fn, ast.Attribute)
                 and fn.attr in {"get", "setdefault", "pop"}
-                and _is_environ(fn.value)
+                and _is_environ_ref(fn.value, os_aliases, environ_aliases)
             ):
                 name = _first_literal(node.args)
-        elif isinstance(node, ast.Subscript) and _is_environ(node.value):
+        elif isinstance(node, ast.Subscript) and _is_environ_ref(
+            node.value, os_aliases, environ_aliases
+        ):
             sl = node.slice
             if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
                 name = sl.value

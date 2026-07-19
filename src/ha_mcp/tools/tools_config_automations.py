@@ -839,39 +839,7 @@ class AutomationConfigTools:
                 and e.status_code == 404
             ):
                 await self._raise_automation_not_found(identifier)
-            error_text = str(e)
-            suggestions = [
-                "Check automation configuration format",
-                "Ensure required fields: alias, triggers, actions",
-                "Use entity_id format: automation.morning_routine or unique_id",
-                "Use ha_search(domain_filter='automation') to find automations",
-                "Use ha_get_skill_guide for automation examples",
-            ]
-            if isinstance(e, HomeAssistantAPIError):
-                if "'service'" in error_text and "not allowed" in error_text:
-                    suggestions.insert(
-                        0,
-                        "Use 'action:' not 'service:' for service calls in action steps "
-                        "(renamed in HA 2024.8).",
-                    )
-                elif "unexpected keyword argument" in error_text.lower():
-                    suggestions.insert(
-                        0,
-                        "An action step contains a field that belongs at the automation root "
-                        "(e.g. alias, trigger, condition). Each action step should only contain "
-                        "action/target/data/delay/choose/if/repeat/parallel keys.",
-                    )
-                elif "'variables'" in error_text and "dictionary" in error_text:
-                    suggestions.insert(
-                        0,
-                        "variables must be a dict mapping names to values, "
-                        'e.g. {"variables": {"my_var": 42}}',
-                    )
-            if bp_warnings:
-                suggestions.append(
-                    "Config had best-practice issues that may be related: "
-                    + "; ".join(bp_warnings)
-                )
+            suggestions = self._build_set_automation_suggestions(e, bp_warnings)
             error = exception_to_structured_error(
                 e,
                 context={"identifier": identifier},
@@ -880,6 +848,51 @@ class AutomationConfigTools:
             )
             augment_error_dict_with_skill_content(error, bp_warnings)
             raise_tool_error(error)
+
+    @staticmethod
+    def _build_set_automation_suggestions(
+        e: Exception, bp_warnings: BestPracticeCheckResult
+    ) -> list[str]:
+        """Build the ordered suggestion list for a failed config-replacement set.
+
+        Extracted verbatim from ``ha_config_set_automation``'s exception
+        handler: HA-API messages get a targeted lead suggestion inserted, and
+        any best-practice warnings are appended.
+        """
+        error_text = str(e)
+        suggestions = [
+            "Check automation configuration format",
+            "Ensure required fields: alias, triggers, actions",
+            "Use entity_id format: automation.morning_routine or unique_id",
+            "Use ha_search(domain_filter='automation') to find automations",
+            "Use ha_get_skill_guide for automation examples",
+        ]
+        if isinstance(e, HomeAssistantAPIError):
+            if "'service'" in error_text and "not allowed" in error_text:
+                suggestions.insert(
+                    0,
+                    "Use 'action:' not 'service:' for service calls in action steps "
+                    "(renamed in HA 2024.8).",
+                )
+            elif "unexpected keyword argument" in error_text.lower():
+                suggestions.insert(
+                    0,
+                    "An action step contains a field that belongs at the automation root "
+                    "(e.g. alias, trigger, condition). Each action step should only contain "
+                    "action/target/data/delay/choose/if/repeat/parallel keys.",
+                )
+            elif "'variables'" in error_text and "dictionary" in error_text:
+                suggestions.insert(
+                    0,
+                    "variables must be a dict mapping names to values, "
+                    'e.g. {"variables": {"my_var": 42}}',
+                )
+        if bp_warnings:
+            suggestions.append(
+                "Config had best-practice issues that may be related: "
+                + "; ".join(bp_warnings)
+            )
+        return suggestions
 
     async def _upsert_automation(
         self,
