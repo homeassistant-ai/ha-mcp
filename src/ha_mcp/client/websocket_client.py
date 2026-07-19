@@ -22,6 +22,7 @@ import websockets
 
 from ..config import get_global_settings
 from .rest_client import (
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
@@ -368,8 +369,8 @@ class HomeAssistantWebSocketClient:
                     message_type="auth_invalid", timeout=1
                 )
                 if auth_invalid:
-                    raise Exception("Authentication failed: Invalid token")
-                raise Exception("Authentication timeout")
+                    raise HomeAssistantAuthError("Authentication failed: Invalid token")
+                raise HomeAssistantConnectionError("Authentication timeout")
 
             self._state.mark_authenticated()
             logger.info("WebSocket connected and authenticated successfully")
@@ -413,7 +414,7 @@ class HomeAssistantWebSocketClient:
     async def _send_auth(self) -> None:
         """Send authentication message."""
         if not self.websocket:
-            raise Exception("WebSocket not connected")
+            raise HomeAssistantConnectionError("WebSocket not connected")
         auth_message = {"type": "auth", "access_token": self.token}
         await self.websocket.send(json.dumps(auth_message))
 
@@ -434,7 +435,7 @@ class HomeAssistantWebSocketClient:
     async def _message_handler(self) -> None:
         """Background task to handle incoming WebSocket messages."""
         if not self.websocket:
-            raise Exception("WebSocket not connected")
+            raise HomeAssistantConnectionError("WebSocket not connected")
         # None means a clean exit (the async-for loop simply ended); the
         # except blocks below fill this in so pending futures — and the
         # log — carry *why* the connection went away instead of a bare
@@ -573,7 +574,7 @@ class HomeAssistantWebSocketClient:
 
         async with self._send_lock:
             if not self.websocket:
-                raise Exception("WebSocket not connected")
+                raise HomeAssistantConnectionError("WebSocket not connected")
             logger.debug(f"WebSocket sending: {message}")
             await self.websocket.send(json.dumps(message))
 
@@ -1204,7 +1205,7 @@ class WebSocketManager:
                 # keeps a non-str (e.g. a MagicMock in tests) from polluting
                 # the message with a repr.
                 detail = f": {reason}" if isinstance(reason, str) else ""
-                raise Exception(
+                raise HomeAssistantConnectionError(
                     "Failed to connect to Home Assistant WebSocket" + detail
                 )
 

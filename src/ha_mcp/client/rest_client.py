@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 import httpx
+from websockets.exceptions import WebSocketException
 
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
@@ -131,6 +132,20 @@ class HomeAssistantCommandTimeout(HomeAssistantError):
     this type directly. Replaces a bare ``Exception("Command timeout")``
     string-match pattern (#1382 Patch76 review).
     """
+
+
+# Exception classes that are evidence no answer came back from Home Assistant,
+# as opposed to Home Assistant answering with a rejection. ``OSError`` covers
+# ``ConnectionResetError``; ``WebSocketException`` covers the
+# ``ConnectionClosed`` family that ``send_command`` re-raises unwrapped;
+# ``HomeAssistantCommandTimeout`` covers a socket that is still open but has
+# stopped answering, which leaves a caller just as blind as a closed one.
+_NO_ANSWER_ERRORS = (
+    HomeAssistantConnectionError,
+    HomeAssistantCommandTimeout,
+    OSError,
+    WebSocketException,
+)
 
 
 class HomeAssistantClient:
@@ -1437,6 +1452,11 @@ class HomeAssistantClient:
         retry_delay = 0.5  # seconds
 
         for attempt in range(max_retries):
+            # Whether the failure happened before a usable connection existed.
+            # Failing to obtain one is transport death whatever class the
+            # manager raises, and it raises a bare ``Exception`` when
+            # ``connect()`` returns False, so this cannot be decided by type.
+            acquiring = True
             try:
                 # Use per-client WebSocket keyed to this client's credentials
                 # (verify_ssl included so a verify_ssl=False client never
@@ -1446,6 +1466,7 @@ class HomeAssistantClient:
                     token=self.token,
                     verify_ssl=self.verify_ssl,
                 )
+                acquiring = False
 
                 # Special handling for render_template which returns an event with the actual result
                 if message.get("type") == "render_template":
@@ -1460,31 +1481,70 @@ class HomeAssistantClient:
 
             except Exception as e:
                 error_str = str(e)
+                is_403 = "403" in error_str and "Forbidden" in error_str
 
-                # Detect transient 403 errors (rate limiting / reverse proxy throttling)
-                if "403" in error_str and "Forbidden" in error_str:
-                    if attempt < max_retries - 1:
-                        logger.warning(
-                            f"WebSocket 403 error (attempt {attempt + 1}/{max_retries}), "
-                            f"retrying after {retry_delay}s: {error_str}"
-                        )
-                        await asyncio.sleep(retry_delay)
-                        continue
-                    else:
-                        logger.error(
-                            f"WebSocket 403 error after {max_retries} attempts: {error_str}"
-                        )
-                        return {
-                            "success": False,
-                            "error": f"WebSocket request blocked (403 Forbidden): {error_str}",
-                            "error_code": getattr(e, "code", None),
-                            "suggestions": [
-                                "This may be caused by a reverse proxy or security filter",
-                                "Try simplifying the request (e.g., shorter templates, fewer parameters)",
-                                "If using complex templates, try breaking them into smaller parts",
-                                "Check if your Home Assistant is behind a reverse proxy with security rules",
-                            ],
-                        }
+                # Transient 403 (rate limiting / reverse proxy throttling): retry
+                # before deciding anything, since the next attempt may succeed.
+                if is_403 and attempt < max_retries - 1:
+                    logger.warning(
+                        f"WebSocket 403 error (attempt {attempt + 1}/{max_retries}), "
+                        f"retrying after {retry_delay}s: {error_str}"
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+
+                # Phase first, type second. Failing before a client exists is
+                # evidence about the transport whatever class was raised, and
+                # the pooled manager raises a bare ``Exception`` when
+                # ``connect()`` returns False, so that case cannot be decided
+                # by type. Past acquisition only the no-answer classes count:
+                # ``send_command`` deliberately re-raises the original
+                # ``ConnectionClosed`` / ``ConnectionResetError`` from the send
+                # rather than wrapping it, to keep at-most-once semantics for
+                # write callers, so those arrive here untranslated. Anything
+                # else (a ``ValueError`` from building the message, say) is a
+                # bug rather than evidence about the connection.
+                if acquiring or isinstance(e, _NO_ANSWER_ERRORS):
+                    # One error channel for "no answer came back" (#1947): the
+                    # caller decides the policy, rather than every consumer
+                    # having to notice a marker on an otherwise ordinary
+                    # failure envelope. Callers that legitimately continue on a
+                    # missing answer catch this and say in ``warnings`` what
+                    # they skipped; callers whose output would read as a
+                    # negative finding let it propagate.
+                    logger.error(
+                        f"WebSocket transport failed ({message.get('type')}): {e}"
+                    )
+                    if isinstance(e, HomeAssistantConnectionError):
+                        # Already the right class — re-raise unchanged so
+                        # subtypes (``HomeAssistantCommandNotSent``) and the
+                        # original traceback survive.
+                        raise
+                    raise HomeAssistantConnectionError(error_str) from e
+
+                # Deliberate asymmetry (#1966 review item 8): a 403 that
+                # exhausts its retries DURING acquisition is transport death -
+                # no client was ever obtained - so it raises and loses the
+                # reverse-proxy suggestions below. The 403 text survives in the
+                # message, and returning a soft envelope there instead would
+                # put a blocked transport back on the degrade path this change
+                # exists to close. Past acquisition the socket is alive and HA
+                # (or a proxy) answered, so the tailored suggestions apply.
+                if is_403:
+                    logger.error(
+                        f"WebSocket 403 error after {max_retries} attempts: {error_str}"
+                    )
+                    return {
+                        "success": False,
+                        "error": f"WebSocket request blocked (403 Forbidden): {error_str}",
+                        "error_code": getattr(e, "code", None),
+                        "suggestions": [
+                            "This may be caused by a reverse proxy or security filter",
+                            "Try simplifying the request (e.g., shorter templates, fewer parameters)",
+                            "If using complex templates, try breaking them into smaller parts",
+                            "Check if your Home Assistant is behind a reverse proxy with security rules",
+                        ],
+                    }
 
                 # Name the command in the log line: a bare "Command failed:
                 # Unknown command." is undiagnosable from a user's log
@@ -1499,7 +1559,11 @@ class HomeAssistantClient:
                     "error_code": getattr(e, "code", None),
                 }
 
-        return {"success": False, "error": "WebSocket request failed"}
+        # Unreachable: every attempt either returns, raises, or ``continue``s,
+        # and the last attempt cannot ``continue`` (the 403 branch guards on
+        # ``attempt < max_retries - 1``). Assert rather than return a
+        # contextless failure envelope that would read as a soft error.
+        raise AssertionError("send_websocket_message loop exited without a result")
 
     async def _handle_render_template(
         self, ws_client: Any, message: dict[str, Any]
@@ -1536,12 +1600,23 @@ class HomeAssistantClient:
                 }
 
         except TimeoutError:
+            # Template-level, not transport-level: the wait budget here is the
+            # caller's own ``timeout`` (default 3s) plus two seconds, and a
+            # template that is merely slow to render leaves the socket healthy.
+            # Deliberately NOT treated as a dead transport, unlike the 30s
+            # round-trip ``HomeAssistantCommandTimeout`` in ``send_command``.
             return {
                 "success": False,
                 "error": "Event timeout - template result not received",
                 "template": message.get("template"),
             }
         except Exception as e:
+            if isinstance(e, _NO_ANSWER_ERRORS):
+                # Let the caller's classification decide. Returning an envelope
+                # here would route a transport death around the fail-loud policy
+                # in ``send_websocket_message`` — the very swallow this branch
+                # used to hide (#1947).
+                raise
             return {
                 "success": False,
                 "error": str(e),
@@ -1579,6 +1654,13 @@ class HomeAssistantClient:
                             f"Resolved script entity_id {entity_id} to storage key {unique_id}"
                         )
                     return str(unique_id)
+        except HomeAssistantConnectionError:
+            # A dead transport must not become a silent guess: the fallback
+            # below assumes the storage key equals the bare entity_id, which is
+            # exactly what a UI rename breaks. Guessing it on a write path
+            # writes a NEW object under the wrong key instead of updating the
+            # renamed one, so let the caller fail loud (#1947).
+            raise
         except Exception:
             logger.debug(
                 f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
@@ -1720,6 +1802,13 @@ class HomeAssistantClient:
                             f"Resolved scene entity_id {entity_id} to storage key {unique_id}"
                         )
                     return str(unique_id)
+        except HomeAssistantConnectionError:
+            # A dead transport must not become a silent guess: the fallback
+            # below assumes the storage key equals the bare entity_id, which is
+            # exactly what a UI rename breaks. Guessing it on a write path
+            # writes a NEW object under the wrong key instead of updating the
+            # renamed one, so let the caller fail loud (#1947).
+            raise
         except Exception:
             logger.debug(
                 f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",

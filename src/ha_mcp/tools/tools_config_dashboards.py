@@ -873,12 +873,15 @@ async def _dashboards_via_component(
     (``unknown_command`` → invalidate the cached caps), command error/timeout
     (logged), a connection-establishment failure (logged), a malformed
     envelope, or ``available: false`` (lovelace not set up). A
-    ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain ``Exception``
-    ``get_websocket_client()`` raises on a failed (re)connect is caught here and
-    mapped to ``None``: the legacy dashboards path rides the never-raising
-    ``send_websocket_message`` bridge (and the auto-backup capture consumer forbids
-    a blocked write), NOT this pooled socket — so a wedged pooled socket must fall
-    back to legacy rather than escape into a set/delete write path.
+    ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed
+    (re)connect — is caught here and mapped to ``None``: the legacy dashboards
+    path rides the
+    ``send_websocket_message`` bridge (and the auto-backup capture consumer
+    forbids a blocked write), so a wedged component read must fall back to
+    legacy rather than escape into a set/delete write path. If the transport
+    itself is dead the legacy bridge raises in turn (#1947) and the write
+    fails loud, which is the correct outcome for a write that cannot be
+    confirmed.
     """
     caps = await get_component_caps(client)
     if not component_supports(caps, "dashboards"):
@@ -898,10 +901,10 @@ async def _dashboards_via_component(
             logger.warning("%s failed; fell back to legacy: %r", WS_DASHBOARDS, exc)
         return None
     except Exception as exc:
-        # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
-        # get_websocket_client() raises on a failed (re)connect. The legacy path is
-        # the never-raising bridge and the capture consumer must not block a write,
-        # so fall back to legacy rather than escape.
+        # HomeAssistantConnectionError: a pooled-WS drop or a failed
+        # (re)connect. Fall back to the
+        # legacy bridge rather than escape here; if the transport is genuinely
+        # dead the bridge raises there instead (#1947).
         logger.warning(
             "%s connection error; falling back to legacy: %r", WS_DASHBOARDS, exc
         )

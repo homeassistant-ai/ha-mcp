@@ -1973,13 +1973,13 @@ class SearchTools:
           ``HomeAssistantCommandTimeout`` (the component WS search timed out):
           serve the correct result from the legacy path, append a ``warnings[]``
           entry, and ``log.warning`` — correct results now, breakage visible.
-        - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
-          ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
-          served the same way — the legacy path reads ``/api/states`` over REST and
-          the entity registry through the swallowing ``send_websocket_message``
-          bridge (which returns ``{"success": False}`` rather than raising), so it
-          degrades to partial results rather than dying identically on a pooled-WS
-          drop; a transport failure must not escape.
+        - ``HomeAssistantConnectionError`` - a pooled-WS drop, or a failed
+          (re)connect: served the same way. The legacy path reads
+          ``/api/states`` over REST and the entity registry through the
+          ``send_websocket_message`` bridge, so a component-side fault degrades
+          to partial results rather than escaping. The bridge shares this
+          pooled connection, so a dead transport raises there too (#1947) and
+          the registry-unavailable warning names what was skipped.
         """
         try:
             raw = await self._send_component_search(req, visibility)
@@ -3404,10 +3404,24 @@ class SearchTools:
                     }
                     for n in notifications
                 ]
+            else:
+                # HA answered and rejected. The pre-seeded zero would otherwise
+                # report "none pending" for a section that never ran, the same
+                # false negative the transport path already reports.
+                err = ws_result.get("error")
+                err_msg = (
+                    err.get("message") if isinstance(err, dict) else err
+                ) or "unknown error"
+                result.setdefault("warnings", []).append(
+                    f"notifications unavailable: {err_msg}"
+                )
         except Exception as e:
             logger.warning(
                 "Failed to fetch notifications for overview: %s", e, exc_info=True
             )
+            # Leaving the keys off entirely reads as "no notifications", which
+            # is a different answer from "could not ask" (#1947).
+            result.setdefault("warnings", []).append(f"notifications unavailable: {e}")
 
     async def _fetch_repairs(
         self,
@@ -4075,9 +4089,8 @@ class SearchTools:
         legacy REST path returns the byte-identical correct data either way.
         ``ha_get_state``'s legacy path is a REST ``get_entity_state`` read on a
         SEPARATE transport, so a WS transport/connect failure
-        (``HomeAssistantConnectionError``, or the plain ``Exception``
-        ``get_websocket_client()`` raises when ``WebSocketManager`` can't build the
-        socket) is caught here and falls back to REST — an install whose REST API
+        (``HomeAssistantConnectionError``, covering both a pooled-WS drop and a
+        failed connect) is caught here and falls back to REST — an install whose REST API
         still works keeps getting its state instead of a spurious connection error.
         If REST is also down, the legacy path raises the same connection error
         itself. (``ha_search`` / ``ha_get_overview`` likewise fall back on a
@@ -4101,9 +4114,8 @@ class SearchTools:
                 )
             return None
         except Exception as exc:
-            # The plain Exception get_websocket_client() raises when
-            # WebSocketManager can't build the socket (the connection-establishment
-            # failure the tuple above doesn't cover) → legacy REST.
+            # Anything the tuple above doesn't cover → legacy REST, so an
+            # install whose REST API still works keeps answering.
             logger.warning(
                 "ha_mcp_tools/states connection error; fell back to legacy: %r", exc
             )

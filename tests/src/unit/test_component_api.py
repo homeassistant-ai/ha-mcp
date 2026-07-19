@@ -219,7 +219,9 @@ async def test_establish_failure_caches_short_transient_negative(monkeypatch) ->
     monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
     client = _client()
     factory = AsyncMock(
-        side_effect=Exception("Failed to connect to Home Assistant WebSocket")
+        side_effect=HomeAssistantConnectionError(
+            "Failed to connect to Home Assistant WebSocket"
+        )
     )
     with patch.object(component_api, "get_websocket_client", factory):
         assert await get_component_caps(client) is None

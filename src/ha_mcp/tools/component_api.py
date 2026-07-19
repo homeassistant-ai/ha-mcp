@@ -243,8 +243,8 @@ async def get_component_caps(client: Any) -> ComponentCaps | None:
       installed / upgraded mid-session (the REST client — the cache key — is not
       recreated on an HA restart) is eventually adopted instead of pinned absent.
     - ``HomeAssistantConnectionError`` / ``HomeAssistantCommandTimeout`` (WS
-      down or slow) — and the plain ``Exception`` ``get_websocket_client()`` raises
-      when ``WebSocketManager`` can't build the socket: cache a SHORT transient
+      down or slow, including the failed-connect raise from
+      ``WebSocketManager``): cache a SHORT transient
       negative (``_TRANSIENT_NEGATIVE_CACHE_TTL_S``) so repeated calls on a
       WS-broken install skip the slow connect and go straight to legacy, then
       re-probe once the window lapses (self-healing). The consuming tool's legacy
@@ -297,9 +297,8 @@ async def get_component_caps(client: Any) -> ComponentCaps | None:
             _store_transient_negative(client)
             return None
         except Exception:
-            # Includes the plain Exception get_websocket_client() raises when
-            # WebSocketManager can't build the socket — the connect-establishment
-            # failure review-5 M8 targets. Short transient cache, self-healing.
+            # Broad on purpose: the probe must never promote an unexpected
+            # fault into a tool failure. Short transient cache, self-healing.
             logger.debug("%s probe failed unexpectedly", INFO_COMMAND, exc_info=True)
             _store_transient_negative(client)
             return None

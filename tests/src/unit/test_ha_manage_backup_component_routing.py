@@ -343,7 +343,9 @@ class TestCreateBackupRouting:
             patch_ws_establish_failure(
                 caps_ws,
                 backup_module,
-                Exception("Failed to connect to Home Assistant WebSocket"),
+                HomeAssistantConnectionError(
+                    "Failed to connect to Home Assistant WebSocket"
+                ),
             ),
             patch(
                 "ha_mcp.tools.backup.get_connected_ws_client",

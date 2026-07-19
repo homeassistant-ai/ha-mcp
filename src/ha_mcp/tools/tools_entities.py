@@ -102,9 +102,8 @@ async def fetch_entity_enrichment_via_component(
     entity": ``ha_get_entity``'s registry read already served the base record, so a
     ``None`` here simply leaves the additive fields off — the enrichment is
     strictly additive, so its absence changes nothing else. A
-    ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain ``Exception``
-    ``get_websocket_client()`` raises on a failed (re)connect is caught here and
-    mapped to ``None``: there is no legacy enrichment fetch (the base record is
+    ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed
+    (re)connect — is caught here and mapped to ``None``: there is no legacy enrichment fetch (the base record is
     already served), so a transport failure just skips enrichment rather than
     escaping into and failing the whole ``ha_get_entity``. Follows the same
     caps-gate discipline as ``component_devices.fetch_device_via_component``.

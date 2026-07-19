@@ -457,9 +457,15 @@ class EntitySearchMixin(_SearchBase):
             visibility_hidden, visibility_warnings = await load_hidden_set(
                 results[2], results[0], self.client, results[3]
             )
-            area_registry = self._parse_area_registry(results[1])
-            entity_reg_map = self._parse_entity_reg_map(results[2])
-            device_area_map = self._parse_device_area_map(results[3])
+            # Registry failures still fail open, but each names itself: an area
+            # search that answers "no match found" because the area registry
+            # never arrived must not look like a search that genuinely found
+            # nothing (#1947).
+            registry_warnings: list[str] = []
+            area_registry = self._parse_area_registry(results[1], registry_warnings)
+            entity_reg_map = self._parse_entity_reg_map(results[2], registry_warnings)
+            device_area_map = self._parse_device_area_map(results[3], registry_warnings)
+            degraded_warnings = registry_warnings + visibility_warnings
 
             area_query_lower = area_query.lower().strip()
             matched_area_ids = self._match_area_ids(area_registry, area_query_lower)
@@ -476,7 +482,7 @@ class EntitySearchMixin(_SearchBase):
                             for aid, ainfo in area_registry.items()
                         ],
                     },
-                    visibility_warnings,
+                    degraded_warnings,
                 )
 
             entity_area_resolved, hidden_entity_ids = self._resolve_entity_areas(
@@ -499,7 +505,7 @@ class EntitySearchMixin(_SearchBase):
                     "total_entities": total_entities,
                     "areas": formatted_areas,
                 },
-                visibility_warnings,
+                degraded_warnings,
             )
 
         except Exception as e:
@@ -519,20 +525,24 @@ class EntitySearchMixin(_SearchBase):
             raise
 
     @classmethod
-    def _parse_area_registry(cls, result: Any) -> dict[str, dict[str, Any]]:
+    def _parse_area_registry(
+        cls, result: Any, warnings: list[str] | None = None
+    ) -> dict[str, dict[str, Any]]:
         """Parse the area registry into ``area_id -> area info``."""
         area_registry: dict[str, dict[str, Any]] = {}
-        for area in cls._extract_registry_list(result, "area registry"):
+        for area in cls._extract_registry_list(result, "area registry", warnings):
             area_id = area.get("area_id", "")
             if area_id:
                 area_registry[area_id] = area
         return area_registry
 
     @classmethod
-    def _parse_entity_reg_map(cls, result: Any) -> dict[str, dict[str, str | None]]:
+    def _parse_entity_reg_map(
+        cls, result: Any, warnings: list[str] | None = None
+    ) -> dict[str, dict[str, str | None]]:
         """Parse the entity registry into ``entity_id -> {area_id, device_id, hidden_by}``."""
         entity_reg_map: dict[str, dict[str, str | None]] = {}
-        for entry in cls._extract_registry_list(result, "entity registry"):
+        for entry in cls._extract_registry_list(result, "entity registry", warnings):
             entity_id = entry.get("entity_id")
             if entity_id:
                 entity_reg_map[entity_id] = {
@@ -543,10 +553,12 @@ class EntitySearchMixin(_SearchBase):
         return entity_reg_map
 
     @classmethod
-    def _parse_device_area_map(cls, result: Any) -> dict[str, str | None]:
+    def _parse_device_area_map(
+        cls, result: Any, warnings: list[str] | None = None
+    ) -> dict[str, str | None]:
         """Parse the device registry into ``device_id -> area_id``."""
         device_area_map: dict[str, str | None] = {}
-        for device in cls._extract_registry_list(result, "device registry"):
+        for device in cls._extract_registry_list(result, "device registry", warnings):
             device_id = device.get("id", "")
             if device_id:
                 device_area_map[device_id] = device.get("area_id")

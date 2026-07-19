@@ -129,10 +129,20 @@ class SystemOverviewMixin(_SearchBase):
             else:
                 services = results[1]
 
-            # Registry failures degrade area enrichment only; logged at debug.
-            area_registry = self._extract_registry_list(results[2], "area registry")
-            entity_registry = self._extract_registry_list(results[3], "entity registry")
-            device_registry = self._extract_registry_list(results[4], "device registry")
+            # Registry failures degrade area enrichment only, so they keep the
+            # overview rather than failing it — but each one names itself in
+            # `partial_warnings`, since an overview whose area stats are thin
+            # because a registry never arrived is otherwise indistinguishable
+            # from one whose areas really are empty (#1947).
+            area_registry = self._extract_registry_list(
+                results[2], "area registry", partial_warnings
+            )
+            entity_registry = self._extract_registry_list(
+                results[3], "entity registry", partial_warnings
+            )
+            device_registry = self._extract_registry_list(
+                results[4], "device registry", partial_warnings
+            )
             entity_area_map = self._build_entity_area_map(
                 entity_registry, device_registry
             )

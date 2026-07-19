@@ -341,7 +341,7 @@ async def test_ws_establish_failure_falls_back_to_legacy_rest() -> None:
     with patch_ws_establish_failure(
         caps_ws,
         tools_search,
-        Exception("Failed to connect to Home Assistant WebSocket"),
+        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await get_state(["light.a", "sensor.b"])
 

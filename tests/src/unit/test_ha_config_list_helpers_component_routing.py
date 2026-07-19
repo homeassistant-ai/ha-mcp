@@ -41,6 +41,7 @@ from fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, tools_config_helpers
 from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
@@ -352,7 +353,7 @@ async def test_ws_establish_failure_storage_type_falls_back_with_warning() -> No
     with patch_ws_establish_failure(
         caps_ws,
         tools_config_helpers,
-        Exception("Failed to connect to Home Assistant WebSocket"),
+        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await list_helpers(helper_type="input_boolean")
 

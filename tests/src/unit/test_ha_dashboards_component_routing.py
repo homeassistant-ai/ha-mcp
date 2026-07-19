@@ -563,7 +563,7 @@ async def test_ws_establish_failure_falls_back_to_legacy() -> None:
     with patch_ws_establish_failure(
         caps_ws,
         tools_config_dashboards,
-        Exception("Failed to connect to Home Assistant WebSocket"),
+        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         result = await tools_config_dashboards._dashboards_via_component(client, "list")
 

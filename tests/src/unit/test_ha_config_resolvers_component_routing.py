@@ -406,7 +406,9 @@ class TestSceneResolverRouting:
         with patch_ws_establish_failure(
             caps_ws,
             component_config_reads,
-            Exception("Failed to connect to Home Assistant WebSocket"),
+            HomeAssistantConnectionError(
+                "Failed to connect to Home Assistant WebSocket"
+            ),
         ):
             entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
                 "movie_night", allow_component=True
@@ -568,7 +570,9 @@ class TestAutomationResolverRouting:
         with patch_ws_establish_failure(
             caps_ws,
             component_config_reads,
-            Exception("Failed to connect to Home Assistant WebSocket"),
+            HomeAssistantConnectionError(
+                "Failed to connect to Home Assistant WebSocket"
+            ),
         ):
             entity_id = await AutomationConfigTools(
                 client
@@ -722,7 +726,9 @@ class TestReferenceDataRouting:
         with patch_ws_establish_failure(
             caps_ws,
             component_config_reads,
-            Exception("Failed to connect to Home Assistant WebSocket"),
+            HomeAssistantConnectionError(
+                "Failed to connect to Home Assistant WebSocket"
+            ),
         ):
             result = await validate_config_references(client, _CONFIG)
         assert _warning_set(result) == {

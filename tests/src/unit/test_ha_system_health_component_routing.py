@@ -586,7 +586,9 @@ async def test_snapshot_ws_establish_failure_falls_back_to_legacy() -> None:
         patch_ws_establish_failure(
             caps_ws,
             tools_system,
-            Exception("Failed to connect to Home Assistant WebSocket"),
+            HomeAssistantConnectionError(
+                "Failed to connect to Home Assistant WebSocket"
+            ),
         ),
         _health_baseline(health_ws),
     ):

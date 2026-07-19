@@ -543,6 +543,9 @@ async def _fetch_assist_exposure(
         )
         return overrides, expose_new
     except Exception:
+        # No warning appended here: returning ``None`` is exactly the state
+        # ``hidden_entity_ids`` already reports as _ASSIST_UNAVAILABLE_WARNING,
+        # so recording a second one would double-warn on one root cause.
         logger.warning("assist exposure fetch failed; dimension skipped", exc_info=True)
         return None, False
 

@@ -420,7 +420,7 @@ async def test_ws_establish_failure_falls_back_to_legacy() -> None:
     with patch_ws_establish_failure(
         caps_ws,
         tools_service,
-        Exception("Failed to connect to Home Assistant WebSocket"),
+        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await call_service(
             domain="light", service="turn_on", entity_id="light.a"
@@ -604,7 +604,9 @@ class TestD9AtMostOnce:
         with patch_ws_establish_failure(
             caps_ws,
             tools_service,
-            Exception("Failed to connect to Home Assistant WebSocket"),
+            HomeAssistantConnectionError(
+                "Failed to connect to Home Assistant WebSocket"
+            ),
         ):
             resp = await call_service(
                 domain="light", service="turn_on", entity_id="light.a"

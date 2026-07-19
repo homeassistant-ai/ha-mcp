@@ -617,7 +617,9 @@ def normalize_log_level(level: Any) -> str | None:
     return None
 
 
-async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
+async def get_logger_levels(
+    client: Any, warnings: list[str] | None = None
+) -> dict[str, dict[str, Any]]:
     """Fetch current HA integration log levels via the ``logger/log_info`` WS command.
 
     Returns a mapping of integration domain (e.g. ``"mqtt"``) to a dict with:
@@ -628,9 +630,12 @@ async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
     - ``raw``: the original numeric level (``int``) when HA returned an int,
       otherwise ``None`` (e.g. when the level was already provided as a string).
 
-    Best-effort enrichment: returns an empty dict on connection/IO failures so
-    callers can treat it as "no custom levels". Programming errors are not
-    suppressed — they surface as bugs during development/CI.
+    Best-effort enrichment: returns an empty dict on connection/IO failures.
+    An empty map alone cannot say whether Home Assistant has no custom levels
+    or whether nobody could ask, so a caller that passes ``warnings`` gets a
+    line on failure and can report UNKNOWN instead of claiming DEFAULT (#1947).
+    Programming errors are not suppressed — they surface as bugs during
+    development/CI.
     """
     try:
         result = await client.send_websocket_message({"type": "logger/log_info"})
@@ -642,9 +647,13 @@ async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
         OSError,
     ) as exc:
         logger.debug("logger/log_info fetch failed: %s", exc)
+        if warnings is not None:
+            warnings.append(f"log levels unavailable: {exc}")
         return {}
 
     if not isinstance(result, dict) or not result.get("success"):
+        if warnings is not None:
+            warnings.append("log levels unavailable: logger/log_info failed")
         return {}
 
     entries = result.get("result", [])
@@ -1536,7 +1545,9 @@ async def wait_for_automation_entity_by_unique_id(
     return None
 
 
-async def fetch_entity_category(client: Any, entity_id: str, scope: str) -> str | None:
+async def fetch_entity_category(
+    client: Any, entity_id: str, scope: str, warnings: list[str] | None = None
+) -> str | None:
     """Fetch a category ID for an entity from the entity registry.
 
     Args:
@@ -1546,17 +1557,43 @@ async def fetch_entity_category(client: Any, entity_id: str, scope: str) -> str 
 
     Returns:
         Category ID string if set, None otherwise
+
+    ``None`` is also what a failed lookup returns, which reads as "no category
+    assigned" - a caller that passes ``warnings`` gets a line naming the
+    failure instead, so the two are distinguishable (#1947).
     """
     try:
         result = await client.send_websocket_message(
             {"type": "config/entity_registry/get", "entity_id": entity_id}
         )
-        if result.get("success"):
-            categories = result.get("result", {}).get("categories", {})
-            cat_id = categories.get(scope)
-            return str(cat_id) if cat_id is not None else None
-    except Exception as e:
+        if isinstance(result, dict) and result.get("success"):
+            entry = result.get("result")
+            # The registry entry is a dict; anything else (a list, None) is a
+            # malformed read rather than an entry without categories.
+            if isinstance(entry, dict):
+                categories = entry.get("categories") or {}
+                cat_id = categories.get(scope) if isinstance(categories, dict) else None
+                return str(cat_id) if cat_id is not None else None
+            return None
+        # Shape-guarded rather than relying on a broad except: a non-dict
+        # payload is a malformed read, not "no category assigned".
+        reason = (
+            (result.get("error") or "request failed")
+            if isinstance(result, dict)
+            else f"unexpected response type: {type(result).__name__}"
+        )
+        if warnings is not None:
+            warnings.append(f"category unavailable for {entity_id}: {reason}")
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        HomeAssistantAuthError,
+        TimeoutError,
+        OSError,
+    ) as e:
         logger.warning(f"Failed to fetch category for {entity_id}: {e}")
+        if warnings is not None:
+            warnings.append(f"category unavailable for {entity_id}: {e}")
     return None
 
 
@@ -2329,10 +2366,15 @@ def merge_visibility_warnings(
 
 # Error strings produced by the pooled WebSocket path when the transport (not
 # the command) fails: the manager's connect raise, send timeouts, and socket
-# drops. ``send_websocket_message`` collapses these into
-# ``{"success": False, "error": ...}``, so callers that attach domain-specific
-# suggestions must first check the shape or an HA restart gets presented as a
-# domain problem (issue #1832 review).
+# drops. Callers that attach domain-specific suggestions match on these so an
+# HA restart is not presented as a domain problem (issue #1832 review).
+#
+# Since #1947 ``send_websocket_message`` raises on a dead transport rather than
+# collapsing it into ``{"success": False, "error": ...}``, so these signatures
+# now only have to catch transport-shaped text that reaches a caller by another
+# route (a component-side error frame, or an error string threaded through a
+# response body). They are kept as a belt-and-braces match, not as the primary
+# detection path.
 WS_CONNECTION_SIGNATURES = (
     "failed to connect",
     "timed out",

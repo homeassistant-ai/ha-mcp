@@ -399,7 +399,10 @@ class ConfigSceneTools:
         # for the reasoning. Category fetch on the wrong entity_id is a
         # silent no-op, masking real category assignments.
         entity_id = await self._resolve_scene_entity_id(resolved_id)
-        cat_id = await fetch_entity_category(self._client, entity_id, "scene")
+        cat_warnings: list[str] = []
+        cat_id = await fetch_entity_category(
+            self._client, entity_id, "scene", cat_warnings
+        )
 
         response: dict[str, Any] = {
             "success": True,
@@ -410,6 +413,8 @@ class ConfigSceneTools:
         }
         if cat_id:
             response["category"] = cat_id
+        if cat_warnings:
+            response.setdefault("warnings", []).extend(cat_warnings)
         return response
 
     async def _get_scene_config_internal(

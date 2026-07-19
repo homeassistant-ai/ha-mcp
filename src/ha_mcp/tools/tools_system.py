@@ -1251,14 +1251,15 @@ class SystemTools:
         different instant. ``unknown_command`` invalidates the cached caps
         (component downgraded mid-session); any other command error/timeout
         just logs and falls back, leaving caps cached. A
-        ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
-        ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect
-        is caught here and mapped to ``None``: the consuming sections' legacy
-        fetches run on a DEDICATED health WS client (repairs/zwave/matter) plus
-        REST ``get_states()`` and the never-raising ``send_websocket_message``
-        bridge (dead_entities), NOT this pooled socket — so a wedged pooled
-        socket must degrade per-section (the tool's own never-raises contract)
-        rather than fail the WHOLE ``ha_get_system_health``.
+        ``HomeAssistantConnectionError`` - a pooled-WS drop, or a failed
+        (re)connect - is caught here and mapped to ``None``: the consuming
+        sections' legacy fetches run on a DEDICATED health WS client
+        (repairs/zwave/matter) plus REST ``get_states()`` and the
+        ``send_websocket_message`` bridge (dead_entities), so a component-side
+        fault degrades per-section rather than failing the WHOLE
+        ``ha_get_system_health``. A genuinely dead transport is a different
+        case and deliberately does NOT degrade: the bridge raises (#1947) and
+        the dead-entities detector fails loud rather than answer while blind.
 
         Only the ``include_*`` flags the caller actually needs are requested
         (mirroring which of ``want_repairs`` / ``want_zwave`` / ``want_matter``
@@ -1288,10 +1289,11 @@ class SystemTools:
                 )
             return None
         except Exception as exc:
-            # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
-            # get_websocket_client() raises on a failed (re)connect. The legacy
-            # sections degrade individually (dedicated health WS + REST + the
-            # never-raising bridge), so fall back rather than fail the whole tool.
+            # HomeAssistantConnectionError: a pooled-WS drop or a failed
+            # (re)connect. The legacy sections degrade individually (dedicated
+            # health WS + REST + the bridge), so fall back rather than fail the
+            # whole tool on a component-side fault. A genuinely dead transport
+            # still fails loud from the bridge itself (#1947).
             logger.warning(
                 "%s connection error; falling back to legacy: %r",
                 WS_SYSTEM_SNAPSHOT,
@@ -1646,6 +1648,14 @@ class SystemTools:
         message that hides the root cause (auth vs command error vs
         malformed envelope). Fatal exceptions (per ``_reraise_if_fatal``)
         unwind instead of being returned as an error string.
+
+        A dead transport never reaches this helper as an envelope:
+        ``send_websocket_message`` raises ``HomeAssistantConnectionError``
+        when no answer came back (#1947), so it arrives either as the raw
+        exception from ``gather(return_exceptions=True)`` below or by
+        propagating out of the await — and dead entities, being a detector
+        whose short list would read as "nothing is dead", fails loud on it
+        via the ordinary ``_reraise_if_fatal`` path.
         """
         if isinstance(resp, BaseException):
             # gather(return_exceptions=True) hands back the raw exception; let

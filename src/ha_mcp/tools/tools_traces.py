@@ -369,11 +369,12 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 def _raise_trace_ws_failure(error_msg: Any, context: dict[str, Any]) -> None:
     """Raise the structured error for a failed trace WS command.
 
-    The pooled ``send_websocket_message`` collapses transport failures into
-    ``{"success": False, "error": ...}`` — classify connection-shaped errors as
-    CONNECTION_FAILED (the same code the removed dedicated-socket connect check
-    raised) instead of a generic SERVICE_CALL_FAILED during an HA restart. A
-    genuine trace-command failure (unknown item, no such run) keeps its
+    Since #1947 a dead transport raises out of ``send_websocket_message``
+    rather than arriving here, so this path sees the failures Home Assistant
+    answered with. Connection-shaped wording can still reach it (an error frame
+    or a message threaded through a response body), so it stays classified as
+    CONNECTION_FAILED rather than a generic SERVICE_CALL_FAILED. A genuine
+    trace-command failure (unknown item, no such run) keeps its
     SERVICE_CALL_FAILED shape unchanged.
     """
     if is_connection_error_message(error_msg):

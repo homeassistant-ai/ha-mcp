@@ -286,7 +286,7 @@ async def test_ws_establish_failure_on_visibility_path_falls_back_to_legacy(
     with patch_ws_establish_failure(
         caps_ws,
         tools_search,
-        Exception("Failed to connect to Home Assistant WebSocket"),
+        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await ha_search(query="kitchen")
 

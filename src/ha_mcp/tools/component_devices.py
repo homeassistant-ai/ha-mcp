@@ -71,10 +71,10 @@ async def fetch_device_via_component(
     unavailable, fall back"). Falls back **silently**, mirroring
     ``ha_get_state``: the legacy path returns the byte-identical device either way
     and the ``log.warning`` preserves operator visibility. A
-    ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain ``Exception``
-    ``get_websocket_client()`` raises on a failed (re)connect is caught here and
-    mapped to ``None``: the consumers' legacy paths ride the swallowing
-    ``send_websocket_message`` bridge (registry tools) or a dedicated one-shot WS
+    ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed
+    (re)connect — is caught here and mapped to ``None``: the consumers' legacy
+    paths ride the ``send_websocket_message`` bridge (registry tools) or a
+    dedicated one-shot WS
     client (the auto-backup capture) — NOT this pooled socket — so a transport
     failure must fall back rather than block a tool / a wrapped write.
 
@@ -100,10 +100,10 @@ async def fetch_device_via_component(
             logger.warning("%s failed; fell back to legacy: %r", WS_DEVICE_GET, exc)
         return None
     except Exception as exc:
-        # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
-        # get_websocket_client() raises when WebSocketManager can't (re)connect.
-        # The legacy paths ride the swallowing send_websocket_message bridge / a
-        # dedicated capture socket, not this pooled one, so fall back to legacy.
+        # HomeAssistantConnectionError: a pooled-WS drop or a failed
+        # (re)connect. The legacy paths ride the send_websocket_message bridge /
+        # a dedicated capture socket, so fall back to legacy; if the transport
+        # itself is dead the bridge raises there in turn (#1947).
         logger.warning(
             "%s connection error; falling back to legacy: %r", WS_DEVICE_GET, exc
         )
@@ -173,7 +173,7 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
         return None
     except Exception as exc:
         # HomeAssistantConnectionError / plain establish Exception → legacy (the
-        # legacy device list rides the swallowing send_websocket_message bridge).
+        # legacy device list rides the send_websocket_message bridge).
         logger.warning(
             "%s connection error; falling back to legacy: %r", WS_DEVICE_LIST, exc
         )

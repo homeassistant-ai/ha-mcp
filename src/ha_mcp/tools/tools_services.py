@@ -13,8 +13,11 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response, create_validation_error
@@ -177,8 +180,9 @@ class ServiceDiscoveryTools:
             limit_int = limit
             offset_int = offset
 
+            catalog_warnings: list[str] = []
             rest_services, translations = await _fetch_catalog_and_translations(
-                self._client, domain
+                self._client, domain, catalog_warnings
             )
 
             # Process and filter services
@@ -207,6 +211,8 @@ class ServiceDiscoveryTools:
                 if _warn:
                     result.setdefault("warnings", []).append(_warn)
 
+            _attach_warnings(result, catalog_warnings)
+
             return project_fields(result, parsed_fields)
 
         except ToolError:
@@ -231,8 +237,19 @@ def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     register_tool_methods(mcp, ServiceDiscoveryTools(client))
 
 
+def _attach_warnings(result: dict[str, Any], warnings: list[str]) -> None:
+    """Merge degradation warnings into a response's top-level ``warnings``.
+
+    The catalog is REST-backed and still answers when the WebSocket is down,
+    so without this the service descriptions just go missing and the response
+    looks complete (#1947). Empty in, key omitted.
+    """
+    if warnings:
+        result.setdefault("warnings", []).extend(warnings)
+
+
 async def _fetch_catalog_and_translations(
-    client: Any, domain: str | None
+    client: Any, domain: str | None, warnings: list[str] | None = None
 ) -> tuple[Any, dict[str, Any]]:
     """The ``(rest_services, translations)`` pair ``_process_services`` consumes.
 
@@ -244,7 +261,7 @@ async def _fetch_catalog_and_translations(
     if component_payload is not None:
         return component_payload["services"], component_payload["translations"]
     rest_services = await client.get_services()
-    translations = await _get_service_translations(client)
+    translations = await _get_service_translations(client, warnings)
     return rest_services, translations
 
 
@@ -277,10 +294,9 @@ async def _fetch_services_list_via_component(
     failure IS caught here and mapped to ``None`` (legacy fallback), like every
     component fetch helper. This tool's legacy path is the REST ``get_services()`` +
     a per-request WS bridge for translations, NOT the shared pooled WS — so a WS
-    outage must not kill the tool when REST can still serve the catalog. The catch
-    is broad because ``get_websocket_client()`` raises a plain ``Exception`` (not
-    ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot establish the
-    socket, so a narrow catch would let that escape and kill the tool; routing any
+    outage must not kill the tool when REST can still serve the catalog. The
+    catch stays broad so no unexpected fault escapes and kills the tool; routing
+    any
     non-command component failure back to the REST catalog fetch is safe here
     (mirrors ``get_component_caps``' own broad-catch precedent).
     """
@@ -301,10 +317,9 @@ async def _fetch_services_list_via_component(
         return None
     except Exception as exc:
         # DEVIATION (see docstring): the legacy path is REST + a per-request WS
-        # bridge, NOT the shared pooled WS. A pooled-WS drop
-        # (HomeAssistantConnectionError) OR get_websocket_client() raising a plain
-        # Exception when WebSocketManager can't (re)connect must fall back to REST
-        # rather than kill the tool.
+        # bridge, NOT the shared pooled WS. A pooled-WS drop or a failed
+        # (re)connect, both HomeAssistantConnectionError since #1947, must fall
+        # back to REST rather than kill the tool.
         logger.warning(
             "%s connection error; falling back to REST legacy: %r",
             WS_SERVICES_LIST,
@@ -326,7 +341,9 @@ async def _fetch_services_list_via_component(
     return result
 
 
-async def _get_service_translations(client: Any) -> dict[str, Any]:
+async def _get_service_translations(
+    client: Any, warnings: list[str] | None = None
+) -> dict[str, Any]:
     """
     Get service translations from Home Assistant via WebSocket.
 
@@ -342,15 +359,30 @@ async def _get_service_translations(client: Any) -> dict[str, Any]:
             }
         )
 
-        if response.get("success") and response.get("result"):
+        if (
+            isinstance(response, dict)
+            and response.get("success")
+            and response.get("result")
+        ):
             result = response["result"]
             if isinstance(result, dict):
                 resources: dict[str, Any] = result.get("resources", {})
                 return resources
         return {}
 
-    except Exception as e:
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        HomeAssistantAuthError,
+        TimeoutError,
+        OSError,
+    ) as e:
         logger.warning(f"Failed to get service translations: {e}")
+        # An empty map is also what an instance with no translations returns,
+        # so a caller that wants to tell the two apart passes ``warnings``
+        # and reports that the catalog came back without descriptions (#1947).
+        if warnings is not None:
+            warnings.append(f"service descriptions unavailable: {e}")
         return {}
 
 

@@ -22,6 +22,7 @@ import pytest
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, tools_entities
 from ha_mcp.tools.tools_entities import (
@@ -281,7 +282,7 @@ async def test_ws_establish_failure_omits_fields_silently() -> None:
     with patch_ws_establish_failure(
         caps_ws,
         tools_entities,
-        Exception("Failed to connect to Home Assistant WebSocket"),
+        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await get_entity("light.a")
 

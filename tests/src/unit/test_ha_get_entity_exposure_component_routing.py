@@ -21,6 +21,7 @@ import pytest
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, tools_voice_assistant
 from ha_mcp.tools.tools_voice_assistant import register_voice_assistant_tools
@@ -262,7 +263,7 @@ async def test_ws_establish_failure_falls_back_to_legacy() -> None:
     with patch_ws_establish_failure(
         caps_ws,
         tools_voice_assistant,
-        Exception("Failed to connect to Home Assistant WebSocket"),
+        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await exposure()
 

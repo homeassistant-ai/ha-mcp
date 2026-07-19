@@ -260,12 +260,13 @@ async def _fetch_entries_via_component(
     component fetch helper. The callers' legacy paths are NOT the shared pooled WS —
     ``ha_get_integration`` reads pure REST (``get_config_entry`` /
     ``GET /config/config_entries`` + the REST OptionsFlow probe) and radio's
-    ``resolve_entry_id`` uses the REST client's ``send_websocket_message`` bridge
-    (which never raises) — so a WS outage must not kill the tool when the legacy
-    path can still serve the entry. The catch is broad because
-    ``get_websocket_client()`` raises a plain ``Exception`` (not
-    ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot establish the
-    socket, so a narrow catch would let that escape and kill the tool; routing any
+    ``resolve_entry_id`` uses the REST client's ``send_websocket_message``
+    bridge — so a WS outage must not kill the tool when the legacy path can
+    still serve the entry. (The bridge itself raises on a dead transport since
+    #1947, which only matters for the radio caller: when the socket is dead
+    that path has nothing to serve either, while the pure-REST caller is
+    unaffected.) The catch stays broad so no unexpected fault escapes and
+    kills the tool; routing any
     non-command component failure back to the legacy fetch is safe here (mirrors
     ``get_component_caps``' own broad-catch precedent). Otherwise the same caps-gate
     discipline as ``component_devices.fetch_device_via_component``.
@@ -999,10 +1000,19 @@ class IntegrationTools:
             # Surface the effective Python logger level for this integration
             # so users can confirm logger.set_level changes took effect.
             # Emit unconditionally for symmetry with the list path (_format_entry).
-            logger_levels = await get_logger_levels(self._client)
+            level_warnings: list[str] = []
+            logger_levels = await get_logger_levels(self._client, level_warnings)
             level_info = logger_levels.get(entry_domain or "")
-            resp["log_level"] = level_info["name"] if level_info else "DEFAULT"
+            # UNKNOWN, not DEFAULT: an unreadable level is not evidence that the
+            # integration runs at the default one (#1947).
+            resp["log_level"] = (
+                "UNKNOWN"
+                if level_warnings
+                else (level_info["name"] if level_info else "DEFAULT")
+            )
             resp["log_level_raw"] = level_info["raw"] if level_info else None
+            if level_warnings:
+                resp.setdefault("warnings", []).extend(level_warnings)
 
             # Optionally fetch options flow schema (logically read-only: start+abort)
             if include_schema and result.get("supports_options"):
@@ -1112,10 +1122,18 @@ class IntegrationTools:
 
         # Surface the effective Python logger level for this integration
         # (unconditionally, for symmetry with the legacy path and _format_entry).
-        logger_levels = await get_logger_levels(self._client)
+        level_warnings: list[str] = []
+        logger_levels = await get_logger_levels(self._client, level_warnings)
         level_info = logger_levels.get(entry.get("domain") or "")
-        resp["log_level"] = level_info["name"] if level_info else "DEFAULT"
+        # UNKNOWN, not DEFAULT — see the component path above.
+        resp["log_level"] = (
+            "UNKNOWN"
+            if level_warnings
+            else (level_info["name"] if level_info else "DEFAULT")
+        )
         resp["log_level_raw"] = level_info["raw"] if level_info else None
+        if level_warnings:
+            resp.setdefault("warnings", []).extend(level_warnings)
 
         # Options schema only exists in a live options flow — read it from the
         # legacy flow, but keep the component-provided options (populate_options
@@ -1391,13 +1409,15 @@ class IntegrationTools:
             ]
 
         # Fetch current logger levels once; enrich each entry with its effective level.
-        logger_levels = await get_logger_levels(self._client)
+        level_warnings: list[str] = []
+        logger_levels = await get_logger_levels(self._client, level_warnings)
 
         # `_format_entry` is sync and cannot probe the OptionsFlow; options
         # are filled in by a second async pass below for entries that
         # advertise supports_options=True. See `fetch_entry_options_with_status`.
         formatted_entries = [
-            self._format_entry(entry, include_opts, logger_levels) for entry in entries
+            self._format_entry(entry, include_opts, logger_levels, bool(level_warnings))
+            for entry in entries
         ]
 
         # quiet=True: per-entry probe failures are aggregated into a response
@@ -1432,6 +1452,7 @@ class IntegrationTools:
             limit_int,
             offset_int,
             probe_failures,
+            level_warnings,
         )
 
     async def _list_entries_from_component(
@@ -1454,9 +1475,11 @@ class IntegrationTools:
         additively flattened one level (raw nesting preserved) — see
         ``ha_get_integration``'s OPTIONS note and ``_flatten_option_sections``.
         """
-        logger_levels = await get_logger_levels(self._client)
+        level_warnings: list[str] = []
+        logger_levels = await get_logger_levels(self._client, level_warnings)
         formatted_entries = [
-            self._format_entry(row, include_opts, logger_levels) for row in rows
+            self._format_entry(row, include_opts, logger_levels, bool(level_warnings))
+            for row in rows
         ]
         # Mirror the OptionsFlow-derived read: additively flatten one level of
         # nested option sections on each row (raw nesting preserved). Only the
@@ -1468,7 +1491,14 @@ class IntegrationTools:
                     formatted.get("options", {})
                 )
         return self._finalize_entry_list(
-            formatted_entries, domain, query, exact_match, limit_int, offset_int, []
+            formatted_entries,
+            domain,
+            query,
+            exact_match,
+            limit_int,
+            offset_int,
+            [],
+            level_warnings,
         )
 
     def _finalize_entry_list(
@@ -1480,6 +1510,7 @@ class IntegrationTools:
         limit_int: int,
         offset_int: int,
         probe_failures: list[str],
+        extra_warnings: list[str] | None = None,
     ) -> dict[str, Any]:
         """Query-filter, summarize, and paginate formatted entries.
 
@@ -1514,13 +1545,15 @@ class IntegrationTools:
         }
         if domain:
             result_data["domain_filter"] = domain.strip().lower()
+        if extra_warnings:
+            result_data.setdefault("warnings", []).extend(extra_warnings)
         if probe_failures:
-            result_data["warnings"] = [
+            result_data.setdefault("warnings", []).append(
                 f"options probe failed for {len(probe_failures)} "
                 f"entr{'y' if len(probe_failures) == 1 else 'ies'} "
-                f"({', '.join(probe_failures)}) — their 'options' may be "
+                f"({', '.join(probe_failures)}) - their 'options' may be "
                 "incomplete; empty options does not mean an entry has none"
-            ]
+            )
         return result_data
 
     @staticmethod
@@ -1528,6 +1561,7 @@ class IntegrationTools:
         entry: dict[str, Any],
         include_opts: bool | None,
         logger_levels: dict[str, dict[str, Any]] | None = None,
+        levels_unknown: bool = False,
     ) -> dict[str, Any]:
         """Format a raw config entry into the response shape."""
         formatted_entry: dict[str, Any] = {
@@ -1548,8 +1582,12 @@ class IntegrationTools:
         if logger_levels is not None:
             domain = entry.get("domain") or ""
             level_info = logger_levels.get(domain)
+            # UNKNOWN, not DEFAULT: an unreadable level is not evidence that the
+            # integration runs at the default one (#1947).
             formatted_entry["log_level"] = (
-                level_info["name"] if level_info else "DEFAULT"
+                "UNKNOWN"
+                if levels_unknown
+                else (level_info["name"] if level_info else "DEFAULT")
             )
             formatted_entry["log_level_raw"] = level_info["raw"] if level_info else None
 
