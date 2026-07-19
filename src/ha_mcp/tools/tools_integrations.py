@@ -260,9 +260,12 @@ async def _fetch_entries_via_component(
     component fetch helper. The callers' legacy paths are NOT the shared pooled WS —
     ``ha_get_integration`` reads pure REST (``get_config_entry`` /
     ``GET /config/config_entries`` + the REST OptionsFlow probe) and radio's
-    ``resolve_entry_id`` uses the REST client's ``send_websocket_message`` bridge
-    (which never raises) — so a WS outage must not kill the tool when the legacy
-    path can still serve the entry. The catch is broad because
+    ``resolve_entry_id`` uses the REST client's ``send_websocket_message``
+    bridge — so a WS outage must not kill the tool when the legacy path can
+    still serve the entry. (The bridge itself raises on a dead transport since
+    #1947, which only matters for the radio caller: when the socket is dead
+    that path has nothing to serve either, while the pure-REST caller is
+    unaffected.) The catch is broad because
     ``get_websocket_client()`` raises a plain ``Exception`` (not
     ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot establish the
     socket, so a narrow catch would let that escape and kill the tool; routing any

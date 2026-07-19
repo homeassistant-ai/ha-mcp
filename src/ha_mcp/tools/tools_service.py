@@ -606,10 +606,11 @@ class ServiceTools:
                     parameter="data",
                 )
             )
-        # send_websocket_message catches its own transport errors and always
-        # returns a {"success": ...} dict (never raises), so the failure is
-        # handled by the result-shape check below -- matching the other
-        # send_websocket_message call sites in the codebase.
+        # send_websocket_message returns a {"success": ...} dict for anything
+        # HA answered with, which the result-shape check below turns into a
+        # structured error. A dead transport raises instead (#1947) and
+        # propagates to the tool's structured-error handler: an arbitrary WS
+        # command must not report a verdict it never received.
         result = await self._client.send_websocket_message(
             {"type": command_type, **command_params}
         )

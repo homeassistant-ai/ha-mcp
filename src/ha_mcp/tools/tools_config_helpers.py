@@ -3908,13 +3908,14 @@ class HelperConfigTools:
           raise the component-required error — no legacy fallback exists.
         - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
           ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
-          for a storage type, served from the legacy ``{helper_type}/list`` body
-          (which rides the never-raising ``send_websocket_message`` bridge, a
-          different transport, so it does not die identically), with a
-          ``warnings[]`` entry + ``log.warning``. For a flow type — which has no
-          legacy body — the transport failure re-raises to the tool's
-          structured-error handler (no working legacy path is being blocked, so the
-          systemic "fall back to legacy" rule does not apply).
+          for a storage type, the legacy ``{helper_type}/list`` body is attempted,
+          with a ``warnings[]`` entry + ``log.warning``. It rides the
+          ``send_websocket_message`` bridge over the SAME pooled connection
+          (``WebSocketManager`` keys one client per url/token/verify_ssl), so it
+          recovers a component-side fault but not a dead socket — there the bridge
+          raises in turn (#1947) and the failure surfaces instead of being served
+          as a short list. For a flow type — which has no legacy body — the
+          transport failure re-raises to the tool's structured-error handler.
 
         On a successful response the type must also be in the component's
         ``covered_types`` (see :func:`_component_covers`): a type the response
@@ -3948,12 +3949,11 @@ class HelperConfigTools:
         except Exception as exc:
             # Transport/establishment failure (HomeAssistantConnectionError, or the
             # plain Exception get_websocket_client() raises when WebSocketManager
-            # can't build the socket). The legacy `{helper_type}/list` body rides
-            # the never-raising send_websocket_message bridge (a different transport
-            # from this pooled-WS read), so a storage type falls back rather than
-            # dying identically. A flow type has NO legacy body, so its transport
-            # failure re-raises to the tool's structured-error handler — no working
-            # legacy path is blocked, so the fall-back-to-legacy rule doesn't apply.
+            # can't build the socket). A storage type still attempts the legacy
+            # `{helper_type}/list` body: it rides the same pooled connection, so it
+            # recovers a component-side fault but not a dead socket, where the
+            # bridge raises in turn (#1947). A flow type has NO legacy body, so its
+            # transport failure re-raises to the tool's structured-error handler.
             if is_flow:
                 raise
             legacy = await self._legacy_helper_list(helper_type)

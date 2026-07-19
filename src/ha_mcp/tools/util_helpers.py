@@ -2329,10 +2329,15 @@ def merge_visibility_warnings(
 
 # Error strings produced by the pooled WebSocket path when the transport (not
 # the command) fails: the manager's connect raise, send timeouts, and socket
-# drops. ``send_websocket_message`` collapses these into
-# ``{"success": False, "error": ...}``, so callers that attach domain-specific
-# suggestions must first check the shape or an HA restart gets presented as a
-# domain problem (issue #1832 review).
+# drops. Callers that attach domain-specific suggestions match on these so an
+# HA restart is not presented as a domain problem (issue #1832 review).
+#
+# Since #1947 ``send_websocket_message`` raises on a dead transport rather than
+# collapsing it into ``{"success": False, "error": ...}``, so these signatures
+# now only have to catch transport-shaped text that reaches a caller by another
+# route (a component-side error frame, or an error string threaded through a
+# response body). They are kept as a belt-and-braces match, not as the primary
+# detection path.
 WS_CONNECTION_SIGNATURES = (
     "failed to connect",
     "timed out",

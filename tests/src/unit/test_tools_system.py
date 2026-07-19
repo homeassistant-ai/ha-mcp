@@ -2237,22 +2237,17 @@ class TestHomeAssistantConnectionErrorPropagation:
         """Connection failure on the WS registry fetch unwinds rather than
         landing as a section error string.
 
-        Exercises the shape production actually produces: ``rest_client``'s
-        ``send_websocket_message`` catches the transport error and returns the
-        ``connection_error``-marked failure envelope, so nothing ever raises
-        into the caller's ``gather``. Injecting a raising mock here would test
-        a path this fetch cannot reach and would stay green even with the
-        marker handling removed (issue #1947)."""
+        Exercises the shape production actually produces: since #1947
+        ``send_websocket_message`` raises ``HomeAssistantConnectionError``
+        when no answer came back, so the failure reaches the caller's
+        ``gather`` as an exception and ``_reraise_if_fatal`` decides. The
+        predecessor of this test injected a failure envelope, which is the
+        shape the bridge no longer produces for a dead transport."""
         client = _make_dead_entities_client(
             states=[],
-            registry_resp={
-                "success": False,
-                "error": "ws gone",
-                "error_code": None,
-                "connection_error": True,
-            },
+            registry_exc=HomeAssistantConnectionError("ws gone"),
         )
-        with pytest.raises(HomeAssistantConnectionError):
+        with pytest.raises(HomeAssistantConnectionError, match="ws gone"):
             await SystemTools(client)._fetch_dead_entities()
 
     @pytest.mark.asyncio
@@ -2264,22 +2259,17 @@ class TestHomeAssistantConnectionErrorPropagation:
         client = _make_dead_entities_client(
             states=[],
             registry=[],
-            entries_resp={
-                "success": False,
-                "error": "ws gone",
-                "error_code": None,
-                "connection_error": True,
-            },
+            entries_exc=HomeAssistantConnectionError("ws gone"),
         )
-        with pytest.raises(HomeAssistantConnectionError):
+        with pytest.raises(HomeAssistantConnectionError, match="ws gone"):
             await SystemTools(client)._fetch_dead_entities()
 
     @pytest.mark.asyncio
     async def test_soft_envelope_failure_still_degrades(self) -> None:
-        """The marker, not the failed envelope, is what makes a WS failure
-        fatal. An unmarked ``{"success": False}`` (HA rejected the command)
-        keeps landing as a section error string, so the fix does not turn
-        every soft failure into ``isError``."""
+        """A failed envelope is not by itself fatal: since #1947 it means HA
+        answered and rejected the command, and that keeps landing as a section
+        error string. Only an unanswered call routes to ``isError``, so a
+        rejection does not take the whole request down."""
         client = _make_dead_entities_client(
             states=[],
             registry_resp={"success": False, "error": "unknown command"},

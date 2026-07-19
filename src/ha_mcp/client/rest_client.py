@@ -40,11 +40,6 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_STATUS = frozenset({502, 503, 504})
 _MAX_REQUEST_ATTEMPTS = 3
 
-# Key set on a ``send_websocket_message`` failure envelope when the underlying
-# cause was a dead transport rather than a command HA rejected (issue #1947).
-# Shared so the producer below and its consumers cannot drift on the spelling.
-WS_CONNECTION_ERROR_KEY = "connection_error"
-
 
 class HomeAssistantError(Exception):
     """Base exception for Home Assistant API errors."""
@@ -139,12 +134,15 @@ class HomeAssistantCommandTimeout(HomeAssistantError):
     """
 
 
-# Exception classes that are evidence the WebSocket transport itself failed,
+# Exception classes that are evidence no answer came back from Home Assistant,
 # as opposed to Home Assistant answering with a rejection. ``OSError`` covers
 # ``ConnectionResetError``; ``WebSocketException`` covers the
-# ``ConnectionClosed`` family that ``send_command`` re-raises unwrapped.
-_TRANSPORT_DEAD_ERRORS = (
+# ``ConnectionClosed`` family that ``send_command`` re-raises unwrapped;
+# ``HomeAssistantCommandTimeout`` covers a socket that is still open but has
+# stopped answering, which leaves a caller just as blind as a closed one.
+_NO_ANSWER_ERRORS = (
     HomeAssistantConnectionError,
+    HomeAssistantCommandTimeout,
     OSError,
     WebSocketException,
 )
@@ -1483,49 +1481,62 @@ class HomeAssistantClient:
 
             except Exception as e:
                 error_str = str(e)
-                # Decided once so every return path below carries it. The 403
-                # branch matches on message text, and a connection error can
-                # carry that text (``HomeAssistantConnectionError(f"HTTP error:
-                # {e}")`` wraps an httpx "403 Forbidden" verbatim), so leaving
-                # the marker to a single return site would make correctness
-                # depend on wording that is free to change.
-                #
-                # Past the acquisition phase only the transport classes count:
+                is_403 = "403" in error_str and "Forbidden" in error_str
+
+                # Transient 403 (rate limiting / reverse proxy throttling): retry
+                # before deciding anything, since the next attempt may succeed.
+                if is_403 and attempt < max_retries - 1:
+                    logger.warning(
+                        f"WebSocket 403 error (attempt {attempt + 1}/{max_retries}), "
+                        f"retrying after {retry_delay}s: {error_str}"
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+
+                # Phase first, type second. Failing before a client exists is
+                # evidence about the transport whatever class was raised, and
+                # the pooled manager raises a bare ``Exception`` when
+                # ``connect()`` returns False, so that case cannot be decided
+                # by type. Past acquisition only the no-answer classes count:
                 # ``send_command`` deliberately re-raises the original
                 # ``ConnectionClosed`` / ``ConnectionResetError`` from the send
                 # rather than wrapping it, to keep at-most-once semantics for
                 # write callers, so those arrive here untranslated. Anything
                 # else (a ``ValueError`` from building the message, say) is a
                 # bug rather than evidence about the connection.
-                transport_dead = acquiring or isinstance(e, _TRANSPORT_DEAD_ERRORS)
+                if acquiring or isinstance(e, _NO_ANSWER_ERRORS):
+                    # One error channel for "no answer came back" (#1947): the
+                    # caller decides the policy, rather than every consumer
+                    # having to notice a marker on an otherwise ordinary
+                    # failure envelope. Callers that legitimately continue on a
+                    # missing answer catch this and say in ``warnings`` what
+                    # they skipped; callers whose output would read as a
+                    # negative finding let it propagate.
+                    logger.error(
+                        f"WebSocket transport failed ({message.get('type')}): {e}"
+                    )
+                    if isinstance(e, HomeAssistantConnectionError):
+                        # Already the right class — re-raise unchanged so
+                        # subtypes (``HomeAssistantCommandNotSent``) and the
+                        # original traceback survive.
+                        raise
+                    raise HomeAssistantConnectionError(error_str) from e
 
-                # Detect transient 403 errors (rate limiting / reverse proxy throttling)
-                if "403" in error_str and "Forbidden" in error_str:
-                    if attempt < max_retries - 1:
-                        logger.warning(
-                            f"WebSocket 403 error (attempt {attempt + 1}/{max_retries}), "
-                            f"retrying after {retry_delay}s: {error_str}"
-                        )
-                        await asyncio.sleep(retry_delay)
-                        continue
-                    else:
-                        logger.error(
-                            f"WebSocket 403 error after {max_retries} attempts: {error_str}"
-                        )
-                        blocked: dict[str, Any] = {
-                            "success": False,
-                            "error": f"WebSocket request blocked (403 Forbidden): {error_str}",
-                            "error_code": getattr(e, "code", None),
-                            "suggestions": [
-                                "This may be caused by a reverse proxy or security filter",
-                                "Try simplifying the request (e.g., shorter templates, fewer parameters)",
-                                "If using complex templates, try breaking them into smaller parts",
-                                "Check if your Home Assistant is behind a reverse proxy with security rules",
-                            ],
-                        }
-                        if transport_dead:
-                            blocked[WS_CONNECTION_ERROR_KEY] = True
-                        return blocked
+                if is_403:
+                    logger.error(
+                        f"WebSocket 403 error after {max_retries} attempts: {error_str}"
+                    )
+                    return {
+                        "success": False,
+                        "error": f"WebSocket request blocked (403 Forbidden): {error_str}",
+                        "error_code": getattr(e, "code", None),
+                        "suggestions": [
+                            "This may be caused by a reverse proxy or security filter",
+                            "Try simplifying the request (e.g., shorter templates, fewer parameters)",
+                            "If using complex templates, try breaking them into smaller parts",
+                            "Check if your Home Assistant is behind a reverse proxy with security rules",
+                        ],
+                    }
 
                 # Name the command in the log line: a bare "Command failed:
                 # Unknown command." is undiagnosable from a user's log
@@ -1534,23 +1545,17 @@ class HomeAssistantClient:
                 # Preserve HA's structured error code (e.g. ``not_found``) so callers
                 # can distinguish HA's authoritative verdict from a transient failure
                 # instead of only seeing the stringified message.
-                failure: dict[str, Any] = {
+                return {
                     "success": False,
                     "error": str(e),
                     "error_code": getattr(e, "code", None),
                 }
-                if transport_dead:
-                    # ``error_code`` cannot carry this (the connection classes
-                    # define no ``code``), so mark it structurally instead of
-                    # leaving callers to match on the message text. Opt-in by
-                    # design (#1947): a caller whose degraded output would be
-                    # read as a negative finding must re-raise on this, while
-                    # callers that merely enrich a primary result keep
-                    # degrading as before.
-                    failure[WS_CONNECTION_ERROR_KEY] = True
-                return failure
 
-        return {"success": False, "error": "WebSocket request failed"}
+        # Unreachable: every attempt either returns, raises, or ``continue``s,
+        # and the last attempt cannot ``continue`` (the 403 branch guards on
+        # ``attempt < max_retries - 1``). Assert rather than return a
+        # contextless failure envelope that would read as a soft error.
+        raise AssertionError("send_websocket_message loop exited without a result")
 
     async def _handle_render_template(
         self, ws_client: Any, message: dict[str, Any]
@@ -1587,12 +1592,23 @@ class HomeAssistantClient:
                 }
 
         except TimeoutError:
+            # Template-level, not transport-level: the wait budget here is the
+            # caller's own ``timeout`` (default 3s) plus two seconds, and a
+            # template that is merely slow to render leaves the socket healthy.
+            # Deliberately NOT treated as a dead transport, unlike the 30s
+            # round-trip ``HomeAssistantCommandTimeout`` in ``send_command``.
             return {
                 "success": False,
                 "error": "Event timeout - template result not received",
                 "template": message.get("template"),
             }
         except Exception as e:
+            if isinstance(e, _NO_ANSWER_ERRORS):
+                # Let the caller's classification decide. Returning an envelope
+                # here would route a transport death around the fail-loud policy
+                # in ``send_websocket_message`` — the very swallow this branch
+                # used to hide (#1947).
+                raise
             return {
                 "success": False,
                 "error": str(e),

@@ -22,17 +22,30 @@ class _SearchBase:
     settings: Any
 
     @staticmethod
-    def _extract_registry_list(result: Any, label: str) -> list[dict[str, Any]]:
+    def _extract_registry_list(
+        result: Any, label: str, warnings: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """Unwrap a WS registry-list result, returning ``[]`` on error/failure.
 
-        Exceptions are logged at debug because every caller treats missing
-        registry data as non-fatal rather than raising: the overview degrades
-        its area enrichment, and the area search degrades to "no match found".
+        Every caller treats missing registry data as non-fatal rather than
+        raising: the overview degrades its area enrichment, and the area
+        search degrades to "no match found". Degrading is fine; degrading
+        silently is not — a caller that passes ``warnings`` gets a line
+        naming what was unavailable and why, so a thinner answer is
+        distinguishable from a genuinely empty registry (#1947).
         """
+        cause: str | None = None
+        registry: list[dict[str, Any]] = []
         if isinstance(result, Exception):
             logger.debug(f"Could not fetch {label}: {result}")
-            return []
-        if isinstance(result, dict) and result.get("success"):
-            registry: list[dict[str, Any]] = result.get("result", [])
-            return registry
-        return []
+            cause = str(result) or type(result).__name__
+        elif isinstance(result, dict) and result.get("success"):
+            registry = result.get("result", [])
+        elif isinstance(result, dict):
+            cause = str(result.get("error") or "request failed")
+        else:
+            cause = f"unexpected response type: {type(result).__name__}"
+
+        if cause is not None and warnings is not None:
+            warnings.append(f"{label} unavailable: {cause}")
+        return registry
