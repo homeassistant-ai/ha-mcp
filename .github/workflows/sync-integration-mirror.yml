@@ -73,11 +73,19 @@ jobs:
   # The mirror tag depends only on the "Semantic Release" job (the name both
   # semver-release.yml and hotfix-release.yml use — commented as load-bearing
   # there), so gate on that job's conclusion instead. workflow_run fires for
-  # EVERY completed run of the listed workflows; the all-skipped Hotfix
-  # Release runs that every non-hotfix PR merge produces conclude "skipped",
-  # which never satisfied the old success gate either — the job-level check
-  # keeps excluding them (a skipped Semantic Release job is not a release).
-  # Push and manual dispatch (where workflow_run is absent) always proceed.
+  # EVERY completed run of the listed workflows, including the wholesale-skipped
+  # Hotfix Release runs every non-hotfix PR merge produces. Those conclude
+  # "skipped", but their per-job records are created ASYNCHRONOUSLY, seconds
+  # after the completed event fires — so the gate's immediate jobs query races
+  # them and can come back empty (a later query shows the skipped jobs;
+  # observed live on the v1.2.1 misfire: the gate queried at :34, the
+  # "Semantic Release" record appeared at :36). That job-absent result fell
+  # through to the "" branch below and FAILED OPEN, cutting three accidental
+  # stable mirror tags (v1.1.1, v1.2.0, v1.2.1). So the gate short-circuits on
+  # the run-level "skipped" conclusion — delivered synchronously in the event
+  # payload — BEFORE querying jobs: a run skipped in its entirety ran no
+  # release. Push and manual dispatch (where workflow_run is absent) always
+  # proceed.
   gate:
     runs-on: ubuntu-latest
     permissions:
@@ -89,8 +97,12 @@ jobs:
       # uses it to raise an alarm if a stable tag actually gets cut on such
       # a run: fail-open is deliberate (see below), but a stable tag with no
       # release behind it means the component version must be bumped rather
-      # than piled onto (live: v1.1.1 went stable off a skipped
-      # pull_request Hotfix Release shell whose job list came back empty).
+      # than piled onto. The skipped-run path this flag once covered (v1.1.1,
+      # then again v1.2.0 and v1.2.1, each off a skipped pull_request Hotfix
+      # Release shell whose job records had not yet materialized when the gate
+      # queried) is now short-circuited before the jobs query, so failopen is
+      # left to a genuine API error and a truly absent job on a run that
+      # executed.
       failopen: ${{ steps.decide.outputs.failopen }}
     steps:
       - name: Gate on the Semantic Release job, not the whole run
@@ -102,6 +114,18 @@ jobs:
           if [ "${{ github.event_name }}" != "workflow_run" ]; then
             echo "Push/dispatch trigger - proceeding."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Short-circuit a run that was skipped in its entirety BEFORE the
+          # jobs query: every non-hotfix PR merge's Hotfix Release run
+          # concludes "skipped", and its job records materialize seconds after
+          # the completed event, so the immediate jobs query can come back
+          # empty and fail OPEN in the "" branch below — the hole that cut
+          # stable tags v1.1.1, v1.2.0 and v1.2.1. A wholesale-skipped run
+          # performed no release, so no stable tag is due.
+          if [ "${{ github.event.workflow_run.conclusion }}" = "skipped" ]; then
+            echo "Triggering run was skipped in its entirety - skipping the mirror sync."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Fail OPEN on an API error and on a missing job: the snapshot and
