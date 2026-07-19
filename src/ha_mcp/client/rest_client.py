@@ -1646,6 +1646,13 @@ class HomeAssistantClient:
                             f"Resolved script entity_id {entity_id} to storage key {unique_id}"
                         )
                     return str(unique_id)
+        except HomeAssistantConnectionError:
+            # A dead transport must not become a silent guess: the fallback
+            # below assumes the storage key equals the bare entity_id, which is
+            # exactly what a UI rename breaks. Guessing it on a write path
+            # writes a NEW object under the wrong key instead of updating the
+            # renamed one, so let the caller fail loud (#1947).
+            raise
         except Exception:
             logger.debug(
                 f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
@@ -1787,6 +1794,13 @@ class HomeAssistantClient:
                             f"Resolved scene entity_id {entity_id} to storage key {unique_id}"
                         )
                     return str(unique_id)
+        except HomeAssistantConnectionError:
+            # A dead transport must not become a silent guess: the fallback
+            # below assumes the storage key equals the bare entity_id, which is
+            # exactly what a UI rename breaks. Guessing it on a write path
+            # writes a NEW object under the wrong key instead of updating the
+            # renamed one, so let the caller fail loud (#1947).
+            raise
         except Exception:
             logger.debug(
                 f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",

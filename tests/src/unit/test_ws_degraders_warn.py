@@ -9,11 +9,14 @@ answers-while-blind shape the detector fix exists to prevent.
 """
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.smart_search._base import _SearchBase
 
@@ -137,3 +140,56 @@ class TestAreaSearchReportsSkippedEnrichment:
         assert not any("unavailable" in w for w in response.get("warnings", [])), (
             response.get("warnings")
         )
+
+
+class TestIdentifierResolversFailLoud:
+    """``_resolve_script_id`` / ``resolve_scene_id`` map an entity_id to its
+    storage key, which a UI rename makes differ from the bare id. Their
+    fallback to the bare id is right when the registry answers "no such
+    entry", and wrong when nothing answered at all: on a write path it would
+    create a new object under the guessed key instead of updating the renamed
+    one. A dead transport therefore propagates (#1947).
+    """
+
+    @pytest.fixture
+    def client(self) -> HomeAssistantClient:
+        with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
+            c = HomeAssistantClient()
+        c.base_url = "http://ha.local:8123"
+        c.token = "tok"
+        c.verify_ssl = True
+        return c
+
+    @pytest.mark.parametrize(
+        "method, identifier",
+        [("_resolve_script_id", "script.morning"), ("resolve_scene_id", "scene.movie")],
+    )
+    @pytest.mark.asyncio
+    async def test_dead_transport_propagates(
+        self, client: HomeAssistantClient, method: str, identifier: str
+    ) -> None:
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws gone")
+        )
+
+        with pytest.raises(HomeAssistantConnectionError):
+            await getattr(client, method)(identifier)
+
+    @pytest.mark.parametrize(
+        "method, identifier, expected",
+        [
+            ("_resolve_script_id", "script.morning", "morning"),
+            ("resolve_scene_id", "scene.movie", "movie"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_answered_lookup_failure_still_falls_back(
+        self, client: HomeAssistantClient, method: str, identifier: str, expected: str
+    ) -> None:
+        """An entry HA genuinely does not have is the case the fallback exists
+        for, and it keeps working."""
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "not found"}
+        )
+
+        assert await getattr(client, method)(identifier) == expected
