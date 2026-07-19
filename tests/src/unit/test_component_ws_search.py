@@ -768,7 +768,7 @@ class TestInfo:
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "1.2.1"
+        assert manifest["version"] == COMPONENT_VERSION == "1.2.2"
 
 
 # =============================================================================

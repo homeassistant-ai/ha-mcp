@@ -245,8 +245,9 @@ channel's package is uninstalled first — only one is ever installed at a time.
 If the installed server needs a newer version of the custom component than the
 one you have (HACS can deliver a server build before you update the component),
 a repair issue titled **Update the HA-MCP Custom Component via HACS** appears
-under **Settings → Repairs** with a link to the HACS update. The server keeps
-running; update the component via HACS to clear it.
+under **Settings → Repairs**. The server keeps running; update the component via
+HACS to clear it — see [Held server updates](#held-server-updates) if HACS does
+not show the update yet.
 
 If the component was installed from the legacy location — the main `ha-mcp`
 server repository added directly as a HACS custom repository, before the
@@ -257,6 +258,46 @@ server's `7.x` version numbers and the server's release notes for the
 component. Follow the issue's link to add the mirror in HACS and reinstall the
 component from it (your settings and config entries are kept), then restart
 Home Assistant; the issue clears itself afterwards.
+
+### Held server updates
+
+When a new server release also ships a **newer custom component** than the one
+you are running, the automatic server update is **held** instead of installed,
+and a repair issue titled **HA-MCP server update waiting for a component update**
+appears under **Settings → Repairs** to explain it. The hold exists to avoid
+auto-starting a server build under a component version it was never tested with —
+installing a newer server against an out-of-date component is the combination
+that has broken server startups. The server keeps running on its current version
+while the hold is in effect.
+
+**HACS usually shows no component update yet at this point.** The component
+notices the newer server quickly — it checks PyPI every 6 hours and again on
+every reload or restart — but HACS refreshes its own repository information far
+less often: for a custom repository (how this component is installed in HACS)
+that can take up to about two days. So when the hold appears the component
+update is typically not yet visible in HACS, and telling Home Assistant to check
+for updates does not make HACS re-fetch any sooner. The one manual refresh that
+does is in HACS itself: open the **HA-MCP Custom Component** repository, open its
+**⋮** (three-dot) menu, and choose **Update information**; the component update
+then appears.
+
+The component asks HACS to perform this refresh automatically whenever the hold —
+or the component-outdated repair — first appears, so in most cases the component
+update shows up in HACS right away with no manual step. The manual **Update
+information** refresh above is the fallback for when that automatic request cannot
+reach HACS (for example HACS is still starting up, or its internals changed in a
+newer HACS release).
+
+To **clear the hold**, update the component in HACS and restart Home Assistant.
+The held server update then installs automatically on the next periodic check or
+reload.
+
+To **install the update anyway**, press **Install** on the HA-MCP server update
+entity — this bypasses the hold and installs the newer server immediately. Be
+aware that it runs a server build against a component it has never been tested
+with; if that server in turn requires an even newer component, it raises a
+separate **Update the HA-MCP Custom Component via HACS** repair until you update
+the component.
 
 ### Local-only mode
 

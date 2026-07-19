@@ -181,6 +181,15 @@ class _FakeSession:
 
 
 class TestReleaseNotes:
+    @pytest.fixture(autouse=True)
+    def _not_held(self, monkeypatch):
+        # These tests cover the plain notes path; neutralize the component-hold
+        # check (covered by TestReleaseNotesComponentHold) so they exercise the
+        # unchanged not-held behaviour without a network hold probe.
+        monkeypatch.setattr(
+            upd, "_async_update_held_by_component", AsyncMock(return_value=None)
+        )
+
     async def test_concatenates_bodies_between_installed_and_latest(self, monkeypatch):
         releases = [
             {"tag_name": "v1.3.0", "body": "too new"},
@@ -251,6 +260,99 @@ class TestReleaseNotes:
         )
 
         assert await entity.async_release_notes() is None
+
+
+class TestReleaseNotesComponentHold:
+    """The release-notes dialog leads with a component-update warning while the
+    pending server update is held on a newer custom component (#1783/#1785)."""
+
+    def _held(self, monkeypatch, value):
+        monkeypatch.setattr(
+            upd, "_async_update_held_by_component", AsyncMock(return_value=value)
+        )
+
+    async def test_held_prepends_warning_before_notes(self, monkeypatch):
+        self._held(monkeypatch, ("1.2.0", "1.0.0"))
+        releases = [{"tag_name": "v1.2.0", "body": "server notes"}]
+        session = _FakeSession(_FakeResp(releases))
+        monkeypatch.setattr(
+            upd, "async_get_clientsession", MagicMock(return_value=session)
+        )
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(installed="1.0.0", latest="1.2.0"))
+        )
+
+        notes = await entity.async_release_notes()
+
+        assert notes is not None
+        assert notes.startswith('<ha-alert alert-type="warning">')
+        # Names the shipped and running component versions, and the HACS action.
+        assert "1.2.0" in notes
+        assert "1.0.0" in notes
+        assert "HACS" in notes
+        # The real release notes still follow the warning, in that order.
+        assert "server notes" in notes
+        assert notes.index("warning") < notes.index("server notes")
+
+    async def test_held_with_notes_none_returns_warning_alone(self, monkeypatch):
+        # The warning must not vanish when the GitHub notes fetch fails while the
+        # update is held — surfacing it is the whole point of the dialog.
+        self._held(monkeypatch, ("1.2.0", "1.0.0"))
+        session = _FakeSession(_FakeResp(None, raise_exc=RuntimeError("boom")))
+        monkeypatch.setattr(
+            upd, "async_get_clientsession", MagicMock(return_value=session)
+        )
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(installed="1.0.0", latest="1.2.0"))
+        )
+
+        notes = await entity.async_release_notes()
+
+        assert notes is not None
+        assert notes.startswith('<ha-alert alert-type="warning">')
+        assert "1.0.0" in notes
+        assert "---" not in notes  # no notes body appended
+
+    async def test_hold_check_failure_degrades_to_plain_notes(self, monkeypatch):
+        # An unexpected error escaping the held-check must not break the dialog:
+        # it degrades to the plain notes (as if not held).
+        monkeypatch.setattr(
+            upd,
+            "_async_update_held_by_component",
+            AsyncMock(side_effect=RuntimeError("gate boom")),
+        )
+        releases = [{"tag_name": "v1.2.0", "body": "server notes"}]
+        session = _FakeSession(_FakeResp(releases))
+        monkeypatch.setattr(
+            upd, "async_get_clientsession", MagicMock(return_value=session)
+        )
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(installed="1.0.0", latest="1.2.0"))
+        )
+
+        notes = await entity.async_release_notes()
+
+        assert notes == "server notes"
+
+    async def test_both_probes_failing_degrades_to_none(self, monkeypatch):
+        # Both gathered probes failing at once must degrade to None (the UI's
+        # release_url fallback), never propagate out of the gather.
+        monkeypatch.setattr(
+            upd,
+            "_async_update_held_by_component",
+            AsyncMock(side_effect=RuntimeError("gate boom")),
+        )
+        session = _FakeSession(_FakeResp(None, raise_exc=RuntimeError("boom")))
+        monkeypatch.setattr(
+            upd, "async_get_clientsession", MagicMock(return_value=session)
+        )
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(installed="1.0.0", latest="1.2.0"))
+        )
+
+        notes = await entity.async_release_notes()
+
+        assert notes is None
 
 
 class TestAsyncInstall:

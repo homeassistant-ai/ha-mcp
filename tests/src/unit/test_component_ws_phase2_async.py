@@ -140,10 +140,11 @@ class TestCapabilityPresence:
             assert cap in wsapi.CAPABILITIES
 
     def test_component_version(self):
-        # Rides under the pending 1.2.1 release (1.2.0 is already released), so
-        # the new write caps are advertised by capability name (not version-inferred),
-        # and no bump is needed for them.
-        assert wsapi.COMPONENT_VERSION == "1.2.1"
+        # Pending 1.2.2 (1.2.1 is the released stable). Capabilities are
+        # advertised by name, never version-inferred, so new caps ride any
+        # pending version without a bump; this assertion just pins the
+        # declared version (the write caps shipped in 1.2.1).
+        assert wsapi.COMPONENT_VERSION == "1.2.2"
 
 
 # =============================================================================
