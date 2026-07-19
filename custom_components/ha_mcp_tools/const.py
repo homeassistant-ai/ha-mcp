@@ -24,7 +24,7 @@ DOMAIN = "ha_mcp_tools"
 # manifest bump that forgets this constant (or vice-versa) fails in CI. The
 # capability negotiation — not this version — gates each WS command (see
 # ``websocket_api.CAPABILITIES``).
-COMPONENT_VERSION = "1.2.1"
+COMPONENT_VERSION = "1.2.2"
 
 # Config-entry discriminator (``entry.data[CONF_ENTRY_TYPE]``). A missing value
 # means "tools" so the pre-existing services entry keeps working across the
@@ -445,12 +445,24 @@ SERVER_USER_NAME = "HA-MCP Server"
 # namespace (mirrors the webhook-proxy add-on's /api/mcp_proxy/oauth base).
 OAUTH_BASE = "/api/ha_mcp_tools/oauth"
 
-# HACS "add repository" deep link for the custom component. Shared learn_more_url
-# for every repair issue that ends with "install/reinstall the component via
-# HACS" (the component-outdated issue and the legacy-HACS-source issue below).
+# HACS "add repository" deep link for the custom component. learn_more_url for
+# the legacy-HACS-source repair (install_source_check) only, whose fix really is
+# re-adding the repository. The update-held and component-outdated issues point
+# at UPDATE_HOLD_DOCS_URL instead — for an already-installed component this deep
+# link just opens a blank "add repository" dialog.
 HACS_COMPONENT_URL = (
     "https://my.home-assistant.io/redirect/hacs_repository/"
     "?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration"
+)
+
+# Docs section explaining the automatic-update hold, linked as learn_more_url
+# from the update-held and component-outdated repair issues (both resolve by
+# updating an already-installed component, not by re-adding a repository). The
+# anchor is the GitHub slug of the "Held server updates" heading in
+# docs/in-process-server.md; hassfest forbids literal URLs inside strings.json.
+UPDATE_HOLD_DOCS_URL = (
+    "https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/"
+    "in-process-server.md#held-server-updates"
 )
 
 # Usage guide for the conversation-agent LLM API option (#1745). Injected into

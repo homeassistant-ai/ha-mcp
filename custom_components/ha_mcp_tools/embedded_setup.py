@@ -46,7 +46,6 @@ from .const import (
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
     DOMAIN,
-    HACS_COMPONENT_URL,
     ISSUE_COMPONENT_OUTDATED,
     ISSUE_LEGACY_OAUTH_RESTART,
     ISSUE_PACKAGE_FAILED,
@@ -62,6 +61,7 @@ from .const import (
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_WEBHOOK_AUTH,
+    UPDATE_HOLD_DOCS_URL,
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
     channel_for_dist,
@@ -654,7 +654,7 @@ async def async_maybe_auto_update(
                 "shipped": shipped,
                 "running": running,
             },
-            learn_more_url=HACS_COMPONENT_URL,
+            learn_more_url=UPDATE_HOLD_DOCS_URL,
         )
         return
     ir.async_delete_issue(hass, DOMAIN, ISSUE_UPDATE_HELD)
@@ -911,7 +911,7 @@ async def _async_check_component_compat(
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_COMPONENT_OUTDATED,
             translation_placeholders={"required": required, "installed": own},
-            learn_more_url=HACS_COMPONENT_URL,
+            learn_more_url=UPDATE_HOLD_DOCS_URL,
         )
     else:
         ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)

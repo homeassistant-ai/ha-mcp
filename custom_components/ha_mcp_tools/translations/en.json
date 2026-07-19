@@ -88,7 +88,7 @@
         },
         "component_outdated": {
             "title": "Update the HA-MCP Custom Component via HACS",
-            "description": "The installed ha-mcp server requires HA-MCP Custom Component {required} or newer, but you have {installed}. Update the component via HACS and restart Home Assistant. The server keeps running in the meantime, but some newer features may not work until the component is updated."
+            "description": "The installed ha-mcp server requires HA-MCP Custom Component {required} or newer, but you have {installed}. Update the component via HACS (open the HA-MCP Custom Component entry and use 'Update information' if no update is shown yet) and restart Home Assistant. The server keeps running in the meantime, but some newer features may not work until the component is updated."
         },
         "server_update_held": {
             "title": "HA-MCP server update waiting for a component update",
