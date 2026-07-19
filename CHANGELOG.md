@@ -3,6 +3,206 @@
 <!-- version list -->
 
 
+## v7.14.0 (2026-07-19)
+
+### Added
+
+- Component-backed server-entry direct-write, closing out issue #1813
+  ([#1935](https://github.com/homeassistant-ai/ha-mcp/pull/1935))
+- Surface connect URLs for every network interface (#1862)
+  ([#1928](https://github.com/homeassistant-ai/ha-mcp/pull/1928))
+- Phase 3 write capabilities — call_service and bulk_call_service (#1813)
+  ([#1921](https://github.com/homeassistant-ai/ha-mcp/pull/1921))
+- Add external OIDC authentication support for standalone mode
+  ([#1888](https://github.com/homeassistant-ai/ha-mcp/pull/1888))
+- Phase 2 component-backed robustness reads (config entries, registry lookups, system snapshot, dashboards, services, visibility) (#1813)
+  ([#1902](https://github.com/homeassistant-ai/ha-mcp/pull/1902))
+- **addon**: Add icon and logo to both add-on flavors
+  ([#1916](https://github.com/homeassistant-ai/ha-mcp/pull/1916))
+- Phase 1 component-backed read capabilities (states, blueprint bodies, device reads, entity enrichment, exposure) (#1813)
+  ([#1895](https://github.com/homeassistant-ai/ha-mcp/pull/1895))
+- Accept locally installed skills and allow disabling ha_get_skill_guide
+  ([#1900](https://github.com/homeassistant-ai/ha-mcp/pull/1900))
+- Add overwrite option to ha_import_blueprint for blueprint re-import
+  ([#1897](https://github.com/homeassistant-ai/ha-mcp/pull/1897))
+
+### Fixed
+
+- Prefer an HTTP-500 sample in the deep-search failed fragment
+  ([#1962](https://github.com/homeassistant-ai/ha-mcp/pull/1962))
+- Join the entity registry on the ha_config_list_helpers legacy fallback
+  ([#1960](https://github.com/homeassistant-ai/ha-mcp/pull/1960))
+- Raise on parse error for a single explicit ha_config_get_yaml target
+  ([#1959](https://github.com/homeassistant-ai/ha-mcp/pull/1959))
+- Allow ha_manage_backup(scope="edits", action="diff") in read-only mode
+  ([#1958](https://github.com/homeassistant-ai/ha-mcp/pull/1958))
+- Name a representative error in the deep-search non-404 failed fragment
+  ([#1930](https://github.com/homeassistant-ai/ha-mcp/pull/1930))
+- Exclude inactive issue-registry entries from overview repairs (#1905)
+  ([#1906](https://github.com/homeassistant-ai/ha-mcp/pull/1906))
+- Serve OAuth/OIDC settings UI behind a dedicated secret path
+  ([#1934](https://github.com/homeassistant-ai/ha-mcp/pull/1934))
+- Escape translated catalog strings before rendering as HTML in settings UI
+  ([#1931](https://github.com/homeassistant-ai/ha-mcp/pull/1931))
+- Return actionable not-found for ha_config_set_label with an unknown label_id
+  ([#1926](https://github.com/homeassistant-ai/ha-mcp/pull/1926))
+- State which server ha_dev_manage_server update_source actually changes
+  ([#1929](https://github.com/homeassistant-ai/ha-mcp/pull/1929))
+- Make strict-BPS ack key a rotating attestation phrase
+  ([#1925](https://github.com/homeassistant-ai/ha-mcp/pull/1925))
+- Reinstall the embedded server when its pip source changes, not just its version
+  ([#1923](https://github.com/homeassistant-ai/ha-mcp/pull/1923))
+- Keep MCP URL on one log line; document dev/stable add-on conflict
+  ([#1922](https://github.com/homeassistant-ai/ha-mcp/pull/1922))
+- Alert on out-of-cycle stable mirror tags and track orphaned install jobs
+  ([#1915](https://github.com/homeassistant-ai/ha-mcp/pull/1915))
+- Restore the engine user's saved theme after dashboard screenshots
+  ([#1912](https://github.com/homeassistant-ai/ha-mcp/pull/1912))
+- Track importing workers process-wide so a reload cannot purge under them
+  ([#1911](https://github.com/homeassistant-ai/ha-mcp/pull/1911))
+- Guide stale-schema clients past BestPracticeKey client-side rejection
+  ([#1910](https://github.com/homeassistant-ai/ha-mcp/pull/1910))
+- Keep embedded bring-up alive while the worker makes startup progress
+  ([#1908](https://github.com/homeassistant-ai/ha-mcp/pull/1908))
+- Remove phantom bulk-config WS commands and honor HA SSL/port on the embedded loopback
+  ([#1892](https://github.com/homeassistant-ai/ha-mcp/pull/1892))
+
+### Refactoring
+
+- **c901**: Clear final 6 files, delete emptied grandfather list (closes #925)
+  ([#1964](https://github.com/homeassistant-ai/ha-mcp/pull/1964))
+- **c901**: UAT harness below C901 threshold, remove from grandfather list
+  ([#1955](https://github.com/homeassistant-ai/ha-mcp/pull/1955))
+- **c901**: Test infra and unit tests below C901 threshold, remove from grandfather list
+  ([#1953](https://github.com/homeassistant-ai/ha-mcp/pull/1953))
+- **c901**: Fix 3 files below C901 threshold, remove from grandfather list
+  ([#1940](https://github.com/homeassistant-ai/ha-mcp/pull/1940))
+- **c901**: Fix webhook-proxy dev flavor (2 files) below C901 threshold, remove from grandfather list
+  ([#1952](https://github.com/homeassistant-ai/ha-mcp/pull/1952))
+- **c901**: E2e infra below C901 threshold, remove from grandfather list
+  ([#1951](https://github.com/homeassistant-ai/ha-mcp/pull/1951))
+- **c901**: Custom component below C901 threshold, remove from grandfather list
+  ([#1943](https://github.com/homeassistant-ai/ha-mcp/pull/1943))
+- **c901**: Fix 7 e2e test files below C901 threshold, remove from grandfather list
+  ([#1941](https://github.com/homeassistant-ai/ha-mcp/pull/1941))
+- **c901**: Fix backup subsystem (3 files) below C901 threshold, remove from grandfather list
+  ([#1937](https://github.com/homeassistant-ai/ha-mcp/pull/1937))
+- **c901**: Fix 9 src tool files below C901 threshold, remove from grandfather list
+  ([#1938](https://github.com/homeassistant-ai/ha-mcp/pull/1938))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish dev addon version 7.13.0.dev2042 [skip ci]
+  ([`e0d807e`](https://github.com/homeassistant-ai/ha-mcp/commit/e0d807e0a44fb120b9242913607436b558f27d37))
+- **addon**: Publish dev addon version 7.13.0.dev2039 [skip ci]
+  ([`83ef578`](https://github.com/homeassistant-ai/ha-mcp/commit/83ef57836bf0e0ed3df4e1d79f16c80dc576b341))
+- **addon**: Publish dev addon version 7.13.0.dev2037 [skip ci]
+  ([`fc8a039`](https://github.com/homeassistant-ai/ha-mcp/commit/fc8a039cb4efee5e837577d34fc759d5c32d532e))
+- **addon**: Publish dev addon version 7.13.0.dev2035 [skip ci]
+  ([`4259195`](https://github.com/homeassistant-ai/ha-mcp/commit/4259195da814d0718d5ff8543b2f459b5520a61f))
+- Add contributors update skill
+  ([#1932](https://github.com/homeassistant-ai/ha-mcp/pull/1932))
+- **addon**: Publish dev addon version 7.13.0.dev2033 [skip ci]
+  ([`1f6b103`](https://github.com/homeassistant-ai/ha-mcp/commit/1f6b103b87ed9e7d0f25445a8d3573d9e732123b))
+- **addon**: Publish dev addon version 7.13.0.dev2031 [skip ci]
+  ([`5659850`](https://github.com/homeassistant-ai/ha-mcp/commit/5659850738167a320fc0e719bb648334a7815e4a))
+- **addon**: Publish dev addon version 7.13.0.dev2029 [skip ci]
+  ([`453b9c4`](https://github.com/homeassistant-ai/ha-mcp/commit/453b9c4549d60c1046cdada95643948deb1e25ae))
+- **addon**: Promote webhook-proxy dev -> stable 2.0.4
+  ([#1956](https://github.com/homeassistant-ai/ha-mcp/pull/1956))
+- **addon**: Publish dev addon version 7.13.0.dev2027 [skip ci]
+  ([`d0b0713`](https://github.com/homeassistant-ai/ha-mcp/commit/d0b0713a029c9686440184c88b0e5c650f2ffcbf))
+- **addon**: Publish dev addon version 7.13.0.dev2024 [skip ci]
+  ([`4e54254`](https://github.com/homeassistant-ai/ha-mcp/commit/4e5425406f55aab21180e9ccfe32591315e8a5cb))
+- **addon**: Publish dev addon version 7.13.0.dev2023 [skip ci]
+  ([`e575e3b`](https://github.com/homeassistant-ai/ha-mcp/commit/e575e3bf8255c14428e33e595012aa1e63bfd692))
+- **addon**: Publish dev addon version 7.13.0.dev2021 [skip ci]
+  ([`90b8e6f`](https://github.com/homeassistant-ai/ha-mcp/commit/90b8e6f2545ae87a03173ef061ee030560753f65))
+- **addon**: Publish dev addon version 7.13.0.dev2019 [skip ci]
+  ([`0b7a4bd`](https://github.com/homeassistant-ai/ha-mcp/commit/0b7a4bde83fe5c41e0576fc5952d71eb8da0ee5a))
+- **addon**: Publish dev addon version 7.13.0.dev2015 [skip ci]
+  ([`44e2b8e`](https://github.com/homeassistant-ai/ha-mcp/commit/44e2b8e09f523ebeed3a7f91f09fdfc0a915c730))
+- **addon**: Publish dev addon version 7.13.0.dev2014 [skip ci]
+  ([`1ff7579`](https://github.com/homeassistant-ai/ha-mcp/commit/1ff75791850f890e61e8a6b4f518f70bbb54121e))
+- **addon**: Publish dev addon version 7.13.0.dev2013 [skip ci]
+  ([`1015b19`](https://github.com/homeassistant-ai/ha-mcp/commit/1015b193789d2d4f9386fd6fa41207c9eaf81b36))
+- **addon**: Publish dev addon version 7.13.0.dev2011 [skip ci]
+  ([`45fbcb3`](https://github.com/homeassistant-ai/ha-mcp/commit/45fbcb31e6838ccbf00d053335283e6bb5b28fc7))
+- **addon**: Publish dev addon version 7.13.0.dev2009 [skip ci]
+  ([`3a332d7`](https://github.com/homeassistant-ai/ha-mcp/commit/3a332d7a920b24e0a3bdd62b47a353633df044ad))
+- **addon**: Publish dev addon version 7.13.0.dev2007 [skip ci]
+  ([`8f94f79`](https://github.com/homeassistant-ai/ha-mcp/commit/8f94f7935fc2d7b3ed9384a97a586d998469aebc))
+- **addon**: Publish dev addon version 7.13.0.dev2005 [skip ci]
+  ([`364acb7`](https://github.com/homeassistant-ai/ha-mcp/commit/364acb7a975fd6afe8c05ab8530faee0b23e1f91))
+- **addon**: Publish dev addon version 7.13.0.dev2003 [skip ci]
+  ([`f3adde7`](https://github.com/homeassistant-ai/ha-mcp/commit/f3adde794c20d3bfe1bd573524e6915fa98e9f09))
+- **addon**: Promote webhook-proxy dev -> stable 2.0.3
+  ([#1936](https://github.com/homeassistant-ai/ha-mcp/pull/1936))
+- **addon**: Publish dev addon version 7.13.0.dev1999 [skip ci]
+  ([`d60c42f`](https://github.com/homeassistant-ai/ha-mcp/commit/d60c42ff0583fbccf58c9b5c3d068f63476f6230))
+- **addon**: Publish dev addon version 7.13.0.dev1997 [skip ci]
+  ([`52bd77c`](https://github.com/homeassistant-ai/ha-mcp/commit/52bd77c0c4276e06ead115800ae722c1238afbbd))
+- **addon**: Publish dev addon version 7.13.0.dev1994 [skip ci]
+  ([`69b40af`](https://github.com/homeassistant-ai/ha-mcp/commit/69b40afa5900dfc5d132de51a1270f09f74297bf))
+- Sync tool docs after merge [skip ci]
+  ([`8bae89b`](https://github.com/homeassistant-ai/ha-mcp/commit/8bae89b37d7d021382a39a499598adcf79677a96))
+- **addon**: Publish dev addon version 7.13.0.dev1992 [skip ci]
+  ([`aab8f38`](https://github.com/homeassistant-ai/ha-mcp/commit/aab8f38f6c96c5f0f30d3e6598ec7c44d47edeb9))
+- **addon**: Publish dev addon version 7.13.0.dev1989 [skip ci]
+  ([`a4eed95`](https://github.com/homeassistant-ai/ha-mcp/commit/a4eed9534761c5294ab21b2953b0a13a340e2645))
+- **addon**: Publish dev addon version 7.13.0.dev1987 [skip ci]
+  ([`692275d`](https://github.com/homeassistant-ai/ha-mcp/commit/692275d03385964dc6f3c9ff0754de34ec836f83))
+- **addon**: Publish dev addon version 7.13.0.dev1985 [skip ci]
+  ([`70ffd5f`](https://github.com/homeassistant-ai/ha-mcp/commit/70ffd5f626b9643b66eff4152dd54076d4379a7d))
+- Disable sunset Gemini Code Assist and point review docs at Codex
+  ([#1919](https://github.com/homeassistant-ai/ha-mcp/pull/1919))
+- **addon**: Publish dev addon version 7.13.0.dev1980 [skip ci]
+  ([`d86e50c`](https://github.com/homeassistant-ai/ha-mcp/commit/d86e50cec3560321fb79f3f55b5e7c7a457a943e))
+- Sync tool docs after merge [skip ci]
+  ([`8422402`](https://github.com/homeassistant-ai/ha-mcp/commit/842240287966d89872704f866383878b933a1841))
+- **addon**: Publish dev addon version 7.13.0.dev1977 [skip ci]
+  ([`f1de58a`](https://github.com/homeassistant-ai/ha-mcp/commit/f1de58a1400272a052ad465aa7057097030449bf))
+- **addon**: Publish dev addon version 7.13.0.dev1975 [skip ci]
+  ([`8e41cf4`](https://github.com/homeassistant-ai/ha-mcp/commit/8e41cf4af244c1d18451e3b9083f783a39247db3))
+- Sync tool docs after merge [skip ci]
+  ([`084ae59`](https://github.com/homeassistant-ai/ha-mcp/commit/084ae599e27e06f81bcaa801f31cbbd4a335b0bc))
+- **addon**: Publish dev addon version 7.13.0.dev1973 [skip ci]
+  ([`017e44b`](https://github.com/homeassistant-ai/ha-mcp/commit/017e44b7ab1e0607d962390ebc12b1854a998d99))
+- **addon**: Publish dev addon version 7.13.0.dev1971 [skip ci]
+  ([`1ef8f36`](https://github.com/homeassistant-ai/ha-mcp/commit/1ef8f363377b1e734961b1ca4b4f0e7889851648))
+- **addon**: Publish dev addon version 7.13.0.dev1969 [skip ci]
+  ([`c1a76c0`](https://github.com/homeassistant-ai/ha-mcp/commit/c1a76c0428434a651b30d401e1194231b1f57fe7))
+- **addon**: Publish dev addon version 7.13.0.dev1966 [skip ci]
+  ([`741a7d2`](https://github.com/homeassistant-ai/ha-mcp/commit/741a7d2266eb211159d8580a732d43ecf1c58137))
+- **addon**: Publish dev addon version 7.13.0.dev1962 [skip ci]
+  ([`772ae06`](https://github.com/homeassistant-ai/ha-mcp/commit/772ae0697ca0c0234f6124553df4e4b8ef8c2dcf))
+- Sync tool docs after merge [skip ci]
+  ([`11bb55e`](https://github.com/homeassistant-ai/ha-mcp/commit/11bb55e181befbb4e767880a0a7d4ef6cd540778))
+- **addon**: Publish dev addon version 7.13.0.dev1959 [skip ci]
+  ([`b1c68d4`](https://github.com/homeassistant-ai/ha-mcp/commit/b1c68d4edf1f9b79ee8fa95ad7facee57a65b234))
+- Sync tool docs after merge [skip ci]
+  ([`fc45acb`](https://github.com/homeassistant-ai/ha-mcp/commit/fc45acbc2e1b51213b4cc5c313ca749004b489f8))
+- **addon**: Publish dev addon version 7.13.0.dev1955 [skip ci]
+  ([`7f6b011`](https://github.com/homeassistant-ai/ha-mcp/commit/7f6b011b088f5cf772788d6da7c61dda3bc8ca62))
+- Sync tool docs after merge [skip ci]
+  ([`1a66dfc`](https://github.com/homeassistant-ai/ha-mcp/commit/1a66dfc808738b2765e1766e5852f505320e6d8e))
+- **addon**: Publish dev addon version 7.13.0.dev1953 [skip ci]
+  ([`86b94f4`](https://github.com/homeassistant-ai/ha-mcp/commit/86b94f47464e0059d87d33c6a33eee1cf89c876b))
+- **addon**: Publish version 7.13.0 [skip ci]
+  ([`108d848`](https://github.com/homeassistant-ai/ha-mcp/commit/108d84869ee866784e13c4b7e4c1316d26ecc79a))
+
+### Testing
+
+- Close #1906 review gaps and bump component to 1.2.1
+  ([#1942](https://github.com/homeassistant-ai/ha-mcp/pull/1942))
+</details>
+
+
 ## v7.13.0 (2026-07-16)
 
 ### Added
