@@ -568,8 +568,8 @@ class TestCallMcpToolsServiceInjectsToken:
         exclude ``1.1.0`` (it is ``1.2.0``, the first version cut after #1882),
         else a stale ``1.1.0`` install passes the gate and then hits raw
         failures instead of the actionable "update" prompt. Pins that ``1.1.0``
-        never passes – true for any floor above it, so it also guards against a
-        regression that lowers the floor back to ``1.1.0``.
+        never passes; this holds for any floor above it, so it also guards
+        against a regression that lowers the floor back to ``1.1.0``.
         """
         client = AsyncMock()
         client.get_services.return_value = [
