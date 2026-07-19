@@ -49,6 +49,7 @@ All workflow automation is implemented as skills in `.claude/skills/` and invoke
 | **issue-to-pr-resolver** | `/issue-to-pr-resolver <number>` | End-to-end issue implementation: worktree creation → implementation with tests → draft PR → iterative CI/review resolution until merge-ready. |
 | **my-pr-checker** | `/my-pr-checker <number>` | Review and manage YOUR OWN PRs — check CI, resolve review threads, fix issues, iterate until all checks pass. |
 | **contrib-pr-review** | `/contrib-pr-review <number>` | Review external contributor PRs for safety, quality, and readiness. |
+| **contributors-update** | `/contributors-update` | Find merged PR authors missing from README and update the contributors list after approval. |
 | **wt** | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master. |
 | **bat-adhoc** | `/bat-adhoc [scenario]` | Ad-hoc bot acceptance testing with dynamically generated scenarios. |
 | **bat-story-eval** | `/bat-story-eval --baseline v6.6.1` | Diff-based story evaluation: two-version comparison, regression detection. |
@@ -177,7 +178,7 @@ The `/my-pr-checker` skill carries the exact commands (the inline-reply
 
 ## Git & PR Policies
 
-**CRITICAL - Never commit directly to master.**
+**CRITICAL - Never commit directly to master, except for documentation-only adjustments.**
 
 You are STRICTLY PROHIBITED from committing to `master` or `main` branch. Always use worktrees for feature work:
 
