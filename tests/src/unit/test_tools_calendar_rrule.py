@@ -7,8 +7,8 @@ Since issue #1813 that WS command routes through the shared pooled client
 
 These tests pin the transport routing: ``rrule`` present → pooled WS command
 carrying an RFC 5545 event payload (``dtstart``/``dtend`` keys); ``rrule``
-absent → the pre-existing REST service call (``start_date_time``/
-``end_date_time`` keys), unchanged.
+absent → the REST service call. Datetime values use ``start_date_time``/
+``end_date_time`` while date-only values use ``start_date``/``end_date``.
 
 They also cover the rrule-branch failure path: a failed WS command comes back
 from the pooled client as ``{"success": False, ...}`` and is re-raised so the
@@ -147,6 +147,50 @@ async def test_no_rrule_keeps_rest_service_path():
     client.send_websocket_message.assert_not_awaited()
     assert result["success"] is True
     assert result["event"]["rrule"] is None
+
+
+@pytest.mark.asyncio
+async def test_no_rrule_date_only_values_create_all_day_event():
+    """Date-only values must use HA's all-day service fields."""
+    client = _make_mock_client()
+
+    tools = CalendarTools(client)
+    await tools.ha_config_set_calendar_event(
+        entity_id="calendar.test",
+        summary="School holidays",
+        start="2026-07-04",
+        end="2026-08-10",
+    )
+
+    client.call_service.assert_awaited_once_with(
+        "calendar",
+        "create_event",
+        {
+            "entity_id": "calendar.test",
+            "summary": "School holidays",
+            "start_date": "2026-07-04",
+            "end_date": "2026-08-10",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_rrule_rejects_mixed_date_and_datetime_values():
+    """Mixed all-day and timed boundaries are ambiguous and invalid."""
+    client = _make_mock_client()
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Mixed event",
+            start="2026-07-04",
+            end="2026-07-04T12:00:00",
+        )
+
+    error = _structured_error(exc_info.value)["error"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    client.call_service.assert_not_awaited()
 
 
 @pytest.mark.asyncio

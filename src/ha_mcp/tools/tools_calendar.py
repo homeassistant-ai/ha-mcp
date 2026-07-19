@@ -232,12 +232,29 @@ class CalendarTools:
         location: str | None,
     ) -> Any:
         """Create a one-off calendar event via the calendar.create_event service."""
+        start_is_date = self._is_date_only(start)
+        end_is_date = self._is_date_only(end)
+        if start_is_date != end_is_date:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Calendar event start and end must both be dates or both be datetimes",
+                    context={"start": start, "end": end},
+                    suggestions=[
+                        "Use YYYY-MM-DD for both values to create an all-day event",
+                        "Use ISO 8601 datetimes for both values to create a timed event",
+                    ],
+                )
+            )
+
         service_data: dict[str, Any] = {
             "entity_id": entity_id,
             "summary": summary,
-            "start_date_time": start,
-            "end_date_time": end,
         }
+        if start_is_date:
+            service_data.update({"start_date": start, "end_date": end})
+        else:
+            service_data.update({"start_date_time": start, "end_date_time": end})
 
         if description is not None:
             service_data["description"] = description
@@ -245,6 +262,17 @@ class CalendarTools:
             service_data["location"] = location
 
         return await self._client.call_service("calendar", "create_event", service_data)
+
+    @staticmethod
+    def _is_date_only(value: str) -> bool:
+        """Return whether value is a valid date in strict YYYY-MM-DD form."""
+        try:
+            return (
+                len(value) == 10
+                and datetime.strptime(value, "%Y-%m-%d").date().isoformat() == value
+            )
+        except ValueError:
+            return False
 
     def _build_set_calendar_event_error_suggestions(
         self, entity_id: str, rrule: str | None, error: Exception
@@ -305,8 +333,12 @@ class CalendarTools:
             str, Field(description="Calendar entity ID (e.g., 'calendar.family')")
         ],
         summary: Annotated[str, Field(description="Event title/summary")],
-        start: Annotated[str, Field(description="Event start datetime in ISO format")],
-        end: Annotated[str, Field(description="Event end datetime in ISO format")],
+        start: Annotated[
+            str, Field(description="Event start date or datetime in ISO format")
+        ],
+        end: Annotated[
+            str, Field(description="Event end date or datetime in ISO format")
+        ],
         description: Annotated[
             str | None,
             Field(description="Optional event description", default=None),
@@ -337,8 +369,8 @@ class CalendarTools:
         **Parameters:**
         - entity_id: Calendar entity ID (e.g., 'calendar.family')
         - summary: Event title/summary
-        - start: Event start datetime in ISO format
-        - end: Event end datetime in ISO format
+        - start: Event start date or datetime in ISO format
+        - end: Event end date or datetime in ISO format
         - description: Optional event description
         - location: Optional event location
         - rrule: Optional RFC 5545 recurrence rule (creates a recurring series)
