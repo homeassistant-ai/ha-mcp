@@ -1,0 +1,202 @@
+"""Unit tests for the HACS refresh nudge (#1783/#1785 follow-up).
+
+When the component detects that a newer custom component exists — the auto-update
+hold or the component-outdated repair — it asks HACS to force-refresh this
+component's repository so HACS surfaces the update promptly instead of waiting
+out its ~48h custom-repository cache. The interaction reaches into HACS internals
+and is advisory: any failure degrades to a debug log and never faults the caller.
+
+HACS is faked in ``hass.data["hacs"]``; HACS itself is never imported. Home
+Assistant is stubbed via ``_embedded_stubs``.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+from ._embedded_stubs import install
+
+install()
+
+import custom_components.ha_mcp_tools.hacs_nudge as nudge  # noqa: E402
+from custom_components.ha_mcp_tools.const import (  # noqa: E402
+    DOMAIN,
+    HACS_LEGACY_REPO_FULL_NAME,
+    HACS_MIRROR_REPO_FULL_NAME,
+)
+
+
+def _make_hass() -> MagicMock:
+    hass = MagicMock(name="hass")
+    hass.data = {}
+    return hass
+
+
+def _fake_repo(*, category: str = "integration") -> MagicMock:
+    repo = MagicMock(name="repository")
+    repo.update_repository = AsyncMock()
+    repo.data = SimpleNamespace(category=category)
+    return repo
+
+
+def _fake_hacs(*, repos=None, category: str = "integration"):
+    """A fake HACS: ``repos`` maps full_name -> repo (any other name -> None).
+
+    ``coordinators`` is keyed by category so the update-entity listener push can
+    be asserted. Returns ``(hacs, coordinator)``.
+    """
+    repos = repos or {}
+    hacs = MagicMock(name="hacs")
+    hacs.repositories.get_by_full_name = MagicMock(
+        side_effect=lambda full_name: repos.get(full_name)
+    )
+    coordinator = MagicMock(name="coordinator")
+    hacs.coordinators = {category: coordinator}
+    return hacs, coordinator
+
+
+class TestNudge:
+    async def test_refreshes_repository_found_by_mirror_name(self):
+        hass = _make_hass()
+        repo = _fake_repo(category="integration")
+        hacs, coordinator = _fake_hacs(
+            repos={HACS_MIRROR_REPO_FULL_NAME: repo}, category="integration"
+        )
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+
+        # The mirror name is tried first and its repo is force-refreshed...
+        assert (
+            hacs.repositories.get_by_full_name.call_args_list[0].args[0]
+            == HACS_MIRROR_REPO_FULL_NAME
+        )
+        repo.update_repository.assert_awaited_once_with(ignore_issues=True, force=True)
+        # ...then the update entity's coordinator is nudged to re-publish.
+        coordinator.async_update_listeners.assert_called_once()
+
+    async def test_falls_back_to_legacy_repo_name(self):
+        hass = _make_hass()
+        repo = _fake_repo()
+        hacs, _ = _fake_hacs(repos={HACS_LEGACY_REPO_FULL_NAME: repo})
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+
+        # Both names were tried, in order, and the legacy repo was refreshed.
+        tried = [c.args[0] for c in hacs.repositories.get_by_full_name.call_args_list]
+        assert tried == [HACS_MIRROR_REPO_FULL_NAME, HACS_LEGACY_REPO_FULL_NAME]
+        repo.update_repository.assert_awaited_once()
+
+    async def test_absent_hacs_is_a_clean_no_op(self):
+        hass = _make_hass()  # no hass.data["hacs"]
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")  # must not raise
+
+        # Nothing to throttle on: a later pass (once HACS exists) still refreshes.
+        assert nudge._DATA_HACS_NUDGED_VERSION not in hass.data.get(DOMAIN, {})
+
+    async def test_repo_not_registered_is_a_clean_no_op(self):
+        hass = _make_hass()
+        hacs, _ = _fake_hacs(repos={})  # neither candidate resolves
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+
+        assert nudge._DATA_HACS_NUDGED_VERSION not in hass.data.get(DOMAIN, {})
+
+    async def test_exploding_hacs_is_swallowed_and_logged(self, caplog):
+        import logging
+
+        hass = _make_hass()
+        hacs = MagicMock(name="hacs")
+        hacs.repositories.get_by_full_name = MagicMock(
+            side_effect=AttributeError("HACS internals changed")
+        )
+        hass.data["hacs"] = hacs
+
+        with caplog.at_level(logging.DEBUG):
+            await nudge.async_nudge_hacs_refresh(hass, "1.2.0")  # must not raise
+
+        assert "could not nudge HACS" in caplog.text
+        # A failure leaves the throttle unset so the next pass retries.
+        assert nudge._DATA_HACS_NUDGED_VERSION not in hass.data.get(DOMAIN, {})
+
+    async def test_update_repository_failure_is_swallowed(self):
+        # A network failure inside the refresh itself must degrade, not raise.
+        hass = _make_hass()
+        repo = _fake_repo()
+        repo.update_repository = AsyncMock(side_effect=RuntimeError("github down"))
+        hacs, _ = _fake_hacs(repos={HACS_MIRROR_REPO_FULL_NAME: repo})
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")  # must not raise
+
+        assert nudge._DATA_HACS_NUDGED_VERSION not in hass.data.get(DOMAIN, {})
+
+    async def test_second_call_for_same_version_is_throttled(self):
+        hass = _make_hass()
+        repo = _fake_repo()
+        hacs, _ = _fake_hacs(repos={HACS_MIRROR_REPO_FULL_NAME: repo})
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+
+        # The successful first refresh set the throttle marker; the second call
+        # short-circuits before touching HACS again.
+        repo.update_repository.assert_awaited_once()
+        assert hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSION] == "1.2.0"
+
+    async def test_different_version_refreshes_again(self):
+        hass = _make_hass()
+        repo = _fake_repo()
+        hacs, _ = _fake_hacs(repos={HACS_MIRROR_REPO_FULL_NAME: repo})
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+        await nudge.async_nudge_hacs_refresh(hass, "1.3.0")
+
+        # A new pending version is a new refresh.
+        assert repo.update_repository.await_count == 2
+        assert hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSION] == "1.3.0"
+
+    async def test_missing_coordinator_still_refreshes(self):
+        # The listener push is a bonus; a HACS with no coordinator for the
+        # category must not turn the completed refresh into a failure.
+        hass = _make_hass()
+        repo = _fake_repo(category="integration")
+        hacs = MagicMock(name="hacs")
+        hacs.repositories.get_by_full_name = MagicMock(
+            side_effect=lambda full_name: (
+                repo if full_name == HACS_MIRROR_REPO_FULL_NAME else None
+            )
+        )
+        hacs.coordinators = {}  # no coordinator for this category
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+
+        repo.update_repository.assert_awaited_once()
+        # The refresh completed, so it is throttled.
+        assert hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSION] == "1.2.0"
+
+
+class TestSchedule:
+    def test_schedule_creates_named_background_task(self):
+        hass = MagicMock(name="hass")
+        captured = {}
+
+        def _create_task(coro, name=None):
+            captured["name"] = name
+            # Close the real coroutine so it is not left un-awaited in this
+            # scheduling-only test.
+            coro.close()
+
+        hass.async_create_task = MagicMock(side_effect=_create_task)
+
+        nudge.async_schedule_hacs_nudge(hass, "1.2.0")
+
+        hass.async_create_task.assert_called_once()
+        assert captured["name"] == f"{DOMAIN}_hacs_nudge"

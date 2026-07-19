@@ -281,6 +281,13 @@ does is in HACS itself: open the **HA-MCP Custom Component** repository, open it
 **⋮** (three-dot) menu, and choose **Update information**; the component update
 then appears.
 
+The component asks HACS to perform this refresh automatically whenever the hold —
+or the component-outdated repair — first appears, so in most cases the component
+update shows up in HACS right away with no manual step. The manual **Update
+information** refresh above is the fallback for when that automatic request cannot
+reach HACS (for example HACS is still starting up, or its internals changed in a
+newer HACS release).
+
 To **clear the hold**, update the component in HACS and restart Home Assistant.
 The held server update then installs automatically on the next periodic check or
 reload.

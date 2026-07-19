@@ -445,6 +445,14 @@ SERVER_USER_NAME = "HA-MCP Server"
 # namespace (mirrors the webhook-proxy add-on's /api/mcp_proxy/oauth base).
 OAUTH_BASE = "/api/ha_mcp_tools/oauth"
 
+# HACS repository full_names (``owner/repo``, the key HACS's repository registry
+# uses) this component may be tracked under: the dedicated integration mirror is
+# the current install path; the main ha-mcp server repo is the legacy pre-mirror
+# path (see install_source_check). Shared by the legacy-source check and the
+# HACS refresh nudge (hacs_nudge) so a repository rename lands in one place.
+HACS_MIRROR_REPO_FULL_NAME = "homeassistant-ai/ha-mcp-integration"
+HACS_LEGACY_REPO_FULL_NAME = "homeassistant-ai/ha-mcp"
+
 # HACS "add repository" deep link for the custom component. learn_more_url for
 # the legacy-HACS-source repair (install_source_check) only, whose fix really is
 # re-adding the repository. The update-held and component-outdated issues point

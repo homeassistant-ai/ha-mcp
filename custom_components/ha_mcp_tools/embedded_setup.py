@@ -67,6 +67,7 @@ from .const import (
     channel_for_dist,
 )
 from .embedded_server import EmbeddedServerError, EmbeddedServerManager
+from .hacs_nudge import async_schedule_hacs_nudge
 from .llm_api import async_register_llm_api, async_unregister_llm_api
 from .mcp_webhook import async_register_webhook, async_unregister_webhook
 from .oauth_legacy import legacy_credentials_active
@@ -656,6 +657,11 @@ async def async_maybe_auto_update(
             },
             learn_more_url=UPDATE_HOLD_DOCS_URL,
         )
+        # A newer component exists but HACS may not surface it for ~48h; ask
+        # HACS to refresh this repository now so the update becomes visible
+        # promptly. Fire-and-forget + throttled per shipped version; fully
+        # advisory (see hacs_nudge).
+        async_schedule_hacs_nudge(hass, shipped)
         return
     ir.async_delete_issue(hass, DOMAIN, ISSUE_UPDATE_HELD)
 
@@ -913,5 +919,10 @@ async def _async_check_component_compat(
             translation_placeholders={"required": required, "installed": own},
             learn_more_url=UPDATE_HOLD_DOCS_URL,
         )
+        # The server needs a newer component than HACS has surfaced; ask HACS
+        # to refresh this repository now so the required update becomes visible
+        # promptly. Fire-and-forget + throttled per required version; fully
+        # advisory (see hacs_nudge).
+        async_schedule_hacs_nudge(hass, required)
     else:
         ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)

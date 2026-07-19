@@ -64,6 +64,16 @@ def _make_hass() -> MagicMock:
 
     hass.config_entries.async_update_entry = MagicMock(side_effect=_update_entry)
 
+    def _create_task(coro, *args, **kwargs):
+        # The update-check paths schedule the HACS nudge fire-and-forget; these
+        # tests assert the scheduling decision, not the nudge's own behavior
+        # (covered in test_hacs_nudge) — close the real coroutine so it is never
+        # left un-awaited.
+        if asyncio.iscoroutine(coro):
+            coro.close()
+
+    hass.async_create_task = MagicMock(side_effect=_create_task)
+
     async def _executor(func, *args):
         return func(*args)
 
@@ -1275,6 +1285,33 @@ class TestAutoUpdateComponentGate:
         fetch.assert_not_awaited()
         hass.config_entries.async_reload.assert_not_awaited()
 
+    async def test_hold_schedules_hacs_nudge_for_shipped_version(self, monkeypatch):
+        # When the hold fires, the component asks HACS to refresh so the newer
+        # component becomes visible promptly (#1783/#1785 follow-up). The nudge
+        # targets the shipped component version and is fire-and-forget.
+        hass = _make_async_hass()
+        entry = _make_entry()
+        self._stub_gate(monkeypatch, shipped="1.0.9", running="1.0.2")
+        nudge = MagicMock()
+        monkeypatch.setattr(esetup, "async_schedule_hacs_nudge", nudge)
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        nudge.assert_called_once_with(hass, "1.0.9")
+
+    async def test_no_hold_does_not_schedule_hacs_nudge(self, monkeypatch):
+        # When the component is current, the update proceeds and no HACS refresh
+        # is requested.
+        hass = _make_async_hass()
+        entry = _make_entry()
+        self._stub_gate(monkeypatch, shipped="1.0.2", running="1.0.2")
+        nudge = MagicMock()
+        monkeypatch.setattr(esetup, "async_schedule_hacs_nudge", nudge)
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        nudge.assert_not_called()
+
 
 class TestFetchShippedComponentVersion:
     """The raw-manifest fetch behind the gate: resolves the component version
@@ -1569,6 +1606,42 @@ class TestComponentCompat:
         esetup.ir.async_delete_issue.assert_called_once_with(
             hass, DOMAIN, ISSUE_COMPONENT_OUTDATED
         )
+
+    async def test_outdated_component_schedules_hacs_nudge_for_required(
+        self, monkeypatch
+    ):
+        # The component-outdated repair also asks HACS to refresh, targeting the
+        # required (server-declared) component version — fire-and-forget.
+        hass = _make_async_hass()
+        entry = _make_entry()
+        monkeypatch.setattr(esetup, "_read_min_component_version", lambda: "0.15.0")
+        monkeypatch.setattr(
+            esetup,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="0.14.0")),
+        )
+        nudge = MagicMock()
+        monkeypatch.setattr(esetup, "async_schedule_hacs_nudge", nudge)
+
+        await esetup._async_check_component_compat(hass, entry)
+
+        nudge.assert_called_once_with(hass, "0.15.0")
+
+    async def test_satisfied_component_does_not_schedule_hacs_nudge(self, monkeypatch):
+        hass = _make_async_hass()
+        entry = _make_entry()
+        monkeypatch.setattr(esetup, "_read_min_component_version", lambda: "0.11.0")
+        monkeypatch.setattr(
+            esetup,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="0.14.0")),
+        )
+        nudge = MagicMock()
+        monkeypatch.setattr(esetup, "async_schedule_hacs_nudge", nudge)
+
+        await esetup._async_check_component_compat(hass, entry)
+
+        nudge.assert_not_called()
 
     async def test_missing_min_version_skips(self, monkeypatch):
         # An older/newer server without MIN_COMPONENT_VERSION ⇒ nothing to

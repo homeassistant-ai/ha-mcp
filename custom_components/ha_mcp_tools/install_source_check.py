@@ -21,16 +21,17 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, callback
 from homeassistant.helpers import issue_registry as ir
 
-from .const import DOMAIN, HACS_COMPONENT_URL, ISSUE_LEGACY_HACS_SOURCE
+from .const import (
+    DOMAIN,
+    HACS_COMPONENT_URL,
+    HACS_LEGACY_REPO_FULL_NAME,
+    ISSUE_LEGACY_HACS_SOURCE,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import Event, HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
-
-# The main server repo's full_name, as HACS's repository registry keys it —
-# the legacy (pre-mirror) install path this module detects.
-_LEGACY_REPO_FULL_NAME = "homeassistant-ai/ha-mcp"
 
 # Guards the schedule below so multiple config entries (tools + server) on the
 # same HA run only ever schedule the check once.
@@ -86,7 +87,7 @@ async def _async_check_install_source(hass: HomeAssistant) -> None:
         hacs = hass.data.get("hacs")
         installed = False
         if hacs is not None:
-            repo = hacs.repositories.get_by_full_name(_LEGACY_REPO_FULL_NAME)
+            repo = hacs.repositories.get_by_full_name(HACS_LEGACY_REPO_FULL_NAME)
             installed = repo is not None and bool(repo.data.installed)
     except Exception:
         _LOGGER.warning(
