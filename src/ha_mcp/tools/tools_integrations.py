@@ -1000,10 +1000,19 @@ class IntegrationTools:
             # Surface the effective Python logger level for this integration
             # so users can confirm logger.set_level changes took effect.
             # Emit unconditionally for symmetry with the list path (_format_entry).
-            logger_levels = await get_logger_levels(self._client)
+            level_warnings: list[str] = []
+            logger_levels = await get_logger_levels(self._client, level_warnings)
             level_info = logger_levels.get(entry_domain or "")
-            resp["log_level"] = level_info["name"] if level_info else "DEFAULT"
+            # UNKNOWN, not DEFAULT: an unreadable level is not evidence that the
+            # integration runs at the default one (#1947).
+            resp["log_level"] = (
+                "UNKNOWN"
+                if level_warnings
+                else (level_info["name"] if level_info else "DEFAULT")
+            )
             resp["log_level_raw"] = level_info["raw"] if level_info else None
+            if level_warnings:
+                resp.setdefault("warnings", []).extend(level_warnings)
 
             # Optionally fetch options flow schema (logically read-only: start+abort)
             if include_schema and result.get("supports_options"):
@@ -1113,10 +1122,18 @@ class IntegrationTools:
 
         # Surface the effective Python logger level for this integration
         # (unconditionally, for symmetry with the legacy path and _format_entry).
-        logger_levels = await get_logger_levels(self._client)
+        level_warnings: list[str] = []
+        logger_levels = await get_logger_levels(self._client, level_warnings)
         level_info = logger_levels.get(entry.get("domain") or "")
-        resp["log_level"] = level_info["name"] if level_info else "DEFAULT"
+        # UNKNOWN, not DEFAULT — see the component path above.
+        resp["log_level"] = (
+            "UNKNOWN"
+            if level_warnings
+            else (level_info["name"] if level_info else "DEFAULT")
+        )
         resp["log_level_raw"] = level_info["raw"] if level_info else None
+        if level_warnings:
+            resp.setdefault("warnings", []).extend(level_warnings)
 
         # Options schema only exists in a live options flow — read it from the
         # legacy flow, but keep the component-provided options (populate_options

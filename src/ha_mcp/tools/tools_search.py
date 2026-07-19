@@ -3408,6 +3408,9 @@ class SearchTools:
             logger.warning(
                 "Failed to fetch notifications for overview: %s", e, exc_info=True
             )
+            # Leaving the keys off entirely reads as "no notifications", which
+            # is a different answer from "could not ask" (#1947).
+            result.setdefault("warnings", []).append(f"notifications unavailable: {e}")
 
     async def _fetch_repairs(
         self,

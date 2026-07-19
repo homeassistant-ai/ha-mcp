@@ -20,6 +20,8 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.smart_search._base import _SearchBase
 from ha_mcp.tools.tools_registry import _get_single_device_result
+from ha_mcp.tools.tools_search import SearchTools
+from ha_mcp.tools.util_helpers import get_logger_levels
 
 _AREA_LIST = "config/area_registry/list"
 
@@ -258,3 +260,54 @@ class TestDeviceEnrichmentReportsSkips:
 
         assert "warnings" not in result
         assert result["device"]["radio_metrics"]["lqi"] == 200
+
+
+class TestEmptyResultVersusUnaskedQuestion:
+    """Helpers whose "nothing found" value is indistinguishable from "could not
+    ask" now record the difference, so a caller can stop reporting a value it
+    never retrieved."""
+
+    @pytest.mark.asyncio
+    async def test_logger_levels_records_the_failed_fetch(self) -> None:
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws gone")
+        )
+        warnings: list[str] = []
+
+        levels = await get_logger_levels(client, warnings)
+
+        assert levels == {}
+        assert warnings == ["log levels unavailable: ws gone"]
+
+    @pytest.mark.asyncio
+    async def test_logger_levels_stays_quiet_when_ha_reports_none(self) -> None:
+        """An instance with no custom levels is a real answer, not a failure."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"integrations": {}}}
+        )
+        warnings: list[str] = []
+
+        await get_logger_levels(client, warnings)
+
+        assert warnings == []
+
+    @pytest.mark.asyncio
+    async def test_notifications_failure_is_named_in_the_overview(self) -> None:
+        """The count is pre-seeded to 0, so a failed fetch leaves the overview
+        asserting "0 notifications" — a positive claim about something nobody
+        could read."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws gone")
+        )
+        tools = SearchTools(client, MagicMock())
+        result: dict[str, Any] = {}
+
+        await tools._fetch_notifications(result)
+
+        # The pre-seeded 0 stays (callers index it unconditionally), but it no
+        # longer stands unqualified.
+        assert result["notification_count"] == 0
+        assert any("notifications unavailable" in w for w in result["warnings"])

@@ -617,7 +617,9 @@ def normalize_log_level(level: Any) -> str | None:
     return None
 
 
-async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
+async def get_logger_levels(
+    client: Any, warnings: list[str] | None = None
+) -> dict[str, dict[str, Any]]:
     """Fetch current HA integration log levels via the ``logger/log_info`` WS command.
 
     Returns a mapping of integration domain (e.g. ``"mqtt"``) to a dict with:
@@ -628,9 +630,12 @@ async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
     - ``raw``: the original numeric level (``int``) when HA returned an int,
       otherwise ``None`` (e.g. when the level was already provided as a string).
 
-    Best-effort enrichment: returns an empty dict on connection/IO failures so
-    callers can treat it as "no custom levels". Programming errors are not
-    suppressed — they surface as bugs during development/CI.
+    Best-effort enrichment: returns an empty dict on connection/IO failures.
+    An empty map alone cannot say whether Home Assistant has no custom levels
+    or whether nobody could ask, so a caller that passes ``warnings`` gets a
+    line on failure and can report UNKNOWN instead of claiming DEFAULT (#1947).
+    Programming errors are not suppressed — they surface as bugs during
+    development/CI.
     """
     try:
         result = await client.send_websocket_message({"type": "logger/log_info"})
@@ -642,9 +647,13 @@ async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
         OSError,
     ) as exc:
         logger.debug("logger/log_info fetch failed: %s", exc)
+        if warnings is not None:
+            warnings.append(f"log levels unavailable: {exc}")
         return {}
 
     if not isinstance(result, dict) or not result.get("success"):
+        if warnings is not None:
+            warnings.append("log levels unavailable: logger/log_info failed")
         return {}
 
     entries = result.get("result", [])
