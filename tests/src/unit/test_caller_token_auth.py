@@ -558,6 +558,42 @@ class TestCallMcpToolsServiceInjectsToken:
         await call_mcp_tools_service(client, "list_files", {"path": "www"})
 
     @pytest.mark.asyncio
+    async def test_stale_1_1_0_component_rejected(self):
+        """Regression for #1946: a component reporting exactly ``1.1.0`` is
+        rejected as too old.
+
+        #1882 added the packages-aware ``list_files`` + ``read_file``
+        ``include_parsed`` behaviours under an *un-bumped* ``1.1.0`` component,
+        so a ``1.1.0`` build may or may not carry them. The floor must therefore
+        exclude ``1.1.0`` (it is ``1.2.0``, the first version cut after #1882),
+        else a stale ``1.1.0`` install passes the gate and then hits raw
+        failures instead of the actionable "update" prompt. Pins that ``1.1.0``
+        never passes; this holds for any floor above it, so it also guards
+        against a regression that lowers the floor back to ``1.1.0``.
+        """
+        client = AsyncMock()
+        client.get_services.return_value = [
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
+            }
+        ]
+        client.call_service = AsyncMock(
+            return_value={
+                "service_response": {
+                    "success": True,
+                    "token": "tok-stale",
+                    "version": "1.1.0",
+                }
+            }
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await call_mcp_tools_service(client, "list_files", {"path": "www"})
+        msg = str(exc_info.value)
+        assert "too old" in msg
+        assert "1.1.0" in msg
+
+    @pytest.mark.asyncio
     async def test_version_above_minimum_accepted(self):
         """A component reporting a version strictly ABOVE
         ``MIN_COMPONENT_VERSION`` is accepted. Guards against a future
