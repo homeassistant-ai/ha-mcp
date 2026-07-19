@@ -556,7 +556,7 @@ wheels = [
 
 [[package]]
 name = "ha-mcp"
-version = "7.14.0"
+version = "7.14.1"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },

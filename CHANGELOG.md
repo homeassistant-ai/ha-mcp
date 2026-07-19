@@ -3,6 +3,52 @@
 <!-- version list -->
 
 
+## v7.14.1 (2026-07-19)
+
+### Changed
+
+- Record repo-wide C901 enforcement, guard against new per-file ignores
+  ([#1967](https://github.com/homeassistant-ai/ha-mcp/pull/1967))
+
+### Fixed
+
+- None-mode webhook connects from claude.ai with no login
+  ([#1976](https://github.com/homeassistant-ai/ha-mcp/pull/1976))
+- Raise on a dead WebSocket transport so dead entities fails loud
+  ([#1966](https://github.com/homeassistant-ai/ha-mcp/pull/1966))
+- Make pending component updates visible (learn-more docs, HACS nudge, held-install warning)
+  ([#1970](https://github.com/homeassistant-ai/ha-mcp/pull/1970))
+- Raise MIN_COMPONENT_VERSION to 1.2.0 so stale 1.1.0 builds fail the gate
+  ([#1961](https://github.com/homeassistant-ai/ha-mcp/pull/1961))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish dev addon version 7.14.0.dev2054 [skip ci]
+  ([`e658112`](https://github.com/homeassistant-ai/ha-mcp/commit/e658112e25e88243928be00b2e79f08a04698400))
+- **addon**: Publish dev addon version 7.14.0.dev2050 [skip ci]
+  ([`c5fb22d`](https://github.com/homeassistant-ai/ha-mcp/commit/c5fb22d7888a857895eab4f0fe71cf59bf6a4d83))
+- **addon**: Publish dev addon version 7.14.0.dev2047 [skip ci]
+  ([`4b5c75d`](https://github.com/homeassistant-ai/ha-mcp/commit/4b5c75db520a24445bcb571196656455b8ad51b9))
+- **addon**: Publish version 7.14.0 [skip ci]
+  ([`fb455a2`](https://github.com/homeassistant-ai/ha-mcp/commit/fb455a20357a31e7653e63a96b3a663fab514a6f))
+
+### Continuous Integration
+
+- Never fail the mirror gate open on a skipped triggering run
+  ([#1968](https://github.com/homeassistant-ai/ha-mcp/pull/1968))
+
+### Testing
+
+- Cover ha_manage_backup(action="diff") tool-layer error mapping
+  ([#1963](https://github.com/homeassistant-ai/ha-mcp/pull/1963))
+</details>
+
+
 ## v7.14.0 (2026-07-19)
 
 ### Added
