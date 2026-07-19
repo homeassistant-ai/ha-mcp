@@ -296,6 +296,46 @@ def _ha_auth_supported() -> bool:
     )
 
 
+def _none_autoapprove_supported() -> bool:
+    """Feature-detect whether the CURRENT flavor ships none-mode auto-approve
+    discovery (its `oauth_autoapprove.py` module, issue #1969). The stable
+    flavor skips these tests until the module is promoted — same
+    lockstep-with-code approach as `_ha_auth_supported`."""
+    return os.path.exists(
+        os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "oauth_autoapprove.py")
+    )
+
+
+def _import_none_autoapprove_stack():
+    """Import the integration wired so none-mode auto-approve resolves.
+
+    Loads __init__, oauth, oauth_autoapprove, and auth_native as submodules of
+    ONE package so the relative imports resolve in every direction to the same
+    instances: oauth_autoapprove does `from .oauth import ...` at load, the AS
+    view does `from .oauth_autoapprove import ...` (none) / `from .auth_native
+    import ...` (ha_auth) at request time, and auth_native does `from .oauth
+    import ...` at load. Returns (init_mod, oauth_mod, autoapprove_mod,
+    auth_native_mod).
+    """
+    _install_runtime_stubs()
+    component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
+    pkg_name = f"mcp_proxy_init_{CURRENT['key']}"
+    for suffix in ("", ".oauth", ".oauth_autoapprove", ".auth_native", ".repairs"):
+        sys.modules.pop(f"{pkg_name}{suffix}", None)
+    init_path = os.path.join(component_dir, "__init__.py")
+    init_spec = importlib.util.spec_from_file_location(
+        pkg_name, init_path, submodule_search_locations=[component_dir]
+    )
+    pkg = importlib.util.module_from_spec(init_spec)
+    sys.modules[pkg_name] = pkg
+    # oauth first (oauth_autoapprove + auth_native both `from .oauth` at load).
+    oauth = _load_pkg_submodule(pkg_name, component_dir, "oauth")
+    autoapprove = _load_pkg_submodule(pkg_name, component_dir, "oauth_autoapprove")
+    auth_native = _load_pkg_submodule(pkg_name, component_dir, "auth_native")
+    init_spec.loader.exec_module(pkg)
+    return pkg, oauth, autoapprove, auth_native
+
+
 def _load_pkg_submodule(pkg_name, component_dir, sub):
     """Load `<pkg_name>.<sub>` from `<component_dir>/<sub>.py` and register it in
     sys.modules under that dotted name so relative imports resolve to it."""
@@ -1426,9 +1466,11 @@ class TestOAuthOffPreservesBehavior:
         return h
 
     async def test_setup_without_oauth_section_omits_oauth_key(self, mod, hass):
-        """The OFF path must not even add an "oauth" key to hass.data —
-        v1.0.2 had three keys (target_url, webhook_id, session) and the OFF
-        path of v1.0.3-beta.1 must produce identical shape."""
+        """The OFF path must never add the "oauth" key (which arms the bearer
+        gate). On stable that leaves exactly the legacy three keys; on dev the
+        none-mode auto-approve fix (#1969) additionally serves discovery, so it
+        adds "autoapprove" + "oauth_mode" — but still NOT "oauth", so the
+        forwarder stays unauthenticated."""
         proxy_config = {
             "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
             "webhook_id": "mcp_test_webhook_id_12345",
@@ -1440,18 +1482,23 @@ class TestOAuthOffPreservesBehavior:
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
+        # The bearer-gate key is never set on the OFF path, in EITHER flavor.
         assert "oauth" not in hass.data[mod.DOMAIN]
-        # And the rest of the dict shape matches the legacy three keys
-        assert set(hass.data[mod.DOMAIN].keys()) == {
-            "target_url",
-            "webhook_id",
-            "session",
-        }
+        expected = {"target_url", "webhook_id", "session"}
+        if _none_autoapprove_supported():
+            # Dev serves none-mode auto-approve discovery (issue #1969): the
+            # provider under "autoapprove" (not "oauth") + the mode marker.
+            expected |= {"autoapprove", "oauth_mode"}
+            assert (
+                hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_NONE_AUTOAPPROVE
+            )
+        assert set(hass.data[mod.DOMAIN].keys()) == expected
 
     async def test_setup_does_not_import_oauth_module_when_off(self, mod, hass):
-        """Confirms the lazy-import: oauth submodule shouldn't be loaded
-        unless OAuth is configured. If this regresses, the OFF path picks up
-        new dependencies and the 'no behavior change' guarantee breaks."""
+        """Confirms the lazy-import: the oauth submodule shouldn't be loaded on
+        the OFF path — UNLESS the flavor ships none-mode auto-approve (dev,
+        #1969), whose discovery deliberately reuses oauth's metadata views +
+        shared PKCE store, so loading it on the OFF path is expected there."""
         proxy_config = {
             "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
             "webhook_id": "mcp_test_webhook_id_12345",
@@ -1467,9 +1514,14 @@ class TestOAuthOffPreservesBehavior:
             await mod.async_setup_entry(hass, MagicMock())
 
         # The submodule name follows from the parent's package name
-        # ("mcp_proxy_init_<variant>"). If it ever appears here, the OFF path
-        # imported it.
-        assert oauth_submodule_name not in sys.modules
+        # ("mcp_proxy_init_<variant>").
+        if _none_autoapprove_supported():
+            # Dev's OFF path serves auto-approve discovery, which reuses oauth's
+            # metadata views + PKCE store — so oauth IS loaded, by design.
+            assert oauth_submodule_name in sys.modules
+        else:
+            # Stable keeps the original lazy-import guarantee.
+            assert oauth_submodule_name not in sys.modules
 
     async def test_blank_creds_raises_config_entry_error(self, mod, hass):
         """Blank creds in an oauth section signal a config bug — the user
@@ -1585,11 +1637,12 @@ class TestDebugLogging:
             await mod.async_setup_entry(hass, MagicMock())
 
         assert "debug_logging" not in hass.data[mod.DOMAIN]
-        assert set(hass.data[mod.DOMAIN].keys()) == {
-            "target_url",
-            "webhook_id",
-            "session",
-        }
+        expected = {"target_url", "webhook_id", "session"}
+        if _none_autoapprove_supported():
+            # Dev's OAuth-off path also serves none-mode auto-approve discovery
+            # (issue #1969): provider under "autoapprove" + the mode marker.
+            expected |= {"autoapprove", "oauth_mode"}
+        assert set(hass.data[mod.DOMAIN].keys()) == expected
 
     async def test_debug_on_stores_flag(self, mod, hass):
         proxy_config = {
@@ -3804,16 +3857,13 @@ class TestPendingCodeCap:
     def test_issue_code_returns_none_at_cap(self, provider, tmp_path):
         oauth = _import_oauth(tmp_secret_dir=tmp_path)
         challenge = "X" * 43
-        # Fill the dict directly — pruning would clear expired entries on
-        # re-issue but here we want non-expired entries at the cap.
-        for i in range(oauth.MAX_PENDING_CODES):
-            provider._codes[f"k{i}"] = {
-                "redirect_uri": "https://x/",
-                "code_challenge": challenge,
-                "expires": time.time() + 60,
-            }
-        result = provider.issue_code("https://claude.ai/cb", challenge)
-        assert result is None
+        # Fill to the cap via the public API — none of these expire within the
+        # 5-min TTL, so the prune on each issue keeps them and the cap is hit.
+        # (Poking the internal dict is avoided so this stays agnostic to whether
+        # the flavor stores codes inline or in the shared PKCECodeStore.)
+        for _ in range(oauth.MAX_PENDING_CODES):
+            assert provider.issue_code("https://claude.ai/cb", challenge) is not None
+        assert provider.issue_code("https://claude.ai/cb", challenge) is None
 
 
 class TestTokenExpiryBoundary:
@@ -4824,8 +4874,10 @@ class TestHaAuthMode:
         assert auth_native_name not in sys.modules
 
     async def test_off_path_imports_neither_oauth_nor_auth_native(self, hass, tmp_path):
-        """The OAuth-off path must import neither oauth NOR auth_native (mirror
-        of the existing 'off path imports nothing' pin, extended to ha_auth)."""
+        """The OAuth-off path must never import auth_native (ha_auth stays lazy).
+        oauth stays lazy too UNLESS the flavor ships none-mode auto-approve
+        (dev, #1969), whose off-path discovery deliberately reuses oauth's
+        metadata views + shared PKCE store."""
         mod = _import_mcp_proxy()
         oauth_name = f"{mod.__name__}.oauth"
         an_name = f"{mod.__name__}.auth_native"
@@ -4841,7 +4893,12 @@ class TestHaAuthMode:
             patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
         ):
             await mod.async_setup_entry(hass, MagicMock())
-        assert oauth_name not in sys.modules
+        if _none_autoapprove_supported():
+            # None-mode auto-approve reuses oauth (metadata views + PKCE store).
+            assert oauth_name in sys.modules
+        else:
+            assert oauth_name not in sys.modules
+        # auth_native (ha_auth) is never pulled in on the OFF path.
         assert an_name not in sys.modules
 
     # ---- documents ----
@@ -5828,3 +5885,512 @@ class TestProxyConfigFilePersistence:
         assert isinstance(json.loads(config_path.read_text()), dict)
         err = capsys.readouterr().err
         assert "Could not create the proxy config file" in err
+
+
+class TestNoneAutoApproveMode:
+    """None-mode auto-approve discovery (OAuth off — issue #1969, dev-only).
+
+    When OAuth is off the add-on serves its own corrected RFC 8414/9728 discovery
+    documents plus an invisible auto-approve authorization server, so claude.ai's
+    intermittent discovery resolves against the add-on instead of HA core's
+    broken origin-root doc — and completes with no HA login. The webhook stays
+    unauthenticated (the forwarder never 401s). Skips on flavors that don't ship
+    oauth_autoapprove yet."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_stable(self, _webhook_proxy_variant):
+        if not _none_autoapprove_supported():
+            pytest.skip("flavor does not ship none-mode auto-approve yet")
+
+    @pytest.fixture
+    def hass(self):
+        h = MagicMock()
+        h.data = {}
+        h.http = MagicMock()
+        h.http.register_view = MagicMock()
+
+        async def fake_executor(func, *args):
+            return func(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        return h
+
+    @staticmethod
+    def _pkce_pair():
+        """A valid (code_verifier, code_challenge) pair per RFC 7636 S256."""
+        import base64
+        import hashlib
+        import secrets
+
+        verifier = secrets.token_urlsafe(64)
+        challenge = (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+            .rstrip(b"=")
+            .decode("ascii")
+        )
+        return verifier, challenge
+
+    @staticmethod
+    def _none_live_hass(oauth, autoapprove, webhook_id="mcp_test"):
+        """A hass whose live cfg is none-mode auto-approve (provider under the
+        AUTOAPPROVE_PROVIDER_KEY, mode marker set, NO "oauth" key)."""
+        hass = MagicMock()
+        hass.data = {}
+        hass.http = MagicMock()
+        provider = autoapprove.AutoApproveProvider(hass, webhook_id, None)
+        hass.data[oauth.DOMAIN] = {
+            "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+            "webhook_id": webhook_id,
+            "session": MagicMock(),
+            "oauth_mode": oauth.MODE_NONE_AUTOAPPROVE,
+            oauth.AUTOAPPROVE_PROVIDER_KEY: provider,
+        }
+        return hass, provider
+
+    CLAUDE_REDIRECT = "https://claude.ai/api/mcp/auth_callback"
+
+    # ---- literals agree across the modules ----
+
+    def test_mode_and_key_literals_agree(self):
+        mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        assert oauth.MODE_NONE_AUTOAPPROVE == "none_autoapprove"
+        assert mod.OAUTH_MODE_NONE_AUTOAPPROVE == oauth.MODE_NONE_AUTOAPPROVE
+        # The provider key the discovery views read (oauth._active_provider) must
+        # equal the one the handler writes (mod._setup_none_autoapprove).
+        assert oauth.AUTOAPPROVE_PROVIDER_KEY == mod.AUTOAPPROVE_PROVIDER_KEY
+        assert oauth.AUTOAPPROVE_PROVIDER_KEY == "autoapprove"
+
+    # ---- none-mode authorization-server document ----
+
+    def test_as_document_shape(self):
+        _mod, _oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        doc = autoapprove.authorization_server_document("https://x.example")
+        base = CURRENT["oauth_base"]
+        assert doc["issuer"] == f"https://x.example{base}"
+        # Points at OUR auto-approve endpoints, NOT HA core's /auth/*.
+        assert doc["authorization_endpoint"] == f"https://x.example{base}/authorize"
+        assert doc["token_endpoint"] == f"https://x.example{base}/token"
+        assert doc["response_types_supported"] == ["code"]
+        assert doc["grant_types_supported"] == ["authorization_code"]
+        assert doc["code_challenge_methods_supported"] == ["S256"]
+        # The two fields HA core's root doc lacks — the whole reason for #1969.
+        assert doc["token_endpoint_auth_methods_supported"] == ["none"]
+        assert doc["client_id_metadata_document_supported"] is True
+        # No DCR: fixed/auto flow, so no registration endpoint advertised.
+        assert "registration_endpoint" not in doc
+
+    async def test_as_view_serves_none_document_when_live(self):
+        _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass, provider = self._none_live_hass(oauth, autoapprove)
+        view = oauth.AuthorizationServerMetadataView(provider)
+        request = _make_view_request(headers={"Host": "legit.example"})
+        with patch.object(oauth.web, "json_response") as jr:
+            await view.get(request)
+        doc = jr.call_args.args[0]
+        base = CURRENT["oauth_base"]
+        assert doc["authorization_endpoint"] == f"https://legit.example{base}/authorize"
+        assert doc["token_endpoint_auth_methods_supported"] == ["none"]
+
+    async def test_fixed_path_protected_resource_404s_in_none_mode(self):
+        # SECURITY (#1976): the fixed, guessable /protected-resource path must
+        # NOT leak the webhook id (the sole credential in none mode) to an
+        # anonymous GET — it 404s in none-autoapprove mode.
+        _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass, provider = self._none_live_hass(oauth, autoapprove)
+        request = _make_view_request(headers={"Host": "legit.example"})
+        with patch.object(oauth.web, "json_response") as jr:
+            await oauth.ProtectedResourceMetadataView(provider).get(request)
+        assert jr.call_args.kwargs["status"] == 404
+
+    async def test_path_scoped_protected_resource_still_serves_in_none_mode(self):
+        # The path-scoped view (URL embeds the id) KEEPS serving in none mode —
+        # its caller already knows the id, so nothing leaks (#1976). This is the
+        # doc claude.ai's none-mode discovery actually uses.
+        _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass, provider = self._none_live_hass(oauth, autoapprove)
+        request = _make_view_request(headers={"Host": "legit.example"})
+        wk = oauth.WellKnownProtectedResourceView(provider)
+        assert wk.url == "/.well-known/oauth-protected-resource/api/webhook/mcp_test"
+        with patch.object(oauth.web, "json_response") as jr:
+            await wk.get(request)
+        body = jr.call_args.args[0]
+        base = CURRENT["oauth_base"]
+        assert body["resource"] == "https://legit.example/api/webhook/mcp_test"
+        assert body["authorization_servers"] == [f"https://legit.example{base}"]
+        # It served (200) rather than 404ing.
+        assert jr.call_args.kwargs.get("status") in (None, 200)
+
+    # ---- AutoApproveProvider (PKCE store + cosmetic token) ----
+
+    def test_provider_pkce_roundtrip_and_one_shot(self):
+        _mod, _oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        provider = autoapprove.AutoApproveProvider(MagicMock(), "mcp_test", None)
+        verifier, challenge = self._pkce_pair()
+        code = provider.issue_code(self.CLAUDE_REDIRECT, challenge)
+        assert code
+        assert provider.consume_code(code, self.CLAUDE_REDIRECT, verifier) is True
+        # One-shot: a second consume of the same code fails.
+        assert provider.consume_code(code, self.CLAUDE_REDIRECT, verifier) is False
+
+    def test_provider_rejects_wrong_verifier(self):
+        _mod, _oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        provider = autoapprove.AutoApproveProvider(MagicMock(), "mcp_test", None)
+        _v, challenge = self._pkce_pair()
+        other_verifier, _c = self._pkce_pair()
+        code = provider.issue_code(self.CLAUDE_REDIRECT, challenge)
+        assert (
+            provider.consume_code(code, self.CLAUDE_REDIRECT, other_verifier) is False
+        )
+
+    def test_access_token_is_opaque_and_unique(self):
+        _mod, _oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        t1 = autoapprove.AutoApproveProvider.issue_access_token()
+        t2 = autoapprove.AutoApproveProvider.issue_access_token()
+        assert isinstance(t1, str) and len(t1) >= 20
+        assert t1 != t2
+
+    # ---- redirect open-redirect gate (allowlist-only) ----
+
+    def test_redirect_gate_allows_claude_callback_only(self):
+        _mod, _oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        assert autoapprove._is_valid_autoapprove_redirect(self.CLAUDE_REDIRECT) is True
+        # A same-host-different-path or any other https URL is NOT allowlisted.
+        assert (
+            autoapprove._is_valid_autoapprove_redirect("https://claude.ai/evil")
+            is False
+        )
+        assert (
+            autoapprove._is_valid_autoapprove_redirect("https://evil.example/cb")
+            is False
+        )
+        # http (non-https) fails the floor before the allowlist even matters.
+        assert (
+            autoapprove._is_valid_autoapprove_redirect(
+                "http://claude.ai/api/mcp/auth_callback"
+            )
+            is False
+        )
+
+    # ---- AutoApproveAuthorizeView (GET: issue code, 302, no UI) ----
+
+    async def test_authorize_404_when_not_live(self):
+        _mod, _oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass = MagicMock()
+        hass.data = {}
+        view = autoapprove.AutoApproveAuthorizeView(hass)
+        request = _make_view_request(query={"response_type": "code"})
+        with patch.object(autoapprove.web, "json_response") as jr:
+            await view.get(request)
+        assert jr.call_args.kwargs["status"] == 404
+
+    async def test_authorize_happy_path_issues_code_and_redirects(self):
+        _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass, provider = self._none_live_hass(oauth, autoapprove)
+        view = autoapprove.AutoApproveAuthorizeView(hass)
+        verifier, challenge = self._pkce_pair()
+        request = _make_view_request(
+            query={
+                "response_type": "code",
+                "client_id": "https://claude.ai/whatever",
+                "redirect_uri": self.CLAUDE_REDIRECT,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": "st-1",
+            }
+        )
+        with patch.object(autoapprove.web, "Response") as resp:
+            await view.get(request)
+        # 302 straight back — no consent page rendered.
+        assert resp.call_args.kwargs["status"] == 302
+        location = resp.call_args.kwargs["headers"]["Location"]
+        from urllib.parse import parse_qs, urlparse
+
+        q = parse_qs(urlparse(location).query)
+        assert q["state"][0] == "st-1"
+        # The issued code is real: it consumes with the matching verifier.
+        assert provider.consume_code(q["code"][0], self.CLAUDE_REDIRECT, verifier)
+
+    async def test_authorize_rejects_non_allowlisted_redirect_with_400(self):
+        _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass, _provider = self._none_live_hass(oauth, autoapprove)
+        view = autoapprove.AutoApproveAuthorizeView(hass)
+        _v, challenge = self._pkce_pair()
+        request = _make_view_request(
+            query={
+                "response_type": "code",
+                "client_id": "https://evil.example/cimd",
+                "redirect_uri": "https://evil.example/steal",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": "st",
+            }
+        )
+        with (
+            patch.object(autoapprove.web, "json_response") as jr,
+            patch.object(autoapprove.web, "Response") as resp,
+        ):
+            await view.get(request)
+        # 400 in place — NEVER a 302 to an unvalidated target.
+        assert jr.call_args.kwargs["status"] == 400
+        resp.assert_not_called()
+
+    async def test_authorize_rejects_non_s256(self):
+        _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass, _provider = self._none_live_hass(oauth, autoapprove)
+        view = autoapprove.AutoApproveAuthorizeView(hass)
+        _v, challenge = self._pkce_pair()
+        request = _make_view_request(
+            query={
+                "response_type": "code",
+                "redirect_uri": self.CLAUDE_REDIRECT,
+                "code_challenge": challenge,
+                "code_challenge_method": "plain",
+                "state": "st",
+            }
+        )
+        with patch.object(autoapprove.web, "json_response") as jr:
+            await view.get(request)
+        assert jr.call_args.kwargs["status"] == 400
+
+    # ---- AutoApproveTokenView (POST: PKCE exchange, public client) ----
+
+    async def test_token_404_when_not_live(self):
+        _mod, _oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass = MagicMock()
+        hass.data = {}
+        view = autoapprove.AutoApproveTokenView(hass)
+        request = _make_view_request(post_data={}, method="POST")
+        with patch.object(autoapprove.web, "json_response") as jr:
+            await view.post(request)
+        assert jr.call_args.kwargs["status"] == 404
+
+    async def test_token_valid_pkce_no_client_secret(self):
+        _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass, provider = self._none_live_hass(oauth, autoapprove)
+        verifier, challenge = self._pkce_pair()
+        code = provider.issue_code(self.CLAUDE_REDIRECT, challenge)
+        view = autoapprove.AutoApproveTokenView(hass)
+        # NOTE: no client_secret in the form — public client.
+        request = _make_view_request(
+            post_data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": self.CLAUDE_REDIRECT,
+                "code_verifier": verifier,
+            },
+            method="POST",
+        )
+        with patch.object(autoapprove.web, "json_response") as jr:
+            await view.post(request)
+        # Success is a bare json_response (default 200, no status kwarg).
+        assert jr.call_args.kwargs.get("status") in (None, 200)
+        body = jr.call_args.args[0]
+        assert body["token_type"] == "Bearer"
+        assert body["access_token"]
+        assert isinstance(body["expires_in"], int)
+        # None mode issues no refresh token.
+        assert "refresh_token" not in body
+        # RFC 6749 §5.1: the token body carries credentials and must not be
+        # cached — parity with the component's auto-approve token view (#1976).
+        assert jr.call_args.kwargs["headers"] == {
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+        }
+        assert jr.call_args.kwargs["headers"]["Cache-Control"] == "no-store"
+
+    async def test_token_wrong_verifier_is_invalid_grant(self):
+        _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass, provider = self._none_live_hass(oauth, autoapprove)
+        _v, challenge = self._pkce_pair()
+        code = provider.issue_code(self.CLAUDE_REDIRECT, challenge)
+        wrong_verifier, _c = self._pkce_pair()
+        view = autoapprove.AutoApproveTokenView(hass)
+        request = _make_view_request(
+            post_data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": self.CLAUDE_REDIRECT,
+                "code_verifier": wrong_verifier,
+            },
+            method="POST",
+        )
+        with patch.object(autoapprove.web, "json_response") as jr:
+            await view.post(request)
+        assert jr.call_args.kwargs["status"] == 400
+        assert jr.call_args.args[0]["error"] == "invalid_grant"
+
+    async def test_token_code_is_one_time(self):
+        _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass, provider = self._none_live_hass(oauth, autoapprove)
+        verifier, challenge = self._pkce_pair()
+        code = provider.issue_code(self.CLAUDE_REDIRECT, challenge)
+        view = autoapprove.AutoApproveTokenView(hass)
+        post_data = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": self.CLAUDE_REDIRECT,
+            "code_verifier": verifier,
+        }
+        with patch.object(autoapprove.web, "json_response") as jr:
+            await view.post(
+                _make_view_request(post_data=dict(post_data), method="POST")
+            )
+        assert jr.call_args.kwargs.get("status") in (None, 200)
+        with patch.object(autoapprove.web, "json_response") as jr:
+            await view.post(
+                _make_view_request(post_data=dict(post_data), method="POST")
+            )
+        assert jr.call_args.kwargs["status"] == 400
+        assert jr.call_args.args[0]["error"] == "invalid_grant"
+
+    # ---- full setup registers the views + marks the mode ----
+
+    async def test_setup_registers_metadata_and_autoapprove_views(self, hass, tmp_path):
+        mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        repairs = _bind_repairs(mod, tmp_path)
+        repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
+        # No "oauth" section = OAuth off = none-mode auto-approve.
+        config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create,
+            patch.object(repairs, "_write_marker") as mock_write,
+            patch.object(repairs, "_delete_issue_only") as mock_delete,
+        ):
+            result = await mod.async_setup_entry(hass, MagicMock())
+
+        assert result is True
+        registered = {
+            call.args[0].url for call in hass.http.register_view.call_args_list
+        }
+        metadata = {
+            f"{CURRENT['oauth_base']}/protected-resource",
+            f"{CURRENT['oauth_base']}/authorization-server",
+        } | _wellknown_oauth_urls(oauth, "mcp_test")
+        autoapprove_urls = {
+            f"{CURRENT['oauth_base']}/authorize",
+            f"{CURRENT['oauth_base']}/token",
+        }
+        assert registered == metadata | autoapprove_urls
+        assert len(registered) == 9  # 7 discovery + 2 auto-approve
+        # Mode marker + provider under the non-"oauth" key.
+        assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_NONE_AUTOAPPROVE
+        assert isinstance(
+            hass.data[mod.DOMAIN]["autoapprove"], autoapprove.AutoApproveProvider
+        )
+        # The bearer-gate key stays off — the webhook is unauthenticated.
+        assert "oauth" not in hass.data[mod.DOMAIN]
+        # No root /authorize or /token (those are legacy-only).
+        assert "/authorize" not in registered
+        assert "/token" not in registered
+        # No restart repair — none-mode binds path-scoped views only.
+        assert not repairs.RESTART_MARKER_FILE.exists()
+        mock_delete.assert_called_once_with(hass, mod.DOMAIN)
+        mock_create.assert_not_called()
+        mock_write.assert_not_called()
+
+    async def test_setup_failure_fails_open_keeps_plain_proxy(self, hass, tmp_path):
+        """Unlike ha_auth/legacy, a none-mode auto-approve setup failure must NOT
+        tear down the (intentionally unauthenticated) webhook — it just skips the
+        discovery enhancement and keeps forwarding."""
+        mod, oauth, _aa, _an = _import_none_autoapprove_stack()
+        _bind_repairs(mod, tmp_path)
+        config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=config),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(
+                oauth, "register_metadata_views", side_effect=RuntimeError("boom")
+            ),
+        ):
+            result = await mod.async_setup_entry(hass, MagicMock())
+
+        assert result is True  # setup still succeeds (fail-open)
+        # Webhook was NOT torn down.
+        mock_unreg.assert_not_called()
+        # Discovery not marked live, but the plain proxy config is present.
+        data = hass.data[mod.DOMAIN]
+        assert "autoapprove" not in data
+        assert "oauth_mode" not in data
+        assert "oauth" not in data
+        assert data["target_url"].endswith("private_zctpwlX7ZkIAr7oqdfLPxw")
+
+    # ---- mode switch none <-> ha_auth with no rebind (hard requirement) ----
+
+    async def test_as_document_switches_none_ha_auth_without_rebind(self):
+        _mod, oauth, autoapprove, auth_native = _import_none_autoapprove_stack()
+        hass = MagicMock()
+        hass.data = {}
+        aa_provider = autoapprove.AutoApproveProvider(hass, "mcp_test", None)
+        # none-autoapprove live
+        hass.data[oauth.DOMAIN] = {
+            "oauth_mode": oauth.MODE_NONE_AUTOAPPROVE,
+            oauth.AUTOAPPROVE_PROVIDER_KEY: aa_provider,
+        }
+        view = oauth.AuthorizationServerMetadataView(aa_provider)  # bound once
+        request = _make_view_request(headers={"Host": "legit.example"})
+        base = CURRENT["oauth_base"]
+
+        with patch.object(oauth.web, "json_response") as jr:
+            await view.get(request)
+        assert jr.call_args.args[0]["authorization_endpoint"] == (
+            f"https://legit.example{base}/authorize"
+        )
+
+        # Flip to ha_auth by mutating hass.data — no rebind, no restart.
+        rs = auth_native.ResourceServer(hass, "mcp_test", None)
+        hass.data[oauth.DOMAIN] = {"oauth_mode": oauth.MODE_HA_AUTH, "oauth": rs}
+        with patch.object(oauth.web, "json_response") as jr:
+            await view.get(request)
+        assert jr.call_args.args[0]["authorization_endpoint"] == (
+            "https://legit.example/auth/authorize"
+        )
+
+        # Flip back to none — the same bound view serves the auto-approve doc.
+        hass.data[oauth.DOMAIN] = {
+            "oauth_mode": oauth.MODE_NONE_AUTOAPPROVE,
+            oauth.AUTOAPPROVE_PROVIDER_KEY: aa_provider,
+        }
+        with patch.object(oauth.web, "json_response") as jr:
+            await view.get(request)
+        assert jr.call_args.args[0]["authorization_endpoint"] == (
+            f"https://legit.example{base}/authorize"
+        )
+
+    # ---- forwarder stays unauthenticated (no 401) with auto-approve live ----
+
+    async def test_webhook_forwarder_ignores_bearer_in_none_mode(self):
+        mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass = MagicMock()
+        provider = autoapprove.AutoApproveProvider(hass, "mcp_test", None)
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test",
+                "session": MagicMock(),
+                "oauth_mode": mod.OAUTH_MODE_NONE_AUTOAPPROVE,
+                "autoapprove": provider,
+            }
+        }
+        request = MagicMock()
+        request.headers = {"Authorization": "Bearer whatever-cosmetic-or-forged"}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        sentinel = mod.aiohttp.ClientError("stop here")
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(side_effect=sentinel)
+
+        await mod._handle_webhook(hass, "mcp_test", request)
+
+        # The gate keys off "oauth" (absent here), so it never 401s — the body
+        # is read and forwarded upstream (which raises the sentinel -> 502).
+        request.read.assert_awaited_once()

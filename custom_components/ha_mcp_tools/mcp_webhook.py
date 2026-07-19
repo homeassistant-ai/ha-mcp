@@ -8,7 +8,11 @@ reverse proxy) with the webhook id as the shared secret.
 Three auth postures, chosen in the options flow:
 
 * ``none`` — the secret webhook URL *is* the credential (matches the add-on's
-  default). No bearer is required.
+  default). No bearer is required and the forwarder always returns 200. It still
+  serves our own corrected RFC 8414 / RFC 9728 discovery documents plus an
+  invisible auto-approve authorization server (:mod:`oauth_autoapprove`), so
+  claude.ai's intermittent OAuth discovery resolves against us — not HA core's
+  broken origin-root doc — and connects with no HA login (issue #1969).
 * ``ha_auth`` — Home Assistant core is the OAuth authorization server. This
   module serves the RFC 8414 / RFC 9728 discovery documents (so claude.ai /
   ChatGPT can sign in with the user's HA account) and validates inbound bearer
@@ -26,7 +30,9 @@ mapping); the ``ha_auth`` bearer check + discovery documents mirror the add-on's
 provider + its root ``/authorize`` + ``/token`` views live in
 :mod:`oauth_legacy`, ported from the ``legacy`` subset of the add-on's
 ``oauth.py``. The seven RFC 8414 / RFC 9728 discovery views below are shared by
-``ha_auth`` and ``legacy`` — see :func:`active_auth_mode`.
+``ha_auth``, ``legacy``, and ``none`` (which serves a distinct auto-approve
+authorization-server document pointing at :mod:`oauth_autoapprove`'s endpoints)
+— see :func:`active_auth_mode`.
 """
 
 from __future__ import annotations
@@ -50,6 +56,11 @@ from .const import (
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
+)
+from .oauth_autoapprove import (
+    CFG_AUTOAPPROVE_PROVIDER,
+    AutoApproveProvider,
+    bind_autoapprove_views,
 )
 from .oauth_legacy import (
     AUTHORIZE_PATH,
@@ -219,14 +230,14 @@ def _active_webhook_cfg(hass: HomeAssistant) -> dict[str, Any] | None:
 def active_auth_mode(hass: HomeAssistant) -> str | None:
     """Return the OAuth-relevant auth mode of the live webhook registration.
 
-    ``WEBHOOK_AUTH_HA`` or ``WEBHOOK_AUTH_LEGACY``, or None when no OAuth
+    ``WEBHOOK_AUTH_HA``, ``WEBHOOK_AUTH_LEGACY``, or ``WEBHOOK_AUTH_NONE`` (the
+    none-mode auto-approve surface, issue #1969), or None when no discovery
     surface is live. Checked via PROVIDER PRESENCE, not the raw configured
     ``auth_mode`` string, so local-only mode (remote webhook disabled by
     option — ``register_endpoint=False`` in ``async_register_webhook``)
-    correctly reports None even when ``webhook_auth`` is set to
-    ``ha_auth``/``legacy``: no provider is constructed for a webhook that was
-    never registered, so there is nothing to advertise or authenticate
-    against. Read live from hass.data (not captured at view/provider
+    correctly reports None even when ``webhook_auth`` is set: no provider is
+    constructed for a webhook that was never registered, so there is nothing to
+    advertise or authenticate against. Read live from hass.data (not captured at view/provider
     construction time) so the SAME registered/bound instances serve whichever
     mode is active now — mirrors the add-on's ``_active_oauth_mode``. Used by
     the discovery views below AND by ``LegacyOAuthProvider.is_active`` (via
@@ -246,6 +257,8 @@ def active_auth_mode(hass: HomeAssistant) -> str | None:
         return WEBHOOK_AUTH_HA
     if cfg.get("oauth_provider") is not None:
         return WEBHOOK_AUTH_LEGACY
+    if cfg.get(CFG_AUTOAPPROVE_PROVIDER) is not None:
+        return WEBHOOK_AUTH_NONE
     return None
 
 
@@ -295,6 +308,32 @@ def _legacy_authorization_server_document(base: str) -> dict[str, Any]:
     }
 
 
+def _none_mode_authorization_server_document(base: str) -> dict[str, Any]:
+    """RFC 8414 authorization-server metadata for none mode's auto-approve server.
+
+    Points at OUR OWN ``OAUTH_BASE`` ``/authorize`` + ``/token`` (the invisible
+    auto-approve endpoints in :mod:`oauth_autoapprove`), NOT HA core's
+    ``/auth/*``. Serving this — with ``token_endpoint_auth_methods_supported:
+    ["none"]`` (public PKCE client) and ``client_id_metadata_document_supported``
+    — is the none-mode fix: claude.ai's intermittent discovery resolves against
+    this corrected document instead of HA core's origin-root
+    ``/.well-known/oauth-authorization-server``, which omits the ``"none"`` auth
+    method and has no ``registration_endpoint`` (issue #1969). No refresh grant:
+    the token is cosmetic (none mode ignores bearers), so only
+    ``authorization_code`` is advertised.
+    """
+    return {
+        "issuer": f"{base}{OAUTH_BASE}",
+        "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
+        "token_endpoint": f"{base}{OAUTH_BASE}/token",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "client_id_metadata_document_supported": True,
+    }
+
+
 class _ProtectedResourceMetadataView(HomeAssistantView):
     """RFC 9728 Protected Resource Metadata."""
 
@@ -308,7 +347,18 @@ class _ProtectedResourceMetadataView(HomeAssistantView):
         self._hass = hass
 
     async def get(self, request: web.Request) -> web.Response:
-        """Serve the protected-resource document (or 404 when no OAuth mode is live)."""
+        """Serve the protected-resource document for the bearer-gated modes only.
+
+        SECURITY (#1976 review): this ANONYMOUS, fixed (guessable) path exposes
+        ``resource: <base>/api/webhook/<id>``. In none mode the webhook id is the
+        SOLE credential, so serving it here would leak it to any unauthenticated
+        GET. Serve only for ``ha_auth``/``legacy`` (where the id is not a secret
+        and the 401 ``WWW-Authenticate`` pointer legitimately directs a client
+        here); 404 otherwise. The PATH-SCOPED well-known view still serves in none
+        mode — its caller must already know the id (it is a route parameter).
+        """
+        if active_auth_mode(self._hass) not in (WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY):
+            return _json_not_found()
         webhook_id = _active_webhook_id(self._hass)
         if webhook_id is None:
             return _json_not_found()
@@ -341,6 +391,8 @@ class _AuthorizationServerMetadataView(HomeAssistantView):
         base = _build_base_url(request)
         if mode == WEBHOOK_AUTH_LEGACY:
             return web.json_response(_legacy_authorization_server_document(base))
+        if mode == WEBHOOK_AUTH_NONE:
+            return web.json_response(_none_mode_authorization_server_document(base))
         return web.json_response(_authorization_server_document(base))
 
 
@@ -636,6 +688,7 @@ async def async_register_webhook(
         "auth_mode": auth_mode,
         "resource_server": None,
         "oauth_provider": None,
+        CFG_AUTOAPPROVE_PROVIDER: None,
     }
 
     oauth_restart_needed = False
@@ -672,6 +725,19 @@ async def async_register_webhook(
                         "enable legacy mode again."
                     ) from err
                 cfg["oauth_provider"] = oauth_provider
+            else:
+                # WEBHOOK_AUTH_NONE (the only remaining mode — unknown modes
+                # already raised above). The secret webhook URL is the
+                # credential, but we still serve our own corrected discovery +
+                # an invisible auto-approve authorization server so claude.ai's
+                # intermittent OAuth discovery resolves against us instead of HA
+                # core's broken origin-root document, and completes with no HA
+                # login (issue #1969). Both view bundles bind at most once per
+                # HA session; the per-request resolvers gate them on this cfg,
+                # so a none<->ha_auth switch needs no restart.
+                _register_metadata_views(hass)
+                bind_autoapprove_views(hass)
+                cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
         except Exception:
             # Never leave a live endpoint (or a leaked session) behind a failed
             # auth-setup path. suppress: the ORIGINAL error must be what

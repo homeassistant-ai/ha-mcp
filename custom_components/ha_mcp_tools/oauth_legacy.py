@@ -53,13 +53,16 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Registered at the HA ROOT rather than under a component-namespaced path
-# because MCP clients (claude.ai, and per the reporter, Google Spark too)
-# construct the authorize URL as ``<host>/authorize`` from the resource host
-# root — they do not read the ``authorization_endpoint`` field of the
-# authorization-server metadata document. Registering at the root is the only
-# way to actually catch the redirect. Same paths the add-on's legacy mode
-# uses — see the ownership guard below for why that matters.
+# Registered at the HA ROOT rather than under a component-namespaced path, to
+# match the add-on's legacy mode (see the ownership guard below). This was
+# motivated by an MCP client that builds ``<host>/authorize`` from the resource
+# host root instead of reading the ``authorization_endpoint`` metadata field —
+# observed with Google Gemini Spark, which is what legacy mode exists to serve.
+# claude.ai, by contrast, DOES honor the advertised ``authorization_endpoint``:
+# issue #1969's none-mode auto-approve server advertises a component-scoped
+# ``/authorize`` (see :mod:`oauth_autoapprove`) and claude.ai calls exactly that,
+# proven live. So the root registration is for the metadata-ignoring clients, not
+# a hard requirement for claude.ai.
 AUTHORIZE_PATH = "/authorize"
 TOKEN_PATH = "/token"
 
@@ -376,13 +379,84 @@ def _json_not_found() -> web.Response:
 
 
 class _PendingCode(TypedDict):
-    """Shape of an entry in LegacyOAuthProvider._codes. TypedDict so a typo on
+    """Shape of an entry in PKCECodeStore._codes. TypedDict so a typo on
     one of these keys fails type-check rather than silently treating it as
     missing."""
 
     redirect_uri: str
     code_challenge: str
     expires: float
+
+
+# ---------------------------------------------------------------------------
+# PKCECodeStore (shared PKCE S256 authorization-code lifecycle)
+# ---------------------------------------------------------------------------
+
+
+class PKCECodeStore:
+    """In-memory PKCE (S256) authorization-code store.
+
+    Shared by :class:`LegacyOAuthProvider` and the none-mode auto-approve
+    server (:mod:`oauth_autoapprove`) so the one-shot code lifecycle — issue at
+    ``/authorize``, verify + consume at ``/token`` — has a single
+    implementation instead of two copies. Codes are short-lived
+    (:data:`AUTH_CODE_TTL`), one-shot, bound to the ``redirect_uri`` +
+    ``code_challenge`` presented at issuance, and capped
+    (:data:`MAX_PENDING_CODES`) with an expiry prune on each issue. A restart
+    wipes the store, which only forces in-flight authorize/token round-trips to
+    retry.
+    """
+
+    def __init__(self) -> None:
+        self._codes: dict[str, _PendingCode] = {}
+
+    def issue_code(self, redirect_uri: str, code_challenge: str) -> str | None:
+        """Issue a one-shot authorization code, or None if the pending-code
+        store is at capacity (signals an abuse attempt — see MAX_PENDING_CODES)."""
+        now = time.time()
+        self._codes = {k: v for k, v in self._codes.items() if v["expires"] > now}
+        if len(self._codes) >= MAX_PENDING_CODES:
+            _LOGGER.warning(
+                "HA-MCP OAuth: pending-code store at cap (%d); refusing "
+                "new issuance until existing codes expire or are consumed.",
+                MAX_PENDING_CODES,
+            )
+            return None
+        code = secrets.token_urlsafe(32)
+        self._codes[code] = {
+            "redirect_uri": redirect_uri,
+            "code_challenge": code_challenge,
+            "expires": now + AUTH_CODE_TTL,
+        }
+        return code
+
+    def consume_code(self, code: str, redirect_uri: str, code_verifier: str) -> bool:
+        """One-shot consume ``code``, verifying its PKCE S256 challenge.
+
+        Returns True only for a live, unexpired code whose stored
+        ``redirect_uri`` matches and whose ``code_challenge`` equals
+        ``base64url(SHA-256(code_verifier))``. The code is popped (one-shot)
+        before any check that can fail, so a failed attempt still burns it.
+        """
+        # Validate the verifier shape per RFC 7636 §4.1 before doing any
+        # crypto. A confused client passing an empty/short verifier should be
+        # rejected explicitly rather than silently hashing junk.
+        if not (PKCE_VERIFIER_MIN <= len(code_verifier) <= PKCE_VERIFIER_MAX):
+            return False
+        if not _PKCE_VERIFIER_RE.match(code_verifier):
+            return False
+        entry = self._codes.pop(code, None)
+        if entry is None:
+            return False
+        if entry["expires"] < time.time():
+            return False
+        if entry["redirect_uri"] != redirect_uri:
+            return False
+        # PKCE S256 verification: SHA-256(verifier) base64url(no pad) == challenge
+        derived = _b64url_encode(hashlib.sha256(code_verifier.encode()).digest())
+        return hmac.compare_digest(
+            derived.encode("ascii"), entry["code_challenge"].encode("ascii")
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -419,10 +493,9 @@ class LegacyOAuthProvider:
         self._client_secret = client_secret
         self._signing_key = key_bytes
         self._active_mode_getter = active_mode_getter
-        # In-memory pending authorization codes. Codes are short-lived (5 min)
-        # and one-shot; a restart wipes them, which only forces in-flight
-        # authorize/token round-trips to retry.
-        self._codes: dict[str, _PendingCode] = {}
+        # PKCE authorization codes live in the shared store (also used by the
+        # none-mode auto-approve server) — see :class:`PKCECodeStore`.
+        self._code_store = PKCECodeStore()
 
     @property
     def client_id(self) -> str:
@@ -509,45 +582,12 @@ class LegacyOAuthProvider:
     # -----------------------------------------------------------------
 
     def issue_code(self, redirect_uri: str, code_challenge: str) -> str | None:
-        """Issue a one-shot authorization code, or None if the pending-code
-        store is at capacity (signals an abuse attempt — see MAX_PENDING_CODES)."""
-        now = time.time()
-        self._codes = {k: v for k, v in self._codes.items() if v["expires"] > now}
-        if len(self._codes) >= MAX_PENDING_CODES:
-            _LOGGER.warning(
-                "HA-MCP legacy OAuth: pending-code store at cap (%d); refusing "
-                "new issuance until existing codes expire or are consumed.",
-                MAX_PENDING_CODES,
-            )
-            return None
-        code = secrets.token_urlsafe(32)
-        self._codes[code] = {
-            "redirect_uri": redirect_uri,
-            "code_challenge": code_challenge,
-            "expires": now + AUTH_CODE_TTL,
-        }
-        return code
+        """Issue a one-shot PKCE-bound authorization code (see PKCECodeStore)."""
+        return self._code_store.issue_code(redirect_uri, code_challenge)
 
     def consume_code(self, code: str, redirect_uri: str, code_verifier: str) -> bool:
-        # Validate the verifier shape per RFC 7636 §4.1 before doing any
-        # crypto. A confused client passing an empty/short verifier should be
-        # rejected explicitly rather than silently hashing junk.
-        if not (PKCE_VERIFIER_MIN <= len(code_verifier) <= PKCE_VERIFIER_MAX):
-            return False
-        if not _PKCE_VERIFIER_RE.match(code_verifier):
-            return False
-        entry = self._codes.pop(code, None)
-        if entry is None:
-            return False
-        if entry["expires"] < time.time():
-            return False
-        if entry["redirect_uri"] != redirect_uri:
-            return False
-        # PKCE S256 verification: SHA-256(verifier) base64url(no pad) == challenge
-        derived = _b64url_encode(hashlib.sha256(code_verifier.encode()).digest())
-        return hmac.compare_digest(
-            derived.encode("ascii"), entry["code_challenge"].encode("ascii")
-        )
+        """Verify PKCE S256 + one-shot consume a code (see PKCECodeStore)."""
+        return self._code_store.consume_code(code, redirect_uri, code_verifier)
 
     # -----------------------------------------------------------------
     # Client authentication
