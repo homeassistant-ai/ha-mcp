@@ -32,11 +32,10 @@ on any component error — lives in one place (the pattern ``component_devices``
 established for the ``device_get`` / ``device_list`` capabilities). Both helpers
 return ``None`` to mean "component unavailable — use the legacy path"; a component
 that answers returns its payload. Per the uniform transport-fallback taxonomy, a
-``HomeAssistantConnectionError`` (pooled-WS drop) and the plain ``Exception``
-``get_websocket_client()`` raises on a failed (re)connect are caught and mapped to
-``None`` so the legacy path runs: the consumers' legacy reads (the whole-registry
+``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed (re)connect —
+is caught and mapped to ``None`` so the legacy path runs: the consumers' legacy reads (the whole-registry
 ``config/entity_registry/list`` dump and the per-id ``config/entity_registry/get``
-retry loop) ride the swallowing ``send_websocket_message`` bridge, which returns
+retry loop) ride the ``send_websocket_message`` bridge, which returns
 ``{"success": False}`` rather than raising — so they do NOT die identically on a
 pooled-WS drop, and letting a transport failure escape would skip the
 ``resolve_entities_via_component`` consumer's legacy retry loop entirely.
@@ -96,7 +95,7 @@ async def fetch_entities_for_config_entry_via_component(
         return None
     except Exception as exc:
         # HomeAssistantConnectionError / plain establish Exception → legacy (the
-        # legacy entity_registry/list dump rides the swallowing bridge; see module
+        # legacy entity_registry/list dump rides the bridge; see module
         # docstring). Never propagate a transport failure out of the read.
         logger.warning(
             "%s connection error; falling back to legacy: %r", WS_REGISTRY_LOOKUP, exc

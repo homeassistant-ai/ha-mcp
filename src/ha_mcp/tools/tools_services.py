@@ -277,10 +277,9 @@ async def _fetch_services_list_via_component(
     failure IS caught here and mapped to ``None`` (legacy fallback), like every
     component fetch helper. This tool's legacy path is the REST ``get_services()`` +
     a per-request WS bridge for translations, NOT the shared pooled WS — so a WS
-    outage must not kill the tool when REST can still serve the catalog. The catch
-    is broad because ``get_websocket_client()`` raises a plain ``Exception`` (not
-    ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot establish the
-    socket, so a narrow catch would let that escape and kill the tool; routing any
+    outage must not kill the tool when REST can still serve the catalog. The
+    catch stays broad so no unexpected fault escapes and kills the tool; routing
+    any
     non-command component failure back to the REST catalog fetch is safe here
     (mirrors ``get_component_caps``' own broad-catch precedent).
     """

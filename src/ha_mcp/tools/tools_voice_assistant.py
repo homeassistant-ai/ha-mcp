@@ -621,10 +621,9 @@ class VoiceAssistantTools:
         it unchanged. ``None`` on capability miss, downgrade (``unknown_command`` →
         invalidate the cached caps), command error/timeout (logged), or a
         connection-establishment failure (logged) — the caller falls back to the
-        legacy WS list. A ``HomeAssistantConnectionError`` (pooled-WS drop) or the
-        plain ``Exception`` ``get_websocket_client()`` raises on a failed
-        (re)connect is caught here and mapped to ``None``: the legacy
-        ``homeassistant/expose_entity/list`` read rides the swallowing
+        legacy WS list. A ``HomeAssistantConnectionError`` — a pooled-WS drop,
+        or a failed (re)connect — is caught here and mapped to ``None``: the
+        legacy ``homeassistant/expose_entity/list`` read rides the
         ``send_websocket_message`` bridge (which returns ``{"success": False}``
         rather than raising), NOT this pooled socket — so a transport failure must
         fall back rather than escape. Same caps-gate discipline as
@@ -649,7 +648,7 @@ class VoiceAssistantTools:
             return None
         except Exception as exc:
             # HomeAssistantConnectionError / plain establish Exception → legacy (the
-            # legacy expose_entity/list read rides the swallowing bridge).
+            # legacy expose_entity/list read rides the bridge).
             logger.warning(
                 "%s connection error; falling back to legacy: %r", WS_EXPOSURE, exc
             )

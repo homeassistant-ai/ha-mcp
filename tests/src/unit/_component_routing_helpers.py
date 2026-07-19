@@ -85,10 +85,10 @@ def patch_ws_establish_failure(
     ``caps_ws`` so the caps probe succeeds and caches a positive capability, but the
     tool module's own ``get_websocket_client`` raises ``exc`` — simulating
     ``WebSocketManager`` failing to (re)establish the pooled socket for the READ
-    command AFTER caps were cached. This is the plain-``Exception`` connection-
-    establishment failure ``get_websocket_client()`` raises (not a
-    ``HomeAssistantConnectionError`` off ``send_command``), which the REST-legacy
-    helpers must catch broadly and route to their legacy fetch.
+    command AFTER caps were cached. Callers pass the
+    ``HomeAssistantConnectionError`` the manager raises on a failed connect
+    (#1947 retyped it from a bare ``Exception``), which the REST-legacy helpers
+    route to their legacy fetch.
     """
     good = AsyncMock(return_value=caps_ws)
     bad = AsyncMock(side_effect=exc)

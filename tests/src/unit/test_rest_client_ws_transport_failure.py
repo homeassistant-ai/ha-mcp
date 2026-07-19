@@ -154,19 +154,27 @@ class TestNoAnswerRaises:
     @pytest.mark.parametrize(
         "exc",
         [
-            Exception("Failed to connect to Home Assistant WebSocket"),
-            HomeAssistantConnectionError("ws gone"),
+            Exception("Lock not initialized"),
+            HomeAssistantConnectionError(
+                "Failed to connect to Home Assistant WebSocket"
+            ),
         ],
-        ids=["bare_exception", "connection_error"],
+        ids=["untyped", "connection_error"],
     )
     @pytest.mark.asyncio
     async def test_failure_to_acquire_a_client_raises(
         self, client: HomeAssistantClient, exc: Exception
     ) -> None:
-        """Never obtaining a usable connection is transport death whatever the
-        exception class. The pooled manager raises a bare ``Exception`` when
-        ``connect()`` returns False, which is the ordinary "HA is unreachable"
-        case, so this cannot be decided on type alone."""
+        """Never obtaining a usable connection counts as transport death
+        whatever the exception class, which is why the phase is checked before
+        the type.
+
+        The failed-connect raise is typed now, but the acquisition path still
+        has untyped exits — ``WebSocketManager`` guards its pool lock with a
+        bare ``Exception("Lock not initialized")`` — and a caller cannot read a
+        result it never got regardless of how the manager chose to signal that.
+        The untyped case is what fails if the phase check is ever dropped in
+        favour of the type check alone."""
         with pytest.raises(HomeAssistantConnectionError, match=str(exc)):
             await _send_with_acquire_failure(client, exc)
 

@@ -339,7 +339,7 @@ async def test_simple_delete_ws_establish_failure_falls_back_to_legacy() -> None
     with patch_ws_establish_failure(
         caps_ws,
         component_registry_lookup,
-        Exception("Failed to connect to Home Assistant WebSocket"),
+        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await tools.ha_remove_helpers_integrations(
             target="my_button",
@@ -706,7 +706,7 @@ async def test_resolve_entities_ws_establish_failure_falls_back() -> None:
     with patch_ws_establish_failure(
         caps_ws,
         component_registry_lookup,
-        Exception("Failed to connect to Home Assistant WebSocket"),
+        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         assert (
             await component_registry_lookup.resolve_entities_via_component(

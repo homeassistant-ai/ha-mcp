@@ -1288,10 +1288,11 @@ class SystemTools:
                 )
             return None
         except Exception as exc:
-            # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
-            # get_websocket_client() raises on a failed (re)connect. The legacy
-            # sections degrade individually (dedicated health WS + REST + the
-            # never-raising bridge), so fall back rather than fail the whole tool.
+            # HomeAssistantConnectionError: a pooled-WS drop or a failed
+            # (re)connect. The legacy sections degrade individually (dedicated
+            # health WS + REST + the bridge), so fall back rather than fail the
+            # whole tool on a component-side fault. A genuinely dead transport
+            # still fails loud from the bridge itself (#1947).
             logger.warning(
                 "%s connection error; falling back to legacy: %r",
                 WS_SYSTEM_SNAPSHOT,

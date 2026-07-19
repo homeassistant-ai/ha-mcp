@@ -566,7 +566,7 @@ async def test_fetch_ws_establish_failure_falls_back_to_none() -> None:
     with patch_ws_establish_failure(
         caps_ws,
         tools_integrations,
-        Exception("Failed to connect to Home Assistant WebSocket"),
+        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         assert await _fetch_entries_via_component(client) is None
     assert client in component_api._CAPS_CACHE

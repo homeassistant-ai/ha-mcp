@@ -1976,7 +1976,7 @@ class SearchTools:
         - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
           ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
           served the same way — the legacy path reads ``/api/states`` over REST and
-          the entity registry through the swallowing ``send_websocket_message``
+          the entity registry through the ``send_websocket_message``
           bridge (which returns ``{"success": False}`` rather than raising), so it
           degrades to partial results rather than dying identically on a pooled-WS
           drop; a transport failure must not escape.
@@ -4075,9 +4075,8 @@ class SearchTools:
         legacy REST path returns the byte-identical correct data either way.
         ``ha_get_state``'s legacy path is a REST ``get_entity_state`` read on a
         SEPARATE transport, so a WS transport/connect failure
-        (``HomeAssistantConnectionError``, or the plain ``Exception``
-        ``get_websocket_client()`` raises when ``WebSocketManager`` can't build the
-        socket) is caught here and falls back to REST — an install whose REST API
+        (``HomeAssistantConnectionError``, covering both a pooled-WS drop and a
+        failed connect) is caught here and falls back to REST — an install whose REST API
         still works keeps getting its state instead of a spurious connection error.
         If REST is also down, the legacy path raises the same connection error
         itself. (``ha_search`` / ``ha_get_overview`` likewise fall back on a
@@ -4101,9 +4100,8 @@ class SearchTools:
                 )
             return None
         except Exception as exc:
-            # The plain Exception get_websocket_client() raises when
-            # WebSocketManager can't build the socket (the connection-establishment
-            # failure the tuple above doesn't cover) → legacy REST.
+            # Anything the tuple above doesn't cover → legacy REST, so an
+            # install whose REST API still works keeps answering.
             logger.warning(
                 "ha_mcp_tools/states connection error; fell back to legacy: %r", exc
             )

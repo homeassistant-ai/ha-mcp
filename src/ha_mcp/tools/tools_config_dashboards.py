@@ -873,9 +873,9 @@ async def _dashboards_via_component(
     (``unknown_command`` → invalidate the cached caps), command error/timeout
     (logged), a connection-establishment failure (logged), a malformed
     envelope, or ``available: false`` (lovelace not set up). A
-    ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain ``Exception``
-    ``get_websocket_client()`` raises on a failed (re)connect is caught here and
-    mapped to ``None``: the legacy dashboards path rides the
+    ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed
+    (re)connect — is caught here and mapped to ``None``: the legacy dashboards
+    path rides the
     ``send_websocket_message`` bridge (and the auto-backup capture consumer
     forbids a blocked write), so a wedged component read must fall back to
     legacy rather than escape into a set/delete write path. If the transport
@@ -901,8 +901,8 @@ async def _dashboards_via_component(
             logger.warning("%s failed; fell back to legacy: %r", WS_DASHBOARDS, exc)
         return None
     except Exception as exc:
-        # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
-        # get_websocket_client() raises on a failed (re)connect. Fall back to the
+        # HomeAssistantConnectionError: a pooled-WS drop or a failed
+        # (re)connect. Fall back to the
         # legacy bridge rather than escape here; if the transport is genuinely
         # dead the bridge raises there instead (#1947).
         logger.warning(

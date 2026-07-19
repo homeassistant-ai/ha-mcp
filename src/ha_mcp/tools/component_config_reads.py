@@ -42,7 +42,7 @@ still completes:
 
 - ``fetch_entity_lookup_via_component``'s consumers degrade gracefully. The scene
   resolver's ``config/entity_registry/list`` dump rides
-  ``client.send_websocket_message`` — the swallowing bridge that returns
+  ``client.send_websocket_message`` — the bridge that returns
   ``{"success": False}`` instead of raising, so the resolver walks its retry loop
   to the naive ``scene.{id}`` fallback — and the automation resolver scans REST
   ``get_states()`` and additionally catches broadly → ``None``. Its only routed
@@ -104,7 +104,7 @@ async def fetch_entity_lookup_via_component(
     ``None`` on capability miss, downgrade (``unknown_command`` → invalidate the
     cached caps), command error/timeout (logged), a connection-establishment
     failure (logged — see the module docstring: the resolvers' legacy paths ride
-    the swallowing WS bridge / REST, NOT this pooled socket, so a transport
+    the WS bridge / REST, NOT this pooled socket, so a transport
     failure must fall back rather than abort a landed write), or a shape-drift
     payload (no ``matches`` list). Same error-taxonomy and silent fallback as
     ``component_devices.fetch_device_via_component``.
@@ -125,8 +125,8 @@ async def fetch_entity_lookup_via_component(
             logger.warning("%s failed; fell back to legacy: %r", WS_ENTITY_LOOKUP, exc)
         return None
     except Exception as exc:
-        # HomeAssistantConnectionError (pooled-WS drop) OR the plain Exception
-        # get_websocket_client() raises when WebSocketManager can't (re)connect.
+        # HomeAssistantConnectionError: a pooled-WS drop or a failed
+        # (re)connect.
         # The resolvers' legacy paths do NOT die identically (see module docstring),
         # so route to legacy rather than escape.
         logger.warning(
@@ -163,11 +163,10 @@ async def fetch_reference_data_via_component(
 
     Like every component fetch helper, a transport failure routes to ``None``
     (→ legacy REST) rather than escaping; the reference validator's legacy path is
-    the REST ``get_services()`` / ``get_states()`` pair. The catch is
-    broad because ``get_websocket_client()`` raises a plain ``Exception`` (not
-    ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot build the
-    socket; letting it escape would make ``validate_config_references`` hit its
-    swallow-all fetch guard and skip ALL reference warnings even when REST is up.
+    the REST ``get_services()`` / ``get_states()`` pair. The catch stays broad
+    so no unexpected fault escapes: that would make ``validate_config_references``
+    hit its swallow-all fetch guard and skip ALL reference warnings even when
+    REST is up.
     Mirrors ``get_component_caps``' own broad-catch precedent.
     """
     caps = await get_component_caps(client)
@@ -187,10 +186,9 @@ async def fetch_reference_data_via_component(
         return None
     except Exception as exc:
         # Legacy is REST (get_services/get_states), NOT the pooled WS, so a
-        # pooled-WS drop (HomeAssistantConnectionError) OR get_websocket_client()
-        # raising a plain Exception when WebSocketManager can't (re)connect must
-        # route to the REST fetch rather than escape into the validator's
-        # swallow-all guard (which would skip every reference warning).
+        # pooled-WS drop or a failed (re)connect must route to the REST fetch
+        # rather than escape into the validator's swallow-all guard (which would
+        # skip every reference warning).
         logger.warning(
             "%s connection error; falling back to REST legacy: %r",
             WS_REFERENCE_DATA,

@@ -15,6 +15,8 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantClient,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.tools_system import SystemTools
@@ -2276,6 +2278,66 @@ class TestHomeAssistantConnectionErrorPropagation:
         )
         dead = await SystemTools(client)._fetch_dead_entities()
         assert "unknown command" in dead["error"]
+
+    @pytest.mark.parametrize(
+        ("ws_exc", "expected_code"),
+        [
+            (HomeAssistantConnectionError("ws gone"), "CONNECTION_FAILED"),
+            (HomeAssistantCommandTimeout("Command timeout"), "CONNECTION_TIMEOUT"),
+        ],
+        ids=["dead_socket", "wedged_socket"],
+    )
+    @pytest.mark.asyncio
+    async def test_tool_answers_is_error_on_an_unanswered_transport(
+        self, ws_exc: Exception, expected_code: str
+    ) -> None:
+        """The actual bug boundary of #1947: driving the TOOL on a transport
+        that never answers must produce ``isError``.
+
+        Runs the real chain — the real ``send_websocket_message`` bridge, the
+        real detector, the real tool — with only the WebSocket itself failing.
+        Every other test in this class stops at ``_fetch_dead_entities``
+        raising, and ``_run_dead_entities_section`` has no ``try/except``
+        today, so those would all stay green if one were ever added and the
+        detector went back to reporting ``config_entry_orphans: 0`` while
+        blind. This is the test that goes red instead.
+
+        Both cases enter as the raw WS-level exception and must come out as a
+        connection-class tool error: the wedged-socket case additionally pins
+        that a 30s round-trip timeout is classified as ``CONNECTION_TIMEOUT``
+        rather than demoted to a section error string.
+        """
+        with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
+            client = HomeAssistantClient()
+        client.base_url = "http://ha.local:8123"
+        client.token = "tok"
+        client.verify_ssl = True
+        # REST still works; only the socket is gone — the case where a
+        # degraded detector answer looks most credible.
+        client.get_states = AsyncMock(return_value=[])
+
+        ws_client = MagicMock()
+        ws_client.send_command = AsyncMock(side_effect=ws_exc)
+
+        with (
+            patch(
+                "ha_mcp.client.websocket_client.get_websocket_client",
+                new=AsyncMock(return_value=ws_client),
+            ),
+            # component_api binds the name at import time, so the bridge patch
+            # above does not cover its caps probe — without this it opens a
+            # real socket to the fixture URL and stalls on the connect timeout.
+            patch(
+                "ha_mcp.tools.component_api.get_websocket_client",
+                new=AsyncMock(return_value=ws_client),
+            ),
+            _patch_health_info_baseline(),
+            pytest.raises(ToolError) as excinfo,
+        ):
+            await SystemTools(client).ha_get_system_health(include="dead_entities")
+
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == expected_code
 
     @pytest.mark.parametrize(
         "helper_name",

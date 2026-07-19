@@ -3947,9 +3947,9 @@ class HelperConfigTools:
             )
             return legacy
         except Exception as exc:
-            # Transport/establishment failure (HomeAssistantConnectionError, or the
-            # plain Exception get_websocket_client() raises when WebSocketManager
-            # can't build the socket). A storage type still attempts the legacy
+            # Transport/establishment failure — a pooled-WS drop or a failed
+            # (re)connect, both HomeAssistantConnectionError. A storage type
+            # still attempts the legacy
             # `{helper_type}/list` body: it rides the same pooled connection, so it
             # recovers a component-side fault but not a dead socket, where the
             # bridge raises in turn (#1947). A flow type has NO legacy body, so its

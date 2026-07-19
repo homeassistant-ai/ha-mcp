@@ -27,6 +27,7 @@ import pytest
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ha_mcp.tools import tools_search
 from ha_mcp.tools.smart_search import SmartSearchTools
@@ -386,7 +387,7 @@ async def test_ws_establish_failure_falls_back_with_warning(
     with patch_ws_establish_failure(
         caps_ws,
         tools_search,
-        Exception("Failed to connect to Home Assistant WebSocket"),
+        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await overview(detail_level="standard")
 

@@ -265,10 +265,8 @@ async def _fetch_entries_via_component(
     still serve the entry. (The bridge itself raises on a dead transport since
     #1947, which only matters for the radio caller: when the socket is dead
     that path has nothing to serve either, while the pure-REST caller is
-    unaffected.) The catch is broad because
-    ``get_websocket_client()`` raises a plain ``Exception`` (not
-    ``HomeAssistantConnectionError``) when ``WebSocketManager`` cannot establish the
-    socket, so a narrow catch would let that escape and kill the tool; routing any
+    unaffected.) The catch stays broad so no unexpected fault escapes and
+    kills the tool; routing any
     non-command component failure back to the legacy fetch is safe here (mirrors
     ``get_component_caps``' own broad-catch precedent). Otherwise the same caps-gate
     discipline as ``component_devices.fetch_device_via_component``.
