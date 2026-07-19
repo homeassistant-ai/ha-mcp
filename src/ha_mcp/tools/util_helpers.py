@@ -1545,7 +1545,9 @@ async def wait_for_automation_entity_by_unique_id(
     return None
 
 
-async def fetch_entity_category(client: Any, entity_id: str, scope: str) -> str | None:
+async def fetch_entity_category(
+    client: Any, entity_id: str, scope: str, warnings: list[str] | None = None
+) -> str | None:
     """Fetch a category ID for an entity from the entity registry.
 
     Args:
@@ -1555,6 +1557,10 @@ async def fetch_entity_category(client: Any, entity_id: str, scope: str) -> str 
 
     Returns:
         Category ID string if set, None otherwise
+
+    ``None`` is also what a failed lookup returns, which reads as "no category
+    assigned" – a caller that passes ``warnings`` gets a line naming the
+    failure instead, so the two are distinguishable (#1947).
     """
     try:
         result = await client.send_websocket_message(
@@ -1566,6 +1572,8 @@ async def fetch_entity_category(client: Any, entity_id: str, scope: str) -> str 
             return str(cat_id) if cat_id is not None else None
     except Exception as e:
         logger.warning(f"Failed to fetch category for {entity_id}: {e}")
+        if warnings is not None:
+            warnings.append(f"category unavailable for {entity_id}: {e}")
     return None
 
 

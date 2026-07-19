@@ -461,18 +461,24 @@ class AutomationConfigTools:
         # Resolve entity_id and fetch category from entity registry
         # (injected after hash so transient registry failures don't affect the hash)
         entity_id = await self._resolve_automation_entity_id(identifier)
+        cat_warnings: list[str] = []
         if entity_id:
-            cat_id = await fetch_entity_category(self._client, entity_id, "automation")
+            cat_id = await fetch_entity_category(
+                self._client, entity_id, "automation", cat_warnings
+            )
             if cat_id:
                 normalized_config["category"] = cat_id
 
-        return {
+        response: dict[str, Any] = {
             "success": True,
             "action": "get",
             "automation_id": entity_id or identifier,
             "config": normalized_config,
             "config_hash": config_hash,
         }
+        if cat_warnings:
+            response.setdefault("warnings", []).extend(cat_warnings)
+        return response
 
     @tool(
         name="ha_config_set_automation",

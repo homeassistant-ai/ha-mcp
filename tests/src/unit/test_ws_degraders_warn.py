@@ -19,9 +19,11 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.smart_search._base import _SearchBase
+from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.tools.tools_registry import _get_single_device_result
 from ha_mcp.tools.tools_search import SearchTools
-from ha_mcp.tools.util_helpers import get_logger_levels
+from ha_mcp.tools.tools_services import _get_service_translations
+from ha_mcp.tools.util_helpers import fetch_entity_category, get_logger_levels
 
 _AREA_LIST = "config/area_registry/list"
 
@@ -311,3 +313,67 @@ class TestEmptyResultVersusUnaskedQuestion:
         # longer stands unqualified.
         assert result["notification_count"] == 0
         assert any("notifications unavailable" in w for w in result["warnings"])
+
+
+class TestEnrichmentAbsenceIsNotAnAnswer:
+    """The last two audit sites. Both enrich a payload whose primary data comes
+    over REST, so a live REST plus a dead socket returns a complete-looking
+    response that is quietly missing a field."""
+
+    @pytest.mark.asyncio
+    async def test_category_fetch_failure_is_recorded(self) -> None:
+        """`None` is also what "no category assigned" looks like."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws gone")
+        )
+        warnings: list[str] = []
+
+        cat = await fetch_entity_category(client, "script.morning", "script", warnings)
+
+        assert cat is None
+        assert warnings == ["category unavailable for script.morning: ws gone"]
+
+    @pytest.mark.asyncio
+    async def test_category_absent_without_failure_stays_quiet(self) -> None:
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"categories": {}}}
+        )
+        warnings: list[str] = []
+
+        assert (
+            await fetch_entity_category(client, "script.morning", "script", warnings)
+            is None
+        )
+        assert warnings == []
+
+    @pytest.mark.asyncio
+    async def test_service_translation_failure_is_recorded(self) -> None:
+        """An empty map is also what an instance with no translations returns."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws gone")
+        )
+        warnings: list[str] = []
+
+        assert await _get_service_translations(client, warnings) == {}
+        assert any("service descriptions unavailable" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_script_get_surfaces_the_category_warning(self) -> None:
+        """At the seam: the tool response, not the helper. The script config
+        itself is REST-backed and still arrives."""
+        client = MagicMock()
+        client.get_script_config = AsyncMock(
+            return_value={"script_id": "morning", "config": {"alias": "Morning"}}
+        )
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws gone")
+        )
+        tools = ConfigScriptTools(client)
+
+        result = await tools._legacy_get_script("morning")
+
+        assert result["script_id"] == "morning"
+        assert any("category unavailable" in w for w in result["warnings"])

@@ -202,7 +202,10 @@ class ConfigScriptTools:
         # Fetch category from entity registry (best-effort)
         # (injected after hash so transient registry failures don't affect the hash)
         entity_id = f"script.{script_id}"
-        cat_id = await fetch_entity_category(self._client, entity_id, "script")
+        cat_warnings: list[str] = []
+        cat_id = await fetch_entity_category(
+            self._client, entity_id, "script", cat_warnings
+        )
         if cat_id:
             config_result["category"] = cat_id
 
@@ -222,13 +225,18 @@ class ConfigScriptTools:
             )
             canonical_id = script_id
 
-        return {
+        response: dict[str, Any] = {
             "success": True,
             "action": "get",
             "script_id": canonical_id,
             "config": config_result,
             "config_hash": config_hash_value,
         }
+        # Top level, not inside ``config``: ``config_result`` becomes the
+        # nested payload, and warnings are a top-level list[str] by contract.
+        if cat_warnings:
+            response.setdefault("warnings", []).extend(cat_warnings)
+        return response
 
     async def _list_script_entity_ids(self) -> list[str]:
         """Best-effort list of bare script IDs (up to 10) from the entity registry.

@@ -177,8 +177,9 @@ class ServiceDiscoveryTools:
             limit_int = limit
             offset_int = offset
 
+            catalog_warnings: list[str] = []
             rest_services, translations = await _fetch_catalog_and_translations(
-                self._client, domain
+                self._client, domain, catalog_warnings
             )
 
             # Process and filter services
@@ -207,6 +208,8 @@ class ServiceDiscoveryTools:
                 if _warn:
                     result.setdefault("warnings", []).append(_warn)
 
+            _attach_warnings(result, catalog_warnings)
+
             return project_fields(result, parsed_fields)
 
         except ToolError:
@@ -231,8 +234,19 @@ def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     register_tool_methods(mcp, ServiceDiscoveryTools(client))
 
 
+def _attach_warnings(result: dict[str, Any], warnings: list[str]) -> None:
+    """Merge degradation warnings into a response's top-level ``warnings``.
+
+    The catalog is REST-backed and still answers when the WebSocket is down,
+    so without this the service descriptions just go missing and the response
+    looks complete (#1947). Empty in, key omitted.
+    """
+    if warnings:
+        result.setdefault("warnings", []).extend(warnings)
+
+
 async def _fetch_catalog_and_translations(
-    client: Any, domain: str | None
+    client: Any, domain: str | None, warnings: list[str] | None = None
 ) -> tuple[Any, dict[str, Any]]:
     """The ``(rest_services, translations)`` pair ``_process_services`` consumes.
 
@@ -244,7 +258,7 @@ async def _fetch_catalog_and_translations(
     if component_payload is not None:
         return component_payload["services"], component_payload["translations"]
     rest_services = await client.get_services()
-    translations = await _get_service_translations(client)
+    translations = await _get_service_translations(client, warnings)
     return rest_services, translations
 
 
@@ -325,7 +339,9 @@ async def _fetch_services_list_via_component(
     return result
 
 
-async def _get_service_translations(client: Any) -> dict[str, Any]:
+async def _get_service_translations(
+    client: Any, warnings: list[str] | None = None
+) -> dict[str, Any]:
     """
     Get service translations from Home Assistant via WebSocket.
 
@@ -350,6 +366,11 @@ async def _get_service_translations(client: Any) -> dict[str, Any]:
 
     except Exception as e:
         logger.warning(f"Failed to get service translations: {e}")
+        # An empty map is also what an instance with no translations returns,
+        # so a caller that wants to tell the two apart passes ``warnings``
+        # and reports that the catalog came back without descriptions (#1947).
+        if warnings is not None:
+            warnings.append(f"service descriptions unavailable: {e}")
         return {}
 
 
