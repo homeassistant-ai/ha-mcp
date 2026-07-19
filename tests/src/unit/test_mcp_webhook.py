@@ -64,6 +64,7 @@ def _store_cfg(
     auth_mode: str = WEBHOOK_AUTH_NONE,
     resource_server: object | None = None,
     oauth_provider: object | None = None,
+    autoapprove_provider: object | None = None,
 ) -> None:
     hass.data[DOMAIN] = {
         DATA_WEBHOOK: {
@@ -73,6 +74,7 @@ def _store_cfg(
             "auth_mode": auth_mode,
             "resource_server": resource_server,
             "oauth_provider": oauth_provider,
+            mw.CFG_AUTOAPPROVE_PROVIDER: autoapprove_provider,
         }
     }
 
@@ -285,6 +287,23 @@ class TestForwardingHandler:
 
         resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, make_request())
         assert resp.status == 500
+
+    async def test_none_mode_forwards_200_and_ignores_bearer(self):
+        # #1969: none mode advertises an auto-approve authorization server, but
+        # the FORWARDER must still never 401 and never validate a bearer — the
+        # secret webhook URL is the credential and the OAuth token is cosmetic.
+        session = FakeSession(upstream=FakeUpstream(status=200, body=b"{}"))
+        hass = _make_hass()
+        _store_cfg(hass, session=session, autoapprove_provider=mw.AutoApproveProvider())
+
+        request = make_request(
+            headers={"Authorization": "Bearer whatever-cosmetic-or-forged"}
+        )
+        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
+
+        assert resp.status == 200
+        assert len(session.calls) == 1  # forwarded upstream, not challenged
+        request.read.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -702,6 +721,118 @@ class TestDiscoveryViews:
 
 
 # ---------------------------------------------------------------------------
+# None-mode auto-approve discovery (issue #1969)
+# ---------------------------------------------------------------------------
+
+
+def _none_live_hass(webhook_id: str = WEBHOOK_ID) -> MagicMock:
+    """A hass whose live webhook cfg is none-mode auto-approve (provider set) —
+    mirrors what async_register_webhook stores in none mode with the endpoint
+    enabled. Distinct from _live_hass(WEBHOOK_AUTH_NONE), which models the
+    local-only cfg (no provider) that advertises nothing."""
+    hass = _make_hass()
+    hass.data[DOMAIN] = {
+        DATA_WEBHOOK: {
+            "webhook_id": webhook_id,
+            "auth_mode": WEBHOOK_AUTH_NONE,
+            "resource_server": None,
+            "oauth_provider": None,
+            mw.CFG_AUTOAPPROVE_PROVIDER: mw.AutoApproveProvider(),
+        }
+    }
+    return hass
+
+
+class TestNoneModeDiscovery:
+    def test_none_mode_as_document_shape(self):
+        doc = mw._none_mode_authorization_server_document("https://x.nabu.casa")
+        assert doc["issuer"] == f"https://x.nabu.casa{OAUTH_BASE}"
+        # Points at OUR auto-approve endpoints, NOT HA core's /auth/*.
+        assert (
+            doc["authorization_endpoint"]
+            == f"https://x.nabu.casa{OAUTH_BASE}/authorize"
+        )
+        assert doc["token_endpoint"] == f"https://x.nabu.casa{OAUTH_BASE}/token"
+        assert doc["response_types_supported"] == ["code"]
+        assert doc["grant_types_supported"] == ["authorization_code"]
+        assert doc["code_challenge_methods_supported"] == ["S256"]
+        # The two fields HA core's root doc lacks — the whole reason for #1969.
+        assert doc["token_endpoint_auth_methods_supported"] == ["none"]
+        assert doc["client_id_metadata_document_supported"] is True
+
+    def test_active_auth_mode_reports_none_when_autoapprove_live(self):
+        assert mw.active_auth_mode(_none_live_hass()) == WEBHOOK_AUTH_NONE
+
+    async def test_as_view_serves_none_document_when_live(self):
+        hass = _none_live_hass()
+        view = mw._AuthorizationServerMetadataView(hass)
+        resp = await view.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
+        assert resp.status == 200
+        doc = resp.json_body
+        assert doc["authorization_endpoint"] == (
+            f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
+        )
+        assert doc["token_endpoint_auth_methods_supported"] == ["none"]
+
+    async def test_protected_resource_views_live_in_none_mode(self):
+        hass = _none_live_hass()
+        request = make_request(headers={"Host": "abc.ui.nabu.casa"})
+        plain = mw._ProtectedResourceMetadataView(hass)
+        plain_resp = await plain.get(request)
+        assert plain_resp.status == 200
+        assert plain_resp.json_body["authorization_servers"] == [
+            f"https://abc.ui.nabu.casa{OAUTH_BASE}"
+        ]
+        # The path-scoped variant claude.ai probes first must also serve.
+        wellknown = mw._WellKnownProtectedResourceView(hass)
+        wk_resp = await wellknown.get(request, webhook_id=WEBHOOK_ID)
+        assert wk_resp.status == 200
+        assert wk_resp.json_body["resource"] == (
+            f"https://abc.ui.nabu.casa/api/webhook/{WEBHOOK_ID}"
+        )
+
+    async def test_as_document_switches_on_mode_flip_without_rebinding(self):
+        # Hard requirement: with the ONE bound AS view, flipping the live mode
+        # none -> ha_auth -> none swaps which document is served, all by
+        # mutating hass.data cfg (no re-bind, no restart).
+        hass = _none_live_hass()
+        view = mw._AuthorizationServerMetadataView(hass)  # bound once
+        request = make_request(headers={"Host": "abc.ui.nabu.casa"})
+
+        none_doc = (await view.get(request)).json_body
+        assert none_doc["authorization_endpoint"] == (
+            f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
+        )
+
+        # Flip to ha_auth: HA-core-pointing document.
+        hass.data[DOMAIN][DATA_WEBHOOK] = {
+            "webhook_id": WEBHOOK_ID,
+            "auth_mode": WEBHOOK_AUTH_HA,
+            "resource_server": mw.ResourceServer(hass, WEBHOOK_ID),
+            "oauth_provider": None,
+            mw.CFG_AUTOAPPROVE_PROVIDER: None,
+        }
+        ha_doc = (await view.get(request)).json_body
+        assert (
+            ha_doc["authorization_endpoint"]
+            == "https://abc.ui.nabu.casa/auth/authorize"
+        )
+
+        # Flip back to none: auto-approve document again.
+        hass.data[DOMAIN][DATA_WEBHOOK] = {
+            "webhook_id": WEBHOOK_ID,
+            "auth_mode": WEBHOOK_AUTH_NONE,
+            "resource_server": None,
+            "oauth_provider": None,
+            mw.CFG_AUTOAPPROVE_PROVIDER: mw.AutoApproveProvider(),
+        }
+        back_doc = (await view.get(request)).json_body
+        assert back_doc["authorization_endpoint"] == (
+            f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Registration / teardown
 # ---------------------------------------------------------------------------
 
@@ -753,6 +884,72 @@ class TestRegisterWebhook:
         mw.async_register.assert_called_once()
         # Reload-safe: clears any stale registration before (re)registering.
         mw.async_unregister.assert_called_once_with(hass, WEBHOOK_ID)
+
+    async def test_none_auth_binds_discovery_and_autoapprove_views(self, monkeypatch):
+        # #1969: none mode now serves our corrected discovery + the auto-approve
+        # authorization server, so it binds the 7 discovery views AND the 2
+        # auto-approve views and registers an AutoApproveProvider in cfg.
+        hass = _register_hass()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+        assert mw._OAUTH_VIEWS_REGISTERED_KEY not in hass.data
+
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_NONE,
+        )
+
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        assert isinstance(cfg[mw.CFG_AUTOAPPROVE_PROVIDER], mw.AutoApproveProvider)
+        assert cfg["resource_server"] is None
+        assert cfg["oauth_provider"] is None
+        # 7 discovery views + 2 auto-approve views.
+        assert hass.http.register_view.call_count == 9
+        assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
+
+    async def test_none_ha_auth_none_switch_reuses_bound_views(self, monkeypatch):
+        # aiohttp cannot rebind a view; a none->ha_auth->none cycle in one HA
+        # session must REUSE the already-bound view bundles (no new bindings, no
+        # raise) while active_auth_mode swaps which document is served.
+        hass = _register_hass()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_NONE,
+        )
+        assert hass.http.register_view.call_count == 9
+        assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
+        await mw.async_unregister_webhook(hass)
+
+        # Switch to ha_auth: discovery views already bound (guarded), the
+        # auto-approve views are simply left bound (they 404 while inactive).
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_HA,
+        )
+        assert hass.http.register_view.call_count == 9
+        assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_HA
+        await mw.async_unregister_webhook(hass)
+
+        # Switch back to none: still no re-bind, auto-approve live again.
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_NONE,
+        )
+        assert hass.http.register_view.call_count == 9
+        assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
 
     async def test_ha_auth_registers_resource_server_and_views(self, monkeypatch):
         hass = _register_hass()
@@ -994,7 +1191,12 @@ class TestRegisterWebhook:
         assert cfg["target_url"] == "http://127.0.0.1:9584/private_x"
         assert cfg["session"] is fake_session
         assert cfg["resource_server"] is None
+        # Local-only none mode advertises nothing: no auto-approve provider, so
+        # active_auth_mode is None and every discovery/auto-approve view 404s.
+        assert cfg[mw.CFG_AUTOAPPROVE_PROVIDER] is None
+        assert mw.active_auth_mode(hass) is None
         mw.async_register.assert_not_called()
+        hass.http.register_view.assert_not_called()
         # Off means off: a leftover endpoint from a crashed unload is cleared
         # even though nothing gets (re)registered.
         mw.async_unregister.assert_called_once_with(hass, WEBHOOK_ID)
