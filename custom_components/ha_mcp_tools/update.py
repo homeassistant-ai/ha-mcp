@@ -155,8 +155,14 @@ class ServerUpdateEntity(CoordinatorEntity[ServerVersionCoordinator], UpdateEnti
         if data is None or data.installed is None or data.latest is None:
             return None
 
-        warning = await self._async_component_hold_warning(data)
-        notes = await self._async_fetch_release_notes(data)
+        # Both probes are advisory network calls that contain their own
+        # failures and timeouts; run them concurrently so the dialog waits for
+        # the slower of the two, not their sum — a blocked/slow manifest host
+        # must not stall the ordinary notes fetch (review finding).
+        warning, notes = await asyncio.gather(
+            self._async_component_hold_warning(data),
+            self._async_fetch_release_notes(data),
+        )
 
         if warning is None:
             # Not held: exactly the pre-existing behaviour (the notes, or None
