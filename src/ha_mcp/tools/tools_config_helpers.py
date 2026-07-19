@@ -4001,11 +4001,11 @@ class HelperConfigTools:
     async def _legacy_helper_list(self, helper_type: str) -> dict[str, Any]:
         """Legacy ``{helper_type}/list`` success envelope, for the § 4 #3 fallback.
 
-        A faithful copy of the tool's inline legacy success path, kept separate
-        (rather than extracted from that body) so the #1794 registry-join PR can
-        patch the inline body without a conflict here. The drift is bounded to
-        the rare component-error fallback and is flagged by the ``warnings[]``
-        entry the caller appends.
+        A copy of the tool's inline legacy success path, kept separate rather
+        than extracted from that body. It flattens and joins the entity registry
+        (issue #1945) exactly like the inline path, so a renamed helper served on
+        this fallback carries its current entity_id/name; the caller additionally
+        appends a ``warnings[]`` entry flagging that the component path was used.
         """
         result = await self._client.send_websocket_message(
             {"type": f"{helper_type}/list"}
@@ -4023,13 +4023,22 @@ class HelperConfigTools:
         # would be a dict here — breaking count, the pagination slice and the
         # all-types merge, which all expect a list of records.
         items = _flatten_helper_list_result(result)
-        return {
+        # Join the entity registry like the inline body (issue #1945): without
+        # this a renamed helper served on the component-error fallback keeps its
+        # stale storage id/name, the same #1794 staleness the inline path fixes.
+        enrich_warnings = await _enrich_helpers_with_current_registry(
+            self._client, helper_type, items
+        )
+        response: dict[str, Any] = {
             "success": True,
             "helper_type": helper_type,
             "count": len(items),
             "helpers": items,
             "message": f"Found {len(items)} {helper_type} helper(s)",
         }
+        if enrich_warnings:
+            response["warnings"] = enrich_warnings
+        return response
 
     async def _list_all_helpers(self) -> dict[str, Any]:
         """Serve ``helper_type="all"``: one merged component listing, or a hard error.
@@ -4145,8 +4154,14 @@ class HelperConfigTools:
                     ],
                 )
             )
+        merge_warnings: list[str] = []
         for helper_type in sorted(SIMPLE_HELPER_TYPES - covered_set):
             legacy = await self._legacy_helper_list(helper_type)
+            # _legacy_helper_list joins the registry (issue #1945) and, degrade-
+            # open, flags a failed registry read in warnings[]; surface those here
+            # instead of dropping them, else an uncovered type is served stale and
+            # silent during an all-types listing.
+            merge_warnings.extend(legacy.get("warnings", []))
             skipped = 0
             for item in legacy.get("helpers", []):
                 if isinstance(item, dict):
@@ -4165,13 +4180,16 @@ class HelperConfigTools:
                     helper_type,
                 )
 
-        return {
+        response: dict[str, Any] = {
             "success": True,
             "helper_type": "all",
             "count": len(helpers),
             "helpers": helpers,
             "message": f"Found {len(helpers)} helper(s)",
         }
+        if merge_warnings:
+            response["warnings"] = merge_warnings
+        return response
 
     @tool(
         name="ha_config_set_helper",
