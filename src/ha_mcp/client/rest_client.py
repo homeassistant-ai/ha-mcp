@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 import httpx
+from websockets.exceptions import WebSocketException
 
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
@@ -136,6 +137,17 @@ class HomeAssistantCommandTimeout(HomeAssistantError):
     this type directly. Replaces a bare ``Exception("Command timeout")``
     string-match pattern (#1382 Patch76 review).
     """
+
+
+# Exception classes that are evidence the WebSocket transport itself failed,
+# as opposed to Home Assistant answering with a rejection. ``OSError`` covers
+# ``ConnectionResetError``; ``WebSocketException`` covers the
+# ``ConnectionClosed`` family that ``send_command`` re-raises unwrapped.
+_TRANSPORT_DEAD_ERRORS = (
+    HomeAssistantConnectionError,
+    OSError,
+    WebSocketException,
+)
 
 
 class HomeAssistantClient:
@@ -1442,6 +1454,11 @@ class HomeAssistantClient:
         retry_delay = 0.5  # seconds
 
         for attempt in range(max_retries):
+            # Whether the failure happened before a usable connection existed.
+            # Failing to obtain one is transport death whatever class the
+            # manager raises, and it raises a bare ``Exception`` when
+            # ``connect()`` returns False, so this cannot be decided by type.
+            acquiring = True
             try:
                 # Use per-client WebSocket keyed to this client's credentials
                 # (verify_ssl included so a verify_ssl=False client never
@@ -1451,6 +1468,7 @@ class HomeAssistantClient:
                     token=self.token,
                     verify_ssl=self.verify_ssl,
                 )
+                acquiring = False
 
                 # Special handling for render_template which returns an event with the actual result
                 if message.get("type") == "render_template":
@@ -1471,7 +1489,15 @@ class HomeAssistantClient:
                 # {e}")`` wraps an httpx "403 Forbidden" verbatim), so leaving
                 # the marker to a single return site would make correctness
                 # depend on wording that is free to change.
-                transport_dead = isinstance(e, HomeAssistantConnectionError)
+                #
+                # Past the acquisition phase only the transport classes count:
+                # ``send_command`` deliberately re-raises the original
+                # ``ConnectionClosed`` / ``ConnectionResetError`` from the send
+                # rather than wrapping it, to keep at-most-once semantics for
+                # write callers, so those arrive here untranslated. Anything
+                # else (a ``ValueError`` from building the message, say) is a
+                # bug rather than evidence about the connection.
+                transport_dead = acquiring or isinstance(e, _TRANSPORT_DEAD_ERRORS)
 
                 # Detect transient 403 errors (rate limiting / reverse proxy throttling)
                 if "403" in error_str and "Forbidden" in error_str:

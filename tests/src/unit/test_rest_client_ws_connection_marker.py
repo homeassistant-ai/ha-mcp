@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from websockets.exceptions import ConnectionClosedError
 
 from ha_mcp.client.rest_client import (
     WS_CONNECTION_ERROR_KEY,
@@ -46,6 +47,17 @@ async def _send_with_failure(
     with patch(
         "ha_mcp.client.websocket_client.get_websocket_client",
         new=AsyncMock(return_value=ws_client),
+    ):
+        return await client.send_websocket_message({"type": "config_entries/get"})
+
+
+async def _send_with_acquire_failure(
+    client: HomeAssistantClient, exc: Exception
+) -> dict[str, Any]:
+    """Drive ``send_websocket_message`` with an unavailable pooled client."""
+    with patch(
+        "ha_mcp.client.websocket_client.get_websocket_client",
+        new=AsyncMock(side_effect=exc),
     ):
         return await client.send_websocket_message({"type": "config_entries/get"})
 
@@ -99,6 +111,48 @@ class TestConnectionErrorMarker:
 
         assert result["success"] is False
         assert "403 Forbidden" in result["error"]
+        assert result[WS_CONNECTION_ERROR_KEY] is True
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            Exception("Failed to connect to Home Assistant WebSocket"),
+            HomeAssistantConnectionError("ws gone"),
+        ],
+        ids=["bare_exception", "connection_error"],
+    )
+    @pytest.mark.asyncio
+    async def test_failure_to_acquire_a_client_is_marked(
+        self, client: HomeAssistantClient, exc: Exception
+    ) -> None:
+        """Never obtaining a usable connection is transport death whatever the
+        exception class. The pooled manager raises a bare ``Exception`` when
+        ``connect()`` returns False, which is the ordinary "HA is unreachable"
+        case, so this cannot be decided on type alone."""
+        result = await _send_with_acquire_failure(client, exc)
+
+        assert result["success"] is False
+        assert result[WS_CONNECTION_ERROR_KEY] is True
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            ConnectionClosedError(None, None),
+            ConnectionResetError("peer reset"),
+        ],
+        ids=["connection_closed", "connection_reset"],
+    )
+    @pytest.mark.asyncio
+    async def test_socket_write_failures_are_marked(
+        self, client: HomeAssistantClient, exc: Exception
+    ) -> None:
+        """``send_command`` re-raises the original transport error from the
+        send rather than wrapping it, to keep at-most-once semantics for write
+        callers, so the bridge sees the library class untranslated. A socket
+        that dies mid-request is still a dead transport."""
+        result = await _send_with_failure(client, exc)
+
+        assert result["success"] is False
         assert result[WS_CONNECTION_ERROR_KEY] is True
 
     def test_connection_classes_carry_no_error_code(self) -> None:
