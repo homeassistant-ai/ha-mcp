@@ -18,6 +18,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..client.rest_client import (
+    WS_CONNECTION_ERROR_KEY,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
 )
@@ -1645,7 +1646,8 @@ class SystemTools:
         attribute the failure rather than substitute a fixed "unavailable"
         message that hides the root cause (auth vs command error vs
         malformed envelope). Fatal exceptions (per ``_reraise_if_fatal``)
-        unwind instead of being returned as an error string.
+        unwind instead of being returned as an error string, as do failure
+        envelopes carrying the bridge's ``connection_error`` marker.
         """
         if isinstance(resp, BaseException):
             # gather(return_exceptions=True) hands back the raw exception; let
@@ -1654,6 +1656,21 @@ class SystemTools:
             return None, f"{type(resp).__name__}: {resp}"
         if not isinstance(resp, dict):
             return None, f"unexpected response type: {type(resp).__name__}"
+        if resp.get(WS_CONNECTION_ERROR_KEY):
+            # ``send_websocket_message`` swallows transport failures into this
+            # envelope, so the raw-exception pre-pass above never sees them and
+            # the #1624 policy was unreachable here (issue #1947). Dead entities
+            # is a detector: a short list produced while the transport is down
+            # reads as "nothing is dead", so it must fail loud. Rebuild the
+            # exception and route it through the same gate rather than raising
+            # here, keeping one policy site.
+            from ..client.rest_client import HomeAssistantConnectionError
+
+            _reraise_if_fatal(
+                HomeAssistantConnectionError(
+                    str(resp.get("error") or "WebSocket transport failed")
+                )
+            )
         # Require success truthy before trusting ``result`` — matches the
         # ``if result.get("success")`` convention used by the other WS handlers
         # in this file (and treats a malformed envelope missing the key as a

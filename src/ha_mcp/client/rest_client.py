@@ -39,6 +39,11 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_STATUS = frozenset({502, 503, 504})
 _MAX_REQUEST_ATTEMPTS = 3
 
+# Key set on a ``send_websocket_message`` failure envelope when the underlying
+# cause was a dead transport rather than a command HA rejected (issue #1947).
+# Shared so the producer below and its consumers cannot drift on the spelling.
+WS_CONNECTION_ERROR_KEY = "connection_error"
+
 
 class HomeAssistantError(Exception):
     """Base exception for Home Assistant API errors."""
@@ -1460,6 +1465,13 @@ class HomeAssistantClient:
 
             except Exception as e:
                 error_str = str(e)
+                # Decided once so every return path below carries it. The 403
+                # branch matches on message text, and a connection error can
+                # carry that text (``HomeAssistantConnectionError(f"HTTP error:
+                # {e}")`` wraps an httpx "403 Forbidden" verbatim), so leaving
+                # the marker to a single return site would make correctness
+                # depend on wording that is free to change.
+                transport_dead = isinstance(e, HomeAssistantConnectionError)
 
                 # Detect transient 403 errors (rate limiting / reverse proxy throttling)
                 if "403" in error_str and "Forbidden" in error_str:
@@ -1474,7 +1486,7 @@ class HomeAssistantClient:
                         logger.error(
                             f"WebSocket 403 error after {max_retries} attempts: {error_str}"
                         )
-                        return {
+                        blocked: dict[str, Any] = {
                             "success": False,
                             "error": f"WebSocket request blocked (403 Forbidden): {error_str}",
                             "error_code": getattr(e, "code", None),
@@ -1485,6 +1497,9 @@ class HomeAssistantClient:
                                 "Check if your Home Assistant is behind a reverse proxy with security rules",
                             ],
                         }
+                        if transport_dead:
+                            blocked[WS_CONNECTION_ERROR_KEY] = True
+                        return blocked
 
                 # Name the command in the log line: a bare "Command failed:
                 # Unknown command." is undiagnosable from a user's log
@@ -1493,11 +1508,21 @@ class HomeAssistantClient:
                 # Preserve HA's structured error code (e.g. ``not_found``) so callers
                 # can distinguish HA's authoritative verdict from a transient failure
                 # instead of only seeing the stringified message.
-                return {
+                failure: dict[str, Any] = {
                     "success": False,
                     "error": str(e),
                     "error_code": getattr(e, "code", None),
                 }
+                if transport_dead:
+                    # ``error_code`` cannot carry this (the connection classes
+                    # define no ``code``), so mark it structurally instead of
+                    # leaving callers to match on the message text. Opt-in by
+                    # design (#1947): a caller whose degraded output would be
+                    # read as a negative finding must re-raise on this, while
+                    # callers that merely enrich a primary result keep
+                    # degrading as before.
+                    failure[WS_CONNECTION_ERROR_KEY] = True
+                return failure
 
         return {"success": False, "error": "WebSocket request failed"}
 

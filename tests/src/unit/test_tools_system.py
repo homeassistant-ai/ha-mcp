@@ -2234,16 +2234,58 @@ class TestHomeAssistantConnectionErrorPropagation:
 
     @pytest.mark.asyncio
     async def test_connection_error_from_registry_propagates(self):
-        """Connection failure on the WS registry fetch unwinds (via
-        ``_ws_result_list``'s fatal pre-pass) rather than landing as a
-        section error string."""
+        """Connection failure on the WS registry fetch unwinds rather than
+        landing as a section error string.
+
+        Exercises the shape production actually produces: ``rest_client``'s
+        ``send_websocket_message`` catches the transport error and returns the
+        ``connection_error``-marked failure envelope, so nothing ever raises
+        into the caller's ``gather``. Injecting a raising mock here would test
+        a path this fetch cannot reach and would stay green even with the
+        marker handling removed (issue #1947)."""
         client = _make_dead_entities_client(
             states=[],
-            registry_resp=None,
-            registry_exc=HomeAssistantConnectionError("ws gone"),
+            registry_resp={
+                "success": False,
+                "error": "ws gone",
+                "error_code": None,
+                "connection_error": True,
+            },
         )
         with pytest.raises(HomeAssistantConnectionError):
             await SystemTools(client)._fetch_dead_entities()
+
+    @pytest.mark.asyncio
+    async def test_connection_marked_entries_envelope_propagates(self):
+        """The config-entries fetch degrades to a warning on an ordinary
+        failure, but a dead transport is not degradable: it must unwind like
+        the registry fetch rather than report ``config_entry_orphans`` as
+        skipped while the connection is down."""
+        client = _make_dead_entities_client(
+            states=[],
+            registry=[],
+            entries_resp={
+                "success": False,
+                "error": "ws gone",
+                "error_code": None,
+                "connection_error": True,
+            },
+        )
+        with pytest.raises(HomeAssistantConnectionError):
+            await SystemTools(client)._fetch_dead_entities()
+
+    @pytest.mark.asyncio
+    async def test_soft_envelope_failure_still_degrades(self):
+        """The marker, not the failed envelope, is what makes a WS failure
+        fatal. An unmarked ``{"success": False}`` (HA rejected the command)
+        keeps landing as a section error string, so the fix does not turn
+        every soft failure into ``isError``."""
+        client = _make_dead_entities_client(
+            states=[],
+            registry_resp={"success": False, "error": "unknown command"},
+        )
+        dead = await SystemTools(client)._fetch_dead_entities()
+        assert "unknown command" in dead["error"]
 
     @pytest.mark.parametrize(
         "helper_name",
