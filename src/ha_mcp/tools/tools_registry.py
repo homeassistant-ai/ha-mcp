@@ -383,8 +383,15 @@ async def _lookup_device_for_remove(client: Any, device_id: str) -> dict[str, An
     return device
 
 
-async def _enrich_zha_metrics(client: Any, device_info: dict[str, Any]) -> None:
-    """Fetch ZHA radio metrics (LQI/RSSI) and add to device_info in-place."""
+async def _enrich_zha_metrics(
+    client: Any, device_info: dict[str, Any], warnings: list[str]
+) -> None:
+    """Fetch ZHA radio metrics (LQI/RSSI) and add to device_info in-place.
+
+    Enrichment is best-effort, but a skipped fetch is named in ``warnings`` so
+    a device answered without ``radio_metrics`` is distinguishable from one
+    whose radio genuinely reports none (#1947).
+    """
     try:
         zha_result = await client.send_websocket_message({"type": "zha/devices"})
         if zha_result.get("success"):
@@ -408,12 +415,17 @@ async def _enrich_zha_metrics(client: Any, device_info: dict[str, Any]) -> None:
             device_info.get("device_id"),
             e,
         )
+        warnings.append(f"ZHA radio metrics unavailable: {e}")
 
 
 async def _enrich_zwave_status(
-    client: Any, device_id: str, device_info: dict[str, Any]
+    client: Any, device_id: str, device_info: dict[str, Any], warnings: list[str]
 ) -> None:
-    """Fetch Z-Wave node status and add to device_info in-place."""
+    """Fetch Z-Wave node status and add to device_info in-place.
+
+    Best-effort like the ZHA metrics, and named in ``warnings`` on failure for
+    the same reason (#1947).
+    """
     try:
         zwave_result = await client.send_websocket_message(
             {"type": "zwave_js/node_status", "device_id": device_id}
@@ -440,15 +452,17 @@ async def _enrich_zwave_status(
             device_info.get("device_id"),
             e,
         )
+        warnings.append(f"Z-Wave node status unavailable: {e}")
 
 
 async def _enrich_matter_diagnostics(
-    client: Any, device_id: str, device_info: dict[str, Any]
+    client: Any, device_id: str, device_info: dict[str, Any], warnings: list[str]
 ) -> None:
     """Fetch Matter node diagnostics and add to device_info in-place.
 
     Mirrors _enrich_zwave_status: surfaces the Matter equivalent of Z-Wave node
-    status — network type (wifi/thread), reachability, IPs and joined fabrics.
+    status — network type (wifi/thread), reachability, IPs and joined fabrics,
+    and names a skipped fetch in ``warnings`` (#1947).
     """
     try:
         result = await client.send_websocket_message(
@@ -474,6 +488,7 @@ async def _enrich_matter_diagnostics(
         TimeoutError,
         OSError,
     ) as e:
+        warnings.append(f"Matter node diagnostics unavailable: {e}")
         logger.warning(
             "Could not fetch Matter node diagnostics for device %s: %s",
             device_info.get("device_id"),
@@ -506,6 +521,7 @@ async def _get_single_device_result(
         )
         return {}  # unreachable: raise_tool_error always raises
 
+    enrichment_warnings: list[str] = []
     device_info = _get_device_info(device)
     device_info["entities"] = device_to_entities.get(device_id, [])
     device_info["name_by_user"] = device.get("name_by_user")
@@ -519,14 +535,16 @@ async def _get_single_device_result(
     device_info["identifiers"] = device.get("identifiers", [])
 
     if device_info.get("integration_type") == "zha" and device_info.get("ieee_address"):
-        await _enrich_zha_metrics(client, device_info)
+        await _enrich_zha_metrics(client, device_info, enrichment_warnings)
     if device_info.get("integration_type") == "zwave_js" and device_info.get("node_id"):
-        await _enrich_zwave_status(client, device_id, device_info)
+        await _enrich_zwave_status(client, device_id, device_info, enrichment_warnings)
     if device_info.get("integration_type") == "matter":
-        await _enrich_matter_diagnostics(client, device_id, device_info)
+        await _enrich_matter_diagnostics(
+            client, device_id, device_info, enrichment_warnings
+        )
 
     entities = device_info.get("entities", [])
-    return {
+    response: dict[str, Any] = {
         "success": True,
         "device": device_info,
         "entities": entities,  # Also at top level for backward compatibility
@@ -534,6 +552,11 @@ async def _get_single_device_result(
         "queried_by": "entity_id" if entity_id else "device_id",
         "queried_entity_id": entity_id,
     }
+    if enrichment_warnings:
+        # Top-level list[str] per the response contract — never nested under
+        # ``device``, where a caller reading the payload would miss it.
+        response["warnings"] = enrichment_warnings
+    return response
 
 
 def _matches_integration(

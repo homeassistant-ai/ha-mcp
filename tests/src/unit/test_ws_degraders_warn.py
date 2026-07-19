@@ -19,6 +19,7 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.smart_search._base import _SearchBase
+from ha_mcp.tools.tools_registry import _get_single_device_result
 
 _AREA_LIST = "config/area_registry/list"
 
@@ -193,3 +194,67 @@ class TestIdentifierResolversFailLoud:
         )
 
         assert await getattr(client, method)(identifier) == expected
+
+
+class TestDeviceEnrichmentReportsSkips:
+    """Radio enrichment is best-effort, but a device answered without
+    ``radio_metrics`` because the transport died must not look like a device
+    whose radio reports none. The skip is named at the top level, not nested
+    under ``device`` where a caller reading the payload would miss it.
+    """
+
+    @staticmethod
+    def _zha_device() -> dict[str, Any]:
+        return {
+            "id": "dev-1",
+            "name": "Kitchen sensor",
+            "identifiers": [["zha", "aa:bb"]],
+            "connections": [],
+        }
+
+    @pytest.mark.asyncio
+    async def test_dead_transport_names_the_skipped_enrichment(self) -> None:
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws gone")
+        )
+
+        with patch(
+            "ha_mcp.tools.tools_registry._get_device_info",
+            return_value={
+                "device_id": "dev-1",
+                "integration_type": "zha",
+                "ieee_address": "aa:bb",
+            },
+        ):
+            result = await _get_single_device_result(
+                client, "dev-1", None, [self._zha_device()], {}
+            )
+
+        assert result["success"] is True
+        assert any("ZHA radio metrics unavailable" in w for w in result["warnings"])
+        # Contract: top-level list[str], never nested under ``device``.
+        assert isinstance(result["warnings"], list)
+        assert "warnings" not in result["device"]
+
+    @pytest.mark.asyncio
+    async def test_healthy_enrichment_adds_no_warning(self) -> None:
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": [{"ieee": "aa:bb", "lqi": 200}]}
+        )
+
+        with patch(
+            "ha_mcp.tools.tools_registry._get_device_info",
+            return_value={
+                "device_id": "dev-1",
+                "integration_type": "zha",
+                "ieee_address": "aa:bb",
+            },
+        ):
+            result = await _get_single_device_result(
+                client, "dev-1", None, [self._zha_device()], {}
+            )
+
+        assert "warnings" not in result
+        assert result["device"]["radio_metrics"]["lqi"] == 200
