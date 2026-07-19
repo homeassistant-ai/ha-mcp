@@ -163,15 +163,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/**/*" = ["E501", "B011"]
-# C901 (mccabe complexity) grandfathered debt: newly enabled rule, these files
-# already exceeded the threshold. Remove a line once its functions are
-# refactored below threshold -- do not add new files here.
-"src/ha_mcp/tools/tools_config_automations.py" = ["C901"]
-"src/ha_mcp/tools/tools_config_scenes.py" = ["C901"]
-"src/ha_mcp/tools/tools_config_scripts.py" = ["C901"]
-"src/ha_mcp/tools/tools_dev.py" = ["C901"]
-"src/ha_mcp/tools/tools_system.py" = ["C901"]
-"tests/src/unit/test_advanced_settings_coverage.py" = ["C901"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

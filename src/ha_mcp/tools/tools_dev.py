@@ -100,6 +100,11 @@ _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 # Sentinel marking a key for removal in _merge_file_override (reset action).
 _REMOVE = object()
 
+# Sentinel returned by the per-type ``_coerce_*_setting`` helpers when ``raw``
+# is not coercible to that type — the caller then raises the generic
+# type-mismatch error.
+_COERCE_MISS = object()
+
 
 def is_dev_mode_enabled() -> bool:
     """Check if developer mode is enabled.
@@ -442,40 +447,17 @@ class DevTools:
         for int/float). Raises ``ToolError`` on mismatch.
         """
         if ftype is bool:
-            if isinstance(raw, bool):
-                return raw
-            if isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
-                return raw.strip().lower() == "true"
+            coerced = DevTools._coerce_bool_setting(raw)
         elif ftype is int:
-            if isinstance(raw, bool):
-                pass  # bool is an int subclass; reject below
-            elif isinstance(raw, int):
-                return raw
-            elif isinstance(raw, str):
-                try:
-                    return int(raw.strip())
-                except ValueError:
-                    pass
+            coerced = DevTools._coerce_int_setting(raw)
         elif ftype is float:
-            if isinstance(raw, bool):
-                pass
-            elif isinstance(raw, int | float):
-                return float(raw)
-            elif isinstance(raw, str):
-                try:
-                    return float(raw.strip())
-                except ValueError:
-                    pass
+            coerced = DevTools._coerce_float_setting(raw)
         elif ftype is str:
-            if isinstance(raw, str):
-                if "\x00" in raw:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            f"{fname!r} value contains a null byte",
-                        )
-                    )
-                return raw
+            coerced = DevTools._coerce_str_setting(fname, raw)
+        else:
+            coerced = _COERCE_MISS
+        if coerced is not _COERCE_MISS:
+            return coerced
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -484,6 +466,60 @@ class DevTools:
             )
         )
         return None  # unreachable; explicit for CodeQL
+
+    @staticmethod
+    def _coerce_bool_setting(raw: Any) -> Any:
+        """Coerce ``raw`` to bool, or ``_COERCE_MISS`` if not coercible."""
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
+            return raw.strip().lower() == "true"
+        return _COERCE_MISS
+
+    @staticmethod
+    def _coerce_int_setting(raw: Any) -> Any:
+        """Coerce ``raw`` to int, or ``_COERCE_MISS`` if not coercible."""
+        if isinstance(raw, bool):
+            pass  # bool is an int subclass; reject below
+        elif isinstance(raw, int):
+            return raw
+        elif isinstance(raw, str):
+            try:
+                return int(raw.strip())
+            except ValueError:
+                pass
+        return _COERCE_MISS
+
+    @staticmethod
+    def _coerce_float_setting(raw: Any) -> Any:
+        """Coerce ``raw`` to float, or ``_COERCE_MISS`` if not coercible."""
+        if isinstance(raw, bool):
+            pass
+        elif isinstance(raw, int | float):
+            return float(raw)
+        elif isinstance(raw, str):
+            try:
+                return float(raw.strip())
+            except ValueError:
+                pass
+        return _COERCE_MISS
+
+    @staticmethod
+    def _coerce_str_setting(fname: str, raw: Any) -> Any:
+        """Coerce ``raw`` to str, or ``_COERCE_MISS`` if not a string.
+
+        Raises ``ToolError`` when a string contains a null byte.
+        """
+        if isinstance(raw, str):
+            if "\x00" in raw:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"{fname!r} value contains a null byte",
+                    )
+                )
+            return raw
+        return _COERCE_MISS
 
     @staticmethod
     async def _merge_file_override(changes: dict[str, Any]) -> None:
@@ -657,12 +693,9 @@ class DevTools:
                 _ADVANCED_SETTINGS_SENTINELS,
                 _FEATURE_FLAG_INT_BOUNDS,
                 ADVANCED_SETTINGS_FIELDS,
-                BETA_FEATURE_FIELDS,
                 FEATURE_FLAG_FIELDS,
                 _read_feature_flag_override_file,
-                _reset_global_settings,
                 get_feature_flag_origin,
-                get_global_settings,
             )
 
             features = {f: (e, t) for f, e, t in FEATURE_FLAG_FIELDS}
@@ -697,122 +730,20 @@ class DevTools:
                 )
 
             if action == "reset":
-                if origin == "env":
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            f"{setting!r} is pinned by the {env_name} env var; "
-                            "unset the env var instead.",
-                        )
-                    )
-                if origin == "addon":
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            f"{setting!r} is managed by the add-on "
-                            "configuration; change it there or via "
-                            "action='set'.",
-                        )
-                    )
-                had_override = origin == "file"
-                if had_override:
-                    await self._merge_file_override({setting: _REMOVE})
-                    _reset_global_settings()
-                return {
-                    "success": True,
-                    "data": {
-                        "setting": setting,
-                        "removed_override": had_override,
-                        "restart_required": had_override,
-                    },
-                }
+                return await self._apply_setting_reset(setting, env_name, origin)
 
             # action == "set"
-            if value is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_MISSING_PARAMETER,
-                        "'value' is required for action='set'",
-                    )
-                )
-            if not editable:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"{setting!r} is locked by {origin}. "
-                        + (
-                            f"Unset the {env_name} env var to edit it here."
-                            if origin == "env"
-                            else "It is display-only on this surface."
-                        ),
-                    )
-                )
-            coerced = self._coerce_setting_value(setting, value, ftype)
-            if (
-                bounds is not None
-                and coerced != sentinel
-                and not (bounds[0] <= coerced <= bounds[1])
-            ):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"{setting!r} must be between {bounds[0]} and {bounds[1]}",
-                    )
-                )
-            if choices is not None and coerced not in choices:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"{setting!r} must be one of {list(choices)}",
-                    )
-                )
-            # Master beta gate: enabling a beta sub-flag while the
-            # effective master is off would be silently forced back off
-            # at runtime — reject loudly instead (same rule as the web
-            # UI save handler).
-            if (
-                setting in BETA_FEATURE_FIELDS
-                and bool(coerced)
-                and not get_global_settings().enable_beta_features
-            ):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Cannot enable beta sub-flag {setting!r} while "
-                        "'enable_beta_features' is off.",
-                        suggestions=["Set enable_beta_features=true first, then retry"],
-                    )
-                )
-
-            if origin == "addon":
-                from ..settings_ui._supervisor import _supervisor_merge_and_post_options
-
-                ok, err = await _supervisor_merge_and_post_options(
-                    get_global_settings().verify_ssl, {setting: coerced}
-                )
-                if not ok:
-                    message = err.message if err else "Supervisor update failed"
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            f"Supervisor rejected the options update: {message}",
-                            suggestions=["Check the Supervisor and add-on logs"],
-                        )
-                    )
-                mode = "addon"
-            else:
-                await self._merge_file_override({setting: coerced})
-                _reset_global_settings()
-                mode = "file"
-            return {
-                "success": True,
-                "data": {
-                    "setting": setting,
-                    "value": coerced,
-                    "mode": mode,
-                    "restart_required": True,
-                },
-            }
+            return await self._apply_setting_set(
+                setting,
+                value,
+                env_name,
+                ftype,
+                origin,
+                editable,
+                bounds,
+                sentinel,
+                choices,
+            )
         except ToolError:
             raise
         except Exception as e:
@@ -822,6 +753,156 @@ class DevTools:
                 suggestions=["Check server logs for details"],
             )
             return None  # unreachable; explicit for CodeQL
+
+    async def _apply_setting_reset(
+        self, setting: str, env_name: str, origin: str
+    ) -> dict[str, Any]:
+        """Handle ``ha_dev_manage_settings`` action='reset'.
+
+        Extracted verbatim from the inline branch: rejects env/addon-managed
+        settings, removes any file override, and reports whether one existed.
+        """
+        from ..config import _reset_global_settings
+
+        if origin == "env":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"{setting!r} is pinned by the {env_name} env var; "
+                    "unset the env var instead.",
+                )
+            )
+        if origin == "addon":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"{setting!r} is managed by the add-on "
+                    "configuration; change it there or via "
+                    "action='set'.",
+                )
+            )
+        had_override = origin == "file"
+        if had_override:
+            await self._merge_file_override({setting: _REMOVE})
+            _reset_global_settings()
+        return {
+            "success": True,
+            "data": {
+                "setting": setting,
+                "removed_override": had_override,
+                "restart_required": had_override,
+            },
+        }
+
+    async def _apply_setting_set(
+        self,
+        setting: str,
+        value: bool | int | float | str | None,
+        env_name: str,
+        ftype: type,
+        origin: str,
+        editable: bool,
+        bounds: tuple[float, float] | None,
+        sentinel: int | None,
+        choices: tuple[str, ...] | None,
+    ) -> dict[str, Any]:
+        """Handle ``ha_dev_manage_settings`` action='set'.
+
+        Extracted verbatim from the inline branch: validates presence +
+        editability, coerces and range/choice/beta-checks the value, then
+        persists via Supervisor (add-on mode) or the override file.
+        """
+        from ..config import (
+            BETA_FEATURE_FIELDS,
+            _reset_global_settings,
+            get_global_settings,
+        )
+
+        if value is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "'value' is required for action='set'",
+                )
+            )
+        if not editable:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"{setting!r} is locked by {origin}. "
+                    + (
+                        f"Unset the {env_name} env var to edit it here."
+                        if origin == "env"
+                        else "It is display-only on this surface."
+                    ),
+                )
+            )
+        coerced = self._coerce_setting_value(setting, value, ftype)
+        if (
+            bounds is not None
+            and coerced != sentinel
+            and not (bounds[0] <= coerced <= bounds[1])
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"{setting!r} must be between {bounds[0]} and {bounds[1]}",
+                )
+            )
+        if choices is not None and coerced not in choices:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"{setting!r} must be one of {list(choices)}",
+                )
+            )
+        # Master beta gate: enabling a beta sub-flag while the
+        # effective master is off would be silently forced back off
+        # at runtime — reject loudly instead (same rule as the web
+        # UI save handler).
+        if (
+            setting in BETA_FEATURE_FIELDS
+            and bool(coerced)
+            and not get_global_settings().enable_beta_features
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Cannot enable beta sub-flag {setting!r} while "
+                    "'enable_beta_features' is off.",
+                    suggestions=["Set enable_beta_features=true first, then retry"],
+                )
+            )
+
+        if origin == "addon":
+            from ..settings_ui._supervisor import _supervisor_merge_and_post_options
+
+            ok, err = await _supervisor_merge_and_post_options(
+                get_global_settings().verify_ssl, {setting: coerced}
+            )
+            if not ok:
+                message = err.message if err else "Supervisor update failed"
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Supervisor rejected the options update: {message}",
+                        suggestions=["Check the Supervisor and add-on logs"],
+                    )
+                )
+            mode = "addon"
+        else:
+            await self._merge_file_override({setting: coerced})
+            _reset_global_settings()
+            mode = "file"
+        return {
+            "success": True,
+            "data": {
+                "setting": setting,
+                "value": coerced,
+                "mode": mode,
+                "restart_required": True,
+            },
+        }
 
     @tool(
         name="ha_dev_manage_server",
@@ -974,9 +1055,14 @@ class DevTools:
             result["warnings"] = warnings
         return result
 
-    async def _update_source(
-        self, channel: str | None, pip_spec: str | None
-    ) -> dict[str, Any]:
+    @staticmethod
+    def _validate_update_source_args(channel: str | None, pip_spec: str | None) -> None:
+        """Validate ``update_source``'s channel/pip_spec arguments.
+
+        Extracted verbatim from ``_update_source``: raises a structured
+        ToolError when neither is given, the channel is unknown, or the
+        pip_spec is multi-line / over 500 chars.
+        """
         if channel is None and pip_spec is None:
             raise_tool_error(
                 create_error_response(
@@ -1000,6 +1086,11 @@ class DevTools:
                     "pip_spec must be a single-line string under 500 chars",
                 )
             )
+
+    async def _update_source(
+        self, channel: str | None, pip_spec: str | None
+    ) -> dict[str, Any]:
+        self._validate_update_source_args(channel, pip_spec)
 
         if is_embedded():
             # Embedded self-reload: prefer the component's one-hop direct write

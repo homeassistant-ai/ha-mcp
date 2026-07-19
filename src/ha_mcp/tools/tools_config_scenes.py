@@ -137,33 +137,61 @@ class ConfigSceneTools:
         """
         scene_id = scene_id.removeprefix("scene.")
         if allow_component:
-            matches = await fetch_entity_lookup_via_component(
-                self._client, scene_id, domain="scene"
-            )
-            if matches is not None:
-                # Component answered authoritatively. A hit returns at once — the
-                # in-process registry read needs no settle. An EMPTY result right
-                # after an upsert can be HA's async entity-registration lag
-                # (#1168), not a true absence, so recheck ONCE after the same
-                # short delay the legacy path uses before the naive fallback.
-                entity_id = self._first_scene_entity_id(matches)
-                if entity_id is not None:
-                    return entity_id
-                await asyncio.sleep(self._RESOLVE_RETRY_DELAY)
-                recheck = await fetch_entity_lookup_via_component(
-                    self._client, scene_id, domain="scene"
-                )
-                if recheck is not None:
-                    # Authoritative recheck: a hit is returned; a genuine empty
-                    # (still absent after the settle) falls to the naive guess.
-                    entity_id = self._first_scene_entity_id(recheck)
-                    if entity_id is not None:
-                        return entity_id
-                    return f"scene.{scene_id}"
-                # recheck is None: the component went unavailable/errored/downgraded
-                # mid-retry, so the first empty read is NOT authoritative. Fall
-                # through to the legacy list+retry path below (its own retry
-                # absorbs the same registration lag) instead of guessing.
+            resolved = await self._resolve_scene_via_component(scene_id)
+            if resolved is not None:
+                return resolved
+        return await self._resolve_scene_via_registry(scene_id)
+
+    async def _resolve_scene_via_component(self, scene_id: str) -> str | None:
+        """Resolve a scene ``entity_id`` through the in-process component.
+
+        Returns the resolved ``entity_id`` (or the naive ``scene.{scene_id}``
+        guess when the component authoritatively reports the scene still absent
+        after a settle). Returns ``None`` when the component is unavailable or
+        non-authoritative (capability miss, or the recheck went
+        unavailable/errored mid-retry), so the caller falls through to the
+        legacy registry list+retry path. ``scene_id`` must already have its
+        ``scene.`` prefix stripped; see ``_resolve_scene_entity_id`` for the
+        full lag-vs-absence reasoning.
+        """
+        matches = await fetch_entity_lookup_via_component(
+            self._client, scene_id, domain="scene"
+        )
+        if matches is None:
+            return None
+        # Component answered authoritatively. A hit returns at once — the
+        # in-process registry read needs no settle. An EMPTY result right
+        # after an upsert can be HA's async entity-registration lag
+        # (#1168), not a true absence, so recheck ONCE after the same
+        # short delay the legacy path uses before the naive fallback.
+        entity_id = self._first_scene_entity_id(matches)
+        if entity_id is not None:
+            return entity_id
+        await asyncio.sleep(self._RESOLVE_RETRY_DELAY)
+        recheck = await fetch_entity_lookup_via_component(
+            self._client, scene_id, domain="scene"
+        )
+        if recheck is None:
+            # recheck is None: the component went unavailable/errored/downgraded
+            # mid-retry, so the first empty read is NOT authoritative. Fall
+            # through to the legacy list+retry path (its own retry absorbs the
+            # same registration lag) instead of guessing.
+            return None
+        # Authoritative recheck: a hit is returned; a genuine empty
+        # (still absent after the settle) falls to the naive guess.
+        entity_id = self._first_scene_entity_id(recheck)
+        if entity_id is not None:
+            return entity_id
+        return f"scene.{scene_id}"
+
+    async def _resolve_scene_via_registry(self, scene_id: str) -> str:
+        """Resolve a scene ``entity_id`` via the entity-registry list.
+
+        Legacy path used by ``_resolve_scene_entity_id`` when the component is
+        unavailable or non-authoritative: lists the registry with one
+        registration-lag retry, falling back to the naive ``scene.{scene_id}``.
+        ``scene_id`` must already have its ``scene.`` prefix stripped.
+        """
         retried = False
         for attempt in range(2):
             try:
@@ -679,246 +707,15 @@ class ConfigSceneTools:
                     )
                 )
 
-            # python_transform branch
             if python_transform is not None:
-                if config_hash is None:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "config_hash is required for python_transform",
-                            suggestions=[
-                                "Call ha_config_get_scene() first",
-                                "Use the config_hash from that response",
-                            ],
-                            context={
-                                "action": "python_transform",
-                                "scene_id": scene_id,
-                            },
-                        )
-                    )
-
-                actual_config, resolved_id = await self._fetch_and_verify_hash(
-                    scene_id, config_hash, "python_transform"
+                return await self._run_scene_python_transform(
+                    scene_id,
+                    config_hash,
+                    python_transform,
+                    category,
+                    wait,
+                    MandatoryBPS,
                 )
-                # Capture the scene's own ``id`` BEFORE the transform mutates the
-                # config in place — it is the stable identity the id-change guard
-                # compares against (in production it equals ``resolved_id``; it is
-                # also correct when ``resolved_id`` is None because the envelope
-                # omitted ``scene_id``).
-                original_id = actual_config.get("id")
-
-                try:
-                    transformed_config = safe_execute(python_transform, actual_config)
-                except PythonSandboxError as e:
-                    message, suggestions = format_sandbox_error(e, python_transform)
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            message,
-                            suggestions=suggestions,
-                            context={
-                                "action": "python_transform",
-                                "scene_id": resolved_id,
-                            },
-                        )
-                    )
-
-                # Issue #1168 R5 blocker 8: a transform that reassigns
-                # config to ``None`` (or returns ``None`` from a list-comp
-                # mistake) used to crash the next ``in`` check with a
-                # ``TypeError`` that surfaced as ``INTERNAL_ERROR``. Catch
-                # the rebind here so the user gets the same VALIDATION
-                # signal the dict-shape checks below produce.
-                if transformed_config is None:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            "Transform must not reassign config to None",
-                            suggestions=[
-                                "The transform must produce a dict matching the scene config shape",
-                                "Mutate ``config`` in-place rather than reassigning it",
-                            ],
-                            context={
-                                "action": "python_transform",
-                                "scene_id": resolved_id,
-                            },
-                        )
-                    )
-
-                # Validate transformed config still has the required shape.
-                if "entities" not in transformed_config:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            "Transformed config must still include 'entities'",
-                            suggestions=[
-                                "The transform may have removed the required field",
-                                "Ensure the config still has an 'entities' key",
-                            ],
-                            context={
-                                "action": "python_transform",
-                                "scene_id": resolved_id,
-                            },
-                        )
-                    )
-                if not isinstance(transformed_config["entities"], dict):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            "Transformed 'entities' must remain a dict keyed by entity_id",
-                            context={
-                                "action": "python_transform",
-                                "scene_id": resolved_id,
-                                "resulting_type": type(
-                                    transformed_config["entities"]
-                                ).__name__,
-                            },
-                        )
-                    )
-
-                # Issue #1168 R5 blocker 10: a transform that mutates
-                # ``config['id']`` produces a duplicate scene at the new
-                # storage key AND orphans the original (state goes
-                # ``unavailable``, registry row left behind). HA itself
-                # accepts the mismatched-id upsert silently. Reject the
-                # rename here — renaming a scene means delete-old +
-                # create-new through the explicit tools, not an in-place
-                # ``id`` rebind. R6 blocker 18: only reject an explicit
-                # mismatched id; a transform that ``del config['id']`` is
-                # legitimate (HA treats ``id`` as optional) and should pass
-                # through. R7 blocker 24: ``transformed_config["id"] = None``
-                # is the in-place equivalent of ``del`` — normalise both
-                # by checking against ``(None, original_id)``, so only an
-                # explicit non-None mismatch triggers the reject. Compare against
-                # the scene's own captured ``id`` (not ``resolved_id``, which may
-                # be None on the structural-invariant path) — in production the
-                # two are equal.
-                if "id" in transformed_config and transformed_config["id"] not in (
-                    None,
-                    original_id,
-                ):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            "Transform must not change ``config['id']``",
-                            suggestions=[
-                                f"Original scene_id is {original_id!r} — keep it unchanged",
-                                "To rename a scene, use ha_config_remove_scene + ha_config_set_scene",
-                            ],
-                            context={
-                                "action": "python_transform",
-                                "scene_id": original_id,
-                                "attempted_id": transformed_config.get("id"),
-                            },
-                        )
-                    )
-
-                # Issue #1168 R3 blocker 5: prune orphan ``metadata`` keys
-                # whose entity was deleted by the transform (e.g. a list
-                # comprehension that filters ``entities`` doesn't touch
-                # ``metadata`` and HA keeps the orphan entries on disk).
-                # Full-replace via ``config=`` clears metadata cleanly; the
-                # transform path needs to mirror that contract.
-                metadata = transformed_config.get("metadata")
-                if isinstance(metadata, dict):
-                    valid_keys = set(transformed_config["entities"].keys())
-                    pruned_keys = sorted(k for k in metadata if k not in valid_keys)
-                    if pruned_keys:
-                        # Issue #1168 R5 blocker 12: a buggy transform that
-                        # accidentally drops entities used to silently
-                        # rewrite metadata. Surface the prune so a stray
-                        # ``del entities[k]`` doesn't lose the friendly_name
-                        # without trace.
-                        logger.info(
-                            f"python_transform pruned {len(pruned_keys)} orphan "
-                            f"metadata key(s) from scene {resolved_id}: {pruned_keys}"
-                        )
-                    transformed_config["metadata"] = {
-                        k: v for k, v in metadata.items() if k in valid_keys
-                    }
-
-                # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
-                # the upsert commits. Validating after the write produced the
-                # exact partial-state-mutation pattern this PR's auto-attach
-                # contract was meant to eliminate — scene was rewritten,
-                # caller saw VALIDATION_INVALID_PARAMETER on a phantom
-                # category, and the storage state had already moved.
-                if category:
-                    await self._validate_category_id(category)
-
-                # ``resolved_id`` is the storage key (write target); ``scene_id``
-                # stays the caller id so a missing ``name`` defaults caller-facing
-                # rather than to the storage key (#1935).
-                result = await self._client.upsert_scene_config(
-                    transformed_config, scene_id, resolved_id=resolved_id
-                )
-                # The upsert re-resolves when ``resolved_id`` was None (envelope
-                # omitted the key); re-bind to the authoritative write target it
-                # returned so the re-fetch, entity resolution, and response all
-                # use the resolved storage key rather than a possible None.
-                resolved_id = result.get("scene_id", resolved_id)
-
-                # Re-fetch to get authoritative hash (HA may normalise after save).
-                # ``resolved_id`` is already the storage key, so skip the re-resolve.
-                _, new_config_hash, _ = await self._get_scene_config_internal(
-                    resolved_id, _resolved=True
-                )
-
-                # Resolve actual entity_id and apply wait + category — same
-                # post-upsert finalisation the full-config branch runs. Without
-                # these, ``wait`` and ``category`` are silently dropped on
-                # python_transform calls.
-                entity_id = await self._resolve_scene_entity_id(
-                    resolved_id, allow_component=True
-                )
-                if wait:
-                    try:
-                        registered = await wait_for_entity_registered(
-                            self._client, entity_id
-                        )
-                        if not registered:
-                            result.setdefault("warnings", []).append(
-                                f"Scene updated but {entity_id} not yet queryable. "
-                                "It may take a moment to become available."
-                            )
-                    except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                        result.setdefault("warnings", []).append(
-                            f"Scene updated but verification failed: {e}"
-                        )
-                if category and entity_id:
-                    # Pre-validation of ``category`` already ran before the
-                    # upsert (R6 blocker 15) — apply directly here.
-                    await apply_entity_category(
-                        self._client,
-                        entity_id,
-                        category,
-                        "scene",
-                        result,
-                        "scene",
-                    )
-
-                # Issue #1168 R3 blocker 6: build the response from
-                # ``resolved_id`` directly (not the caller-input ``scene_id``)
-                # so the outer field always matches the storage key carried
-                # in ``result``. ``result["scene_id"]`` is also the storage
-                # key from rest_client; the kwarg-after-spread order means
-                # the explicit assignment wins on key-collision regardless.
-                response: dict[str, Any] = {
-                    "success": True,
-                    **{k: v for k, v in result.items() if k != "success"},
-                    "action": "python_transform",
-                    "scene_id": resolved_id,
-                    "config_hash": new_config_hash,
-                    "python_expression": python_transform,
-                    "message": f"Scene {resolved_id} updated via Python transform",
-                }
-                attach_skill_content(
-                    response,
-                    MandatoryBPS=MandatoryBPS,
-                    canonical_files=_SCENE_SKILL_FILES,
-                    referenced_files=None,
-                )
-                return response
 
             if config is None:
                 raise_tool_error(
@@ -933,130 +730,14 @@ class ConfigSceneTools:
                     )
                 )
 
-            config_dict, effective_category = self._validate_scene_config(
-                config,
+            return await self._run_scene_config_replace(
                 scene_id,
+                config,
+                config_hash,
                 category,
+                wait,
+                MandatoryBPS,
             )
-
-            # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
-            # the hash check + upsert commits. Same partial-state hazard as
-            # the python_transform branch — a phantom category must not
-            # rewrite the scene before erroring.
-            #
-            # Issue #1168 R8 (post-merge follow-up): gate on
-            # ``effective_category`` truthy, not on the user-facing
-            # ``category`` param. ``_validate_scene_config`` promotes a
-            # top-level ``config["category"]`` into ``effective_category``
-            # when the user passed ``category=None``; the R7 fix gated on
-            # ``category is not None`` to skip the WS round-trip when no
-            # category was supplied, but that left the dict-promoted path
-            # uncovered — a phantom category in ``config["category"]``
-            # would skip validation and reach ``apply_entity_category``,
-            # which attaches the phantom ID to the entity registry without
-            # checking it exists. Truthy check covers both sources and
-            # still skips the WS call when neither produces a category.
-            if effective_category:
-                await self._validate_category_id(effective_category)
-
-            # Issue #1168 R3 blocker 7: when caller passes ``config_hash``,
-            # honor the optimistic-locking semantics promised by the field
-            # description. ``_fetch_and_verify_hash`` raises ToolError on
-            # mismatch. We capture ``resolved_id`` from the verified fetch
-            # so subsequent upsert/response builders use the storage key
-            # consistently (issue #1168 R3 blocker 6).
-            #
-            # Path branching: if a hash is supplied for a non-existent
-            # scene, the inner fetch raises 404 and surfaces as
-            # ENTITY_NOT_FOUND via the outer except — which is the right
-            # caller-facing semantics ("you can't lock against a scene
-            # that doesn't exist"). The no-hash branch resolves separately
-            # so a fresh create still threads the resolved id correctly.
-            if config_hash:
-                _, resolved_id = await self._fetch_and_verify_hash(
-                    scene_id, config_hash, "set"
-                )
-            else:
-                resolved_id = await self._client.resolve_scene_id(scene_id)
-
-            # Cross-check literal service and entity references against the
-            # live registries. Soft warnings only.
-            validation_meta = await validate_config_references(
-                self._client, config_dict
-            )
-
-            # ``resolved_id`` is already the storage key (from the hash-verify
-            # fetch or the resolve above) — pass it as the write target to skip
-            # the redundant re-resolve. ``scene_id`` stays the caller id so a
-            # missing ``name`` defaults caller-facing, not to the storage key
-            # (#1935).
-            result = await self._client.upsert_scene_config(
-                config_dict, scene_id, resolved_id=resolved_id
-            )
-            # The upsert re-resolves when ``resolved_id`` was None (envelope
-            # omitted the key); re-bind to the authoritative write target it
-            # returned so entity resolution and the response use the resolved
-            # storage key rather than a possible None.
-            resolved_id = result.get("scene_id", resolved_id)
-
-            # Resolve actual entity_id via registry — HA derives scene
-            # entity_ids from the 'name' slug, not the scene_id storage key,
-            # so f"scene.{scene_id}" is wrong whenever a name is supplied.
-            entity_id = await self._resolve_scene_entity_id(
-                resolved_id, allow_component=True
-            )
-
-            # Wait for scene to be queryable
-            if wait:
-                try:
-                    registered = await wait_for_entity_registered(
-                        self._client, entity_id
-                    )
-                    if not registered:
-                        result.setdefault("warnings", []).append(
-                            f"Scene saved but {entity_id} not yet queryable. "
-                            "It may take a moment to become available."
-                        )
-                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                    result.setdefault("warnings", []).append(
-                        f"Scene saved but verification failed: {e}"
-                    )
-
-            # Apply category to entity registry if provided.
-            if effective_category and entity_id:
-                # Pre-validation of ``effective_category`` already ran before
-                # the upsert (R6 blocker 15) — apply directly here.
-                await apply_entity_category(
-                    self._client,
-                    entity_id,
-                    effective_category,
-                    "scene",
-                    result,
-                    "scene",
-                )
-
-            merge_validation_meta(result, validation_meta)
-
-            # Issue #1168 R3 blocker 6: build response from ``resolved_id``
-            # so the outer ``scene_id`` always matches the storage key.
-            # ``result["scene_id"]`` is also the storage key (from
-            # rest_client); explicit assignment after the spread guards
-            # against any future result-shape drift.
-            response = {
-                "success": True,
-                **result,
-                "scene_id": resolved_id,
-            }
-            # attach AFTER the outer dict is built so hint lands at
-            # position 0 of the FINAL response (see
-            # util_helpers._SKILL_CONTENT_OPTOUT_HINT).
-            attach_skill_content(
-                response,
-                MandatoryBPS=MandatoryBPS,
-                canonical_files=_SCENE_SKILL_FILES,
-                referenced_files=None,
-            )
-            return response
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
@@ -1074,6 +755,412 @@ class ConfigSceneTools:
             )
             augment_error_dict_with_skill_content(error, bp_warnings=None)
             raise_tool_error(error)
+
+    async def _run_scene_python_transform(
+        self,
+        scene_id: str,
+        config_hash: str | None,
+        python_transform: str,
+        category: str | None,
+        wait: bool,
+        MandatoryBPS: bool,
+    ) -> dict[str, Any]:
+        """Execute ``ha_config_set_scene``'s python_transform mode.
+
+        Extracted verbatim from the inline branch; returns the tool response.
+        """
+        if config_hash is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "config_hash is required for python_transform",
+                    suggestions=[
+                        "Call ha_config_get_scene() first",
+                        "Use the config_hash from that response",
+                    ],
+                    context={
+                        "action": "python_transform",
+                        "scene_id": scene_id,
+                    },
+                )
+            )
+
+        actual_config, resolved_id = await self._fetch_and_verify_hash(
+            scene_id, config_hash, "python_transform"
+        )
+        # Capture the scene's own ``id`` BEFORE the transform mutates the
+        # config in place — it is the stable identity the id-change guard
+        # compares against (in production it equals ``resolved_id``; it is
+        # also correct when ``resolved_id`` is None because the envelope
+        # omitted ``scene_id``).
+        original_id = actual_config.get("id")
+
+        try:
+            transformed_config = safe_execute(python_transform, actual_config)
+        except PythonSandboxError as e:
+            message, suggestions = format_sandbox_error(e, python_transform)
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    message,
+                    suggestions=suggestions,
+                    context={
+                        "action": "python_transform",
+                        "scene_id": resolved_id,
+                    },
+                )
+            )
+
+        self._validate_transformed_scene(transformed_config, resolved_id, original_id)
+        self._prune_scene_metadata(transformed_config, resolved_id)
+
+        # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
+        # the upsert commits. Validating after the write produced the
+        # exact partial-state-mutation pattern this PR's auto-attach
+        # contract was meant to eliminate — scene was rewritten,
+        # caller saw VALIDATION_INVALID_PARAMETER on a phantom
+        # category, and the storage state had already moved.
+        if category:
+            await self._validate_category_id(category)
+
+        # ``resolved_id`` is the storage key (write target); ``scene_id``
+        # stays the caller id so a missing ``name`` defaults caller-facing
+        # rather than to the storage key (#1935).
+        result = await self._client.upsert_scene_config(
+            transformed_config, scene_id, resolved_id=resolved_id
+        )
+        # The upsert re-resolves when ``resolved_id`` was None (envelope
+        # omitted the key); re-bind to the authoritative write target it
+        # returned so the re-fetch, entity resolution, and response all
+        # use the resolved storage key rather than a possible None.
+        resolved_id = result.get("scene_id", resolved_id)
+
+        # Re-fetch to get authoritative hash (HA may normalise after save).
+        # ``resolved_id`` is already the storage key, so skip the re-resolve.
+        _, new_config_hash, _ = await self._get_scene_config_internal(
+            resolved_id, _resolved=True
+        )
+
+        # Resolve actual entity_id and apply wait + category — same
+        # post-upsert finalisation the full-config branch runs. Without
+        # these, ``wait`` and ``category`` are silently dropped on
+        # python_transform calls.
+        entity_id = await self._resolve_scene_entity_id(
+            resolved_id, allow_component=True
+        )
+        if wait:
+            try:
+                registered = await wait_for_entity_registered(self._client, entity_id)
+                if not registered:
+                    result.setdefault("warnings", []).append(
+                        f"Scene updated but {entity_id} not yet queryable. "
+                        "It may take a moment to become available."
+                    )
+            except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                result.setdefault("warnings", []).append(
+                    f"Scene updated but verification failed: {e}"
+                )
+        if category and entity_id:
+            # Pre-validation of ``category`` already ran before the
+            # upsert (R6 blocker 15) — apply directly here.
+            await apply_entity_category(
+                self._client,
+                entity_id,
+                category,
+                "scene",
+                result,
+                "scene",
+            )
+
+        # Issue #1168 R3 blocker 6: build the response from
+        # ``resolved_id`` directly (not the caller-input ``scene_id``)
+        # so the outer field always matches the storage key carried
+        # in ``result``. ``result["scene_id"]`` is also the storage
+        # key from rest_client; the kwarg-after-spread order means
+        # the explicit assignment wins on key-collision regardless.
+        response: dict[str, Any] = {
+            "success": True,
+            **{k: v for k, v in result.items() if k != "success"},
+            "action": "python_transform",
+            "scene_id": resolved_id,
+            "config_hash": new_config_hash,
+            "python_expression": python_transform,
+            "message": f"Scene {resolved_id} updated via Python transform",
+        }
+        attach_skill_content(
+            response,
+            MandatoryBPS=MandatoryBPS,
+            canonical_files=_SCENE_SKILL_FILES,
+            referenced_files=None,
+        )
+        return response
+
+    @staticmethod
+    def _validate_transformed_scene(
+        transformed_config: Any,
+        resolved_id: str | None,
+        original_id: Any,
+    ) -> None:
+        """Validate a python_transform result still matches the scene shape.
+
+        Rejects a ``None`` rebind, a missing/non-dict ``entities`` field, and an
+        in-place ``id`` change (rename). Raises a structured ToolError on any
+        violation; returns normally when the transformed config is valid.
+        Extracted verbatim from ``ha_config_set_scene``'s python_transform branch.
+        """
+        # Issue #1168 R5 blocker 8: a transform that reassigns
+        # config to ``None`` (or returns ``None`` from a list-comp
+        # mistake) used to crash the next ``in`` check with a
+        # ``TypeError`` that surfaced as ``INTERNAL_ERROR``. Catch
+        # the rebind here so the user gets the same VALIDATION
+        # signal the dict-shape checks below produce.
+        if transformed_config is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Transform must not reassign config to None",
+                    suggestions=[
+                        "The transform must produce a dict matching the scene config shape",
+                        "Mutate ``config`` in-place rather than reassigning it",
+                    ],
+                    context={
+                        "action": "python_transform",
+                        "scene_id": resolved_id,
+                    },
+                )
+            )
+
+        # Validate transformed config still has the required shape.
+        if "entities" not in transformed_config:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Transformed config must still include 'entities'",
+                    suggestions=[
+                        "The transform may have removed the required field",
+                        "Ensure the config still has an 'entities' key",
+                    ],
+                    context={
+                        "action": "python_transform",
+                        "scene_id": resolved_id,
+                    },
+                )
+            )
+        if not isinstance(transformed_config["entities"], dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Transformed 'entities' must remain a dict keyed by entity_id",
+                    context={
+                        "action": "python_transform",
+                        "scene_id": resolved_id,
+                        "resulting_type": type(transformed_config["entities"]).__name__,
+                    },
+                )
+            )
+
+        # Issue #1168 R5 blocker 10: a transform that mutates
+        # ``config['id']`` produces a duplicate scene at the new
+        # storage key AND orphans the original (state goes
+        # ``unavailable``, registry row left behind). HA itself
+        # accepts the mismatched-id upsert silently. Reject the
+        # rename here — renaming a scene means delete-old +
+        # create-new through the explicit tools, not an in-place
+        # ``id`` rebind. R6 blocker 18: only reject an explicit
+        # mismatched id; a transform that ``del config['id']`` is
+        # legitimate (HA treats ``id`` as optional) and should pass
+        # through. R7 blocker 24: ``transformed_config["id"] = None``
+        # is the in-place equivalent of ``del`` — normalise both
+        # by checking against ``(None, original_id)``, so only an
+        # explicit non-None mismatch triggers the reject. Compare against
+        # the scene's own captured ``id`` (not ``resolved_id``, which may
+        # be None on the structural-invariant path) — in production the
+        # two are equal.
+        if "id" in transformed_config and transformed_config["id"] not in (
+            None,
+            original_id,
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Transform must not change ``config['id']``",
+                    suggestions=[
+                        f"Original scene_id is {original_id!r} — keep it unchanged",
+                        "To rename a scene, use ha_config_remove_scene + ha_config_set_scene",
+                    ],
+                    context={
+                        "action": "python_transform",
+                        "scene_id": original_id,
+                        "attempted_id": transformed_config.get("id"),
+                    },
+                )
+            )
+
+    @staticmethod
+    def _prune_scene_metadata(
+        transformed_config: dict[str, Any], resolved_id: str | None
+    ) -> None:
+        """Drop orphan ``metadata`` keys whose entity was removed by the transform.
+
+        Extracted verbatim from ``ha_config_set_scene``'s python_transform branch.
+        """
+        # Issue #1168 R3 blocker 5: prune orphan ``metadata`` keys
+        # whose entity was deleted by the transform (e.g. a list
+        # comprehension that filters ``entities`` doesn't touch
+        # ``metadata`` and HA keeps the orphan entries on disk).
+        # Full-replace via ``config=`` clears metadata cleanly; the
+        # transform path needs to mirror that contract.
+        metadata = transformed_config.get("metadata")
+        if isinstance(metadata, dict):
+            valid_keys = set(transformed_config["entities"].keys())
+            pruned_keys = sorted(k for k in metadata if k not in valid_keys)
+            if pruned_keys:
+                # Issue #1168 R5 blocker 12: a buggy transform that
+                # accidentally drops entities used to silently
+                # rewrite metadata. Surface the prune so a stray
+                # ``del entities[k]`` doesn't lose the friendly_name
+                # without trace.
+                logger.info(
+                    f"python_transform pruned {len(pruned_keys)} orphan "
+                    f"metadata key(s) from scene {resolved_id}: {pruned_keys}"
+                )
+            transformed_config["metadata"] = {
+                k: v for k, v in metadata.items() if k in valid_keys
+            }
+
+    async def _run_scene_config_replace(
+        self,
+        scene_id: str,
+        config: dict[str, Any],
+        config_hash: str | None,
+        category: str | None,
+        wait: bool,
+        MandatoryBPS: bool,
+    ) -> dict[str, Any]:
+        """Execute ``ha_config_set_scene``'s full-config replacement mode.
+
+        Extracted verbatim from the inline branch; returns the tool response.
+        """
+        config_dict, effective_category = self._validate_scene_config(
+            config,
+            scene_id,
+            category,
+        )
+
+        # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
+        # the hash check + upsert commits. Same partial-state hazard as
+        # the python_transform branch — a phantom category must not
+        # rewrite the scene before erroring.
+        #
+        # Issue #1168 R8 (post-merge follow-up): gate on
+        # ``effective_category`` truthy, not on the user-facing
+        # ``category`` param. ``_validate_scene_config`` promotes a
+        # top-level ``config["category"]`` into ``effective_category``
+        # when the user passed ``category=None``; the R7 fix gated on
+        # ``category is not None`` to skip the WS round-trip when no
+        # category was supplied, but that left the dict-promoted path
+        # uncovered — a phantom category in ``config["category"]``
+        # would skip validation and reach ``apply_entity_category``,
+        # which attaches the phantom ID to the entity registry without
+        # checking it exists. Truthy check covers both sources and
+        # still skips the WS call when neither produces a category.
+        if effective_category:
+            await self._validate_category_id(effective_category)
+
+        # Issue #1168 R3 blocker 7: when caller passes ``config_hash``,
+        # honor the optimistic-locking semantics promised by the field
+        # description. ``_fetch_and_verify_hash`` raises ToolError on
+        # mismatch. We capture ``resolved_id`` from the verified fetch
+        # so subsequent upsert/response builders use the storage key
+        # consistently (issue #1168 R3 blocker 6).
+        #
+        # Path branching: if a hash is supplied for a non-existent
+        # scene, the inner fetch raises 404 and surfaces as
+        # ENTITY_NOT_FOUND via the outer except — which is the right
+        # caller-facing semantics ("you can't lock against a scene
+        # that doesn't exist"). The no-hash branch resolves separately
+        # so a fresh create still threads the resolved id correctly.
+        if config_hash:
+            _, resolved_id = await self._fetch_and_verify_hash(
+                scene_id, config_hash, "set"
+            )
+        else:
+            resolved_id = await self._client.resolve_scene_id(scene_id)
+
+        # Cross-check literal service and entity references against the
+        # live registries. Soft warnings only.
+        validation_meta = await validate_config_references(self._client, config_dict)
+
+        # ``resolved_id`` is already the storage key (from the hash-verify
+        # fetch or the resolve above) — pass it as the write target to skip
+        # the redundant re-resolve. ``scene_id`` stays the caller id so a
+        # missing ``name`` defaults caller-facing, not to the storage key
+        # (#1935).
+        result = await self._client.upsert_scene_config(
+            config_dict, scene_id, resolved_id=resolved_id
+        )
+        # The upsert re-resolves when ``resolved_id`` was None (envelope
+        # omitted the key); re-bind to the authoritative write target it
+        # returned so entity resolution and the response use the resolved
+        # storage key rather than a possible None.
+        resolved_id = result.get("scene_id", resolved_id)
+
+        # Resolve actual entity_id via registry — HA derives scene
+        # entity_ids from the 'name' slug, not the scene_id storage key,
+        # so f"scene.{scene_id}" is wrong whenever a name is supplied.
+        entity_id = await self._resolve_scene_entity_id(
+            resolved_id, allow_component=True
+        )
+
+        # Wait for scene to be queryable
+        if wait:
+            try:
+                registered = await wait_for_entity_registered(self._client, entity_id)
+                if not registered:
+                    result.setdefault("warnings", []).append(
+                        f"Scene saved but {entity_id} not yet queryable. "
+                        "It may take a moment to become available."
+                    )
+            except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                result.setdefault("warnings", []).append(
+                    f"Scene saved but verification failed: {e}"
+                )
+
+        # Apply category to entity registry if provided.
+        if effective_category and entity_id:
+            # Pre-validation of ``effective_category`` already ran before
+            # the upsert (R6 blocker 15) — apply directly here.
+            await apply_entity_category(
+                self._client,
+                entity_id,
+                effective_category,
+                "scene",
+                result,
+                "scene",
+            )
+
+        merge_validation_meta(result, validation_meta)
+
+        # Issue #1168 R3 blocker 6: build response from ``resolved_id``
+        # so the outer ``scene_id`` always matches the storage key.
+        # ``result["scene_id"]`` is also the storage key (from
+        # rest_client); explicit assignment after the spread guards
+        # against any future result-shape drift.
+        response = {
+            "success": True,
+            **result,
+            "scene_id": resolved_id,
+        }
+        # attach AFTER the outer dict is built so hint lands at
+        # position 0 of the FINAL response (see
+        # util_helpers._SKILL_CONTENT_OPTOUT_HINT).
+        attach_skill_content(
+            response,
+            MandatoryBPS=MandatoryBPS,
+            canonical_files=_SCENE_SKILL_FILES,
+            referenced_files=None,
+        )
+        return response
 
     @tool(
         name="ha_config_remove_scene",
