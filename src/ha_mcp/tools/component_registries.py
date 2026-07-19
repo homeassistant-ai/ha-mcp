@@ -105,8 +105,10 @@ async def fetch_registries_via_component(
     legacy ``_ws_send`` builds a DEDICATED one-shot WS client (which can succeed
     while the pooled socket is wedged) under a best-effort contract that requires
     warn-and-skip, never a blocked write; ``ha_list_floors_areas``' legacy rides
-    the ``send_websocket_message`` bridge. Neither dies identically on
-    a pooled-WS drop, so a transport failure must fall back rather than escape.
+    the ``send_websocket_message`` bridge, which is the SAME pooled connection
+    and raises on a dead transport (#1947) rather than degrading. Only the
+    capture path's dedicated socket survives a wedged pool, so a
+    component-side fault must fall back rather than escape.
     """
     caps = await get_component_caps(client)
     if not component_supports(caps, "registries"):

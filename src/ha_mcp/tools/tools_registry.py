@@ -404,6 +404,10 @@ async def _enrich_zha_metrics(
                     "lqi": zha_dev.get("lqi"),
                     "rssi": zha_dev.get("rssi"),
                 }
+        else:
+            warnings.append(
+                f"ZHA radio metrics unavailable: {zha_result.get('error') or 'request failed'}"
+            )
     except (
         HomeAssistantConnectionError,
         HomeAssistantAPIError,
@@ -441,6 +445,10 @@ async def _enrich_zwave_status(
                 "zwave_plus_version": node_data.get("zwave_plus_version"),
                 "is_controller_node": node_data.get("is_controller_node"),
             }
+        else:
+            warnings.append(
+                f"Z-Wave node status unavailable: {zwave_result.get('error') or 'request failed'}"
+            )
     except (
         HomeAssistantConnectionError,
         HomeAssistantAPIError,
@@ -482,6 +490,10 @@ async def _enrich_matter_diagnostics(
                 "active_fabrics": data.get("active_fabrics"),
                 "active_fabric_index": data.get("active_fabric_index"),
             }
+        else:
+            warnings.append(
+                f"Matter node diagnostics unavailable: {result.get('error') or 'request failed'}"
+            )
     except (
         HomeAssistantConnectionError,
         HomeAssistantAPIError,

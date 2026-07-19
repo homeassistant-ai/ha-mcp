@@ -8,6 +8,7 @@ arrived" is indistinguishable from "there are no areas", which is the same
 answers-while-blind shape the detector fix exists to prevent.
 """
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -377,3 +378,94 @@ class TestEnrichmentAbsenceIsNotAnAnswer:
 
         assert result["script_id"] == "morning"
         assert any("category unavailable" in w for w in result["warnings"])
+
+
+class TestReviewRoundTwoGaps:
+    """Branches added in round one that nothing asserted, plus the round-two
+    fixes. Each pins one production condition."""
+
+    @pytest.mark.asyncio
+    async def test_ws_command_transport_death_is_structured(self) -> None:
+        """`ha_call_service(ws_command=...)` returns before the method's own
+        try block, so without a handler of its own the raise escapes the tool
+        unstructured."""
+        from fastmcp.exceptions import ToolError
+
+        from ha_mcp.tools.tools_service import ServiceTools
+
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws gone")
+        )
+
+        with pytest.raises(ToolError) as excinfo:
+            await ServiceTools(client, MagicMock())._call_ws_command(
+                "repairs/list_issues", None, domain=None, service=None
+            )
+
+        payload = json.loads(str(excinfo.value))
+        assert payload["error"]["code"] == "CONNECTION_FAILED"
+
+    @pytest.mark.parametrize(
+        "integration_type, ws_type, field",
+        [
+            ("zwave_js", "zwave_js/node_status", "Z-Wave node status"),
+            ("matter", "matter/node_diagnostics", "Matter node diagnostics"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_zwave_and_matter_enrichers_report_skips(
+        self, integration_type: str, ws_type: str, field: str
+    ) -> None:
+        """Only the ZHA enricher was exercised in round one."""
+        from ha_mcp.tools.tools_registry import _get_single_device_result
+
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws gone")
+        )
+        device = {"id": "dev-1", "name": "Node", "identifiers": [], "connections": []}
+
+        with patch(
+            "ha_mcp.tools.tools_registry._get_device_info",
+            return_value={
+                "device_id": "dev-1",
+                "integration_type": integration_type,
+                "node_id": 7,
+            },
+        ):
+            result = await _get_single_device_result(
+                client, "dev-1", None, [device], {}
+            )
+
+        assert any(f"{field} unavailable" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_logger_levels_records_an_answered_rejection(self) -> None:
+        """The envelope-failure branch, distinct from the transport one."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "unknown command"}
+        )
+        warnings: list[str] = []
+
+        assert await get_logger_levels(client, warnings) == {}
+        assert warnings == ["log levels unavailable: logger/log_info failed"]
+
+    @pytest.mark.asyncio
+    async def test_notifications_records_an_answered_rejection(self) -> None:
+        """`success: false` skipped the section silently; only the transport
+        path was covered."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "unavailable during reload"}
+        )
+        result: dict[str, Any] = {}
+
+        await SearchTools(client, MagicMock())._fetch_notifications(result)
+
+        assert result["notification_count"] == 0
+        assert any(
+            "notifications unavailable: unavailable during reload" in w
+            for w in result["warnings"]
+        )

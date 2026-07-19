@@ -35,10 +35,12 @@ that answers returns its payload. Per the uniform transport-fallback taxonomy, a
 ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed (re)connect —
 is caught and mapped to ``None`` so the legacy path runs: the consumers' legacy reads (the whole-registry
 ``config/entity_registry/list`` dump and the per-id ``config/entity_registry/get``
-retry loop) ride the ``send_websocket_message`` bridge, which returns
-``{"success": False}`` rather than raising — so they do NOT die identically on a
-pooled-WS drop, and letting a transport failure escape would skip the
-``resolve_entities_via_component`` consumer's legacy retry loop entirely.
+retry loop) ride the ``send_websocket_message`` bridge, which answers a
+command HA rejected with ``{"success": False}`` - so a component-side fault
+does not kill them, and letting it escape would skip the
+``resolve_entities_via_component`` consumer's legacy retry loop entirely. The
+bridge uses the SAME pooled connection, so a dead transport raises there too
+(#1947) rather than degrading.
 """
 
 from __future__ import annotations

@@ -1452,8 +1452,11 @@ async def _enrich_helpers_with_current_registry(
     # Mirrors _get_entities_for_config_entry's degrade-open behavior (it now
     # routes through the component's registry_lookup first, falling back to this
     # same config/entity_registry/list read).
-    # send_websocket_message returns {"success": false, ...} instead of raising,
-    # so the malformed-response check below is the branch production takes.
+    # send_websocket_message answers a command HA rejected with
+    # {"success": false, ...}, so the malformed-response check below is the
+    # branch production takes for that case; a dead transport raises instead
+    # (#1947) and the degrade-open except below turns it back into an empty
+    # enrichment, which is correct for a cosmetic field.
     try:
         reg_result = await client.send_websocket_message(
             {"type": "config/entity_registry/list"}

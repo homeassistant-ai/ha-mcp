@@ -485,7 +485,6 @@ def _registry_assist_override(entry: dict[str, Any]) -> bool | None:
 
 async def _fetch_assist_exposure(
     client: Any,
-    warnings: list[str],
 ) -> tuple[dict[str, bool] | None, bool]:
     """Fetch the ``conversation`` Assist exposure inputs over websocket.
 
@@ -543,12 +542,11 @@ async def _fetch_assist_exposure(
             else False
         )
         return overrides, expose_new
-    except Exception as exc:
+    except Exception:
+        # No warning appended here: returning ``None`` is exactly the state
+        # ``hidden_entity_ids`` already reports as _ASSIST_UNAVAILABLE_WARNING,
+        # so recording a second one would double-warn on one root cause.
         logger.warning("assist exposure fetch failed; dimension skipped", exc_info=True)
-        # Recorded rather than only logged: with the dimension skipped the
-        # filter answers with a different entity set, and the caller's own
-        # warning path never fires because this except pre-empts it (#1947).
-        warnings.append(f"assist exposure unavailable, dimension skipped: {exc}")
         return None, False
 
 
@@ -698,12 +696,9 @@ async def load_hidden_set(
         config = await asyncio.to_thread(load_visibility_config, get_data_dir())
         assist_overrides: dict[str, bool] | None = None
         expose_new = False
-        fetch_warnings: list[str] = []
         if config.enabled and config.respect_assist_exposure and client is not None:
-            assist_overrides, expose_new = await _fetch_assist_exposure(
-                client, fetch_warnings
-            )
-        hidden, warnings = hidden_entity_ids(
+            assist_overrides, expose_new = await _fetch_assist_exposure(client)
+        return hidden_entity_ids(
             registry_result,
             config,
             states_result,
@@ -711,9 +706,6 @@ async def load_hidden_set(
             expose_new,
             device_registry_result,
         )
-        # A skipped Assist dimension changes which entities are filtered, so it
-        # belongs in the caller's warnings rather than only in the log (#1947).
-        return hidden, [*fetch_warnings, *warnings]
     except Exception:
         logger.warning(
             "entity visibility config load failed; filter disabled", exc_info=True

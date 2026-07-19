@@ -1559,18 +1559,38 @@ async def fetch_entity_category(
         Category ID string if set, None otherwise
 
     ``None`` is also what a failed lookup returns, which reads as "no category
-    assigned" – a caller that passes ``warnings`` gets a line naming the
+    assigned" - a caller that passes ``warnings`` gets a line naming the
     failure instead, so the two are distinguishable (#1947).
     """
     try:
         result = await client.send_websocket_message(
             {"type": "config/entity_registry/get", "entity_id": entity_id}
         )
-        if result.get("success"):
-            categories = result.get("result", {}).get("categories", {})
-            cat_id = categories.get(scope)
-            return str(cat_id) if cat_id is not None else None
-    except Exception as e:
+        if isinstance(result, dict) and result.get("success"):
+            entry = result.get("result")
+            # The registry entry is a dict; anything else (a list, None) is a
+            # malformed read rather than an entry without categories.
+            if isinstance(entry, dict):
+                categories = entry.get("categories") or {}
+                cat_id = categories.get(scope) if isinstance(categories, dict) else None
+                return str(cat_id) if cat_id is not None else None
+            return None
+        # Shape-guarded rather than relying on a broad except: a non-dict
+        # payload is a malformed read, not "no category assigned".
+        reason = (
+            (result.get("error") or "request failed")
+            if isinstance(result, dict)
+            else f"unexpected response type: {type(result).__name__}"
+        )
+        if warnings is not None:
+            warnings.append(f"category unavailable for {entity_id}: {reason}")
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        HomeAssistantAuthError,
+        TimeoutError,
+        OSError,
+    ) as e:
         logger.warning(f"Failed to fetch category for {entity_id}: {e}")
         if warnings is not None:
             warnings.append(f"category unavailable for {entity_id}: {e}")

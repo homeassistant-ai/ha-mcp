@@ -1973,13 +1973,13 @@ class SearchTools:
           ``HomeAssistantCommandTimeout`` (the component WS search timed out):
           serve the correct result from the legacy path, append a ``warnings[]``
           entry, and ``log.warning`` — correct results now, breakage visible.
-        - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
-          ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
-          served the same way — the legacy path reads ``/api/states`` over REST and
-          the entity registry through the ``send_websocket_message``
-          bridge (which returns ``{"success": False}`` rather than raising), so it
-          degrades to partial results rather than dying identically on a pooled-WS
-          drop; a transport failure must not escape.
+        - ``HomeAssistantConnectionError`` - a pooled-WS drop, or a failed
+          (re)connect: served the same way. The legacy path reads
+          ``/api/states`` over REST and the entity registry through the
+          ``send_websocket_message`` bridge, so a component-side fault degrades
+          to partial results rather than escaping. The bridge shares this
+          pooled connection, so a dead transport raises there too (#1947) and
+          the registry-unavailable warning names what was skipped.
         """
         try:
             raw = await self._send_component_search(req, visibility)
@@ -3404,6 +3404,17 @@ class SearchTools:
                     }
                     for n in notifications
                 ]
+            else:
+                # HA answered and rejected. The pre-seeded zero would otherwise
+                # report "none pending" for a section that never ran, the same
+                # false negative the transport path already reports.
+                err = ws_result.get("error")
+                err_msg = (
+                    err.get("message") if isinstance(err, dict) else err
+                ) or "unknown error"
+                result.setdefault("warnings", []).append(
+                    f"notifications unavailable: {err_msg}"
+                )
         except Exception as e:
             logger.warning(
                 "Failed to fetch notifications for overview: %s", e, exc_info=True

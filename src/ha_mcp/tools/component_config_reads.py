@@ -42,9 +42,10 @@ still completes:
 
 - ``fetch_entity_lookup_via_component``'s consumers degrade gracefully. The scene
   resolver's ``config/entity_registry/list`` dump rides
-  ``client.send_websocket_message`` — the bridge that returns
-  ``{"success": False}`` instead of raising, so the resolver walks its retry loop
-  to the naive ``scene.{id}`` fallback — and the automation resolver scans REST
+  ``client.send_websocket_message``, which answers a command HA rejected with
+  ``{"success": False}``, so the resolver walks its retry loop to the naive
+  ``scene.{id}`` fallback (a dead transport raises there instead, #1947) - and
+  the automation resolver scans REST
   ``get_states()`` and additionally catches broadly → ``None``. Its only routed
   call sites run AFTER a scene/automation upsert commits or BEFORE a REST delete,
   so an escaping transport error would report a landed write as failed / abort a

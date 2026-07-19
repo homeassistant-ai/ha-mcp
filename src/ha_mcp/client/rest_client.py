@@ -1522,6 +1522,14 @@ class HomeAssistantClient:
                         raise
                     raise HomeAssistantConnectionError(error_str) from e
 
+                # Deliberate asymmetry (#1966 review item 8): a 403 that
+                # exhausts its retries DURING acquisition is transport death -
+                # no client was ever obtained - so it raises and loses the
+                # reverse-proxy suggestions below. The 403 text survives in the
+                # message, and returning a soft envelope there instead would
+                # put a blocked transport back on the degrade path this change
+                # exists to close. Past acquisition the socket is alive and HA
+                # (or a proxy) answered, so the tailored suggestions apply.
                 if is_403:
                     logger.error(
                         f"WebSocket 403 error after {max_retries} attempts: {error_str}"

@@ -624,9 +624,10 @@ class VoiceAssistantTools:
         legacy WS list. A ``HomeAssistantConnectionError`` — a pooled-WS drop,
         or a failed (re)connect — is caught here and mapped to ``None``: the
         legacy ``homeassistant/expose_entity/list`` read rides the
-        ``send_websocket_message`` bridge (which returns ``{"success": False}``
-        rather than raising), NOT this pooled socket — so a transport failure must
-        fall back rather than escape. Same caps-gate discipline as
+        ``send_websocket_message`` bridge, which answers a component-side fault
+        with ``{"success": False}`` - so a fault here falls back rather than
+        escapes. It is the SAME pooled connection, so a genuinely dead
+        transport raises there too (#1947) instead of degrading. Same caps-gate discipline as
         ``component_devices.fetch_device_via_component``.
         """
         caps = await get_component_caps(self._client)

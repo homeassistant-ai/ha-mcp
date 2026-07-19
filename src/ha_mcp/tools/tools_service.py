@@ -521,6 +521,33 @@ class ServiceTools:
             suggestions=suggestions,
         )
 
+    async def _send_ws_command_mapped(
+        self, command_type: str, command_params: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Send an arbitrary WS command, mapping a dead transport to ToolError.
+
+        The ws_command branch returns before ``ha_call_service``'s own try
+        block, so without this a transport failure raised by
+        ``send_websocket_message`` (#1947) would escape the tool unstructured.
+        """
+        try:
+            result: dict[str, Any] = await self._client.send_websocket_message(
+                {"type": command_type, **command_params}
+            )
+            return result
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"ws_command": command_type},
+                suggestions=[
+                    "Check the Home Assistant connection",
+                    "Retry once the WebSocket link is back",
+                ],
+            )
+            raise  # unreachable: exception_to_structured_error always raises
+
     async def _call_ws_command(
         self,
         ws_command: str,
@@ -608,12 +635,10 @@ class ServiceTools:
             )
         # send_websocket_message returns a {"success": ...} dict for anything
         # HA answered with, which the result-shape check below turns into a
-        # structured error. A dead transport raises instead (#1947) and
-        # propagates to the tool's structured-error handler: an arbitrary WS
-        # command must not report a verdict it never received.
-        result = await self._client.send_websocket_message(
-            {"type": command_type, **command_params}
-        )
+        # structured error. A dead transport raises instead (#1947), and this
+        # branch runs BEFORE ha_call_service's own try block, so the mapping
+        # has to happen here or the exception escapes the tool unstructured.
+        result = await self._send_ws_command_mapped(command_type, command_params)
 
         if not isinstance(result, dict) or not result.get("success", False):
             error_msg = (

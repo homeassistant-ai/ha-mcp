@@ -13,8 +13,11 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response, create_validation_error
@@ -314,10 +317,9 @@ async def _fetch_services_list_via_component(
         return None
     except Exception as exc:
         # DEVIATION (see docstring): the legacy path is REST + a per-request WS
-        # bridge, NOT the shared pooled WS. A pooled-WS drop
-        # (HomeAssistantConnectionError) OR get_websocket_client() raising a plain
-        # Exception when WebSocketManager can't (re)connect must fall back to REST
-        # rather than kill the tool.
+        # bridge, NOT the shared pooled WS. A pooled-WS drop or a failed
+        # (re)connect, both HomeAssistantConnectionError since #1947, must fall
+        # back to REST rather than kill the tool.
         logger.warning(
             "%s connection error; falling back to REST legacy: %r",
             WS_SERVICES_LIST,
@@ -357,14 +359,24 @@ async def _get_service_translations(
             }
         )
 
-        if response.get("success") and response.get("result"):
+        if (
+            isinstance(response, dict)
+            and response.get("success")
+            and response.get("result")
+        ):
             result = response["result"]
             if isinstance(result, dict):
                 resources: dict[str, Any] = result.get("resources", {})
                 return resources
         return {}
 
-    except Exception as e:
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        HomeAssistantAuthError,
+        TimeoutError,
+        OSError,
+    ) as e:
         logger.warning(f"Failed to get service translations: {e}")
         # An empty map is also what an instance with no translations returns,
         # so a caller that wants to tell the two apart passes ``warnings``

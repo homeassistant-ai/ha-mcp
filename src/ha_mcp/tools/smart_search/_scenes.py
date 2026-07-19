@@ -88,8 +88,9 @@ class SceneSearchMixin(ConfigFetchMixin):
                     )
             else:
                 # Soft-failure path: `send_websocket_message` returns
-                # `{"success": False, "error": ...}` on connection drops or
-                # post-retry 403s rather than raising. Treat it the same as
+                # `{"success": False, "error": ...}` for a command HA rejected,
+                # including a post-retry 403 that is not transport death (a
+                # dead transport raises instead since #1947). Treat it the same as
                 # the raise branch — without the platform filter we cannot
                 # tell HA-managed from integration-managed scenes, so route
                 # to attempt-all + registry_failed=True. Falling through to

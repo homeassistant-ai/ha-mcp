@@ -1251,14 +1251,15 @@ class SystemTools:
         different instant. ``unknown_command`` invalidates the cached caps
         (component downgraded mid-session); any other command error/timeout
         just logs and falls back, leaving caps cached. A
-        ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
-        ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect
-        is caught here and mapped to ``None``: the consuming sections' legacy
-        fetches run on a DEDICATED health WS client (repairs/zwave/matter) plus
-        REST ``get_states()`` and the never-raising ``send_websocket_message``
-        bridge (dead_entities), NOT this pooled socket — so a wedged pooled
-        socket must degrade per-section (the tool's own never-raises contract)
-        rather than fail the WHOLE ``ha_get_system_health``.
+        ``HomeAssistantConnectionError`` - a pooled-WS drop, or a failed
+        (re)connect - is caught here and mapped to ``None``: the consuming
+        sections' legacy fetches run on a DEDICATED health WS client
+        (repairs/zwave/matter) plus REST ``get_states()`` and the
+        ``send_websocket_message`` bridge (dead_entities), so a component-side
+        fault degrades per-section rather than failing the WHOLE
+        ``ha_get_system_health``. A genuinely dead transport is a different
+        case and deliberately does NOT degrade: the bridge raises (#1947) and
+        the dead-entities detector fails loud rather than answer while blind.
 
         Only the ``include_*`` flags the caller actually needs are requested
         (mirroring which of ``want_repairs`` / ``want_zwave`` / ``want_matter``
