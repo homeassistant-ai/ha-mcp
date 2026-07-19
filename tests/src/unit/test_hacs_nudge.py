@@ -33,10 +33,10 @@ def _make_hass() -> MagicMock:
     return hass
 
 
-def _fake_repo(*, category: str = "integration") -> MagicMock:
+def _fake_repo(*, category: str = "integration", installed: bool = True) -> MagicMock:
     repo = MagicMock(name="repository")
     repo.update_repository = AsyncMock()
-    repo.data = SimpleNamespace(category=category)
+    repo.data = SimpleNamespace(category=category, installed=installed)
     return repo
 
 
@@ -88,6 +88,45 @@ class TestNudge:
         tried = [c.args[0] for c in hacs.repositories.get_by_full_name.call_args_list]
         assert tried == [HACS_MIRROR_REPO_FULL_NAME, HACS_LEGACY_REPO_FULL_NAME]
         repo.update_repository.assert_awaited_once()
+
+    async def test_uninstalled_mirror_falls_through_to_installed_legacy(self):
+        # Legacy->mirror migration limbo: the mirror repo has been ADDED to
+        # HACS (a record exists) but not installed yet, while the running
+        # component is still tracked — and downloaded — under the legacy
+        # record. Only the installed repo has an update entity, so that is the
+        # one that must be refreshed (review finding).
+        hass = _make_hass()
+        mirror = _fake_repo(installed=False)
+        legacy = _fake_repo()
+        hacs, _ = _fake_hacs(
+            repos={
+                HACS_MIRROR_REPO_FULL_NAME: mirror,
+                HACS_LEGACY_REPO_FULL_NAME: legacy,
+            }
+        )
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+
+        mirror.update_repository.assert_not_awaited()
+        legacy.update_repository.assert_awaited_once_with(
+            ignore_issues=True, force=True
+        )
+        assert hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSION] == "1.2.0"
+
+    async def test_no_installed_candidate_is_a_clean_no_op(self):
+        # A record that is added but not installed has no update entity to
+        # light up — nothing to refresh, and the throttle stays unset so a
+        # later pass (after an install) still gets its one refresh.
+        hass = _make_hass()
+        mirror = _fake_repo(installed=False)
+        hacs, _ = _fake_hacs(repos={HACS_MIRROR_REPO_FULL_NAME: mirror})
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+
+        mirror.update_repository.assert_not_awaited()
+        assert nudge._DATA_HACS_NUDGED_VERSION not in hass.data.get(DOMAIN, {})
 
     async def test_absent_hacs_is_a_clean_no_op(self):
         hass = _make_hass()  # no hass.data["hacs"]

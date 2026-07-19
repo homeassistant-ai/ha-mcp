@@ -109,8 +109,8 @@ async def _async_force_hacs_repo_refresh(hass: HomeAssistant) -> bool:
     """Run HACS's "Update information" force-refresh for this component's repo.
 
     Returns True when a tracked repository was found and its refresh completed,
-    False when there is nothing to refresh (no HACS, or the repository is not in
-    HACS's registry under either candidate name). Reaches into HACS internals —
+    False when there is nothing to refresh (no HACS, or no INSTALLED repository
+    under either candidate name). Reaches into HACS internals —
     the top-level lookups are ``getattr``-guarded so a wholly different HACS
     shape returns False cleanly; anything deeper that changes shape raises and is
     swallowed by :func:`async_nudge_hacs_refresh`.
@@ -128,9 +128,19 @@ async def _async_force_hacs_repo_refresh(hass: HomeAssistant) -> bool:
 
     repository = None
     for full_name in _CANDIDATE_REPO_FULL_NAMES:
-        repository = get_by_full_name(full_name)
-        if repository is not None:
-            break
+        candidate = get_by_full_name(full_name)
+        if candidate is None:
+            continue
+        # HACS keeps a repository record for every ADDED repo, downloaded or
+        # not, but only creates an update entity for DOWNLOADED ones — and a
+        # legacy->mirror migration can leave the mirror added but not yet
+        # (re)installed while the running component is still tracked under the
+        # legacy record. Refreshing an uninstalled record lights up nothing, so
+        # only an installed candidate counts (review finding).
+        if not getattr(getattr(candidate, "data", None), "installed", False):
+            continue
+        repository = candidate
+        break
     if repository is None:
         return False
 
