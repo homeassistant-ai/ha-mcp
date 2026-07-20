@@ -1567,11 +1567,6 @@ _PENDING_INSTALL_DONE: threading.Event | None = None
 # again (issue #1904).
 _CACHED_IMPORT_VERSION: str | None = None
 
-# One-time WARNING de-dup for the Python-3.14 editable-finder recovery below: an
-# affected install trips it on every version check (bring-up + periodic
-# auto-update), so we surface the condition once per process, then DEBUG.
-_INVALIDATE_KEYERROR_WARNED = False
-
 
 def _safe_invalidate_caches() -> None:
     """Run ``importlib.invalidate_caches()``, completing it if a finder breaks.
@@ -1602,30 +1597,20 @@ def _safe_invalidate_caches() -> None:
     could re-add a stale placeholder in the window between the prune and the
     retry, so a *second* ``KeyError`` is tolerated (logged, best-effort) rather
     than re-raised — a partial cache refresh must never re-crash bring-up, which
-    is the whole point of this helper. The condition is surfaced once per process
-    at WARNING (it recurs on every version check on an affected install), DEBUG
-    thereafter.
+    is the whole point of this helper. The recovery is logged at WARNING (it
+    recurs on every version check on an affected install), so it is visible for
+    diagnosis rather than a silent workaround.
     """
-    global _INVALIDATE_KEYERROR_WARNED
     try:
         importlib.invalidate_caches()
         return
     except KeyError as err:
-        if _INVALIDATE_KEYERROR_WARNED:
-            _LOGGER.debug(
-                "importlib.invalidate_caches() again raised KeyError from a "
-                "broken finder; pruning stale path-cache entries and retrying: %s",
-                err,
-            )
-        else:
-            _INVALIDATE_KEYERROR_WARNED = True
-            _LOGGER.warning(
-                "importlib.invalidate_caches() raised KeyError from a broken "
-                "(setuptools editable / Python 3.14) finder; pruning stale "
-                "sys.path_importer_cache entries and retrying. Expected on "
-                "affected installs; logged once per process: %s",
-                err,
-            )
+        _LOGGER.warning(
+            "importlib.invalidate_caches() raised KeyError from a broken "
+            "(setuptools editable / Python 3.14) finder; pruning stale "
+            "sys.path_importer_cache entries and retrying: %s",
+            err,
+        )
     for name in list(sys.path_importer_cache):
         if sys.path_importer_cache.get(name) is None or not os.path.isabs(name):
             sys.path_importer_cache.pop(name, None)

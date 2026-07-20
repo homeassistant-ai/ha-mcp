@@ -1419,10 +1419,8 @@ class TestSafeInvalidateCaches:
     @pytest.fixture(autouse=True)
     def _isolate_path_cache(self, monkeypatch):
         # Recovery prunes sys.path_importer_cache entries; hand each test a
-        # private copy so it never mutates the real process cache. Also reset the
-        # once-per-process WARNING flag so each test's log path is deterministic.
+        # private copy so it never mutates the real process cache.
         monkeypatch.setattr(sys, "path_importer_cache", dict(sys.path_importer_cache))
-        monkeypatch.setattr(es, "_INVALIDATE_KEYERROR_WARNED", False)
 
     def _raise_once(self, monkeypatch, *, then=None):
         """Patch invalidate_caches to raise the editable KeyError on the first
