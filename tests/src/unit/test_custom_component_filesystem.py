@@ -185,6 +185,30 @@ class TestIsPathAllowedForDir:
             is True
         )
 
+    def test_allows_blueprints_directory_read_only(self, tmp_path):
+        """blueprints/ is listable/readable but NOT writable (issue #1965)."""
+        # Read/list allowed
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "blueprints/", ALLOWED_READ_DIRS) is True
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "blueprints/automation/author/thing.yaml", ALLOWED_READ_DIRS
+            )
+            is True
+        )
+        # Writes deliberately denied — blueprints is absent from ALLOWED_WRITE_DIRS
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "blueprints/", ALLOWED_WRITE_DIRS)
+            is False
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "blueprints/automation/author/thing.yaml", ALLOWED_WRITE_DIRS
+            )
+            is False
+        )
+
 
 class TestIsPathAllowedForRead:
     """Test _is_path_allowed_for_read function."""
@@ -225,6 +249,19 @@ class TestIsPathAllowedForRead:
     def test_allows_packages_yaml(self, tmp_path):
         """Should allow reading packages/*.yaml files."""
         assert _is_path_allowed_for_read(tmp_path, "packages/lights.yaml") is True
+
+    def test_allows_blueprints_files(self, tmp_path):
+        """Should allow reading files under blueprints/ (issue #1965)."""
+        assert (
+            _is_path_allowed_for_read(
+                tmp_path, "blueprints/automation/homeassistant/motion_light.yaml"
+            )
+            is True
+        )
+        assert (
+            _is_path_allowed_for_read(tmp_path, "blueprints/script/author/thing.yaml")
+            is True
+        )
 
     def test_allows_custom_components_py_files(self, tmp_path):
         """Should allow reading custom_components/**/*.py files."""

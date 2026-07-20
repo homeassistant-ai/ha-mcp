@@ -58,7 +58,10 @@ list_files:
   fields:
     path:
       name: Path
-      description: Relative path from config directory (e.g., "www/", "themes/")
+      description: >-
+        Relative path from config directory. Allowed: www/, themes/,
+        custom_templates/, dashboards/, blueprints/, plus your configured
+        packages/ folder (e.g., "www/", "blueprints/automation").
       required: true
       example: "www/"
       selector:
@@ -81,7 +84,8 @@ read_file:
         Relative path from config directory. Allowed paths include
         configuration.yaml, automations.yaml, scripts.yaml, scenes.yaml,
         secrets.yaml (values masked), home-assistant.log, www/**, themes/**,
-        custom_templates/**, packages/*.yaml, custom_components/**/*.py
+        custom_templates/**, dashboards/**, blueprints/**, packages/*.yaml,
+        custom_components/**/*.py
       required: true
       example: "configuration.yaml"
       selector:
@@ -119,13 +123,13 @@ read_file:
 
 write_file:
   name: Write File
-  description: Write a file to allowed directories (www/, themes/, custom_templates/).
+  description: Write a file to allowed directories (www/, themes/, custom_templates/, dashboards/).
   fields:
     path:
       name: Path
       description: >-
-        Relative path from config directory. Must be in www/, themes/, or
-        custom_templates/.
+        Relative path from config directory. Must be in www/, themes/,
+        custom_templates/, or dashboards/.
       required: true
       example: "www/custom.css"
       selector:
@@ -155,13 +159,13 @@ write_file:
 
 delete_file:
   name: Delete File
-  description: Delete a file from allowed directories (www/, themes/, custom_templates/).
+  description: Delete a file from allowed directories (www/, themes/, custom_templates/, dashboards/).
   fields:
     path:
       name: Path
       description: >-
-        Relative path from config directory. Must be in www/, themes/, or
-        custom_templates/.
+        Relative path from config directory. Must be in www/, themes/,
+        custom_templates/, or dashboards/.
       required: true
       example: "www/old-file.css"
       selector:

@@ -406,7 +406,8 @@ class FilesystemTools:
             Field(
                 description=(
                     "Directory path. Relative to the config dir for the built-in "
-                    "allowlist (www/, themes/, custom_templates/, dashboards/). "
+                    "allowlist (www/, themes/, custom_templates/, dashboards/, "
+                    "blueprints/). "
                     "Custom directories and HAOS sibling volumes "
                     "(/share, /media, /ssl, /backup) configured in the ha-mcp "
                     "settings UI are also allowed (pass the absolute path). "
@@ -427,14 +428,18 @@ class FilesystemTools:
     ) -> dict[str, Any]:
         """List files in a directory within the Home Assistant config directory.
 
-        Lists files in allowed directories (www/, themes/, custom_templates/, dashboards/) with
-        optional glob pattern filtering. Returns file names, sizes, and modification times.
+        Lists files in allowed directories (www/, themes/, custom_templates/,
+        dashboards/, blueprints/) with optional glob pattern filtering. Returns
+        file names, sizes, and modification times.
 
         **Allowed Directories:**
         - `www/` - Web assets (CSS, JS, images for dashboards)
         - `themes/` - Theme files
         - `custom_templates/` - Jinja2 template files
         - `dashboards/` - YAML-mode dashboard files
+        - `blueprints/` - Automation/script blueprint sources (read-only)
+        - Your configured `packages/` folder, when `homeassistant: packages:` is
+          set (the folder name you bound, default `packages/`)
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
           `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
           (pass the absolute path for volumes)
@@ -549,6 +554,11 @@ class FilesystemTools:
     ) -> dict[str, Any]:
         """Read a file from the Home Assistant config directory.
 
+        General-purpose escape hatch — prefer a dedicated tool when one exists:
+        ha_get_blueprint for a blueprint body, ha_config_get_yaml for a config
+        key, ha_config_get_automation/script/scene for storage-mode items. Reach
+        for ha_read_file only for raw on-disk text those tools don't expose.
+
         Reads files from allowed paths within the config directory. Some files
         have special handling:
         - `secrets.yaml`: Values are masked for security
@@ -559,7 +569,7 @@ class FilesystemTools:
         - `secrets.yaml` (values masked)
         - `packages/*.yaml`
         - `home-assistant.log` (tail only)
-        - `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`
+        - `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`, `blueprints/**`
         - `custom_components/**/*.py` (read-only)
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
           `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI

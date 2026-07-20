@@ -40,8 +40,17 @@ TOOLS_ENTRY_TITLE = "HA-MCP File & YAML Tools"
 TOOLS_ENTRY_LEGACY_TITLE = "HA MCP Tools"
 MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.6.0"
 
-# Allowed directories for file operations (relative to config dir)
-ALLOWED_READ_DIRS = ["www", "themes", "custom_templates", "dashboards"]
+# Allowed directories for file operations (relative to config dir).
+# "blueprints" is read-only BY DEFAULT — in ALLOWED_READ_DIRS but not
+# ALLOWED_WRITE_DIRS, so ha_write_file / ha_delete_file reject it (raw blueprint
+# reads are safe: community YAML, no secrets — issue #1965). This is the default
+# allowlist, not an absolute guarantee: an admin who adds "blueprints" as a
+# custom extra directory (issue #1567, see _current_extra_dirs) grants it
+# read+write, since extra_dirs are honored on the write path too. Blueprint
+# writes should instead go through ha_import_blueprint (which invokes the
+# blueprint/save WS command internally). Prefer ha_get_blueprint for the parsed
+# body; raw read is the escape hatch for the exact on-disk text.
+ALLOWED_READ_DIRS = ["www", "themes", "custom_templates", "dashboards", "blueprints"]
 ALLOWED_WRITE_DIRS = ["www", "themes", "custom_templates", "dashboards"]
 
 # NON-OVERRIDABLE deny floor for the user-configurable extra read/write
