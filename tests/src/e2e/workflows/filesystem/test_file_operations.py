@@ -269,6 +269,28 @@ class TestListFiles:
 
             logger.info(f"Found files: {[f['name'] for f in files]}")
 
+    async def test_list_files_in_blueprints_directory(self, mcp_client_with_filesystem):
+        """Blueprints dir is listable by default (issue #1965)."""
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
+        _skip_if_component_not_installed(service_check, "List files in blueprints")
+
+        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
+            result_data = await mcp.call_tool_success(
+                "ha_list_files",
+                {"path": "blueprints/automation/homeassistant"},
+            )
+
+            data = result_data
+            assert data.get("success") is True, f"List blueprints failed: {data}"
+            names = [f["name"] for f in data.get("files", [])]
+            assert "motion_light.yaml" in names, (
+                f"Expected motion_light.yaml under blueprints/: {names}"
+            )
+
+            logger.info(f"Listed blueprints/automation/homeassistant: {names}")
+
     async def test_list_files_with_pattern_filter(self, mcp_client_with_filesystem):
         """Test listing files with glob pattern filter."""
         service_check = await _check_mcp_tools_service_available(
@@ -362,6 +384,28 @@ class TestReadFile:
             logger.info(
                 f"Successfully read configuration.yaml ({data.get('size', 0)} bytes)"
             )
+
+    async def test_read_blueprint_file(self, mcp_client_with_filesystem):
+        """Blueprint files are readable by default (issue #1965)."""
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
+        _skip_if_component_not_installed(service_check, "Read blueprint file")
+
+        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
+            result_data = await mcp.call_tool_success(
+                "ha_read_file",
+                {"path": "blueprints/automation/homeassistant/motion_light.yaml"},
+            )
+
+            data = result_data
+            assert data.get("success") is True, f"Read blueprint failed: {data}"
+            content = data.get("content", "")
+            assert "blueprint:" in content, (
+                f"Content doesn't look like a blueprint: {content[:200]}"
+            )
+
+            logger.info(f"Successfully read blueprint ({data.get('size', 0)} bytes)")
 
     async def test_read_secrets_yaml_masked(self, mcp_client_with_filesystem):
         """Test reading secrets.yaml - values should be masked."""

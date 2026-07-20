@@ -1000,7 +1000,8 @@ def _is_path_allowed_for_read(
 
     Allowed:
     - Files directly in config dir: configuration.yaml, automations.yaml, etc.
-    - Files in allowed directories: www/, themes/, custom_templates/
+    - Files in allowed directories: www/, themes/, custom_templates/,
+      dashboards/, blueprints/ (blueprints is read-only — issue #1965)
     - Files matching patterns: <packages-folder>/*.yaml, custom_components/**/*.py
     - User-configured extra directories (``extra_dirs``), granted read+write
       (issue #1567)

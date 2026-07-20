@@ -40,8 +40,14 @@ TOOLS_ENTRY_TITLE = "HA-MCP File & YAML Tools"
 TOOLS_ENTRY_LEGACY_TITLE = "HA MCP Tools"
 MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.6.0"
 
-# Allowed directories for file operations (relative to config dir)
-ALLOWED_READ_DIRS = ["www", "themes", "custom_templates", "dashboards"]
+# Allowed directories for file operations (relative to config dir).
+# "blueprints" is READ-only — present in ALLOWED_READ_DIRS but deliberately NOT
+# in ALLOWED_WRITE_DIRS. Raw blueprint reads are safe (community YAML, no
+# secrets) and let agents inspect blueprint sources (issue #1965), but writes
+# must go through validated paths (ha_import_blueprint / blueprint/save), never
+# a raw file write. Prefer ha_get_blueprint for the parsed body; raw read is the
+# escape hatch for the exact on-disk text.
+ALLOWED_READ_DIRS = ["www", "themes", "custom_templates", "dashboards", "blueprints"]
 ALLOWED_WRITE_DIRS = ["www", "themes", "custom_templates", "dashboards"]
 
 # NON-OVERRIDABLE deny floor for the user-configurable extra read/write
