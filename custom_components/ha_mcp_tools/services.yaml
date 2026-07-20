@@ -123,13 +123,13 @@ read_file:
 
 write_file:
   name: Write File
-  description: Write a file to allowed directories (www/, themes/, custom_templates/).
+  description: Write a file to allowed directories (www/, themes/, custom_templates/, dashboards/).
   fields:
     path:
       name: Path
       description: >-
-        Relative path from config directory. Must be in www/, themes/, or
-        custom_templates/.
+        Relative path from config directory. Must be in www/, themes/,
+        custom_templates/, or dashboards/.
       required: true
       example: "www/custom.css"
       selector:
@@ -159,13 +159,13 @@ write_file:
 
 delete_file:
   name: Delete File
-  description: Delete a file from allowed directories (www/, themes/, custom_templates/).
+  description: Delete a file from allowed directories (www/, themes/, custom_templates/, dashboards/).
   fields:
     path:
       name: Path
       description: >-
-        Relative path from config directory. Must be in www/, themes/, or
-        custom_templates/.
+        Relative path from config directory. Must be in www/, themes/,
+        custom_templates/, or dashboards/.
       required: true
       example: "www/old-file.css"
       selector:
