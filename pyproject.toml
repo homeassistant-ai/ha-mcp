@@ -33,7 +33,7 @@ dependencies = [
     "pydantic==2.13.4",
     "python-dotenv==1.2.2",
     "truststore==0.10.4",
-    "websockets==16.1",
+    "websockets==16.1.1",
     # Range (not a hard pin) so the resolver can satisfy Home Assistant's own
     # cryptography constraint when ha-mcp is installed into the HA venv for
     # in-process embedding (HA 2026.6 pins cryptography==48.0.0, 2026.7 pins
