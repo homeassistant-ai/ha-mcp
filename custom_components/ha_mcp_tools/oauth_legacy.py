@@ -436,7 +436,11 @@ class PKCECodeStore:
         Returns True only for a live, unexpired code whose stored
         ``redirect_uri`` matches and whose ``code_challenge`` equals
         ``base64url(SHA-256(code_verifier))``. The code is popped (one-shot)
-        before any check that can fail, so a failed attempt still burns it.
+        once the verifier clears the cheap RFC 7636 shape guard below, so every
+        well-formed attempt burns it — a wrong verifier, expired code, or
+        redirect mismatch still consumes the code. A malformed verifier is
+        rejected before the pop and does NOT burn the code, so a client that
+        sends a syntactically broken verifier can retry.
         """
         # Validate the verifier shape per RFC 7636 §4.1 before doing any
         # crypto. A confused client passing an empty/short verifier should be

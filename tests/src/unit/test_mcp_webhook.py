@@ -1157,6 +1157,48 @@ class TestRegisterWebhook:
         assert fake_session.closed is True
         assert DATA_WEBHOOK not in hass.data.get(DOMAIN, {})
 
+    async def test_none_mode_discovery_failure_keeps_webhook_registered(
+        self, monkeypatch
+    ):
+        # #1978: none mode is intentionally unauthenticated, so a failure in the
+        # (cosmetic) auto-approve discovery layer must FAIL OPEN — the webhook
+        # stays registered and forwarding, unlike ha_auth/legacy where the failed
+        # piece IS the auth. Contrast test_registration_failure_closes_session_
+        # and_unregisters above, which injects into async_register itself: the
+        # webhook never bound there, so tearing down is the correct behavior.
+        hass = _register_hass()
+        fake_session = FakeSession()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: fake_session)
+        # Raise INSIDE the none-mode discovery block, after the webhook bound.
+        monkeypatch.setattr(
+            mw,
+            "bind_autoapprove_views",
+            MagicMock(side_effect=RuntimeError("router frozen")),
+        )
+
+        # No exception propagates: the failure is swallowed (fail open).
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_NONE,
+        )
+
+        # Webhook stays registered (cfg was stored → we reached the end of the
+        # function) and the session is NOT closed. The outer fail-closed teardown
+        # would do both — unregister + close the session + re-raise — so its
+        # absence here is the fail-open proof. (async_unregister IS called once
+        # near the top as a defensive pre-clear, so its count is not the signal.)
+        assert DATA_WEBHOOK in hass.data[DOMAIN]
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        assert fake_session.closed is False
+        # none-autoapprove discovery is inactive (plain proxy): the provider was
+        # never assigned, so active_auth_mode reports None and the bound
+        # discovery views 404 per request.
+        assert cfg.get(mw.CFG_AUTOAPPROVE_PROVIDER) is None
+        assert mw.active_auth_mode(hass) is None
+
     async def test_unregister_pops_cfg_and_closes_session(self, monkeypatch):
         hass = _register_hass()
         fake_session = FakeSession()
