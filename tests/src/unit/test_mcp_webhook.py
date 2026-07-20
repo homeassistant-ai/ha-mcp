@@ -1157,6 +1157,62 @@ class TestRegisterWebhook:
         assert fake_session.closed is True
         assert DATA_WEBHOOK not in hass.data.get(DOMAIN, {})
 
+    async def test_none_mode_discovery_failure_keeps_webhook_registered(
+        self, monkeypatch
+    ):
+        # #1978: none mode is intentionally unauthenticated, so a failure in the
+        # (cosmetic) auto-approve discovery layer must FAIL OPEN — the webhook
+        # stays registered and forwarding, unlike ha_auth/legacy where the failed
+        # piece IS the auth. Contrast test_registration_failure_closes_session_
+        # and_unregisters above, which injects into async_register itself: the
+        # webhook never bound there, so tearing down is the correct behavior.
+        hass = _register_hass()
+        fake_session = FakeSession()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: fake_session)
+        # Raise INSIDE the none-mode discovery block, after the webhook bound.
+        monkeypatch.setattr(
+            mw,
+            "bind_autoapprove_views",
+            MagicMock(side_effect=RuntimeError("router frozen")),
+        )
+
+        # No exception propagates: the failure is swallowed (fail open).
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_NONE,
+        )
+
+        # Webhook stays registered (cfg was stored → we reached the end of the
+        # function) and the session is NOT closed. The outer fail-closed teardown
+        # would do both — unregister + close the session + re-raise — so its
+        # absence here is the fail-open proof. (async_unregister IS called once
+        # near the top as a defensive pre-clear, so its count is not the signal.)
+        assert DATA_WEBHOOK in hass.data[DOMAIN]
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        assert fake_session.closed is False
+        # none-autoapprove discovery is inactive (plain proxy): the provider was
+        # never assigned, so active_auth_mode reports None and the bound
+        # discovery views 404 per request.
+        assert cfg.get(mw.CFG_AUTOAPPROVE_PROVIDER) is None
+        assert mw.active_auth_mode(hass) is None
+
+    async def test_partial_metadata_bind_leaves_guard_flag_unset(self):
+        # #1978 (Codex P2): the discovery-views "bound" flag must mean the FULL
+        # bundle registered. If a register_view raises partway, the flag stays
+        # unset so the bundle is never treated as complete — otherwise a later
+        # setup would assign a provider and advertise discovery with an unbound
+        # metadata route, 404-ing clients that probe it. bind_autoapprove_views
+        # uses the same flag-only-after-all-register pattern.
+        hass = _register_hass()
+        # 7 metadata views; fail on the 3rd register_view, mid-bundle.
+        hass.http.register_view.side_effect = [None, None, RuntimeError("frozen")]
+        with pytest.raises(RuntimeError):
+            mw._register_metadata_views(hass)
+        assert mw._OAUTH_VIEWS_REGISTERED_KEY not in hass.data
+
     async def test_unregister_pops_cfg_and_closes_session(self, monkeypatch):
         hass = _register_hass()
         fake_session = FakeSession()

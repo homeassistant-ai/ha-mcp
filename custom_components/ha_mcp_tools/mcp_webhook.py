@@ -486,6 +486,13 @@ def _register_metadata_views(hass: HomeAssistant) -> None:
     """
     if hass.data.get(_OAUTH_VIEWS_REGISTERED_KEY):
         return
+    # Set the flag only AFTER every view registers (issue #1978): it must mean
+    # "the full bundle is bound", so a partial bind stays distinguishable from a
+    # complete one. Marking it bound early would let a later setup assign a
+    # provider and advertise discovery while some RFC metadata routes are still
+    # unbound — a 404 for the clients that probe them. On a partial bind the flag
+    # stays unset; the none-mode caller then fails open (the retry's duplicate
+    # register is caught harmlessly) while ha_auth/legacy fail closed.
     for view in _metadata_views(hass):
         hass.http.register_view(view)
     hass.data[_OAUTH_VIEWS_REGISTERED_KEY] = True
@@ -735,9 +742,28 @@ async def async_register_webhook(
                 # login (issue #1969). Both view bundles bind at most once per
                 # HA session; the per-request resolvers gate them on this cfg,
                 # so a none<->ha_auth switch needs no restart.
-                _register_metadata_views(hass)
-                bind_autoapprove_views(hass)
-                cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
+                #
+                # Fails OPEN, unlike ha_auth/legacy (issue #1978): none mode is
+                # intentionally unauthenticated, and this discovery is an
+                # enhancement layered on a webhook that (already registered
+                # above) otherwise always forwards. A failure here must NOT fall
+                # through to the outer teardown and take down a webhook the user
+                # configured to need no auth — it only means claude.ai's rare
+                # OAuth-discovery fallback goes unassisted. Mirrors the add-on's
+                # _setup_none_autoapprove. Provider is assigned last, so a
+                # partial bind leaves none-autoapprove inactive (plain proxy)
+                # rather than half-enabled.
+                try:
+                    _register_metadata_views(hass)
+                    bind_autoapprove_views(hass)
+                    cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
+                except Exception:
+                    _LOGGER.exception(
+                        "MCP webhook: failed to set up none-mode auto-approve "
+                        "discovery; continuing as a plain unauthenticated proxy "
+                        "(the webhook still forwards — only claude.ai's rare "
+                        "OAuth-discovery fallback is unassisted)."
+                    )
         except Exception:
             # Never leave a live endpoint (or a leaked session) behind a failed
             # auth-setup path. suppress: the ORIGINAL error must be what

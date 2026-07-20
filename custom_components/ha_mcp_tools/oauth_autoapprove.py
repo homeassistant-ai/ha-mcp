@@ -185,6 +185,18 @@ class AutoApproveAuthorizeView(HomeAssistantView):
     open-redirect gate, then issues a PKCE-bound one-time code and redirects
     straight back to the client. No login page and no consent screen render, so
     claude.ai's OAuth flow completes invisibly (issue #1969).
+
+    ACCEPTED RISK (issue #1978): this endpoint is anonymous by design — none
+    mode requires zero HA login — so it consults neither the webhook id nor a
+    client identity. Anyone who knows the HA origin can therefore fill the
+    shared pending-code store (``MAX_PENDING_CODES``) with S256 challenges bound
+    to the public claude.ai callback, at which point a *brand-new* connector's
+    handshake gets ``temporarily_unavailable`` until those codes expire
+    (``AUTH_CODE_TTL``, 5 min). Accepted because it is self-healing, exposes no
+    data, and grants no access: completing the flow needs the PKCE verifier the
+    attacker never has, and the issued token is cosmetic (none mode ignores
+    bearers). The webhook URL itself keeps forwarding throughout — only the rare
+    OAuth-discovery fallback for a *first* connect is briefly delayed.
     """
 
     requires_auth = False
@@ -298,6 +310,11 @@ def bind_autoapprove_views(hass: HomeAssistant) -> None:
     """
     if hass.data.get(_AUTOAPPROVE_VIEWS_REGISTERED_KEY):
         return
+    # Set the flag only AFTER both views register (issue #1978): see
+    # mcp_webhook._register_metadata_views. Marking the bundle bound before
+    # /token registers would let a later none-mode setup assign the provider and
+    # advertise OAuth with an unbound /token — a 404 on the token exchange. The
+    # flag must mean the full bundle succeeded; a partial bind leaves it unset.
     hass.http.register_view(AutoApproveAuthorizeView(hass))
     hass.http.register_view(AutoApproveTokenView(hass))
     hass.data[_AUTOAPPROVE_VIEWS_REGISTERED_KEY] = True
