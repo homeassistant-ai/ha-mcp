@@ -46,12 +46,14 @@ from homeassistant.core import HomeAssistant
 _LOGGER = logging.getLogger(__name__)
 
 OAUTH_BASE = "/api/mcp_proxy/oauth"
-# Authorize/token endpoints live at the root rather than under
-# OAUTH_BASE because Claude.ai (and apparently other MCP clients)
-# construct the authorize URL as `<host>/authorize` from the resource
-# host root — they do not use the `authorization_endpoint` field of
-# our authorization-server metadata document. Registering at the root
-# is the only way to actually catch the redirect.
+# Authorize/token endpoints live at the root rather than under OAUTH_BASE for
+# the legacy flow's original motivation: an MCP client that builds
+# `<host>/authorize` from the resource host root instead of reading the
+# `authorization_endpoint` metadata field (observed with Google Gemini Spark).
+# claude.ai DOES honor the advertised `authorization_endpoint` — issue #1969's
+# none-mode auto-approve server advertises OAUTH_BASE `/authorize` (see
+# oauth_autoapprove) and claude.ai calls exactly that, proven live — so root
+# registration is for the metadata-ignoring clients, not a claude.ai requirement.
 AUTHORIZE_PATH = "/authorize"
 TOKEN_PATH = "/token"
 SECRET_FILE = Path("/config/.mcp_proxy_oauth_secret")
@@ -84,9 +86,20 @@ _METADATA_VIEWS_REGISTERED_KEY = (
 
 # OAuth mode markers. Mirrored as auth_native.HA_AUTH_MODE and __init__.py's
 # OAUTH_MODE_* (a test pins them in agreement). ha_auth = HA core is the
-# authorization server; legacy = this module's embedded authorization server.
+# authorization server; legacy = this module's embedded authorization server;
+# none_autoapprove = OAuth off, but we still serve our own corrected discovery +
+# an invisible auto-approve authorization server so claude.ai's flaky discovery
+# resolves against us instead of HA core's broken root doc (issue #1969, dev-only
+# — see oauth_autoapprove).
 MODE_HA_AUTH = "ha_auth"
 MODE_LEGACY = "legacy"
+MODE_NONE_AUTOAPPROVE = "none_autoapprove"
+
+# hass.data[DOMAIN] key holding the live none-mode AutoApproveProvider (issue
+# #1969). Stored under its OWN key — NOT "oauth" — so the webhook forwarder's
+# bearer gate (which keys off "oauth") stays off in none mode: the secret
+# webhook URL is the credential and the auto-approve token is cosmetic.
+AUTOAPPROVE_PROVIDER_KEY = "autoapprove"
 
 ACCESS_TOKEN_TTL = 60 * 60  # 1 hour
 REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60  # 30 days
@@ -337,8 +350,10 @@ def _active_oauth_mode(provider: object) -> str | None:
     Read live from hass.data so the SAME registered view instances serve
     whichever mode is active now — e.g. a legacy-bound view after the operator
     switched the add-on to ha_auth, which Home Assistant cannot rebind without a
-    restart. Returns ``MODE_HA_AUTH`` or ``MODE_LEGACY``, or ``None`` when no
-    mode is live — the integration data is gone (the config entry was unloaded)
+    restart. Returns ``MODE_HA_AUTH``, ``MODE_LEGACY``, or
+    ``MODE_NONE_AUTOAPPROVE`` (none-mode auto-approve, issue #1969), or ``None``
+    when no mode is live — the integration data is gone (the config entry was
+    unloaded)
     or present without an ``oauth_mode`` key (reloaded with OAuth turned off) —
     so a stale view can 404 like an unregistered route; HA can't drop the bound
     views until a restart either way. A non-dict ``hass.data[DOMAIN]`` (only
@@ -370,10 +385,89 @@ def _active_provider(bound_provider: MetadataProvider) -> MetadataProvider:
     hass = getattr(bound_provider, "_hass", None)
     domain_data = hass.data.get(DOMAIN) if hass is not None else None
     if isinstance(domain_data, dict):
-        active: MetadataProvider | None = domain_data.get("oauth")
+        # ha_auth/legacy store their provider under "oauth"; none-mode
+        # auto-approve (issue #1969) stores its MetadataProvider under
+        # AUTOAPPROVE_PROVIDER_KEY (never "oauth", so the bearer gate stays
+        # off). The two are mutually exclusive, so this resolves the live one.
+        active: MetadataProvider | None = domain_data.get("oauth") or domain_data.get(
+            AUTOAPPROVE_PROVIDER_KEY
+        )
         if active is not None:
             return active
     return bound_provider
+
+
+class PKCECodeStore:
+    """In-memory PKCE (S256) authorization-code store.
+
+    Shared by `OAuthProvider` (legacy) and the none-mode auto-approve server
+    (`oauth_autoapprove`, issue #1969) so the one-shot code lifecycle — issue at
+    `/authorize`, verify + consume at `/token` — has a single implementation
+    instead of two copies. Codes are short-lived (`AUTH_CODE_TTL`), one-shot,
+    bound to the `redirect_uri` + `code_challenge` presented at issuance, and
+    capped (`MAX_PENDING_CODES`) with an expiry prune on each issue. A restart
+    wipes the store, which only forces in-flight authorize/token round-trips to
+    retry.
+    """
+
+    def __init__(self) -> None:
+        self._codes: dict[str, _PendingCode] = {}
+
+    def issue_code(self, redirect_uri: str, code_challenge: str) -> str | None:
+        """Issue a one-shot authorization code, or return None if the
+        pending-code store is at capacity (which signals an abuse attempt
+        — see MAX_PENDING_CODES)."""
+        # Prune expired entries — bounds dict size to O(active codes)
+        # between abusive bursts; the cap below handles the burst case.
+        now = time.time()
+        self._codes = {k: v for k, v in self._codes.items() if v["expires"] > now}
+        if len(self._codes) >= MAX_PENDING_CODES:
+            _LOGGER.warning(
+                "MCP Proxy OAuth: pending-code store at cap (%d); refusing "
+                "new issuance until existing codes expire or are consumed.",
+                MAX_PENDING_CODES,
+            )
+            return None
+        code = secrets.token_urlsafe(32)
+        self._codes[code] = {
+            "redirect_uri": redirect_uri,
+            "code_challenge": code_challenge,
+            "expires": now + AUTH_CODE_TTL,
+        }
+        return code
+
+    def consume_code(self, code: str, redirect_uri: str, code_verifier: str) -> bool:
+        """One-shot consume ``code``, verifying its PKCE S256 challenge.
+
+        Returns True only for a live, unexpired code whose stored
+        ``redirect_uri`` matches and whose ``code_challenge`` equals
+        ``base64url(SHA-256(code_verifier))``. The code is popped (one-shot)
+        once the verifier clears the cheap RFC 7636 shape guard below, so every
+        well-formed attempt burns it — a wrong verifier, expired code, or
+        redirect mismatch still consumes the code. A malformed verifier is
+        rejected before the pop and does NOT burn the code, so a client that
+        sends a syntactically broken verifier can retry.
+        """
+        # Validate the verifier shape per RFC 7636 §4.1 before doing any
+        # crypto. A confused client passing an empty/short verifier should
+        # be rejected explicitly rather than silently hashing junk.
+        if not (PKCE_VERIFIER_MIN <= len(code_verifier) <= PKCE_VERIFIER_MAX):
+            return False
+        if not _PKCE_VERIFIER_RE.match(code_verifier):
+            return False
+        entry = self._codes.pop(code, None)
+        if entry is None:
+            return False
+        if entry["expires"] < time.time():
+            return False
+        if entry["redirect_uri"] != redirect_uri:
+            return False
+        # PKCE S256 verification: SHA-256(verifier) base64url(no pad) == challenge
+        derived = _b64url_encode(hashlib.sha256(code_verifier.encode()).digest())
+        return hmac.compare_digest(
+            derived.encode("ascii"),
+            entry["code_challenge"].encode("ascii"),
+        )
 
 
 class OAuthProvider:
@@ -412,10 +506,9 @@ class OAuthProvider:
         # event loop must not be blocked with sync filesystem I/O during
         # integration setup.
         self._signing_key = signing_key
-        # In-memory pending authorization codes. Codes are short-lived
-        # (5 min) and one-shot; restart wipes them, which only forces
-        # in-flight authorize/token round-trips to retry.
-        self._codes: dict[str, _PendingCode] = {}
+        # PKCE authorization codes live in the shared store (also used by the
+        # none-mode auto-approve server) — see PKCECodeStore.
+        self._code_store = PKCECodeStore()
 
     @property
     def client_id(self) -> str:
@@ -543,49 +636,12 @@ class OAuthProvider:
     # -----------------------------------------------------------------
 
     def issue_code(self, redirect_uri: str, code_challenge: str) -> str | None:
-        """Issue a one-shot authorization code, or return None if the
-        pending-code store is at capacity (which signals an abuse attempt
-        — see MAX_PENDING_CODES)."""
-        # Prune expired entries — bounds dict size to O(active codes)
-        # between abusive bursts; the cap below handles the burst case.
-        now = time.time()
-        self._codes = {k: v for k, v in self._codes.items() if v["expires"] > now}
-        if len(self._codes) >= MAX_PENDING_CODES:
-            _LOGGER.warning(
-                "MCP Proxy OAuth: pending-code store at cap (%d); refusing "
-                "new issuance until existing codes expire or are consumed.",
-                MAX_PENDING_CODES,
-            )
-            return None
-        code = secrets.token_urlsafe(32)
-        self._codes[code] = {
-            "redirect_uri": redirect_uri,
-            "code_challenge": code_challenge,
-            "expires": now + AUTH_CODE_TTL,
-        }
-        return code
+        """Issue a one-shot PKCE-bound authorization code (see PKCECodeStore)."""
+        return self._code_store.issue_code(redirect_uri, code_challenge)
 
     def consume_code(self, code: str, redirect_uri: str, code_verifier: str) -> bool:
-        # Validate the verifier shape per RFC 7636 §4.1 before doing any
-        # crypto. A confused client passing an empty/short verifier should
-        # be rejected explicitly rather than silently hashing junk.
-        if not (PKCE_VERIFIER_MIN <= len(code_verifier) <= PKCE_VERIFIER_MAX):
-            return False
-        if not _PKCE_VERIFIER_RE.match(code_verifier):
-            return False
-        entry = self._codes.pop(code, None)
-        if entry is None:
-            return False
-        if entry["expires"] < time.time():
-            return False
-        if entry["redirect_uri"] != redirect_uri:
-            return False
-        # PKCE S256 verification: SHA-256(verifier) base64url(no pad) == challenge
-        derived = _b64url_encode(hashlib.sha256(code_verifier.encode()).digest())
-        return hmac.compare_digest(
-            derived.encode("ascii"),
-            entry["code_challenge"].encode("ascii"),
-        )
+        """Verify PKCE S256 + one-shot consume a code (see PKCECodeStore)."""
+        return self._code_store.consume_code(code, redirect_uri, code_verifier)
 
     # -----------------------------------------------------------------
     # Client authentication
@@ -607,24 +663,37 @@ class OAuthProvider:
 
 
 class ProtectedResourceMetadataView(HomeAssistantView):
-    """RFC 9728 Protected Resource Metadata."""
+    """RFC 9728 Protected Resource Metadata (fixed, guessable path)."""
 
     requires_auth = False
     cors_allowed = True
     url = f"{OAUTH_BASE}/protected-resource"
     name = "mcp_proxy:oauth:protected-resource"
 
+    # SECURITY (#1976 review): this fixed path exposes ``resource:
+    # <base>/api/webhook/<id>``. In none-autoapprove mode the webhook id is the
+    # SOLE credential, so this ANONYMOUS, guessable path must NOT serve it there.
+    # The path-scoped subclass flips this True — its URL already embeds the id,
+    # so its caller must already know it (no leak).
+    _serves_in_none_mode = False
+
     def __init__(self, provider: MetadataProvider) -> None:
         self._provider = provider
 
     async def get(self, request: web.Request) -> web.Response:
-        # The protected-resource document has the same shape in both OAuth
-        # modes; only 404 when no mode is live (entry unloaded / OAuth off) so a
+        # The protected-resource document has the same shape in every OAuth
+        # mode; 404 when no mode is live (entry unloaded / OAuth off) so a
         # stale-bound view acts like an unregistered route. URLs are built via
         # the ACTIVE mode's provider, not the instance this view was bound with,
         # so a live mode switch also switches the base-URL policy (legacy:
         # pinned; ha_auth: host-derived).
-        if _active_oauth_mode(self._provider) is None:
+        mode = _active_oauth_mode(self._provider)
+        if mode is None:
+            return _json_not_found()
+        # In none-autoapprove mode only the path-scoped subclass may serve (see
+        # _serves_in_none_mode above); the fixed-path view 404s to avoid leaking
+        # the credential-bearing webhook id anonymously (#1976 review).
+        if mode == MODE_NONE_AUTOAPPROVE and not self._serves_in_none_mode:
             return _json_not_found()
         provider = _active_provider(self._provider)
         base = provider.base_url_for(request)
@@ -670,6 +739,14 @@ class AuthorizationServerMetadataView(HomeAssistantView):
             from .auth_native import authorization_server_document
 
             return web.json_response(authorization_server_document(base))
+        if mode == MODE_NONE_AUTOAPPROVE:
+            # OAuth off, but we advertise OUR OWN auto-approve endpoints under
+            # OAUTH_BASE (public PKCE client + CIMD) so claude.ai's flaky
+            # discovery resolves against us, not HA core's broken root doc
+            # (issue #1969). Lazy import mirrors the ha_auth dispatch above.
+            from .oauth_autoapprove import authorization_server_document
+
+            return web.json_response(authorization_server_document(base))
         as_url = provider.authorization_server_url(base)
         return web.json_response(
             {
@@ -708,6 +785,11 @@ class WellKnownProtectedResourceView(ProtectedResourceMetadataView):
     """
 
     name = "mcp_proxy:oauth:wellknown-protected-resource"
+
+    # Path-scoped: the URL already embeds the webhook id, so the caller must
+    # already know it — serving in none-autoapprove mode leaks nothing (#1976).
+    # This is the doc claude.ai's none-mode discovery actually uses.
+    _serves_in_none_mode = True
 
     def __init__(self, provider: MetadataProvider) -> None:
         super().__init__(provider)

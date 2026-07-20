@@ -350,8 +350,10 @@ def _active_oauth_mode(provider: object) -> str | None:
     Read live from hass.data so the SAME registered view instances serve
     whichever mode is active now — e.g. a legacy-bound view after the operator
     switched the add-on to ha_auth, which Home Assistant cannot rebind without a
-    restart. Returns ``MODE_HA_AUTH`` or ``MODE_LEGACY``, or ``None`` when no
-    mode is live — the integration data is gone (the config entry was unloaded)
+    restart. Returns ``MODE_HA_AUTH``, ``MODE_LEGACY``, or
+    ``MODE_NONE_AUTOAPPROVE`` (none-mode auto-approve, issue #1969), or ``None``
+    when no mode is live — the integration data is gone (the config entry was
+    unloaded)
     or present without an ``oauth_mode`` key (reloaded with OAuth turned off) —
     so a stale view can 404 like an unregistered route; HA can't drop the bound
     views until a restart either way. A non-dict ``hass.data[DOMAIN]`` (only
@@ -435,7 +437,17 @@ class PKCECodeStore:
         return code
 
     def consume_code(self, code: str, redirect_uri: str, code_verifier: str) -> bool:
-        """One-shot consume ``code``, verifying its PKCE S256 challenge."""
+        """One-shot consume ``code``, verifying its PKCE S256 challenge.
+
+        Returns True only for a live, unexpired code whose stored
+        ``redirect_uri`` matches and whose ``code_challenge`` equals
+        ``base64url(SHA-256(code_verifier))``. The code is popped (one-shot)
+        once the verifier clears the cheap RFC 7636 shape guard below, so every
+        well-formed attempt burns it — a wrong verifier, expired code, or
+        redirect mismatch still consumes the code. A malformed verifier is
+        rejected before the pop and does NOT burn the code, so a client that
+        sends a syntactically broken verifier can retry.
+        """
         # Validate the verifier shape per RFC 7636 §4.1 before doing any
         # crypto. A confused client passing an empty/short verifier should
         # be rejected explicitly rather than silently hashing junk.

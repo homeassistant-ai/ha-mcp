@@ -64,6 +64,20 @@ CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
 # The two are mutually exclusive: exactly one marker is ever set for an entry.
 OAUTH_MODE_HA_AUTH = "ha_auth"
 OAUTH_MODE_LEGACY = "legacy"
+#   none_autoapprove — OAuth is OFF, but we still serve our own corrected
+#             discovery documents + an invisible auto-approve authorization
+#             server (oauth_autoapprove) so claude.ai's flaky discovery resolves
+#             against us instead of HA core's broken root doc (issue #1969). The
+#             webhook stays unauthenticated: this marker is stored under
+#             "oauth_mode" but the provider lives under AUTOAPPROVE_PROVIDER_KEY,
+#             never "oauth", so the forwarder's bearer gate stays off.
+OAUTH_MODE_NONE_AUTOAPPROVE = "none_autoapprove"
+
+# hass.data[DOMAIN] key for the none-mode auto-approve provider (issue #1969).
+# MUST equal oauth.AUTOAPPROVE_PROVIDER_KEY (a test pins them in agreement): the
+# shared discovery views read it via oauth._active_provider, and it is
+# deliberately NOT "oauth" so the webhook forwarder's bearer gate stays off.
+AUTOAPPROVE_PROVIDER_KEY = "autoapprove"
 
 # Service the add-on calls (via the HA Core API) to raise/clear the
 # click-to-restart Repair issues from outside HA — see async_setup.
@@ -481,8 +495,10 @@ async def _setup_legacy_oauth(
             "file, or turn off Enable OAuth in the addon configuration."
         )
     # Root-route collision guard. The OAuth provider registers /authorize
-    # and /token at the HA ROOT (claude.ai builds <host>/authorize from the
-    # host root). HA cannot unregister HTTP views until it restarts, and
+    # and /token at the HA ROOT (a metadata-ignoring client, e.g. Gemini Spark,
+    # builds <host>/authorize from the host root; claude.ai honors the advertised
+    # authorization_endpoint — see #1969). HA cannot unregister HTTP views until
+    # it restarts, and
     # aiohttp lets the first-registered path win — a later duplicate is
     # silently shadowed. So if the OTHER webhook-proxy flavor already owns
     # these routes in this HA instance, registering ours would be shadowed
@@ -568,6 +584,55 @@ async def _setup_legacy_oauth(
     return oauth_restart_needed
 
 
+def _setup_none_autoapprove(
+    hass: HomeAssistant, webhook_id: str, hass_data: dict
+) -> None:
+    """Set up none-mode auto-approve discovery (OAuth off — issue #1969).
+
+    Serves our own corrected RFC 8414/9728 discovery documents plus an invisible
+    auto-approve authorization server so claude.ai's flaky discovery resolves
+    against us, not HA core's broken origin-root doc, and completes OAuth with no
+    HA login. Mutates ``hass_data`` with the provider (under
+    AUTOAPPROVE_PROVIDER_KEY, NOT "oauth" — so the webhook forwarder never 401s)
+    and the mode marker.
+
+    Fails OPEN, unlike ha_auth/legacy: the user did NOT opt into auth here (the
+    webhook is intentionally unauthenticated), and this discovery is an
+    enhancement layered on top of the already-working proxy. A failure must not
+    tear the working webhook down — it only means claude.ai's rare discovery
+    fallback isn't helped; the endpoint still forwards.
+    """
+    try:
+        from .oauth import register_metadata_views
+        from .oauth_autoapprove import (
+            AutoApproveProvider,
+            register_autoapprove_views,
+        )
+
+        # Host-derived base URLs (public_base_url=None), like ha_auth: the same
+        # install must work via any external URL.
+        provider = AutoApproveProvider(hass, webhook_id, None)
+        # Both view bundles bind at most once per HA session (guarded); a
+        # none<->ha_auth switch reuses them, so no restart is needed.
+        register_metadata_views(hass, provider)
+        register_autoapprove_views(hass)
+    except Exception:
+        _LOGGER.exception(
+            "MCP Proxy: failed to set up none-mode auto-approve discovery; "
+            "continuing as a plain unauthenticated proxy (the webhook still "
+            "forwards — only claude.ai's rare OAuth-discovery fallback is "
+            "unassisted)."
+        )
+        return
+    hass_data[AUTOAPPROVE_PROVIDER_KEY] = provider
+    hass_data["oauth_mode"] = OAUTH_MODE_NONE_AUTOAPPROVE
+    _LOGGER.info(
+        "MCP Proxy: OAuth off — serving none-mode auto-approve discovery so "
+        "MCP connectors that run OAuth discovery still resolve against this "
+        "add-on (issue #1969). The webhook itself stays unauthenticated."
+    )
+
+
 async def _setup_oauth_section(
     hass: HomeAssistant,
     webhook_id: str,
@@ -611,6 +676,14 @@ async def _setup_oauth_section(
         return await _setup_legacy_oauth(
             hass, webhook_id, proxy_config, oauth_section, session, hass_data
         )
+    # No OAuth section = OAuth off. Instead of a bare unauthenticated proxy,
+    # serve our own corrected discovery + an invisible auto-approve authorization
+    # server so claude.ai's intermittent OAuth discovery resolves against us, not
+    # HA core's broken origin-root doc (issue #1969). Fails open — the webhook
+    # forwarder stays unauthenticated and never 401s (see _setup_none_autoapprove
+    # / the AUTOAPPROVE_PROVIDER_KEY-not-"oauth" split). No restart is ever
+    # needed, so oauth_restart_needed stays False.
+    _setup_none_autoapprove(hass, webhook_id, hass_data)
     return False
 
 

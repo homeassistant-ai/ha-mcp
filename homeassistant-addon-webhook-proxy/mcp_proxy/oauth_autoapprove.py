@@ -255,7 +255,7 @@ class AutoApproveAuthorizeView(HomeAssistantView):
     requires_auth = False
     cors_allowed = True
     url = f"{OAUTH_BASE}/authorize"
-    name = "mcp_proxy_dev:oauth:autoapprove-authorize"
+    name = "mcp_proxy:oauth:autoapprove-authorize"
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Bind the view to the HA instance; liveness is resolved per request."""
@@ -316,7 +316,7 @@ class AutoApproveTokenView(HomeAssistantView):
     requires_auth = False
     cors_allowed = True
     url = f"{OAUTH_BASE}/token"
-    name = "mcp_proxy_dev:oauth:autoapprove-token"
+    name = "mcp_proxy:oauth:autoapprove-token"
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Bind the view to the HA instance; liveness is resolved per request."""
