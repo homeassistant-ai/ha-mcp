@@ -3,6 +3,23 @@
 <!-- version list -->
 
 
+## v2.0.5 (2026-07-20)
+
+### Bug Fixes
+
+- When OAuth is off, serve the add-on's own corrected OAuth discovery documents
+  plus an invisible auto-approve authorization server, so an MCP connector
+  (claude.ai) that intermittently front-loads OAuth discovery resolves against
+  the add-on instead of falling through to Home Assistant core's origin-root
+  `/.well-known/oauth-authorization-server` — which omits
+  `token_endpoint_auth_methods_supported: ["none"]` and has no
+  `registration_endpoint`, so the connector reports "Automatic client
+  registration isn't supported" and cannot connect (issue #1969). The webhook
+  itself stays unauthenticated (URL-only clients are unaffected) and the OAuth
+  flow completes with no Home Assistant login. Switching between OAuth-off and
+  `ha_auth` needs no Home Assistant restart.
+
+
 ## v2.0.4 (2026-07-18)
 
 ### Refactoring
