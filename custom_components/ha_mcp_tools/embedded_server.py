@@ -1568,6 +1568,47 @@ _PENDING_INSTALL_DONE: threading.Event | None = None
 _CACHED_IMPORT_VERSION: str | None = None
 
 
+def _safe_invalidate_caches() -> None:
+    """Run ``importlib.invalidate_caches()``, completing it if a finder breaks.
+
+    On Python 3.14 with ``homeassistant`` installed as a setuptools *editable*
+    package (the official HA container image), ``PathFinder.invalidate_caches()``
+    raises ``KeyError`` at its ``del sys.path_importer_cache[name]`` line: the
+    synthetic ``__editable__.<dist>.finder.__path_hook__`` placeholder is not an
+    absolute path, so CPython takes the ``del`` branch on a key an earlier
+    iteration already removed — a CPython 3.14 bug (the ``del`` should be a
+    ``pop``). That aborts ``importlib.invalidate_caches()`` partway and, before
+    this guard, crashed in-process server bring-up on every boot (issues #1891,
+    #1985).
+
+    On that ``KeyError`` we finish the sweep CPython abandoned, using only
+    public ``invalidate_caches`` entry points (safe on any Python): prune dead /
+    relative ``sys.path_importer_cache`` entries with ``pop`` instead of the
+    buggy ``del``, re-invalidate every live path-entry finder, then refresh the
+    metadata finder — the two caches the downstream ``find_spec`` /
+    ``importlib.metadata`` reads depend on. Recovery only ever runs on the broken
+    3.14 path (the top-level call succeeds everywhere else); every
+    non-``KeyError`` still propagates.
+    """
+    try:
+        importlib.invalidate_caches()
+        return
+    except KeyError as err:
+        _LOGGER.debug(
+            "importlib.invalidate_caches() aborted on a broken (setuptools "
+            "editable / Python 3.14) finder; completing it manually: %s",
+            err,
+        )
+    for name, finder in list(sys.path_importer_cache.items()):
+        if finder is None or not os.path.isabs(name):
+            sys.path_importer_cache.pop(name, None)
+        else:
+            invalidate = getattr(finder, "invalidate_caches", None)
+            if invalidate is not None:
+                invalidate()
+    importlib.metadata.MetadataPathFinder.invalidate_caches()
+
+
 def _purge_ha_mcp_modules() -> None:
     """Drop every cached ``ha_mcp`` module so the next import loads fresh code.
 
@@ -1595,7 +1636,7 @@ def _purge_ha_mcp_modules() -> None:
         return
     for name in purged:
         sys.modules.pop(name, None)
-    importlib.invalidate_caches()
+    _safe_invalidate_caches()
     _LOGGER.debug("Purged %d cached ha_mcp module(s) before worker start", len(purged))
 
 
@@ -1608,7 +1649,7 @@ def _installed_ha_mcp_version(preferred_dist: str | None = None) -> str | None:
     provided, checks that channel first so stale metadata from a failed
     best-effort conflicting uninstall cannot mask the package just installed.
     """
-    importlib.invalidate_caches()
+    _safe_invalidate_caches()
     # Metadata alone is not proof: a channel switch's best-effort uninstall
     # can leave ORPHANED .dist-info whose files are gone (the shared ha_mcp/
     # tree belongs to whichever dist installed last). Require the import
@@ -1631,7 +1672,7 @@ def _dist_installed(dist_name: str) -> bool:
 
     Invalidates the import caches first so a just-completed (un)install is seen.
     """
-    importlib.invalidate_caches()
+    _safe_invalidate_caches()
     try:
         importlib.metadata.version(dist_name)
     except importlib.metadata.PackageNotFoundError:
@@ -1648,7 +1689,7 @@ def _installed_dist_version(dist_name: str) -> str | None:
     the auto-update check compares the newest PyPI build against the version of
     the channel actually installed.
     """
-    importlib.invalidate_caches()
+    _safe_invalidate_caches()
     try:
         return importlib.metadata.version(dist_name)
     except importlib.metadata.PackageNotFoundError:

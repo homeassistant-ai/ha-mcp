@@ -1402,6 +1402,77 @@ class TestInstalledDistVersion:
         assert es._installed_dist_version(DIST_NAME_STABLE) is None
 
 
+class TestSafeInvalidateCaches:
+    """Guard for the Python-3.14 setuptools editable-finder KeyError (#1891, #1985).
+
+    In the official HA container image ``homeassistant`` is a setuptools
+    *editable* install whose generated finder raises ``KeyError`` from its own
+    ``invalidate_caches()`` on Python 3.14. That propagated out of
+    ``importlib.invalidate_caches()`` and aborted in-process server bring-up on
+    every boot. The helper must tolerate that specific failure while letting
+    every other error through.
+    """
+
+    _EDITABLE_KEY = "__editable__.homeassistant-2026.7.2.finder.__path_hook__"
+
+    @pytest.fixture(autouse=True)
+    def _isolate_path_cache(self, monkeypatch):
+        # Recovery prunes/invalidates sys.path_importer_cache entries; hand each
+        # test a private copy so it never mutates the real process cache.
+        monkeypatch.setattr(sys, "path_importer_cache", dict(sys.path_importer_cache))
+
+    def test_swallows_keyerror_from_broken_finder(self, monkeypatch):
+        def _boom():
+            raise KeyError(self._EDITABLE_KEY)
+
+        monkeypatch.setattr(es.importlib, "invalidate_caches", _boom)
+        es._safe_invalidate_caches()  # must not raise
+
+    def test_propagates_non_keyerror(self, monkeypatch):
+        def _boom():
+            raise RuntimeError("unrelated import-system failure")
+
+        monkeypatch.setattr(es.importlib, "invalidate_caches", _boom)
+        with pytest.raises(RuntimeError):
+            es._safe_invalidate_caches()
+
+    def test_recovers_remaining_finders_after_abort(self, monkeypatch):
+        # The point of recovery: a healthy path-entry finder still gets
+        # invalidated even though the top-level sweep aborted on the bad one,
+        # and CPython's dead/relative-entry pruning still happens (via pop).
+        invalidated = []
+
+        class _Finder:
+            def invalidate_caches(self):
+                invalidated.append("called")
+
+        sys.path_importer_cache.clear()
+        sys.path_importer_cache["/abs/deps/dir"] = _Finder()
+        sys.path_importer_cache[""] = None  # non-abs → pruned, not invalidated
+
+        def _boom():
+            raise KeyError(self._EDITABLE_KEY)
+
+        monkeypatch.setattr(es.importlib, "invalidate_caches", _boom)
+        es._safe_invalidate_caches()
+
+        assert invalidated == ["called"]
+        assert "" not in sys.path_importer_cache
+
+    def test_installed_version_survives_editable_finder_keyerror(self, monkeypatch):
+        # End-to-end regression for the exact reported traceback:
+        # _installed_ha_mcp_version() -> importlib.invalidate_caches() raised
+        # KeyError and crashed bring-up. With the guard the version still
+        # resolves.
+        def _boom():
+            raise KeyError(self._EDITABLE_KEY)
+
+        monkeypatch.setattr(es.importlib, "invalidate_caches", _boom)
+        monkeypatch.setattr(es.importlib.util, "find_spec", lambda name: object())
+        monkeypatch.setattr(importlib.metadata, "version", lambda name: "7.14.1")
+        assert es._installed_ha_mcp_version() == "7.14.1"
+
+
 # ---------------------------------------------------------------------------
 # Worker-thread env staging
 # ---------------------------------------------------------------------------
