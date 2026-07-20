@@ -1402,6 +1402,112 @@ class TestInstalledDistVersion:
         assert es._installed_dist_version(DIST_NAME_STABLE) is None
 
 
+class TestSafeInvalidateCaches:
+    """Guard for the Python-3.14 setuptools editable-finder KeyError (#1891, #1985).
+
+    On Python 3.14, ``homeassistant`` as a setuptools *editable* install makes
+    ``PathFinder.invalidate_caches()`` raise ``KeyError`` at its
+    ``del sys.path_importer_cache[name]`` line, aborting
+    ``importlib.invalidate_caches()`` and crashing in-process bring-up. The
+    helper prunes the stale entries CPython choked on, then re-runs the call so
+    the full sweep (finder invalidation + namespace-path epoch + metadata)
+    completes.
+    """
+
+    _EDITABLE_KEY = "__editable__.homeassistant-2026.7.2.finder.__path_hook__"
+
+    @pytest.fixture(autouse=True)
+    def _isolate_path_cache(self, monkeypatch):
+        # Recovery prunes sys.path_importer_cache entries; hand each test a
+        # private copy so it never mutates the real process cache. Also reset the
+        # once-per-process WARNING flag so each test's log path is deterministic.
+        monkeypatch.setattr(sys, "path_importer_cache", dict(sys.path_importer_cache))
+        monkeypatch.setattr(es, "_INVALIDATE_KEYERROR_WARNED", False)
+
+    def _raise_once(self, monkeypatch, *, then=None):
+        """Patch invalidate_caches to raise the editable KeyError on the first
+        call, then delegate to ``then`` (a no-op by default) on the retry."""
+        calls = []
+
+        def _invalidate():
+            calls.append(1)
+            if len(calls) == 1:
+                raise KeyError(self._EDITABLE_KEY)
+            if then is not None:
+                then()
+
+        monkeypatch.setattr(es.importlib, "invalidate_caches", _invalidate)
+        return calls
+
+    def test_no_recovery_when_first_call_succeeds(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(es.importlib, "invalidate_caches", lambda: calls.append(1))
+        es._safe_invalidate_caches()
+        assert calls == [1]  # succeeded first try, no retry
+
+    def test_prunes_stale_entries_then_retries(self, monkeypatch):
+        calls = self._raise_once(monkeypatch)
+        sys.path_importer_cache.clear()
+        sys.path_importer_cache["/abs/deps/dir"] = object()  # abs + live → kept
+        sys.path_importer_cache[self._EDITABLE_KEY] = None  # non-abs None → pruned
+        sys.path_importer_cache[""] = None  # relative None → pruned
+        # Non-absolute key with a LIVE (non-None) finder: the None disjunct is
+        # False here, so ONLY the ``not os.path.isabs`` disjunct can prune it —
+        # this independently exercises the abspath branch (a real editable
+        # placeholder has a live finder, not None).
+        sys.path_importer_cache["rel/not/absolute"] = object()
+
+        es._safe_invalidate_caches()
+
+        assert len(calls) == 2  # aborted once, retried once
+        assert self._EDITABLE_KEY not in sys.path_importer_cache
+        assert "" not in sys.path_importer_cache
+        assert "rel/not/absolute" not in sys.path_importer_cache
+        assert "/abs/deps/dir" in sys.path_importer_cache
+
+    def test_propagates_non_keyerror(self, monkeypatch):
+        def _boom():
+            raise RuntimeError("unrelated import-system failure")
+
+        monkeypatch.setattr(es.importlib, "invalidate_caches", _boom)
+        with pytest.raises(RuntimeError):
+            es._safe_invalidate_caches()
+
+    def test_retry_keyerror_is_tolerated(self, monkeypatch):
+        # If a concurrent import re-adds a stale placeholder between the prune and
+        # the retry, the retry can raise KeyError a SECOND time. That must not
+        # re-crash bring-up (the helper's whole purpose) — it is logged
+        # best-effort and swallowed, not re-raised.
+        def _always_keyerror():
+            raise KeyError(self._EDITABLE_KEY)
+
+        monkeypatch.setattr(es.importlib, "invalidate_caches", _always_keyerror)
+        es._safe_invalidate_caches()  # must not raise despite the retry also failing
+
+    def test_recovery_advances_namespace_epoch(self, monkeypatch):
+        # Codex (#1987): recovery must preserve PathFinder's namespace-path epoch
+        # bump so a newly-installed PEP 420 namespace portion stays discoverable.
+        # The retry runs the REAL invalidate_caches, which advances the epoch.
+        from importlib._bootstrap_external import _NamespacePath
+
+        real = importlib.invalidate_caches
+        self._raise_once(monkeypatch, then=real)
+
+        before = _NamespacePath._epoch
+        es._safe_invalidate_caches()
+        assert _NamespacePath._epoch > before
+
+    def test_installed_version_survives_editable_finder_keyerror(self, monkeypatch):
+        # End-to-end regression for the exact reported traceback:
+        # _installed_ha_mcp_version() -> importlib.invalidate_caches() raised
+        # KeyError and crashed bring-up. With the guard the version still
+        # resolves.
+        self._raise_once(monkeypatch)
+        monkeypatch.setattr(es.importlib.util, "find_spec", lambda name: object())
+        monkeypatch.setattr(importlib.metadata, "version", lambda name: "7.14.1")
+        assert es._installed_ha_mcp_version() == "7.14.1"
+
+
 # ---------------------------------------------------------------------------
 # Worker-thread env staging
 # ---------------------------------------------------------------------------

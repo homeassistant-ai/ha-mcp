@@ -82,6 +82,40 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 _INITIAL_STATE = _REPO_ROOT / "tests" / "initial_test_state"
 _INTEGRATION_SRC = _REPO_ROOT / "custom_components" / "ha_mcp_tools"
 
+# Run INSIDE the live HA container (a separate ``python3`` process, so HA itself
+# is never touched) to prove _safe_invalidate_caches() recovers from the
+# Python-3.14 setuptools editable-finder KeyError (#1891/#1985) on the REAL
+# component code + container interpreter. The container here is Python 3.13, so
+# the crash can't occur naturally — we inject a meta-path finder that raises the
+# exact KeyError while the stale placeholder is cached (what CPython 3.14's
+# PathFinder `del` trips on). With the fix, the helper prunes the placeholder and
+# the retry succeeds; revert the fix and the KeyError propagates → exit != 0.
+_INVALIDATE_RECOVERY_PROBE = """
+import sys
+sys.path.insert(0, "/config")
+from custom_components.ha_mcp_tools.embedded_server import _safe_invalidate_caches
+
+PLACEHOLDER = "__editable__.homeassistant-2026.7.2.finder.__path_hook__"
+
+
+class _EditableFinderKeyErrorSim:
+    def find_spec(self, fullname, path=None, target=None):
+        return None
+
+    def invalidate_caches(self):
+        if PLACEHOLDER in sys.path_importer_cache:
+            raise KeyError(PLACEHOLDER)
+
+
+sys.path_importer_cache[PLACEHOLDER] = None
+sys.meta_path.insert(0, _EditableFinderKeyErrorSim())
+
+_safe_invalidate_caches()
+
+assert PLACEHOLDER not in sys.path_importer_cache, "stale placeholder not pruned"
+print("RECOVERY_OK")
+"""
+
 
 def _docker_available() -> bool:
     try:
@@ -258,10 +292,12 @@ def _initialize(base_url: str) -> tuple[bool, str | None]:
 def embedded_ha():
     """Boot a dedicated HA container running the in-process MCP server entry.
 
-    Yields ``(base_url, session_id, config_path)`` once the in-process MCP
-    server has installed itself, started, and registered its ingress webhook.
+    Yields ``(base_url, session_id, config_path, container)`` once the in-process
+    MCP server has installed itself, started, and registered its ingress webhook.
     ``config_path`` is the bind-mounted /config dir — the LLM-API test reads
     ``home-assistant.log`` from it to prove the registration ran inside HA.
+    ``container`` is the testcontainers handle — the invalidate-caches recovery
+    test ``exec_run``s an in-container probe through it.
     """
     if not _docker_available():
         pytest.skip("Docker is not available for the embedded-server e2e")
@@ -320,7 +356,7 @@ def embedded_ha():
                 "in-process MCP server did not become reachable via its webhook within "
                 f"{_READY_TIMEOUT_S}s. Container logs:\n{logs}"
             )
-        yield base_url, session_id, config_path
+        yield base_url, session_id, config_path, container
     finally:
         with contextlib.suppress(Exception):
             container.stop()
@@ -328,7 +364,7 @@ def embedded_ha():
 
 class TestEmbeddedServerEndToEnd:
     def test_initialize_and_list_tools(self, embedded_ha):
-        base_url, session_id, _config = embedded_ha
+        base_url, session_id, _config, _container = embedded_ha
         resp = _mcp_post(
             base_url,
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
@@ -345,7 +381,7 @@ class TestEmbeddedServerEndToEnd:
         assert "ha_get_state" in names
 
     def test_read_only_tool_call(self, embedded_ha):
-        base_url, session_id, _config = embedded_ha
+        base_url, session_id, _config, _container = embedded_ha
         resp = _mcp_post(
             base_url,
             {
@@ -365,6 +401,40 @@ class TestEmbeddedServerEndToEnd:
         # The tool ran against the real HA instance and returned content.
         assert parsed["result"].get("content"), parsed
 
+    def test_invalidate_caches_recovers_from_editable_finder_keyerror(
+        self, embedded_ha
+    ):
+        """_safe_invalidate_caches() recovers from the 3.14 editable-finder
+        KeyError on the REAL component code + container interpreter (#1891/#1985).
+
+        The reaching-ready ``embedded_ha`` fixture already proves the happy path
+        (bring-up runs ``_installed_ha_mcp_version`` → ``_safe_invalidate_caches``
+        without crashing). This drives the FAILURE path: a ``python3`` process in
+        the same container injects the exact KeyError and asserts the helper
+        prunes the stale entry and the retry completes. Reverting the fix makes
+        the probe exit non-zero.
+
+        NOTE (skip-ceiling coupling): like its siblings this module is
+        ``container_only`` + ``not_on_embedded`` (see the file-level
+        ``pytestmark``), so this test is SKIPPED on the haos, haos_inaddon,
+        haos_embedded, and embedded lanes and RUNS only on the container lane.
+        Each such skip counts toward ``_SKIP_CEILING_PER_LANE`` in
+        tests/src/e2e/basic/test_backend_dispatch_smoke.py — adding this test
+        tripped ``test_session_skipped_count_below_ceiling`` until those four
+        ceilings were bumped by 1. Any future marker-gated test added here will
+        trip that guard the same way until its ceilings are bumped.
+        """
+        _base_url, _session_id, _config, container = embedded_ha
+        result = container.get_wrapped_container().exec_run(
+            ["python3", "-c", _INVALIDATE_RECOVERY_PROBE]
+        )
+        output = (result.output or b"").decode("utf-8", "replace")
+        assert result.exit_code == 0, (
+            "in-container _safe_invalidate_caches() did not recover from the "
+            f"injected editable-finder KeyError (exit {result.exit_code}):\n{output}"
+        )
+        assert "RECOVERY_OK" in output, output
+
     def test_llm_api_registered_inside_ha(self, embedded_ha):
         """The bring-up registered the toolset as an LLM API in the REAL HA.
 
@@ -376,7 +446,7 @@ class TestEmbeddedServerEndToEnd:
         (registration runs right after webhook bring-up and imports the mcp
         SDK on the executor first), so the log is polled briefly.
         """
-        _base_url, _session_id, config_path = embedded_ha
+        _base_url, _session_id, config_path, _container = embedded_ha
         log_file = config_path / "home-assistant.log"
         needle = "Registered the HA-MCP toolset as LLM API"
         deadline = time.monotonic() + 60
@@ -413,7 +483,7 @@ class TestEmbeddedServerEndToEnd:
         from mcp.client.streamable_http import streamable_http_client
         from voluptuous_openapi import convert_to_voluptuous
 
-        base_url, _session_id, _config = embedded_ha
+        base_url, _session_id, _config, _container = embedded_ha
         url = f"{base_url}/api/webhook/{_WEBHOOK_ID}"
 
         async with asyncio.timeout(120):
