@@ -350,8 +350,10 @@ def _active_oauth_mode(provider: object) -> str | None:
     Read live from hass.data so the SAME registered view instances serve
     whichever mode is active now — e.g. a legacy-bound view after the operator
     switched the add-on to ha_auth, which Home Assistant cannot rebind without a
-    restart. Returns ``MODE_HA_AUTH`` or ``MODE_LEGACY``, or ``None`` when no
-    mode is live — the integration data is gone (the config entry was unloaded)
+    restart. Returns ``MODE_HA_AUTH``, ``MODE_LEGACY``, or
+    ``MODE_NONE_AUTOAPPROVE`` (none-mode auto-approve, issue #1969), or ``None``
+    when no mode is live — the integration data is gone (the config entry was
+    unloaded)
     or present without an ``oauth_mode`` key (reloaded with OAuth turned off) —
     so a stale view can 404 like an unregistered route; HA can't drop the bound
     views until a restart either way. A non-dict ``hass.data[DOMAIN]`` (only

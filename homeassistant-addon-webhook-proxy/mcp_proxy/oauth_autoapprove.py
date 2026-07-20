@@ -128,11 +128,11 @@ def _json_not_found() -> web.Response:
 def _json_error(
     error: str, status: int, description: str | None = None
 ) -> web.Response:
-    """OAuth-style JSON error (RFC 6749 §5.2 shape)."""
+    """OAuth-style JSON error (RFC 6749 §5.2 shape) with no-store headers."""
     body: dict[str, str] = {"error": error}
     if description is not None:
         body["error_description"] = description
-    return web.json_response(body, status=status)
+    return web.json_response(body, status=status, headers=_TOKEN_RESPONSE_HEADERS)
 
 
 def _is_valid_autoapprove_redirect(redirect_uri: str) -> bool:
