@@ -310,10 +310,11 @@ def bind_autoapprove_views(hass: HomeAssistant) -> None:
     """
     if hass.data.get(_AUTOAPPROVE_VIEWS_REGISTERED_KEY):
         return
-    # Claim the bind BEFORE registering (issue #1978): see
-    # mcp_webhook._register_metadata_views — one bind attempt per HA session so a
-    # partial failure can't wedge a retry into re-registering an already-bound
-    # view. Pairs with the none-mode caller's fail-open handling.
-    hass.data[_AUTOAPPROVE_VIEWS_REGISTERED_KEY] = True
+    # Set the flag only AFTER both views register (issue #1978): see
+    # mcp_webhook._register_metadata_views. Marking the bundle bound before
+    # /token registers would let a later none-mode setup assign the provider and
+    # advertise OAuth with an unbound /token — a 404 on the token exchange. The
+    # flag must mean the full bundle succeeded; a partial bind leaves it unset.
     hass.http.register_view(AutoApproveAuthorizeView(hass))
     hass.http.register_view(AutoApproveTokenView(hass))
+    hass.data[_AUTOAPPROVE_VIEWS_REGISTERED_KEY] = True

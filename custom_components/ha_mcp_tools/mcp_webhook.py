@@ -486,15 +486,16 @@ def _register_metadata_views(hass: HomeAssistant) -> None:
     """
     if hass.data.get(_OAUTH_VIEWS_REGISTERED_KEY):
         return
-    # Claim the bind BEFORE registering (issue #1978): aiohttp can't unregister a
-    # view and a duplicate register_view raises, so if this loop fails partway, a
-    # later retry (e.g. a mode switch) must NOT re-register the views that already
-    # bound. Setting the guard first caps this at one bind attempt per HA session
-    # — a partial failure leaves some discovery views unbound (they 404 like an
-    # unregistered route) instead of throwing a duplicate-route error next call.
-    hass.data[_OAUTH_VIEWS_REGISTERED_KEY] = True
+    # Set the flag only AFTER every view registers (issue #1978): it must mean
+    # "the full bundle is bound", so a partial bind stays distinguishable from a
+    # complete one. Marking it bound early would let a later setup assign a
+    # provider and advertise discovery while some RFC metadata routes are still
+    # unbound — a 404 for the clients that probe them. On a partial bind the flag
+    # stays unset; the none-mode caller then fails open (the retry's duplicate
+    # register is caught harmlessly) while ha_auth/legacy fail closed.
     for view in _metadata_views(hass):
         hass.http.register_view(view)
+    hass.data[_OAUTH_VIEWS_REGISTERED_KEY] = True
 
 
 def _build_unauthorized_response(request: web.Request) -> web.Response:

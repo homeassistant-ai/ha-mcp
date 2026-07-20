@@ -1199,6 +1199,20 @@ class TestRegisterWebhook:
         assert cfg.get(mw.CFG_AUTOAPPROVE_PROVIDER) is None
         assert mw.active_auth_mode(hass) is None
 
+    async def test_partial_metadata_bind_leaves_guard_flag_unset(self):
+        # #1978 (Codex P2): the discovery-views "bound" flag must mean the FULL
+        # bundle registered. If a register_view raises partway, the flag stays
+        # unset so the bundle is never treated as complete — otherwise a later
+        # setup would assign a provider and advertise discovery with an unbound
+        # metadata route, 404-ing clients that probe it. bind_autoapprove_views
+        # uses the same flag-only-after-all-register pattern.
+        hass = _register_hass()
+        # 7 metadata views; fail on the 3rd register_view, mid-bundle.
+        hass.http.register_view.side_effect = [None, None, RuntimeError("frozen")]
+        with pytest.raises(RuntimeError):
+            mw._register_metadata_views(hass)
+        assert mw._OAUTH_VIEWS_REGISTERED_KEY not in hass.data
+
     async def test_unregister_pops_cfg_and_closes_session(self, monkeypatch):
         hass = _register_hass()
         fake_session = FakeSession()
