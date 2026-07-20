@@ -1,6 +1,6 @@
 name: "Nabu Casa - Webhook Proxy for HA MCP (Dev)"
 description: "DEV CHANNEL (unstable) — remote access proxy via Nabu Casa or any reverse proxy. Cannot run alongside the stable Webhook Proxy add-on."
-version: "2.0.3.dev3"
+version: "2.0.5.dev1"
 slug: "ha_mcp_webhook_proxy_dev"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 stage: experimental

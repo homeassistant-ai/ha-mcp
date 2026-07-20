@@ -9,6 +9,17 @@ history from before the fork.
 -->
 
 
+## v2.0.5.dev1 (2026-07-20)
+
+### Bug Fixes
+
+- Rebase the dev channel onto the 2.0.5 stable base and fold in the #1978
+  post-merge parity fixes now shipping in stable: the none-mode auto-approve
+  OAuth error responses carry `Cache-Control: no-store` / `Pragma: no-cache`
+  (matching the token responses and the custom-component twin), and the
+  `_active_oauth_mode` docstring documents its `none_autoapprove` return value.
+
+
 ## v2.0.3.dev3 (2026-07-19)
 
 ### Bug Fixes

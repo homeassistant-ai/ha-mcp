@@ -18,6 +18,9 @@
   itself stays unauthenticated (URL-only clients are unaffected) and the OAuth
   flow completes with no Home Assistant login. Switching between OAuth-off and
   `ha_auth` needs no Home Assistant restart.
+- Follow-up to the above (issue #1978): the none-mode auto-approve OAuth error
+  responses now carry `Cache-Control: no-store` / `Pragma: no-cache`, matching
+  the token responses and the custom-component twin.
 
 
 ## v2.0.4 (2026-07-18)
