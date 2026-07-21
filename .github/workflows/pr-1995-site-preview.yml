@@ -1,0 +1,39 @@
+name: PR 1995 Site Preview Artifact
+
+on:
+  push:
+    branches:
+      - preview/pr-1995-site
+
+permissions:
+  contents: read
+
+jobs:
+  build-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install dependencies
+        working-directory: site
+        run: npm ci
+
+      - name: Build site
+        working-directory: site
+        run: npm run build
+
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ha-mcp-pr-1995-site-11226e2e
+          path: site/dist
+          if-no-files-found: error
+          retention-days: 1
