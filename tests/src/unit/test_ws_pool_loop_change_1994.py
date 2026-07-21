@@ -20,6 +20,7 @@ instead of being awaited from the new one.
 
 import asyncio
 import threading
+from collections.abc import Callable
 
 import pytest
 
@@ -44,6 +45,10 @@ class StubWebSocketClient:
         self.disconnected = threading.Event()
         self.disconnect_loop: asyncio.AbstractEventLoop | None = None
         self.last_connect_error: str | None = None
+        # Set by a test that needs to observe manager state from inside the
+        # disconnect call, i.e. mid-cleanup.
+        self.observe_pool: Callable[[], dict[str, object]] | None = None
+        self.pool_at_disconnect: dict[str, object] | None = None
 
     async def connect(self) -> bool:
         return True
@@ -51,6 +56,8 @@ class StubWebSocketClient:
     async def disconnect(self) -> None:
         self.disconnect_calls += 1
         self.disconnect_loop = asyncio.get_running_loop()
+        if self.observe_pool is not None:
+            self.pool_at_disconnect = self.observe_pool()
         self.disconnected.set()
         if self.disconnect_error is not None:
             raise self.disconnect_error
@@ -147,18 +154,23 @@ async def test_stale_disconnect_runs_on_a_still_running_owning_loop(manager):
 async def test_disconnect_clears_the_pool_even_when_a_client_raises(manager):
     """``WebSocketManager.disconnect`` leaves no pooled state behind.
 
-    A raising client used to abort the loop before ``_clients.clear()``, which
-    is the same permanently-stale-pool failure on the shutdown path.
+    Two independent properties, so both are asserted: the pool is already
+    detached while a client is being disconnected (``pool_at_disconnect``),
+    and a raising client does not abort the shutdown. Asserting only the final
+    state would pass against the old order, where the raise was merely caught
+    and the trailing ``clear()`` still ran.
     """
     failing = StubWebSocketClient(disconnect_error=RuntimeError(CROSS_LOOP_MESSAGE))
     manager.configure(client_factory=lambda url, token: failing)
 
     await manager.get_client(url="http://ha.local", token="t")
     assert manager._clients
+    failing.observe_pool = lambda: dict(manager._clients)
 
     await manager.disconnect()
 
     assert failing.disconnect_calls == 1
+    assert failing.pool_at_disconnect == {}
     assert manager._clients == {}
     assert manager._last_used == {}
     assert manager._current_loop is None

@@ -8,6 +8,7 @@ This module handles WebSocket connections to Home Assistant for:
 """
 
 import asyncio
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -1036,6 +1037,21 @@ class HomeAssistantWebSocketClient:
 MAX_POOL_SIZE = 50
 
 
+def _log_stale_disconnect(future: "concurrent.futures.Future[None]") -> None:
+    """Report how a disconnect scheduled on a stale event loop ended.
+
+    Nothing awaits that future, so without this the outcome would be invisible
+    at every log level: a ``concurrent.futures.Future`` never warns about an
+    exception no one retrieved.
+    """
+    if future.cancelled():
+        logger.debug("Stale WebSocket disconnect was cancelled with its loop")
+        return
+    error = future.exception()
+    if error is not None:
+        logger.debug("Stale WebSocket disconnect failed: %s", error)
+
+
 class WebSocketManager:
     """Singleton manager for Home Assistant WebSocket connections.
 
@@ -1123,12 +1139,14 @@ class WebSocketManager:
 
         Never awaits: the connections belong to ``loop``, and awaiting them
         from the loop that replaced it is exactly the cross-loop failure this
-        avoids. When ``loop`` is still running (two live loops in one
-        process) each disconnect is scheduled on it and deliberately not
-        waited for. When it is closed or no longer running there is nothing to
-        schedule on, so the connection is abandoned and its socket is released
-        with the loop's own resources. Either way the caller has already
-        detached the pool, so a failure here cannot make it stale again.
+        avoids. When ``loop`` is still running (two live loops in one process)
+        each disconnect is scheduled on it and deliberately not waited for.
+        When it is closed or stopped there is nothing left to schedule on, so
+        the connection is abandoned: its socket is closed when the orphaned
+        transport is garbage-collected (with a ``ResourceWarning``), because
+        closing a loop does not close the transports it carried. Either way
+        the caller has already detached the pool, so a failure here cannot
+        make it stale again.
         """
         if not clients:
             return
@@ -1142,15 +1160,22 @@ class WebSocketManager:
         for client in clients:
             coro = client.disconnect()
             try:
-                asyncio.run_coroutine_threadsafe(coro, loop)
+                future = asyncio.run_coroutine_threadsafe(coro, loop)
             except RuntimeError:
-                # The loop stopped between the check above and now; close the
-                # coroutine so it does not surface as "never awaited".
+                # The loop closed between the check above and now. Closing the
+                # coroutine keeps it from surfacing as "never awaited". The
+                # narrower window stays open by construction: a loop that
+                # accepts the callback and then stops before draining it never
+                # runs the coroutine at all, and ``run_coroutine_threadsafe``
+                # needs the coroutine object up front, so there is nothing left
+                # to reclaim from this side.
                 coro.close()
                 logger.debug(
                     "Could not schedule disconnect of a stale WebSocket client",
                     exc_info=True,
                 )
+                continue
+            future.add_done_callback(_log_stale_disconnect)
 
     async def get_client(
         self,
