@@ -40,6 +40,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 
@@ -692,6 +693,7 @@ class DevTools:
         ] = None,
         policy: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -713,6 +715,7 @@ class DevTools:
         ] = None,
         backup: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
