@@ -1502,7 +1502,9 @@ class TestJournaldWindowLinesParam:
         assert kwargs["params"] is None
 
     @pytest.mark.asyncio
-    async def test_addon_proxy_branch_sends_lines_query(self, mock_client):
+    async def test_addon_proxy_branch_sends_lines_query(
+        self, mock_client, non_addon_install
+    ):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = "x\n"
@@ -1514,7 +1516,9 @@ class TestJournaldWindowLinesParam:
         assert kwargs["params"] == {"lines": 2000}
 
     @pytest.mark.asyncio
-    async def test_system_service_proxy_branch_sends_lines_query(self, mock_client):
+    async def test_system_service_proxy_branch_sends_lines_query(
+        self, mock_client, non_addon_install
+    ):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = "x\n"
