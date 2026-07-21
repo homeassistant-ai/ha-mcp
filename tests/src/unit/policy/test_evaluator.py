@@ -167,6 +167,37 @@ class TestEvaluate:
         assert first is not None
         assert first.remember_minutes == 10
 
+    def test_any_of_multiple_same_tool_rules_gates(self):
+        """Each UI 'condition' persists as its own rule; the tool gates if ANY
+        of them matches (OR across rules), even when the others don't. This is
+        the semantics behind the ALL->ANY policy-editor change (PR #1993)."""
+        p = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_call_service",
+                    when=[Predicate(path="args.domain", op="eq", value="lock")],
+                ),
+                Rule(
+                    tool_name="ha_call_service",
+                    when=[
+                        Predicate(
+                            path="args.domain", op="eq", value="alarm_control_panel"
+                        )
+                    ],
+                ),
+            ],
+        )
+        assert (
+            evaluate("ha_call_service", {"domain": "lock"}, p)
+            == Verdict.REQUIRE_APPROVAL
+        )
+        assert (
+            evaluate("ha_call_service", {"domain": "alarm_control_panel"}, p)
+            == Verdict.REQUIRE_APPROVAL
+        )
+        # Neither condition matches -> allowed.
+        assert evaluate("ha_call_service", {"domain": "light"}, p) == Verdict.ALLOW
+
 
 # --- case-insensitive string comparison ---
 class TestCaseInsensitive:
