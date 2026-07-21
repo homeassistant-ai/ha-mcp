@@ -345,10 +345,11 @@ class DevTools:
 
     def __init__(self, client: Any, server: Any | None = None) -> None:
         self._client = client
-        # The live server object, when available (embedded / add-on / container
-        # deployments). Needed for the approval queue and the unfiltered tool
-        # registry that the Tools/Policies actions drive; ``None`` in the stdio
-        # settings sidecar, where those actions degrade to a clear error.
+        # The live server object. The registry always passes it, so it is
+        # present in every real deployment that registers these dev tools;
+        # ``None`` is only a defensive fallback (no real path constructs
+        # DevTools without a server). Used for the approval queue and the
+        # unfiltered tool registry the Tools/Policies actions drive.
         self._server = server
 
     # ----- settings management helpers -----
@@ -673,7 +674,10 @@ class DevTools:
             bool | None,
             Field(
                 default=None,
-                description="set_tool: expose the tool to HA conversation agents",
+                description=(
+                    "set_tool: expose the tool to HA conversation agents "
+                    "(effective only on the embedded custom-component server)"
+                ),
             ),
         ] = None,
         gated: Annotated[
@@ -861,7 +865,14 @@ class DevTools:
     # ----- Tools tab: enable/disable/pin, LLM-API, security gate -----
 
     async def _tool_metadata_rows(self) -> list[dict[str, Any]]:
-        """Return unfiltered tool metadata (live registry, else sidecar cache)."""
+        """Return unfiltered tool metadata from the live registry.
+
+        Every real deployment that registers these developer tools passes a
+        live server (the registry always does; the stdio settings sidecar is
+        a separate process that never builds these tools), so the metadata
+        comes from ``local_provider._list_tools()``. The on-disk cache is a
+        defensive fallback for a server-less construction only.
+        """
         from ..settings_ui._persistence import load_tool_metadata_cache
         from ..settings_ui._tools_meta import _get_tool_metadata
 
@@ -871,7 +882,13 @@ class DevTools:
 
     @staticmethod
     def _gated_tool_names() -> set[str]:
-        """Tool names carrying at least one security-policy rule."""
+        """Tool names carrying the bare unconditional gate (the Tools-tab toggle).
+
+        The Tools-tab per-tool gate toggle manages only the bare rule (no
+        predicates); conditional rules are authored in the Policies tab. Keying
+        this on the bare rule keeps the reported toggle state consistent with
+        what set_tool(gated=...) writes.
+        """
         from ..policy.persistence import load_policy
         from ..utils.data_paths import get_data_dir
 
@@ -879,7 +896,7 @@ class DevTools:
             policy = load_policy(get_data_dir())
         except ValueError:
             return set()
-        return {rule.tool_name for rule in policy.rules}
+        return {rule.tool_name for rule in policy.rules if not rule.when}
 
     async def _list_tool_states(self) -> dict[str, Any]:
         """List every tool with its state / LLM-API / gate + lock flags.
@@ -912,6 +929,12 @@ class DevTools:
                 "name": t["name"],
                 "category": t.get("category"),
                 "state": states.get(t["name"], "enabled"),
+                # Feature-gated tools appear as stubs carrying disabled_by (the
+                # flag that would register them). Surface availability so the
+                # caller doesn't read a stub's default state="enabled" as "this
+                # tool is live" — it isn't until disabled_by is turned on.
+                "available": t.get("disabled_by") is None,
+                "disabled_by": t.get("disabled_by"),
                 # Feature-gated stub rows carry their primary tag but not the
                 # "beta" tag the registered tool declares; append it for
                 # disabled_by stubs so the default exposure matches what the
@@ -936,7 +959,12 @@ class DevTools:
             "data": {
                 "tools": rows,
                 "count": len(rows),
+                # configured: the saved flag. live: whether the gating
+                # middleware/queue are actually wired (only at startup). They
+                # diverge after toggling the flag until a restart.
                 "policies_enabled": settings.enable_tool_security_policies,
+                "policies_live": getattr(self._server, "approval_queue", None)
+                is not None,
                 "llm_api_available": is_embedded(),
             },
         }
@@ -978,9 +1006,15 @@ class DevTools:
                     "set_tool needs at least one of state / llm_api / gated",
                 )
             )
-        return await asyncio.to_thread(
-            self._write_tool_all, tool, state, llm_api, gated
-        )
+        # Serialize the tool_config + policy read-modify-write against the web
+        # save handlers and other set_tool calls via the shared lock (held on
+        # the loop while the file I/O runs in the worker thread).
+        from ..utils.config_write_lock import get_config_write_lock
+
+        async with get_config_write_lock():
+            return await asyncio.to_thread(
+                self._write_tool_all, tool, state, llm_api, gated
+            )
 
     def _write_tool_all(
         self, tool: str, state: str | None, llm_api: bool | None, gated: bool | None
@@ -1080,12 +1114,41 @@ class DevTools:
                 )
             )
         if plan["gate_val"] is not None:
-            warnings.extend(self._commit_gate(plan, data))
+            partial = (state is not None and plan["persist_state"]) or plan[
+                "llm_val"
+            ] is not None
+            warnings.extend(self._commit_gate_or_flag_partial(plan, data, partial))
         data["restart_required"] = restart_required
         result: dict[str, Any] = {"success": True, "data": data}
         if warnings:
             result["warnings"] = warnings
         return result
+
+    def _commit_gate_or_flag_partial(
+        self, plan: dict[str, Any], data: dict[str, Any], partial: bool
+    ) -> list[str]:
+        """Commit the gate; on a raw policy-write failure, surface that the
+        tool_config (state/LLM-API) change already persisted so the caller
+        isn't told the whole operation failed."""
+        try:
+            return self._commit_gate(plan, data)
+        except ToolError:
+            raise
+        except Exception as exc:
+            suffix = (
+                " The state/LLM-API change WAS already saved — re-run set_tool "
+                "with only gated= to finish the gate."
+                if partial
+                else ""
+            )
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"The security-gate policy write failed: {exc}.{suffix}",
+                    context={"partial_commit": partial, "persisted": data},
+                )
+            )
+            return []  # unreachable; explicit for CodeQL
 
     def _commit_gate(self, plan: dict[str, Any], data: dict[str, Any]) -> list[str]:
         """Persist the gate portion of a set_tool plan; returns any warnings."""
@@ -1233,6 +1296,8 @@ class DevTools:
                 "policies_enabled": (
                     get_global_settings().enable_tool_security_policies
                 ),
+                "policies_live": getattr(self._server, "approval_queue", None)
+                is not None,
             },
         }
 
@@ -1243,8 +1308,7 @@ class DevTools:
         from pydantic import ValidationError
 
         from ..policy.model import Policy
-        from ..policy.persistence import load_policy, save_policy
-        from ..utils.data_paths import get_data_dir
+        from ..utils.config_write_lock import get_config_write_lock
 
         if not isinstance(policy, dict):
             raise_tool_error(
@@ -1265,6 +1329,28 @@ class DevTools:
                     f"policy failed schema validation: {exc}",
                 )
             )
+        # Compare against the COERCED model version so a JSON string "3" matches
+        # the on-disk int 3; ``"version" in policy`` distinguishes an omitted
+        # version (no concurrency check) from an explicit one.
+        expected = (
+            expected_version
+            if expected_version is not None
+            else (new_policy.version if "version" in policy else None)
+        )
+        # Serialize the load-check-save against the web PUT handler + set_tool.
+        async with get_config_write_lock():
+            return await asyncio.to_thread(self._commit_policy, new_policy, expected)
+
+    def _commit_policy(self, new_policy: Any, expected: int | None) -> dict[str, Any]:
+        """Load current policy, version-check against ``expected``, save, report.
+
+        MUST run while holding ``get_config_write_lock()`` (called via
+        ``asyncio.to_thread`` from ``_apply_set_policy``).
+        """
+        from ..config import get_global_settings
+        from ..policy.persistence import load_policy, save_policy
+        from ..utils.data_paths import get_data_dir
+
         data_dir = get_data_dir()
         try:
             current = load_policy(data_dir)
@@ -1277,9 +1363,6 @@ class DevTools:
                 )
             )
         warnings: list[str] = []
-        expected = (
-            expected_version if expected_version is not None else policy.get("version")
-        )
         if expected is not None and expected != current.version:
             raise_tool_error(
                 create_error_response(
@@ -1295,13 +1378,22 @@ class DevTools:
             warnings.append(
                 "No version supplied; wrote without an optimistic-concurrency check."
             )
-        # Rebase onto the on-disk version so save_policy bumps to current+1
-        # (matches the web PUT semantics).
-        to_save = new_policy.model_copy(update={"version": current.version})
-        save_policy(data_dir, to_save)
+        # Rebase onto the on-disk version so save_policy bumps to current+1.
+        save_policy(
+            data_dir, new_policy.model_copy(update={"version": current.version})
+        )
         rules_changed = current.rules != new_policy.rules
         if rules_changed:
             self._clear_remember_cache()
+        # Same "won't enforce" signal set_tool(gated=True) gives, so authoring
+        # rules while the engine is off doesn't look like a live gate.
+        if new_policy.rules and not get_global_settings().enable_tool_security_policies:
+            warnings.append(
+                "Tool security policies are disabled "
+                "(enable_tool_security_policies=false); these rules are stored "
+                "but won't enforce until policies are enabled and the server "
+                "restarts."
+            )
         result: dict[str, Any] = {
             "success": True,
             "data": {"version": current.version + 1, "rules_changed": rules_changed},
@@ -1313,27 +1405,15 @@ class DevTools:
     # ----- Auto-backup config -----
 
     async def _get_backup_config(self) -> dict[str, Any]:
-        """Return the auto-backup config fields with per-field origin/editable."""
-        from ..config import (
-            BACKUP_OVERRIDE_FIELDS,
-            get_backup_setting_origin,
-            get_global_settings,
-        )
+        """Return the auto-backup config fields (shared with the web handler)."""
+        from ..settings_ui._handlers_backups import backup_config_fields
 
-        settings = get_global_settings()
-        fields = [
-            {
-                "field": field_name,
-                "env_var": env_name,
-                "value": getattr(settings, field_name),
-                "origin": (origin := get_backup_setting_origin(env_name)),
-                "editable": origin in ("addon", "file", "default"),
-            }
-            for field_name, env_name, _ftype in BACKUP_OVERRIDE_FIELDS
-        ]
         return {
             "success": True,
-            "data": {"is_addon": is_running_in_addon(), "fields": fields},
+            "data": {
+                "is_addon": is_running_in_addon(),
+                "fields": backup_config_fields(),
+            },
         }
 
     async def _apply_set_backup_config(
@@ -2037,22 +2117,24 @@ class DevTools:
     def _require_queue(self) -> Any:
         """Return the live approval queue or raise a clear error.
 
-        The queue only exists on a full server (embedded / add-on /
-        container) with tool security policies enabled; it is absent in the
-        stdio settings sidecar and whenever the feature flag is off.
+        The queue is created at server startup only when
+        ``enable_tool_security_policies`` is on. These developer tools always
+        run with a live server, so a missing queue means policies were off at
+        startup (or were toggled on without the required restart) — not a
+        deployment without a server.
         """
         queue = getattr(self._server, "approval_queue", None)
         if queue is None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "No active approval queue: tool security policies are "
-                    "disabled, or this deployment has no live server (stdio "
-                    "settings sidecar).",
+                    "No active approval queue: tool security policies were not "
+                    "enabled when the server started, so the gating middleware "
+                    "and its queue are not wired.",
                     suggestions=[
-                        "Enable enable_tool_security_policies and restart, then "
-                        "retry from a full-server (embedded/add-on/container) "
-                        "deployment."
+                        "Enable enable_tool_security_policies "
+                        "(ha_dev_manage_settings set) and restart the server, "
+                        "then retry."
                     ],
                 )
             )
@@ -2068,8 +2150,8 @@ class DevTools:
                     "pending": [],
                     "count": 0,
                     "note": (
-                        "No active approval queue (tool security policies "
-                        "disabled or no live server); nothing is blocked."
+                        "No active approval queue — tool security policies were "
+                        "not enabled at server startup; nothing is blocked."
                     ),
                 },
             }

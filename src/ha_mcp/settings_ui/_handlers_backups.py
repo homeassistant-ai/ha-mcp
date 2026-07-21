@@ -244,32 +244,42 @@ async def _delete_backups_bulk(
     )
 
 
-async def _get_backup_config(
-    server: HomeAssistantSmartMCPServer | None, _: Request
-) -> JSONResponse:
-    """Return live auto-backup config + per-field origin + editable flag.
+def backup_config_fields() -> list[dict[str, Any]]:
+    """Auto-backup fields with per-field value/origin/editable.
 
-    Per-field origin/editable matrix (see ``config.get_backup_setting_origin``):
-    - ``addon``: editable — POST routes through Supervisor.
-    - ``env``: read-only — env var wins; user must unset to edit.
-    - ``file``/``default``: editable — POST writes the override file.
+    Shared by the HTTP ``_get_backup_config`` handler and the
+    ``ha_dev_manage_settings`` developer tool so the two never drift.
+    Origin/editable matrix (see ``config.get_backup_setting_origin``):
+    ``addon`` editable (Supervisor), ``env`` read-only, ``file``/``default``
+    editable (override file).
     """
     settings = get_global_settings()
-    addon_mode = is_running_in_addon()
-    fields = []
+    fields: list[dict[str, Any]] = []
     for field_name, env_name, _ftype in BACKUP_OVERRIDE_FIELDS:
         origin = get_backup_setting_origin(env_name)
-        editable = origin in ("addon", "file", "default")
         fields.append(
             {
                 "field": field_name,
                 "env_var": env_name,
                 "value": getattr(settings, field_name),
                 "origin": origin,
-                "editable": editable,
+                "editable": origin in ("addon", "file", "default"),
             }
         )
-    return JSONResponse({"success": True, "is_addon": addon_mode, "fields": fields})
+    return fields
+
+
+async def _get_backup_config(
+    server: HomeAssistantSmartMCPServer | None, _: Request
+) -> JSONResponse:
+    """Return live auto-backup config + per-field origin + editable flag."""
+    return JSONResponse(
+        {
+            "success": True,
+            "is_addon": is_running_in_addon(),
+            "fields": backup_config_fields(),
+        }
+    )
 
 
 # Inclusive bounds for the integer auto-backup fields; a field absent here

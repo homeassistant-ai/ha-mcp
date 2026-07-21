@@ -18,6 +18,7 @@ from .._version import is_embedded
 from ..errors import ErrorCode, create_error_response
 from ..llm_exposure import LLM_API_CONFIG_KEY
 from ..transforms import DEFAULT_PINNED_TOOLS
+from ..utils.config_write_lock import get_config_write_lock
 from . import _persistence
 from ._tools_meta import _VALID_STATES, BPS_MANDATORY_TOOLS, _get_tool_metadata
 
@@ -264,60 +265,65 @@ async def _save_tools(
         )
     llm_api_overrides = _coerce_llm_overrides(raw_llm_api)
 
-    config = _persistence.load_tool_config()
+    # Serialize the load-modify-save against the developer tool
+    # (set_tool runs its RMW in a worker thread, in parallel with this
+    # loop) via the shared write lock so neither loses the other's update.
+    async with get_config_write_lock():
+        config = _persistence.load_tool_config()
 
-    # BPS-dependency guard (#1886): reject disabling a BPS-locked tool
-    # while strict best-practices mode is on. Mirrors the env-pinned
-    # semantics above — only a *change to* "disabled" is rejected, so a
-    # payload echoing an already-persisted disabled state (reachable via
-    # a hand-edited tool_config.json) still saves and is handled by
-    # apply_tool_visibility's strip-and-warn at startup.
-    prior_states = config.get("tools", {})
-    bps_conflicts = sorted(
-        name
-        for name in _bps_locked_tools()
-        if states.get(name) == "disabled" and prior_states.get(name) != "disabled"
-    )
-    if bps_conflicts:
-        return JSONResponse(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Refusing to disable {', '.join(bps_conflicts)} while "
-                "strict best-practices mode "
-                "(enable_strict_mandatory_bps) is on — strict mode "
-                "publishes its acknowledgment key only through that "
-                "tool, so disabling it would block every gated write.",
-                suggestions=[
-                    "Turn off 'Strict best-practices mode' in the Server "
-                    "Settings tab first, then disable the tool.",
-                ],
-                context={"rejected": bps_conflicts},
-            ),
-            status_code=409,
+        # BPS-dependency guard (#1886): reject disabling a BPS-locked tool
+        # while strict best-practices mode is on. Mirrors the env-pinned
+        # semantics above — only a *change to* "disabled" is rejected, so a
+        # payload echoing an already-persisted disabled state (reachable via
+        # a hand-edited tool_config.json) still saves and is handled by
+        # apply_tool_visibility's strip-and-warn at startup.
+        prior_states = config.get("tools", {})
+        bps_conflicts = sorted(
+            name
+            for name in _bps_locked_tools()
+            if states.get(name) == "disabled" and prior_states.get(name) != "disabled"
         )
+        if bps_conflicts:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Refusing to disable {', '.join(bps_conflicts)} while "
+                    "strict best-practices mode "
+                    "(enable_strict_mandatory_bps) is on — strict mode "
+                    "publishes its acknowledgment key only through that "
+                    "tool, so disabling it would block every gated write.",
+                    suggestions=[
+                        "Turn off 'Strict best-practices mode' in the Server "
+                        "Settings tab first, then disable the tool.",
+                    ],
+                    context={"rejected": bps_conflicts},
+                ),
+                status_code=409,
+            )
 
-    # The enable/disable/pin half still needs a restart to apply
-    # (visibility is wired at server build); the LLM-API exposure half
-    # applies live (stamped per tools/list). Only demand a restart when
-    # the half that needs one actually changed. Compare with the SAME
-    # default-pinned padding _get_tools applies to its response — the JS
-    # posts that padded map back verbatim, so an unpadded compare would
-    # flag every first save as a states change (live-found on #1745).
-    states_changed = _padded_pins(config.get("tools", {})) != _padded_pins(states)
-    config["tools"] = states
-    config[LLM_API_CONFIG_KEY] = llm_api_overrides
-    if not _persistence.save_tool_config(config):
-        return JSONResponse(
-            create_error_response(
-                ErrorCode.INTERNAL_ERROR,
-                "Failed to persist tool config to disk",
-                suggestions=[
-                    "Set HA_MCP_CONFIG_DIR to a writable path (read-only filesystem?)",
-                    "Check the server logs for the underlying OSError",
-                ],
-            ),
-            status_code=500,
-        )
+        # The enable/disable/pin half still needs a restart to apply
+        # (visibility is wired at server build); the LLM-API exposure half
+        # applies live (stamped per tools/list). Only demand a restart when
+        # the half that needs one actually changed. Compare with the SAME
+        # default-pinned padding _get_tools applies to its response — the JS
+        # posts that padded map back verbatim, so an unpadded compare would
+        # flag every first save as a states change (live-found on #1745).
+        states_changed = _padded_pins(config.get("tools", {})) != _padded_pins(states)
+        config["tools"] = states
+        config[LLM_API_CONFIG_KEY] = llm_api_overrides
+        if not _persistence.save_tool_config(config):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Failed to persist tool config to disk",
+                    suggestions=[
+                        "Set HA_MCP_CONFIG_DIR to a writable path "
+                        + "(read-only filesystem?)",
+                        "Check the server logs for the underlying OSError",
+                    ],
+                ),
+                status_code=500,
+            )
 
     disabled_count = sum(1 for s in states.values() if s == "disabled")
     pinned_count = sum(1 for s in states.values() if s == "pinned")
