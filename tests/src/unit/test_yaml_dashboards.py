@@ -310,6 +310,33 @@ class TestParseYamlPathExtraAllowedKeys:
         assert kind == "single"
         assert parts == ("alert2",)
 
+    @pytest.mark.parametrize("key", ["automation", "script", "scene"])
+    def test_extra_key_does_not_lift_packages_only_restriction(self, parse, key):
+        """An extra key must not make a packages-only key writable in
+        configuration.yaml (#1887).
+
+        Those keys have storage-mode equivalents and are confined to
+        packages/*.yaml so the two collections cannot collide. If the extra-key
+        setting lifted that, an operator could reach configuration.yaml with
+        automation/script/scene while the per-key toggle governing them is off,
+        since that toggle only gates packages targets.
+        """
+        _, _, err = parse(key, extra_allowed_keys=frozenset({key}))
+        assert err is not None
+        assert "packages/*.yaml" in err
+        assert f"ha_config_set_{key}" in err
+
+    @pytest.mark.parametrize("key", ["automation", "script", "scene"])
+    def test_packages_only_key_still_reaches_package_files(self, parse, key):
+        """The restriction above must not narrow the packages path itself:
+        inside packages/*.yaml these keys stay acceptable, with or without the
+        operator listing them."""
+        for extra in (frozenset(), frozenset({key})):
+            kind, parts, err = parse(key, is_package=True, extra_allowed_keys=extra)
+            assert err is None, f"{key} with extra={extra}: {err}"
+            assert kind == "single"
+            assert parts == (key,)
+
     def test_generic_error_lists_extra_keys(self, parse):
         # An operator who added a key must see it in the allowed-keys dump,
         # otherwise the error contradicts their own configuration.

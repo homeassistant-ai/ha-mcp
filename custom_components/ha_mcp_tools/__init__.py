@@ -2259,8 +2259,9 @@ def _parse_and_validate_yaml_path(
     1. Single segment in ALLOWED_YAML_KEYS -> kind='single'
        When ``is_package=True``, single segments in PACKAGES_ONLY_YAML_KEYS
        (automation, script, scene) are also accepted. ``extra_allowed_keys``
-       adds operator-opted-in keys on top (#1887); it never overrides
-       ``YAML_KEY_DENYLIST``, which is filtered out before it gets here.
+       adds operator-opted-in keys on top of ALLOWED_YAML_KEYS (#1887); it
+       overrides neither ``YAML_KEY_DENYLIST`` (filtered out before it gets
+       here) nor the packages-only restriction.
     2. Exactly 'lovelace.dashboards.<url_path>' -> kind='lovelace_dashboard'
     3. Single segment theme name (no dots) when ``is_theme=True`` -> kind='theme'
 
@@ -2310,11 +2311,18 @@ def _parse_and_validate_yaml_path(
             return "single", parts, None
         if is_package and key in PACKAGES_ONLY_YAML_KEYS:
             return "single", parts, None
-        if key in extra_allowed_keys:
+        # Operator extra keys widen ALLOWED_YAML_KEYS only. They deliberately
+        # do NOT lift the packages-only restriction: those keys reach
+        # packages/*.yaml through the branch above (still governed by their
+        # per-key toggle) and stay rejected in configuration.yaml, so the
+        # storage-mode/YAML-mode collision guarantee holds however the
+        # operator fills the setting.
+        if key in extra_allowed_keys and key not in PACKAGES_ONLY_YAML_KEYS:
             return "single", parts, None
         # Reaching here means the key was not accepted. If it is a
-        # PACKAGES_ONLY key, we know is_package=False (otherwise the
-        # preceding branch would have returned) — emit the targeted
+        # PACKAGES_ONLY key, we know is_package=False (the packages branch
+        # would have returned, and the extra-keys branch excludes them
+        # precisely so this guidance still fires) – emit the targeted
         # "move it to a package file" guidance instead of the generic
         # allowlist dump below.
         if key in PACKAGES_ONLY_YAML_KEYS:

@@ -235,6 +235,33 @@ class TestYamlConfigSecurity:
             assert "not in the allowed list" not in message, f"{key}: {message}"
         logger.info("Deny floor refused all trust-boundary keys")
 
+    async def test_packages_only_key_still_rejected_in_configuration_yaml(
+        self, mcp_client_with_yaml_config
+    ):
+        """automation/script/scene stay confined to packages/*.yaml (#1887).
+
+        The operator extra-key setting widens the allowlist, but it must not
+        reach these: they have storage-mode equivalents, and the per-key
+        toggle that governs them only applies to packages targets, so lifting
+        the restriction here would route around both.
+        """
+
+        for key in ("automation", "script", "scene"):
+            data = await safe_call_tool(
+                mcp_client_with_yaml_config,
+                TOOL_NAME,
+                {
+                    "yaml_path": key,
+                    "action": "add",
+                    "content": "[]",
+                    "file": "configuration.yaml",
+                },
+            )
+            assert data.get("success") is False, f"{key} must stay rejected: {data}"
+            message = extract_error_message(data).lower()
+            assert "packages/*.yaml" in message, f"{key}: {message}"
+        logger.info("Packages-only keys remain rejected in configuration.yaml")
+
     async def test_helper_keys_not_allowed(self, mcp_client_with_yaml_config):
         """Keys manageable via ha_config_set_helper must not be in the allowlist."""
 

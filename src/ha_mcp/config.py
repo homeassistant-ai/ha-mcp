@@ -211,6 +211,9 @@ class Settings(BaseSettings):
     # (the authoritative layer) and is deliberately not mirrored here, so
     # there is one copy to keep correct. A denied key typed into this setting
     # is simply ignored, with the component's explanation on first use.
+    # Nor does it lift the packages-only restriction on automation/script/
+    # scene: those keep reaching packages/*.yaml through their own per-key
+    # toggles and stay rejected in configuration.yaml.
     # Empty (the default) keeps today's behaviour exactly.
     # Registered in ADVANCED_SETTINGS_FIELDS (section ``beta_yamlkeys``), not
     # FEATURE_FLAG_FIELDS, because it is a value rather than a toggle – the
