@@ -831,3 +831,48 @@ class TestExtraYamlKeysVersionGate:
         with pytest.raises(ToolError) as excinfo:
             await assert_extra_yaml_keys_supported(client, ["alert2"])
         assert "1.2.4" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_gate_rebootstraps_after_component_update(self):
+        """A component updated underneath a running server must heal the gate.
+
+        The caller-token cache is keyed by the long-lived REST client and
+        survives a Home Assistant restart, so without a forced re-bootstrap
+        the version stays at whatever it was when this process first talked
+        to the component. The error's own remediation ("update, then restart
+        HA") would then never take effect.
+        """
+        from ha_mcp.tools.tools_filesystem import (
+            _CALLER_TOKEN_CACHE,
+            _COMPONENT_VERSION_CACHE,
+            _fetch_caller_token,
+            assert_extra_yaml_keys_supported,
+        )
+
+        reported = {"version": "1.2.3"}
+        client = _make_client_with_token("gate-token")
+
+        async def fake_call_service(domain, service, payload, **kwargs):
+            if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
+                return {
+                    "service_response": {
+                        "success": True,
+                        "token": "gate-token",
+                        "version": reported["version"],
+                    }
+                }
+            return {"service_response": {"success": True}}
+
+        client.call_service.side_effect = fake_call_service
+
+        # Prime the caches the way a live server would have, on the old build.
+        await _fetch_caller_token(client)
+        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.3"
+        assert _CALLER_TOKEN_CACHE.get(client) == "gate-token"
+
+        # Operator updates the component; the cached token is still valid, so
+        # nothing else on the path would re-read the version.
+        reported["version"] = "1.2.4"
+
+        await assert_extra_yaml_keys_supported(client, ["alert2"])
+        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.4"

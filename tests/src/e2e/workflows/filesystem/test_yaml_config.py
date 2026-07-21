@@ -189,14 +189,15 @@ class TestYamlConfigSecurity:
     async def test_blocked_key_rejected(self, mcp_client_with_yaml_config):
         """Keys not in the allowlist must be rejected."""
 
-        # 'homeassistant' is not in ALLOWED_YAML_KEYS
+        # An unknown key: not in ALLOWED_YAML_KEYS and not denylisted, so it
+        # gets the generic allowlist rejection.
         data = await safe_call_tool(
             mcp_client_with_yaml_config,
             TOOL_NAME,
             {
-                "yaml_path": "homeassistant",
+                "yaml_path": "zigbee2mqtt",
                 "action": "replace",
-                "content": "name: Hacked",
+                "content": "permit_join: true",
                 "file": "configuration.yaml",
             },
         )
@@ -204,6 +205,35 @@ class TestYamlConfigSecurity:
         assert inner.get("success") is False, f"Blocked key should fail: {data}"
         assert "not in the allowed list" in extract_error_message(inner).lower()
         logger.info("Correctly rejected blocked key")
+
+    async def test_denylisted_key_rejected_with_floor_message(
+        self, mcp_client_with_yaml_config
+    ):
+        """YAML_KEY_DENYLIST keys get the categorical refusal, not the
+        generic allowlist dump (#1887).
+
+        The distinction matters: the generic message reads as "pick another
+        key", while these can never be enabled at all, not even through the
+        extra-write-keys setting.
+        """
+
+        for key in ("homeassistant", "http", "frontend", "lovelace"):
+            data = await safe_call_tool(
+                mcp_client_with_yaml_config,
+                TOOL_NAME,
+                {
+                    "yaml_path": key,
+                    "action": "replace",
+                    "content": "name: Hacked",
+                    "file": "configuration.yaml",
+                },
+            )
+            assert data.get("success") is False, f"{key} must be refused: {data}"
+            message = extract_error_message(data).lower()
+            assert "can never be edited" in message, f"{key}: {message}"
+            assert "cannot be lifted" in message, f"{key}: {message}"
+            assert "not in the allowed list" not in message, f"{key}: {message}"
+        logger.info("Deny floor refused all trust-boundary keys")
 
     async def test_helper_keys_not_allowed(self, mcp_client_with_yaml_config):
         """Keys manageable via ha_config_set_helper must not be in the allowlist."""

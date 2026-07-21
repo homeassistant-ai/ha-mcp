@@ -960,15 +960,31 @@ async def assert_extra_yaml_keys_supported(client: Any, extra_keys: list[str]) -
     """
     if not extra_keys:
         return
+
+    def _current() -> tuple[int, ...] | None:
+        reported = _COMPONENT_VERSION_CACHE.get(client, "")
+        if not reported:
+            return None
+        try:
+            return _version_tuple(reported)
+        except ValueError:
+            return None
+
+    floor = _version_tuple(MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
     await _ensure_caller_token(client)
+    parsed = _current()
+    if parsed is None or parsed < floor:
+        # The token cache is keyed by the long-lived REST client and survives
+        # a Home Assistant restart, so a component updated after this process
+        # first bootstrapped would keep reporting its old version forever and
+        # the remediation this error prints ("update, then restart HA") would
+        # never take effect. Re-bootstrap once before blocking, so the update
+        # heals the gate on the next call rather than needing an ha-mcp
+        # restart. Only on the failure path: a satisfied gate costs nothing.
+        await _ensure_caller_token(client, force_refresh=True)
+        parsed = _current()
     reported = _COMPONENT_VERSION_CACHE.get(client, "")
-    try:
-        parsed = _version_tuple(reported) if reported else None
-    except ValueError:
-        parsed = None
-    if parsed is not None and parsed >= _version_tuple(
-        MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS
-    ):
+    if parsed is not None and parsed >= floor:
         return
     raise_tool_error(
         create_error_response(
@@ -980,8 +996,13 @@ async def assert_extra_yaml_keys_supported(client: Any, extra_keys: list[str]) -
             suggestions=[
                 "HACS → Integrations → HA-MCP Custom Component → Update",
                 "Restart Home Assistant after the update completes",
-                "Or clear the extra YAML write keys setting to write only "
-                "the built-in allowed keys",
+                # Parenthesised so this reads as one suggestion rather than
+                # a list entry with a missing comma (py/implicit-string-
+                # concatenation-in-list).
+                (
+                    "Or clear the extra YAML write keys setting to write "
+                    "only the built-in allowed keys"
+                ),
             ],
         )
     )
