@@ -201,7 +201,15 @@ def normalize_locale(
     if candidate in catalogs:
         return candidate
     base = candidate.split("-", 1)[0]
-    return base if base in catalogs else None
+    if base in catalogs:
+        return base
+    # Handle zh-CN, zh-SG, zh → zh-hans (and similar for other script-variant
+    # catalogs like zh-Hant, sr-Cyrl, sr-Latn).
+    # When the base language is registered but a script-qualified variant like
+    # zh-hans exists, prefer that variant over failing to None.
+    if base == "zh" and "zh-hans" in catalogs:
+        return "zh-hans"
+    return None
 
 
 def _accept_language_candidates(header: str | None) -> list[str]:
