@@ -19,14 +19,18 @@ instead of being awaited from the new one.
 """
 
 import asyncio
+import concurrent.futures
+import logging
 import threading
 from collections.abc import Callable
 
 import pytest
 
+from ha_mcp.client import websocket_client
 from ha_mcp.client.websocket_client import (
     HomeAssistantWebSocketClient,
     WebSocketManager,
+    _log_stale_disconnect,
 )
 
 CROSS_LOOP_MESSAGE = (
@@ -218,3 +222,84 @@ async def test_disconnect_clears_the_pool_even_when_a_client_raises(manager):
     assert manager._clients == {}
     assert manager._last_used == {}
     assert manager._current_loop is None
+
+
+def test_log_stale_disconnect_handles_a_cancelled_future(caplog):
+    """A cancelled fire-and-forget disconnect logs, and never calls exception().
+
+    ``_log_stale_disconnect`` is the only signal for a disconnect nobody
+    awaits. Its ``cancelled()`` guard must precede ``exception()``: on a
+    cancelled ``concurrent.futures.Future`` calling ``.exception()`` raises
+    ``CancelledError``, so dropping or reordering the guard would turn this
+    callback into a raiser. Cancel while PENDING so ``cancelled()`` is True.
+    """
+    future: concurrent.futures.Future[None] = concurrent.futures.Future()
+    assert future.cancel()
+
+    with caplog.at_level(logging.DEBUG, logger=websocket_client.logger.name):
+        _log_stale_disconnect(future)
+
+    assert "cancelled with its loop" in caplog.text
+
+
+def test_log_stale_disconnect_reports_a_failed_future(caplog):
+    """A scheduled disconnect that raised is surfaced at debug, not swallowed.
+
+    The future finished with an exception no one retrieved; without this
+    callback a ``concurrent.futures.Future`` stays silent about it.
+    """
+    future: concurrent.futures.Future[None] = concurrent.futures.Future()
+    future.set_exception(RuntimeError(CROSS_LOOP_MESSAGE))
+
+    with caplog.at_level(logging.DEBUG, logger=websocket_client.logger.name):
+        _log_stale_disconnect(future)
+
+    assert "Stale WebSocket disconnect failed" in caplog.text
+    assert CROSS_LOOP_MESSAGE in caplog.text
+
+
+def test_release_stale_clients_survives_a_loop_closing_mid_schedule(
+    monkeypatch, caplog
+):
+    """The race where the owning loop closes between the is_closed() check and
+    ``run_coroutine_threadsafe`` is caught, and cleanup moves to the next
+    client instead of propagating.
+
+    A running loop clears the abandon guard so the scheduling branch is
+    reached; ``run_coroutine_threadsafe`` is then forced to raise
+    ``RuntimeError`` (what a loop closing in that window actually raises).
+    Two clients pin the ``continue``: both are attempted, the disconnect
+    coroutines are closed (no "never awaited" warning), and nothing escapes.
+    """
+    first = StubWebSocketClient()
+    second = StubWebSocketClient()
+
+    calls = 0
+
+    def raise_runtime(_coro, _loop):
+        # Model the loop closing in the check->schedule window; the real
+        # except branch is what must close the orphaned coroutine, not this.
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("Event loop is closed")
+
+    monkeypatch.setattr(
+        websocket_client.asyncio, "run_coroutine_threadsafe", raise_runtime
+    )
+
+    owning_loop = asyncio.new_event_loop()
+    worker = threading.Thread(target=owning_loop.run_forever, daemon=True)
+    worker.start()
+    try:
+        with caplog.at_level(logging.DEBUG, logger=websocket_client.logger.name):
+            # Does not raise despite both schedule attempts failing.
+            WebSocketManager._release_stale_clients([first, second], owning_loop)
+    finally:
+        owning_loop.call_soon_threadsafe(owning_loop.stop)
+        worker.join(timeout=10)
+        owning_loop.close()
+
+    assert calls == 2
+    assert caplog.text.count("Could not schedule disconnect") == 2
+    assert first.disconnect_calls == 0
+    assert second.disconnect_calls == 0

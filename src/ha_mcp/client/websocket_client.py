@@ -1304,10 +1304,16 @@ class WebSocketManager:
         if not self._lock:
             raise Exception("Lock not initialized")
         async with self._lock:
-            # Detach before disconnecting, for the same reason as the
-            # loop-change branch in ``get_client``: a disconnect that raises
-            # (a cross-loop ``RuntimeError`` when this runs on a loop other
-            # than the pool's) must not leave the pool populated.
+            # Detach the pool before disconnecting so a raising disconnect
+            # cannot leave it populated (the bookkeeping half of the
+            # loop-change branch in ``get_client``). The only caller,
+            # ``__main__``'s shutdown, runs on the pool's own loop, so each
+            # ``disconnect()`` is awaited to completion here. ``RuntimeError``
+            # is caught purely defensively: were this ever driven from a
+            # different loop, the cross-loop future would raise instead of
+            # hanging the shutdown. Unlike ``get_client`` it does not
+            # reschedule onto the owning loop, because the process is going
+            # away and there is nothing left to resume it.
             clients = list(self._clients.values())
             self._clients.clear()
             self._last_used.clear()
