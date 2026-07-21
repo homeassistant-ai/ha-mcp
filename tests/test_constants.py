@@ -20,7 +20,7 @@ NON_ADMIN_TEST_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIzNzkyOTc
 # Home Assistant Docker image for E2E/performance/UAT tests.
 # Keep in sync with .github/workflows/e2e-tests.yml and pr.yml.
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-HA_TEST_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.6.4"
+HA_TEST_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.7.2"
 
 # Test user credentials (for UI access)
 TEST_USER = "mcp"
