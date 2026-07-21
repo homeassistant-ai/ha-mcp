@@ -137,7 +137,7 @@
     "features.enable_lite_docstrings.label": "启用精简工具文档字符串（测试版）",
     "features.enable_lite_docstrings.help": "测试版功能。将少数重型 ha-mcp 工具（自动化、脚本、场景、辅助元素、仪表盘、ha_call_service、ha_config_set_yaml）上的文档字符串替换为更短的变体，将 schema 和示例细节推迟到 ha_get_skill_guide 工具（或其 skill:// 资源）。警告：这会降低空闲 token 用量，但可能降低 LLM 表现——精简后的描述依赖 LLM 实际调用技能工具或读取技能资源来获取细节，这并不保证（某些模型会跳过额外的工具调用，最终得到的指引反而比之前更少）。最好与支持 MCP 资源的客户端或启用工具搜索搭配使用。需要重启才能生效。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。",
     "features.enable_dashboard_screenshot.label": "启用仪表盘截图模式（测试版）",
-    "features.enable_dashboard_screenshot.help": "测试版功能——默认关闭。新增 ha_get_dashboard_screenshot 工具，以及仪表盘 get/set 工具上的 include_screenshot / return_screenshot 选项，让 AI 助手可检查一个或多个响应式 Lovelace 图像（例如验证其刚创建的仪表盘）。支持稳定的命名视图、移动/平板/桌面批次，以及 PNG/JPEG/WebP/BMP 输出。渲染在独立的、可选引擎中运行——b alloob 的“Puppet”插件（无头 Chromium）——你安装一次（添加 balloob 的插件仓库，然后安装“Puppet”）并为其提供长期访问令牌；在 Docker/容器部署中，你将该引擎作为 sidecar 运行并设置 HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL。除非你同时启用此功能并安装引擎，否则不会安装任何重型组件。需要重启才能生效。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。",
+    "features.enable_dashboard_screenshot.help": "测试版功能——默认关闭。新增 ha_get_dashboard_screenshot 工具，以及仪表盘 get/set 工具上的 include_screenshot / return_screenshot 选项，让 AI 助手可检查一个或多个响应式 Lovelace 图像（例如验证其刚创建的仪表盘）。支持稳定的命名视图、移动/平板/桌面批次，以及 PNG/JPEG/WebP/BMP 输出。渲染在独立的、可选引擎中运行——balloob 的“Puppet”插件（无头 Chromium）——你安装一次（添加 balloob 的插件仓库，然后安装“Puppet”）并为其提供长期访问令牌；在 Docker/容器部署中，你将该引擎作为 sidecar 运行并设置 HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL。除非你同时启用此功能并安装引擎，否则不会安装任何重型组件。需要重启才能生效。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。",
     "actions.restart_server": "重启 HA-MCP 服务器",
     "actions.restart_confirm": "立即重启 HA-MCP？页面在它恢复在线后会自动重新加载。",
     "actions.view": "查看",
