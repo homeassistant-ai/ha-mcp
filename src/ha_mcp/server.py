@@ -1008,6 +1008,21 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         UI take effect immediately without restart and without a stale
         in-memory cache.
         """
+        # One-time ANY-match schema migration (PR #1993) runs even when
+        # policies are disabled, so the file already matches the editor's
+        # ANY semantics whenever the user turns the feature on. Never
+        # blocks startup.
+        try:
+            from .policy.persistence import migrate_policy_any_semantics
+            from .utils.data_paths import get_data_dir as _get_data_dir
+
+            migrate_policy_any_semantics(_get_data_dir())
+        except Exception:
+            logger.warning(
+                "tool_policy.json ANY-match migration failed; continuing",
+                exc_info=True,
+            )
+
         if not self.settings.enable_tool_security_policies:
             return
 

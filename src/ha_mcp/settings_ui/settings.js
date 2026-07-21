@@ -2518,13 +2518,16 @@ function renderPolicyCards(policy) {
   });
   order.forEach(toolName => {
     const toolRules = byTool[toolName];
-    const conditions = [];
-    toolRules.forEach(r => (r.when || []).forEach(p => conditions.push(p)));
+    // One card per tool; each RULE is one condition row. A rule's predicates
+    // stay together as a unit (a condition with AND-ed sub-parameters), so a
+    // card edit round-trips multi-predicate rules intact instead of
+    // flattening them.
+    const conditions = toolRules.map(r => r.when || []);
     // The card has a single remember-minutes input; carry the max across the
     // tool's rules so re-saving doesn't silently shorten a remembered window.
     const remember = Math.max(0, ...toolRules.map(r => r.remember_minutes || 0));
     policyRuleEdits[toolName] = JSON.parse(JSON.stringify(
-      {tool_name: toolName, when: conditions, remember_minutes: remember}
+      {tool_name: toolName, conditions: conditions, remember_minutes: remember}
     ));
     listEl.appendChild(renderPolicyCard(toolName, policyRuleEdits[toolName]));
   });
@@ -2541,15 +2544,24 @@ function renderPolicyCard(toolName, rule) {
   const card = document.createElement('div');
   card.className = 'policy-rule-card';
   card.dataset.tool = toolName;
-  rule.when = rule.when || [];
-  const predicateRows = rule.when.map((p, i) => (
+  rule.conditions = rule.conditions || [];
+  // A condition = one rule's predicate list. Multiple predicates in one
+  // condition AND together (sub-parameters); separate conditions OR. Only
+  // single-predicate conditions get the edit button — the form edits one
+  // predicate; multi-predicate conditions (hand-authored) can be removed.
+  const displayCondition = (preds) => (preds.length
+    ? preds.map(displayPredicate).join(' AND ')
+    : t('policies.card.always_row', {}, '(always — gates every call to this tool)'));
+  const predicateRows = rule.conditions.map((preds, i) => (
     '<li class="policy-predicate-row" data-idx="' + i + '">' +
-      '<code>' + escapeHtml(displayPredicate(p)) + '</code>' +
-      '<button class="policy-edit-predicate" data-idx="' + i + '">' + escapeHtml(t('actions.edit', {}, 'edit')) + '</button>' +
+      '<code>' + escapeHtml(displayCondition(preds)) + '</code>' +
+      (preds.length === 1
+        ? '<button class="policy-edit-predicate" data-idx="' + i + '">' + escapeHtml(t('actions.edit', {}, 'edit')) + '</button>'
+        : '') +
       '<button class="policy-remove-predicate" data-idx="' + i + '" aria-label="' + escapeHtml(t('actions.remove', {}, 'Remove')) + '">×</button>' +
     '</li>'
   )).join('');
-  const emptyHint = rule.when.length === 0
+  const emptyHint = rule.conditions.length === 0
     ? '<li class="policy-predicate-row"><em style="color:var(--text-secondary);font-size:0.8rem">' +
       escapeHtml(t('policies.card.no_conditions', {}, '(no conditions, rule matches every call to this tool)')) + '</em></li>'
     : '';
@@ -3008,7 +3020,8 @@ function renderPolicyCard(toolName, rule) {
     formEl.style.display = '';
     await fetchToolSchema();
     if (idx >= 0) {
-      const p = rule.when[idx];
+      // Edit is only offered for single-predicate conditions.
+      const p = rule.conditions[idx][0];
       opEl.value = p.op || 'eq';
       populatePathSelect(p.path || '');
       await renderValueControl(p.value);
@@ -3028,7 +3041,7 @@ function renderPolicyCard(toolName, rule) {
   card.querySelectorAll('.policy-remove-predicate').forEach(btn => {
     btn.addEventListener('click', async () => {
       const idx = parseInt(btn.dataset.idx, 10);
-      rule.when.splice(idx, 1);
+      rule.conditions.splice(idx, 1);
       await autoSave();
       rerenderCard();
     });
@@ -3071,9 +3084,9 @@ function renderPolicyCard(toolName, rule) {
       }
     }
     if (editingIdx >= 0) {
-      rule.when[editingIdx] = predicate;
+      rule.conditions[editingIdx] = [predicate];
     } else {
-      rule.when.push(predicate);
+      rule.conditions.push([predicate]);
     }
     await autoSave();
     rerenderCard();
@@ -3088,13 +3101,14 @@ async function savePolicyRule(toolName, ruleObj) {
   const policy = await r.json();
   policy.rules = policy.rules || [];
   // Expand the card's conditions into ONE rule each (they OR at evaluation —
-  // the tool gates if ANY condition matches). No conditions = a single bare
-  // rule that always requires approval. Replaces all of this tool's rules.
+  // the tool gates if ANY condition matches; a condition's own predicates AND
+  // together as sub-parameters). No conditions = a single bare rule that
+  // always requires approval. Replaces all of this tool's rules.
   const remember = ruleObj.remember_minutes || 0;
-  const conditions = ruleObj.when || [];
+  const conditions = ruleObj.conditions || [];
   const expanded = conditions.length === 0
     ? [{tool_name: toolName, when: [], remember_minutes: remember}]
-    : conditions.map(p => ({tool_name: toolName, when: [p], remember_minutes: remember}));
+    : conditions.map(preds => ({tool_name: toolName, when: preds, remember_minutes: remember}));
   policy.rules = policy.rules
     .filter(rule => rule.tool_name !== toolName)
     .concat(expanded);

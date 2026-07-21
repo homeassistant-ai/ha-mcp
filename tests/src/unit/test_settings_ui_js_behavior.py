@@ -1309,9 +1309,9 @@ class TestPolicyTabFlow:
             invoke="""
               await window.savePolicyRule('ha_call_service', {
                 tool_name: 'ha_call_service',
-                when: [
-                  {path: 'args.domain', op: 'eq', value: 'lock'},
-                  {path: 'args.domain', op: 'eq', value: 'alarm_control_panel'}
+                conditions: [
+                  [{path: 'args.domain', op: 'eq', value: 'lock'}],
+                  [{path: 'args.domain', op: 'eq', value: 'alarm_control_panel'}]
                 ],
                 remember_minutes: 0
               });
@@ -1329,6 +1329,51 @@ class TestPolicyTabFlow:
         assert all(
             r["tool_name"] == "ha_call_service" and len(r["when"]) == 1 for r in rules
         )
+
+    def test_save_rule_preserves_multi_predicate_condition(
+        self, settings_script: str
+    ) -> None:
+        """A condition with AND-ed sub-parameters (multi-predicate rule) must
+        round-trip as ONE rule — not be flattened into separate OR rules."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 0,
+                    "rules": [],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await window.savePolicyRule('ha_call_service', {
+                tool_name: 'ha_call_service',
+                conditions: [
+                  [
+                    {path: 'args.domain', op: 'eq', value: 'lock'},
+                    {path: 'args.service', op: 'eq', value: 'unlock'}
+                  ]
+                ],
+                remember_minutes: 0
+              });
+            """,
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1
+        rules = json.loads(puts[0]["body"])["rules"]
+        assert len(rules) == 1, f"multi-predicate condition was split: {rules}"
+        assert len(rules[0]["when"]) == 2
 
     def test_pending_list_shows_off_message_when_feature_disabled(
         self, settings_script: str
