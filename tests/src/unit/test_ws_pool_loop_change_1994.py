@@ -151,6 +151,50 @@ async def test_stale_disconnect_runs_on_a_still_running_owning_loop(manager):
         owning_loop.close()
 
 
+def test_stale_disconnect_is_deferred_to_a_stopped_owning_loop(manager):
+    """A stopped, not closed loop still gets the cleanup when it resumes.
+
+    Such a loop owns live transports and can be restarted, so abandoning its
+    clients would leak a connection and its background task on every loop
+    swap. The discriminating assertion is that the disconnect runs on the
+    owning loop only after that loop is resumed, not that it runs at all.
+    """
+    stale = StubWebSocketClient()
+    fresh = StubWebSocketClient()
+    handed_out = iter((stale, fresh))
+    manager.configure(client_factory=lambda url, token: next(handed_out))
+
+    owning_loop = asyncio.new_event_loop()
+    try:
+        first = owning_loop.run_until_complete(
+            manager.get_client(url="http://ha.local", token="t")
+        )
+        assert first is stale
+        assert not owning_loop.is_running()
+        assert not owning_loop.is_closed()
+
+        # A second loop takes over while the first one is merely stopped.
+        second = asyncio.run(manager.get_client(url="http://ha.local", token="t"))
+
+        assert second is fresh
+        # Still queued: a stopped loop runs nothing until it is resumed.
+        assert stale.disconnect_calls == 0
+
+        async def drain() -> None:
+            for _ in range(100):
+                if stale.disconnected.is_set():
+                    return
+                await asyncio.sleep(0.01)
+
+        owning_loop.run_until_complete(drain())
+
+        assert stale.disconnect_calls == 1
+        assert stale.disconnect_loop is owning_loop
+        assert list(manager._clients.values()) == [fresh]
+    finally:
+        owning_loop.close()
+
+
 async def test_disconnect_clears_the_pool_even_when_a_client_raises(manager):
     """``WebSocketManager.disconnect`` leaves no pooled state behind.
 

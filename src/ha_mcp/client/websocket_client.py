@@ -1139,10 +1139,13 @@ class WebSocketManager:
 
         Never awaits: the connections belong to ``loop``, and awaiting them
         from the loop that replaced it is exactly the cross-loop failure this
-        avoids. When ``loop`` is still running (two live loops in one process)
-        each disconnect is scheduled on it and deliberately not waited for.
-        When it is closed or stopped there is nothing left to schedule on, so
-        the connection is abandoned: its socket is closed when the orphaned
+        avoids. Each disconnect is scheduled on the owning loop and
+        deliberately not waited for. A merely stopped loop is scheduled too:
+        it still owns live transports and still accepts callbacks, so the
+        disconnect runs once that loop is resumed, and otherwise stays an
+        unrun callback like any other the abandoned loop still holds. Only a
+        closed or unknown loop has nothing left to schedule on; its
+        connection is abandoned and the socket closes when the orphaned
         transport is garbage-collected (with a ``ResourceWarning``), because
         closing a loop does not close the transports it carried. Either way
         the caller has already detached the pool, so a failure here cannot
@@ -1150,7 +1153,7 @@ class WebSocketManager:
         """
         if not clients:
             return
-        if loop is None or loop.is_closed() or not loop.is_running():
+        if loop is None or loop.is_closed():
             logger.debug(
                 "Abandoning %d stale WebSocket client(s): the owning event "
                 "loop is gone",
