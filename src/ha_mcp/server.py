@@ -249,7 +249,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # what it offers to Home Assistant conversation agents on it.
         from .llm_exposure import LlmExposureMiddleware
 
-        self.mcp.add_middleware(LlmExposureMiddleware())
+        # policy_live: whether the gating middleware/queue actually wired at
+        # startup — stamped so a client can distinguish "configured" from
+        # "enforcing" on the very connection it is using (#1990).
+        self.mcp.add_middleware(
+            LlmExposureMiddleware(
+                policy_live=lambda: getattr(self, "approval_queue", None) is not None
+            )
+        )
 
         # Read Only Mode write blocker (discussion #1569) — always
         # installed, consults the live flag per call. Before
