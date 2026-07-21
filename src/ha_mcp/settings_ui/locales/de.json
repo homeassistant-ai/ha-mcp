@@ -412,6 +412,8 @@
     "advanced.code_mode_max_invocations.help": "API-/Tool-Aufruf-Grenze pro Sandbox-Lauf. Neustart erforderlich.",
     "advanced.code_mode_saved_tools_path.label": "Pfad für gespeicherte Tools",
     "advanced.code_mode_saved_tools_path.help": "JSON-Datei, die verwendet wird, um benutzerdefinierte Tools über Neustarts hinweg beizubehalten. Neustart erforderlich.",
+    "advanced.extra_yaml_write_keys.label": "Zusätzliche YAML-Schreib-Keys",
+    "advanced.extra_yaml_write_keys.help": "Kommagetrennte Top-Level-Keys, die ha_config_set_yaml zusätzlich zu den eingebauten schreiben darf – für YAML-first-Integrationen auf dieser Installation (z. B. alert2). Keys, die die Vertrauensgrenze von Home Assistant selbst verändern, lassen sich nie hinzufügen und werden ignoriert. Erfordert Custom Component 1.2.4 oder neuer.",
     "advanced.sidecar_pin_port.label": "Einstellungs-UI-Sidecar-Port",
     "advanced.sidecar_pin_port.help": "0 wählt bei jedem Neustart einen freien Port; 1024-65535 heftet einen bevorzugten Port an. Neustart erforderlich.",
     "advanced.enable_dev_mode.label": "Entwicklermodus",

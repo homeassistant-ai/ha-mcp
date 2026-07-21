@@ -1006,6 +1006,44 @@ class TestEditYamlConfigBackCompat:
         )
 
 
+class TestEditYamlConfigExtraAllowedKeys:
+    """Source guards for the operator extra-key wiring (#1887).
+
+    Two links in the chain are invisible to the parse-level tests: the schema
+    entry that lets the field through at all, and the handler passing it into
+    the validator. Dropping either leaves every parse test green while the
+    feature is dead - the first rejects the whole call with the opaque
+    "extra keys not allowed", the second silently ignores the operator's keys.
+    Voluptuous is mocked in this suite, so these assert at the source level.
+    """
+
+    def test_schema_accepts_extra_allowed_keys(self):
+        import inspect
+
+        import custom_components.ha_mcp_tools as comp
+
+        src = inspect.getsource(comp)
+        start = src.index("SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(")
+        block = src[start : src.index("\n)\n", start)]
+        assert 'vol.Optional("extra_allowed_keys"' in block, (
+            "edit_yaml_config dropped the extra_allowed_keys field; the strict "
+            "schema would reject every call from a server that sends it"
+        )
+
+    def test_handler_forwards_caller_extra_keys_to_validator(self):
+        import inspect
+
+        import custom_components.ha_mcp_tools as comp
+
+        src = inspect.getsource(comp)
+        start = src.index("_parse_and_validate_yaml_path(\n")
+        block = src[start : start + 400]
+        assert "extra_allowed_keys=_caller_extra_allowed_keys(call)" in block, (
+            "the edit handler stopped forwarding the caller's extra keys; the "
+            "operator setting would be silently inert"
+        )
+
+
 class TestDenyFloor:
     """The non-overridable deny floor (issue #1567): a user-configured extra
     directory can NEVER reach .storage or an unmasked secrets file, even when

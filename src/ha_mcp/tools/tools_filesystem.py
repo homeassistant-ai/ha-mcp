@@ -108,6 +108,15 @@ def _version_tuple(version: str) -> tuple[int, ...]:
 # when a client is garbage-collected (avoids id() reuse if a freed client's
 # address gets recycled before the unauthorized-retry fires).
 _CALLER_TOKEN_CACHE: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+# Component version as reported by the REST bootstrap, keyed like the token
+# cache. Populated in ``_fetch_caller_token``, which already parses and
+# validates it. Feature-scoped version gates read this rather than the
+# WebSocket capability handshake: caps come back ``None`` for a transport
+# blip just as they do for an old component, so gating on them would report
+# a momentary socket drop as "your component is too old".
+_COMPONENT_VERSION_CACHE: weakref.WeakKeyDictionary[Any, str] = (
+    weakref.WeakKeyDictionary()
+)
 _CALLER_TOKEN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
     weakref.WeakKeyDictionary()
 )
@@ -232,6 +241,7 @@ async def _fetch_caller_token(client: Any) -> str:
     if parsed < _version_tuple(MIN_COMPONENT_VERSION):
         _raise_component_too_old(f"reported version is {version}")
     _CALLER_TOKEN_CACHE[client] = token
+    _COMPONENT_VERSION_CACHE[client] = version
     return token
 
 
@@ -920,3 +930,58 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     logger.info("Filesystem tools enabled via feature flag")
     register_tool_methods(mcp, FilesystemTools(client))
+
+
+# First custom-component version whose ``edit_yaml_config`` schema accepts
+# ``extra_allowed_keys`` (#1887).
+MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS = "1.2.4"
+
+
+async def assert_extra_yaml_keys_supported(client: Any, extra_keys: list[str]) -> None:
+    """Block with an actionable prompt if the component predates #1887.
+
+    ``edit_yaml_config``'s service schema is strict, so sending
+    ``extra_allowed_keys`` to a component that does not declare the field makes
+    Home Assistant reject the whole call with an opaque "extra keys not
+    allowed". Callers only send the field when the operator configured keys,
+    and this turns the remaining server-ahead-of-component window into a clear
+    message. Both the write path and the backup restore path use it, so a
+    snapshot taken under the setting fails the same recognisable way.
+
+    Deliberately NOT a bump of ``MIN_COMPONENT_VERSION``: an operator who never
+    sets extra keys must not be forced to update the component to keep using
+    the filesystem tools.
+
+    The version comes from the REST bootstrap cache, which every call to this
+    component populates and validates, so a WebSocket hiccup cannot be
+    mistaken for an outdated component. An absent entry means the bootstrap
+    has not run yet; the caller below performs it first, and a component too
+    old to report a version at all is already rejected there.
+    """
+    if not extra_keys:
+        return
+    await _ensure_caller_token(client)
+    reported = _COMPONENT_VERSION_CACHE.get(client, "")
+    try:
+        parsed = _version_tuple(reported) if reported else None
+    except ValueError:
+        parsed = None
+    if parsed is not None and parsed >= _version_tuple(
+        MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS
+    ):
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.COMPONENT_NOT_INSTALLED,
+            "Extra YAML write keys are configured, but the installed "
+            "ha_mcp_tools custom component does not support them "
+            f"(reported version: {reported or 'unknown'}; requires >= "
+            f"{MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS}).",
+            suggestions=[
+                "HACS → Integrations → HA-MCP Custom Component → Update",
+                "Restart Home Assistant after the update completes",
+                "Or clear the extra YAML write keys setting to write only "
+                "the built-in allowed keys",
+            ],
+        )
+    )

@@ -24,7 +24,7 @@ DOMAIN = "ha_mcp_tools"
 # manifest bump that forgets this constant (or vice-versa) fails in CI. The
 # capability negotiation — not this version — gates each WS command (see
 # ``websocket_api.CAPABILITIES``).
-COMPONENT_VERSION = "1.2.3"
+COMPONENT_VERSION = "1.2.4"
 
 # Config-entry discriminator (``entry.data[CONF_ENTRY_TYPE]``). A missing value
 # means "tools" so the pre-existing services entry keeps working across the
@@ -96,7 +96,11 @@ ALLOWED_YAML_CONFIG_FILES = ["configuration.yaml"]
 
 # Top-level YAML keys allowed for editing in any allowed file
 # (configuration.yaml or packages/*.yaml).
-# ONLY keys that have no UI/API alternative belong here.
+# The bar is "YAML is a legitimate way to manage this key", not "this key
+# has no UI alternative": template, utility_meter and group do have helper
+# equivalents and stay allowed for git-managed YAML configs (the caller
+# attaches a routing warning instead – see _HELPER_EQUIVALENT_KEYS in
+# src/ha_mcp/tools/tools_yaml_config.py).
 # Keys manageable via ha_config_set_helper (input_*, counter, timer, schedule)
 # are intentionally excluded. automation/script/scene live in
 # PACKAGES_ONLY_YAML_KEYS below — they have storage-mode equivalents
@@ -140,6 +144,51 @@ PACKAGES_ONLY_YAML_KEYS = frozenset(
         "automation",
         "script",
         "scene",
+    }
+)
+
+# Top-level YAML keys an operator can never unlock (#1887).
+# The operator-configurable extra-key list (ha-mcp's "extra YAML write
+# keys" setting) is additive on top of ALLOWED_YAML_KEYS, so this floor
+# is what keeps that setting from reaching HA's own trust boundary. It is
+# checked before every single-key allowlist branch and is deliberately NOT
+# operator-extendable – otherwise the same trust question just reopens
+# one level up. Scope note: it guards the per-key merge path only.
+# ``action="replace_file"`` returns before key validation runs at all, so a
+# whole-file rewrite of configuration.yaml can still contain these keys –
+# pre-existing behaviour, and the reason this is a floor under the extra-key
+# setting rather than a general "these keys are unwritable" guarantee.
+#
+# The bar is not "powerful": command_line, shell_command and rest are
+# already allowed above, so command execution and outbound HTTP are
+# accepted surface. The bar is "redefines authentication, escalates the
+# write surface itself, or can lock the user out" – unrecoverable in a
+# way a broken sensor is not. Verified against home-assistant/core:
+#   homeassistant: CORE_CONFIG_SCHEMA (homeassistant/core_config.py) takes
+#     auth_providers / auth_mfa_modules (how the instance authenticates)
+#     and packages (which folder is loaded as packages – a write here
+#     would redirect the very surface this feature is bounded by).
+#   http: takes trusted_proxies + use_x_forwarded_for (a spoofable
+#     X-Forwarded-For becomes an auth bypass), cors_allowed_origins, and
+#     ip_ban_enabled / login_attempts_threshold (brute-force protection).
+#   frontend: takes extra_module_url, JavaScript modules loaded into the
+#     authenticated dashboard – a stored-XSS foothold with access to the
+#     instance and its tokens.
+#   lovelace: takes resources (url + type: module), loaded whenever
+#     resource_mode resolves to yaml. That is the same JS-into-an-
+#     authenticated-dashboard primitive as frontend: extra_module_url, so
+#     denying one while allowing the other would be a floor contradicting
+#     its own rationale. Only the bare key is denied; the validated
+#     lovelace.dashboards.<url_path> shape is a different branch and stays
+#     available for YAML-mode dashboard management.
+# auth and api are absent on purpose: both have an empty CONFIG_SCHEMA in
+# core, so there is no sub-key to restrict.
+YAML_KEY_DENYLIST = frozenset(
+    {
+        "homeassistant",
+        "http",
+        "frontend",
+        "lovelace",
     }
 )
 

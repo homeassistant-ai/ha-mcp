@@ -769,3 +769,65 @@ class TestHaCallServiceRefusesMcpToolsDomain:
                 assert "ha_mcp_tools" not in str(exc), (
                     "Refusal incorrectly triggered for non-ha_mcp_tools domain"
                 )
+
+
+class TestExtraYamlKeysVersionGate:
+    """The #1887 gate reads the version the REST bootstrap reported.
+
+    Every other test of the gate seeds ``_COMPONENT_VERSION_CACHE`` by hand,
+    which pins the comparison but not its input. These drive the real
+    ``_fetch_caller_token`` so that deleting the cache write - which would
+    make the gate answer "reported version: unknown" on a perfectly current
+    component, disabling the feature for everyone - cannot stay green.
+    """
+
+    @staticmethod
+    def _client(version: str):
+        client = _make_client_with_token("gate-token")
+
+        async def fake_call_service(domain, service, payload, **kwargs):
+            if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
+                return {
+                    "service_response": {
+                        "success": True,
+                        "token": "gate-token",
+                        "version": version,
+                    }
+                }
+            return {"service_response": {"success": True}}
+
+        client.call_service.side_effect = fake_call_service
+        return client
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_populates_version_cache(self):
+        from ha_mcp.tools.tools_filesystem import (
+            _COMPONENT_VERSION_CACHE,
+            _fetch_caller_token,
+        )
+
+        client = self._client("1.2.4")
+        await _fetch_caller_token(client)
+        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.4"
+
+    @pytest.mark.asyncio
+    async def test_gate_passes_on_current_component_via_bootstrap(self):
+        from ha_mcp.tools.tools_filesystem import (
+            MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS,
+            assert_extra_yaml_keys_supported,
+        )
+
+        client = self._client(MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
+        # No exception: the gate found the version the bootstrap reported.
+        await assert_extra_yaml_keys_supported(client, ["alert2"])
+
+    @pytest.mark.asyncio
+    async def test_gate_blocks_on_older_component_via_bootstrap(self):
+        from fastmcp.exceptions import ToolError
+
+        from ha_mcp.tools.tools_filesystem import assert_extra_yaml_keys_supported
+
+        client = self._client("1.2.3")
+        with pytest.raises(ToolError) as excinfo:
+            await assert_extra_yaml_keys_supported(client, ["alert2"])
+        assert "1.2.4" in str(excinfo.value)

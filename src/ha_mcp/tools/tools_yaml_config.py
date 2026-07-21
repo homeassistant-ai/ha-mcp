@@ -20,7 +20,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..config import get_global_settings
+from ..config import get_global_settings, parse_extra_yaml_write_keys
 from ..errors import ErrorCode, create_error_response
 from ..strict_bps import BestPracticeKeyParam
 from .auto_backup import with_auto_backup
@@ -33,6 +33,7 @@ from .helpers import (
 from .tools_config_dashboards import fetch_dashboards_list
 from .tools_filesystem import (
     _assert_mcp_tools_available,
+    assert_extra_yaml_keys_supported,
     call_mcp_tools_service,
 )
 from .util_helpers import (
@@ -464,6 +465,9 @@ class YamlConfigTools:
             # Check if custom component is available
             await _assert_mcp_tools_available(self._client)
 
+            extra_keys = parse_extra_yaml_write_keys(settings)
+            await assert_extra_yaml_keys_supported(self._client, extra_keys)
+
             # Build service data
             service_data: dict[str, Any] = {
                 "file": file,
@@ -472,6 +476,11 @@ class YamlConfigTools:
                 "disabled_packages_keys": disabled_keys,
                 "require_confirm": settings.enable_yaml_edit_confirm,
             }
+            # Only sent when the operator actually configured extra keys, so a
+            # component that predates the field keeps working unchanged for
+            # everyone else (its schema is strict and would reject the call).
+            if extra_keys:
+                service_data["extra_allowed_keys"] = extra_keys
             if content is not None:
                 service_data["content"] = content
             if confirm_token is not None:

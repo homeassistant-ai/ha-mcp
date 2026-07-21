@@ -2167,7 +2167,9 @@ function renderFeatureFlags(flags) {
     // bottom.
     if (fieldName === 'enable_code_mode') {
       const codeModeOn = !!f.value;
-      renderCodeModeSubRows(targetBody, masterOn, codeModeOn);
+      renderAdvancedSubRows(
+        targetBody, 'beta_codemode', 'codemode-sub', !masterOn || !codeModeOn
+      );
     }
     // After rendering the enable_yaml_config_editing parent, inject
     // its 3 per-key sub-rows (automation/script/scene). Dimmed when
@@ -2179,6 +2181,11 @@ function renderFeatureFlags(flags) {
         cssClass: 'yaml-packages-sub',
         lockedByGate: !masterOn || !parentOn,
       });
+      // Extra write keys (#1887) – same nesting depth as the per-key
+      // toggles above, but a text value from the advanced cache.
+      renderAdvancedSubRows(
+        targetBody, 'beta_yamlkeys', 'yaml-packages-sub', !masterOn || !parentOn
+      );
     }
     // After the enable_mandatory_bps parent row, inject its strict-mode
     // sub-row. This whole group is non-beta, so the only gate is the
@@ -2276,8 +2283,13 @@ function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByG
   });
 }
 
-function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
-  const cmRows = (_advancedFields || []).filter(x => x.section === 'beta_codemode');
+// Shared renderer for non-bool sub-rows that live in ADVANCED_SETTINGS_FIELDS
+// but render nested under a feature toggle (code-mode numerics under
+// enable_code_mode, extra YAML write keys under enable_yaml_config_editing).
+// They save through commitAdvancedEdit rather than saveFeatureFlag, which is
+// why renderSubFlagRows (checkbox-only) cannot serve them.
+function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
+  const cmRows = (_advancedFields || []).filter(x => x.section === section);
   cmRows.forEach(f => {
     const meta = localizeMeta(
       'advanced',
@@ -2285,9 +2297,7 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
       ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' }
     );
     const row = document.createElement('div');
-    const lockedByGate = !masterOn || !codeModeOn;
-    const dimmed = lockedByGate;
-    row.className = 'feature-row codemode-sub' + (dimmed ? ' dimmed' : '');
+    row.className = 'feature-row ' + cssClass + (lockedByGate ? ' dimmed' : '');
 
     const info = document.createElement('div');
     info.className = 'feature-info';
@@ -3390,6 +3400,7 @@ const ADVANCED_FIELD_META = {
   code_mode_max_recursion:   { label: "Code-mode max recursion",      help: "Recursion-depth cap per sandbox run. Restart required." },
   code_mode_max_invocations: { label: "Code-mode max invocations",    help: "API/tool-call cap per sandbox run. Restart required." },
   code_mode_saved_tools_path:{ label: "Saved-tools path",              help: "JSON file where ha_manage_custom_tool persists saved tools across restarts. Restart required." },
+  extra_yaml_write_keys:     { label: "Extra YAML write keys",        help: "Comma-separated top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Keys that redefine Home Assistant's own trust boundary can never be added and are ignored. Requires custom component 1.2.4 or newer." },
   sidecar_pin_port:    { label: "Settings UI sidecar port",    help: "0 = a new free port each restart (default); set 1024–65535 to pin a fixed port so the settings URL stays stable across restarts. Falls back to a free port if the pinned one is busy. Restart required." },
   enable_dev_mode:     { label: "Developer mode",               help: "⚠ DANGER: registers hidden developer tools (ha_dev_manage_server, ha_dev_manage_settings) that let AI agents change server settings and replace the running server version (e.g. install a PR build). For development and testing only. Restart required." },
 };
@@ -3493,10 +3504,10 @@ async function loadAdvancedSettings() {
   renderAdvancedSection('advSidecar', bySection.sidecar || []);
   renderAdvancedSection('advDeveloper', bySection.developer || []);
   applySidecarAvailability(data.is_stdio !== false);
-  // Re-render feature flags so the code_mode sub-numerics show up
-  // beneath enable_code_mode (race: loadFeatureFlags may have run
-  // before _advancedFields was populated). Cheap no-op if feature
-  // flags haven't loaded yet.
+  // Re-render feature flags so the advanced-backed sub-rows (code_mode
+  // numerics, extra YAML write keys) show up beneath their parent toggles
+  // (race: loadFeatureFlags may have run before _advancedFields was
+  // populated). Cheap no-op if feature flags haven't loaded yet.
   if (Object.keys(_lastFeatureFlags).length > 0) {
     renderFeatureFlags(_lastFeatureFlags);
   }
