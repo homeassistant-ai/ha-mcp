@@ -20,8 +20,9 @@ DOMAIN = "ha_mcp_tools"
 
 # Component version, kept in lockstep with ``manifest.json``'s ``version``.
 # ``ha_mcp_tools/info`` reports this so the server can display/debug the running
-# component build; ``TestManifestVersionParity`` pins the two together so a
-# manifest bump that forgets this constant (or vice-versa) fails in CI. The
+# component build; ``TestInfo::test_manifest_version_parity`` pins the two
+# together so a manifest bump that forgets this constant (or vice-versa) fails
+# in CI. The
 # capability negotiation — not this version — gates each WS command (see
 # ``websocket_api.CAPABILITIES``).
 COMPONENT_VERSION = "1.2.4"

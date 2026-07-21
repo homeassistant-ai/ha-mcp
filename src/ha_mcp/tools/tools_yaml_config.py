@@ -58,7 +58,7 @@ _LOVELACE_DASHBOARD_PREFIX = "lovelace.dashboards."
 # here, otherwise a key would silently be unreachable through the
 # wrapper. The parity invariant (keys == PACKAGES_ONLY_YAML_KEYS, and
 # every value is a real Settings field) is enforced by
-# test_yaml_config_tool.py::test_flag_map_matches_packages_only_keys.
+# test_yaml_dashboards.py::test_flag_map_matches_packages_only_keys.
 _YAML_PACKAGES_FLAG_BY_KEY = {
     "automation": "enable_yaml_packages_automation",
     "script": "enable_yaml_packages_script",
