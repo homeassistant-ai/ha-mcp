@@ -326,12 +326,18 @@ async function syncPolicyRule(toolName, gated) {
   if (!r.ok) throw new Error(t('policies.errors.load', {status: r.status}, 'Could not load policy: ' + r.status));
   const policy = await r.json();
   policy.rules = policy.rules || [];
+  // The gate toggle manages ONLY the bare, unconditional rule (empty `when`)
+  // for this tool; predicate-bearing rules authored in the policy editor are
+  // preserved. A conditional rule must not be mistaken for the gate (enabling
+  // would silently no-op) nor wiped on un-gate.
+  const isBareGate = rule =>
+    rule.tool_name === toolName && (!rule.when || rule.when.length === 0);
   if (gated) {
-    if (!policy.rules.some(rule => rule.tool_name === toolName)) {
+    if (!policy.rules.some(isBareGate)) {
       policy.rules.push({tool_name: toolName, when: [], remember_minutes: 0});
     }
   } else {
-    policy.rules = policy.rules.filter(rule => rule.tool_name !== toolName);
+    policy.rules = policy.rules.filter(rule => !isBareGate(rule));
   }
   await policyPut(policy, t('policies.operations.sync_gated', {}, 'Sync gated toggle'));
 }

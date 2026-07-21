@@ -1194,6 +1194,53 @@ class TestPolicyTabFlow:
             f"got {[f.get('body') for f in flag_posts]}"
         )
 
+    def test_gate_toggle_preserves_conditional_rules(
+        self, settings_script: str
+    ) -> None:
+        """Un-gating a tool must remove only the bare unconditional rule, not
+        a predicate-bearing rule the user authored in the policy editor. The
+        gate toggle keys on the ``when == []`` rule; conditional rules survive."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 3,
+                    "rules": [
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.domain", "op": "eq", "value": "lock"}
+                            ],
+                            "remember_minutes": 0,
+                        }
+                    ],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="await window.syncPolicyRule('ha_call_service', false);",
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1, (
+            f"expected one PUT to policy config; got {result.fetches}"
+        )
+        body = json.loads(puts[0]["body"])
+        rules = body.get("rules", [])
+        # The conditional rule survives un-gating; nothing was wiped.
+        assert len(rules) == 1, f"conditional rule was wrongly removed: {rules}"
+        assert rules[0]["when"], "expected the predicate-bearing rule to remain"
+
     def test_pending_list_shows_off_message_when_feature_disabled(
         self, settings_script: str
     ) -> None:

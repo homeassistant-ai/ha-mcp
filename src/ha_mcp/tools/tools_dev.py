@@ -11,6 +11,7 @@ Feature Flag: Set HAMCP_ENABLE_DEV_MODE=true to enable these tools.
 """
 
 import asyncio
+import json
 import logging
 import sys
 from typing import Annotated, Any, Literal
@@ -342,8 +343,13 @@ def schedule_deferred_entry_reload(client: Any, entry_id: str) -> None:
 class DevTools:
     """Developer-mode tools for server introspection, update, and settings."""
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, server: Any | None = None) -> None:
         self._client = client
+        # The live server object, when available (embedded / add-on / container
+        # deployments). Needed for the approval queue and the unfiltered tool
+        # registry that the Tools/Policies actions drive; ``None`` in the stdio
+        # settings sidecar, where those actions degrade to a clear error.
+        self._server = server
 
     # ----- settings management helpers -----
 
@@ -531,8 +537,6 @@ class DevTools:
         unreadable or corrupt existing file — same data-loss guard as
         the web UI save handlers.
         """
-        import json
-
         from ..config import _FEATURE_FLAG_OVERRIDE_FILENAME
         from ..settings_ui._persistence import (
             _atomic_write_json,
@@ -626,9 +630,24 @@ class DevTools:
     async def ha_dev_manage_settings(
         self,
         action: Annotated[
-            Literal["list", "set", "reset"],
+            Literal[
+                "list",
+                "set",
+                "reset",
+                "list_tools",
+                "set_tool",
+                "get_policy",
+                "set_policy",
+                "get_backup_config",
+                "set_backup_config",
+            ],
             Field(
-                description="list all settings, set one value, or reset one override"
+                description=(
+                    "Server-settings matrix: list / set / reset. Tools tab: "
+                    "list_tools / set_tool (enable-disable-pin, LLM-API, security "
+                    "gate). Security policies: get_policy / set_policy. Auto-backup "
+                    "config: get_backup_config / set_backup_config."
+                )
             ),
         ],
         setting: Annotated[
@@ -639,120 +658,735 @@ class DevTools:
             bool | int | float | str | None,
             Field(default=None, description="New value (required for set)"),
         ] = None,
+        tool: Annotated[
+            str | None,
+            Field(default=None, description="Tool name (required for set_tool)"),
+        ] = None,
+        state: Annotated[
+            Literal["enabled", "disabled", "pinned"] | None,
+            Field(
+                default=None,
+                description="set_tool: enable, disable, or pin the tool",
+            ),
+        ] = None,
+        llm_api: Annotated[
+            bool | None,
+            Field(
+                default=None,
+                description="set_tool: expose the tool to HA conversation agents",
+            ),
+        ] = None,
+        gated: Annotated[
+            bool | None,
+            Field(
+                default=None,
+                description=(
+                    "set_tool: require user approval before every call to this "
+                    "tool (adds/removes an unconditional security-policy rule)"
+                ),
+            ),
+        ] = None,
+        policy: Annotated[
+            dict[str, Any] | None,
+            Field(
+                default=None,
+                description=(
+                    "set_policy: the full policy object "
+                    "{wait_seconds, approval_ttl_minutes, rules, version}"
+                ),
+            ),
+        ] = None,
+        expected_version: Annotated[
+            int | None,
+            Field(
+                default=None,
+                description=(
+                    "set_policy: the version from your last get_policy, for "
+                    "optimistic-concurrency safety (else the policy's own "
+                    "version field is used)"
+                ),
+            ),
+        ] = None,
+        backup: Annotated[
+            dict[str, Any] | None,
+            Field(
+                default=None,
+                description=(
+                    "set_backup_config: {field: value} of auto-backup settings "
+                    "to change (see get_backup_config for field names)"
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Manage ha-mcp server settings directly (developer mode).
+        """Manage ha-mcp server settings and the Tools/Policies/Backups surfaces (developer mode).
+
+        Drives everything the web settings UI can change: the Server
+        Settings matrix (list/set/reset), the Tools tab (enable/disable/pin,
+        LLM-API exposure, and the per-tool security gate), the Tool Security
+        Policies editor (get_policy/set_policy), and the auto-backup config
+        (get_backup_config/set_backup_config). Use ha_dev_manage_server for
+        the live approval queue and to restart.
 
         When NOT to use: for HA entity/automation configuration use the
-        ha_config_* tools; for enabling/disabling individual MCP tools
-        use the web settings UI (Tools tab).
+        ha_config_* tools.
 
-        When to use: reading or changing the server's own settings (the
-        same matrix as the web UI's Server Settings tab) during
-        development/testing — feature flags, advanced fields, and their
-        env/file/addon origins.
-
-        Caveats: changed values persist to the server's override file
-        (or the add-on options via Supervisor) but most settings only
-        take effect after a server restart (ha_dev_manage_server
-        action="restart").
-        Env-pinned settings are read-only until the env var is unset.
-        This can flip security-sensitive flags; treat with the same
-        care as editing the web UI.
+        Caveats: enable/disable/pin and most server settings take effect
+        only after a restart (ha_dev_manage_server action="restart");
+        LLM-API exposure, security gates, and policy edits apply live.
+        Env-pinned settings/tools are read-only until the env var is unset.
+        These actions can flip security-sensitive state — treat with the
+        same care as editing the web UI.
 
         EXAMPLES:
-        ha_dev_manage_settings("list")
-        ha_dev_manage_settings("set", setting="log_level", value="DEBUG")
-        ha_dev_manage_settings("reset", setting="log_level")
+        ha_dev_manage_settings("list_tools")
+        ha_dev_manage_settings("set_tool", tool="ha_write_file", state="disabled")
+        ha_dev_manage_settings("set_tool", tool="ha_call_service", gated=True)
+        ha_dev_manage_settings("get_policy")
+        ha_dev_manage_settings("set_backup_config", backup={"enable_auto_backup": False})
         """
         try:
-            if action == "list":
-                return {
-                    "success": True,
-                    "data": {
-                        "settings": await asyncio.to_thread(self._settings_rows),
-                        "is_addon": is_running_in_addon(),
-                        "is_embedded": is_embedded(),
-                        "note": (
-                            "Most settings need a server restart to take "
-                            "effect (ha_dev_manage_server action='restart')."
-                        ),
-                    },
-                }
-
-            if not setting:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_MISSING_PARAMETER,
-                        f"'setting' is required for action={action!r}",
-                    )
-                )
-
-            from ..config import (
-                _ADVANCED_SETTINGS_BOUNDS,
-                _ADVANCED_SETTINGS_CHOICES,
-                _ADVANCED_SETTINGS_SENTINELS,
-                _FEATURE_FLAG_INT_BOUNDS,
-                ADVANCED_SETTINGS_FIELDS,
-                FEATURE_FLAG_FIELDS,
-                _read_feature_flag_override_file,
-                get_feature_flag_origin,
-            )
-
-            features = {f: (e, t) for f, e, t in FEATURE_FLAG_FIELDS}
-            advanced = {f: (e, t, s, ed) for f, e, t, s, ed in ADVANCED_SETTINGS_FIELDS}
-            bounds: tuple[float, float] | None
-            sentinel: int | None
-            choices: tuple[str, ...] | None
-            if setting in features:
-                env_name, ftype = features[setting]
-                origin = get_feature_flag_origin(env_name)
-                editable = origin in ("addon", "file", "default")
-                bounds = _FEATURE_FLAG_INT_BOUNDS.get(setting)
-                sentinel = None
-                choices = None
-            elif setting in advanced:
-                env_name, ftype, _section, registry_editable = advanced[setting]
-                overrides = await asyncio.to_thread(_read_feature_flag_override_file)
-                origin = self._advanced_origin(setting, env_name, overrides)
-                editable = registry_editable and origin != "env"
-                bounds = _ADVANCED_SETTINGS_BOUNDS.get(setting)
-                sentinel = _ADVANCED_SETTINGS_SENTINELS.get(setting)
-                choices = _ADVANCED_SETTINGS_CHOICES.get(setting)
-            else:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Unknown setting: {setting!r}",
-                        suggestions=[
-                            "Call ha_dev_manage_settings('list') for valid names"
-                        ],
-                    )
-                )
-
-            if action == "reset":
-                return await self._apply_setting_reset(setting, env_name, origin)
-
-            # action == "set"
-            return await self._apply_setting_set(
-                setting,
-                value,
-                env_name,
-                ftype,
-                origin,
-                editable,
-                bounds,
-                sentinel,
-                choices,
-            )
+            if action in ("list", "set", "reset"):
+                return await self._manage_server_setting(action, setting, value)
+            if action == "list_tools":
+                return await self._list_tool_states()
+            if action == "set_tool":
+                return await self._apply_set_tool(tool, state, llm_api, gated)
+            if action == "get_policy":
+                return await self._get_policy()
+            if action == "set_policy":
+                return await self._apply_set_policy(policy, expected_version)
+            if action == "get_backup_config":
+                return await self._get_backup_config()
+            return await self._apply_set_backup_config(backup)
         except ToolError:
             raise
         except Exception as e:
             exception_to_structured_error(
                 e,
-                context={"action": action, "setting": setting},
+                context={"action": action, "setting": setting, "tool": tool},
                 suggestions=["Check server logs for details"],
             )
             return None  # unreachable; explicit for CodeQL
+
+    async def _manage_server_setting(
+        self,
+        action: str,
+        setting: str | None,
+        value: bool | int | float | str | None,
+    ) -> dict[str, Any]:
+        """Handle the server-settings matrix actions (list / set / reset).
+
+        Extracted from ``ha_dev_manage_settings``'s inline body so the tool
+        method stays a thin dispatcher; the feature/advanced resolution and
+        the env/addon/file origin logic live here.
+        """
+        if action == "list":
+            return {
+                "success": True,
+                "data": {
+                    "settings": await asyncio.to_thread(self._settings_rows),
+                    "is_addon": is_running_in_addon(),
+                    "is_embedded": is_embedded(),
+                    "note": (
+                        "Most settings need a server restart to take "
+                        "effect (ha_dev_manage_server action='restart')."
+                    ),
+                },
+            }
+
+        if not setting:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    f"'setting' is required for action={action!r}",
+                )
+            )
+
+        from ..config import (
+            _ADVANCED_SETTINGS_BOUNDS,
+            _ADVANCED_SETTINGS_CHOICES,
+            _ADVANCED_SETTINGS_SENTINELS,
+            _FEATURE_FLAG_INT_BOUNDS,
+            ADVANCED_SETTINGS_FIELDS,
+            FEATURE_FLAG_FIELDS,
+            _read_feature_flag_override_file,
+            get_feature_flag_origin,
+        )
+
+        features = {f: (e, t) for f, e, t in FEATURE_FLAG_FIELDS}
+        advanced = {f: (e, t, s, ed) for f, e, t, s, ed in ADVANCED_SETTINGS_FIELDS}
+        bounds: tuple[float, float] | None
+        sentinel: int | None
+        choices: tuple[str, ...] | None
+        if setting in features:
+            env_name, ftype = features[setting]
+            origin = get_feature_flag_origin(env_name)
+            editable = origin in ("addon", "file", "default")
+            bounds = _FEATURE_FLAG_INT_BOUNDS.get(setting)
+            sentinel = None
+            choices = None
+        elif setting in advanced:
+            env_name, ftype, _section, registry_editable = advanced[setting]
+            overrides = await asyncio.to_thread(_read_feature_flag_override_file)
+            origin = self._advanced_origin(setting, env_name, overrides)
+            editable = registry_editable and origin != "env"
+            bounds = _ADVANCED_SETTINGS_BOUNDS.get(setting)
+            sentinel = _ADVANCED_SETTINGS_SENTINELS.get(setting)
+            choices = _ADVANCED_SETTINGS_CHOICES.get(setting)
+        else:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Unknown setting: {setting!r}",
+                    suggestions=["Call ha_dev_manage_settings('list') for valid names"],
+                )
+            )
+
+        if action == "reset":
+            return await self._apply_setting_reset(setting, env_name, origin)
+
+        # action == "set"
+        return await self._apply_setting_set(
+            setting,
+            value,
+            env_name,
+            ftype,
+            origin,
+            editable,
+            bounds,
+            sentinel,
+            choices,
+        )
+
+    # ----- Tools tab: enable/disable/pin, LLM-API, security gate -----
+
+    async def _tool_metadata_rows(self) -> list[dict[str, Any]]:
+        """Return unfiltered tool metadata (live registry, else sidecar cache)."""
+        from ..settings_ui._persistence import load_tool_metadata_cache
+        from ..settings_ui._tools_meta import _get_tool_metadata
+
+        if self._server is not None:
+            return await _get_tool_metadata(self._server)
+        return load_tool_metadata_cache()
+
+    @staticmethod
+    def _gated_tool_names() -> set[str]:
+        """Tool names carrying at least one security-policy rule."""
+        from ..policy.persistence import load_policy
+        from ..utils.data_paths import get_data_dir
+
+        try:
+            policy = load_policy(get_data_dir())
+        except ValueError:
+            return set()
+        return {rule.tool_name for rule in policy.rules}
+
+    async def _list_tool_states(self) -> dict[str, Any]:
+        """List every tool with its state / LLM-API / gate + lock flags.
+
+        Mirrors the web Tools tab payload: enabled/disabled/pinned (from
+        tool_config.json + env overlay + default-pinned padding), effective
+        LLM-API exposure, the per-tool security gate, and the env-pinned /
+        mandatory / bps-locked flags that make a row read-only.
+        """
+        from ..config import get_global_settings
+        from ..llm_exposure import effective_llm_api_exposed, load_llm_api_overrides
+        from ..settings_ui._handlers_tools import _bps_locked_tools
+        from ..settings_ui._persistence import effective_tool_config, env_pinned_tools
+        from ..settings_ui._tools_meta import effective_mandatory_tools
+        from ..transforms import DEFAULT_PINNED_TOOLS
+
+        metadata = await self._tool_metadata_rows()
+        settings = get_global_settings()
+        states = dict(effective_tool_config().get("tools", {}))
+        for name in DEFAULT_PINNED_TOOLS:
+            states.setdefault(name, "pinned")
+        env_pinned = env_pinned_tools()
+        overrides = load_llm_api_overrides()
+        gated = self._gated_tool_names()
+        mandatory = effective_mandatory_tools(settings)
+        bps_locked = set(_bps_locked_tools())
+
+        rows = [
+            {
+                "name": t["name"],
+                "category": t.get("category"),
+                "state": states.get(t["name"], "enabled"),
+                # Feature-gated stub rows carry their primary tag but not the
+                # "beta" tag the registered tool declares; append it for
+                # disabled_by stubs so the default exposure matches what the
+                # real (beta) tool reports once enabled. Mirrors _get_tools.
+                "llm_api": effective_llm_api_exposed(
+                    t["name"],
+                    [
+                        *(t.get("tags") or []),
+                        *(["beta"] if t.get("disabled_by") else []),
+                    ],
+                    overrides,
+                ),
+                "gated": t["name"] in gated,
+                "env_pinned": t["name"] in env_pinned,
+                "mandatory": t["name"] in mandatory,
+                "bps_locked": t["name"] in bps_locked,
+            }
+            for t in metadata
+        ]
+        return {
+            "success": True,
+            "data": {
+                "tools": rows,
+                "count": len(rows),
+                "policies_enabled": settings.enable_tool_security_policies,
+                "llm_api_available": is_embedded(),
+            },
+        }
+
+    async def _apply_set_tool(
+        self,
+        tool: str | None,
+        state: str | None,
+        llm_api: bool | None,
+        gated: bool | None,
+    ) -> dict[str, Any]:
+        """Apply a Tools-tab change to one tool (state / LLM-API / gate).
+
+        All requested changes are validated (and the policy file read) BEFORE
+        anything is written, so a validation failure on one field cannot leave
+        another already persisted. ``tool='*'`` is rejected — it is a policy
+        wildcard, not a specific tool; author wildcard rules via set_policy.
+        """
+        if not tool:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "'tool' is required for action='set_tool'",
+                )
+            )
+        if tool == "*":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "tool='*' is a policy wildcard, not a specific tool; it "
+                    "would gate every tool. Use set_policy to author a wildcard "
+                    "rule deliberately.",
+                )
+            )
+        if not any(v is not None for v in (state, llm_api, gated)):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "set_tool needs at least one of state / llm_api / gated",
+                )
+            )
+        return await asyncio.to_thread(
+            self._write_tool_all, tool, state, llm_api, gated
+        )
+
+    def _write_tool_all(
+        self, tool: str, state: str | None, llm_api: bool | None, gated: bool | None
+    ) -> dict[str, Any]:
+        """Preflight-validate every requested change, then write them.
+
+        Validation and the fallible policy read happen before any write, so a
+        rejected field (env-pin, mandatory/BPS lock, corrupt policy) cannot
+        leave another field already persisted (Codex #1993). Cross-file
+        atomicity across tool_config.json and tool_policy.json is still
+        best-effort on a raw disk-write failure.
+        """
+        plan = self._preflight_set_tool(tool, state, llm_api, gated)
+        return self._commit_set_tool(tool, state, plan)
+
+    def _preflight_set_tool(
+        self, tool: str, state: str | None, llm_api: bool | None, gated: bool | None
+    ) -> dict[str, Any]:
+        """Validate all requested changes without writing anything.
+
+        Returns a plan dict (persist_state / llm_val / gate_val / new_policy /
+        gate_changed); raises ToolError on the first invalid field.
+        """
+        from ..config import get_global_settings
+        from ..policy.persistence import load_policy
+        from ..settings_ui._persistence import env_pinned_tools
+        from ..utils.data_paths import get_data_dir
+
+        plan: dict[str, Any] = {
+            "persist_state": False,
+            "llm_val": None,
+            "gate_val": None,
+            "new_policy": None,
+            "gate_changed": False,
+        }
+        if state is not None:
+            plan["persist_state"] = self._validate_state_change(
+                tool, state, get_global_settings(), env_pinned_tools()
+            )
+        if llm_api is not None:
+            plan["llm_val"] = self._coerce_bool_or_raise(llm_api, "llm_api")
+        if gated is not None:
+            gate_val = self._coerce_bool_or_raise(gated, "gated")
+            try:
+                policy = load_policy(get_data_dir())
+            except ValueError as exc:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.CONFIG_INVALID,
+                        f"tool_policy.json is invalid: {exc}",
+                        suggestions=["Inspect or delete the file, then retry"],
+                    )
+                )
+            new_policy, changed = self._apply_gate_to_policy(policy, tool, gate_val)
+            plan["gate_val"] = gate_val
+            plan["new_policy"] = new_policy
+            plan["gate_changed"] = changed
+        return plan
+
+    def _commit_set_tool(
+        self, tool: str, state: str | None, plan: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Persist a preflighted set_tool plan (validations already passed)."""
+        from ..llm_exposure import LLM_API_CONFIG_KEY
+        from ..settings_ui._persistence import load_tool_config, save_tool_config
+
+        config = load_tool_config()
+        tools_states = dict(config.get("tools", {}))
+        llm_over = dict(config.get(LLM_API_CONFIG_KEY, {}))
+        data: dict[str, Any] = {"tool": tool}
+        warnings: list[str] = []
+        restart_required = False
+        if state is not None:
+            data["state"] = state
+            if plan["persist_state"]:
+                tools_states[tool] = state
+                restart_required = True
+        if plan["llm_val"] is not None:
+            llm_over[tool] = plan["llm_val"]
+            data["llm_api"] = plan["llm_val"]
+            if not is_embedded():
+                warnings.append(
+                    "LLM-API exposure only affects the embedded custom-component "
+                    "server; it has no effect in this deployment."
+                )
+        config["tools"] = tools_states
+        config[LLM_API_CONFIG_KEY] = llm_over
+        if not save_tool_config(config):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Failed to persist tool config to disk",
+                    suggestions=[
+                        "Set HA_MCP_CONFIG_DIR to a writable path",
+                        "Check the server logs for the underlying OSError",
+                    ],
+                )
+            )
+        if plan["gate_val"] is not None:
+            warnings.extend(self._commit_gate(plan, data))
+        data["restart_required"] = restart_required
+        result: dict[str, Any] = {"success": True, "data": data}
+        if warnings:
+            result["warnings"] = warnings
+        return result
+
+    def _commit_gate(self, plan: dict[str, Any], data: dict[str, Any]) -> list[str]:
+        """Persist the gate portion of a set_tool plan; returns any warnings."""
+        from ..config import get_global_settings
+        from ..policy.persistence import save_policy
+        from ..utils.data_paths import get_data_dir
+
+        data["gated"] = bool(plan["gate_val"])
+        data["policy_rules_changed"] = plan["gate_changed"]
+        if plan["gate_changed"]:
+            save_policy(get_data_dir(), plan["new_policy"])
+            self._clear_remember_cache()
+        warnings: list[str] = []
+        if not get_global_settings().enable_tool_security_policies:
+            warnings.append(
+                "Tool security policies are disabled "
+                "(enable_tool_security_policies=false); this gate is stored but "
+                "won't enforce until policies are enabled and the server restarts."
+            )
+        return warnings
+
+    @staticmethod
+    def _validate_state_change(
+        tool: str, state: str, settings: Any, env_pinned: dict[str, str]
+    ) -> bool:
+        """Validate a state change; return whether it should be persisted.
+
+        Rejects invalid states, env-pinned flips, and disabling a mandatory
+        tool (base MANDATORY_TOOLS always, plus the BPS-locked set while
+        strict best-practices mode is on) — the web Tools tab locks those
+        rows, so the headless path must refuse rather than persist a disable
+        that apply_tool_visibility silently reverts at startup. Env-pinned
+        no-op re-sends return False (nothing to persist); anything else that
+        passes returns True.
+        """
+        from ..settings_ui._tools_meta import (
+            _VALID_STATES,
+            BPS_MANDATORY_TOOLS,
+            effective_mandatory_tools,
+        )
+
+        if state not in _VALID_STATES:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"state must be one of {sorted(_VALID_STATES)}",
+                )
+            )
+        if tool in env_pinned:
+            if env_pinned[tool] != state:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"{tool!r} is pinned by DISABLED_TOOLS / PINNED_TOOLS "
+                        f"to {env_pinned[tool]!r}; unset the env var to change it.",
+                    )
+                )
+            return False
+        if state == "disabled" and tool in effective_mandatory_tools(settings):
+            if tool in BPS_MANDATORY_TOOLS:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Refusing to disable {tool!r} while strict "
+                        "best-practices mode (enable_strict_mandatory_bps) is on.",
+                        suggestions=[
+                            "Turn off strict best-practices mode first, then retry."
+                        ],
+                    )
+                )
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"{tool!r} is a mandatory tool and is always kept enabled; "
+                    "it cannot be disabled.",
+                )
+            )
+        return True
+
+    @staticmethod
+    def _coerce_bool_or_raise(value: Any, field: str) -> bool:
+        """Coerce ``value`` to bool or raise a ToolError naming ``field``."""
+        coerced = DevTools._coerce_bool_setting(value)
+        if coerced is _COERCE_MISS:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"{field} must be a boolean",
+                )
+            )
+        return bool(coerced)
+
+    @staticmethod
+    def _apply_gate_to_policy(policy: Any, tool: str, gated: bool) -> tuple[Any, bool]:
+        """Return (policy, changed) after adding/removing the bare gate rule.
+
+        Pure (no I/O): manages only the bare unconditional rule (when == [])
+        for ``tool``; predicate-bearing rules are preserved.
+        """
+        from ..policy.model import Rule
+
+        has_bare = any(r.tool_name == tool and not r.when for r in policy.rules)
+        if gated and not has_bare:
+            updated = policy.model_copy(
+                update={"rules": [*policy.rules, Rule(tool_name=tool)]}
+            )
+            return updated, True
+        if not gated and has_bare:
+            updated = policy.model_copy(
+                update={
+                    "rules": [r for r in policy.rules if r.tool_name != tool or r.when]
+                }
+            )
+            return updated, True
+        return policy, False
+
+    def _clear_remember_cache(self) -> None:
+        """Clear the approval remember-cache if a live queue exists."""
+        queue = getattr(self._server, "approval_queue", None)
+        if queue is not None:
+            queue.clear_remember_cache()
+
+    # ----- Tool security policies -----
+
+    async def _get_policy(self) -> dict[str, Any]:
+        """Return the full tool-security policy."""
+        from ..config import get_global_settings
+        from ..policy.persistence import load_policy
+        from ..utils.data_paths import get_data_dir
+
+        try:
+            policy = load_policy(get_data_dir())
+        except ValueError as exc:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.CONFIG_INVALID,
+                    f"tool_policy.json is invalid: {exc}",
+                    suggestions=["Inspect or delete the file, then retry"],
+                )
+            )
+        return {
+            "success": True,
+            "data": {
+                "policy": policy.model_dump(mode="json"),
+                "policies_enabled": (
+                    get_global_settings().enable_tool_security_policies
+                ),
+            },
+        }
+
+    async def _apply_set_policy(
+        self, policy: dict[str, Any] | None, expected_version: int | None
+    ) -> dict[str, Any]:
+        """Write the full tool-security policy (validated, version-guarded)."""
+        from pydantic import ValidationError
+
+        from ..policy.model import Policy
+        from ..policy.persistence import load_policy, save_policy
+        from ..utils.data_paths import get_data_dir
+
+        if not isinstance(policy, dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "'policy' (a policy object) is required for action='set_policy'",
+                    suggestions=[
+                        "Call ha_dev_manage_settings('get_policy') for the shape"
+                    ],
+                )
+            )
+        try:
+            new_policy = Policy.model_validate(policy)
+        except (ValidationError, ValueError) as exc:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"policy failed schema validation: {exc}",
+                )
+            )
+        data_dir = get_data_dir()
+        try:
+            current = load_policy(data_dir)
+        except ValueError as exc:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.CONFIG_INVALID,
+                    f"existing tool_policy.json is invalid: {exc}",
+                    suggestions=["Inspect or delete the file, then retry"],
+                )
+            )
+        warnings: list[str] = []
+        expected = (
+            expected_version if expected_version is not None else policy.get("version")
+        )
+        if expected is not None and expected != current.version:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "policy version mismatch — reload with get_policy before saving",
+                    context={
+                        "current_version": current.version,
+                        "current_policy": current.model_dump(mode="json"),
+                    },
+                )
+            )
+        if expected is None:
+            warnings.append(
+                "No version supplied; wrote without an optimistic-concurrency check."
+            )
+        # Rebase onto the on-disk version so save_policy bumps to current+1
+        # (matches the web PUT semantics).
+        to_save = new_policy.model_copy(update={"version": current.version})
+        save_policy(data_dir, to_save)
+        rules_changed = current.rules != new_policy.rules
+        if rules_changed:
+            self._clear_remember_cache()
+        result: dict[str, Any] = {
+            "success": True,
+            "data": {"version": current.version + 1, "rules_changed": rules_changed},
+        }
+        if warnings:
+            result["warnings"] = warnings
+        return result
+
+    # ----- Auto-backup config -----
+
+    async def _get_backup_config(self) -> dict[str, Any]:
+        """Return the auto-backup config fields with per-field origin/editable."""
+        from ..config import (
+            BACKUP_OVERRIDE_FIELDS,
+            get_backup_setting_origin,
+            get_global_settings,
+        )
+
+        settings = get_global_settings()
+        fields = [
+            {
+                "field": field_name,
+                "env_var": env_name,
+                "value": getattr(settings, field_name),
+                "origin": (origin := get_backup_setting_origin(env_name)),
+                "editable": origin in ("addon", "file", "default"),
+            }
+            for field_name, env_name, _ftype in BACKUP_OVERRIDE_FIELDS
+        ]
+        return {
+            "success": True,
+            "data": {"is_addon": is_running_in_addon(), "fields": fields},
+        }
+
+    async def _apply_set_backup_config(
+        self, backup: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Apply auto-backup config changes (same routing as the web UI)."""
+        from ..settings_ui._handlers_backups import (
+            _validate_backup_payload,
+            apply_backup_config,
+        )
+
+        if not isinstance(backup, dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "'backup' (an object of {field: value}) is required for "
+                    "action='set_backup_config'",
+                    suggestions=[
+                        "Call ha_dev_manage_settings('get_backup_config') for "
+                        "field names"
+                    ],
+                )
+            )
+        clean, err = _validate_backup_payload(backup)
+        if err is not None:
+            raise_tool_error(
+                create_error_response(ErrorCode.VALIDATION_INVALID_PARAMETER, err)
+            )
+        response = await apply_backup_config(self._server, clean)
+        # JSONResponse.body is typed bytes | memoryview; bytes() normalizes both
+        # (no-op for bytes) so json.loads accepts it.
+        body = json.loads(bytes(response.body))
+        if response.status_code >= 400:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    self._backup_error_message(body),
+                    context={"status": response.status_code, "response": body},
+                )
+            )
+        return {"success": True, "data": body}
+
+    @staticmethod
+    def _backup_error_message(body: Any) -> str:
+        """Pull a human message out of a backup-config error response body."""
+        err = body.get("error") if isinstance(body, dict) else None
+        if isinstance(err, dict):
+            return str(
+                err.get("message") or err.get("code") or "backup config update failed"
+            )
+        if isinstance(err, str):
+            return err
+        return "backup config update failed"
 
     async def _apply_setting_reset(
         self, setting: str, env_name: str, origin: str
@@ -917,14 +1551,23 @@ class DevTools:
     async def ha_dev_manage_server(
         self,
         action: Annotated[
-            Literal["info", "update_source", "restart"],
+            Literal[
+                "info",
+                "update_source",
+                "restart",
+                "list_pending",
+                "approve",
+                "deny",
+            ],
             Field(
                 description=(
                     "info: deployment/version report; update_source: point the "
                     "ha_mcp_tools component's separate in-process server at a "
                     "channel or pip spec and reinstall it (never changes the "
                     "server serving this connection, unless embedded); "
-                    "restart: restart this server"
+                    "restart: restart this server; list_pending: list tool calls "
+                    "blocked on a security-policy approval; approve / deny: decide "
+                    "one blocked call by token"
                 )
             ),
         ],
@@ -945,6 +1588,13 @@ class DevTools:
                     "https://github.com/homeassistant-ai/ha-mcp/archive/refs/"
                     "pull/<PR>/head.tar.gz. Empty string clears the override."
                 ),
+            ),
+        ] = None,
+        token: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="Approval token (required for approve/deny)",
             ),
         ] = None,
     ) -> dict[str, Any]:
@@ -981,13 +1631,19 @@ class DevTools:
         ha_dev_manage_server("update_source", channel="dev")
         ha_dev_manage_server("update_source", pip_spec="https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1234/head.tar.gz")
         ha_dev_manage_server("restart")
+        ha_dev_manage_server("list_pending")
+        ha_dev_manage_server("approve", token="abc123")
         """
         try:
             if action == "info":
                 return await self._server_info()
             if action == "update_source":
                 return await self._update_source(channel, pip_spec)
-            return await self._restart_server()
+            if action == "restart":
+                return await self._restart_server()
+            if action == "list_pending":
+                return await self._list_pending()
+            return await self._decide_approval(token, approve=action == "approve")
         except ToolError:
             raise
         except Exception as e:
@@ -1376,6 +2032,100 @@ class DevTools:
         )
         return None  # unreachable; explicit for CodeQL
 
+    # ----- Approval queue (runtime) -----
+
+    def _require_queue(self) -> Any:
+        """Return the live approval queue or raise a clear error.
+
+        The queue only exists on a full server (embedded / add-on /
+        container) with tool security policies enabled; it is absent in the
+        stdio settings sidecar and whenever the feature flag is off.
+        """
+        queue = getattr(self._server, "approval_queue", None)
+        if queue is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "No active approval queue: tool security policies are "
+                    "disabled, or this deployment has no live server (stdio "
+                    "settings sidecar).",
+                    suggestions=[
+                        "Enable enable_tool_security_policies and restart, then "
+                        "retry from a full-server (embedded/add-on/container) "
+                        "deployment."
+                    ],
+                )
+            )
+        return queue
+
+    async def _list_pending(self) -> dict[str, Any]:
+        """List tool calls currently blocked on a security-policy approval."""
+        queue = getattr(self._server, "approval_queue", None)
+        if queue is None:
+            return {
+                "success": True,
+                "data": {
+                    "pending": [],
+                    "count": 0,
+                    "note": (
+                        "No active approval queue (tool security policies "
+                        "disabled or no live server); nothing is blocked."
+                    ),
+                },
+            }
+        pending = [
+            {
+                "token": e.token,
+                "tool_name": e.tool_name,
+                "args": e.args,
+                "created_at": e.created_at.isoformat(),
+                "expires_at": e.expires_at.isoformat(),
+            }
+            for e in queue.list_pending()
+        ]
+        return {"success": True, "data": {"pending": pending, "count": len(pending)}}
+
+    async def _decide_approval(
+        self, token: str | None, *, approve: bool
+    ) -> dict[str, Any]:
+        """Approve or deny one blocked tool call by token."""
+        if not token:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "'token' is required for approve/deny",
+                )
+            )
+        queue = self._require_queue()
+        entry = queue.get(token)
+        if entry is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Unknown or expired approval token",
+                    suggestions=[
+                        "Call ha_dev_manage_server('list_pending') for live tokens"
+                    ],
+                )
+            )
+        decided = queue.approve(token) if approve else queue.deny(token)
+        if not decided:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Token already decided as {entry.decision!r}",
+                    context={"current_decision": entry.decision},
+                )
+            )
+        return {
+            "success": True,
+            "data": {
+                "token": token,
+                "tool_name": entry.tool_name,
+                "decision": "approved" if approve else "denied",
+            },
+        }
+
 
 def register_dev_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register developer-mode tools.
@@ -1390,7 +2140,7 @@ def register_dev_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     logger.warning(
         "Developer mode is ON: ha_dev_manage_server / ha_dev_manage_settings "
-        "are registered. These tools can change server settings and replace "
-        "the running server version."
+        "are registered. These tools can change server settings, tool "
+        "visibility, security policies, and replace the running server version."
     )
-    register_tool_methods(mcp, DevTools(client))
+    register_tool_methods(mcp, DevTools(client, server=kwargs.get("server")))

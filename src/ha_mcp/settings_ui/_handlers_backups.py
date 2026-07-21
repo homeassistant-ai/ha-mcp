@@ -414,36 +414,15 @@ async def _save_backup_config_addon(
     )
 
 
-async def _save_backup_config(
-    server: HomeAssistantSmartMCPServer | None, request: Request
-) -> JSONResponse:
-    """Persist auto-backup config edits and publish to the live process.
+def _apply_backup_config_file(clean: dict[str, Any]) -> JSONResponse:
+    """Standalone/file-mode branch of ``apply_backup_config``.
 
-    Routing:
-    - Addon mode: POST ``/addons/self/options`` and return
-      ``restart_required=True`` (see ``_save_backup_config_addon``).
-    - Standalone (file) mode: refuse any field that's pinned by an env var
-      (process or ``.env``) — return 409 with the offending names so the UI
-      can refresh and show the read-only banner. Editable fields merge into
-      ``<data_dir>/backup_settings.json`` and a Settings cache reset
-      publishes them immediately, hence ``restart_required=False``.
+    Refuse any field pinned by an env var (process or ``.env``) — 409 with
+    the offending names so the UI can refresh and show the read-only banner.
+    Editable fields merge into ``<data_dir>/backup_settings.json`` and a
+    Settings cache reset publishes them immediately, hence
+    ``restart_required=False``.
     """
-    try:
-        payload = await request.json()
-    except (ValueError, json.JSONDecodeError):
-        return _bad_request("Invalid JSON body")
-    clean, err = _validate_backup_payload(payload)
-    if err is not None:
-        return _bad_request(err)
-
-    if is_running_in_addon():
-        # ``is_running_in_addon()`` checks SUPERVISOR_TOKEN — the
-        # ``_save_backup_config_addon`` helper called below also catches the
-        # missing-token ``RuntimeError`` from ``make_supervisor_httpx_client``
-        # as defense-in-depth.
-        return await _save_backup_config_addon(server, clean)
-
-    # Standalone (file) mode — refuse to override env-pinned fields.
     rejected = _filter_env_pinned_backup_fields(clean)
     if rejected:
         return JSONResponse(
@@ -481,6 +460,45 @@ async def _save_backup_config(
     return JSONResponse(
         {"success": True, "applied": clean, "mode": "file", "restart_required": False}
     )
+
+
+async def apply_backup_config(
+    server: HomeAssistantSmartMCPServer | None, clean: dict[str, Any]
+) -> JSONResponse:
+    """Route already-validated auto-backup fields to their persistence path.
+
+    Addon mode POSTs to Supervisor (``_save_backup_config_addon``);
+    standalone/file mode merges the override file (``_apply_backup_config_file``).
+    Shared core of the HTTP save handler (``_save_backup_config``) and the
+    ``ha_dev_manage_settings`` developer tool so both take identical
+    addon-vs-file routing and env-pin rejection — ``clean`` must already be
+    validated by ``_validate_backup_payload``.
+    """
+    if is_running_in_addon():
+        # ``is_running_in_addon()`` checks SUPERVISOR_TOKEN — the
+        # ``_save_backup_config_addon`` helper also catches the missing-token
+        # ``RuntimeError`` from ``make_supervisor_httpx_client`` as
+        # defense-in-depth.
+        return await _save_backup_config_addon(server, clean)
+    return _apply_backup_config_file(clean)
+
+
+async def _save_backup_config(
+    server: HomeAssistantSmartMCPServer | None, request: Request
+) -> JSONResponse:
+    """Persist auto-backup config edits and publish to the live process.
+
+    Parses and validates the request body, then delegates the addon-vs-file
+    routing to ``apply_backup_config`` (shared with the developer tool).
+    """
+    try:
+        payload = await request.json()
+    except (ValueError, json.JSONDecodeError):
+        return _bad_request("Invalid JSON body")
+    clean, err = _validate_backup_payload(payload)
+    if err is not None:
+        return _bad_request(err)
+    return await apply_backup_config(server, clean)
 
 
 def build_backups_handlers(
