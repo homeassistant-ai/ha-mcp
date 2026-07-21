@@ -312,7 +312,7 @@
     "policies.operators.lt": "is less than",
     "policies.card.no_conditions": "(no conditions, rule matches every call to this tool)",
     "policies.card.remove_title": "Remove from policy",
-    "policies.card.conditions_intro": "Require approval when ALL conditions match (no conditions = always require approval):",
+    "policies.card.conditions_intro": "Require approval when ANY condition matches (no conditions = always require approval):",
     "policies.card.add_condition": "+ Add condition",
     "policies.card.argument": "Argument:",
     "policies.card.argument_placeholder": "e.g. args.color_temp",

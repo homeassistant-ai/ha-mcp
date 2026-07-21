@@ -288,7 +288,13 @@ async function loadPolicyState() {
       return;
     }
     const p = await r.json();
-    policyState.gatedTools = new Set((p.rules || []).map(rule => rule.tool_name));
+    // The Tools-tab gate toggle reflects the BARE unconditional rule only
+    // (no predicates); conditional rules are managed in the Policies tab.
+    policyState.gatedTools = new Set(
+      (p.rules || [])
+        .filter(rule => !rule.when || rule.when.length === 0)
+        .map(rule => rule.tool_name)
+    );
   } catch (e) {
     // Policy endpoint unavailable (sidecar stub) or network blip — keep the
     // prior gatedTools rather than resetting it to empty. On first load it
@@ -2500,22 +2506,27 @@ function renderPolicyCards(policy) {
     return;
   }
   emptyEl.style.display = 'none';
-  // Group rules by tool_name. The Tools-tab toggle creates exactly one
-  // rule per tool; defensively handle the case where a hand-edited file
-  // has multiple entries: each becomes its own card so the user can
-  // see/edit them all.
+  // Each condition is its own rule on disk (OR: the tool gates if ANY rule
+  // matches). Collapse all of a tool's rules into ONE card whose "conditions"
+  // are the union of the rules' predicates; the card re-expands to one rule
+  // per condition on save (savePolicyRule). Order preserved by first sight.
   const byTool = {};
-  rules.forEach((r, idx) => {
-    const key = r.tool_name + '\0' + idx;
-    byTool[key] = {tool_name: r.tool_name, rule: r, originalIndex: idx};
+  const order = [];
+  rules.forEach(r => {
+    if (!byTool[r.tool_name]) { byTool[r.tool_name] = []; order.push(r.tool_name); }
+    byTool[r.tool_name].push(r);
   });
-  Object.keys(byTool).forEach(key => {
-    const entry = byTool[key];
-    // Deep clone the rule into the edit buffer so card-local changes
-    // don't mutate the server response until "Save changes".
-    const editKey = entry.tool_name;
-    policyRuleEdits[editKey] = JSON.parse(JSON.stringify(entry.rule));
-    listEl.appendChild(renderPolicyCard(entry.tool_name, policyRuleEdits[editKey]));
+  order.forEach(toolName => {
+    const toolRules = byTool[toolName];
+    const conditions = [];
+    toolRules.forEach(r => (r.when || []).forEach(p => conditions.push(p)));
+    // The card has a single remember-minutes input; carry the max across the
+    // tool's rules so re-saving doesn't silently shorten a remembered window.
+    const remember = Math.max(0, ...toolRules.map(r => r.remember_minutes || 0));
+    policyRuleEdits[toolName] = JSON.parse(JSON.stringify(
+      {tool_name: toolName, when: conditions, remember_minutes: remember}
+    ));
+    listEl.appendChild(renderPolicyCard(toolName, policyRuleEdits[toolName]));
   });
 }
 
@@ -2549,7 +2560,7 @@ function renderPolicyCard(toolName, rule) {
     '</div>' +
     '<div class="policy-rule-predicates">' +
       '<label class="features-sub" style="display:block;margin-bottom:4px">' +
-        escapeHtml(t('policies.card.conditions_intro', {}, 'Require approval when ALL of these conditions match (no conditions = always require approval):')) +
+        escapeHtml(t('policies.card.conditions_intro', {}, 'Require approval when ANY of these conditions matches (no conditions = always require approval):')) +
       '</label>' +
       '<ul class="policy-predicate-list">' + emptyHint + predicateRows + '</ul>' +
       '<button class="policy-add-predicate">' + escapeHtml(t('policies.card.add_condition', {}, '+ Add condition')) + '</button>' +
@@ -3076,23 +3087,29 @@ async function savePolicyRule(toolName, ruleObj) {
   if (!r.ok) throw new Error(t('policies.errors.load', {status: r.status}, 'Could not load policy: ' + r.status));
   const policy = await r.json();
   policy.rules = policy.rules || [];
-  const idx = policy.rules.findIndex(rule => rule.tool_name === toolName);
-  if (idx >= 0) {
-    policy.rules[idx] = ruleObj;
-  } else {
-    // Defensive: a card exists for a tool with no server-side rule
-    // (e.g. the user removed the rule from another tab between load
-    // and save). Append rather than silently drop the edit.
-    policy.rules.push(ruleObj);
-  }
+  // Expand the card's conditions into ONE rule each (they OR at evaluation —
+  // the tool gates if ANY condition matches). No conditions = a single bare
+  // rule that always requires approval. Replaces all of this tool's rules.
+  const remember = ruleObj.remember_minutes || 0;
+  const conditions = ruleObj.when || [];
+  const expanded = conditions.length === 0
+    ? [{tool_name: toolName, when: [], remember_minutes: remember}]
+    : conditions.map(p => ({tool_name: toolName, when: [p], remember_minutes: remember}));
+  policy.rules = policy.rules
+    .filter(rule => rule.tool_name !== toolName)
+    .concat(expanded);
   await policyPut(policy, t('policies.operations.save_rule', {}, 'Save rule'));
 }
 
 async function removePolicyRule(toolName) {
-  // Mirror syncPolicyRule(toolName, false) — kept as a separate helper
-  // so the card's remove button stays self-contained, but the on-wire
-  // shape is identical.
-  await syncPolicyRule(toolName, false);
+  // The card's "Remove from policy" button removes ALL of the tool's rules
+  // (every condition), unlike the Tools-tab gate toggle which manages only
+  // the bare unconditional rule via syncPolicyRule.
+  const r = await fetch('./api/policy/config');
+  if (!r.ok) throw new Error(t('policies.errors.load', {status: r.status}, 'Could not load policy: ' + r.status));
+  const policy = await r.json();
+  policy.rules = (policy.rules || []).filter(rule => rule.tool_name !== toolName);
+  await policyPut(policy, t('policies.operations.save_rule', {}, 'Remove rule'));
 }
 
 async function saveGlobalSettings() {

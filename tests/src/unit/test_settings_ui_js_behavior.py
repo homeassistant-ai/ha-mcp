@@ -1241,6 +1241,95 @@ class TestPolicyTabFlow:
         assert len(rules) == 1, f"conditional rule was wrongly removed: {rules}"
         assert rules[0]["when"], "expected the predicate-bearing rule to remain"
 
+    def test_gate_toggle_on_adds_bare_rule_beside_conditional(
+        self, settings_script: str
+    ) -> None:
+        """Enable direction: turning the Tools-tab gate ON when a conditional
+        rule already exists must ADD the bare unconditional rule (not silently
+        no-op), so the tool is gated for every call."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 2,
+                    "rules": [
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.domain", "op": "eq", "value": "lock"}
+                            ],
+                            "remember_minutes": 0,
+                        }
+                    ],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="await window.syncPolicyRule('ha_call_service', true);",
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1
+        rules = json.loads(puts[0]["body"])["rules"]
+        assert len(rules) == 2
+        assert any(r["tool_name"] == "ha_call_service" and not r["when"] for r in rules)
+        assert any(r["when"] for r in rules)  # conditional rule preserved
+
+    def test_save_rule_expands_conditions_into_separate_rules(
+        self, settings_script: str
+    ) -> None:
+        """Each condition on a card persists as its OWN rule so they OR at
+        evaluation (gate if ANY matches), not one AND-ed rule."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 0,
+                    "rules": [],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await window.savePolicyRule('ha_call_service', {
+                tool_name: 'ha_call_service',
+                when: [
+                  {path: 'args.domain', op: 'eq', value: 'lock'},
+                  {path: 'args.domain', op: 'eq', value: 'alarm_control_panel'}
+                ],
+                remember_minutes: 0
+              });
+            """,
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1
+        rules = json.loads(puts[0]["body"])["rules"]
+        assert len(rules) == 2, f"expected one rule per condition; got {rules}"
+        assert all(
+            r["tool_name"] == "ha_call_service" and len(r["when"]) == 1 for r in rules
+        )
+
     def test_pending_list_shows_off_message_when_feature_disabled(
         self, settings_script: str
     ) -> None:

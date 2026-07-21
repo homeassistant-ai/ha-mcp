@@ -312,7 +312,7 @@
     "policies.operators.lt": "ist kleiner als",
     "policies.card.no_conditions": "(keine Bedingungen, Regel stimmt mit jedem Aufruf dieses Tools überein)",
     "policies.card.remove_title": "Aus Richtlinie entfernen",
-    "policies.card.conditions_intro": "Genehmigung erfordern, wenn ALLE Bedingungen übereinstimmen (keine Bedingungen = immer Genehmigung erfordern):",
+    "policies.card.conditions_intro": "Genehmigung erfordern, wenn EINE der Bedingungen übereinstimmt (keine Bedingungen = immer Genehmigung erfordern):",
     "policies.card.add_condition": "+ Bedingung hinzufügen",
     "policies.card.argument": "Argument:",
     "policies.card.argument_placeholder": "z. B. args.color_temp",
