@@ -322,31 +322,76 @@ class TestOptionsFlowDispatch:
 
 
 class TestToolsInfoOptionsFlow:
-    def test_init_shows_info_form_under_tools_info_step(self):
-        # The tools entry's options flow shows an informational form on a step id
-        # distinct from the server flow's ``init`` (a shared id would collide in
-        # strings.json). The schema is empty — there is nothing to configure yet.
+    def _flow_with_stores(self, *, dirs=None, keys=None):
+        # The tools options flow reads/writes the component's own stores via
+        # hass.data; give it a stand-in hass carrying the current values.
         flow = cf.HaMcpToolsInfoOptionsFlow()
+        flow.hass = SimpleNamespace(
+            data={
+                const.DOMAIN: {
+                    "allowed_paths": list(dirs or []),
+                    "extra_yaml_keys": list(keys or []),
+                }
+            }
+        )
+        return flow
+
+    def test_init_shows_editable_form_with_current_values(self):
+        # The tools entry's options flow shows an EDITABLE form on a step id
+        # distinct from the server flow's ``init`` (a shared id would collide in
+        # strings.json). The two fields default to the current stored values.
+        flow = self._flow_with_stores(dirs=["pyscript"], keys=["alert2"])
         flow.async_show_form = MagicMock(
             side_effect=lambda **kw: {"type": "form", **kw}
         )
         form = asyncio.run(flow.async_step_init(None))
         assert form["type"] == "form"
         assert form["step_id"] == "tools_info"
-        # Empty schema: nothing to configure yet.
-        assert list(form["data_schema"].schema) == []
+        markers = {m.schema: m for m in form["data_schema"].schema}
+        assert set(markers) == {"allowed_dirs", "extra_yaml_keys"}
+        assert markers["allowed_dirs"].default() == ["pyscript"]
+        assert markers["extra_yaml_keys"].default() == ["alert2"]
 
-    def test_submitting_info_form_creates_empty_options_entry(self):
-        # HA routes the info form's submit to async_step_tools_info, which
-        # persists an empty options payload (title "").
-        flow = cf.HaMcpToolsInfoOptionsFlow()
+    def test_submit_persists_via_apply_helpers_and_creates_entry(self, monkeypatch):
+        # The submit routes both lists through the shared _apply_* helpers (the
+        # same validated path the services use) and then creates the entry.
+        import custom_components.ha_mcp_tools as comp
+
+        applied: dict[str, list[str]] = {}
+
+        async def _apply_dirs(hass, raw):
+            applied["dirs"] = raw
+            return raw, []
+
+        async def _apply_keys(hass, raw):
+            applied["keys"] = raw
+            return raw, []
+
+        monkeypatch.setattr(comp, "_apply_allowed_paths", _apply_dirs)
+        monkeypatch.setattr(comp, "_apply_extra_yaml_keys", _apply_keys)
+
+        flow = self._flow_with_stores()
         flow.async_create_entry = MagicMock(
             side_effect=lambda **kw: {"type": "entry", **kw}
         )
-        result = asyncio.run(flow.async_step_tools_info({}))
+        result = asyncio.run(
+            flow.async_step_tools_info(
+                {"allowed_dirs": ["pyscript"], "extra_yaml_keys": ["alert2"]}
+            )
+        )
         assert result["type"] == "entry"
-        assert result["title"] == ""
         assert result["data"] == {}
+        assert applied == {"dirs": ["pyscript"], "keys": ["alert2"]}
+
+    def test_submit_none_reshows_form(self):
+        # Defensive: HA calls async_step_tools_info(None) in some flows; it must
+        # re-render rather than persist an empty payload.
+        flow = self._flow_with_stores(dirs=["pyscript"])
+        flow.async_show_form = MagicMock(
+            side_effect=lambda **kw: {"type": "form", **kw}
+        )
+        form = asyncio.run(flow.async_step_tools_info(None))
+        assert form["step_id"] == "tools_info"
 
 
 class TestServerOptionsFlow:

@@ -27,7 +27,15 @@
         "step": {
             "tools_info": {
                 "title": "HA-MCP File & YAML Tools",
-                "description": "Dieser Eintrag stellt die privilegierten Datei- und YAML-Bearbeitungsdienste bereit, die von den opt-in Datei/YAML-Tools von ha-mcp verwendet werden. Hier gibt es noch nichts zu konfigurieren. Welche Verzeichnisse die Datei-Tools nutzen dürfen, wird in den eigenen Einstellungen des ha-mcp-Servers (Settings UI / allowed-paths) verwaltet, nicht hier. Pro-Eintrag-Optionen könnten in einem zukünftigen Release auf diesem Bildschirm erscheinen."
+                "description": "Konfiguriere die privilegierten Datei- und YAML-Bearbeitungsdienste, die von den opt-in Datei/YAML-Tools von ha-mcp verwendet werden. Diese Einstellungen erscheinen auch in der eigenen Einstellungs-UI des ha-mcp-Servers und werden live wirksam, ohne Neustart. Eine nicht überschreibbare Deny-Grenze blockiert weiterhin sensible Pfade (z. B. .storage) und Vertrauensgrenzen-Keys (homeassistant, http, frontend, lovelace).",
+                "data": {
+                    "allowed_dirs": "Zusätzliche Datei-Verzeichnisse",
+                    "extra_yaml_keys": "Zusätzliche YAML-Schreib-Keys"
+                },
+                "data_description": {
+                    "allowed_dirs": "Verzeichnisse relativ zum Konfigurationsverzeichnis, jeweils mit Lese- und Schreibzugriff (z. B. pyscript). Traversal- und Einträge außerhalb des Konfig-Verzeichnisses werden verworfen.",
+                    "extra_yaml_keys": "Top-Level-Keys, die ha_config_set_yaml zusätzlich zu den eingebauten schreiben darf, für YAML-first-Integrationen auf dieser Installation (z. B. alert2). Vertrauensgrenzen-Keys werden verworfen."
+                }
             },
             "init": {
                 "title": "HA-MCP Server",

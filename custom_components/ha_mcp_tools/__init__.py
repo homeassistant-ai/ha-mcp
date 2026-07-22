@@ -456,6 +456,49 @@ async def _save_extra_yaml_keys(hass: HomeAssistant, keys: list[str]) -> None:
     await store.async_save({"keys": keys})
 
 
+async def _apply_allowed_paths(
+    hass: HomeAssistant, raw_paths: Any
+) -> tuple[list[str], list[Any]]:
+    """Normalize, persist, and hot-swap the extra directories (#1567, #1887).
+
+    Shared by the ``set_allowed_paths`` service and the tools-entry options flow
+    so both edit the store through one validated path. Each entry runs through
+    :func:`_normalize_extra_dir`; traversal / out-of-config / deny-floor entries
+    are dropped into ``rejected``. Persists to .storage and updates hass.data so
+    enforcement applies live. Returns ``(kept, rejected)``.
+    """
+    config_dir = Path(hass.config.config_dir)
+    normalized: list[str] = []
+    rejected: list[Any] = []
+    for entry in raw_paths if isinstance(raw_paths, list) else []:
+        norm = (
+            _normalize_extra_dir(entry, config_dir) if isinstance(entry, str) else None
+        )
+        if norm is None:
+            rejected.append(entry)
+        elif norm not in normalized:
+            normalized.append(norm)
+    await _save_allowed_paths(hass, normalized)
+    hass.data.setdefault(DOMAIN, {})[_HASS_DATA_ALLOWED_PATHS_KEY] = normalized
+    return normalized, rejected
+
+
+async def _apply_extra_yaml_keys(
+    hass: HomeAssistant, raw_keys: Any
+) -> tuple[list[str], list[Any]]:
+    """Normalize, persist, and hot-swap the extra YAML write keys (#1887).
+
+    Shared by the ``set_extra_yaml_keys`` service and the tools-entry options
+    flow. Delegates validation to :func:`_normalize_extra_yaml_keys` (strip,
+    dedup, sort, drop denylist). Persists to .storage and updates hass.data so
+    enforcement applies live. Returns ``(kept, rejected)``.
+    """
+    normalized, rejected = _normalize_extra_yaml_keys(raw_keys)
+    await _save_extra_yaml_keys(hass, normalized)
+    hass.data.setdefault(DOMAIN, {})[_HASS_DATA_EXTRA_YAML_KEYS_KEY] = normalized
+    return normalized, rejected
+
+
 def _unified_diff(before: str, after: str, rel_path: str, max_lines: int = 200) -> str:
     """Unified diff of a prospective write, capped for response size."""
     lines = list(
@@ -3109,7 +3152,6 @@ def _build_set_allowed_paths_handler(
     hass: HomeAssistant,
 ) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
     """Build the handle_set_allowed_paths service handler."""
-    config_dir = Path(hass.config.config_dir)
 
     async def handle_set_allowed_paths(call: ServiceCall) -> ServiceResponse:
         """Replace the user-configurable extra directories (issues #1567, #1586).
@@ -3132,18 +3174,9 @@ def _build_set_allowed_paths_handler(
                 "error": "ha_mcp_tools.set_allowed_paths requires admin auth.",
                 "paths": [],
             }
-        raw_paths = call.data.get("paths", [])
-        normalized: list[str] = []
-        rejected: list[str] = []
-        for entry in raw_paths:
-            norm = _normalize_extra_dir(entry, config_dir)
-            if norm is None:
-                rejected.append(entry)
-            elif norm not in normalized:
-                normalized.append(norm)
-
-        await _save_allowed_paths(hass, normalized)
-        hass.data.setdefault(DOMAIN, {})[_HASS_DATA_ALLOWED_PATHS_KEY] = normalized
+        normalized, rejected = await _apply_allowed_paths(
+            hass, call.data.get("paths", [])
+        )
         _LOGGER.info(
             "Updated ha_mcp_tools custom filesystem directories: %s (%d rejected)",
             normalized,
@@ -3212,9 +3245,9 @@ def _build_set_extra_yaml_keys_handler(
                 "error": "ha_mcp_tools.set_extra_yaml_keys requires admin auth.",
                 "keys": [],
             }
-        normalized, rejected = _normalize_extra_yaml_keys(call.data.get("keys", []))
-        await _save_extra_yaml_keys(hass, normalized)
-        hass.data.setdefault(DOMAIN, {})[_HASS_DATA_EXTRA_YAML_KEYS_KEY] = normalized
+        normalized, rejected = await _apply_extra_yaml_keys(
+            hass, call.data.get("keys", [])
+        )
         _LOGGER.info(
             "Updated ha_mcp_tools extra YAML write keys: %s (%d rejected)",
             normalized,
