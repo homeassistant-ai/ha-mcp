@@ -18,6 +18,7 @@ import pytest
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
+    SceneResolution,
 )
 
 
@@ -743,6 +744,14 @@ class TestLifecycleWriteWarningsShape:
         client.delete_scene_config = AsyncMock(return_value={"scene_id": "test_scene"})
         client.resolve_scene_id = AsyncMock(
             side_effect=lambda sid: sid.removeprefix("scene.")
+        )
+        # The remove path resolves via ``_resolve_scene`` (issue #1971).
+        client._resolve_scene = AsyncMock(
+            side_effect=lambda sid: SceneResolution(
+                storage_key=sid.removeprefix("scene."),
+                registry_hit=False,
+                platform=None,
+            )
         )
         client.get_entity_state = AsyncMock(
             return_value={
