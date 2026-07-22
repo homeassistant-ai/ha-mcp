@@ -795,6 +795,12 @@ class ConfigSceneTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
+        except SceneStorageConfigNotFoundError as e:
+            # Set on a non-storage scene: the hash-verify / python_transform
+            # pre-fetch read 404s because the entity has no editable scenes.yaml
+            # config (Hue/vendor or raw-YAML). Same CONFIG_NOT_FOUND
+            # classification as get/delete (#1971), not a generic write failure.
+            _raise_scene_not_storage_error(e.scene_id, e.platform)
         except Exception as e:
             error = exception_to_structured_error(
                 e,
