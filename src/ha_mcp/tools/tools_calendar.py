@@ -366,6 +366,10 @@ class CalendarTools:
         when ``rrule`` is provided (the REST service schema does not accept
         recurrence rules).
 
+        **When NOT to use:**
+        - To retrieve calendar events, use ``ha_config_get_calendar_events``.
+        - To delete an event, use ``ha_config_remove_calendar_event``.
+
         **Parameters:**
         - entity_id: Calendar entity ID (e.g., 'calendar.family')
         - summary: Event title/summary
