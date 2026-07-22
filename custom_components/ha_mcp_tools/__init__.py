@@ -81,6 +81,8 @@ SERVICE_EDIT_YAML_CONFIG = "edit_yaml_config"
 SERVICE_GET_CALLER_TOKEN = "get_caller_token"
 SERVICE_GET_ALLOWED_PATHS = "get_allowed_paths"
 SERVICE_SET_ALLOWED_PATHS = "set_allowed_paths"
+SERVICE_GET_EXTRA_YAML_KEYS = "get_extra_yaml_keys"
+SERVICE_SET_EXTRA_YAML_KEYS = "set_extra_yaml_keys"
 # Read-only access to pre-#1579 YAML backups in .ha_mcp_tools_backups/, so the
 # shared edits-backup interface can list/view/diff/restore them (#1579). These
 # historical artifacts predate the fold into the shared store; new writes no
@@ -105,6 +107,18 @@ _HASS_DATA_TOKEN_KEY = "caller_token"
 _ALLOWED_PATHS_STORAGE_KEY = f"{DOMAIN}_allowed_paths"
 _ALLOWED_PATHS_STORAGE_VERSION = 1
 _HASS_DATA_ALLOWED_PATHS_KEY = "allowed_paths"
+
+# User-configurable extra YAML write keys (#1887). Same store-per-concern
+# rationale as the allowed paths above: a separate Store, loaded into hass.data
+# at setup and updated in place by set_extra_yaml_keys so enforcement picks up
+# changes with no HA restart. This is the component-owned half of the setting;
+# the ha-mcp server also carries its own HA_MCP_EXTRA_YAML_KEYS, and the
+# effective write allowlist is the union of the two (the server reads this store
+# via get_extra_yaml_keys). YAML_KEY_DENYLIST members are stripped on the way in
+# and re-checked at enforcement, so the store can never widen the deny floor.
+_EXTRA_YAML_KEYS_STORAGE_KEY = f"{DOMAIN}_extra_yaml_keys"
+_EXTRA_YAML_KEYS_STORAGE_VERSION = 1
+_HASS_DATA_EXTRA_YAML_KEYS_KEY = "extra_yaml_keys"
 
 # Service schemas
 SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
@@ -214,6 +228,24 @@ SERVICE_GET_ALLOWED_PATHS_SCHEMA = vol.Schema(
 SERVICE_SET_ALLOWED_PATHS_SCHEMA = vol.Schema(
     {
         vol.Optional("paths", default=list): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional(CALLER_TOKEN_FIELD): cv.string,
+    }
+)
+
+# get_extra_yaml_keys / set_extra_yaml_keys back the component's own options
+# flow and the ha-mcp settings UI (#1887). Both are caller-token + admin gated,
+# matching the allowed-paths pair. set_extra_yaml_keys receives the FULL
+# replacement list; the handler strips whitespace/empties and drops any
+# YAML_KEY_DENYLIST member, reporting drops in ``rejected``.
+SERVICE_GET_EXTRA_YAML_KEYS_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CALLER_TOKEN_FIELD): cv.string,
+    }
+)
+
+SERVICE_SET_EXTRA_YAML_KEYS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("keys", default=list): vol.All(cv.ensure_list, [cv.string]),
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
@@ -343,6 +375,85 @@ async def _save_allowed_paths(hass: HomeAssistant, paths: list[str]) -> None:
         hass, _ALLOWED_PATHS_STORAGE_VERSION, _ALLOWED_PATHS_STORAGE_KEY
     )
     await store.async_save({"paths": paths})
+
+
+def _normalize_extra_yaml_keys(raw: Any) -> tuple[list[str], list[Any]]:
+    """Clean a candidate extra-YAML-keys list into ``(kept, dropped)`` (#1887).
+
+    Mirrors the server's ``parse_extra_yaml_write_keys`` (strip whitespace, drop
+    empties, dedup, sort) and additionally drops any ``YAML_KEY_DENYLIST``
+    member, so the component store can never widen the deny floor. Non-string
+    and blank entries are dropped too. ``dropped`` collects every rejected
+    entry for reporting/logging. Case is preserved: HA's own top-level domain
+    lookup is exact-case, so a mis-cased key never reaches a real integration.
+    """
+    kept: list[str] = []
+    dropped: list[Any] = []
+    seen: set[str] = set()
+    for entry in raw if isinstance(raw, list) else []:
+        if not isinstance(entry, str):
+            dropped.append(entry)
+            continue
+        key = entry.strip()
+        if not key or key in YAML_KEY_DENYLIST:
+            dropped.append(entry)
+            continue
+        if key not in seen:
+            seen.add(key)
+            kept.append(key)
+    return sorted(kept), dropped
+
+
+async def _load_extra_yaml_keys(hass: HomeAssistant) -> list[str]:
+    """Return the persisted user-configurable extra YAML write keys (#1887).
+
+    Fail-safe like :func:`_load_allowed_paths`: a corrupt/unreadable or
+    hand-edited store never propagates out of ``async_setup_entry``. Every entry
+    is re-validated through :func:`_normalize_extra_yaml_keys`, so a denylisted
+    or malformed key can never load into ``hass.data`` (defense in depth - the
+    deny floor is also re-checked at enforcement). Empty list on first run or a
+    malformed store.
+    """
+    store: Store = Store(
+        hass, _EXTRA_YAML_KEYS_STORAGE_VERSION, _EXTRA_YAML_KEYS_STORAGE_KEY
+    )
+    try:
+        data = await store.async_load()
+    except Exception:
+        _LOGGER.warning(
+            "ha_mcp_tools: could not load the extra-YAML-keys store; ignoring "
+            "it and granting no extra write keys.",
+            exc_info=True,
+        )
+        return []
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("keys")
+    if raw is not None and not isinstance(raw, list):
+        _LOGGER.warning(
+            "ha_mcp_tools extra-YAML-keys store is malformed (keys is %s, "
+            "expected list); ignoring it.",
+            type(raw).__name__,
+        )
+        return []
+    kept, dropped = _normalize_extra_yaml_keys(raw)
+    if dropped:
+        _LOGGER.warning(
+            "ha_mcp_tools: dropped %d invalid entr%s from the persisted "
+            "extra-YAML-keys store: %r",
+            len(dropped),
+            "y" if len(dropped) == 1 else "ies",
+            dropped,
+        )
+    return kept
+
+
+async def _save_extra_yaml_keys(hass: HomeAssistant, keys: list[str]) -> None:
+    """Persist the user-configurable extra YAML write keys to .storage."""
+    store: Store = Store(
+        hass, _EXTRA_YAML_KEYS_STORAGE_VERSION, _EXTRA_YAML_KEYS_STORAGE_KEY
+    )
+    await store.async_save({"keys": keys})
 
 
 def _unified_diff(before: str, after: str, rel_path: str, max_lines: int = 200) -> str:
@@ -2108,7 +2219,7 @@ def _build_edit_yaml_config_handler(
             yaml_path,
             is_package=is_package,
             is_theme=is_theme,
-            extra_allowed_keys=_caller_extra_allowed_keys(call),
+            extra_allowed_keys=_effective_extra_allowed_keys(hass, call),
         )
         if path_err is not None:
             return {"success": False, "error": path_err}
@@ -2247,6 +2358,25 @@ def _caller_extra_allowed_keys(call: ServiceCall) -> frozenset[str]:
         for key in call.data.get("extra_allowed_keys", [])
         if key and key not in YAML_KEY_DENYLIST
     )
+
+
+def _effective_extra_allowed_keys(
+    hass: HomeAssistant, call: ServiceCall
+) -> frozenset[str]:
+    """Union the per-call wire keys with the component-stored keys (#1887).
+
+    The ha-mcp server passes its own ``HA_MCP_EXTRA_YAML_KEYS`` on the wire; the
+    component's own options flow / settings store contributes
+    :func:`_current_extra_yaml_keys`. Both sources are denylist-filtered - the
+    wire in :func:`_caller_extra_allowed_keys`, the store on save/load - and
+    :func:`_parse_and_validate_yaml_path` re-checks the deny floor regardless,
+    so the union can never lift a forbidden key. The store side is filtered
+    again here purely as defense in depth.
+    """
+    stored = frozenset(
+        key for key in _current_extra_yaml_keys(hass) if key not in YAML_KEY_DENYLIST
+    )
+    return _caller_extra_allowed_keys(call) | stored
 
 
 def _parse_and_validate_yaml_path(
@@ -2481,6 +2611,16 @@ def _current_extra_dirs(hass: HomeAssistant) -> list[str]:
         paths = domain_data.get(_HASS_DATA_ALLOWED_PATHS_KEY)
         if isinstance(paths, list):
             return paths
+    return []
+
+
+def _current_extra_yaml_keys(hass: HomeAssistant) -> list[str]:
+    """Return the live component-configured extra YAML write keys from hass.data."""
+    domain_data = hass.data.get(DOMAIN)
+    if isinstance(domain_data, dict):
+        keys = domain_data.get(_HASS_DATA_EXTRA_YAML_KEYS_KEY)
+        if isinstance(keys, list):
+            return keys
     return []
 
 
@@ -3018,6 +3158,77 @@ def _build_set_allowed_paths_handler(
     return handle_set_allowed_paths
 
 
+def _build_get_extra_yaml_keys_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+    """Build the handle_get_extra_yaml_keys service handler (#1887)."""
+
+    async def handle_get_extra_yaml_keys(call: ServiceCall) -> ServiceResponse:
+        """Return the component-configured extra YAML write keys plus the
+        non-overridable deny floor.
+
+        Backs the component's own options flow and the ha-mcp settings UI, and
+        is how the server reads this store to union it with its own
+        ``HA_MCP_EXTRA_YAML_KEYS``. Caller-token + admin gated, matching
+        get_allowed_paths.
+        """
+        if not _caller_token_ok(hass, call):
+            return _unauthorized_response(SERVICE_GET_EXTRA_YAML_KEYS, keys=[])
+        if not await _caller_is_admin(hass, call):
+            return {
+                "success": False,
+                "error_code": "unauthorized",
+                "error": "ha_mcp_tools.get_extra_yaml_keys requires admin auth.",
+                "keys": [],
+            }
+        return {
+            "success": True,
+            "keys": _current_extra_yaml_keys(hass),
+            "deny_floor": sorted(YAML_KEY_DENYLIST),
+        }
+
+    return handle_get_extra_yaml_keys
+
+
+def _build_set_extra_yaml_keys_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
+    """Build the handle_set_extra_yaml_keys service handler (#1887)."""
+
+    async def handle_set_extra_yaml_keys(call: ServiceCall) -> ServiceResponse:
+        """Replace the component-configured extra YAML write keys.
+
+        Receives the FULL replacement list. Each entry is stripped and
+        validated; blanks and ``YAML_KEY_DENYLIST`` members are dropped and
+        reported in ``rejected``. Persists to .storage AND updates hass.data so
+        enforcement applies live with no HA restart. Caller-token + admin gated.
+        """
+        if not _caller_token_ok(hass, call):
+            return _unauthorized_response(SERVICE_SET_EXTRA_YAML_KEYS, keys=[])
+        if not await _caller_is_admin(hass, call):
+            return {
+                "success": False,
+                "error_code": "unauthorized",
+                "error": "ha_mcp_tools.set_extra_yaml_keys requires admin auth.",
+                "keys": [],
+            }
+        normalized, rejected = _normalize_extra_yaml_keys(call.data.get("keys", []))
+        await _save_extra_yaml_keys(hass, normalized)
+        hass.data.setdefault(DOMAIN, {})[_HASS_DATA_EXTRA_YAML_KEYS_KEY] = normalized
+        _LOGGER.info(
+            "Updated ha_mcp_tools extra YAML write keys: %s (%d rejected)",
+            normalized,
+            len(rejected),
+        )
+        return {
+            "success": True,
+            "keys": normalized,
+            "rejected": rejected,
+        }
+
+    return handle_set_extra_yaml_keys
+
+
 def _build_list_legacy_backups_handler(
     hass: HomeAssistant,
 ) -> Callable[[ServiceCall], Awaitable[ServiceResponse]]:
@@ -3126,6 +3337,13 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         _HASS_DATA_ALLOWED_PATHS_KEY
     ] = await _load_allowed_paths(hass)
 
+    # Load the component-configured extra YAML write keys (#1887) into hass.data
+    # so enforcement reads them with no I/O. set_extra_yaml_keys updates this in
+    # place, so changes apply live (no HA restart).
+    hass.data.setdefault(DOMAIN, {})[
+        _HASS_DATA_EXTRA_YAML_KEYS_KEY
+    ] = await _load_extra_yaml_keys(hass)
+
     # One-time migration of pre-fix YAML backups out of the publicly-served
     # www/ directory (GHSA-g39v-cvjh-8fpf). Wrapped so a migration failure
     # cannot prevent the integration from loading — the integration's
@@ -3195,6 +3413,8 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     handle_get_caller_token = _build_get_caller_token_handler(hass)
     handle_get_allowed_paths = _build_get_allowed_paths_handler(hass)
     handle_set_allowed_paths = _build_set_allowed_paths_handler(hass)
+    handle_get_extra_yaml_keys = _build_get_extra_yaml_keys_handler(hass)
+    handle_set_extra_yaml_keys = _build_set_extra_yaml_keys_handler(hass)
     handle_list_legacy_backups = _build_list_legacy_backups_handler(hass)
     handle_read_legacy_backup = _build_read_legacy_backup_handler(hass)
 
@@ -3260,6 +3480,22 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         SERVICE_SET_ALLOWED_PATHS,
         handle_set_allowed_paths,
         schema=SERVICE_SET_ALLOWED_PATHS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_EXTRA_YAML_KEYS,
+        handle_get_extra_yaml_keys,
+        schema=SERVICE_GET_EXTRA_YAML_KEYS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_EXTRA_YAML_KEYS,
+        handle_set_extra_yaml_keys,
+        schema=SERVICE_SET_EXTRA_YAML_KEYS_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
 

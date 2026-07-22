@@ -210,3 +210,33 @@ set_allowed_paths:
       example: '["pyscript", "python_scripts"]'
       selector:
         object:
+
+get_extra_yaml_keys:
+  name: Get Extra YAML Write Keys (Internal)
+  description: >-
+    Internal service used by the ha-mcp server and the integration's own
+    options flow. Returns the component-configured extra top-level YAML write
+    keys and the non-overridable deny floor. Restricted to the ha-mcp server
+    (requires the `_ha_mcp_token`) and admin auth. Not intended for direct
+    invocation from automations or scripts.
+  fields: {}
+
+set_extra_yaml_keys:
+  name: Set Extra YAML Write Keys (Internal)
+  description: >-
+    Internal service used by the ha-mcp server settings UI and the
+    integration's own options flow. Replaces the component-configured extra
+    top-level keys that ha_config_set_yaml may write in addition to the
+    built-in ones. Blank entries and keys on the non-overridable deny floor
+    (e.g. homeassistant, http, frontend, lovelace) are dropped. Restricted to
+    the ha-mcp server (requires the `_ha_mcp_token`) and admin auth.
+  fields:
+    keys:
+      name: Keys
+      description: >-
+        Top-level YAML keys, each additionally writable by ha_config_set_yaml
+        on this install (e.g. "alert2"). Replaces the current list.
+      required: false
+      example: '["alert2"]'
+      selector:
+        object:
