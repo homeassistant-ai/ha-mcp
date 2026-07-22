@@ -2234,10 +2234,13 @@ def _validate_lovelace_dashboard_path(
 def _caller_extra_allowed_keys(call: ServiceCall) -> frozenset[str]:
     """Return the operator-configured extra write keys for this call (#1887).
 
-    ``YAML_KEY_DENYLIST`` members are dropped here rather than rejected, so
-    a caller that sends one gets the same "not in the allowed list" answer
-    as before instead of a new way to probe the floor. Keys already covered
-    by the built-in sets are harmless duplicates and stay.
+    ``YAML_KEY_DENYLIST`` members are dropped here so they can never widen the
+    ``allowed`` set that the generic "not in the allowed list" rejection lists
+    for some *other* invalid key. A direct write to a denied key does not rely
+    on this drop: ``_parse_and_validate_yaml_path`` checks the denylist first
+    and returns the categorical floor message before any allow-set is
+    consulted. Keys already covered by the built-in sets are harmless
+    duplicates and stay.
     """
     return frozenset(
         key

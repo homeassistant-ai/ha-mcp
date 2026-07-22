@@ -2066,7 +2066,7 @@ class TestFormControlAccessibility:
         # Sanity: the expanded fixture really did exercise the extra
         # surfaces, not silently render nothing. `adv:code_mode_max_duration`
         # is emitted by both the Advanced-panel field generator (the fixture
-        # lists it as an advanced field) and renderCodeModeSubRows, so this
+        # lists it as an advanced field) and renderAdvancedSubRows, so this
         # assert only proves *a* control with that name rendered — not the
         # code-mode sub-row specifically.
         assert 'name="adv:code_mode_max_duration"' in result.dom, (
@@ -2492,7 +2492,7 @@ class TestAddonModeLockedBannerCopy:
         ``config.yaml`` schema, so the Saved-tools-path row renders
         env-pinned and read-only and the add-on user cannot unset it —
         the standalone "unset it to edit here" copy is unactionable.
-        ``renderCodeModeSubRows`` was
+        ``renderAdvancedSubRows`` was
         overlooked when the addon-aware locked-note copy was added to
         the other render paths (see the master/advanced banner tests
         above); this pins the same rule for the code-mode sub-rows.
