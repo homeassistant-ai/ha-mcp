@@ -13,6 +13,8 @@ import pytest
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantClient,
+    SceneResolution,
+    SceneStorageConfigNotFoundError,
 )
 
 
@@ -351,6 +353,114 @@ class TestSceneResolvedShortCircuit:
         mock_client.send_websocket_message.assert_not_called()
         mock_client._request.assert_called_once_with(
             "DELETE", "config/scene/config/storage_key"
+        )
+
+
+class TestSceneStorageConfigNotFound:
+    """Issue #1971: a scene entity that resolves in the registry but 404s on the
+    scenes.yaml-backed config API (a Hue/vendor scene, or a raw-YAML scene) must
+    surface as the not-storage-scene case, not a bare missing-entity 404.
+
+    ``config/scene/config/{id}`` is backed ONLY by the managed ``scenes.yaml``
+    (verified against HA-core), so it 404s for any scene not in that file even
+    though the entity exists - the registry resolve is what tells the two apart.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        return _make_mock_client()
+
+    @pytest.mark.asyncio
+    async def test_resolve_scene_returns_platform_and_hit(self, mock_client):
+        """``_resolve_scene`` threads out the registry ``platform`` and a
+        ``registry_hit`` flag - the two signals a bare storage key drops."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"result": {"unique_id": "hue-uuid-123", "platform": "hue"}}
+        )
+
+        resolution = await mock_client._resolve_scene("bedroom_sleepy")
+
+        assert resolution == SceneResolution(
+            storage_key="hue-uuid-123", registry_hit=True, platform="hue"
+        )
+
+    @pytest.mark.asyncio
+    async def test_resolve_scene_miss_reports_no_hit(self, mock_client):
+        """A failed registry lookup falls back to the bare id with
+        ``registry_hit=False`` - a write path must not treat the guess as real."""
+        # _make_mock_client's send_websocket_message raises → lookup miss.
+        resolution = await mock_client._resolve_scene("ghost_scene")
+
+        assert resolution == SceneResolution(
+            storage_key="ghost_scene", registry_hit=False, platform=None
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_scene_404_after_registry_hit_raises_storage_config_error(
+        self, mock_client
+    ):
+        """Entity resolves (Hue) but the config API 404s → the distinct
+        SceneStorageConfigNotFoundError carrying the platform, NOT a bare 404."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"result": {"unique_id": "hue-uuid-123", "platform": "hue"}}
+        )
+        mock_client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 404 - Not found", status_code=404
+            )
+        )
+
+        with pytest.raises(SceneStorageConfigNotFoundError) as exc_info:
+            await mock_client.get_scene_config("bedroom_sleepy")
+
+        err = exc_info.value
+        assert err.status_code == 404
+        assert err.platform == "hue"
+        assert err.scene_id == "bedroom_sleepy"
+        assert err.storage_key == "hue-uuid-123"
+
+    @pytest.mark.asyncio
+    async def test_get_scene_404_registry_miss_stays_generic(self, mock_client):
+        """No registry hit → a genuinely missing entity → the historic bare
+        404, NOT the not-storage-scene subclass."""
+        # send_websocket_message raises (miss) via _make_mock_client.
+        mock_client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 404 - Not found", status_code=404
+            )
+        )
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.get_scene_config("truly_missing")
+
+        assert not isinstance(exc_info.value, SceneStorageConfigNotFoundError)
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_delete_scene_404_after_registry_hit_raises_storage_config_error(
+        self, mock_client
+    ):
+        """The delete read-path 404 classifies identically when the caller
+        threads a registry-hit resolution through (#1971 delete parity)."""
+        mock_client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 404 - Not found", status_code=404
+            )
+        )
+        resolution = SceneResolution(
+            storage_key="hue-uuid-123", registry_hit=True, platform="hue"
+        )
+
+        with pytest.raises(SceneStorageConfigNotFoundError) as exc_info:
+            await mock_client.delete_scene_config(
+                "bedroom_sleepy", resolution=resolution
+            )
+
+        assert exc_info.value.platform == "hue"
+        assert exc_info.value.scene_id == "bedroom_sleepy"
+        # Endpoint used the resolved storage key, not the caller slug.
+        mock_client._request.assert_called_once_with(
+            "DELETE", "config/scene/config/hue-uuid-123"
         )
 
     @pytest.mark.asyncio

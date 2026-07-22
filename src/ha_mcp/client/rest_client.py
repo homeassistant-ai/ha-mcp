@@ -8,7 +8,8 @@ import logging
 import os
 import ssl
 import time
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, NoReturn
 
 import httpx
 from websockets.exceptions import WebSocketException
@@ -95,6 +96,54 @@ class HomeAssistantAPIError(HomeAssistantError):
         super().__init__(message)
         self.status_code = status_code
         self.response_data = response_data
+
+
+@dataclass(frozen=True)
+class SceneResolution:
+    """Outcome of resolving a scene identifier via the entity registry.
+
+    ``registry_hit`` records whether ``config/entity_registry/get`` returned a
+    usable ``unique_id`` - i.e. the entity actually EXISTS. It is the signal that
+    separates a genuinely-missing scene from one that exists but is not editable
+    through HA's scene config API (a Hue/vendor scene, or a raw-YAML scene): both
+    resolve fine yet 404 on ``config/scene/config/{id}``, because that endpoint is
+    backed only by the managed ``scenes.yaml`` (issue #1971). ``platform`` carries
+    the registry entry's integration domain (``"hue"``, ``"homeassistant"``, …)
+    for error-message enrichment only - it never drives the classification, since
+    a raw-YAML scene is ``platform="homeassistant"`` yet still 404s.
+    """
+
+    storage_key: str
+    registry_hit: bool
+    platform: str | None
+
+
+class SceneStorageConfigNotFoundError(HomeAssistantAPIError):
+    """A scene entity resolved in the registry, but ``config/scene/config/{id}``
+    (backed by ``scenes.yaml``) has no matching entry.
+
+    The entity EXISTS; it is simply not an editable Home Assistant storage scene
+    (Hue/vendor scene, or a raw-YAML scene). Raised instead of a bare 404 so the
+    tools layer can surface ``CONFIG_NOT_FOUND`` rather than the misleading
+    ``ENTITY_NOT_FOUND``/``RESOURCE_NOT_FOUND`` (issue #1971). Subclasses
+    ``HomeAssistantAPIError`` so existing ``except HomeAssistantAPIError`` sites
+    keep treating it as the 404 it is.
+    """
+
+    def __init__(
+        self,
+        scene_id: str,
+        *,
+        platform: str | None = None,
+        storage_key: str | None = None,
+    ):
+        self.scene_id = scene_id
+        self.platform = platform
+        self.storage_key = storage_key
+        msg = f"Scene not found in editable storage: {scene_id}"
+        if storage_key and storage_key != scene_id:
+            msg += f" (resolved storage key: {storage_key})"
+        super().__init__(msg, status_code=404)
 
 
 class HomeAssistantCommandError(HomeAssistantError):
@@ -1773,20 +1822,23 @@ class HomeAssistantClient:
                 ) from e
             raise
 
-    async def resolve_scene_id(self, identifier: str) -> str:
-        """
-        Resolve a scene identifier to its storage key via the entity registry.
+    async def _resolve_scene(self, identifier: str) -> SceneResolution:
+        """Resolve a scene identifier to its storage key AND registry metadata.
 
-        Scenes may be renamed in the HA UI, changing the entity_id but keeping
-        the original storage key. Mirrors :meth:`_resolve_script_id` — scenes
-        likewise need a WebSocket entity registry lookup; their state attributes
-        do not surface the storage key.
+        Backs :meth:`resolve_scene_id`. Returns the storage key together with
+        ``registry_hit`` (did the entity actually resolve?) and ``platform`` - the
+        two signals a bare storage key throws away. Callers that hit a config-API
+        404 need ``registry_hit`` to tell "entity missing" from "entity exists but
+        has no editable storage config", and ``platform`` to name the owning
+        integration in the resulting error (issue #1971).
 
         Args:
             identifier: Scene ID (with or without ``scene.`` prefix)
 
         Returns:
-            The storage key for the configuration API
+            A :class:`SceneResolution`. On any lookup failure it falls back to the
+            bare id with ``registry_hit=False`` - a write path must not treat the
+            guessed bare id as a confirmed resolve.
         """
         bare_id = identifier.removeprefix("scene.")
         entity_id = f"scene.{bare_id}"
@@ -1795,13 +1847,18 @@ class HomeAssistantClient:
                 {"type": "config/entity_registry/get", "entity_id": entity_id}
             )
             if result.get("success") is not False:
-                unique_id = result.get("result", {}).get("unique_id")
+                entry = result.get("result") or {}
+                unique_id = entry.get("unique_id")
                 if unique_id:
                     if unique_id != bare_id:
                         logger.debug(
                             f"Resolved scene entity_id {entity_id} to storage key {unique_id}"
                         )
-                    return str(unique_id)
+                    return SceneResolution(
+                        storage_key=str(unique_id),
+                        registry_hit=True,
+                        platform=entry.get("platform"),
+                    )
         except HomeAssistantConnectionError:
             # A dead transport must not become a silent guess: the fallback
             # below assumes the storage key equals the bare entity_id, which is
@@ -1814,7 +1871,50 @@ class HomeAssistantClient:
                 f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
                 exc_info=True,
             )
-        return bare_id
+        return SceneResolution(storage_key=bare_id, registry_hit=False, platform=None)
+
+    async def resolve_scene_id(self, identifier: str) -> str:
+        """
+        Resolve a scene identifier to its storage key via the entity registry.
+
+        Scenes may be renamed in the HA UI, changing the entity_id but keeping
+        the original storage key. Mirrors :meth:`_resolve_script_id` - scenes
+        likewise need a WebSocket entity registry lookup; their state attributes
+        do not surface the storage key.
+
+        Thin wrapper over :meth:`_resolve_scene` for callers that only need the
+        storage key (e.g. the write path); the read/delete paths use the richer
+        :class:`SceneResolution` directly.
+
+        Args:
+            identifier: Scene ID (with or without ``scene.`` prefix)
+
+        Returns:
+            The storage key for the configuration API
+        """
+        return (await self._resolve_scene(identifier)).storage_key
+
+    def _raise_scene_config_404(
+        self,
+        scene_id: str,
+        resolved_id: str,
+        resolution: SceneResolution | None,
+    ) -> NoReturn:
+        """Translate a scene config-API 404 into the right exception.
+
+        When the registry resolve succeeded (``registry_hit``), the entity exists
+        and the 404 means "no editable storage config" → raise
+        :class:`SceneStorageConfigNotFoundError`. Otherwise the entity is genuinely
+        absent → the historic bare 404 (issue #1971). Always raises.
+        """
+        if resolution is not None and resolution.registry_hit:
+            raise SceneStorageConfigNotFoundError(
+                scene_id, platform=resolution.platform, storage_key=resolved_id
+            )
+        msg = f"Scene not found: {scene_id}"
+        if resolved_id != scene_id:
+            msg += f" (resolved storage key: {resolved_id})"
+        raise HomeAssistantAPIError(msg, status_code=404)
 
     async def get_scene_config(
         self, scene_id: str, *, _resolved: bool = False
@@ -1824,9 +1924,17 @@ class HomeAssistantClient:
         ``_resolved=True`` signals ``scene_id`` is already the resolved storage
         key (the caller ran :meth:`resolve_scene_id`), skipping the redundant
         registry lookup. ``resolve_scene_id`` is idempotent, so the result is
-        identical either way.
+        identical either way. The ``registry_hit``/``platform`` signals a config
+        404 needs (issue #1971) are unavailable on the ``_resolved`` fast path -
+        that path is the internal re-fetch of an already-resolved scene, where a
+        subsequent 404 is a genuine disappearance, not the not-storage-scene case.
         """
-        resolved_id = scene_id if _resolved else await self.resolve_scene_id(scene_id)
+        if _resolved:
+            resolved_id = scene_id
+            resolution: SceneResolution | None = None
+        else:
+            resolution = await self._resolve_scene(scene_id)
+            resolved_id = resolution.storage_key
         try:
             endpoint = f"config/scene/config/{resolved_id}"
             response = await self._request("GET", endpoint)
@@ -1834,10 +1942,7 @@ class HomeAssistantClient:
             return {"success": True, "scene_id": resolved_id, "config": response}
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                msg = f"Scene not found: {scene_id}"
-                if resolved_id != scene_id:
-                    msg += f" (resolved storage key: {resolved_id})"
-                raise HomeAssistantAPIError(msg, status_code=404) from e
+                self._raise_scene_config_404(scene_id, resolved_id, resolution)
             raise
         except Exception as e:
             logger.error(f"Failed to get scene config for {scene_id}: {e}")
@@ -1904,15 +2009,30 @@ class HomeAssistantClient:
             raise
 
     async def delete_scene_config(
-        self, scene_id: str, *, _resolved: bool = False
+        self,
+        scene_id: str,
+        *,
+        _resolved: bool = False,
+        resolution: SceneResolution | None = None,
     ) -> dict[str, Any]:
         """Delete Home Assistant scene configuration.
 
         ``_resolved=True`` signals ``scene_id`` is already the resolved storage
         key, skipping the redundant registry lookup (``resolve_scene_id`` is
         idempotent, so the endpoint id is unchanged).
+
+        ``resolution`` lets a caller that already ran :meth:`_resolve_scene` pass
+        the full outcome through - the endpoint uses its ``storage_key`` while
+        ``scene_id`` stays the caller's slug for messages, and its ``registry_hit``
+        drives the config-404 classification (issue #1971) with no extra lookup.
         """
-        resolved_id = scene_id if _resolved else await self.resolve_scene_id(scene_id)
+        if resolution is not None:
+            resolved_id = resolution.storage_key
+        elif _resolved:
+            resolved_id = scene_id
+        else:
+            resolution = await self._resolve_scene(scene_id)
+            resolved_id = resolution.storage_key
         try:
             endpoint = f"config/scene/config/{resolved_id}"
             response = await self._request("DELETE", endpoint)
@@ -1925,10 +2045,7 @@ class HomeAssistantClient:
             }
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                msg = f"Scene not found: {scene_id}"
-                if resolved_id != scene_id:
-                    msg += f" (resolved storage key: {resolved_id})"
-                raise HomeAssistantAPIError(msg, status_code=404) from e
+                self._raise_scene_config_404(scene_id, resolved_id, resolution)
             elif e.status_code == 405:
                 raise HomeAssistantAPIError(
                     f"Cannot delete scene '{scene_id}': The HTTP DELETE method is blocked. "

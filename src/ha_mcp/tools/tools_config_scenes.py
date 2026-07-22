@@ -9,7 +9,7 @@ keyed by entity_id (not a list).
 
 import asyncio
 import logging
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NoReturn, cast
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -19,6 +19,7 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
+    SceneStorageConfigNotFoundError,
 )
 from ..errors import ErrorCode, create_error_response
 from ..strict_bps import BestPracticeKeyParam
@@ -61,6 +62,49 @@ from .util_helpers import (
 _SCENE_SKILL_FILES: tuple[str, ...] = ("SKILL.md",)
 
 logger = logging.getLogger(__name__)
+
+
+def _raise_scene_not_storage_error(scene_id: str, platform: str | None) -> NoReturn:
+    """Raise ``CONFIG_NOT_FOUND`` for a scene that exists but has no editable config.
+
+    The scene entity resolved in the registry, but ``config/scene/config/{id}`` -
+    backed only by the managed ``scenes.yaml`` - has no entry for it. That is the
+    not-a-storage-scene case (a Hue/vendor scene, or a scene defined directly in
+    YAML): the entity EXISTS, so ``ENTITY_NOT_FOUND`` would be wrong (issue #1971).
+    ``platform`` names the owning integration when the registry exposed it; the
+    message stays generic otherwise.
+    """
+    entity_id = f"scene.{scene_id.removeprefix('scene.')}"
+    suggestions = [
+        "Activate it with the scene.turn_on service: "
+        f"ha_call_service('scene', 'turn_on', {{'entity_id': '{entity_id}'}}).",
+    ]
+    if platform and platform != "homeassistant":
+        platform_note = (
+            f" It is provided by the '{platform}' integration, which manages its "
+            "own scenes outside Home Assistant's editable scene storage."
+        )
+        suggestions.append(
+            f"Edit this scene in the '{platform}' integration or its companion app; "
+            "ha_config_get_scene / ha_config_set_scene only edit Home Assistant "
+            "UI/storage scenes."
+        )
+    else:
+        platform_note = ""
+        suggestions.append(
+            "ha_config_get_scene / ha_config_set_scene only read and edit Home "
+            "Assistant UI/storage scenes (Settings > Automations & Scenes > Scenes). "
+            "Scenes defined directly in YAML are not editable through this API."
+        )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.CONFIG_NOT_FOUND,
+            f"Scene '{entity_id}' exists but has no editable Home Assistant "
+            f"storage configuration.{platform_note}",
+            suggestions=suggestions,
+            context={"scene_id": scene_id, "platform": platform},
+        )
+    )
 
 
 class ConfigSceneTools:
@@ -352,6 +396,11 @@ class ConfigSceneTools:
             return await self._legacy_get_scene(scene_id)
         except ToolError:
             raise
+        except SceneStorageConfigNotFoundError as e:
+            # The entity resolved but scenes.yaml has no config for it - a Hue/
+            # vendor or raw-YAML scene. Surface CONFIG_NOT_FOUND, not the
+            # ENTITY_NOT_FOUND the generic handler below would emit (#1971).
+            _raise_scene_not_storage_error(e.scene_id, e.platform)
         except Exception as e:
             # Pass `entity_id` so a 404 from rest_client surfaces as
             # ENTITY_NOT_FOUND (not the generic RESOURCE_NOT_FOUND fallback).
@@ -1229,8 +1278,12 @@ class ConfigSceneTools:
             # callsite (entity_id resolver, delete call, response) uses the
             # storage key consistently — outer ``scene_id`` matches the
             # inner body regardless of whether the caller passed the
-            # entity_id slug or the storage key.
-            resolved_id = await self._client.resolve_scene_id(scene_id)
+            # entity_id slug or the storage key. The rich resolution also
+            # carries ``registry_hit``/``platform`` so a config-API 404 on a
+            # non-storage scene (Hue/vendor, raw-YAML) classifies as
+            # CONFIG_NOT_FOUND rather than the misleading generic 404 (#1971).
+            resolution = await self._client._resolve_scene(scene_id)
+            resolved_id = resolution.storage_key
 
             # Resolve actual entity_id BEFORE delete — once the registry
             # entry is gone, the unique_id lookup can no longer find it.
@@ -1240,9 +1293,11 @@ class ConfigSceneTools:
                 resolved_id, allow_component=True
             )
 
-            # ``resolved_id`` is already the storage key (resolved above), so
-            # skip the redundant re-resolve inside delete_scene_config.
-            result = await self._client.delete_scene_config(resolved_id, _resolved=True)
+            # Thread the resolution through so delete_scene_config reuses the
+            # storage key (no redundant re-resolve) and can classify a 404.
+            result = await self._client.delete_scene_config(
+                scene_id, resolution=resolution
+            )
 
             if wait:
                 try:
@@ -1264,6 +1319,10 @@ class ConfigSceneTools:
             }
         except ToolError:
             raise
+        except SceneStorageConfigNotFoundError as e:
+            # Entity resolved but scenes.yaml has no config for it - a Hue/
+            # vendor or raw-YAML scene, not a genuinely missing entity (#1971).
+            _raise_scene_not_storage_error(e.scene_id, e.platform)
         except Exception as e:
             exception_to_structured_error(
                 e,
