@@ -114,14 +114,9 @@ def test_zh_cn_region_normalizes_to_zh_hans(tmp_path: Path) -> None:
     assert normalize_locale("zh-Hans", catalogs) == "zh-hans"
     # zh-TW should NOT resolve to zh-hans (no Traditional Chinese catalog)
     assert normalize_locale("zh-TW", catalogs) is None
+    assert select_locale(ha_language="zh-CN", catalogs=catalogs) == "zh-hans"
     assert (
-        select_locale(ha_language="zh-CN", catalogs=catalogs) == "zh-hans"
-    )
-    assert (
-        select_locale(
-            accept_language="zh-CN,zh;q=0.9", catalogs=catalogs
-        )
-        == "zh-hans"
+        select_locale(accept_language="zh-CN,zh;q=0.9", catalogs=catalogs) == "zh-hans"
     )
 
 
