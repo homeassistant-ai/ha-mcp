@@ -595,7 +595,7 @@ class TestGetSystemOverview:
 
     @pytest.mark.asyncio
     async def test_pagination_across_multiple_domains(self):
-        """Pagination distributes budget fairly across domains on page 1."""
+        """Pagination interleaves entities across domains in round-robin order."""
         entities = (
             [
                 {
@@ -631,7 +631,7 @@ class TestGetSystemOverview:
         assert result["domain_stats"]["sensor"]["count"] == 150
         assert result["domain_stats"]["light"]["count"] == 50
         assert result["domain_stats"]["switch"]["count"] == 50
-        # Every domain gets at least some entities (fair distribution)
+        # Round-robin interleaving includes entities from every domain
         assert len(result["domain_stats"]["sensor"]["entities"]) >= 3
         assert len(result["domain_stats"]["light"]["entities"]) >= 3
         assert len(result["domain_stats"]["switch"]["entities"]) >= 3
@@ -641,6 +641,50 @@ class TestGetSystemOverview:
         )
         assert total_returned <= 100
         assert result["pagination"]["has_more"] is True
+
+    @pytest.mark.asyncio
+    async def test_pagination_walks_multiple_domains_without_overlap(self):
+        """Following next_offset tiles a multi-domain round-robin ordering."""
+        entities = [
+            {
+                "entity_id": f"{domain}.{domain[0]}{index}",
+                "attributes": {"friendly_name": f"{domain.title()} {index}"},
+                "state": "on",
+            }
+            for domain in ("sensor", "light", "switch")
+            for index in range(3)
+        ]
+        tools = _make_tools(MockClient(entities=entities))
+
+        pages = []
+        offset = 0
+        while True:
+            page = await tools.get_system_overview(
+                detail_level="standard", limit=3, offset=offset
+            )
+            pages.append(page)
+            next_offset = page["pagination"]["next_offset"]
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        returned_names = [
+            entity["friendly_name"]
+            for page in pages
+            for domain in page["domain_stats"].values()
+            for entity in domain["entities"]
+        ]
+        expected_names = {entity["attributes"]["friendly_name"] for entity in entities}
+
+        assert len(pages) == 3
+        assert all(page["pagination"]["entities_returned"] == 3 for page in pages)
+        assert all(
+            len(domain["entities"]) == 1
+            for page in pages
+            for domain in page["domain_stats"].values()
+        )
+        assert len(returned_names) == len(set(returned_names))
+        assert set(returned_names) == expected_names
 
     @pytest.mark.asyncio
     async def test_pagination_explicit_limit_overrides_default(self):

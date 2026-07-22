@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import random
+from itertools import islice
 from typing import Any
 
 from ...visibility.resolver import load_hidden_set
@@ -442,21 +443,24 @@ class SystemOverviewMixin(_SearchBase):
 
         A single ordering must drive every page. Otherwise a specially balanced
         first page followed by sequential offset pages can repeat entities.
+
+        Mutates ``formatted_domain_stats`` in place; returns the count included.
         """
-        ordered: list[tuple[str, dict[str, Any]]] = []
         max_domain_size = max(
             (len(data["entities"]) for data in formatted_domain_stats.values()),
             default=0,
         )
-        for index in range(max_domain_size):
-            for domain, data in formatted_domain_stats.items():
-                if index < len(data["entities"]):
-                    ordered.append((domain, data["entities"][index]))
+        ordered = (
+            (domain, data["entities"][index])
+            for index in range(max_domain_size)
+            for domain, data in formatted_domain_stats.items()
+            if index < len(data["entities"])
+        )
 
         selected: dict[str, list[dict[str, Any]]] = {
             domain: [] for domain in formatted_domain_stats
         }
-        for domain, entity in ordered[offset : offset + effective_limit]:
+        for domain, entity in islice(ordered, offset, offset + effective_limit):
             selected[domain].append(entity)
 
         for domain, data in formatted_domain_stats.items():
