@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -876,3 +877,90 @@ class TestExtraYamlKeysVersionGate:
 
         await assert_extra_yaml_keys_supported(client, ["alert2"])
         assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.4"
+
+
+class TestEffectiveExtraYamlWriteKeys:
+    """effective_extra_yaml_write_keys unions the server's HA_MCP_EXTRA_YAML_KEYS
+    with the component-owned store, read via get_extra_yaml_keys and gated on the
+    component version (#1887)."""
+
+    @staticmethod
+    def _client(store_response=None, store_raises=False):
+        client = _make_client_with_token("eff-token")
+
+        async def fake_call_service(domain, service, payload, **kwargs):
+            if service == "get_extra_yaml_keys":
+                if store_raises:
+                    raise RuntimeError("ws boom")
+                return store_response
+            return {"service_response": {"success": True}}
+
+        client.call_service.side_effect = fake_call_service
+        return client
+
+    @staticmethod
+    def _settings(env):
+        return SimpleNamespace(extra_yaml_write_keys=env)
+
+    async def _run(
+        self, monkeypatch, *, version, env, store_response=None, store_raises=False
+    ):
+        from ha_mcp.tools import tools_filesystem as fsmod
+
+        client = self._client(store_response, store_raises)
+
+        async def _ensure(_client, **_kwargs):
+            return "eff-token"
+
+        monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
+        fsmod._COMPONENT_VERSION_CACHE[client] = version
+        return await fsmod.effective_extra_yaml_write_keys(client, self._settings(env))
+
+    @pytest.mark.asyncio
+    async def test_env_only_empty_store(self, monkeypatch):
+        result = await self._run(
+            monkeypatch,
+            version="1.2.4",
+            env=" alert2, foo ",
+            store_response={"service_response": {"success": True, "keys": []}},
+        )
+        assert result == ["alert2", "foo"]
+
+    @pytest.mark.asyncio
+    async def test_unions_env_and_store(self, monkeypatch):
+        result = await self._run(
+            monkeypatch,
+            version="1.2.4",
+            env="alert2",
+            store_response={"service_response": {"success": True, "keys": ["beta"]}},
+        )
+        assert result == ["alert2", "beta"]
+
+    @pytest.mark.asyncio
+    async def test_store_only_when_env_empty(self, monkeypatch):
+        result = await self._run(
+            monkeypatch,
+            version="1.2.4",
+            env="",
+            store_response={"service_response": {"success": True, "keys": ["beta"]}},
+        )
+        assert result == ["beta"]
+
+    @pytest.mark.asyncio
+    async def test_old_component_never_reads_store(self, monkeypatch):
+        # The store would report "beta", but a pre-1.2.4 component is not asked;
+        # assert_extra_yaml_keys_supported then handles the mismatch elsewhere.
+        result = await self._run(
+            monkeypatch,
+            version="1.2.3",
+            env="alert2",
+            store_response={"service_response": {"success": True, "keys": ["beta"]}},
+        )
+        assert result == ["alert2"]
+
+    @pytest.mark.asyncio
+    async def test_store_read_failure_falls_back_to_env(self, monkeypatch):
+        result = await self._run(
+            monkeypatch, version="1.2.4", env="alert2", store_raises=True
+        )
+        assert result == ["alert2"]

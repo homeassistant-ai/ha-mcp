@@ -20,7 +20,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..config import get_global_settings, parse_extra_yaml_write_keys
+from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from ..strict_bps import BestPracticeKeyParam
 from .auto_backup import with_auto_backup
@@ -35,6 +35,7 @@ from .tools_filesystem import (
     _assert_mcp_tools_available,
     assert_extra_yaml_keys_supported,
     call_mcp_tools_service,
+    effective_extra_yaml_write_keys,
 )
 from .util_helpers import (
     attach_skill_content,
@@ -465,7 +466,7 @@ class YamlConfigTools:
             # Check if custom component is available
             await _assert_mcp_tools_available(self._client)
 
-            extra_keys = parse_extra_yaml_write_keys(settings)
+            extra_keys = await effective_extra_yaml_write_keys(self._client, settings)
             await assert_extra_yaml_keys_supported(self._client, extra_keys)
 
             # Build service data

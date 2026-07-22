@@ -130,7 +130,7 @@ def _dispatch_call_count(client) -> int:
     return sum(
         1
         for c in client.call_service.await_args_list
-        if c.args[1] != "get_caller_token"
+        if c.args[1] not in ("get_caller_token", "get_extra_yaml_keys")
     )
 
 
@@ -273,7 +273,7 @@ def _dispatch_payloads(client) -> list[dict]:
     return [
         c.args[2]
         for c in client.call_service.await_args_list
-        if c.args[1] != "get_caller_token"
+        if c.args[1] not in ("get_caller_token", "get_extra_yaml_keys")
     ]
 
 

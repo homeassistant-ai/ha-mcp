@@ -51,6 +51,11 @@ MCP_TOOLS_DOMAIN = "ha_mcp_tools"
 # subsequent call comes back unauthorized (covers token rotation).
 CALLER_TOKEN_FIELD = "_ha_mcp_token"
 CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
+# Component service that returns the operator's component-side extra YAML write
+# keys (#1887). Ships in the same component version as the ``extra_allowed_keys``
+# field, so it is read only when the component is new enough (see
+# ``effective_extra_yaml_write_keys``).
+GET_EXTRA_YAML_KEYS_SERVICE = "get_extra_yaml_keys"
 
 # Minimum version of the ha_mcp_tools custom component that this ha-mcp
 # release expects. Bumps in lockstep with ``manifest.json`` whenever a
@@ -1006,3 +1011,54 @@ async def assert_extra_yaml_keys_supported(client: Any, extra_keys: list[str]) -
             ],
         )
     )
+
+
+async def effective_extra_yaml_write_keys(client: Any, settings: Any) -> list[str]:
+    """Return the write allowlist extension in force: server setting + component.
+
+    The operator can set extra YAML write keys in two places (#1887): the ha-mcp
+    server's own ``HA_MCP_EXTRA_YAML_KEYS`` and, via the integration UI, a store
+    the component owns. A key set only on the component would otherwise be
+    rejected by the server's own pre-dispatch allowlist before the write ever
+    reaches the component, so the server reads that store here (via
+    ``get_extra_yaml_keys``) and unions it with its own setting.
+
+    That service ships in the same component version as the ``extra_allowed_keys``
+    field (``MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS``), so it is read only when the
+    bootstrap reports a new-enough component; on an older component, or any read
+    failure, fall back to the server setting alone and let
+    ``assert_extra_yaml_keys_supported`` turn a real mismatch into an actionable
+    prompt. The store is read per write rather than cached: it changes at runtime
+    from the options flow, and a stale cache is the failure mode #1887's own
+    version-cache heal exists to avoid. YAML writes are rare and human-driven, so
+    the extra round-trip is negligible.
+    """
+    from ..config import parse_extra_yaml_write_keys
+
+    keys: set[str] = set(parse_extra_yaml_write_keys(settings))
+    try:
+        await _ensure_caller_token(client)
+        reported = _COMPONENT_VERSION_CACHE.get(client, "")
+        floor = _version_tuple(MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
+        try:
+            current = _version_tuple(reported) if reported else None
+        except ValueError:
+            current = None
+        if current is not None and current >= floor:
+            result = await call_mcp_tools_service(
+                client, GET_EXTRA_YAML_KEYS_SERVICE, {}
+            )
+            inner = (
+                unwrap_service_response(result) if isinstance(result, dict) else None
+            )
+            if isinstance(inner, dict) and inner.get("success"):
+                stored = inner.get("keys", [])
+                if isinstance(stored, list):
+                    keys.update(k for k in stored if isinstance(k, str) and k)
+    except Exception:
+        logger.debug(
+            "Could not read the component extra-YAML-keys store; "
+            "using the server setting alone.",
+            exc_info=True,
+        )
+    return sorted(keys)

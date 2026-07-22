@@ -2120,10 +2120,11 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
     asymmetry with ``disabled_packages_keys``, whose default is permissive
     and can therefore be left off.
     """
-    from .config import get_global_settings, parse_extra_yaml_write_keys
+    from .config import get_global_settings
     from .tools.tools_filesystem import (
         assert_extra_yaml_keys_supported,
         call_mcp_tools_service,
+        effective_extra_yaml_write_keys,
     )
     from .tools.util_helpers import unwrap_service_response
 
@@ -2138,7 +2139,7 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
         "yaml_path": yaml_path,
         "content": str(config),
     }
-    extra_keys = parse_extra_yaml_write_keys(get_global_settings())
+    extra_keys = await effective_extra_yaml_write_keys(client, get_global_settings())
     if extra_keys:
         # Same version gate as the write path: without it a component that
         # predates the field rejects the whole restore call over an option

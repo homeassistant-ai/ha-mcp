@@ -1692,7 +1692,16 @@ class TestYamlHandler:
         monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", "alert2")
         monkeypatch.setattr(ha_mcp_config, "_settings", None)
         calls: list[Any] = []
-        _patch_services(monkeypatch, {"edit_yaml_config": {"success": True}}, calls)
+        # The effective-keys read hits get_extra_yaml_keys first (empty store
+        # here); the union then carries the server setting to the wire.
+        _patch_services(
+            monkeypatch,
+            {
+                "get_extra_yaml_keys": {"success": True, "keys": []},
+                "edit_yaml_config": {"success": True},
+            },
+            calls,
+        )
 
         client = _StubClient()
 
@@ -1703,7 +1712,7 @@ class TestYamlHandler:
         fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.4"
 
         await bm._restore_yaml(client, "packages/alerts.yaml::alert2", "defaults: {}\n")
-        _, data = calls[0]
+        data = next(d for s, d in calls if s == "edit_yaml_config")
         assert data["extra_allowed_keys"] == ["alert2"]
 
     async def test_restore_blocks_on_component_too_old(
