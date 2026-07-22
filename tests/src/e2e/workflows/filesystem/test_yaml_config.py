@@ -415,6 +415,56 @@ class TestYamlConfigOperations:
             )
             logger.info("Successfully added knx to package file")
 
+    async def test_extra_key_write_succeeds_against_real_component(
+        self, mcp_client_with_yaml_config, ha_container_with_fresh_config
+    ):
+        """An operator extra key writes successfully against the real component (#1887).
+
+        Every rejection path is already e2e-covered; this pins the feature's
+        actual capability (the server forwarding ``extra_allowed_keys`` and
+        the component's real voluptuous schema accepting the widened key),
+        which the unit tests cannot reach (voluptuous is mocked there). The
+        write only succeeds because ``alert2`` was added to the allowlist;
+        without the operator setting it would take the generic allowlist
+        rejection.
+
+        ``alert2`` is wired into the container/in-process server's boot env
+        (``HA_MCP_EXTRA_YAML_KEYS``) and the embedded server's
+        ``feature_flags.json`` override. The inaddon HAOS backend has no
+        Supervisor option for this setting (it is a web-UI + env-var setting
+        by design), so its addon boots without the key; skip there rather than
+        assert a capability that backend was never given.
+        """
+        if ha_container_with_fresh_config.get("backend") == "haos_inaddon":
+            pytest.skip(
+                "HA_MCP_EXTRA_YAML_KEYS is not an inaddon Supervisor option; the "
+                "addon boots without it (web-UI/env-var setting by design)"
+            )
+
+        # alert2 is not in ALLOWED_YAML_KEYS; it reaches the write only through
+        # the operator extra-keys setting. Minimal valid mapping under the key.
+        content = "defaults: {}\n"
+
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            data = await call_set_yaml_confirmed(
+                mcp,
+                {
+                    "yaml_path": "alert2",
+                    "action": "add",
+                    "content": content,
+                    "file": "packages/_e2e_extra_key_alert2.yaml",
+                },
+            )
+            assert data.get("success") is True, (
+                f"extra-key (alert2) add should succeed: {data}"
+            )
+            assert data.get("action") == "add"
+            # alert2 has no reload service, so it defaults to restart_required.
+            assert data.get("post_action") == "restart_required", (
+                f"alert2 should default to post_action=restart_required: {data}"
+            )
+            logger.info("Successfully wrote operator extra key alert2")
+
     @pytest.mark.parametrize(
         ("key", "content", "reload_service"),
         [
