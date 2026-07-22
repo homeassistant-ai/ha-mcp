@@ -2644,3 +2644,27 @@ class TestSceneNotStorageScene:
         assert error["code"] == "CONFIG_NOT_FOUND"
         assert error["code"] != "ENTITY_NOT_FOUND"
         assert "hue" in error["message"].lower()
+
+    async def test_set_scene_not_storage_scene_maps_to_config_not_found(
+        self, tools, mock_client
+    ):
+        """The hash-verify / python_transform set path pre-fetches the scene;
+        on a non-storage scene that read raises SceneStorageConfigNotFoundError,
+        which must surface as CONFIG_NOT_FOUND (not a generic write failure)."""
+        mock_client.get_scene_config = AsyncMock(
+            side_effect=SceneStorageConfigNotFoundError(
+                "bedroom_sleepy", platform="hue", storage_key="hue-uuid-123"
+            )
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="bedroom_sleepy",
+                python_transform="config['name'] = 'x'",
+                config_hash="deadbeef",
+                wait=False,
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "CONFIG_NOT_FOUND"
+        assert "hue" in error["message"].lower()
