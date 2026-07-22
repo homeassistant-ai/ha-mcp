@@ -433,65 +433,38 @@ class SystemOverviewMixin(_SearchBase):
         return formatted_domain_stats
 
     @staticmethod
-    def _allocate_page_one(
-        formatted_domain_stats: dict[str, dict[str, Any]],
-        effective_limit: int,
-        total_entity_count: int,
-    ) -> int:
-        """Distribute the page-1 budget: a min allocation per domain, rest proportional.
-
-        Gives each domain a minimum slice so the LLM sees entities from every
-        domain, then distributes the remaining budget proportionally. Mutates
-        ``formatted_domain_stats`` in place; returns the count included.
-        """
-        min_per_domain = 3
-        num_domains = len(formatted_domain_stats)
-        reserved = min(min_per_domain * num_domains, effective_limit)
-        remaining_budget = effective_limit - reserved
-
-        entities_included = 0
-        for domain_data in formatted_domain_stats.values():
-            domain_entities = domain_data["entities"]
-            domain_len = len(domain_entities)
-            base = min(min_per_domain, domain_len)
-            if total_entity_count > 0 and remaining_budget > 0:
-                extra = int(remaining_budget * domain_len / total_entity_count)
-            else:
-                extra = 0
-            take = min(base + extra, domain_len)
-            if take < domain_len:
-                domain_data["entities"] = domain_entities[:take]
-                domain_data["truncated"] = True
-            entities_included += len(domain_data["entities"])
-        return entities_included
-
-    @staticmethod
-    def _allocate_subsequent_pages(
+    def _allocate_page(
         formatted_domain_stats: dict[str, dict[str, Any]],
         effective_limit: int,
         offset: int,
     ) -> int:
-        """Apply pages-2+ sequential skip/take across domains. Mutates in place."""
-        entities_skipped = 0
-        entities_included = 0
-        for domain_data in formatted_domain_stats.values():
-            domain_entities = domain_data["entities"]
-            domain_len = len(domain_entities)
+        """Take one stable round-robin page across domains.
 
-            skip_from_domain = max(0, min(domain_len, offset - entities_skipped))
-            budget_left = effective_limit - entities_included
-            take_from_domain = max(0, min(domain_len - skip_from_domain, budget_left))
+        A single ordering must drive every page. Otherwise a specially balanced
+        first page followed by sequential offset pages can repeat entities.
+        """
+        ordered: list[tuple[str, dict[str, Any]]] = []
+        max_domain_size = max(
+            (len(data["entities"]) for data in formatted_domain_stats.values()),
+            default=0,
+        )
+        for index in range(max_domain_size):
+            for domain, data in formatted_domain_stats.items():
+                if index < len(data["entities"]):
+                    ordered.append((domain, data["entities"][index]))
 
-            if skip_from_domain > 0 or take_from_domain < domain_len:
-                domain_data["entities"] = domain_entities[
-                    skip_from_domain : skip_from_domain + take_from_domain
-                ]
-                if take_from_domain < domain_len:
-                    domain_data["truncated"] = True
+        selected: dict[str, list[dict[str, Any]]] = {
+            domain: [] for domain in formatted_domain_stats
+        }
+        for domain, entity in ordered[offset : offset + effective_limit]:
+            selected[domain].append(entity)
 
-            entities_skipped += skip_from_domain
-            entities_included += take_from_domain
-        return entities_included
+        for domain, data in formatted_domain_stats.items():
+            original_count = len(data["entities"])
+            data["entities"] = selected[domain]
+            if len(data["entities"]) < original_count:
+                data["truncated"] = True
+        return sum(len(entities) for entities in selected.values())
 
     def _paginate_overview_entities(
         self,
@@ -514,14 +487,9 @@ class SystemOverviewMixin(_SearchBase):
         total_entity_count = sum(
             len(ds["entities"]) for ds in formatted_domain_stats.values()
         )
-        if offset == 0:
-            entities_included = self._allocate_page_one(
-                formatted_domain_stats, effective_limit, total_entity_count
-            )
-        else:
-            entities_included = self._allocate_subsequent_pages(
-                formatted_domain_stats, effective_limit, offset
-            )
+        entities_included = self._allocate_page(
+            formatted_domain_stats, effective_limit, offset
+        )
 
         has_more = (offset + entities_included) < total_entity_count
         return {

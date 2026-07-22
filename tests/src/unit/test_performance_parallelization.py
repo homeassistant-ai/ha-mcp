@@ -540,6 +540,40 @@ class TestGetSystemOverview:
         assert result["pagination"]["next_offset"] is None
 
     @pytest.mark.asyncio
+    async def test_pagination_pages_respect_limit_without_overlap(self):
+        """Following next_offset returns disjoint pages of the requested size."""
+        entities = [
+            {
+                "entity_id": f"light.l{i}",
+                "attributes": {"friendly_name": f"Light {i}"},
+                "state": "on",
+            }
+            for i in range(4)
+        ]
+        tools = _make_tools(MockClient(entities=entities))
+
+        first = await tools.get_system_overview(
+            detail_level="standard", limit=2, offset=0
+        )
+        second = await tools.get_system_overview(
+            detail_level="standard",
+            limit=2,
+            offset=first["pagination"]["next_offset"],
+        )
+
+        first_names = {
+            entity["friendly_name"]
+            for entity in first["domain_stats"]["light"]["entities"]
+        }
+        second_names = {
+            entity["friendly_name"]
+            for entity in second["domain_stats"]["light"]["entities"]
+        }
+        assert first["pagination"]["entities_returned"] == 2
+        assert second["pagination"]["entities_returned"] == 2
+        assert first_names.isdisjoint(second_names)
+
+    @pytest.mark.asyncio
     async def test_pagination_not_applied_to_minimal(self):
         """Minimal mode does not apply global pagination (already capped per-domain)."""
         entities = [
