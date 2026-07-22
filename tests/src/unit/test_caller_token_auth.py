@@ -806,9 +806,9 @@ class TestExtraYamlKeysVersionGate:
             _fetch_caller_token,
         )
 
-        client = self._client("1.2.4")
+        client = self._client("1.2.3")
         await _fetch_caller_token(client)
-        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.4"
+        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.3"
 
     @pytest.mark.asyncio
     async def test_gate_passes_on_current_component_via_bootstrap(self):
@@ -827,10 +827,10 @@ class TestExtraYamlKeysVersionGate:
 
         from ha_mcp.tools.tools_filesystem import assert_extra_yaml_keys_supported
 
-        client = self._client("1.2.3")
+        client = self._client("1.2.2")
         with pytest.raises(ToolError) as excinfo:
             await assert_extra_yaml_keys_supported(client, ["alert2"])
-        assert "1.2.4" in str(excinfo.value)
+        assert "1.2.3" in str(excinfo.value)
 
     @pytest.mark.asyncio
     async def test_gate_rebootstraps_after_component_update(self):
@@ -849,7 +849,7 @@ class TestExtraYamlKeysVersionGate:
             assert_extra_yaml_keys_supported,
         )
 
-        reported = {"version": "1.2.3"}
+        reported = {"version": "1.2.2"}
         client = _make_client_with_token("gate-token")
 
         async def fake_call_service(domain, service, payload, **kwargs):
@@ -867,12 +867,12 @@ class TestExtraYamlKeysVersionGate:
 
         # Prime the caches the way a live server would have, on the old build.
         await _fetch_caller_token(client)
-        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.3"
+        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.2"
         assert _CALLER_TOKEN_CACHE.get(client) == "gate-token"
 
         # Operator updates the component; the cached token is still valid, so
         # nothing else on the path would re-read the version.
-        reported["version"] = "1.2.4"
+        reported["version"] = "1.2.3"
 
         await assert_extra_yaml_keys_supported(client, ["alert2"])
-        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.4"
+        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.3"

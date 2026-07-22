@@ -934,7 +934,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
 # First custom-component version whose ``edit_yaml_config`` schema accepts
 # ``extra_allowed_keys`` (#1887).
-MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS = "1.2.4"
+MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS = "1.2.3"
 
 
 async def assert_extra_yaml_keys_supported(client: Any, extra_keys: list[str]) -> None:

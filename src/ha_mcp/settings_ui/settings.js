@@ -2217,7 +2217,7 @@ function renderFeatureFlags(flags) {
 // master beta AND parent; mandatory-bps: parent only) and pass the CSS
 // class that carries the group's indent/guide-bar depth. The number/text
 // code-mode sub-numerics are NOT rendered here — they save through
-// commitAdvancedEdit and live in renderCodeModeSubRows.
+// commitAdvancedEdit and live in renderAdvancedSubRows.
 function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByGate }) {
   subFieldNames.forEach(fieldName => {
     const f = flags[fieldName];
@@ -3400,7 +3400,7 @@ const ADVANCED_FIELD_META = {
   code_mode_max_recursion:   { label: "Code-mode max recursion",      help: "Recursion-depth cap per sandbox run. Restart required." },
   code_mode_max_invocations: { label: "Code-mode max invocations",    help: "API/tool-call cap per sandbox run. Restart required." },
   code_mode_saved_tools_path:{ label: "Saved-tools path",              help: "JSON file where ha_manage_custom_tool persists saved tools across restarts. Restart required." },
-  extra_yaml_write_keys:     { label: "Extra YAML write keys",        help: "Comma-separated top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Keys that redefine Home Assistant's own trust boundary can never be added and are ignored. Requires custom component 1.2.4 or newer." },
+  extra_yaml_write_keys:     { label: "Extra YAML write keys",        help: "Comma-separated top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Keys that redefine Home Assistant's own trust boundary can never be added and are ignored. Requires custom component 1.2.3 or newer." },
   sidecar_pin_port:    { label: "Settings UI sidecar port",    help: "0 = a new free port each restart (default); set 1024–65535 to pin a fixed port so the settings URL stays stable across restarts. Falls back to a free port if the pinned one is busy. Restart required." },
   enable_dev_mode:     { label: "Developer mode",               help: "⚠ DANGER: registers hidden developer tools (ha_dev_manage_server, ha_dev_manage_settings) that let AI agents change server settings and replace the running server version (e.g. install a PR build). For development and testing only. Restart required." },
 };

@@ -776,7 +776,7 @@ async def test_extra_keys_sent_when_configured(monkeypatch):
     monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", " alert2, foo ,alert2")
     monkeypatch.setattr(ha_mcp_config, "_settings", None)
     fn, client = await _make_tool()
-    _patch_reported_version(monkeypatch, client, "1.2.4")
+    _patch_reported_version(monkeypatch, client, "1.2.3")
     # yaml_path is one of the operator's own extra keys, so this also covers
     # the server's pre-dispatch guards not rejecting a non-built-in key.
     await fn(
@@ -792,7 +792,7 @@ async def test_extra_keys_sent_when_configured(monkeypatch):
     assert payloads[0]["yaml_path"] == "alert2"
 
 
-@pytest.mark.parametrize("reported", ["1.2.3", "not.a.version", None])
+@pytest.mark.parametrize("reported", ["1.2.2", "not.a.version", None])
 async def test_extra_keys_rejected_on_old_component(monkeypatch, reported):
     """Server ahead of component: fail with an actionable update prompt
     rather than letting the component's strict schema reject the whole
@@ -815,7 +815,7 @@ async def test_extra_keys_rejected_on_old_component(monkeypatch, reported):
         )
 
     message = str(excinfo.value)
-    assert "1.2.4" in message
+    assert "1.2.3" in message
     # Never dispatched – the guard fires before the service call.
     assert _dispatch_call_count(client) == 0
 

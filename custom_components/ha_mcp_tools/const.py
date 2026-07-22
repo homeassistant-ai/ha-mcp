@@ -25,7 +25,7 @@ DOMAIN = "ha_mcp_tools"
 # in CI. The
 # capability negotiation — not this version — gates each WS command (see
 # ``websocket_api.CAPABILITIES``).
-COMPONENT_VERSION = "1.2.4"
+COMPONENT_VERSION = "1.2.3"
 
 # Config-entry discriminator (``entry.data[CONF_ENTRY_TYPE]``). A missing value
 # means "tools" so the pre-existing services entry keeps working across the

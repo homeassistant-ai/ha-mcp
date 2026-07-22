@@ -1700,7 +1700,7 @@ class TestYamlHandler:
             return "token"
 
         monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
-        fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.4"
+        fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.3"
 
         await bm._restore_yaml(client, "packages/alerts.yaml::alert2", "defaults: {}\n")
         _, data = calls[0]
@@ -1728,13 +1728,13 @@ class TestYamlHandler:
             return "token"
 
         monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
-        fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.3"
+        fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.2"
 
         with pytest.raises(ToolError) as excinfo:
             await bm._restore_yaml(
                 client, "packages/alerts.yaml::alert2", "defaults: {}\n"
             )
-        assert "1.2.4" in str(excinfo.value)
+        assert "1.2.3" in str(excinfo.value)
         assert not calls
 
     async def test_restore_omits_extra_keys_when_unset(
