@@ -1375,6 +1375,56 @@ class TestPolicyTabFlow:
         assert len(rules) == 1, f"multi-predicate condition was split: {rules}"
         assert len(rules[0]["when"]) == 2
 
+    def test_save_rule_preserves_rule_order(self, settings_script: str) -> None:
+        """Saving a card must replace the tool's rules IN PLACE — rule order
+        is behaviorally significant (find_matching_rule takes the FIRST
+        match's remember_minutes), so a tool rule must not slide behind a
+        wildcard rule on edit (Codex #1993 round 3)."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 1,
+                    "rules": [
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.domain", "op": "eq", "value": "lock"}
+                            ],
+                            "remember_minutes": 5,
+                        },
+                        {"tool_name": "*", "when": [], "remember_minutes": 60},
+                    ],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await window.savePolicyRule('ha_call_service', {
+                tool_name: 'ha_call_service',
+                conditions: [[{path: 'args.domain', op: 'eq', value: 'lock'}]],
+                remember_minutes: 5
+              });
+            """,
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1
+        rules = json.loads(puts[0]["body"])["rules"]
+        assert [r["tool_name"] for r in rules] == ["ha_call_service", "*"], (
+            f"tool rule moved behind the wildcard: {rules}"
+        )
+
     def test_pending_list_shows_off_message_when_feature_disabled(
         self, settings_script: str
     ) -> None:

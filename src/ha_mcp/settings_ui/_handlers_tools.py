@@ -18,7 +18,7 @@ from .._version import is_embedded
 from ..errors import ErrorCode, create_error_response
 from ..llm_exposure import LLM_API_CONFIG_KEY
 from ..transforms import DEFAULT_PINNED_TOOLS
-from ..utils.config_write_lock import get_config_write_lock
+from ..utils.config_write_lock import config_write_guard
 from . import _persistence
 from ._tools_meta import _VALID_STATES, BPS_MANDATORY_TOOLS, _get_tool_metadata
 
@@ -265,10 +265,11 @@ async def _save_tools(
         )
     llm_api_overrides = _coerce_llm_overrides(raw_llm_api)
 
-    # Serialize the load-modify-save against the developer tool
-    # (set_tool runs its RMW in a worker thread, in parallel with this
-    # loop) via the shared write lock so neither loses the other's update.
-    async with get_config_write_lock():
+    # Serialize the load-modify-save against the developer tool (set_tool
+    # runs its RMW in a worker thread, in parallel with this loop) AND
+    # against other processes (the stdio sidecar runs this same handler in
+    # its own process) so neither loses the other's update.
+    async with config_write_guard():
         config = _persistence.load_tool_config()
 
         # BPS-dependency guard (#1886): reject disabling a BPS-locked tool

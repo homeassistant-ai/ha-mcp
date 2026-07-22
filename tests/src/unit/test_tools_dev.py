@@ -1237,3 +1237,42 @@ class TestCoerceBoolBranch:
     def test_coerce_bool_or_raise_rejects_non_bool(self):
         with pytest.raises(ToolError, match="must be a boolean"):
             DevTools._coerce_bool_or_raise("not-a-bool", "llm_api")
+
+
+class TestSetToolNameValidation:
+    """set_tool rejects unknown tool names before persisting any guard.
+
+    A typo'd gate ("ha_call_servce") previously saved a rule for a
+    nonexistent tool and reported success while the intended tool stayed
+    ungated (Codex #1993 round 3).
+    """
+
+    async def test_unknown_tool_rejected(self):
+        _seed_metadata([{"name": "ha_call_service", "tags": ["Control"]}])
+        with pytest.raises(ToolError, match="Unknown tool"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set_tool", tool="ha_call_servce", gated=True
+            )
+
+    async def test_feature_gated_stub_accepted(self):
+        # Currently-unavailable (flag-off) tools are still configurable.
+        _seed_metadata(
+            [
+                {
+                    "name": "ha_write_file",
+                    "tags": ["Files"],
+                    "disabled_by": "enable_filesystem_tools",
+                }
+            ]
+        )
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(
+            action="set_tool", tool="ha_write_file", state="disabled"
+        )
+        assert result["data"]["state"] == "disabled"
+
+    async def test_validation_skipped_without_metadata(self):
+        # Defensive server-less path with an empty cache: don't brick set_tool.
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(
+            action="set_tool", tool="ha_anything", state="pinned"
+        )
+        assert result["data"]["state"] == "pinned"

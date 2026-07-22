@@ -3109,9 +3109,22 @@ async function savePolicyRule(toolName, ruleObj) {
   const expanded = conditions.length === 0
     ? [{tool_name: toolName, when: [], remember_minutes: remember}]
     : conditions.map(preds => ({tool_name: toolName, when: preds, remember_minutes: remember}));
-  policy.rules = policy.rules
-    .filter(rule => rule.tool_name !== toolName)
-    .concat(expanded);
+  // Replace the tool's rules IN PLACE (at the position of its first rule)
+  // rather than appending at the end: rule order is behaviorally significant
+  // — find_matching_rule() takes the FIRST match's remember_minutes, so
+  // moving a tool-specific rule behind a wildcard rule would silently switch
+  // matching calls to the wildcard's approval lifetime.
+  const others = [];
+  let insertAt = -1;
+  policy.rules.forEach(rule => {
+    if (rule.tool_name === toolName) {
+      if (insertAt === -1) insertAt = others.length;
+    } else {
+      others.push(rule);
+    }
+  });
+  if (insertAt === -1) insertAt = others.length;
+  policy.rules = others.slice(0, insertAt).concat(expanded, others.slice(insertAt));
   await policyPut(policy, t('policies.operations.save_rule', {}, 'Save rule'));
 }
 

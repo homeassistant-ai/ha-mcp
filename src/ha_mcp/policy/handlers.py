@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from ..utils.config_write_lock import get_config_write_lock
+from ..utils.config_write_lock import config_write_guard
 from .approval_queue import ApprovalQueue
 from .model import Policy
 from .persistence import load_policy, save_policy
@@ -88,9 +88,10 @@ async def _put_config(
     # between this caller's GET and PUT. Returns the current policy
     # so the client can rebase if it wants to retry.
     # Serialize the version-check + save against the developer tool
-    # (set_policy / set_tool) via the shared write lock so a concurrent writer
-    # can't slip between the read and the write and lose an update.
-    async with get_config_write_lock():
+    # (set_policy / set_tool) AND against other processes (the stdio
+    # sidecar runs this same handler in its own process) so a concurrent
+    # writer can't slip between the read and the write and lose an update.
+    async with config_write_guard():
         current = load_policy(data_dir)
         if new_policy.version != current.version:
             return JSONResponse(

@@ -417,3 +417,33 @@ async def test_swept_pending_during_wait_is_reissued_with_fresh_token(queue):
         "reissue branch must create a fresh, queryable entry"
     )
     assert queue.get(original_token) is None
+
+
+class TestApprovalManagementExemption:
+    """Queue-management dev-tool actions must never themselves be gated.
+
+    With a wildcard (or ha_dev_manage_server) rule, gating "approve" would
+    create a SECOND pending entry instead of deciding the first — an
+    MCP-only approval workflow would deadlock (Codex #1993 P1).
+    """
+
+    def test_queue_management_actions_exempt(self):
+        from ha_mcp.policy.middleware import _is_approval_management
+
+        for action in ("list_pending", "approve", "deny"):
+            assert _is_approval_management(
+                "ha_dev_manage_server", {"action": action, "token": "t"}
+            )
+
+    def test_other_actions_and_tools_not_exempt(self):
+        from ha_mcp.policy.middleware import _is_approval_management
+
+        for action in ("info", "update_source", "restart"):
+            assert not _is_approval_management(
+                "ha_dev_manage_server", {"action": action}
+            )
+        assert not _is_approval_management(
+            "ha_dev_manage_settings", {"action": "approve"}
+        )
+        assert not _is_approval_management("ha_call_service", {"action": "approve"})
+        assert not _is_approval_management("ha_dev_manage_server", {})

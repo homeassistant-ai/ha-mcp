@@ -1009,15 +1009,54 @@ class DevTools:
                     "set_tool needs at least one of state / llm_api / gated",
                 )
             )
+        # Reject unknown tool names BEFORE persisting anything: a typo'd
+        # security gate ("ha_call_servce") would otherwise save a rule for a
+        # nonexistent tool and report success while the intended tool stays
+        # ungated. The metadata list includes feature-gated stubs, so a
+        # currently-unavailable tool is still configurable. Best-effort: a
+        # failed/empty metadata read skips validation (the guard is a typo
+        # net, not a security boundary — never brick set_tool over it).
+        try:
+            known = {t["name"] for t in await self._tool_metadata_rows()}
+        except Exception:
+            logger.debug(
+                "set_tool name validation skipped: metadata unavailable",
+                exc_info=True,
+            )
+            known = set()
+        if known and tool not in known:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Unknown tool: {tool!r}",
+                    suggestions=[
+                        "Call ha_dev_manage_settings('list_tools') for valid names"
+                    ],
+                )
+            )
         # Serialize the tool_config + policy read-modify-write against the web
-        # save handlers and other set_tool calls via the shared lock (held on
-        # the loop while the file I/O runs in the worker thread).
+        # save handlers and other set_tool calls via the shared asyncio lock
+        # (held on the loop while the file I/O runs in the worker thread);
+        # the worker additionally takes the cross-process file lock so the
+        # stdio sidecar's handlers can't interleave from another process.
         from ..utils.config_write_lock import get_config_write_lock
 
         async with get_config_write_lock():
             return await asyncio.to_thread(
-                self._write_tool_all, tool, state, llm_api, gated
+                self._with_file_lock, self._write_tool_all, tool, state, llm_api, gated
             )
+
+    @staticmethod
+    def _with_file_lock(fn: Any, /, *args: Any) -> Any:
+        """Run ``fn(*args)`` holding the cross-process config file lock.
+
+        Thread-side companion of ``config_write_guard()``: callers hold the
+        asyncio lock on the loop, so the file lock never nests in-process.
+        """
+        from ..utils.config_write_lock import config_file_lock
+
+        with config_file_lock():
+            return fn(*args)
 
     def _write_tool_all(
         self, tool: str, state: str | None, llm_api: bool | None, gated: bool | None
@@ -1340,9 +1379,12 @@ class DevTools:
             if expected_version is not None
             else (new_policy.version if "version" in policy else None)
         )
-        # Serialize the load-check-save against the web PUT handler + set_tool.
+        # Serialize the load-check-save against the web PUT handler + set_tool
+        # (asyncio lock) and other processes (file lock, in the thread).
         async with get_config_write_lock():
-            return await asyncio.to_thread(self._commit_policy, new_policy, expected)
+            return await asyncio.to_thread(
+                self._with_file_lock, self._commit_policy, new_policy, expected
+            )
 
     def _commit_policy(self, new_policy: Any, expected: int | None) -> dict[str, Any]:
         """Load current policy, version-check against ``expected``, save, report.
