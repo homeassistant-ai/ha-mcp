@@ -447,3 +447,38 @@ class TestApprovalManagementExemption:
         )
         assert not _is_approval_management("ha_call_service", {"action": "approve"})
         assert not _is_approval_management("ha_dev_manage_server", {})
+
+
+class TestApprovalManagementExemptionMiddleware:
+    """Drive the exemption through ``on_call_tool`` itself, not just the pure
+    ``_is_approval_management`` helper. Under a wildcard policy the queue-
+    management actions must reach ``call_next`` (so an MCP-only approval flow
+    can decide the first pending entry), while the high-stakes actions on the
+    same tool stay gated (Codex #1993 P1)."""
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("action", ["list_pending", "approve", "deny"])
+    async def test_queue_management_action_passes_through(self, queue, action):
+        pol = Policy(rules=[Rule(tool_name="*")])
+        mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
+        call_next = AsyncMock(return_value="passed")
+        result = await mw.on_call_tool(
+            make_context("ha_dev_manage_server", {"action": action, "token": "t"}),
+            call_next,
+        )
+        assert result == "passed"
+        call_next.assert_awaited_once()
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("action", ["update_source", "restart"])
+    async def test_non_management_action_stays_gated(self, queue, action):
+        pol = Policy(rules=[Rule(tool_name="*")])
+        mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
+        call_next = AsyncMock(return_value="should_not_run")
+        with pytest.raises(ToolError) as ei:
+            await mw.on_call_tool(
+                make_context("ha_dev_manage_server", {"action": action}), call_next
+            )
+        body = json.loads(ei.value.args[0])
+        assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
+        call_next.assert_not_called()

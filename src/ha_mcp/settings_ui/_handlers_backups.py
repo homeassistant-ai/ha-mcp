@@ -490,7 +490,13 @@ async def apply_backup_config(
         # ``RuntimeError`` from ``make_supervisor_httpx_client`` as
         # defense-in-depth.
         return await _save_backup_config_addon(server, clean)
-    return _apply_backup_config_file(clean)
+    # Same write-guard treatment as tool_config/tool_policy: the RMW is
+    # synchronous (safe in-process), but the guard's file lock keeps a
+    # writer in another process from interleaving with it.
+    from ..utils.config_write_lock import config_write_guard
+
+    async with config_write_guard():
+        return _apply_backup_config_file(clean)
 
 
 async def _save_backup_config(

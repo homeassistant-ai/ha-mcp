@@ -1195,13 +1195,28 @@ class DevTools:
     def _commit_gate(self, plan: dict[str, Any], data: dict[str, Any]) -> list[str]:
         """Persist the gate portion of a set_tool plan; returns any warnings."""
         from ..config import get_global_settings
-        from ..policy.persistence import save_policy
+        from ..policy.persistence import load_policy, save_policy
         from ..utils.data_paths import get_data_dir
 
         data["gated"] = bool(plan["gate_val"])
         data["policy_rules_changed"] = plan["gate_changed"]
         if plan["gate_changed"]:
-            save_policy(get_data_dir(), plan["new_policy"])
+            data_dir = get_data_dir()
+            # Version re-check before the write. Under the write locks this
+            # never fires (preflight and commit share one locked section);
+            # it matters when config_file_lock degraded to no-op (exotic FS)
+            # — a concurrent cross-process save then surfaces as a loud
+            # retryable error instead of being silently clobbered.
+            current = load_policy(data_dir)
+            if current.version != plan["new_policy"].version:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "policy changed concurrently during set_tool; re-run the call",
+                        context={"current_version": current.version},
+                    )
+                )
+            save_policy(data_dir, plan["new_policy"])
             self._clear_remember_cache()
         warnings: list[str] = []
         if not get_global_settings().enable_tool_security_policies:
@@ -1749,7 +1764,12 @@ class DevTools:
         connection in embedded and add-on deployments (the reply
         arrives just before the server goes down) and supports those
         two deployments only (standalone processes must be restarted
-        externally).
+        externally). list_pending/approve/deny are exempt from policy
+        gating (gating queue management would deadlock approvals) —
+        and since gated-call errors include the approval token, an
+        agent can self-approve its own gated calls while dev mode is
+        on. Dev mode is a trusted-operator feature; leave it off
+        otherwise.
 
         EXAMPLES:
         ha_dev_manage_server("info")

@@ -11,8 +11,9 @@ Lazy construction mirrors ``settings_ui._persistence._get_override_file_lock``:
 fixture with its own loop isn't locked into an import-time loop. Assumes the
 single-uvicorn-loop deployment every ha-mcp server uses.
 
-Leaf module (only stdlib imports) so settings_ui, policy, and tools can all
-depend on it without an import cycle.
+Leaf at import time (stdlib-only at module scope; ``data_paths`` is imported
+lazily inside ``config_file_lock`` — keep it that way) so settings_ui, policy,
+and tools can all depend on it without an import cycle.
 """
 
 from __future__ import annotations

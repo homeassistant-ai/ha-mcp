@@ -14,9 +14,10 @@ axis from the global enable/disable in the settings UI:
 
 The single source of truth travels **in-band**: :class:`LlmExposureMiddleware`
 stamps every ``tools/list`` entry with
-``_meta.ha_mcp = {"llm_api_exposed": bool, "pinned": bool}`` so the component
-(one more loopback MCP client) filters on data that can never drift from the
-server's settings, with zero extra round-trips. Stamping re-reads the
+``_meta.ha_mcp = {"llm_api_exposed": bool, "pinned": bool, "policy": {...}}``
+so the component (one more loopback MCP client) filters on data that can never
+drift from the server's settings, with zero extra round-trips. The ``policy``
+block reports the serving server's gating state (#1990 — see META_POLICY_KEY). Stamping re-reads the
 persisted settings behind a short coalescing cache (2s TTL), so settings-UI
 changes apply on the agent's next conversation turn without a restart.
 

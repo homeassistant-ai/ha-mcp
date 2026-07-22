@@ -1425,6 +1425,93 @@ class TestPolicyTabFlow:
             f"tool rule moved behind the wildcard: {rules}"
         )
 
+    def test_load_collapses_tool_rules_into_one_card(
+        self, settings_script: str
+    ) -> None:
+        """Read side of renderPolicyCards: a tool's on-disk rules collapse into
+        ONE card, one condition row per rule in order. Only single-predicate
+        rows get the edit button; the hand-authored multi-predicate row joins
+        its predicates with ' AND ' and offers no edit. The single remember
+        input shows the MAX across the rules (60), so a save that never touches
+        it can't silently shorten a longer window."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 4,
+                    "rules": [
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.domain", "op": "eq", "value": "lock"}
+                            ],
+                            "remember_minutes": 1,
+                        },
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.service", "op": "eq", "value": "unlock"}
+                            ],
+                            "remember_minutes": 60,
+                        },
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.domain", "op": "eq", "value": "lock"},
+                                {"path": "args.service", "op": "eq", "value": "unlock"},
+                            ],
+                            "remember_minutes": 0,
+                        },
+                    ],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await window.policyLoadConfig();
+              const cards = document.querySelectorAll('.policy-rule-card');
+              document.body.setAttribute('data-card-count', String(cards.length));
+              const card = cards[0];
+              const rows = card
+                ? Array.from(card.querySelectorAll('.policy-predicate-row'))
+                : [];
+              document.body.setAttribute('data-row-count', String(rows.length));
+              const codeText = (r) =>
+                (r && r.querySelector('code')) ? r.querySelector('code').textContent : '';
+              const hasEdit = (r) =>
+                String(!!(r && r.querySelector('.policy-edit-predicate')));
+              document.body.setAttribute(
+                'data-multi-has-and', String(codeText(rows[2]).includes(' AND ')));
+              document.body.setAttribute('data-multi-has-edit', hasEdit(rows[2]));
+              document.body.setAttribute('data-single0-has-edit', hasEdit(rows[0]));
+              document.body.setAttribute('data-single1-has-edit', hasEdit(rows[1]));
+              const rem = card ? card.querySelector('.policy-remember-minutes') : null;
+              document.body.setAttribute('data-remember', rem ? String(rem.value) : '');
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "card-count") == "1", (
+            "tool rules did not collapse to one card"
+        )
+        assert _probe(result, "row-count") == "3", "expected one condition row per rule"
+        assert _probe(result, "multi-has-and") == "true", (
+            "multi-predicate row missing ' AND ' join"
+        )
+        assert _probe(result, "multi-has-edit") == "false", (
+            "multi-predicate row should not be editable"
+        )
+        assert _probe(result, "single0-has-edit") == "true"
+        assert _probe(result, "single1-has-edit") == "true"
+        assert _probe(result, "remember") == "60", (
+            "remember input should show the max across rules"
+        )
+
     def test_pending_list_shows_off_message_when_feature_disabled(
         self, settings_script: str
     ) -> None:

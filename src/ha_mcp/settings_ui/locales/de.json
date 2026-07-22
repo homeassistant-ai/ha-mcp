@@ -311,6 +311,8 @@
     "policies.operators.gt": "ist größer als",
     "policies.operators.lt": "ist kleiner als",
     "policies.card.no_conditions": "(keine Bedingungen, Regel stimmt mit jedem Aufruf dieses Tools überein)",
+    "policies.card.always_row": "(immer — jeder Aufruf dieses Tools erfordert Genehmigung)",
+    "policies.card.and_join": " UND ",
     "policies.card.remove_title": "Aus Richtlinie entfernen",
     "policies.card.conditions_intro": "Genehmigung erfordern, wenn EINE der Bedingungen übereinstimmt (keine Bedingungen = immer Genehmigung erfordern):",
     "policies.card.add_condition": "+ Bedingung hinzufügen",

@@ -2508,8 +2508,9 @@ function renderPolicyCards(policy) {
   emptyEl.style.display = 'none';
   // Each condition is its own rule on disk (OR: the tool gates if ANY rule
   // matches). Collapse all of a tool's rules into ONE card whose "conditions"
-  // are the union of the rules' predicates; the card re-expands to one rule
-  // per condition on save (savePolicyRule). Order preserved by first sight.
+  // are the tool's rules — one condition per rule, each being that rule's
+  // whole predicate list; the card re-expands to one rule per condition on
+  // save (savePolicyRule). Order preserved by first sight.
   const byTool = {};
   const order = [];
   rules.forEach(r => {
@@ -2523,11 +2524,15 @@ function renderPolicyCards(policy) {
     // card edit round-trips multi-predicate rules intact instead of
     // flattening them.
     const conditions = toolRules.map(r => r.when || []);
-    // The card has a single remember-minutes input; carry the max across the
-    // tool's rules so re-saving doesn't silently shorten a remembered window.
-    const remember = Math.max(0, ...toolRules.map(r => r.remember_minutes || 0));
+    // The card has ONE remember-minutes input; DISPLAY the max across the
+    // tool's rules, but keep each condition's own value (remembers[i]) so a
+    // save that never touched the input can't silently rewrite heterogeneous
+    // per-condition lifetimes (rememberDirty gates which one is persisted).
+    const remembers = toolRules.map(r => r.remember_minutes || 0);
+    const remember = Math.max(0, ...remembers);
     policyRuleEdits[toolName] = JSON.parse(JSON.stringify(
-      {tool_name: toolName, conditions: conditions, remember_minutes: remember}
+      {tool_name: toolName, conditions: conditions, remembers: remembers,
+       remember_minutes: remember, rememberDirty: false}
     ));
     listEl.appendChild(renderPolicyCard(toolName, policyRuleEdits[toolName]));
   });
@@ -2550,7 +2555,7 @@ function renderPolicyCard(toolName, rule) {
   // single-predicate conditions get the edit button — the form edits one
   // predicate; multi-predicate conditions (hand-authored) can be removed.
   const displayCondition = (preds) => (preds.length
-    ? preds.map(displayPredicate).join(' AND ')
+    ? preds.map(displayPredicate).join(t('policies.card.and_join', {}, ' AND '))
     : t('policies.card.always_row', {}, '(always — gates every call to this tool)'));
   const predicateRows = rule.conditions.map((preds, i) => (
     '<li class="policy-predicate-row" data-idx="' + i + '">' +
@@ -2621,7 +2626,8 @@ function renderPolicyCard(toolName, rule) {
 
   // Auto-save: every condition add/edit/remove and every remember-minutes
   // change immediately PUTs the rule to disk. No manual "Save changes"
-  // button — the only signal is the small status text below the card.
+  // button. Returns whether the save landed so callers skip re-rendering a
+  // card that no longer reflects the server.
   let autoSaveSeq = 0;
   const autoSave = async () => {
     const status = card.querySelector('.policy-save-status');
@@ -2631,10 +2637,22 @@ function renderPolicyCard(toolName, rule) {
       await savePolicyRule(toolName, rule);
       // Skip the success label if a newer save started (rapid edits)
       if (mySeq === autoSaveSeq) status.textContent = t('status.saved', {}, 'Saved.');
+      return true;
     } catch (err) {
-      if (mySeq === autoSaveSeq) {
-        status.textContent = t('errors.save_failed_detail', {message: err.message}, 'Save failed: ' + err.message);
+      // A failed save must be LOUD and must not leave the card displaying a
+      // condition the server never persisted — a phantom SECURITY rule the
+      // user would trust (the #1990 failure shape). The tiny status text is
+      // missable, so toast like every other save surface, then resync every
+      // card from the server's actual policy.
+      const message = t('errors.save_failed_detail', {message: err.message}, 'Save failed: ' + err.message);
+      if (mySeq === autoSaveSeq) status.textContent = message;
+      showToast(message, {isError: true});
+      try {
+        await policyLoadConfig();
+      } catch (_e) {
+        // Reload failed too (e.g. network down) — the toast already fired.
       }
+      return false;
     }
   };
 
@@ -2664,6 +2682,9 @@ function renderPolicyCard(toolName, rule) {
   let rmDebounce = null;
   card.querySelector('.policy-remember-minutes').addEventListener('input', (e) => {
     rule.remember_minutes = parseInt(e.target.value, 10) || 0;
+    // Only an explicit touch of this input rewrites every condition's
+    // lifetime on save; otherwise per-condition values are preserved.
+    rule.rememberDirty = true;
     if (rmDebounce) clearTimeout(rmDebounce);
     rmDebounce = setTimeout(autoSave, 500);
   });
@@ -3042,8 +3063,10 @@ function renderPolicyCard(toolName, rule) {
     btn.addEventListener('click', async () => {
       const idx = parseInt(btn.dataset.idx, 10);
       rule.conditions.splice(idx, 1);
-      await autoSave();
-      rerenderCard();
+      if (rule.remembers) rule.remembers.splice(idx, 1);
+      // On failure autoSave toasts + rebuilds all cards from the server, so
+      // only re-render this (now stale) card when the save actually landed.
+      if (await autoSave()) rerenderCard();
     });
   });
 
@@ -3087,9 +3110,12 @@ function renderPolicyCard(toolName, rule) {
       rule.conditions[editingIdx] = [predicate];
     } else {
       rule.conditions.push([predicate]);
+      // A new condition takes the card's current lifetime value.
+      (rule.remembers = rule.remembers || []).push(rule.remember_minutes || 0);
     }
-    await autoSave();
-    rerenderCard();
+    // On failure autoSave toasts + rebuilds all cards from the server, so
+    // only re-render this (now stale) card when the save actually landed.
+    if (await autoSave()) rerenderCard();
   });
 
   return card;
@@ -3106,9 +3132,16 @@ async function savePolicyRule(toolName, ruleObj) {
   // always requires approval. Replaces all of this tool's rules.
   const remember = ruleObj.remember_minutes || 0;
   const conditions = ruleObj.conditions || [];
+  const remembers = ruleObj.remembers || [];
+  // Preserve each condition's own lifetime unless the user actually touched
+  // the card's remember input (rememberDirty) — an unrelated predicate edit
+  // must not silently rewrite heterogeneous per-condition remember values.
+  const rememberFor = (i) => (ruleObj.rememberDirty
+    ? remember
+    : (remembers[i] !== undefined ? remembers[i] : remember));
   const expanded = conditions.length === 0
     ? [{tool_name: toolName, when: [], remember_minutes: remember}]
-    : conditions.map(preds => ({tool_name: toolName, when: preds, remember_minutes: remember}));
+    : conditions.map((preds, i) => ({tool_name: toolName, when: preds, remember_minutes: rememberFor(i)}));
   // Replace the tool's rules IN PLACE (at the position of its first rule)
   // rather than appending at the end: rule order is behaviorally significant
   // — find_matching_rule() takes the FIRST match's remember_minutes, so
