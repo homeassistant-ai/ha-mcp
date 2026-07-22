@@ -3,6 +3,48 @@
 <!-- version list -->
 
 
+## v7.14.2 (2026-07-22)
+
+### Fixed
+
+- Tolerate setuptools editable-finder KeyError on Python 3.14 bring-up
+  ([#1989](https://github.com/homeassistant-ai/ha-mcp/pull/1989))
+- Allow reading blueprints/ by default (#1965)
+  ([#1988](https://github.com/homeassistant-ai/ha-mcp/pull/1988))
+- None-mode auto-approve setup must fail open
+  ([#1984](https://github.com/homeassistant-ai/ha-mcp/pull/1984))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish dev addon version 7.14.1.dev2073 [skip ci]
+  ([`4724b03`](https://github.com/homeassistant-ai/ha-mcp/commit/4724b035e027d9e2fb5334941047a0732faa2094))
+- **deps**: Update src/ha_mcp/resources/skills-vendor digest to 191cfec
+  ([#1998](https://github.com/homeassistant-ai/ha-mcp/pull/1998))
+- **deps**: Update ghcr.io/home-assistant/home-assistant docker tag to v2026.7.2
+  ([#1999](https://github.com/homeassistant-ai/ha-mcp/pull/1999))
+- **deps**: Bump astro from 6.4.6 to 7.1.0 in /site
+  ([#1995](https://github.com/homeassistant-ai/ha-mcp/pull/1995))
+- **addon**: Publish dev addon version 7.14.1.dev2067 [skip ci]
+  ([`7eb5e5b`](https://github.com/homeassistant-ai/ha-mcp/commit/7eb5e5bb75bb68c01193894894cc30aa2aef3955))
+- Sync tool docs after merge [skip ci]
+  ([`77de1d6`](https://github.com/homeassistant-ai/ha-mcp/commit/77de1d6cde9a5a4c61a378d849e791a7df6c1dca))
+- **addon**: Promote webhook-proxy 2.0.5 + fold in #1978 parity fixes
+  ([#1977](https://github.com/homeassistant-ai/ha-mcp/pull/1977))
+- **addon**: Publish version 7.14.1 [skip ci]
+  ([`4911d09`](https://github.com/homeassistant-ai/ha-mcp/commit/4911d09d1c19923230f624d2f3158f1cda5ccc46))
+
+### Continuous Integration
+
+- **deps**: Bump the github-actions group with 4 updates
+  ([#1983](https://github.com/homeassistant-ai/ha-mcp/pull/1983))
+</details>
+
+
 ## v7.14.1 (2026-07-19)
 
 ### Changed
