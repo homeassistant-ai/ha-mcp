@@ -11,6 +11,7 @@ for the 15 helper types listed in FLOW_HELPER_TYPES.
 """
 
 import asyncio
+import copy
 import logging
 from collections.abc import Iterator
 from enum import StrEnum
@@ -78,6 +79,7 @@ _RECONFIGURE_SUCCESS_REASONS = frozenset(
         "reconfigure_successful",
     }
 )
+_MISSING_DEFAULT = object()
 
 
 class _FlowType(StrEnum):
@@ -172,6 +174,48 @@ def _record_ignored_section_keys(
     )
 
 
+def _field_default_value(field: dict[str, Any]) -> Any:
+    """Return a serialized schema field's default/suggested value, if present."""
+    description = field.get("description")
+    if isinstance(description, dict) and "suggested_value" in description:
+        return copy.deepcopy(description["suggested_value"])
+    if "suggested_value" in field:
+        return copy.deepcopy(field["suggested_value"])
+    if "default" in field:
+        return copy.deepcopy(field["default"])
+    return _MISSING_DEFAULT
+
+
+def _schema_default_values(data_schema: list[Any]) -> dict[str, Any]:
+    """Build default form data from serialized schema suggestions/defaults."""
+    defaults: dict[str, Any] = {}
+    for field in data_schema:
+        if not isinstance(field, dict):
+            continue
+        name = field.get("name")
+        nested_schema = field.get("schema")
+        if not isinstance(name, str):
+            continue
+        if isinstance(nested_schema, list):
+            nested_defaults = _schema_default_values(nested_schema)
+            if nested_defaults:
+                defaults[name] = nested_defaults
+            continue
+        default = _field_default_value(field)
+        if default is not _MISSING_DEFAULT:
+            defaults[name] = default
+    return defaults
+
+
+def _required_section_defaults(
+    field: dict[str, Any], nested_schema: list[Any]
+) -> dict[str, Any]:
+    """Return default data for a required section, otherwise an empty dict."""
+    if not field.get("required"):
+        return {}
+    return _schema_default_values(nested_schema)
+
+
 def _ignored_keys_warnings(
     ignored_config_keys: set[str], remaining_config: dict[str, Any]
 ) -> list[str]:
@@ -192,6 +236,53 @@ def _ignored_keys_warnings(
             f"{', '.join(sorted(leftover_menu_keys))}"
         )
     return warnings
+
+
+def _consume_section_schema(
+    field: dict[str, Any],
+    nested_schema: list[Any],
+    remaining_config: dict[str, Any],
+    ignored_config_keys: set[str] | None,
+    path_prefix: str,
+    missing: object,
+) -> tuple[str | None, dict[str, Any] | Any]:
+    """Consume config values for a nested flow section."""
+    name = field.get("name")
+    section_name = name if isinstance(name, str) else None
+    section_path = _section_path(path_prefix, name)
+    explicit_section = (
+        remaining_config.pop(section_name, missing)
+        if section_name is not None
+        else missing
+    )
+    if explicit_section is not missing and not isinstance(explicit_section, dict):
+        return section_name, explicit_section
+
+    nested_data = _required_section_defaults(field, nested_schema)
+    if isinstance(explicit_section, dict):
+        explicit_remaining = dict(explicit_section)
+        nested_data.update(
+            _consume_form_schema(
+                nested_schema,
+                explicit_remaining,
+                ignored_config_keys,
+                section_path,
+            )
+        )
+        _record_ignored_section_keys(
+            ignored_config_keys,
+            explicit_remaining,
+            section_path,
+        )
+    nested_data.update(
+        _consume_form_schema(
+            nested_schema,
+            remaining_config,
+            ignored_config_keys,
+            section_path,
+        )
+    )
+    return section_name, nested_data
 
 
 def _consume_form_schema(
@@ -217,47 +308,17 @@ def _consume_form_schema(
         name = field.get("name")
         nested_schema = field.get("schema")
         if isinstance(nested_schema, list):
-            section_path = _section_path(path_prefix, name)
-            explicit_section = (
-                remaining_config.pop(name, missing)
-                if isinstance(name, str)
-                else missing
+            section_name, nested_data = _consume_section_schema(
+                field,
+                nested_schema,
+                remaining_config,
+                ignored_config_keys,
+                path_prefix,
+                missing,
             )
-            if explicit_section is not missing and not isinstance(
-                explicit_section, dict
-            ):
-                if isinstance(name, str):
-                    form_data[name] = explicit_section
-                continue
-
-            nested_data: dict[str, Any] = {}
-            if isinstance(explicit_section, dict):
-                explicit_remaining = dict(explicit_section)
-                nested_data.update(
-                    _consume_form_schema(
-                        nested_schema,
-                        explicit_remaining,
-                        ignored_config_keys,
-                        section_path,
-                    )
-                )
-                _record_ignored_section_keys(
-                    ignored_config_keys,
-                    explicit_remaining,
-                    section_path,
-                )
-            nested_data.update(
-                _consume_form_schema(
-                    nested_schema,
-                    remaining_config,
-                    ignored_config_keys,
-                    section_path,
-                )
-            )
-
             if nested_data:
-                if isinstance(name, str):
-                    form_data[name] = nested_data
+                if section_name is not None:
+                    form_data[section_name] = nested_data
                 else:
                     form_data.update(nested_data)
             continue

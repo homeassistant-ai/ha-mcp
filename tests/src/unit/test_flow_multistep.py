@@ -149,6 +149,91 @@ class TestHandleFormStepFiltering:
         }
         assert remaining == {}
 
+    def test_required_expandable_section_uses_schema_suggestions(self) -> None:
+        """Generic Camera's required advanced section has HA-suggested defaults."""
+        remaining = {"stream_source": "rtsp://camera.example/stream"}
+        step = {
+            "type": "form",
+            "step_id": "user",
+            "data_schema": [
+                {"name": "stream_source", "required": False},
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": True,
+                    "expanded": False,
+                    "schema": [
+                        {
+                            "name": "framerate",
+                            "required": True,
+                            "description": {"suggested_value": 2},
+                        },
+                        {
+                            "name": "verify_ssl",
+                            "required": True,
+                            "description": {"suggested_value": True},
+                        },
+                        {
+                            "name": "rtsp_transport",
+                            "required": False,
+                            "description": {"suggested_value": "tcp"},
+                        },
+                    ],
+                },
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {
+            "stream_source": "rtsp://camera.example/stream",
+            "advanced": {
+                "framerate": 2,
+                "verify_ssl": True,
+                "rtsp_transport": "tcp",
+            },
+        }
+        assert remaining == {}
+
+    def test_required_expandable_section_config_overrides_suggestions(self) -> None:
+        remaining = {
+            "stream_source": "rtsp://camera.example/stream",
+            "advanced": {"framerate": 5},
+            "verify_ssl": False,
+        }
+        step = {
+            "type": "form",
+            "step_id": "user",
+            "data_schema": [
+                {"name": "stream_source", "required": False},
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": True,
+                    "schema": [
+                        {
+                            "name": "framerate",
+                            "required": True,
+                            "description": {"suggested_value": 2},
+                        },
+                        {
+                            "name": "verify_ssl",
+                            "required": True,
+                            "description": {"suggested_value": True},
+                        },
+                    ],
+                },
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {
+            "stream_source": "rtsp://camera.example/stream",
+            "advanced": {"framerate": 5, "verify_ssl": False},
+        }
+        assert remaining == {}
+
     def test_omits_section_when_only_top_level_field_is_updated(self) -> None:
         remaining = {"state": "{{ 2 }}"}
         step = {
