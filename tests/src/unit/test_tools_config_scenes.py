@@ -15,6 +15,8 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
+    SceneResolution,
+    SceneStorageConfigNotFoundError,
 )
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
@@ -61,6 +63,17 @@ def mock_client():
     # storage-key remapping override per-test.
     client.resolve_scene_id = AsyncMock(
         side_effect=lambda sid: sid.removeprefix("scene.")
+    )
+    # The remove path resolves via ``_resolve_scene`` (richer than
+    # ``resolve_scene_id``) so a config-API 404 can be classified (#1971).
+    # Default identity mapping mirrors ``resolve_scene_id`` above; tests
+    # needing a slug↔storage-key remap or the not-storage-scene case override.
+    client._resolve_scene = AsyncMock(
+        side_effect=lambda sid: SceneResolution(
+            storage_key=sid.removeprefix("scene."),
+            registry_hit=False,
+            platform=None,
+        )
     )
     return client
 
@@ -846,8 +859,12 @@ class TestSceneResponseShape:
     async def test_remove_scene_response_uses_storage_key(self, tools, mock_client):
         """Issue #1168 R3 blocker 6: remove-scene response surfaces the
         storage key, even when the caller passed the entity_id slug."""
-        mock_client.resolve_scene_id = AsyncMock(
-            return_value="night_light_led_desk_strip"
+        mock_client._resolve_scene = AsyncMock(
+            return_value=SceneResolution(
+                storage_key="night_light_led_desk_strip",
+                registry_hit=True,
+                platform=None,
+            )
         )
         mock_client.delete_scene_config = AsyncMock(
             return_value={
@@ -976,6 +993,15 @@ class TestSceneResolutionDedup:
         resolve = AsyncMock(side_effect=lambda sid: sid.removeprefix("scene."))
         client.resolve_scene_id = resolve
 
+        async def _resolve_rich(sid):
+            return SceneResolution(
+                storage_key=sid.removeprefix("scene."),
+                registry_hit=True,
+                platform=None,
+            )
+
+        client._resolve_scene = AsyncMock(side_effect=_resolve_rich)
+
         async def _get(scene_id, *, _resolved=False):
             rid = scene_id if _resolved else await resolve(scene_id)
             return {
@@ -991,8 +1017,13 @@ class TestSceneResolutionDedup:
             rid = resolved_id if resolved_id is not None else await resolve(scene_id)
             return {"success": True, "scene_id": rid, "result": "ok"}
 
-        async def _delete(scene_id, *, _resolved=False):
-            rid = scene_id if _resolved else await resolve(scene_id)
+        async def _delete(scene_id, *, _resolved=False, resolution=None):
+            if resolution is not None:
+                rid = resolution.storage_key
+            elif _resolved:
+                rid = scene_id
+            else:
+                rid = await resolve(scene_id)
             return {"success": True, "scene_id": rid, "operation": "deleted"}
 
         client.get_scene_config = AsyncMock(side_effect=_get)
@@ -1047,9 +1078,13 @@ class TestSceneResolutionDedup:
 
         assert result["success"] is True
         assert result["scene_id"] == "test_scene"
-        assert client.resolve_scene_id.await_count == 1
+        # Remove resolves via the richer ``_resolve_scene`` (carries
+        # ``registry_hit``/``platform`` for #1971) exactly once, and threads
+        # that resolution into delete so it does not re-resolve.
+        assert client._resolve_scene.await_count == 1
+        assert client.resolve_scene_id.await_count == 0
         _, kwargs = client.delete_scene_config.call_args
-        assert kwargs.get("_resolved") is True
+        assert kwargs.get("resolution") is not None
 
     async def test_python_transform_resolves_once(self, monkeypatch):
         from ha_mcp.utils.config_hash import compute_config_hash
@@ -2541,3 +2576,95 @@ class TestSceneVerificationFailureWarnings:
             f"expected scene-remove verbiage; got {warnings!r}"
         )
         assert any("forced for test" in w for w in warnings)
+
+
+class TestSceneNotStorageScene:
+    """Issue #1971: get/remove of a scene entity that exists in the registry but
+    has no editable ``scenes.yaml`` config (a Hue/vendor scene, or a raw-YAML
+    scene) surfaces ``CONFIG_NOT_FOUND`` - never the misleading
+    ``ENTITY_NOT_FOUND``, since the entity is present. When the registry exposed
+    the owning ``platform`` the message names it and points at ``scene.turn_on``.
+    """
+
+    async def test_get_scene_not_storage_scene_maps_to_config_not_found(
+        self, tools, mock_client
+    ):
+        mock_client.get_scene_config = AsyncMock(
+            side_effect=SceneStorageConfigNotFoundError(
+                "bedroom_sleepy", platform="hue", storage_key="hue-uuid-123"
+            )
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_get_scene(scene_id="bedroom_sleepy")
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "CONFIG_NOT_FOUND"
+        assert error["code"] != "ENTITY_NOT_FOUND"
+        msg = error["message"].lower()
+        assert "exists" in msg and "hue" in msg
+        assert any("turn_on" in s for s in error["suggestions"])
+
+    async def test_get_scene_not_storage_scene_unknown_platform_stays_generic(
+        self, tools, mock_client
+    ):
+        """No platform exposed → still CONFIG_NOT_FOUND, generic message (no
+        fabricated integration name), still points at scene.turn_on."""
+        mock_client.get_scene_config = AsyncMock(
+            side_effect=SceneStorageConfigNotFoundError(
+                "yaml_scene", platform=None, storage_key="yaml_scene"
+            )
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_get_scene(scene_id="yaml_scene")
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "CONFIG_NOT_FOUND"
+        assert any("turn_on" in s for s in error["suggestions"])
+
+    async def test_remove_scene_not_storage_scene_maps_to_config_not_found(
+        self, tools, mock_client
+    ):
+        mock_client._resolve_scene = AsyncMock(
+            return_value=SceneResolution(
+                storage_key="hue-uuid-123", registry_hit=True, platform="hue"
+            )
+        )
+        mock_client.delete_scene_config = AsyncMock(
+            side_effect=SceneStorageConfigNotFoundError(
+                "bedroom_sleepy", platform="hue", storage_key="hue-uuid-123"
+            )
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_remove_scene(scene_id="bedroom_sleepy", wait=False)
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "CONFIG_NOT_FOUND"
+        assert error["code"] != "ENTITY_NOT_FOUND"
+        assert "hue" in error["message"].lower()
+
+    async def test_set_scene_not_storage_scene_maps_to_config_not_found(
+        self, tools, mock_client
+    ):
+        """The hash-verify / python_transform set path pre-fetches the scene;
+        on a non-storage scene that read raises SceneStorageConfigNotFoundError,
+        which must surface as CONFIG_NOT_FOUND (not a generic write failure)."""
+        mock_client.get_scene_config = AsyncMock(
+            side_effect=SceneStorageConfigNotFoundError(
+                "bedroom_sleepy", platform="hue", storage_key="hue-uuid-123"
+            )
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="bedroom_sleepy",
+                python_transform="config['name'] = 'x'",
+                config_hash="deadbeef",
+                wait=False,
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "CONFIG_NOT_FOUND"
+        assert "hue" in error["message"].lower()
