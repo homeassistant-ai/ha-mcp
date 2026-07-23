@@ -132,12 +132,14 @@ _EMBEDDED_SERVER_CONFIG_SUBDIR = ".ha_mcp"
 # ha_mcp.config reads that override layer in a standalone deployment, and the
 # embedded server IS standalone (is_running_in_addon() is False in embedded mode,
 # so the file is honored rather than short-circuited by Supervisor). Keys are
-# ha_mcp.config Settings field names (config.FEATURE_FLAG_FIELDS), not env-var
-# names. READ_ONLY_MODE / ENABLE_TOOL_SECURITY_POLICIES are deliberately absent:
+# ha_mcp.config Settings field names, not env-var names: both
+# config.FEATURE_FLAG_FIELDS and, via _apply_advanced_overrides reading the
+# same feature_flags.json, config.ADVANCED_SETTINGS_FIELDS. READ_ONLY_MODE /
+# ENABLE_TOOL_SECURITY_POLICIES are deliberately absent:
 # the tests that need them build their own in-process server
 # (test_readonly_mode / test_approval_flow), so enabling them on the shared
 # embedded server would break the default-catalog tests.
-_EMBEDDED_FEATURE_FLAGS: dict[str, bool] = {
+_EMBEDDED_FEATURE_FLAGS: dict[str, bool | str] = {
     "enable_beta_features": True,
     "enable_yaml_config_editing": True,
     "enable_yaml_packages_automation": True,
@@ -149,6 +151,11 @@ _EMBEDDED_FEATURE_FLAGS: dict[str, bool] = {
     # backend pins ENABLE_STRICT_MANDATORY_BPS=false, so the embedded server's
     # keyless writes aren't hard-blocked.
     "enable_strict_mandatory_bps": False,
+    # Operator extra YAML write keys (#1887): an ADVANCED_SETTINGS_FIELDS
+    # value (str, not a bool flag) so the embedded/haos_embedded backends can
+    # exercise a successful non-built-in-key write. The container backend sets
+    # the HA_MCP_EXTRA_YAML_KEYS env var directly instead (below).
+    "extra_yaml_write_keys": "alert2",
 }
 # BACKUP_OVERRIDE_FIELDS (not FEATURE_FLAG_FIELDS) values for the embedded
 # server — a separate override file (backup_settings.json) from
@@ -1764,6 +1771,10 @@ def _haos_post_boot_setup(base_url: str, request) -> tuple[str, dict]:
     os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
     os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
     os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
+    # Operator extra YAML write keys (#1887): widen the allowlist with a
+    # single non-built-in key so the success-path write test has a key to
+    # exercise. Value mirrors _EMBEDDED_FEATURE_FLAGS["extra_yaml_write_keys"].
+    os.environ["HA_MCP_EXTRA_YAML_KEYS"] = "alert2"
     # Strict best-practices gate (#1779) defaults ON with its parent;
     # pin it OFF so the suite's keyless writes aren't hard-blocked. The
     # strict-gate e2e test builds its own server with the flag enabled.
@@ -2425,6 +2436,10 @@ def ha_container_with_fresh_config(request):
         os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
         os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
         os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
+        # Operator extra YAML write keys (#1887): widen the allowlist with a
+        # single non-built-in key so the success-path write test has a key to
+        # exercise. Value mirrors _EMBEDDED_FEATURE_FLAGS["extra_yaml_write_keys"].
+        os.environ["HA_MCP_EXTRA_YAML_KEYS"] = "alert2"
         # Strict best-practices gate (#1779) defaults ON with its parent; pin it
         # OFF so the suite's keyless writes aren't hard-blocked. The strict-gate
         # e2e test builds its own server with the flag enabled.

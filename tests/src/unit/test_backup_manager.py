@@ -1677,6 +1677,83 @@ class TestYamlHandler:
         assert data["action"] == "replace"
         assert data["content"] == "resource: http://a\n"
 
+    async def test_restore_passes_operator_extra_keys(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A snapshot of an operator-extra key must be restorable (#1887).
+
+        The write that produced it was allowed only because of the extra-key
+        setting, so the restore has to carry the same set or the component
+        rejects it as "not in the allowed list".
+        """
+        from ha_mcp import config as ha_mcp_config
+        from ha_mcp.tools import tools_filesystem as fsmod
+
+        monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", "alert2")
+        monkeypatch.setattr(ha_mcp_config, "_settings", None)
+        calls: list[Any] = []
+        _patch_services(monkeypatch, {"edit_yaml_config": {"success": True}}, calls)
+
+        client = _StubClient()
+
+        async def _ensure(_client, **_kwargs):
+            return "token"
+
+        monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
+        fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.3"
+
+        await bm._restore_yaml(client, "packages/alerts.yaml::alert2", "defaults: {}\n")
+        _, data = calls[0]
+        assert data["extra_allowed_keys"] == ["alert2"]
+
+    async def test_restore_blocks_on_component_too_old(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A component predating extra_allowed_keys must produce the same
+        actionable update prompt as the write path, not the opaque
+        "extra keys not allowed" schema rejection from Home Assistant."""
+        from fastmcp.exceptions import ToolError
+
+        from ha_mcp import config as ha_mcp_config
+        from ha_mcp.tools import tools_filesystem as fsmod
+
+        monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", "alert2")
+        monkeypatch.setattr(ha_mcp_config, "_settings", None)
+        calls: list[Any] = []
+        _patch_services(monkeypatch, {"edit_yaml_config": {"success": True}}, calls)
+
+        client = _StubClient()
+
+        async def _ensure(_client, **_kwargs):
+            return "token"
+
+        monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
+        fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.2"
+
+        with pytest.raises(ToolError) as excinfo:
+            await bm._restore_yaml(
+                client, "packages/alerts.yaml::alert2", "defaults: {}\n"
+            )
+        assert "1.2.3" in str(excinfo.value)
+        assert not calls
+
+    async def test_restore_omits_extra_keys_when_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default config must keep the pre-#1887 payload, so a component
+        that predates the field still restores."""
+        from ha_mcp import config as ha_mcp_config
+
+        monkeypatch.delenv("HA_MCP_EXTRA_YAML_KEYS", raising=False)
+        monkeypatch.setattr(ha_mcp_config, "_settings", None)
+        calls: list[Any] = []
+        _patch_services(monkeypatch, {"edit_yaml_config": {"success": True}}, calls)
+        await bm._restore_yaml(
+            _StubClient(), "configuration.yaml::rest", "resource: http://a\n"
+        )
+        _, data = calls[0]
+        assert "extra_allowed_keys" not in data
+
     async def test_restore_bad_entity_id_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -189,14 +189,15 @@ class TestYamlConfigSecurity:
     async def test_blocked_key_rejected(self, mcp_client_with_yaml_config):
         """Keys not in the allowlist must be rejected."""
 
-        # 'homeassistant' is not in ALLOWED_YAML_KEYS
+        # An unknown key: not in ALLOWED_YAML_KEYS and not denylisted, so it
+        # gets the generic allowlist rejection.
         data = await safe_call_tool(
             mcp_client_with_yaml_config,
             TOOL_NAME,
             {
-                "yaml_path": "homeassistant",
+                "yaml_path": "zigbee2mqtt",
                 "action": "replace",
-                "content": "name: Hacked",
+                "content": "permit_join: true",
                 "file": "configuration.yaml",
             },
         )
@@ -204,6 +205,62 @@ class TestYamlConfigSecurity:
         assert inner.get("success") is False, f"Blocked key should fail: {data}"
         assert "not in the allowed list" in extract_error_message(inner).lower()
         logger.info("Correctly rejected blocked key")
+
+    async def test_denylisted_key_rejected_with_floor_message(
+        self, mcp_client_with_yaml_config
+    ):
+        """YAML_KEY_DENYLIST keys get the categorical refusal, not the
+        generic allowlist dump (#1887).
+
+        The distinction matters: the generic message reads as "pick another
+        key", while these can never be enabled at all, not even through the
+        extra-write-keys setting.
+        """
+
+        for key in ("homeassistant", "http", "frontend", "lovelace"):
+            data = await safe_call_tool(
+                mcp_client_with_yaml_config,
+                TOOL_NAME,
+                {
+                    "yaml_path": key,
+                    "action": "replace",
+                    "content": "name: Hacked",
+                    "file": "configuration.yaml",
+                },
+            )
+            assert data.get("success") is False, f"{key} must be refused: {data}"
+            message = extract_error_message(data).lower()
+            assert "can never be edited" in message, f"{key}: {message}"
+            assert "cannot be lifted" in message, f"{key}: {message}"
+            assert "not in the allowed list" not in message, f"{key}: {message}"
+        logger.info("Deny floor refused all trust-boundary keys")
+
+    async def test_packages_only_key_still_rejected_in_configuration_yaml(
+        self, mcp_client_with_yaml_config
+    ):
+        """automation/script/scene stay confined to packages/*.yaml (#1887).
+
+        The operator extra-key setting widens the allowlist, but it must not
+        reach these: they have storage-mode equivalents, and the per-key
+        toggle that governs them only applies to packages targets, so lifting
+        the restriction here would route around both.
+        """
+
+        for key in ("automation", "script", "scene"):
+            data = await safe_call_tool(
+                mcp_client_with_yaml_config,
+                TOOL_NAME,
+                {
+                    "yaml_path": key,
+                    "action": "add",
+                    "content": "[]",
+                    "file": "configuration.yaml",
+                },
+            )
+            assert data.get("success") is False, f"{key} must stay rejected: {data}"
+            message = extract_error_message(data).lower()
+            assert "packages/*.yaml" in message, f"{key}: {message}"
+        logger.info("Packages-only keys remain rejected in configuration.yaml")
 
     async def test_helper_keys_not_allowed(self, mcp_client_with_yaml_config):
         """Keys manageable via ha_config_set_helper must not be in the allowlist."""
@@ -357,6 +414,56 @@ class TestYamlConfigOperations:
                 f"knx should default to post_action=restart_required: {data}"
             )
             logger.info("Successfully added knx to package file")
+
+    async def test_extra_key_write_succeeds_against_real_component(
+        self, mcp_client_with_yaml_config, ha_container_with_fresh_config
+    ):
+        """An operator extra key writes successfully against the real component (#1887).
+
+        Every rejection path is already e2e-covered; this pins the feature's
+        actual capability (the server forwarding ``extra_allowed_keys`` and
+        the component's real voluptuous schema accepting the widened key),
+        which the unit tests cannot reach (voluptuous is mocked there). The
+        write only succeeds because ``alert2`` was added to the allowlist;
+        without the operator setting it would take the generic allowlist
+        rejection.
+
+        ``alert2`` is wired into the container/in-process server's boot env
+        (``HA_MCP_EXTRA_YAML_KEYS``) and the embedded server's
+        ``feature_flags.json`` override. The inaddon HAOS backend has no
+        Supervisor option for this setting (it is a web-UI + env-var setting
+        by design), so its addon boots without the key; skip there rather than
+        assert a capability that backend was never given.
+        """
+        if ha_container_with_fresh_config.get("backend") == "haos_inaddon":
+            pytest.skip(
+                "HA_MCP_EXTRA_YAML_KEYS is not an inaddon Supervisor option; the "
+                "addon boots without it (web-UI/env-var setting by design)"
+            )
+
+        # alert2 is not in ALLOWED_YAML_KEYS; it reaches the write only through
+        # the operator extra-keys setting. Minimal valid mapping under the key.
+        content = "defaults: {}\n"
+
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            data = await call_set_yaml_confirmed(
+                mcp,
+                {
+                    "yaml_path": "alert2",
+                    "action": "add",
+                    "content": content,
+                    "file": "packages/_e2e_extra_key_alert2.yaml",
+                },
+            )
+            assert data.get("success") is True, (
+                f"extra-key (alert2) add should succeed: {data}"
+            )
+            assert data.get("action") == "add"
+            # alert2 has no reload service, so it defaults to restart_required.
+            assert data.get("post_action") == "restart_required", (
+                f"alert2 should default to post_action=restart_required: {data}"
+            )
+            logger.info("Successfully wrote operator extra key alert2")
 
     @pytest.mark.parametrize(
         ("key", "content", "reload_service"),

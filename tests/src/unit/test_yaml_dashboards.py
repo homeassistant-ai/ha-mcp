@@ -181,7 +181,9 @@ class TestParseYamlPath:
         assert parts == ("lovelace", "dashboards", "energy-dash")
 
     def test_rejects_unknown_single_key(self, parse):
-        _, _, err = parse("frontend")
+        # Genuinely unknown, not denylisted – a YAML_KEY_DENYLIST member
+        # gets the categorical deny message instead of this one.
+        _, _, err = parse("zigbee2mqtt")
         assert err is not None
         assert "not in the allowed list" in err
 
@@ -258,8 +260,10 @@ class TestParseYamlPathPackagesOnly:
     def test_union_list_in_generic_error_when_is_package(self, parse):
         # Unknown single key inside a package file: error must enumerate both
         # ALLOWED_YAML_KEYS and PACKAGES_ONLY_YAML_KEYS so the user sees the
-        # full surface they can pick from.
-        _, _, err = parse("frontend", is_package=True)
+        # full surface they can pick from. The probe key must be genuinely
+        # unknown – a YAML_KEY_DENYLIST member takes the deny branch instead
+        # and never reaches this generic dump.
+        _, _, err = parse("zigbee2mqtt", is_package=True)
         assert err is not None
         assert "automation" in err
         assert "script" in err
@@ -269,11 +273,137 @@ class TestParseYamlPathPackagesOnly:
         # Unknown single key against configuration.yaml: allowlist must NOT
         # include PACKAGES_ONLY keys — listing them would mislead the user
         # into thinking they can rename their key to one of those.
-        _, _, err = parse("frontend", is_package=False)
+        _, _, err = parse("zigbee2mqtt", is_package=False)
         assert err is not None
         assert "automation" not in err
         assert "script" not in err
         assert "scene" not in err
+
+
+class TestParseYamlPathExtraAllowedKeys:
+    """Operator-configured extra write keys and the deny floor (#1887).
+
+    ``extra_allowed_keys`` widens what a single-segment yaml_path may name;
+    ``YAML_KEY_DENYLIST`` is the floor that widening can never cross.
+    """
+
+    @pytest.fixture(scope="class")
+    def parse(self):
+        from custom_components.ha_mcp_tools import _parse_and_validate_yaml_path
+
+        return _parse_and_validate_yaml_path
+
+    def test_rejects_unknown_key_without_extra_allowed(self, parse):
+        _, _, err = parse("alert2")
+        assert err is not None
+
+    @pytest.mark.parametrize("is_package", [False, True])
+    def test_accepts_extra_key_in_both_file_kinds(self, parse, is_package):
+        # The filed case (alert2) reads from a package fragment, but the
+        # setting is not packages-scoped – configuration.yaml counts too.
+        kind, parts, err = parse(
+            "alert2",
+            is_package=is_package,
+            extra_allowed_keys=frozenset({"alert2"}),
+        )
+        assert err is None
+        assert kind == "single"
+        assert parts == ("alert2",)
+
+    @pytest.mark.parametrize("key", ["automation", "script", "scene"])
+    def test_extra_key_does_not_lift_packages_only_restriction(self, parse, key):
+        """An extra key must not make a packages-only key writable in
+        configuration.yaml (#1887).
+
+        Those keys have storage-mode equivalents and are confined to
+        packages/*.yaml so the two collections cannot collide. If the extra-key
+        setting lifted that, an operator could reach configuration.yaml with
+        automation/script/scene while the per-key toggle governing them is off,
+        since that toggle only gates packages targets.
+        """
+        _, _, err = parse(key, extra_allowed_keys=frozenset({key}))
+        assert err is not None
+        assert "packages/*.yaml" in err
+        assert f"ha_config_set_{key}" in err
+
+    @pytest.mark.parametrize("key", ["automation", "script", "scene"])
+    def test_packages_only_key_still_reaches_package_files(self, parse, key):
+        """The restriction above must not narrow the packages path itself:
+        inside packages/*.yaml these keys stay acceptable, with or without the
+        operator listing them."""
+        for extra in (frozenset(), frozenset({key})):
+            kind, parts, err = parse(key, is_package=True, extra_allowed_keys=extra)
+            assert err is None, f"{key} with extra={extra}: {err}"
+            assert kind == "single"
+            assert parts == (key,)
+
+    def test_generic_error_lists_extra_keys(self, parse):
+        # An operator who added a key must see it in the allowed-keys dump,
+        # otherwise the error contradicts their own configuration.
+        _, _, err = parse("nosuchkey", extra_allowed_keys=frozenset({"alert2"}))
+        assert err is not None
+        assert "alert2" in err
+
+    @pytest.mark.parametrize("key", ["homeassistant", "http", "frontend", "lovelace"])
+    def test_denylist_key_rejected_even_when_extra_allowed(self, parse, key):
+        # The floor must win over the operator's own list – this is the
+        # whole point of it being non-operator-extendable.
+        _, _, err = parse(key, extra_allowed_keys=frozenset({key}))
+        assert err is not None
+        assert "never be edited" in err
+        # The operator configured this key on purpose; without this sentence
+        # the message never answers "why is my key being ignored".
+        assert "cannot be lifted" in err
+
+    @pytest.mark.parametrize("key", ["homeassistant", "http", "frontend", "lovelace"])
+    def test_denylist_key_rejected_in_packages_too(self, parse, key):
+        _, _, err = parse(key, is_package=True, extra_allowed_keys=frozenset({key}))
+        assert err is not None
+        assert "never be edited" in err
+
+    def test_denylist_error_is_distinct_from_generic_allowlist_dump(self, parse):
+        # A denied key must not be answered with "here are the keys you may
+        # use instead" – that reads as "pick another key", hiding that this
+        # one is categorically refused.
+        _, _, deny_err = parse("http")
+        _, _, generic_err = parse("nosuchkey")
+        assert deny_err is not None and generic_err is not None
+        assert deny_err != generic_err
+        assert "not in the allowed list" not in deny_err
+
+
+class TestYamlKeyDenylistContract:
+    """Invariants the deny floor relies on (#1887)."""
+
+    def test_denylist_disjoint_from_allow_sets(self):
+        # ``_parse_and_validate_yaml_path`` checks the denylist first, so an
+        # overlap would silently make an allowed key unreachable rather than
+        # failing loudly here.
+        from custom_components.ha_mcp_tools.const import (
+            ALLOWED_YAML_KEYS,
+            PACKAGES_ONLY_YAML_KEYS,
+            YAML_KEY_DENYLIST,
+        )
+
+        overlap = YAML_KEY_DENYLIST & (ALLOWED_YAML_KEYS | PACKAGES_ONLY_YAML_KEYS)
+        assert not overlap, f"denylisted keys also marked allowed: {overlap}"
+
+    def test_caller_extra_keys_drop_denylisted_entries(self):
+        from types import SimpleNamespace
+
+        from custom_components.ha_mcp_tools import _caller_extra_allowed_keys
+
+        call = SimpleNamespace(
+            data={"extra_allowed_keys": ["alert2", "http", "", "homeassistant"]}
+        )
+        assert _caller_extra_allowed_keys(call) == frozenset({"alert2"})
+
+    def test_caller_extra_keys_default_empty(self):
+        from types import SimpleNamespace
+
+        from custom_components.ha_mcp_tools import _caller_extra_allowed_keys
+
+        assert _caller_extra_allowed_keys(SimpleNamespace(data={})) == frozenset()
 
 
 class TestPostActionTableContract:

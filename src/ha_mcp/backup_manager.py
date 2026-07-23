@@ -2113,8 +2113,18 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
     ``edit_yaml_config`` is the only write path that reaches HA config
     files (``write_file`` rejects them), so YAML restore goes through it
     with ``action="replace"``.
+
+    The operator's extra write keys (#1887) must ride along: the write that
+    produced this snapshot was allowed only because of them, so omitting
+    them here would make an auto-captured backup unrestorable. Note the
+    asymmetry with ``disabled_packages_keys``, whose default is permissive
+    and can therefore be left off.
     """
-    from .tools.tools_filesystem import call_mcp_tools_service
+    from .config import get_global_settings, parse_extra_yaml_write_keys
+    from .tools.tools_filesystem import (
+        assert_extra_yaml_keys_supported,
+        call_mcp_tools_service,
+    )
     from .tools.util_helpers import unwrap_service_response
 
     # Split on the LAST "::" (see _fetch_yaml) so an exotic file path
@@ -2122,15 +2132,23 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
     file, sep, yaml_path = entity_id.rpartition("::")
     if not sep or not file or not yaml_path:
         raise ValueError(f"Invalid yaml snapshot target: {entity_id!r}")
+    service_data: dict[str, Any] = {
+        "file": file,
+        "action": "replace",
+        "yaml_path": yaml_path,
+        "content": str(config),
+    }
+    extra_keys = parse_extra_yaml_write_keys(get_global_settings())
+    if extra_keys:
+        # Same version gate as the write path: without it a component that
+        # predates the field rejects the whole restore call over an option
+        # the snapshot being restored may not even use.
+        await assert_extra_yaml_keys_supported(client, extra_keys)
+        service_data["extra_allowed_keys"] = extra_keys
     result = await call_mcp_tools_service(
         client,
         "edit_yaml_config",
-        {
-            "file": file,
-            "action": "replace",
-            "yaml_path": yaml_path,
-            "content": str(config),
-        },
+        service_data,
     )
     if isinstance(result, dict):
         result = unwrap_service_response(result)

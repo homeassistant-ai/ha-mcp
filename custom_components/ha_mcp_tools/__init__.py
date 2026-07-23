@@ -58,6 +58,7 @@ from .const import (
     TOOLS_ENTRY_LEGACY_TITLE,
     TOOLS_ENTRY_TITLE,
     YAML_KEY_DEFAULT_POST_ACTION,
+    YAML_KEY_DENYLIST,
     YAML_KEY_POST_ACTIONS,
 )
 from .websocket_api import async_register_commands
@@ -128,6 +129,15 @@ SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
         # stay symmetric — if ha-mcp's flag is off, the component also
         # refuses, defending against bypass attempts.
         vol.Optional("disabled_packages_keys", default=list): vol.All(
+            cv.ensure_list, [cv.string]
+        ),
+        # Caller-provided extra top-level keys the operator has opted into
+        # on top of ALLOWED_YAML_KEYS (#1887). Additive only: the handler
+        # filters YAML_KEY_DENYLIST out before use, so a caller cannot
+        # unlock a trust-boundary key by sending it here. Empty list (the
+        # default) means the built-in allowlist applies unchanged, which
+        # is also what a caller that predates this field produces.
+        vol.Optional("extra_allowed_keys", default=list): vol.All(
             cv.ensure_list, [cv.string]
         ),
         # Two-step preview/confirm flow (#1720). Both optional with
@@ -2095,7 +2105,10 @@ def _build_edit_yaml_config_handler(
 
         # Parse and validate yaml_path (replaces the old ALLOWED_YAML_KEYS check)
         kind, path_parts, path_err = _parse_and_validate_yaml_path(
-            yaml_path, is_package=is_package, is_theme=is_theme
+            yaml_path,
+            is_package=is_package,
+            is_theme=is_theme,
+            extra_allowed_keys=_caller_extra_allowed_keys(call),
         )
         if path_err is not None:
             return {"success": False, "error": path_err}
@@ -2218,18 +2231,40 @@ def _validate_lovelace_dashboard_path(
     return "lovelace_dashboard", parts, None
 
 
+def _caller_extra_allowed_keys(call: ServiceCall) -> frozenset[str]:
+    """Return the operator-configured extra write keys for this call (#1887).
+
+    ``YAML_KEY_DENYLIST`` members are dropped here so they can never widen the
+    ``allowed`` set that the generic "not in the allowed list" rejection lists
+    for some *other* invalid key. A direct write to a denied key does not rely
+    on this drop: ``_parse_and_validate_yaml_path`` checks the denylist first
+    and returns the categorical floor message before any allow-set is
+    consulted. Keys already covered by the built-in sets are harmless
+    duplicates and stay.
+    """
+    return frozenset(
+        key
+        for key in call.data.get("extra_allowed_keys", [])
+        if key and key not in YAML_KEY_DENYLIST
+    )
+
+
 def _parse_and_validate_yaml_path(
     yaml_path: str,
     *,
     is_package: bool = False,
     is_theme: bool = False,
+    extra_allowed_keys: frozenset[str] = frozenset(),
 ) -> tuple[str, tuple[str, ...], str | None]:
     """Parse and validate a yaml_path argument.
 
     Three accepted shapes:
     1. Single segment in ALLOWED_YAML_KEYS -> kind='single'
        When ``is_package=True``, single segments in PACKAGES_ONLY_YAML_KEYS
-       (automation, script, scene) are also accepted.
+       (automation, script, scene) are also accepted. ``extra_allowed_keys``
+       adds operator-opted-in keys on top of ALLOWED_YAML_KEYS (#1887); it
+       overrides neither ``YAML_KEY_DENYLIST`` (filtered out before it gets
+       here) nor the packages-only restriction.
     2. Exactly 'lovelace.dashboards.<url_path>' -> kind='lovelace_dashboard'
     3. Single segment theme name (no dots) when ``is_theme=True`` -> kind='theme'
 
@@ -2256,13 +2291,41 @@ def _parse_and_validate_yaml_path(
     # Shape 1: single key
     if len(parts) == 1:
         key = parts[0]
+        # The deny floor is checked before every single-key accept branch, so
+        # it holds even if a denied key is ever added to one of the allow
+        # sets. It deliberately does not cover the theme branch above: under
+        # ``is_theme`` the segment names a file in themes/, not a top-level
+        # configuration key, so the same word carries no trust-boundary
+        # meaning there.
+        if key in YAML_KEY_DENYLIST:
+            return (
+                "",
+                (),
+                (
+                    f"Key '{yaml_path}' can never be edited through this "
+                    "service: it redefines Home Assistant's own trust "
+                    "boundary (authentication, proxy/CORS handling, or "
+                    "frontend module loading). This floor cannot be lifted "
+                    "by the extra-write-keys setting. Edit it by hand if "
+                    "you really need to change it."
+                ),
+            )
         if key in ALLOWED_YAML_KEYS:
             return "single", parts, None
         if is_package and key in PACKAGES_ONLY_YAML_KEYS:
             return "single", parts, None
+        # Operator extra keys widen ALLOWED_YAML_KEYS only. They deliberately
+        # do NOT lift the packages-only restriction: those keys reach
+        # packages/*.yaml through the branch above (still governed by their
+        # per-key toggle) and stay rejected in configuration.yaml, so the
+        # storage-mode/YAML-mode collision guarantee holds however the
+        # operator fills the setting.
+        if key in extra_allowed_keys and key not in PACKAGES_ONLY_YAML_KEYS:
+            return "single", parts, None
         # Reaching here means the key was not accepted. If it is a
-        # PACKAGES_ONLY key, we know is_package=False (otherwise the
-        # preceding branch would have returned) — emit the targeted
+        # PACKAGES_ONLY key, we know is_package=False (the packages branch
+        # would have returned, and the extra-keys branch excludes them
+        # precisely so this guidance still fires) – emit the targeted
         # "move it to a package file" guidance instead of the generic
         # allowlist dump below.
         if key in PACKAGES_ONLY_YAML_KEYS:
@@ -2278,9 +2341,9 @@ def _parse_and_validate_yaml_path(
                 ),
             )
         allowed = (
-            ALLOWED_YAML_KEYS | PACKAGES_ONLY_YAML_KEYS
+            ALLOWED_YAML_KEYS | PACKAGES_ONLY_YAML_KEYS | extra_allowed_keys
             if is_package
-            else ALLOWED_YAML_KEYS
+            else ALLOWED_YAML_KEYS | extra_allowed_keys
         )
         return (
             "",

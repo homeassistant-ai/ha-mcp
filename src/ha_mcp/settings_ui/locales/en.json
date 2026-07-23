@@ -412,6 +412,8 @@
     "advanced.code_mode_max_invocations.help": "API/tool-call cap per sandbox run. Restart required.",
     "advanced.code_mode_saved_tools_path.label": "Saved-tools path",
     "advanced.code_mode_saved_tools_path.help": "JSON file used to persist custom tools across restarts. Restart required.",
+    "advanced.extra_yaml_write_keys.label": "Extra YAML write keys",
+    "advanced.extra_yaml_write_keys.help": "Comma-separated top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Keys that redefine Home Assistant's own trust boundary can never be added and are ignored. Requires custom component 1.2.3 or newer.",
     "advanced.sidecar_pin_port.label": "Settings UI sidecar port",
     "advanced.sidecar_pin_port.help": "0 chooses a free port each restart; 1024–65535 pins a preferred port. Restart required.",
     "advanced.enable_dev_mode.label": "Developer mode",
