@@ -201,7 +201,15 @@ def normalize_locale(
     if candidate in catalogs:
         return candidate
     base = candidate.split("-", 1)[0]
-    return base if base in catalogs else None
+    if base in catalogs:
+        return base
+    if base == "zh" and "zh-hans" in catalogs:
+        # Map bare "zh" and simplified Chinese region tags (zh-CN, zh-SG) to
+        # zh-hans. Do NOT map zh-TW, zh-HK, etc. — those would need a zh-Hant
+        # catalog to be registered.
+        if candidate == "zh" or candidate.split("-", 1)[-1] in ("cn", "sg"):
+            return "zh-hans"
+    return None
 
 
 def _accept_language_candidates(header: str | None) -> list[str]:

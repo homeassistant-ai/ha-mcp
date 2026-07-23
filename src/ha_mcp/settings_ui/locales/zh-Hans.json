@@ -1,0 +1,806 @@
+{
+  "meta": {
+    "native_name": "简体中文",
+    "dir": "ltr"
+  },
+  "messages": {
+    "app.document_title": "HA-MCP 工具设置",
+    "app.title": "HA-MCP 设置",
+    "language.label": "语言",
+    "language.auto": "自动",
+    "theme.label": "主题",
+    "theme.auto_os": "自动（跟随系统）",
+    "theme.light": "浅色",
+    "theme.dark": "深色",
+    "status.loading": "加载中…",
+    "nav.skip": "跳到正文",
+    "tabs.aria": "设置分区",
+    "tabs.tools": "工具",
+    "tabs.server": "服务器设置",
+    "tabs.backups": "备份",
+    "tabs.policies": "工具安全策略",
+    "tabs.visibility": "实体可见性",
+    "tabs.accessibility": "无障碍",
+    "notice.restart_required": "⚠ 更改已保存。请重启 HA-MCP 使其生效。下次启动时，HA-MCP 会从 MCP 工具列表中彻底移除已禁用的工具。随后请在你的 AI 客户端中重新连接或刷新 MCP 服务器（例如在 claude.ai 上刷新工具列表、在 ChatGPT 中重新添加/刷新连接器，或关闭并重新打开 Claude Desktop）以重新加载工具列表。仅重启应用（插件）或 Home Assistant 不会刷新客户端缓存的工具列表。",
+    "notice.shared_settings": "服务器级功能（工具搜索、YAML 配置编辑、文件系统工具等）会同时出现在<strong>服务器设置</strong>选项卡和应用（插件）配置页中；无论在哪里设置都是同一份配置。在应用（插件）重启后，两个入口会保持同步。更改需要重启 HA-MCP 才能生效。",
+    "notice.env_pins": "列在 <code>DISABLED_TOOLS</code> 或 <code>PINNED_TOOLS</code> 环境变量中的工具被锁定为只读；取消该环境变量才能在此编辑。固定开关仅在启用工具搜索时生效（服务器设置选项卡或应用（插件）配置页）。",
+    "actions.restart_addon": "重启应用（插件）",
+    "actions.save": "保存",
+    "actions.save_settings": "保存设置",
+    "actions.refresh": "刷新",
+    "actions.close": "关闭",
+    "tools.read_only.label": "只读模式",
+    "tools.read_only.help": "关闭所有写入工具，并阻止任何工具进行写入或破坏性调用。读写混合工具（备份、应用（插件）、能源偏好、语音流水线，以及启用时的代码模式）仍可用，但其写入操作被阻止。",
+    "tools.read_only.unknown": "无法读取服务器设置。只读模式状态未知；此视图可能无法反映服务器实际执行的策略。",
+    "tools.search": "搜索工具…",
+    "server.auto_save_notice": "此选项卡上的设置会自动保存。更改仅在重启应用（插件）（在服务端生效）并在你的 AI 客户端中重新连接或刷新 MCP 服务器（重新加载工具列表）后才会生效，例如在 claude.ai 上刷新工具列表、在 ChatGPT 中重新添加或刷新连接器，或关闭并重新打开 Claude Desktop。",
+    "server.sections.search": "搜索与匹配",
+    "server.sections.operations": "操作",
+    "server.sections.tool_surface": "工具面",
+    "server.sections.diagnostics": "诊断",
+    "server.sections.sidecar": "设置界面旁路服务",
+    "server.sections.beta": "测试版功能（危险）",
+    "server.sections.developer": "开发者",
+    "server.sidecar.disable": "永久禁用设置服务器",
+    "server.sidecar.disable_title": "永久禁用设置界面：停止此服务器，并写入 ~/.ha-mcp/settings_ui_disabled，使其在 ha-mcp 将来的启动时不再自动启动。删除该文件即可重新启用。",
+    "backups.loading": "正在加载备份状态…",
+    "backups.filter.domain": "域（例如 automation）",
+    "backups.filter.domain_aria": "按域筛选备份",
+    "backups.filter.entity": "实体 ID",
+    "backups.filter.entity_aria": "按实体 ID 筛选备份",
+    "backups.bulk_delete": "批量删除匹配项…",
+    "policies.title": "工具安全策略",
+    "policies.intro": "针对高风险调用的逐工具审批门控。先在<strong>工具</strong>选项卡中启用某工具的门控，再在此处细化匹配条件和审批有效期。条件运算符：等于、属于其中之一、正则、包含、存在、大于、小于。",
+    "policies.global.title": "全局设置",
+    "policies.global.enabled.label": "启用工具安全策略",
+    "policies.global.enabled.help": "主开关。与服务器设置中的开关一致。默认关闭。打开并重启应用（插件）即可激活门控中间件。关闭时，以下规则会保留但不生效。",
+    "policies.global.wait.label": "等待秒数（5–600）",
+    "policies.global.wait.help": "中间件等待审批的超时时间。",
+    "policies.global.ttl.label": "审批有效期（分钟，1–60）",
+    "policies.global.ttl.help": "待审批项在队列中保留直至过期的时间。",
+    "policies.global.save": "保存全局设置",
+    "policies.pending.title": "待审批项",
+    "policies.pending.empty": "暂无待审批项。",
+    "policies.rules.title": "已门控工具",
+    "policies.rules.empty": "当前没有工具被安全门控。请从<a href=\"#\" data-panel-link=\"tools\">工具</a>选项卡启用逐工具门控。",
+    "accessibility.intro": "这些设置立即生效，并保存在此浏览器和服务器上，因此在各种模式（包括 stdio 模式，该模式下设置页每次会话都会转移到新端口）重启后依然保留。文档站点在导航栏中提供相同的控件；它没有服务器，按浏览器保存。",
+    "accessibility.storage_blocked": "你的浏览器正在阻止站点存储；选择仅对本次会话生效。",
+    "accessibility.theme.title": "主题",
+    "accessibility.theme.help": "一键配色方案。默认为自动，跟随你的系统偏好并在其变化时实时切换。",
+    "accessibility.theme.preset": "主题预设",
+    "accessibility.theme.paper": "纸张",
+    "accessibility.theme.gray": "灰色",
+    "accessibility.theme.contrast": "高对比度",
+    "accessibility.text_size.title": "文字大小",
+    "accessibility.text_size.help": "缩放根字体大小。浏览器缩放（Ctrl/Cmd +）仍可在此基础上叠加使用。",
+    "accessibility.colors.title": "自定义颜色",
+    "accessibility.colors.help": "在所选主题之上自选颜色。每个色板会打开你系统的可视化取色器。",
+    "accessibility.colors.background": "背景",
+    "accessibility.colors.text": "文字",
+    "accessibility.colors.accent": "强调色",
+    "accessibility.colors.low_contrast": "所选背景与文字颜色的对比度低于 4.5:1，可能难以同时阅读。",
+    "accessibility.colors.clear": "清除自定义颜色",
+    "accessibility.reset": "恢复默认",
+    "visibility.intro": "从集合读取工具 <code>ha_search</code> 和 <code>ha_get_overview</code> 中隐藏低价值实体（自动生成的诊断或辅助实体，或显式列表），使搜索和总览结果更清爽。默认关闭；更改在下一次工具调用时生效。",
+    "visibility.boundary": "降噪，而非访问控制：被隐藏的实体仍会在直接读取其 entity_id 时返回，并仍会出现在自动化、仪表盘和模板内容中。请勿将其作为安全边界依赖。",
+    "visibility.enabled": "启用实体可见性过滤器",
+    "visibility.categories.title": "按类别隐藏",
+    "visibility.categories.help": "Home Assistant 会将自动生成的实体标记为诊断或配置。",
+    "visibility.categories.legend": "要隐藏的实体类别",
+    "visibility.categories.diagnostic": "诊断",
+    "visibility.categories.config": "配置",
+    "visibility.categories.hidden": "同时隐藏已在 Home Assistant 中隐藏的实体",
+    "visibility.area_label.title": "按区域或标签隐藏",
+    "visibility.area_label.help": "逗号分隔的区域 ID 或标签 ID；位于所列任意区域或标签中的实体将被隐藏。",
+    "visibility.areas": "区域",
+    "visibility.labels": "标签",
+    "visibility.entities.title": "隐藏指定实体",
+    "visibility.entities.help": "每行一个 entity_id。即使没有实体注册表条目，它们也会保持隐藏。",
+    "visibility.entities.denied": "被拒绝的实体 ID",
+    "visibility.allowlist.title": "限制为允许列表",
+    "visibility.allowlist.help": "高级：当设置了任一允许列表字段时，过滤器反转——仅匹配允许列表的实体保持可见，其余全部隐藏（包括之后添加的实体）。三个字段全部留空则禁用。",
+    "visibility.allowlist.areas": "允许的区域",
+    "visibility.allowlist.labels": "允许的标签",
+    "visibility.allowlist.entities_help": "允许的实体 ID，每行一个。",
+    "visibility.allowlist.entities": "允许的实体 ID",
+    "visibility.assist.title": "遵循 Assist 暴露设置",
+    "visibility.assist.help": "隐藏未暴露给 Home Assistant 的 Assist（“对话”）语音助手的实体，对应设置 > 语音助手 > 暴露列表。启用时每次搜索额外增加两次 websocket 读取。",
+    "visibility.assist.only_exposed": "仅显示暴露给 Assist 的实体",
+    "features.enable_tool_search.label": "启用工具搜索",
+    "features.enable_tool_search.help": "用基于搜索的发现取代完整工具目录。将空闲上下文从约 46K 降至约 5K token。⚠️ 如果你在 Sonnet 或 Opus 模式下使用 Claude，请勿启用此功能——这些模型自带内置工具搜索/延迟工具，会与我们的功能冲突。要在 Claude 中使用 ha-mcp 的工具搜索，请先禁用 Claude 的内置工具搜索；否则请保持关闭。仅在与缺乏原生延迟工具的 LLM 一起使用（例如 Claude Haiku、本地 OpenAI 兼容模型）或上下文窗口较小时才使用此功能。工具通过 ha_search_tools 发现，并通过分类代理（读/写/删）执行。需要重启才能生效。",
+    "features.tool_search_max_results.label": "工具搜索最大结果数",
+    "features.tool_search_max_results.help": "启用工具搜索时 ha_search_tools 返回的最大工具数。较小的值（2–3）可节省上下文 token，但可能遗漏相关工具。范围：2–10。需要重启。",
+    "features.enable_tool_security_policies.label": "启用工具安全策略（高级）",
+    "features.enable_tool_security_policies.help": "将高风险工具调用（锁具/报警控制、自动化写入等）置于用户审批之后。当调用受保护工具时，智能体会提示用户打开 Web UI 中的工具安全策略选项卡并点击批准，调用才会继续。逐工具规则及可选的参数条件在工具安全策略选项卡中配置。默认关闭。需要重启才能生效。",
+    "features.read_only_mode.label": "只读模式",
+    "features.read_only_mode.help": "关闭所有写入工具，并移除工具进行任何写入或破坏性调用的能力。读写混合工具（备份、插件、能源偏好、语音流水线和启用时的代码模式）仍可用，其写入操作被阻止。与 Web UI 工具选项卡中的开关相同。默认关闭。需要重启才能生效。",
+    "features.enable_mandatory_bps.label": "写入时附加最佳实践技能",
+    "features.enable_mandatory_bps.help": "写入工具技能内容投递功能（issue #1182）的主开关。启用时（默认），六个配置写入工具（自动化、脚本、场景、辅助元素、仪表盘、原始 YAML）会在每次成功写入时于 `skill_content` 下附加规范的 Home Assistant 最佳实践参考文件，并自动嵌入最佳实践警告引用的任何参考章节。每个工具还暴露一个逐调用 `MandatoryBPS` 参数，智能体在获得内容后的后续调用中可将其设为 false。当此主开关关闭时，无论逐调用参数或 BP 警告如何，都不会输出 skill_content。建议默认开启；仅在上下文窗口极小的模型上才禁用。关闭可能降低写入准确性。需要重启才能生效。",
+    "features.enable_strict_mandatory_bps.label": "严格最佳实践模式",
+    "features.enable_strict_mandatory_bps.help": "严格模式：在客户端能证明已阅读最佳实践之前，阻止其使用该工具。开启时，六个最佳实践写入工具（自动化、脚本、场景、辅助元素、仪表盘、原始 YAML）会被阻止并返回错误，指引客户端通过 ha_get_skill_guide 阅读最佳实践技能并回传在那里获得的确认密钥。开启时，ha_get_skill_guide 工具被锁定启用——它是确认密钥的唯一发布方。为上方“写入时附加最佳实践技能”选项的子项，当其父项关闭时无效。需要重启才能生效。",
+    "features.enable_beta_features.label": "启用测试版功能（主开关）",
+    "features.enable_beta_features.help": "⚠ 危险——这些工具可能永久损坏你的 Home Assistant 安装。它们会写入你的 YAML 配置、文件系统，安装自定义组件，运行任意沙箱 Python，并编辑 AI 所见的工具文档字符串。无保修、无支持保证——启用即代表你自担风险。开启前请先为 Home Assistant 做备份，切勿在无备份的情况下于生产环境启用。下方 5 个实验性子开关的主网关；即使显式设为 true，当此主开关关闭时，子开关在运行时会被忽略。相同的开关也显示在 Web 设置界面的“测试版功能（危险）”下——任一入口在重启后都会反映到另一入口。",
+    "features.enable_yaml_config_editing.label": "启用 YAML 配置编辑（测试版）",
+    "features.enable_yaml_config_editing.help": "测试版功能。允许 AI 助手在 configuration.yaml 和 packages/*.yaml 中添加、替换或删除顶级键。仅允许白名单键（例如 template、sensor、command_line、mqtt、knx）；核心键如 homeassistant、http、recorder 被阻止。每次编辑都会校验 YAML 语法、运行配置检查，并创建自动备份。大多数键的更改需要完整重启 HA 才能生效。已知限制见 docs/beta.md。可用时使用专用工具（自动化、脚本、场景、辅助元素、模板传感器）更佳。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。",
+    "features.enable_yaml_edit_confirm.label": "YAML 编辑需确认（差异预览）",
+    "features.enable_yaml_edit_confirm.help": "YAML 配置编辑的子开关，默认开启（推荐）。首次 ha_config_set_yaml 调用会返回磁盘上将精确更改的统一差异，外加一个确认令牌，且不写入任何内容；仅当使用令牌重复该调用时，编辑才会落地。其存在是为了在变更到达磁盘前捕获请求编辑之外的意外更改（issue #1720）。仅在每次编辑要省一次往返时关闭。",
+    "features.enable_yaml_packages_automation.label": "允许 automation 出现在 packages/*.yaml",
+    "features.enable_yaml_packages_automation.help": "YAML 配置编辑的子开关。开启时，ha_config_set_yaml 接受 packages/*.yaml 中的 yaml_path='automation'。关闭时，客户端和服务器端都会拒绝该调用。存储模式工具（ha_config_set_automation）不受影响。默认关闭；仅当上方“启用 YAML 配置编辑”也开启时生效。",
+    "features.enable_yaml_packages_script.label": "允许 script 出现在 packages/*.yaml",
+    "features.enable_yaml_packages_script.help": "YAML 配置编辑的子开关。开启时，ha_config_set_yaml 接受 packages/*.yaml 中的 yaml_path='script'。关闭时，客户端和服务器端都会拒绝该调用。存储模式工具（ha_config_set_script）不受影响。默认关闭；仅当上方“启用 YAML 配置编辑”也开启时生效。",
+    "features.enable_yaml_packages_scene.label": "允许 scene 出现在 packages/*.yaml",
+    "features.enable_yaml_packages_scene.help": "YAML 配置编辑的子开关。开启时，ha_config_set_yaml 接受 packages/*.yaml 中的 yaml_path='scene'。关闭时，客户端和服务器端都会拒绝该调用。存储模式工具（ha_config_set_scene）不受影响。默认关闭；仅当上方“启用 YAML 配置编辑”也开启时生效。",
+    "features.enable_filesystem_tools.label": "启用文件系统工具（测试版）",
+    "features.enable_filesystem_tools.help": "设置 HAMCP_ENABLE_FILESYSTEM_TOOLS=true。启用对你 Home Assistant 文件系统的直接文件读/写访问。警告：这会让 MCP 服务器直接读写你的 Home Assistant 文件系统，获得对系统的敏感文件访问权限。仅在信任 AI 助手进行文件操作时才启用。需要重启才能生效。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。",
+    "features.enable_code_mode.label": "启用自定义工具沙箱（测试版）",
+    "features.enable_code_mode.help": "测试版功能。启用 ha_manage_custom_tool 工具，当没有内置工具可处理请求时，让 AI 助手在安全沙箱中创建、运行、保存和删除自定义 Python 代码。代码在隔离的解释器中运行，无文件系统或任意网络访问。沙箱代码可调用 HA REST API（api_get/api_post）、发送 WebSocket 命令（ws_send）、调用现有 MCP 工具（call_tool），或删除已保存工具（delete_saved_tool）。已保存工具默认持久化到 /data/saved_tools.json，以便在插件重启后保留，且对任何能连接的客户端可见。已知限制见 docs/beta.md。需要重启才能生效。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。",
+    "features.enable_lite_docstrings.label": "启用精简工具文档字符串（测试版）",
+    "features.enable_lite_docstrings.help": "测试版功能。将少数重型 ha-mcp 工具（自动化、脚本、场景、辅助元素、仪表盘、ha_call_service、ha_config_set_yaml）上的文档字符串替换为更短的变体，将 schema 和示例细节推迟到 ha_get_skill_guide 工具（或其 skill:// 资源）。警告：这会降低空闲 token 用量，但可能降低 LLM 表现——精简后的描述依赖 LLM 实际调用技能工具或读取技能资源来获取细节，这并不保证（某些模型会跳过额外的工具调用，最终得到的指引反而比之前更少）。最好与支持 MCP 资源的客户端或启用工具搜索搭配使用。需要重启才能生效。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。",
+    "features.enable_dashboard_screenshot.label": "启用仪表盘截图模式（测试版）",
+    "features.enable_dashboard_screenshot.help": "测试版功能——默认关闭。新增 ha_get_dashboard_screenshot 工具，以及仪表盘 get/set 工具上的 include_screenshot / return_screenshot 选项，让 AI 助手可检查一个或多个响应式 Lovelace 图像（例如验证其刚创建的仪表盘）。支持稳定的命名视图、移动/平板/桌面批次，以及 PNG/JPEG/WebP/BMP 输出。渲染在独立的、可选引擎中运行——balloob 的“Puppet”插件（无头 Chromium）——你安装一次（添加 balloob 的插件仓库，然后安装“Puppet”）并为其提供长期访问令牌；在 Docker/容器部署中，你将该引擎作为 sidecar 运行并设置 HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL。除非你同时启用此功能并安装引擎，否则不会安装任何重型组件。需要重启才能生效。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。",
+    "actions.restart_server": "重启 HA-MCP 服务器",
+    "actions.restart_confirm": "立即重启 HA-MCP？页面在它恢复在线后会自动重新加载。",
+    "actions.view": "查看",
+    "actions.diff": "差异",
+    "actions.restore": "恢复",
+    "actions.delete": "删除",
+    "actions.edit": "编辑",
+    "actions.remove": "移除",
+    "actions.cancel": "取消",
+    "actions.approve": "批准",
+    "actions.deny": "拒绝",
+    "actions.dismiss": "忽略",
+    "status.loaded": "已加载",
+    "status.loading_ellipsis": "加载中…",
+    "status.loading_parentheses": "（加载中…）",
+    "status.unsaved": "未保存的更改…",
+    "status.saving": "保存中…",
+    "status.saving_server_setting": "正在保存服务器设置…",
+    "status.saved": "已保存。",
+    "status.saved_restart": "已保存。需要重启。",
+    "status.saved_llm_api": "已保存。LLM API 暴露将在下一条智能体消息时生效。",
+    "status.saved_reload_failed": "已保存（重新加载失败；刷新以确认）。",
+    "status.nothing_editable": "无可编辑项。",
+    "status.stopping": "正在停止…",
+    "status.stopped_offline": "已停止。此页面将离线",
+    "status.stopped_connection": "已停止（连接已断开）",
+    "status.restarting": "重启中…",
+    "status.waiting_addon": "正在等待应用（插件）恢复在线…",
+    "errors.javascript": "JS 错误：{message} @ {where}",
+    "errors.async": "异步错误：{message}",
+    "errors.network": "网络错误：{message}",
+    "errors.network_endpoint": "访问 {endpoint} 时网络错误：{message}",
+    "errors.http_endpoint": "{endpoint} 返回 HTTP {status} {detail}",
+    "errors.json_endpoint": "无法将 {endpoint} 响应解析为 JSON：{message}",
+    "errors.render": "渲染失败：{message}（打开浏览器开发者工具查看堆栈）",
+    "errors.save_failed": "保存失败",
+    "errors.save_failed_detail": "保存失败：{message}",
+    "errors.save_failed_http": "保存失败（HTTP {status}）",
+    "errors.save_failed_non_json": "保存失败（HTTP {status}，非 JSON 响应体）",
+    "errors.load_failed": "加载失败：{status}",
+    "errors.stop_failed": "停止失败",
+    "errors.restart_failed": "重启失败",
+    "errors.failed_detail": "失败：{detail}",
+    "errors.addon_not_back": "应用（插件）未恢复在线。请手动重新加载",
+    "errors.unparseable_suffix": " （响应体无法解析）",
+    "common.operation_failed": "{operation} 失败：{detail}",
+    "common.enabled": "已启用",
+    "common.disabled": "已禁用",
+    "common.env_locked": "环境锁定",
+    "common.minutes_short": "{count} 分钟",
+    "common.bytes": "{count} 字节",
+    "common.none": "（无）",
+    "notice.restart.addon": "⚠ 更改已保存。点击“重启应用（插件）”使其生效。已禁用的工具将在下次启动时从 MCP 工具列表中移除。然后在你的 AI 客户端中刷新工具列表；仅重启应用不会刷新客户端缓存的列表。",
+    "notice.restart.embedded": "⚠ 更改已保存。点击“重启 HA-MCP 服务器”以重新加载进程内集成。然后在你的 AI 客户端中刷新 MCP 工具列表。",
+    "notice.restart.sidecar": "⚠ 更改已保存。完全退出并重新打开你的 MCP 客户端使其生效。已禁用的工具将在下次启动时从 MCP 工具列表中移除。",
+    "notice.restart.standalone": "⚠ 更改已保存。重启 ha-mcp 进程，然后在你的 AI 客户端中刷新 MCP 工具列表。",
+    "server.sidecar.confirm_disable": "⚠ 永久禁用设置服务器？\n\n这将停止服务器并写入一个标记，阻止其再次启动。要恢复访问，请删除 ~/.ha-mcp/settings_ui_disabled 并取消设置 HA_MCP_DISABLE_SETTINGS_UI。继续？",
+    "tools.empty": "未找到工具。旁路服务读取 ~/.ha-mcp/tool_metadata.json。如果它缺失或为空，请重启你的 MCP 客户端。详情见 ~/.ha-mcp/sidecar.log。",
+    "tools.group_count": "{enabled}/{total} 已启用",
+    "tools.group_toggle_title": "启用/禁用此组中的所有工具",
+    "tools.badges.mandatory": "强制",
+    "tools.badges.read_only": "只读",
+    "tools.badges.writes": "可写",
+    "tools.badges.deletes": "可删",
+    "tools.notes.beta_disabled": "测试版。在开发版应用（插件）配置中设置 {setting}，或设置匹配的环境变量（见 docs/beta.md）。",
+    "tools.notes.env_pinned": "由 {variable} 固定。取消该环境变量才能在此编辑。",
+    "tools.notes.bps_locked": "在严格最佳实践模式开启时被锁定。请先关闭该设置以禁用此工具。",
+    "tools.notes.read_only_off": "已关闭。只读模式已开启；写入工具被禁用。",
+    "tools.notes.read_only_partial": "只读模式：此工具的写入操作被阻止；读取操作仍可用。",
+    "tools.llm_api.label": "LLM API",
+    "tools.llm_api.help": "通过 LLM API 将此工具提供给 Home Assistant 对话智能体。在下一条智能体消息时生效；无需重启。",
+    "tools.aria.llm_api": "{title} 已暴露给对话智能体 LLM API",
+    "tools.aria.enabled": "{title} 已启用",
+    "tools.aria.pinned": "{title} 已固定",
+    "tools.aria.security_gated": "{title} 已安全门控",
+    "tools.states.enabled": "已启用",
+    "tools.states.pinned": "已固定",
+    "tools.states.security_gated": "已安全门控",
+    "tools.security.enable_first": "请先在应用（插件）配置中启用工具安全策略。",
+    "tools.summary.total": "共 {count} 个",
+    "tools.summary.enabled": "{count} 个已启用",
+    "tools.summary.pinned": "{count} 个已固定",
+    "tools.summary.disabled": "{count} 个已禁用",
+    "tools.read_only.save_failed": "只读模式更改未保存。服务器仍保留之前的值。",
+    "backup.fields.enable_auto_backup.label": "自动备份编辑",
+    "backup.fields.enable_auto_backup.help": "在每次被封装的写入或破坏性工具调用前捕获快照。",
+    "backup.fields.auto_backup_throttle_minutes.label": "节流（分钟）",
+    "backup.fields.auto_backup_throttle_minutes.help": "按实体节流。0 = 每次写入；N > 0 = 每 N 分钟最多一次备份。范围 0–1440。",
+    "backup.fields.auto_backup_retain_per_entity.label": "每实体保留数",
+    "backup.fields.auto_backup_retain_per_entity.help": "每个实体保留的最大快照数（1–10000）。较旧的会轮转出去。",
+    "backup.fields.auto_backup_dir.label": "备份目录覆盖",
+    "backup.fields.auto_backup_dir.help": "留空使用默认目录；否则输入绝对路径。",
+    "backup.fields.auto_backup_calendar_lookahead_days.label": "日历前瞻（天）",
+    "backup.fields.auto_backup_calendar_lookahead_days.help": "为编辑前快照查询日历事件的前瞻天数。范围 1–365。",
+    "backup.fields.enable_snapshot_delete.label": "允许删除快照",
+    "backup.fields.enable_snapshot_delete.help": "允许 ha_manage_backup 删除完整的 HA 快照，同时保护计划的、最新的和过新的快照。",
+    "backup.fields.snapshot_delete_min_age_days.label": "可删除快照的最小年龄（天）",
+    "backup.fields.snapshot_delete_min_age_days.help": "快照必须至少达到此年龄才能被删除。范围 0–365。",
+    "backup.origins.addon": "已同步到 Supervisor。保存后需重启。",
+    "backup.origins.file": "已本地持久化；立即生效。",
+    "backup.origins.default": "正在使用默认值；首次保存会创建本地覆盖文件。",
+    "backup.errors.load_settings": "无法加载备份设置。",
+    "backup.errors.unavailable": "备份设置不可用。",
+    "backup.errors.load_list": "加载备份出错",
+    "backup.errors.load_one": "无法加载备份“{name}”：{message}",
+    "backup.errors.diff": "无法对备份“{name}”生成差异：{message}",
+    "backup.errors.restore": "恢复“{name}”失败：{message}",
+    "backup.errors.restore_detail": "恢复失败：{detail}",
+    "backup.errors.delete": "删除“{name}”失败：{message}",
+    "backup.errors.delete_detail": "删除失败：{detail}",
+    "backup.errors.bulk_delete": "批量删除失败：{detail}",
+    "backup.state.status": "状态",
+    "backup.state.throttle": "节流",
+    "backup.state.retain": "每实体保留",
+    "backup.state.directory": "目录",
+    "backup.state.total": "总计",
+    "backup.empty": "暂无备份。启用自动备份并编辑某个实体即可创建一个。",
+    "backup.modal.view": "查看：{name}",
+    "backup.modal.diff": "差异：{name}",
+    "backup.identical": "（相同）",
+    "backup.confirm.restore": "恢复 {name}？\n\n这将覆盖当前实体状态。会先进行一次安全备份。",
+    "backup.confirm.delete": "删除 {name}？此操作不可撤销。",
+    "backup.restored": "已恢复。安全备份：{name}",
+    "backup.bulk.prompt_days": "删除早于 N 天的备份（留空则仅使用当前筛选条件）：",
+    "backup.bulk.filter_required": "请至少设置一个筛选条件（域、实体或天数）。",
+    "backup.bulk.confirm": "删除所有匹配以下条件的备份：{filters}？",
+    "backup.bulk.deleted": "已删除 {count} 个备份",
+    "filesystem.custom.title": "自定义文件系统目录（高级）",
+    "filesystem.custom.help": "文件工具可以<strong>读和写</strong>的额外目录（每行一个）。支持相对配置路径和允许的 HAOS 同级卷。立即生效。",
+    "filesystem.custom.blocked": "始终被阻止：{paths}、路径穿越（<code>..</code>）以及允许 HAOS 卷之外的绝对路径。",
+    "filesystem.custom.enable_first": "请先在上方启用测试版功能和文件系统工具才能编辑。",
+    "filesystem.custom.unavailable": "自定义目录当前不可用。",
+    "filesystem.custom.save": "保存目录",
+    "filesystem.custom.saved_rejected": "已保存。被拒绝（被阻止或无效）：{paths}",
+    "origins.env_locked": "通过环境变量设置；取消它才能在此编辑。",
+    "origins.addon_synced": "已同步到应用（插件）配置选项卡。保存后需重启。",
+    "origins.env_var_unset": "通过环境变量 {variable} 设置；取消它才能在此编辑。",
+    "origins.beta_legacy_bridge": "在应用（插件）旧版模式中自动启用。请在配置中显式设置 <code>enable_beta_features</code> 以接管控制。（环境变量：{variable}）",
+    "origins.addon_runtime": "由 Supervisor 管理的应用（插件）运行时环境设置；无法在此更改。（环境变量：{variable}）",
+    "origins.display_only": "仅显示。通过环境变量或应用（插件）设置修改。",
+    "features.errors.network": "功能标志不可用（访问 /api/settings/features 时网络错误）。",
+    "features.errors.http": "功能标志不可用（HTTP {status}）。",
+    "features.errors.json": "功能标志响应不是有效的 JSON。",
+    "advanced.errors.network": "高级设置不可用（访问 /api/settings/advanced 时网络错误）。",
+    "advanced.errors.http": "高级设置不可用（HTTP {status}）。",
+    "advanced.errors.json": "高级设置响应不是有效的 JSON。",
+    "advanced.sidecar.stdio_only": "仅在 stdio 模式下可用。此 HTTP 服务器没有可固定的设置界面旁路服务。",
+    "advanced.enable_dev_mode.confirm": "⚠ 启用开发者模式？\n\n重启后，隐藏的开发者工具将暴露给已连接的 AI 智能体。仅用于开发和测试。",
+    "advanced.code_mode_saved_tools_path.addon_locked": "在应用（插件）模式下硬编码为 <code>/data/saved_tools.json</code>，以便已保存工具在更新后保留。",
+    "advanced.code_mode_saved_tools_path.blank_warning": "如果留空，自定义工具仅保留在内存中，重启后丢失。",
+    "policies.errors.conflict": "{operation} 失败：策略已在另一个标签页或会话中被修改。请重新加载并重新应用你的更改。",
+    "policies.errors.load": "无法加载策略：{status}",
+    "policies.errors.reach_server": "无法连接到服务器：{message}",
+    "policies.errors.corrupt_suffix": " （tool_policy.json 似乎已损坏；请在应用（插件）/data 卷上编辑或删除它）",
+    "policies.errors.load_detail": "加载策略失败：{detail}",
+    "policies.errors.update_tool": "更新工具安全策略失败：{message}",
+    "policies.errors.remove_rule": "删除规则失败：{message}",
+    "policies.errors.master_save": "工具安全策略更改未保存。服务器仍保留之前的值。",
+    "policies.operations.sync_gated": "同步门控开关",
+    "policies.operations.save_rule": "保存规则",
+    "policies.operations.save_global": "保存全局设置",
+    "policies.predicate.invalid": "（无效）",
+    "policies.operators.exists": "存在",
+    "policies.operators.exists_long": "存在（任意值）",
+    "policies.operators.eq": "等于",
+    "policies.operators.neq": "不等于",
+    "policies.operators.in": "属于其中之一",
+    "policies.operators.not_in": "不属于其中之一",
+    "policies.operators.contains": "包含",
+    "policies.operators.regex": "匹配正则",
+    "policies.operators.gt": "大于",
+    "policies.operators.lt": "小于",
+    "policies.card.no_conditions": "（无条件，规则匹配对此工具的每次调用）",
+    "policies.card.remove_title": "从策略中移除",
+    "policies.card.conditions_intro": "当所有条件都匹配时要求审批（无条件 = 始终要求审批）：",
+    "policies.card.add_condition": "+ 添加条件",
+    "policies.card.argument": "参数：",
+    "policies.card.argument_placeholder": "例如 args.color_temp",
+    "policies.card.match_when": "匹配时机：",
+    "policies.card.value": "值：",
+    "policies.card.save_condition": "保存条件",
+    "policies.card.remember_for": "审批记忆时长：",
+    "policies.card.minutes_single": "分钟（0 = 单次）",
+    "policies.card.confirm_remove": "将“{tool}”从安全策略中移除？",
+    "policies.editor.any_argument_title": "将此条件匹配该调用的每个参数。",
+    "policies.editor.any_argument": "（任意参数）",
+    "policies.editor.other_path": "（其他，输入路径）",
+    "policies.editor.value_source_http": "值源获取失败（HTTP {status}）；回退到自由文本",
+    "policies.editor.value_source_error": "值源获取失败（{message}）；回退到自由文本",
+    "policies.editor.schema_http": "工具 schema 获取失败（HTTP {status}）；回退到自由文本",
+    "policies.editor.schema_error": "工具 schema 获取失败（{message}）；回退到自由文本",
+    "policies.editor.hint.exists": "留空以在参数存在时（无论值是什么）进行门控。",
+    "policies.editor.hint.list": "选择一个或多个值，或输入 JSON 列表。留空以对任意值进行门控。",
+    "policies.editor.hint.regex": "用于匹配参数的正则表达式。",
+    "policies.editor.hint.contains": "子串或列表项。留空以对任意值进行门控。",
+    "policies.editor.hint.number": "用于比较的数字。",
+    "policies.editor.hint.equals": "参数必须等于的值。留空以对任意值进行门控。",
+    "policies.editor.loading_choices": "正在加载选项…",
+    "policies.editor.pick_value": "（选择一个值）",
+    "policies.editor.placeholder.blank": "通常留空",
+    "policies.editor.validation.pick_one_or_more": "请至少选择一个值",
+    "policies.editor.validation.pick_value": "请选择一个值",
+    "policies.editor.validation.value_required": "op={operator} 时值为必填",
+    "policies.editor.validation.empty_list": "op={operator} 时列表为空",
+    "policies.editor.validation.argument_required": "参数为必填",
+    "policies.pending.offline": "与服务器失去联系（{message}）。正在重试。",
+    "policies.pending.disabled": "工具安全策略已关闭。请开启并重启应用（插件）以启用门控。",
+    "policies.pending.unavailable": "实时审批不可用。请检查应用（插件）日志。",
+    "policies.pending.expires": "过期时间：{time}",
+    "policies.pending.already_decided": "此审批已被 {decision}，可能由另一个标签页或会话完成。",
+    "policies.pending.invalid_token": "此审批令牌已失效（已被消费或过期）。",
+    "policies.pending.action_failed": "审批操作失败：{detail}",
+    "visibility.errors.reach_server": "无法连接到服务器：{message}",
+    "visibility.errors.corrupt_suffix": " （entity_visibility.json 似乎已损坏；请在应用（插件）/data 卷上编辑或删除它）",
+    "visibility.errors.load_detail": "加载可见性配置失败：{detail}",
+    "visibility.errors.conflict": "配置已在另一个标签页或会话中被更改。请重新加载页面，然后重新应用你的更改。",
+    "advanced.homeassistant_url.label": "Home Assistant URL",
+    "advanced.homeassistant_url.help": "仅显示。通过 HOMEASSISTANT_URL 设置或由应用（插件）管理。",
+    "advanced.homeassistant_token.label": "Home Assistant 令牌",
+    "advanced.homeassistant_token.help": "仅显示。通过 HOMEASSISTANT_TOKEN 设置。此处出于安全考虑已掩码。",
+    "advanced.timeout.label": "HA 请求超时（秒）",
+    "advanced.timeout.help": "每个请求的 HTTP 超时。范围 1–600。需重启。",
+    "advanced.max_retries.label": "HA 请求最大重试次数",
+    "advanced.max_retries.help": "每次失败的 REST 调用的重试预算。范围 0–20。需重启。",
+    "advanced.verify_ssl.label": "验证 SSL 证书",
+    "advanced.verify_ssl.help": "仅在受信任网络上禁用 TLS 验证。需重启。",
+    "advanced.fuzzy_threshold.label": "模糊搜索阈值",
+    "advanced.fuzzy_threshold.help": "较低的值允许更宽松的实体匹配。范围 0–100。",
+    "advanced.entity_search_limit.label": "实体搜索结果上限",
+    "advanced.entity_search_limit.help": "ha_search_entities 返回的最大实体数。范围 1–1000。",
+    "advanced.automation_config_time_budget.label": "自动化配置时间预算（秒）",
+    "advanced.automation_config_time_budget.help": "深度搜索获取自动化配置所花费的最大时间。范围 1–600。需重启。",
+    "advanced.script_config_time_budget.label": "脚本配置时间预算（秒）",
+    "advanced.script_config_time_budget.help": "深度搜索获取脚本配置所花费的最大时间。范围 1–600。需重启。",
+    "advanced.scene_config_time_budget.label": "场景配置时间预算（秒）",
+    "advanced.scene_config_time_budget.help": "深度搜索获取场景配置所花费的最大时间。范围 1–600。需重启。",
+    "advanced.individual_config_timeout.label": "每次请求的配置获取超时（秒）",
+    "advanced.individual_config_timeout.help": "每次自动化/脚本/场景配置获取的超时。范围 1–600。需重启。",
+    "advanced.individual_fetch_batch_size.label": "配置获取批大小",
+    "advanced.individual_fetch_batch_size.help": "并发的按 ID 配置获取数。在串行 HA 服务器上向 1 靠拢。范围 1–100。需重启。",
+    "advanced.backup_hint.label": "备份提示级别",
+    "advanced.backup_hint.help": "控制 LLM 被提示在进行高风险写入前做完整 HA 快照的强度。",
+    "advanced.backup_hint.choices.strong": "强",
+    "advanced.backup_hint.choices.normal": "中",
+    "advanced.backup_hint.choices.weak": "弱",
+    "advanced.backup_hint.choices.auto": "自动",
+    "advanced.dashboard_screenshot_engine_url.label": "仪表盘截图引擎 URL",
+    "advanced.dashboard_screenshot_engine_url.help": "截图引擎的基础 URL。留空以使用 Supervisor 自动发现。立即生效。",
+    "advanced.enable_websocket.label": "启用 WebSocket",
+    "advanced.enable_websocket.help": "WebSocket 状态监控。禁用会回退到轮询，并降低许多工具的性能。需重启。",
+    "advanced.enabled_tool_modules.label": "已启用的工具模块",
+    "advanced.enabled_tool_modules.help": "逗号分隔的模块名，或 'all'。需重启。",
+    "advanced.enable_dashboard_partial_tools.label": "仪表盘部分更新工具",
+    "advanced.enable_dashboard_partial_tools.help": "节省 token 的部分仪表盘工具。对具有程序化工具使用的客户端请禁用。",
+    "advanced.mcp_server_name.label": "MCP 服务器名称",
+    "advanced.mcp_server_name.help": "在 MCP 握手中报告。需重启。",
+    "advanced.mcp_server_version.label": "MCP 服务器版本",
+    "advanced.mcp_server_version.help": "默认使用包版本。覆盖可能使客户端困惑。需重启。",
+    "advanced.environment.label": "环境",
+    "advanced.environment.help": "development 或 production。影响日志详细程度。需重启。",
+    "advanced.log_level.label": "日志级别",
+    "advanced.log_level.help": "DEBUG/INFO/WARNING/ERROR/CRITICAL。需重启。",
+    "advanced.debug.label": "调试模式",
+    "advanced.debug.help": "详细的请求日志。可能暴露敏感数据。需重启。",
+    "advanced.code_mode_max_duration.label": "代码模式最大时长（秒）",
+    "advanced.code_mode_max_duration.help": "每次沙箱运行的时钟预算。范围 1–300。需重启。",
+    "advanced.code_mode_max_memory.label": "代码模式最大内存（字节）",
+    "advanced.code_mode_max_memory.help": "每次沙箱运行的内存上限。范围 1–256 MB。需重启。",
+    "advanced.code_mode_max_recursion.label": "代码模式最大递归深度",
+    "advanced.code_mode_max_recursion.help": "每次沙箱运行的递归深度上限。需重启。",
+    "advanced.code_mode_max_invocations.label": "代码模式最大调用次数",
+    "advanced.code_mode_max_invocations.help": "每次沙箱运行的 API/工具调用上限。需重启。",
+    "advanced.code_mode_saved_tools_path.label": "已保存工具路径",
+    "advanced.code_mode_saved_tools_path.help": "用于在重启间持久化自定义工具的 JSON 文件。需重启。",
+    "advanced.sidecar_pin_port.label": "设置界面旁路服务端口",
+    "advanced.sidecar_pin_port.help": "0 表示每次重启选择空闲端口；1024–65535 固定首选端口。需重启。",
+    "advanced.enable_dev_mode.label": "开发者模式",
+    "advanced.enable_dev_mode.help": "⚠ 注册可更改设置并替换运行中服务器的隐藏工具。仅用于开发和测试。需重启。"
+  },
+  "tool_groups": {
+    "Add-ons": "插件",
+    "Areas & Floors": "区域与楼层",
+    "Assist": "语音助手",
+    "Automations": "自动化",
+    "Blueprints": "蓝图",
+    "Calendar": "日历",
+    "Camera": "摄像头",
+    "Dashboard": "仪表盘",
+    "Dashboards": "仪表盘总览",
+    "Developer": "开发者",
+    "Device Registry": "设备注册表",
+    "Energy": "能源",
+    "Entity Registry": "实体注册表",
+    "Files": "文件",
+    "Groups": "分组",
+    "HACS": "HACS",
+    "Helper Entities": "辅助实体",
+    "History & Statistics": "历史与统计",
+    "Integrations": "集成",
+    "Labels & Categories": "标签与类别",
+    "Matter": "Matter",
+    "Radio Management": "无线电管理",
+    "Scenes": "场景",
+    "Scripts": "脚本",
+    "Search & Discovery": "搜索与发现",
+    "Service & Device Control": "服务与设备控制",
+    "System": "系统",
+    "Thread": "Thread",
+    "Todo Lists": "待办清单",
+    "Utilities": "实用工具",
+    "Z-Wave": "Z-Wave",
+    "Zigbee": "Zigbee",
+    "Zones": "地理区域",
+    "beta": "测试版"
+  },
+  "tools": {
+    "ha_manage_backup": {
+      "title": "管理备份",
+      "description": "多态备份工具。详见工具描述中的路由矩阵。"
+    },
+    "ha_get_addon": {
+      "title": "获取插件",
+      "description": "获取 Home Assistant 插件——列出已安装、可安装的，或查看某一个的详情。"
+    },
+    "ha_manage_addon": {
+      "title": "管理插件",
+      "description": "管理 Home Assistant 插件——更新其配置或调用其内部 API。"
+    },
+    "ha_list_floors_areas": {
+      "title": "列出楼层与区域",
+      "description": "按楼层层级升序列出楼层，每层嵌套其所属区域，并包含未分配楼层的区域。"
+    },
+    "ha_set_area_or_floor": {
+      "title": "创建或更新区域或楼层",
+      "description": "创建或更新 Home Assistant 的区域或楼层。"
+    },
+    "ha_remove_area_or_floor": {
+      "title": "删除区域或楼层",
+      "description": "删除 Home Assistant 的区域或楼层。"
+    },
+    "ha_get_blueprint": {
+      "title": "获取蓝图",
+      "description": "获取蓝图信息——列出所有蓝图或查看某一个的详情。"
+    },
+    "ha_import_blueprint": {
+      "title": "导入蓝图",
+      "description": "从 URL 导入蓝图。"
+    },
+    "ha_report_issue": {
+      "title": "报告问题或反馈",
+      "description": "收集诊断信息以提交问题报告或反馈。"
+    },
+    "ha_config_get_calendar_events": {
+      "title": "获取日历事件",
+      "description": "从日历实体获取日历事件。"
+    },
+    "ha_config_set_calendar_event": {
+      "title": "创建或更新日历事件",
+      "description": "在日历中创建新事件。"
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "删除日历事件",
+      "description": "从日历中删除事件。"
+    },
+    "ha_get_camera_image": {
+      "title": "获取摄像头画面",
+      "description": "从 Home Assistant 摄像头实体获取快照画面。"
+    },
+    "ha_config_get_category": {
+      "title": "获取类别",
+      "description": "获取类别信息——列出某作用域下的所有类别，或按 ID 查看特定类别。"
+    },
+    "ha_config_set_category": {
+      "title": "创建或更新类别",
+      "description": "创建或更新 Home Assistant 类别。"
+    },
+    "ha_config_remove_category": {
+      "title": "删除类别",
+      "description": "删除 Home Assistant 类别。"
+    },
+    "ha_manage_custom_tool": {
+      "title": "自定义工具",
+      "description": "在沙箱中创建并运行自定义工具，或管理已保存的自定义工具。"
+    },
+    "ha_config_get_automation": {
+      "title": "获取自动化配置",
+      "description": "获取 Home Assistant 自动化配置。"
+    },
+    "ha_config_set_automation": {
+      "title": "创建或更新自动化",
+      "description": "创建或更新 Home Assistant 自动化。"
+    },
+    "ha_config_remove_automation": {
+      "title": "删除自动化",
+      "description": "删除 Home Assistant 自动化。"
+    },
+    "ha_config_get_dashboard": {
+      "title": "获取仪表盘",
+      "description": "获取仪表盘信息——列出所有仪表盘、获取配置，或搜索卡片。"
+    },
+    "ha_config_set_dashboard": {
+      "title": "创建或更新仪表盘",
+      "description": "创建或更新 Home Assistant 仪表盘。"
+    },
+    "ha_config_delete_dashboard": {
+      "title": "删除仪表盘",
+      "description": "彻底删除存储模式（storage-mode）的仪表盘。"
+    },
+    "ha_config_list_helpers": {
+      "title": "列出辅助实体",
+      "description": "列出特定类型的 Home Assistant 辅助实体及其配置。"
+    },
+    "ha_config_set_helper": {
+      "title": "创建或更新辅助实体",
+      "description": "创建或更新 Home Assistant 辅助实体与配置子条目（28 种类型，统一接口）。"
+    },
+    "ha_config_get_scene": {
+      "title": "获取场景配置",
+      "description": "获取 Home Assistant 场景配置。"
+    },
+    "ha_config_set_scene": {
+      "title": "创建或更新场景",
+      "description": "创建或更新 Home Assistant 场景。"
+    },
+    "ha_config_remove_scene": {
+      "title": "删除场景",
+      "description": "删除 Home Assistant 场景。"
+    },
+    "ha_config_get_script": {
+      "title": "获取脚本配置",
+      "description": "获取 Home Assistant 脚本配置。"
+    },
+    "ha_config_set_script": {
+      "title": "创建或更新脚本",
+      "description": "创建或更新 Home Assistant 脚本。"
+    },
+    "ha_config_remove_script": {
+      "title": "删除脚本",
+      "description": "删除 Home Assistant 脚本。"
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "获取仪表盘截图",
+      "description": "获取 Home Assistant Lovelace 仪表盘视图的渲染图片。"
+    },
+    "ha_dev_manage_settings": {
+      "title": "管理服务器设置（开发者）",
+      "description": "直接管理 ha-mcp 服务器设置（开发者模式）。"
+    },
+    "ha_dev_manage_server": {
+      "title": "管理 MCP 服务器（开发者）",
+      "description": "管理正在运行的 ha-mcp 服务器本身（开发者模式）。"
+    },
+    "ha_manage_energy_prefs": {
+      "title": "管理能源仪表盘偏好",
+      "description": "管理 Home Assistant 能源仪表盘的偏好设置。"
+    },
+    "ha_set_entity": {
+      "title": "设置实体",
+      "description": "更新实体注册表中的实体属性。"
+    },
+    "ha_get_entity": {
+      "title": "获取实体",
+      "description": "获取一个或多个实体的实体注册表信息。"
+    },
+    "ha_remove_entity": {
+      "title": "删除实体",
+      "description": "从 Home Assistant 实体注册表中删除一个或多个实体。"
+    },
+    "ha_list_files": {
+      "title": "列出文件",
+      "description": "列出 Home Assistant 配置目录中某个目录下的文件。"
+    },
+    "ha_read_file": {
+      "title": "读取文件",
+      "description": "从 Home Assistant 配置目录读取文件。"
+    },
+    "ha_write_file": {
+      "title": "写入文件",
+      "description": "将文件写入 Home Assistant 配置中允许的目录。"
+    },
+    "ha_delete_file": {
+      "title": "删除文件",
+      "description": "从 Home Assistant 配置中允许的目录删除文件。"
+    },
+    "ha_config_list_groups": {
+      "title": "列出分组",
+      "description": "列出 Home Assistant 实体分组及其成员实体。"
+    },
+    "ha_config_set_group": {
+      "title": "创建或更新分组",
+      "description": "通过 group.set 服务创建或更新基于服务的 Home Assistant 实体分组。"
+    },
+    "ha_config_remove_group": {
+      "title": "删除分组",
+      "description": "通过 group.remove 服务删除基于服务的 Home Assistant 实体分组。"
+    },
+    "ha_get_hacs_info": {
+      "title": "获取 HACS 信息",
+      "description": "获取 HACS（Home Assistant 社区商店）数据——搜索商店或获取仓库详情。"
+    },
+    "ha_manage_hacs": {
+      "title": "管理 HACS",
+      "description": "管理 HACS（Home Assistant 社区商店）——安装/更新或添加自定义仓库。"
+    },
+    "ha_get_history": {
+      "title": "获取实体历史或统计",
+      "description": "从 Home Assistant 的 recorder 获取历史数据。"
+    },
+    "ha_get_integration": {
+      "title": "获取集成",
+      "description": "获取集成（配置条目）信息，支持分页。"
+    },
+    "ha_set_integration": {
+      "title": "设置集成",
+      "description": "管理集成（配置条目）：启用/禁用、添加或更新选项。"
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "删除辅助实体或集成",
+      "description": "删除 Home Assistant 的辅助实体或集成配置条目。"
+    },
+    "ha_config_get_label": {
+      "title": "获取标签",
+      "description": "获取标签信息——列出所有标签或按 ID 查看特定标签。"
+    },
+    "ha_config_set_label": {
+      "title": "创建或更新标签",
+      "description": "创建或更新 Home Assistant 标签。"
+    },
+    "ha_config_remove_label": {
+      "title": "删除标签",
+      "description": "删除 Home Assistant 标签。"
+    },
+    "ha_manage_radio": {
+      "title": "管理无线电（Z-Wave / Zigbee / Matter / Thread）",
+      "description": "管理 Home Assistant 的无线电——Z-Wave、Zigbee、Matter 与 Thread。"
+    },
+    "ha_get_device": {
+      "title": "获取设备（含 Zigbee/ZHA/Z2M、Z-Wave 与 Matter）",
+      "description": "获取设备信息并支持分页，包含 Zigbee（ZHA/Z2M）与 Z-Wave JS 设备。"
+    },
+    "ha_set_device": {
+      "title": "设置设备",
+      "description": "更新设备的属性，例如名称、区域、禁用状态或标签。"
+    },
+    "ha_remove_device": {
+      "title": "删除设备",
+      "description": "从 Home Assistant 设备注册表中删除孤立设备。"
+    },
+    "ha_config_list_dashboard_resources": {
+      "title": "列出仪表盘资源",
+      "description": "列出 Lovelace 仪表盘资源（自定义卡片、主题、CSS/JS）。"
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "设置仪表盘资源",
+      "description": "创建或更新仪表盘资源（内联代码或外部 URL）。"
+    },
+    "ha_config_delete_dashboard_resource": {
+      "title": "删除仪表盘资源",
+      "description": "删除仪表盘资源。"
+    },
+    "ha_search": {
+      "title": "搜索",
+      "description": "通过名称、域或区域搜索实体（灯光、传感器、开关、温控等），并在一次调用中同时检索自动化/脚本/场景/辅助实体/仪表盘配置内部。"
+    },
+    "ha_get_overview": {
+      "title": "获取系统概览",
+      "description": "获取对 AI 友好的系统概览，带智能分类。"
+    },
+    "ha_get_state": {
+      "title": "获取实体状态",
+      "description": "获取一个或多个实体的当前状态、state 与属性（灯光、开关、传感器、温控、覆盖件、锁、风扇等）。"
+    },
+    "ha_call_service": {
+      "title": "调用服务",
+      "description": "执行 Home Assistant 服务以控制实体并触发自动化。"
+    },
+    "ha_get_operation_status": {
+      "title": "获取操作状态",
+      "description": "通过实时 WebSocket 校验，检查一个或多个设备操作的状态。"
+    },
+    "ha_bulk_control": {
+      "title": "批量控制",
+      "description": "支持批量操作与 WebSocket 跟踪，同时控制多个设备。"
+    },
+    "ha_call_event": {
+      "title": "调用事件",
+      "description": "在 Home Assistant 事件总线上执行自定义事件。"
+    },
+    "ha_list_services": {
+      "title": "列出可用服务",
+      "description": "列出 Home Assistant 可用服务，支持可选分页与详细程度控制。"
+    },
+    "ha_restart": {
+      "title": "重启 Home Assistant",
+      "description": "重启 Home Assistant。"
+    },
+    "ha_reload_core": {
+      "title": "重载核心组件",
+      "description": "在不完全重启的情况下重载 Home Assistant 配置。"
+    },
+    "ha_get_system_health": {
+      "title": "获取系统健康（含 ZHA/Z-Wave/集成诊断）",
+      "description": "获取 Home Assistant 系统健康状态，包含 Zigbee（ZHA）、Z-Wave JS 及各集成诊断转储。"
+    },
+    "ha_manage_theme": {
+      "title": "管理前端主题",
+      "description": "管理 Home Assistant 前端主题。"
+    },
+    "ha_get_todo": {
+      "title": "获取待办",
+      "description": "获取待办清单或条目——列出所有待办清单或获取某个清单中的条目。"
+    },
+    "ha_set_todo_item": {
+      "title": "设置待办条目",
+      "description": "在 Home Assistant 中创建或更新待办条目。"
+    },
+    "ha_remove_todo_item": {
+      "title": "删除待办条目",
+      "description": "从 Home Assistant 待办清单中删除条目。"
+    },
+    "ha_get_automation_traces": {
+      "title": "获取自动化追踪",
+      "description": "获取自动化与脚本的执行追踪以排查问题。"
+    },
+    "ha_manage_updates": {
+      "title": "管理更新",
+      "description": "管理 Home Assistant 更新——列出、查看详情、批量安装、跳过或取消跳过。"
+    },
+    "ha_get_logs": {
+      "title": "获取日志",
+      "description": "从多个来源获取 Home Assistant 日志。"
+    },
+    "ha_eval_template": {
+      "title": "评估模板",
+      "description": "使用 Home Assistant 的模板引擎评估 Jinja2 模板。"
+    },
+    "ha_manage_pipeline": {
+      "title": "管理 Assist 管线",
+      "description": "管理 Home Assistant Assist 语音管线。"
+    },
+    "ha_get_entity_exposure": {
+      "title": "获取实体暴露设置",
+      "description": "获取实体暴露（exposure）设置——列出全部或获取特定实体的设置。"
+    },
+    "ha_config_set_yaml": {
+      "title": "原始 YAML 配置编辑",
+      "description": "更新 configuration.yaml、packages/*.yaml 或 themes/*.yaml 中的原始 YAML 配置（最后手段）。"
+    },
+    "ha_config_get_yaml": {
+      "title": "读取 YAML 配置片段",
+      "description": "从单个配置文件或 glob 匹配中，获取某个键下的当前 YAML 配置片段。"
+    },
+    "ha_get_zone": {
+      "title": "获取区域",
+      "description": "获取区域信息——列出所有区域或查看某一个的详情。"
+    },
+    "ha_set_zone": {
+      "title": "设置区域",
+      "description": "创建或更新 Home Assistant 区域。"
+    },
+    "ha_remove_zone": {
+      "title": "删除区域",
+      "description": "删除 Home Assistant 区域。"
+    }
+  }
+}
