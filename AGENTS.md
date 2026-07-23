@@ -424,6 +424,9 @@ src/ha_mcp/
 │   ├── rest_client.py       # HTTP REST API client
 │   ├── websocket_client.py  # Real-time state monitoring
 │   └── websocket_listener.py
+├── auth/
+│   ├── provider.py          # OAuth provider (HTTP mode)
+│   └── consent_form.py      # OAuth consent screen
 ├── tools/             # 36 modules, auto-discovered
 │   ├── registry.py          # Lazy auto-discovery
 │   ├── smart_search.py      # Fuzzy entity search
