@@ -120,6 +120,78 @@ async def test_search_entities_all_filters_empty_rejected(mcp_client, params):
 
 
 @pytest.mark.asyncio
+async def test_search_entities_state_filter_only(mcp_client):
+    """state_filter alone enumerates every entity in that state (issue #2002).
+
+    Observe a real state from a domain listing first (fixture states are not
+    pinned here), then enumerate by that state and assert the state_listing
+    contract: search_type, per-result state match, and filtered pagination.
+    """
+    logger.info("Testing state_filter-only listing (issue #2002)")
+
+    # Observe an actual state from the light domain (reliably present).
+    listing = await mcp_client.call_tool(
+        "ha_search",
+        {"domain_filter": "light", "limit": 50},
+    )
+    lights = assert_mcp_success(listing, "Light domain listing")
+    light_entities = lights.get("entities", [])
+    assert light_entities, "Expected at least one light entity in the test env"
+    observed_state = light_entities[0].get("state")
+    assert isinstance(observed_state, str) and observed_state, (
+        f"Expected a non-empty state on the first light, got {observed_state!r}"
+    )
+
+    # Enumerate every entity in that state with ONLY state_filter set.
+    limit = 5
+    result = await mcp_client.call_tool(
+        "ha_search",
+        {"state_filter": observed_state, "limit": limit},
+    )
+    data = assert_mcp_success(result, f"state_filter-only ({observed_state})")
+
+    assert data.get("success") is True
+    assert data.get("search_type") == "state_listing", (
+        f"Expected search_type 'state_listing', got '{data.get('search_type')}'"
+    )
+
+    results = data.get("entities", [])
+    assert results, f"Expected at least one entity in state '{observed_state}'"
+    assert len(results) <= limit, f"limit={limit} not honored: got {len(results)}"
+
+    # Every returned record is in the requested state (exact match) and tagged.
+    for entity in results:
+        assert entity.get("state") == observed_state, (
+            f"{entity.get('entity_id')} state {entity.get('state')!r} "
+            f"!= filter {observed_state!r}"
+        )
+        assert entity.get("match_type") == "state_listing"
+
+    # Pagination reflects the FILTERED total, not the whole state machine.
+    total = data.get("entity_total_matches")
+    assert isinstance(total, int) and total >= len(results), (
+        f"entity_total_matches ({total}) should be >= returned count ({len(results)})"
+    )
+    assert "has_more" in data and isinstance(data["has_more"], bool)
+    assert data.get("count") == len(results), (
+        f"count ({data.get('count')}) should equal returned entities ({len(results)})"
+    )
+    if total > len(results):
+        assert data["has_more"] is True
+        assert data.get("next_offset") is not None
+
+    # A call with NO usable criterion at all still fails validation.
+    empty = await safe_call_tool(mcp_client, "ha_search", {})
+    inner = empty.get("data", empty)
+    assert inner.get("success") is False, f"No-param call must fail: {inner}"
+    assert inner.get("error", {}).get("code") == "VALIDATION_FAILED", inner
+
+    logger.info(
+        f"state_listing: {len(results)}/{total} entities in state '{observed_state}'"
+    )
+
+
+@pytest.mark.asyncio
 async def test_search_entities_area_filter_only(mcp_client):
     """area_filter alone (no query, no domain_filter) returns entities in that area.
 
@@ -348,6 +420,7 @@ async def test_search_entities_response_structure_issue_214(mcp_client):
         "fuzzy_search",
         "exact_match",
         "domain_listing",
+        "state_listing",
         "area_only",
         "area_filtered_query",
     ]
@@ -1307,6 +1380,7 @@ async def test_result_shape_consistent_across_branches(mcp_client):
     forbidden = {"essential_attributes"}
     calls = [
         ({"domain_filter": "light", "limit": 1}, "domain_listing"),
+        ({"state_filter": "unknown", "limit": 1}, "state_listing"),
         ({"query": "light", "exact_match": True, "limit": 1}, "exact_match"),
         ({"query": "light", "exact_match": False, "limit": 1}, "fuzzy_search"),
         ({"area_filter": "kitchen", "limit": 1}, "area_only"),
