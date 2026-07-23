@@ -372,6 +372,12 @@ source ~/.zshrc
           <p class="text-slate-400 text-sm">See the <a href="https://github.com/norpol/hass-codex-tunnel-mcp#readme" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">integration's README</a> for full setup and <a href="https://github.com/homeassistant-ai/ha-mcp/issues/1811" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#1811</a> for background. This is a third-party project — report tunnel issues on its tracker, not here.</p>
         </div>
 
+        <div class="faq-item" id="chatgpt-stale-tools">
+          <h3 class="text-lg font-medium text-white mb-2">ChatGPT doesn't show new or newly enabled tools (stale tool list)</h3>
+          <p class="text-slate-300 mb-3">ChatGPT (web, including Codex Work Mode) caches a connector's tool list and sometimes keeps serving the stale list even after you enable new tools on the server, restart it, and remove and re-add the connector under the same name. Newly enabled tools (for example the beta filesystem/YAML tools) simply never appear in ChatGPT's tool list, even though the server logs show them registered — and other tools on the stale connection may fail with MCP internal errors.</p>
+          <p class="text-slate-300 mb-3"><strong>Solution:</strong> delete the connector and create a new one with a <strong>different name</strong> — ChatGPT then fetches a fresh tool list. Re-adding it under the original name is not enough; the cached list survives the re-add.</p>
+        </div>
+
         <div class="faq-item">
           <h3 class="text-lg font-medium text-white mb-2">Server works but responses are slow</h3>
           <ol class="text-slate-300 space-y-2 list-decimal list-inside">
