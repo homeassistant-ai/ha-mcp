@@ -768,7 +768,7 @@ class TestInfo:
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "1.2.3"
+        assert manifest["version"] == COMPONENT_VERSION == "1.2.4"
 
 
 # =============================================================================
@@ -862,6 +862,7 @@ class TestEntityJoins:
         states = [
             FakeState("light.a", "on", "Lamp A"),
             FakeState("light.b", "off", "Lamp B"),
+            FakeState("light.c", "Vacation", "Lamp C"),
         ]
         monkeypatch.setattr(
             wsapi, "_resolve_registries", lambda hass: wsapi._RegistryView()
@@ -870,6 +871,13 @@ class TestEntityJoins:
             FakeHass(states=states), {"query": "lamp", "state_filter": "off"}
         )
         assert {e["entity_id"] for e in res["entities"]} == {"light.b"}
+
+        # Case-insensitive compare: a mixed-case entity state ("Vacation")
+        # matches a differently-cased state_filter ("vacation").
+        res_ci = wsapi._do_search(
+            FakeHass(states=states), {"query": "lamp", "state_filter": "vacation"}
+        )
+        assert {e["entity_id"] for e in res_ci["entities"]} == {"light.c"}
 
     def test_area_filter_by_name_or_id(self, monkeypatch):
         states = [FakeState("light.lamp", "on", "Lamp")]
