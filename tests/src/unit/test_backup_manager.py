@@ -2012,6 +2012,25 @@ class TestLegacyList:
         )
         assert await bm._list_legacy_backups(_StubClient()) == []
 
+    async def test_tool_error_from_token_gates_degrades_to_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The caller-token gates (tools entry not set up / component too old)
+        # raise ToolError, not HomeAssistantError — the edits list must still
+        # degrade to [] instead of failing wholesale (#1996 exercise path).
+        from fastmcp.exceptions import ToolError
+
+        async def boom(_c: Any, _s: str, _d: dict[str, Any]) -> Any:
+            raise ToolError('{"success": false, "error": {"code": "X"}}')
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_filesystem.call_mcp_tools_service", boom
+        )
+        assert await bm._list_legacy_backups(_StubClient()) == []
+        assert (await bm._read_legacy_backup(_StubClient(), "x.bak"))[
+            "success"
+        ] is False
+
     async def test_unsuccessful_response_degrades_to_empty(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

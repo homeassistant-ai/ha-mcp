@@ -479,7 +479,9 @@ class TestCallMcpToolsServiceInjectsToken:
         sent users on exactly that goose chase.
         """
         client = AsyncMock()
+        # The non-dict item exercises the probe's malformed-entry guard.
         client.get_services.return_value = [
+            "bogus-non-dict-entry",
             {"domain": "light", "services": {"turn_on": {}}},
         ]
         with pytest.raises(ToolError) as exc_info:
@@ -488,6 +490,8 @@ class TestCallMcpToolsServiceInjectsToken:
         assert "HA-MCP File & YAML Tools" in msg
         assert "Add entry" in msg
         assert "too old" not in msg
+        # The Add-entry step leads; the HACS install is the fallback.
+        assert msg.index("Add entry") < msg.index("add_repository")
         client.call_service.assert_not_called()
 
     @pytest.mark.asyncio

@@ -137,6 +137,8 @@ async def _bootstrap_service_state(client: Any) -> tuple[bool, bool]:
       (<0.5.0) component that pre-dates the bootstrap service; the call would
       otherwise fail with an opaque 400 from HA. This one IS fixed by updating.
     """
+    # HA /api/services returns a list of {"domain": str, "services": {...}} objects.
+    # This format has been stable since before HA 0.7 (the first public release).
     services = await client.get_services()
     for entry in services:
         if not isinstance(entry, dict):
@@ -164,8 +166,9 @@ def _raise_tools_entry_not_set_up() -> NoReturn:
             "Installing the HA-MCP integration alone is not enough — this "
             "second entry must be added to it.",
             suggestions=[
-                "In Home Assistant: Settings → Devices & Services → HA-MCP → "
-                + '"Add entry" → choose "HA-MCP File & YAML Tools" (NOT '
+                "In Home Assistant: Settings → Devices & Services → "
+                + 'HA-MCP Custom Component → "Add entry" → choose '
+                + '"HA-MCP File & YAML Tools" (NOT '
                 + '"HA-MCP Server", which starts a second in-process server '
                 + "this ha-mcp server does not need)",
                 "If the HA-MCP integration is not listed there, install it "
@@ -368,8 +371,6 @@ async def _is_mcp_tools_available(client: Any) -> bool:
     Raises if the services API call fails — callers handle API errors via
     their own exception_to_structured_error blocks.
     """
-    # HA /api/services returns a list of {"domain": str, "services": {...}} objects.
-    # This format has been stable since before HA 0.7 (the first public release).
     domain_registered, _ = await _bootstrap_service_state(client)
     return domain_registered
 

@@ -4497,6 +4497,44 @@ class TestFsCustomPathsEndpoints:
         assert "connection refused" in body["reason"]
 
     @pytest.mark.asyncio
+    async def test_get_surfaces_structured_tool_error_message(self, monkeypatch):
+        # #1996: a structured ToolError (e.g. the File & YAML Tools entry is
+        # not set up) must surface its human message plus the actionable first
+        # suggestion — not a "could not reach" prefix wrapping a raw JSON blob.
+        from fastmcp.exceptions import ToolError
+
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        payload = json.dumps(
+            {
+                "success": False,
+                "error": {
+                    "code": "COMPONENT_NOT_INSTALLED",
+                    "message": "The optional entry is not set up.",
+                    "suggestions": ["Press Add entry to add it."],
+                },
+            }
+        )
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+
+        async def boom(client, service, data):
+            raise ToolError(payload)
+
+        monkeypatch.setattr(tf, "call_mcp_tools_service", boom)
+        handlers = build_settings_handlers(server=MagicMock())
+        resp = await handlers["get_fs_custom_paths"](MagicMock())
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["available"] is False
+        assert (
+            body["reason"]
+            == "The optional entry is not set up. Press Add entry to add it."
+        )
+        assert "Could not reach" not in body["reason"]
+
+    @pytest.mark.asyncio
     async def test_save_disabled_returns_409(self, monkeypatch):
         import ha_mcp.tools.tools_filesystem as tf
         from ha_mcp.settings_ui import build_settings_handlers

@@ -2178,16 +2178,18 @@ async def _list_legacy_backups(client: Any) -> list[dict[str, Any]]:
     service.
 
     Returns ``[]`` (logged at debug) when the component predates the service —
-    a service-unavailable rejection surfaces either as a ``success: False``
-    response or a ``HomeAssistantError`` — so the edits ``list`` still works
-    against an older standalone component. Genuine programming errors propagate.
+    a service-unavailable rejection surfaces as a ``success: False`` response,
+    a ``HomeAssistantError``, or a ``ToolError`` from the caller-token gates
+    (tools entry not set up / component too old) — so the edits ``list`` still
+    works against an older or component-less install. Genuine programming
+    errors propagate.
     """
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response
 
     try:
         result = await call_mcp_tools_service(client, "list_legacy_backups", {})
-    except HomeAssistantError as err:
+    except (HomeAssistantError, ToolError) as err:
         logger.debug("legacy backup list unavailable: %s", err)
         return []
     if not isinstance(result, dict):
@@ -2204,8 +2206,9 @@ async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
 
     Returns the unwrapped service response (carries ``success`` / ``content`` /
     ``file_path`` / ``path_ambiguous`` / ``timestamp``). A service-unavailable
-    ``HomeAssistantError`` is mapped to a ``success: False`` dict so the caller
-    surfaces a not-found rather than crashing.
+    ``HomeAssistantError`` — or a ``ToolError`` from the caller-token gates —
+    is mapped to a ``success: False`` dict so the caller surfaces a not-found
+    rather than crashing.
     """
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response
@@ -2214,7 +2217,7 @@ async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
         result = await call_mcp_tools_service(
             client, "read_legacy_backup", {"filename": filename}
         )
-    except HomeAssistantError as err:
+    except (HomeAssistantError, ToolError) as err:
         return {"success": False, "error": str(err)}
     if not isinstance(result, dict):
         return {"success": False, "error": f"no response for {filename!r}"}

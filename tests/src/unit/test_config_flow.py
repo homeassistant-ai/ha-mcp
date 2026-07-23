@@ -501,6 +501,28 @@ class TestServerOptionsFlow:
         assert "not loaded" in versions
         assert "enable or reload" in versions
 
+    def test_tools_module_hint_read_error_drops_line(self, monkeypatch):
+        # Failure-proof like the sibling hints: a raising entry-registry read
+        # drops the status line rather than breaking the options form.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
+        hass.config_entries.async_entries = MagicMock(side_effect=RuntimeError("boom"))
+        flow.hass = hass
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+
+        form = asyncio.run(flow.async_step_init(None))  # must not raise
+        versions = form["description_placeholders"]["versions"]
+        assert versions.startswith(
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+        )
+        assert "tools module" not in versions
+
     def test_webhook_auth_is_first_option_field(self):
         # #1875: Authentication mode sits at the top of the options form,
         # directly under the connect URLs, so users find it without scrolling.

@@ -11,6 +11,7 @@ into thin request-only wrappers for the route table.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -23,6 +24,38 @@ if TYPE_CHECKING:
     from ..server import HomeAssistantSmartMCPServer
 
 logger = logging.getLogger(__name__)
+
+
+def _component_error_reason(exc: Exception) -> str | None:
+    """Extract the human-readable message from a structured ``ToolError``.
+
+    ``raise_tool_error`` serializes the whole error envelope into the
+    exception string, so rendering ``str(exc)`` verbatim shows the settings
+    UI a raw JSON blob behind a misleading "could not reach" prefix — the
+    hard-to-read surface from #1996. Returns the message plus the first
+    suggestion (which carries the actionable step), or None for anything
+    that is not a structured error payload.
+    """
+    try:
+        payload = json.loads(str(exc))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    message = error.get("message")
+    if not isinstance(message, str) or not message:
+        return None
+    suggestions = error.get("suggestions")
+    if (
+        isinstance(suggestions, list)
+        and suggestions
+        and isinstance(suggestions[0], str)
+    ):
+        return f"{message} {suggestions[0]}"
+    return message
 
 
 async def _fs_custom_paths_call(
@@ -90,7 +123,10 @@ async def _get_fs_custom_paths(
         result = await _fs_custom_paths_call(server, "get_allowed_paths", {})
     except Exception as exc:
         logger.warning("fs-custom-paths GET could not reach ha_mcp_tools: %s", exc)
-        return _unavailable(f"Could not reach the ha_mcp_tools component: {exc}")
+        return _unavailable(
+            _component_error_reason(exc)
+            or f"Could not reach the ha_mcp_tools component: {exc}"
+        )
 
     data = unwrap_service_response(result) if isinstance(result, dict) else {}
     if not isinstance(data, dict) or not data.get("success", False):
@@ -163,7 +199,8 @@ async def _save_fs_custom_paths(
         return JSONResponse(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                f"Could not reach the ha_mcp_tools component: {exc}",
+                _component_error_reason(exc)
+                or f"Could not reach the ha_mcp_tools component: {exc}",
             ),
             status_code=502,
         )

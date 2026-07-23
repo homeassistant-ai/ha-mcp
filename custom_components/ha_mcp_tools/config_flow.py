@@ -577,11 +577,11 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             return (
                 "Beta/advanced file & YAML tools module (optional): Installed "
                 'but not loaded — enable or reload the "HA-MCP File & YAML '
-                'Tools" entry on the HA-MCP integration page'
+                "Tools\" entry on this integration's page"
             )
         return (
             "Beta/advanced file & YAML tools module (optional): Not installed — "
-            'press "Add entry" on the HA-MCP integration page and choose '
+            'press "Add entry" on this integration\'s page and choose '
             '"HA-MCP File & YAML Tools" to add it'
         )
 
