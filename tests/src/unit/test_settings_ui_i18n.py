@@ -216,6 +216,17 @@ def test_de_catalog_loads_and_is_registered() -> None:
     assert CATALOGS["de"]["meta"]["dir"] == "ltr"
 
 
+def test_zh_hans_catalog_loads_and_is_registered() -> None:
+    from ha_mcp.settings_ui._i18n import CATALOGS
+
+    assert "zh-hans" in CATALOGS
+    assert CATALOGS["zh-hans"]["meta"]["native_name"] == "简体中文"
+    assert CATALOGS["zh-hans"]["meta"]["dir"] == "ltr"
+    # 工具分组与工具 UI 翻译须已填充，避免空翻译漏过 CI
+    assert CATALOGS["zh-hans"]["tool_groups"]
+    assert CATALOGS["zh-hans"]["tools"]
+
+
 def test_disallowed_inline_markup_is_rejected(tmp_path: Path) -> None:
     _write_catalog(
         tmp_path,

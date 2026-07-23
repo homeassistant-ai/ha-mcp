@@ -203,10 +203,6 @@ def normalize_locale(
     base = candidate.split("-", 1)[0]
     if base in catalogs:
         return base
-    # Handle zh-CN, zh-SG, zh → zh-hans (and similar for other script-variant
-    # catalogs like zh-Hant, sr-Cyrl, sr-Latn).
-    # When the base language is registered but a script-qualified variant like
-    # zh-hans exists, prefer that variant over failing to None.
     if base == "zh" and "zh-hans" in catalogs:
         # Map bare "zh" and simplified Chinese region tags (zh-CN, zh-SG) to
         # zh-hans. Do NOT map zh-TW, zh-HK, etc. — those would need a zh-Hant
