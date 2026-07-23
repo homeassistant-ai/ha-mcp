@@ -109,7 +109,7 @@ class DashboardScreenshotTools:
         tags={"Dashboard", "beta"},
         annotations={
             "openWorldHint": False,
-            "destructiveHint": False,
+            "readOnlyHint": True,
             "title": "Get Dashboard Screenshot",
         },
     )

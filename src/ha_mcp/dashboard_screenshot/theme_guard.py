@@ -1,5 +1,11 @@
 """Snapshot and restore the engine user's saved frontend theme (issue #1909).
 
+NOTE: This guard is currently disabled at its call site (``capture.py``)
+because upstream Puppet fixed the cold-render ``settheme`` dispatch that made
+the bracket necessary (#1991). The code here is retained unchanged so the
+bracket can be re-enabled by uncommenting the snapshot/restore calls in
+``capture.py`` if a future engine regression reintroduces the write.
+
 Stock Puppet dispatches Home Assistant's ``settheme`` event on every
 cold-browser render — its ``dark`` query flag is presence-based, so "not
 requested" reaches the frontend as an explicit "light". Home Assistant

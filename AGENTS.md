@@ -560,6 +560,12 @@ Every tool needs `tags={"Category Name"}` (native FastMCP parameter). Drives the
 | `idempotentHint: True` | `False` | Repeated calls with same args have no additional effect (only meaningful when `readOnlyHint` is false) |
 | `openWorldHint: True` | `True` | Tool reaches an external, third-party-authored world (HACS store, add-on repositories, GitHub release feeds, arbitrary import URLs). Set to `False` when the tool's domain is the local Home Assistant instance. A tool is also open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf — `ha_get_overview` and `ha_get_system_health` embed the update-check field that reaches PyPI / the Supervisor store, while `ha_get_blueprint` and `ha_config_list_dashboard_resources` return externally-authored content from purely local reads. Required on every tool — the default is `true`, so an omitted value silently marks a local tool as open-world |
 
+**Version baseline:** annotations describe a tool's behavior against current
+upstream versions of any external engine or component it drives; a side effect
+that exists only in outdated external builds does not demote the tool to
+write-classified — document the update requirement in the tool's docs instead
+(e.g. the screenshot engine's old `settheme` write, #1991).
+
 ### Error Handling
 
 **Always use the dedicated error functions** from `errors.py` and `helpers.py`. Never construct raw error dicts manually — the helpers ensure consistent structure, error codes, and suggestions across all tools.
