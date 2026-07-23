@@ -25,6 +25,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -547,9 +548,11 @@ class HaMcpServerOptionsFlow(OptionsFlow):
 
         Shown directly under the version line (#1996): users routinely add the
         server entry only and never learn the file / YAML tools need the second
-        "HA-MCP File & YAML Tools" entry until a tool call fails. Failure-proof
-        like the other hints: any read error drops the line rather than
-        breaking the options form.
+        "HA-MCP File & YAML Tools" entry until a tool call fails. An entry
+        that exists but is not loaded (disabled, or setup failed) serves no
+        services either, so it reports "not loaded" rather than Installed.
+        Failure-proof like the other hints: any read error drops the line
+        rather than breaking the options form.
         """
         hass = getattr(self, "hass", None)
         if hass is None:
@@ -557,15 +560,25 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         try:
             # A missing entry_type means tools (pre-#1527 entries never carried
             # the discriminator) — same default async_setup_entry dispatches on.
-            installed = any(
-                entry.data.get(CONF_ENTRY_TYPE, ENTRY_TYPE_TOOLS) == ENTRY_TYPE_TOOLS
+            tools_entries = [
+                entry
                 for entry in hass.config_entries.async_entries(DOMAIN)
+                if entry.data.get(CONF_ENTRY_TYPE, ENTRY_TYPE_TOOLS) == ENTRY_TYPE_TOOLS
+            ]
+            loaded = any(
+                entry.state is ConfigEntryState.LOADED for entry in tools_entries
             )
         except Exception as err:
             _LOGGER.debug("Could not read the tools-entry state for the hint: %s", err)
             return None
-        if installed:
+        if loaded:
             return "Beta/advanced file & YAML tools module (optional): Installed"
+        if tools_entries:
+            return (
+                "Beta/advanced file & YAML tools module (optional): Installed "
+                'but not loaded — enable or reload the "HA-MCP File & YAML '
+                'Tools" entry on the HA-MCP integration page'
+            )
         return (
             "Beta/advanced file & YAML tools module (optional): Not installed — "
             'press "Add entry" on the HA-MCP integration page and choose '

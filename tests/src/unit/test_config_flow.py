@@ -447,9 +447,10 @@ class TestServerOptionsFlow:
         assert "Add entry" in versions
 
     def test_versions_placeholder_shows_tools_entry_installed(self, monkeypatch):
-        # Both entries present → the status line reads Installed. A legacy tools
-        # entry without the entry_type discriminator counts as installed too
-        # (missing entry_type means tools, mirroring async_setup_entry).
+        # Both entries present and the tools entry loaded → the status line
+        # reads Installed. A legacy tools entry without the entry_type
+        # discriminator counts too (missing entry_type means tools, mirroring
+        # async_setup_entry).
         monkeypatch.setattr(
             cf,
             "async_get_integration",
@@ -466,13 +467,39 @@ class TestServerOptionsFlow:
                     SimpleNamespace(
                         data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER}
                     ),
-                    SimpleNamespace(data=tools_data),
+                    SimpleNamespace(data=tools_data, state=cf.ConfigEntryState.LOADED),
                 ]
             )
             form = asyncio.run(flow.async_step_init(None))
             versions = form["description_placeholders"]["versions"]
             assert "tools module (optional): Installed" in versions
             assert "Not installed" not in versions
+            assert "not loaded" not in versions
+
+    def test_versions_placeholder_flags_unloaded_tools_entry(self, monkeypatch):
+        # A tools entry that exists but is not loaded (disabled / setup failed)
+        # serves no services, so it must not read as plain Installed — the line
+        # points at enabling/reloading the existing entry instead.
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        flow.hass = self._hass_with_entries(
+            [
+                SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER}),
+                SimpleNamespace(
+                    data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS},
+                    state=cf.ConfigEntryState.NOT_LOADED,
+                ),
+            ]
+        )
+        form = asyncio.run(flow.async_step_init(None))
+        versions = form["description_placeholders"]["versions"]
+        assert "not loaded" in versions
+        assert "enable or reload" in versions
 
     def test_webhook_auth_is_first_option_field(self):
         # #1875: Authentication mode sits at the top of the options form,
