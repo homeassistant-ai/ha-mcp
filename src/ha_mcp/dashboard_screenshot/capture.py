@@ -855,11 +855,15 @@ async def capture_dashboard_images(
     preset's native orientation. ``full_page`` is a compatibility alias for
     requesting the engine's native ``WIDTHxauto`` viewport.
 
-    The batch is bracketed by a :class:`ThemeGuard` that restores the engine
-    user's saved frontend theme if rendering changed it (issue #1909).
-    ``client`` supplies the guard's non-add-on credential fallback and
-    ``capture_warnings`` collects the guard's non-fatal warnings; both are
-    optional and never affect the captures themselves.
+    The batch used to be bracketed by a :class:`ThemeGuard` that restored the
+    engine user's saved frontend theme when a cold render changed it (issue
+    #1909). That bracket is currently disabled (#1991): upstream Puppet no
+    longer dispatches ``settheme`` on cold renders, so there is nothing to undo.
+    The guard construction and the ``client`` / ``capture_warnings`` plumbing
+    are retained so the bracket can be re-enabled by uncommenting the
+    snapshot/restore calls if a future engine regression reintroduces the write;
+    while disabled ``capture_warnings`` simply stays empty and never affects the
+    captures themselves.
     """
     path = _validate_dashboard_path(dashboard_path)
     options = validate_capture_parameters(
@@ -884,13 +888,16 @@ async def capture_dashboard_images(
     mime_type = _MIME_TYPES[options.image_format]
     captures: list[DashboardImageCapture] = []
 
-    # The engine dispatches a theme write into the authenticated frontend on
-    # cold renders, which Home Assistant persists to the engine user's real
-    # profile (issue #1909). Snapshot before, restore after — including when
-    # the batch fails, since the engine may already have rendered (and
-    # written) before the failure.
+    # ThemeGuard bracket — currently DISABLED (#1991). Stock Puppet used to
+    # dispatch a theme write into the authenticated frontend on cold renders,
+    # which Home Assistant persisted to the engine user's real profile (#1909);
+    # ha-mcp snapshotted before and restored after to undo it. Upstream Puppet
+    # has since fixed the cold-render settheme dispatch, so the bracket is no
+    # longer needed. The guard is still constructed (and the snapshot/restore
+    # calls kept below, commented out) so it can be re-enabled by uncommenting
+    # if a future engine regression reintroduces the write.
     guard = ThemeGuard.for_capture(engine_target.addon_credential, client)
-    await guard.take_snapshot()
+    # await guard.take_snapshot()
     batch_error: ToolError | None = None
     try:
         async with httpx.AsyncClient(
@@ -970,7 +977,7 @@ async def capture_dashboard_images(
         # and its outcome can be attached to the error payload below.
         batch_error = exc
     finally:
-        await guard.restore()
+        # await guard.restore()  # ThemeGuard bracket disabled (#1991) — see above.
         if capture_warnings is not None:
             capture_warnings.extend(guard.warnings)
 

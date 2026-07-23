@@ -1749,7 +1749,7 @@ class DashboardConfigTools:
         tags={"Dashboards"},
         annotations={
             "openWorldHint": False,
-            "destructiveHint": False,
+            "readOnlyHint": True,
             "idempotentHint": True,
             "title": "Get Dashboard",
         },

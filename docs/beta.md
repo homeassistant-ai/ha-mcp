@@ -174,20 +174,18 @@ token grants. If the token is missing or invalid, Puppet lands on the login
 page and (by its design) restarts; ha-mcp surfaces this as a clear "set the
 engine's access token" error rather than a silent failure.
 
-Puppet's theme and dark-mode renderer controls dispatch Home Assistant's
-`settheme` event, which Home Assistant persists on the frontend profile of
-the user whose token the engine runs with — and syncs to that user's real
-web and mobile sessions. Even a fresh Puppet browser's first default render
-saves a "light" selection, which used to flip a dark-mode user's whole UI to
-light on every screenshot. ha-mcp now brackets every capture: it reads that
-user's saved theme before rendering and writes it back afterwards if the
-render changed it (in add-on mode it authenticates with the Puppet add-on's
-own configured token; in sidecar / self-hosted non-add-on mode with ha-mcp's
-own HA credentials, which protects the user whenever both tokens belong to the
-same account). The restore is best-effort — a failed restore surfaces as a
-`warnings` entry on the tool response. A dedicated Puppet account remains a
-sound belt-and-suspenders setup. Language selection is local to Puppet's
-browser session.
+Puppet's theme and dark-mode renderer controls used to dispatch Home
+Assistant's `settheme` event on every cold render, which Home Assistant
+persisted on the frontend profile of the user whose token the engine runs with
+— and synced to that user's real web and mobile sessions, flipping a dark-mode
+user's whole UI to light on every screenshot (#1909). Recent Puppet versions
+fixed that cold-render dispatch, so ha-mcp's snapshot/restore bracket around
+each capture is now disabled (#1991); the guard code is retained so it can be
+switched back on if a future engine regression reintroduces the write. If you
+run an older Puppet build, update the add-on (or your self-hosted sidecar
+image) — older engines still persist the theme selection and will keep
+flipping it. A dedicated Puppet account remains a sound belt-and-suspenders
+setup. Language selection is local to Puppet's browser session.
 
 To change the Puppet engine add-on's own options (such as `keep_browser_open`)
 or to restart it, use `ha_manage_addon`; the screenshot tools only render and
