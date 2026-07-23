@@ -177,9 +177,9 @@ def _record_ignored_section_keys(
 def _field_default_value(field: dict[str, Any]) -> Any:
     """Return a serialized schema field's default/suggested value, if present."""
     description = field.get("description")
-    if isinstance(description, dict) and "suggested_value" in description:
+    if isinstance(description, dict) and description.get("suggested_value") is not None:
         return copy.deepcopy(description["suggested_value"])
-    if "suggested_value" in field:
+    if field.get("suggested_value") is not None:
         return copy.deepcopy(field["suggested_value"])
     if "default" in field:
         return copy.deepcopy(field["default"])
@@ -207,11 +207,10 @@ def _schema_default_values(data_schema: list[Any]) -> dict[str, Any]:
     return defaults
 
 
-def _required_section_defaults(
-    field: dict[str, Any], nested_schema: list[Any]
-) -> dict[str, Any]:
+def _required_section_defaults(field: dict[str, Any]) -> dict[str, Any]:
     """Return default data for a required section, otherwise an empty dict."""
-    if not field.get("required"):
+    nested_schema = field.get("schema")
+    if not field.get("required") or not isinstance(nested_schema, list):
         return {}
     return _schema_default_values(nested_schema)
 
@@ -240,32 +239,29 @@ def _ignored_keys_warnings(
 
 def _consume_section_schema(
     field: dict[str, Any],
-    nested_schema: list[Any],
+    explicit_section: dict[str, Any] | None,
     remaining_config: dict[str, Any],
     ignored_config_keys: set[str] | None,
+    consumed_config_keys: set[str] | None,
     path_prefix: str,
-    missing: object,
-) -> tuple[str | None, dict[str, Any] | Any]:
+) -> dict[str, Any]:
     """Consume config values for a nested flow section."""
-    name = field.get("name")
-    section_name = name if isinstance(name, str) else None
-    section_path = _section_path(path_prefix, name)
-    explicit_section = (
-        remaining_config.pop(section_name, missing)
-        if section_name is not None
-        else missing
-    )
-    if explicit_section is not missing and not isinstance(explicit_section, dict):
-        return section_name, explicit_section
+    nested_schema = field.get("schema")
+    if not isinstance(nested_schema, list):
+        return {}
 
-    nested_data = _required_section_defaults(field, nested_schema)
-    if isinstance(explicit_section, dict):
+    name = field.get("name")
+    section_path = _section_path(path_prefix, name)
+    nested_data = _required_section_defaults(field)
+
+    if explicit_section is not None:
         explicit_remaining = dict(explicit_section)
         nested_data.update(
             _consume_form_schema(
                 nested_schema,
                 explicit_remaining,
                 ignored_config_keys,
+                consumed_config_keys,
                 section_path,
             )
         )
@@ -274,21 +270,56 @@ def _consume_section_schema(
             explicit_remaining,
             section_path,
         )
+
     nested_data.update(
         _consume_form_schema(
             nested_schema,
             remaining_config,
             ignored_config_keys,
+            consumed_config_keys,
             section_path,
         )
     )
-    return section_name, nested_data
+    return nested_data
+
+
+def _mark_consumed(
+    consumed_config_keys: set[str] | None,
+    path_prefix: str,
+    name: str,
+) -> None:
+    """Record that a caller-supplied form key, not an injected default, was used."""
+    if consumed_config_keys is not None:
+        consumed_config_keys.add(_section_path(path_prefix, name))
+
+
+def _auto_confirm_form_payload(current_step: dict[str, Any]) -> dict[str, Any] | None:
+    """Return payload for HA preview/confirmation-only forms we can safely advance."""
+    if "preview" not in current_step:
+        return None
+    data_schema = current_step.get("data_schema")
+    if not isinstance(data_schema, list) or len(data_schema) != 1:
+        return None
+    field = data_schema[0]
+    if not isinstance(field, dict) or not field.get("required"):
+        return None
+    name = field.get("name")
+    if not isinstance(name, str) or name in _MENU_SELECTION_KEYS:
+        return None
+    default = _field_default_value(field)
+    if default is not False:
+        return None
+    selector = field.get("selector")
+    if isinstance(selector, dict) and selector and "boolean" not in selector:
+        return None
+    return {name: True}
 
 
 def _consume_form_schema(
     data_schema: list[Any],
     remaining_config: dict[str, Any],
     ignored_config_keys: set[str] | None = None,
+    consumed_config_keys: set[str] | None = None,
     path_prefix: str = "",
 ) -> dict[str, Any]:
     """Consume matching config values and shape nested flow sections.
@@ -299,7 +330,6 @@ def _consume_form_schema(
     ``ignored_config_keys`` with their dotted section path.
     """
     form_data: dict[str, Any] = {}
-    missing = object()
 
     for field in data_schema:
         if not isinstance(field, dict):
@@ -308,13 +338,23 @@ def _consume_form_schema(
         name = field.get("name")
         nested_schema = field.get("schema")
         if isinstance(nested_schema, list):
-            section_name, nested_data = _consume_section_schema(
+            section_name = name if isinstance(name, str) else None
+            explicit_section = None
+            if section_name is not None and section_name in remaining_config:
+                explicit_value = remaining_config.pop(section_name)
+                if not isinstance(explicit_value, dict):
+                    form_data[section_name] = explicit_value
+                    _mark_consumed(consumed_config_keys, path_prefix, section_name)
+                    continue
+                explicit_section = explicit_value
+
+            nested_data = _consume_section_schema(
                 field,
-                nested_schema,
+                explicit_section,
                 remaining_config,
                 ignored_config_keys,
+                consumed_config_keys,
                 path_prefix,
-                missing,
             )
             if nested_data:
                 if section_name is not None:
@@ -329,6 +369,7 @@ def _consume_form_schema(
             and name in remaining_config
         ):
             form_data[name] = remaining_config.pop(name)
+            _mark_consumed(consumed_config_keys, path_prefix, name)
 
     return form_data
 
@@ -357,6 +398,7 @@ def _handle_form_step(
     current_step: dict[str, Any],
     remaining_config: dict[str, Any],
     ignored_config_keys: set[str] | None = None,
+    consumed_config_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate a form step and return form data to submit.
 
@@ -398,9 +440,10 @@ def _handle_form_step(
             if key in _MENU_SELECTION_KEYS:
                 continue
             form_data[key] = remaining_config.pop(key)
+            _mark_consumed(consumed_config_keys, "", key)
     else:
         form_data = _consume_form_schema(
-            data_schema, remaining_config, ignored_config_keys
+            data_schema, remaining_config, ignored_config_keys, consumed_config_keys
         )
 
     return form_data
@@ -844,13 +887,17 @@ async def _handle_flow_steps(
             # for subsequent steps (HA can present multi-step forms, e.g.
             # statistics: user step then pick-characteristic step).
             saw_form_step = True
-            form_data = _handle_form_step(
-                flow_id,
-                current_step,
-                remaining_config,
-                ignored_config_keys,
-            )
-            if form_data:
+            consumed_form_keys: set[str] = set()
+            form_data = _auto_confirm_form_payload(current_step)
+            if form_data is None:
+                form_data = _handle_form_step(
+                    flow_id,
+                    current_step,
+                    remaining_config,
+                    ignored_config_keys,
+                    consumed_form_keys,
+                )
+            if consumed_form_keys:
                 any_form_key_consumed = True
             logger.debug(
                 f"Flow step {step_num}: form submit "

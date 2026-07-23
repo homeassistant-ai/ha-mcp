@@ -234,6 +234,98 @@ class TestHandleFormStepFiltering:
         }
         assert remaining == {}
 
+    def test_required_section_uses_all_schema_default_sources(self) -> None:
+        remaining: dict[str, Any] = {}
+        step = {
+            "type": "form",
+            "step_id": "user",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": True,
+                    "schema": [
+                        {
+                            "name": "from_description",
+                            "description": {"suggested_value": 2},
+                        },
+                        {"name": "from_top_level", "suggested_value": "tcp"},
+                        {"name": "from_default", "default": True},
+                    ],
+                },
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {
+            "advanced": {
+                "from_description": 2,
+                "from_top_level": "tcp",
+                "from_default": True,
+            }
+        }
+        assert remaining == {}
+
+    def test_null_suggested_values_fall_back_to_defaults(self) -> None:
+        remaining: dict[str, Any] = {}
+        step = {
+            "type": "form",
+            "step_id": "user",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": True,
+                    "schema": [
+                        {
+                            "name": "description_null",
+                            "description": {"suggested_value": None},
+                            "default": "fallback-a",
+                        },
+                        {
+                            "name": "top_level_null",
+                            "suggested_value": None,
+                            "default": "fallback-b",
+                        },
+                    ],
+                },
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {
+            "advanced": {
+                "description_null": "fallback-a",
+                "top_level_null": "fallback-b",
+            }
+        }
+        assert remaining == {}
+
+    def test_optional_expandable_section_does_not_seed_suggestions(self) -> None:
+        remaining = {"stream_source": "rtsp://camera.example/stream"}
+        step = {
+            "type": "form",
+            "step_id": "user",
+            "data_schema": [
+                {"name": "stream_source", "required": False},
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": False,
+                    "schema": [
+                        {"name": "framerate", "description": {"suggested_value": 2}},
+                    ],
+                },
+            ],
+        }
+
+        form_data = _handle_form_step("flow-1", step, remaining)
+
+        assert form_data == {"stream_source": "rtsp://camera.example/stream"}
+        assert remaining == {}
+
     def test_omits_section_when_only_top_level_field_is_updated(self) -> None:
         remaining = {"state": "{{ 2 }}"}
         step = {
@@ -341,6 +433,24 @@ class TestHandleFormStepFiltering:
 
         assert form_data == {"advanced_options": "invalid"}
         assert remaining == {}
+
+    def test_passes_through_falsy_non_dict_explicit_section_values(self) -> None:
+        step = {
+            "type": "form",
+            "step_id": "sensor",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "advanced_options",
+                    "schema": [{"name": "availability"}],
+                }
+            ],
+        }
+        for value in (0, False, "", []):
+            remaining = {"advanced_options": value}
+            form_data = _handle_form_step("flow-1", step, remaining)
+            assert form_data == {"advanced_options": value}
+            assert remaining == {}
 
     def test_flattens_children_when_section_name_is_missing(self) -> None:
         remaining = {"availability": "{{ true }}"}
@@ -733,6 +843,79 @@ class TestAllKeysIgnoredIsAnError:
 
         assert result["success"] is True
         assert "warnings" not in result
+
+    async def test_seeded_section_defaults_do_not_count_as_consumed_keys(self) -> None:
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(side_effect=[final_entry])
+        initial_step = {
+            "type": "form",
+            "flow_id": "flow-defaults",
+            "step_id": "user",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": True,
+                    "schema": [{"name": "framerate", "default": 2}],
+                }
+            ],
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-defaults",
+                initial_step=initial_step,
+                config={"typo_key": 5},
+                submit_fn=submit_fn,
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "without consuming any" in body["error"]["message"]
+        assert submit_fn.await_args.args[1] == {"advanced": {"framerate": 2}}
+
+    async def test_preview_confirm_form_is_auto_advanced(self) -> None:
+        confirm_step = {
+            "type": "form",
+            "flow_id": "flow-generic",
+            "step_id": "user_confirm",
+            "preview": "Camera preview",
+            "data_schema": [
+                {
+                    "name": "confirmed_ok",
+                    "required": True,
+                    "default": False,
+                    "selector": {"boolean": {}},
+                }
+            ],
+        }
+        final_entry = {"type": "create_entry", "result": {"entry_id": "camera-1"}}
+        submit_fn = AsyncMock(side_effect=[confirm_step, final_entry])
+        initial_step = {
+            "type": "form",
+            "flow_id": "flow-generic",
+            "step_id": "user",
+            "data_schema": [{"name": "stream_source"}],
+        }
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-generic",
+            initial_step=initial_step,
+            config={"stream_source": "rtsp://camera.example/stream"},
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        assert submit_fn.await_args_list[0].args[1] == {
+            "stream_source": "rtsp://camera.example/stream"
+        }
+        assert submit_fn.await_args_list[1].args[1] == {"confirmed_ok": True}
 
     async def test_menu_only_selection_still_succeeds(self) -> None:
         # A caller whose config is JUST a menu selection consumed by a menu
