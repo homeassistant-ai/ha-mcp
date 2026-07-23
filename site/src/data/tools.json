@@ -709,7 +709,7 @@
     },
     "annotations": {
       "openWorldHint": false,
-      "destructiveHint": false
+      "readOnlyHint": true
     },
     "tags": [
       "Dashboard",
@@ -817,7 +817,7 @@
     },
     "annotations": {
       "openWorldHint": false,
-      "destructiveHint": false,
+      "readOnlyHint": true,
       "idempotentHint": true
     },
     "tags": [
