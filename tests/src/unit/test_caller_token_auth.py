@@ -469,6 +469,28 @@ class TestCallMcpToolsServiceInjectsToken:
         client.call_service.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_raises_entry_not_set_up_when_no_domain_services(self):
+        """No ha_mcp_tools services at all → the "add the File & YAML Tools
+        entry" error, NOT the "too old / update via HACS" prompt (#1996).
+
+        This is the state a fully-current component is in when only the
+        "HA-MCP Server" entry was added: the services register in the tools
+        entry's setup, so a HACS update can never fix it — the old message
+        sent users on exactly that goose chase.
+        """
+        client = AsyncMock()
+        client.get_services.return_value = [
+            {"domain": "light", "services": {"turn_on": {}}},
+        ]
+        with pytest.raises(ToolError) as exc_info:
+            await call_mcp_tools_service(client, "list_files", {"path": "www"})
+        msg = str(exc_info.value)
+        assert "HA-MCP File & YAML Tools" in msg
+        assert "Add entry" in msg
+        assert "too old" not in msg
+        client.call_service.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_raises_component_too_old_when_response_missing_version(self):
         """Bootstrap registered but response has no ``version`` field → still
         rejected as "too old" with the same actionable update prompt.

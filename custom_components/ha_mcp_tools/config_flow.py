@@ -442,11 +442,18 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             if bool(opts.get(OPT_ENABLE_SIDEBAR_PANEL, True))
             else ""
         )
+        # The tools-module status renders as its own paragraph directly under
+        # the version line, sharing the {versions} placeholder so every
+        # translation shows it without a strings change.
+        versions = await self._versions_hint()
+        tools_hint = self._tools_module_hint()
+        if tools_hint:
+            versions = f"{versions}\n\n{tools_hint}"
         return self.async_show_form(
             step_id="init",
             data_schema=schema,
             description_placeholders={
-                "versions": await self._versions_hint(),
+                "versions": versions,
                 "connect_url": await self._connect_url_hint(),
                 "oauth_creds": self._oauth_creds_hint(),
                 "llm_api_docs_url": LLM_API_DOCS_URL,
@@ -533,6 +540,36 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         return (
             f"Component {component_version} - "
             f"Server ha-mcp {server_version} ({channel} channel)"
+        )
+
+    def _tools_module_hint(self) -> str | None:
+        """Return the File & YAML tools entry status line, or None if unreadable.
+
+        Shown directly under the version line (#1996): users routinely add the
+        server entry only and never learn the file / YAML tools need the second
+        "HA-MCP File & YAML Tools" entry until a tool call fails. Failure-proof
+        like the other hints: any read error drops the line rather than
+        breaking the options form.
+        """
+        hass = getattr(self, "hass", None)
+        if hass is None:
+            return None
+        try:
+            # A missing entry_type means tools (pre-#1527 entries never carried
+            # the discriminator) — same default async_setup_entry dispatches on.
+            installed = any(
+                entry.data.get(CONF_ENTRY_TYPE, ENTRY_TYPE_TOOLS) == ENTRY_TYPE_TOOLS
+                for entry in hass.config_entries.async_entries(DOMAIN)
+            )
+        except Exception as err:
+            _LOGGER.debug("Could not read the tools-entry state for the hint: %s", err)
+            return None
+        if installed:
+            return "Beta/advanced file & YAML tools module (optional): Installed"
+        return (
+            "Beta/advanced file & YAML tools module (optional): Not installed — "
+            'press "Add entry" on the HA-MCP integration page and choose '
+            '"HA-MCP File & YAML Tools" to add it'
         )
 
     async def _connect_url_hint(self) -> str:

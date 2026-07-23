@@ -377,7 +377,11 @@ class TestServerOptionsFlow:
 
         form = asyncio.run(flow.async_step_init(None))
         versions = form["description_placeholders"]["versions"]
-        assert versions == "Component 0.14.0 - Server ha-mcp 7.9.0 (dev channel)"
+        # startswith, not equality: the tools-module status line (#1996) rides
+        # the same placeholder below the version line.
+        assert versions.startswith(
+            "Component 0.14.0 - Server ha-mcp 7.9.0 (dev channel)"
+        )
 
     def test_versions_placeholder_is_failure_proof(self, monkeypatch):
         # A broken version read must not break the form: the component read
@@ -396,9 +400,8 @@ class TestServerOptionsFlow:
 
         form = asyncio.run(flow.async_step_init(None))  # must not raise
         versions = form["description_placeholders"]["versions"]
-        assert (
-            versions
-            == "Component unknown - Server ha-mcp not installed yet (stable channel)"
+        assert versions.startswith(
+            "Component unknown - Server ha-mcp not installed yet (stable channel)"
         )
 
     def test_versions_placeholder_server_not_installed_yet(self, monkeypatch):
@@ -411,6 +414,65 @@ class TestServerOptionsFlow:
         # No hass on the flow ⇒ component "unknown"; server not installed yet.
         assert "not installed yet" in versions
         assert versions.startswith("Component unknown")
+
+    @staticmethod
+    def _hass_with_entries(entries):
+        """hass whose config-entry registry returns ``entries`` for the domain."""
+        hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
+        hass.config_entries.async_entries = MagicMock(return_value=entries)
+        return hass
+
+    def test_versions_placeholder_flags_missing_tools_entry(self, monkeypatch):
+        # #1996: a server-entry-only install shows a status line directly under
+        # the version line pointing at the missing File & YAML Tools entry —
+        # users otherwise never learn about the second entry until a tool fails.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        flow.hass = self._hass_with_entries(
+            [SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER})]
+        )
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+
+        form = asyncio.run(flow.async_step_init(None))
+        versions = form["description_placeholders"]["versions"]
+        assert versions.startswith(
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+        )
+        assert "Not installed" in versions
+        assert "Add entry" in versions
+
+    def test_versions_placeholder_shows_tools_entry_installed(self, monkeypatch):
+        # Both entries present → the status line reads Installed. A legacy tools
+        # entry without the entry_type discriminator counts as installed too
+        # (missing entry_type means tools, mirroring async_setup_entry).
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        for tools_data in (
+            {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS},
+            {},  # legacy pre-#1527 entry
+        ):
+            flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+            flow.hass = self._hass_with_entries(
+                [
+                    SimpleNamespace(
+                        data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER}
+                    ),
+                    SimpleNamespace(data=tools_data),
+                ]
+            )
+            form = asyncio.run(flow.async_step_init(None))
+            versions = form["description_placeholders"]["versions"]
+            assert "tools module (optional): Installed" in versions
+            assert "Not installed" not in versions
 
     def test_webhook_auth_is_first_option_field(self):
         # #1875: Authentication mode sits at the top of the options form,
