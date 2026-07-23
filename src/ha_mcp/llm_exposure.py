@@ -14,9 +14,10 @@ axis from the global enable/disable in the settings UI:
 
 The single source of truth travels **in-band**: :class:`LlmExposureMiddleware`
 stamps every ``tools/list`` entry with
-``_meta.ha_mcp = {"llm_api_exposed": bool, "pinned": bool}`` so the component
-(one more loopback MCP client) filters on data that can never drift from the
-server's settings, with zero extra round-trips. Stamping re-reads the
+``_meta.ha_mcp = {"llm_api_exposed": bool, "pinned": bool, "policy": {...}}``
+so the component (one more loopback MCP client) filters on data that can never
+drift from the server's settings, with zero extra round-trips. The ``policy``
+block reports the serving server's gating state (#1990 — see META_POLICY_KEY). Stamping re-reads the
 persisted settings behind a short coalescing cache (2s TTL), so settings-UI
 changes apply on the agent's next conversation turn without a restart.
 
@@ -31,7 +32,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from fastmcp.server.middleware import Middleware
@@ -49,6 +50,15 @@ logger = logging.getLogger(__name__)
 META_NAMESPACE = "ha_mcp"
 META_EXPOSED_KEY = "llm_api_exposed"
 META_PINNED_KEY = "pinned"
+
+# Serving-server policy/identity block stamped alongside the per-tool keys
+# (#1990). A client (or a debugging agent) reading tools/list can see the
+# ACTUAL gating state of the server answering this connection — configured
+# flag, live middleware, and rule count — plus the deployment mode. Without
+# this, a client pointed at a different server than the one the user
+# configured rules on fails silently: calls execute ungated and nothing
+# anywhere says "this server has zero rules".
+META_POLICY_KEY = "policy"
 
 # Key in tool_config.json holding the user's per-tool overrides
 # ({tool_name: bool}). Sparse on purpose: only tools the user explicitly
@@ -153,9 +163,17 @@ class LlmExposureMiddleware(Middleware):
     is hidden or altered for regular MCP clients.
     """
 
-    def __init__(self) -> None:
-        """Initialize the short-lived settings cache."""
+    def __init__(self, policy_live: Callable[[], bool] | None = None) -> None:
+        """Initialize the short-lived settings cache.
+
+        ``policy_live`` reports whether the gating middleware/queue are
+        actually wired on this server (they only wire at startup); the
+        stamp carries it so "configured but not enforcing until restart"
+        is visible on the wire.
+        """
         self._cache: tuple[float, dict[str, bool], set[str]] | None = None
+        self._policy_live = policy_live
+        self._policy_cache: tuple[float, dict[str, Any]] | None = None
 
     def _current_settings(self) -> tuple[dict[str, bool], set[str]]:
         """Return (overrides, pinned) with a short TTL over the file reads."""
@@ -192,6 +210,47 @@ class LlmExposureMiddleware(Middleware):
         self._cache = (now, overrides, pinned)
         return overrides, pinned
 
+    def _policy_block(self) -> dict[str, Any]:
+        """Serving-server policy/identity block (TTL-cached like the overrides).
+
+        Best-effort: a failure to read settings or the policy file stamps
+        conservative values (enabled=False / rules=0) rather than breaking
+        tools/list — the block is diagnostic metadata, not enforcement.
+        """
+        now = time.monotonic()
+        if (
+            self._policy_cache is not None
+            and now - self._policy_cache[0] < _OVERRIDES_TTL_SECONDS
+        ):
+            return self._policy_cache[1]
+        from ._version import is_embedded, is_running_in_addon
+
+        block: dict[str, Any] = {
+            "enabled": False,
+            "live": bool(self._policy_live()) if self._policy_live else False,
+            "rules": 0,
+            "deployment": (
+                "embedded"
+                if is_embedded()
+                else ("addon" if is_running_in_addon() else "standalone")
+            ),
+        }
+        try:
+            from .config import get_global_settings
+
+            block["enabled"] = bool(get_global_settings().enable_tool_security_policies)
+        except Exception:
+            logger.debug("policy stamp: settings read failed", exc_info=True)
+        try:
+            from .policy.persistence import load_policy
+            from .utils.data_paths import get_data_dir
+
+            block["rules"] = len(load_policy(get_data_dir()).rules)
+        except Exception:
+            logger.debug("policy stamp: policy read failed", exc_info=True)
+        self._policy_cache = (now, block)
+        return block
+
     async def on_list_tools(
         self,
         context: MiddlewareContext[mt.ListToolsRequest],
@@ -200,6 +259,7 @@ class LlmExposureMiddleware(Middleware):
         """Stamp ``_meta.ha_mcp`` on every tool in the list result."""
         tools = await call_next(context)
         overrides, pinned = self._current_settings()
+        policy_block = self._policy_block()
 
         stamped: list[Tool] = []
         for tool in tools:
@@ -209,6 +269,7 @@ class LlmExposureMiddleware(Middleware):
                 tool.name, tool.tags or set(), overrides
             )
             namespace[META_PINNED_KEY] = tool.name in pinned
+            namespace[META_POLICY_KEY] = policy_block
             meta[META_NAMESPACE] = namespace
             stamped.append(tool.model_copy(update={"meta": meta}))
         return stamped

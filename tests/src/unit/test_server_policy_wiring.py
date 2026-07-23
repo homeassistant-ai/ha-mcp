@@ -65,3 +65,45 @@ def test_policy_middleware_not_attached_when_disabled():
     assert getattr(stub, "approval_queue", None) is None
     # No middleware registered on the FastMCP instance
     assert stub.mcp.add_middleware.call_count == 0
+
+
+def test_migration_runs_even_when_policies_disabled():
+    """The ANY-match schema migration must run at startup regardless of the
+    enable flag, so the file already matches the editor's semantics whenever
+    the user later turns the feature on. The method imports
+    ``migrate_policy_any_semantics`` from ``ha_mcp.policy.persistence`` at call
+    time, so patching the source module intercepts it."""
+    from unittest.mock import patch
+
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+    from ha_mcp.utils.data_paths import get_data_dir
+
+    stub = _make_server_stub(enable_policies=False)
+    with patch(
+        "ha_mcp.policy.persistence.migrate_policy_any_semantics"
+    ) as mock_migrate:
+        HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    mock_migrate.assert_called_once_with(get_data_dir())
+    # Disabled path is otherwise a clean no-op: no queue, no middleware.
+    assert getattr(stub, "approval_queue", None) is None
+    assert stub.mcp.add_middleware.call_count == 0
+
+
+def test_raising_migration_does_not_block_startup():
+    """A migration that raises must be swallowed — startup continues. A
+    crash here would take down every server boot over a one-time data fixup."""
+    from unittest.mock import patch
+
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=False)
+    with patch(
+        "ha_mcp.policy.persistence.migrate_policy_any_semantics",
+        side_effect=RuntimeError("migration boom"),
+    ):
+        # Must not propagate out of _apply_tool_security_policies.
+        HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    assert getattr(stub, "approval_queue", None) is None
+    assert stub.mcp.add_middleware.call_count == 0

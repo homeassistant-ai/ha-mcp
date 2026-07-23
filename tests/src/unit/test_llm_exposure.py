@@ -138,7 +138,10 @@ class TestMiddleware:
         result = await mw.on_list_tools(_context(), AsyncMock(return_value=tools))
 
         by_name = {t.name: t.meta[META_NAMESPACE] for t in result}
-        assert by_name["ha_search"] == {META_EXPOSED_KEY: True, META_PINNED_KEY: True}
+        assert by_name["ha_search"][META_EXPOSED_KEY] is True
+        assert by_name["ha_search"][META_PINNED_KEY] is True
+        # The serving-server policy block rides the same namespace (#1990).
+        assert llm_exposure.META_POLICY_KEY in by_name["ha_search"]
         # Override exposes the default-hidden restart tool.
         assert by_name["ha_restart"][META_EXPOSED_KEY] is True
         assert by_name["ha_restart"][META_PINNED_KEY] is False
@@ -227,3 +230,55 @@ class TestMiddleware:
         )
         # The user-hidden tool STAYS hidden on the stale data.
         assert second[0].meta[META_NAMESPACE][META_EXPOSED_KEY] is False
+
+
+class TestPolicyStamp:
+    """The serving-server policy/identity block in _meta.ha_mcp (#1990).
+
+    A client pointed at a different server than the one the user configured
+    rules on previously failed SILENTLY — calls executed ungated with nothing
+    on the wire saying "this server has zero rules". The stamp makes the
+    serving server's actual gating state visible on every tools/list.
+    """
+
+    async def test_policy_block_reflects_rules_and_live_state(
+        self, monkeypatch, tmp_path
+    ):
+        from ha_mcp.policy.model import Policy, Rule
+        from ha_mcp.policy.persistence import save_policy
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        save_policy(tmp_path, Policy(rules=[Rule(tool_name="ha_call_service")]))
+        monkeypatch.setattr(llm_exposure, "load_llm_api_overrides", dict)
+        monkeypatch.setattr(llm_exposure, "_pinned_tool_names", set)
+
+        mw = LlmExposureMiddleware(policy_live=lambda: True)
+        result = await mw.on_list_tools(
+            _context(), AsyncMock(return_value=[_tool("ha_get_state")])
+        )
+        block = result[0].meta[META_NAMESPACE][llm_exposure.META_POLICY_KEY]
+        assert block["rules"] == 1
+        assert block["live"] is True
+        assert block["deployment"] in ("embedded", "addon", "standalone")
+        get_data_dir.cache_clear()
+
+    async def test_policy_block_defaults_without_queue_or_file(
+        self, monkeypatch, tmp_path
+    ):
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        monkeypatch.setattr(llm_exposure, "load_llm_api_overrides", dict)
+        monkeypatch.setattr(llm_exposure, "_pinned_tool_names", set)
+
+        mw = LlmExposureMiddleware()  # no policy_live callable
+        result = await mw.on_list_tools(
+            _context(), AsyncMock(return_value=[_tool("ha_get_state")])
+        )
+        block = result[0].meta[META_NAMESPACE][llm_exposure.META_POLICY_KEY]
+        assert block["live"] is False
+        assert block["rules"] == 0
+        get_data_dir.cache_clear()

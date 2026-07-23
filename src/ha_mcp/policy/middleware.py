@@ -35,6 +35,29 @@ PROXY_META_TOOLS = frozenset(
     }
 )
 
+# ha_dev_manage_server actions that MANAGE the approval queue itself.
+# Gating these deadlocks by construction: with a wildcard (or
+# ha_dev_manage_server) rule in place, an MCP-only "approve" call would
+# itself require approval — creating a second pending entry instead of
+# deciding the first, so nothing can ever be approved through the tool.
+# Only the queue-management actions are exempt; update_source / restart
+# remain gateable like any other high-stakes action.
+_APPROVAL_MANAGEMENT_TOOL = "ha_dev_manage_server"
+_APPROVAL_MANAGEMENT_ACTIONS = frozenset({"list_pending", "approve", "deny"})
+
+
+def _is_approval_management(name: str, args: dict[str, Any]) -> bool:
+    """True for dev-tool calls that manage the approval queue itself."""
+    return (
+        name == _APPROVAL_MANAGEMENT_TOOL
+        and args.get("action") in _APPROVAL_MANAGEMENT_ACTIONS
+    )
+
+
+def _passes_ungated(name: str, args: dict[str, Any]) -> bool:
+    """Calls that must bypass gating: proxy meta-tools + queue management."""
+    return name in PROXY_META_TOOLS or _is_approval_management(name, args)
+
 
 class PolicyMiddleware(Middleware):
     """Gate tool calls against a Policy, blocking with progress heartbeats."""
@@ -78,7 +101,7 @@ class PolicyMiddleware(Middleware):
         name = context.message.name
         args = context.message.arguments or {}
 
-        if name in PROXY_META_TOOLS:
+        if _passes_ungated(name, args):
             return await call_next(context)
 
         if evaluate(name, args, policy) != Verdict.REQUIRE_APPROVAL:

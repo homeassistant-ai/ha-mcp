@@ -669,3 +669,610 @@ class TestConcurrentSettingsWrites:
         )
         persisted = json.loads(_override_file_path().read_text())
         assert persisted == {"log_level": "DEBUG", "debug": True}
+
+
+def _tool_config() -> dict:
+    """Read the persisted tool_config.json (or {} if absent)."""
+    path = get_data_dir() / "tool_config.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def _seed_metadata(rows: list[dict]) -> None:
+    """Seed the sidecar tool-metadata cache so server-less list_tools works."""
+    from ha_mcp.settings_ui._persistence import dump_tool_metadata_cache
+
+    dump_tool_metadata_cache(rows)
+
+
+class TestManageToolsState:
+    """set_tool drives the Tools-tab enable/disable/pin + LLM-API toggles."""
+
+    @pytest.fixture
+    def dev_tools(self):
+        return DevTools(MagicMock())
+
+    async def test_set_state_disabled_writes_config(self, dev_tools):
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_write_file", state="disabled"
+        )
+        assert result["data"]["state"] == "disabled"
+        assert result["data"]["restart_required"] is True
+        assert _tool_config()["tools"]["ha_write_file"] == "disabled"
+
+    async def test_set_state_pinned_writes_config(self, dev_tools):
+        await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_get_history", state="pinned"
+        )
+        assert _tool_config()["tools"]["ha_get_history"] == "pinned"
+
+    async def test_set_state_rejects_invalid_state(self, dev_tools):
+        with pytest.raises(ToolError, match="state must be one of"):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_tool", tool="ha_get_history", state="bogus"
+            )
+
+    async def test_set_state_rejects_env_pinned_flip(self, dev_tools, monkeypatch):
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        reset_global_settings()
+        with pytest.raises(ToolError, match="unset the env var"):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_tool", tool="ha_foo", state="pinned"
+            )
+
+    async def test_set_state_rejects_bps_locked_disable(self, dev_tools):
+        # enable_mandatory_bps + enable_strict_mandatory_bps default on, so
+        # ha_get_skill_guide is locked enabled.
+        with pytest.raises(ToolError, match="strict best-practices"):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_tool", tool="ha_get_skill_guide", state="disabled"
+            )
+
+    async def test_set_state_rejects_mandatory_disable(self, dev_tools):
+        # ha_search is an unconditional MANDATORY_TOOLS member; the headless
+        # path must refuse (the web UI locks the row, and apply_tool_visibility
+        # would silently re-enable it at startup — a misleading "success").
+        with pytest.raises(ToolError, match="mandatory"):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_tool", tool="ha_search", state="disabled"
+            )
+
+    async def test_set_tool_rejects_wildcard(self, dev_tools):
+        # tool='*' is a policy wildcard; gating it would gate every tool,
+        # including the developer recovery actions.
+        with pytest.raises(ToolError, match="wildcard"):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_tool", tool="*", gated=True
+            )
+
+    async def test_set_llm_api_writes_override(self, dev_tools):
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_search", llm_api=False
+        )
+        assert result["data"]["llm_api"] is False
+        assert _tool_config()["llm_api"]["ha_search"] is False
+        # Not embedded in the test env → a no-effect warning is surfaced.
+        assert any("embedded" in w for w in result["warnings"])
+
+    async def test_set_state_and_llm_api_together(self, dev_tools):
+        await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_search", state="pinned", llm_api=True
+        )
+        config = _tool_config()
+        assert config["tools"]["ha_search"] == "pinned"
+        assert config["llm_api"]["ha_search"] is True
+
+    async def test_set_tool_requires_tool(self, dev_tools):
+        with pytest.raises(ToolError, match="'tool' is required"):
+            await dev_tools.ha_dev_manage_settings(action="set_tool", state="disabled")
+
+    async def test_set_tool_requires_a_field(self, dev_tools):
+        with pytest.raises(ToolError, match="at least one"):
+            await dev_tools.ha_dev_manage_settings(action="set_tool", tool="ha_search")
+
+
+class TestManageToolsGate:
+    """The per-tool security gate adds/removes an unconditional policy rule."""
+
+    @pytest.fixture
+    def dev_tools(self):
+        return DevTools(MagicMock())
+
+    def _rules(self):
+        from ha_mcp.policy.persistence import load_policy
+
+        return load_policy(get_data_dir()).rules
+
+    async def test_gate_on_adds_rule(self, dev_tools):
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=True
+        )
+        assert result["data"]["gated"] is True
+        assert result["data"]["policy_rules_changed"] is True
+        rules = self._rules()
+        assert [r.tool_name for r in rules] == ["ha_call_service"]
+        assert rules[0].when == []
+        # Policies default OFF → warning that the gate won't enforce yet.
+        assert any("enable_tool_security_policies" in w for w in result["warnings"])
+
+    async def test_gate_off_removes_rule(self, dev_tools):
+        await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=True
+        )
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=False
+        )
+        assert result["data"]["policy_rules_changed"] is True
+        assert self._rules() == []
+
+    async def test_gate_on_is_idempotent(self, dev_tools):
+        await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=True
+        )
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=True
+        )
+        assert result["data"]["policy_rules_changed"] is False
+        assert len(self._rules()) == 1
+
+    async def test_gate_preserves_conditional_rules(self, dev_tools):
+        # A predicate-bearing rule the user authored must survive gate toggles:
+        # gated=True adds the bare gate alongside it; gated=False removes ONLY
+        # the bare gate, never the conditional rule (Codex #1993 P1).
+        from ha_mcp.policy.model import Policy, Predicate, Rule
+        from ha_mcp.policy.persistence import save_policy
+
+        save_policy(
+            get_data_dir(),
+            Policy(
+                rules=[
+                    Rule(
+                        tool_name="ha_call_service",
+                        when=[Predicate(path="args.domain", op="eq", value="lock")],
+                    )
+                ]
+            ),
+        )
+        await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=True
+        )
+        rules = self._rules()
+        assert len(rules) == 2
+        assert any(r.tool_name == "ha_call_service" and not r.when for r in rules)
+        assert any(r.when for r in rules)  # conditional preserved
+
+        await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=False
+        )
+        rules = self._rules()
+        assert len(rules) == 1
+        assert rules[0].when  # the conditional rule remains
+
+    async def test_combined_set_tool_is_atomic_on_validation_failure(self, dev_tools):
+        # A combined state+gate request whose state fails validation must NOT
+        # have persisted the gate rule — preflight validates before any write.
+        with pytest.raises(ToolError, match="strict best-practices"):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_tool",
+                tool="ha_get_skill_guide",
+                state="disabled",
+                gated=True,
+            )
+        assert self._rules() == []  # the gate was never written
+
+
+class TestListToolStates:
+    async def test_list_reflects_state_llm_and_gate(self):
+        _seed_metadata(
+            [
+                {"name": "ha_search", "tags": ["Search"], "category": "read"},
+                {"name": "ha_call_service", "tags": ["Control"], "category": "write"},
+            ]
+        )
+        dev = DevTools(MagicMock())
+        await dev.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", state="disabled", gated=True
+        )
+        result = await dev.ha_dev_manage_settings(action="list_tools")
+        rows = {r["name"]: r for r in result["data"]["tools"]}
+        assert rows["ha_call_service"]["state"] == "disabled"
+        assert rows["ha_call_service"]["gated"] is True
+        assert rows["ha_search"]["gated"] is False
+        assert result["data"]["policies_enabled"] is False
+        assert result["data"]["count"] == 2
+
+    async def test_list_marks_mandatory_and_bps(self):
+        _seed_metadata(
+            [
+                {"name": "ha_search", "tags": ["Search"]},
+                {"name": "ha_get_skill_guide", "tags": ["System"]},
+            ]
+        )
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(action="list_tools")
+        rows = {r["name"]: r for r in result["data"]["tools"]}
+        assert rows["ha_search"]["mandatory"] is True
+        assert rows["ha_get_skill_guide"]["bps_locked"] is True
+
+
+class TestManagePolicy:
+    @pytest.fixture
+    def dev_tools(self):
+        return DevTools(MagicMock())
+
+    async def test_get_policy_default(self, dev_tools):
+        result = await dev_tools.ha_dev_manage_settings(action="get_policy")
+        policy = result["data"]["policy"]
+        assert policy["wait_seconds"] == 60
+        assert policy["rules"] == []
+        assert policy["version"] == 0
+        assert result["data"]["policies_enabled"] is False
+
+    async def test_set_policy_roundtrip_bumps_version(self, dev_tools):
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_policy",
+            policy={
+                "wait_seconds": 30,
+                "approval_ttl_minutes": 5,
+                "rules": [{"tool_name": "ha_call_service"}],
+                "version": 0,
+            },
+        )
+        assert result["data"]["version"] == 1
+        assert result["data"]["rules_changed"] is True
+        got = await dev_tools.ha_dev_manage_settings(action="get_policy")
+        assert got["data"]["policy"]["version"] == 1
+        assert got["data"]["policy"]["rules"][0]["tool_name"] == "ha_call_service"
+
+    async def test_set_policy_version_mismatch_rejected(self, dev_tools):
+        await dev_tools.ha_dev_manage_settings(
+            action="set_policy", policy={"rules": [], "version": 0}
+        )
+        # On-disk version is now 1; a stale expected_version=0 must be rejected.
+        with pytest.raises(ToolError, match="version mismatch"):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_policy",
+                policy={"rules": []},
+                expected_version=0,
+            )
+
+    async def test_set_policy_invalid_schema_rejected(self, dev_tools):
+        # wait_seconds must be < approval_ttl_minutes * 60.
+        with pytest.raises(ToolError, match="schema validation"):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_policy",
+                policy={"wait_seconds": 599, "approval_ttl_minutes": 1},
+            )
+
+    async def test_set_policy_requires_object(self, dev_tools):
+        with pytest.raises(ToolError, match="'policy'"):
+            await dev_tools.ha_dev_manage_settings(action="set_policy")
+
+    async def test_set_policy_without_version_warns(self, dev_tools):
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_policy", policy={"rules": []}
+        )
+        assert any("without an optimistic-concurrency" in w for w in result["warnings"])
+
+
+class TestBackupConfig:
+    @pytest.fixture(autouse=True)
+    def _clean_backup_env(self, monkeypatch):
+        """Neutralize ambient auto-backup env vars (e.g. from tests/.env.test)
+        so file-mode edits aren't spuriously rejected as env-pinned."""
+        from ha_mcp.config import BACKUP_OVERRIDE_FIELDS
+
+        for _field, env_name, _ftype in BACKUP_OVERRIDE_FIELDS:
+            monkeypatch.delenv(env_name, raising=False)
+        reset_global_settings()
+
+    @pytest.fixture
+    def dev_tools(self):
+        return DevTools(MagicMock())
+
+    async def test_get_backup_config_lists_fields(self, dev_tools):
+        result = await dev_tools.ha_dev_manage_settings(action="get_backup_config")
+        fields = {f["field"]: f for f in result["data"]["fields"]}
+        assert "enable_auto_backup" in fields
+        assert fields["enable_auto_backup"]["editable"] is True
+
+    async def test_set_backup_config_file_mode_persists(self, dev_tools):
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_backup_config", backup={"enable_auto_backup": False}
+        )
+        assert result["data"]["applied"] == {"enable_auto_backup": False}
+        assert result["data"]["restart_required"] is False
+        assert get_global_settings().enable_auto_backup is False
+
+    async def test_set_backup_config_rejects_env_pinned(self, dev_tools, monkeypatch):
+        monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
+        reset_global_settings()
+        with pytest.raises(ToolError, match="environment variable"):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_backup_config", backup={"enable_auto_backup": False}
+            )
+
+    async def test_set_backup_config_rejects_out_of_bounds(self, dev_tools):
+        with pytest.raises(ToolError, match="must be"):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_backup_config",
+                backup={"auto_backup_throttle_minutes": 99999},
+            )
+
+    async def test_set_backup_config_requires_object(self, dev_tools):
+        with pytest.raises(ToolError, match="'backup'"):
+            await dev_tools.ha_dev_manage_settings(action="set_backup_config")
+
+
+def _queue_with_entry(**args):
+    """A real ApprovalQueue holding one pending entry; returns (server, token)."""
+    from types import SimpleNamespace
+
+    from ha_mcp.policy.approval_queue import ApprovalQueue, compute_args_hash
+
+    queue = ApprovalQueue()
+    entry = queue.create(
+        "ha_call_service",
+        compute_args_hash(args),
+        args,
+        ttl_minutes=5,
+    )
+    return SimpleNamespace(approval_queue=queue), entry.token, queue
+
+
+class TestManageServerApprovals:
+    async def test_list_pending_reports_entries(self):
+        server, token, _queue = _queue_with_entry(domain="light")
+        result = await DevTools(MagicMock(), server=server).ha_dev_manage_server(
+            action="list_pending"
+        )
+        assert result["data"]["count"] == 1
+        assert result["data"]["pending"][0]["token"] == token
+        assert result["data"]["pending"][0]["tool_name"] == "ha_call_service"
+
+    async def test_list_pending_without_queue_is_empty(self):
+        result = await DevTools(MagicMock(), server=None).ha_dev_manage_server(
+            action="list_pending"
+        )
+        assert result["data"]["pending"] == []
+        assert "No active approval queue" in result["data"]["note"]
+
+    async def test_approve_marks_entry_approved(self):
+        server, token, queue = _queue_with_entry(domain="light")
+        result = await DevTools(MagicMock(), server=server).ha_dev_manage_server(
+            action="approve", token=token
+        )
+        assert result["data"]["decision"] == "approved"
+        assert queue.get(token).decision == "approved"
+
+    async def test_deny_marks_entry_denied(self):
+        server, token, queue = _queue_with_entry(domain="light")
+        await DevTools(MagicMock(), server=server).ha_dev_manage_server(
+            action="deny", token=token
+        )
+        assert queue.get(token).decision == "denied"
+
+    async def test_approve_unknown_token_errors(self):
+        server, _token, _queue = _queue_with_entry(domain="light")
+        with pytest.raises(ToolError, match="Unknown or expired"):
+            await DevTools(MagicMock(), server=server).ha_dev_manage_server(
+                action="approve", token="not-a-real-token"
+            )
+
+    async def test_approve_already_decided_errors(self):
+        server, token, _queue = _queue_with_entry(domain="light")
+        dev = DevTools(MagicMock(), server=server)
+        await dev.ha_dev_manage_server(action="approve", token=token)
+        with pytest.raises(ToolError, match="already decided"):
+            await dev.ha_dev_manage_server(action="approve", token=token)
+
+    async def test_approve_requires_token(self):
+        server, _token, _queue = _queue_with_entry(domain="light")
+        with pytest.raises(ToolError, match="'token' is required"):
+            await DevTools(MagicMock(), server=server).ha_dev_manage_server(
+                action="approve"
+            )
+
+    async def test_approve_without_queue_errors(self):
+        with pytest.raises(ToolError, match="No active approval queue"):
+            await DevTools(MagicMock(), server=None).ha_dev_manage_server(
+                action="approve", token="x"
+            )
+
+
+class TestDevToolsServerPlumbing:
+    def test_init_stores_server(self):
+        sentinel = object()
+        assert DevTools(MagicMock(), server=sentinel)._server is sentinel
+
+    def test_register_passes_server_through(self, monkeypatch):
+        monkeypatch.setenv(FEATURE_FLAG, "true")
+        reset_global_settings()
+        captured = {}
+
+        def _capture(_mcp, dev_tools):
+            captured["server"] = dev_tools._server
+
+        monkeypatch.setattr(tools_dev, "register_tool_methods", _capture)
+        sentinel = object()
+        register_dev_tools(MagicMock(), MagicMock(), server=sentinel)
+        assert captured["server"] is sentinel
+
+
+def _fake_server_with_tools(tools, *, approval_queue=None):
+    """A server whose mcp.local_provider._list_tools() returns fake tool objs,
+    exercising the live-registry list_tools path (not the cache fallback)."""
+    from types import SimpleNamespace
+
+    fake_tools = [
+        SimpleNamespace(
+            name=name,
+            tags=set(tags),
+            description="desc",
+            title=None,
+            annotations=SimpleNamespace(
+                readOnlyHint=None, destructiveHint=None, title=None
+            ),
+        )
+        for name, tags in tools
+    ]
+    provider = SimpleNamespace(_list_tools=AsyncMock(return_value=fake_tools))
+    return SimpleNamespace(
+        mcp=SimpleNamespace(local_provider=provider),
+        approval_queue=approval_queue,
+    )
+
+
+class TestListToolsLiveRegistry:
+    """The live-registry path every real deployment uses (server present)."""
+
+    async def test_uses_live_registry_and_marks_feature_gated(self):
+        server = _fake_server_with_tools(
+            [("ha_search", ["Search"]), ("ha_call_service", ["Control"])]
+        )
+        result = await DevTools(MagicMock(), server=server).ha_dev_manage_settings(
+            action="list_tools"
+        )
+        rows = {r["name"]: r for r in result["data"]["tools"]}
+        assert rows["ha_search"]["available"] is True
+        assert rows["ha_search"]["disabled_by"] is None
+        # Feature-gated stub injected by _get_tool_metadata (flag off).
+        assert rows["ha_write_file"]["available"] is False
+        assert rows["ha_write_file"]["disabled_by"] == "enable_filesystem_tools"
+
+    async def test_policies_live_reflects_queue_presence(self):
+        from ha_mcp.policy.approval_queue import ApprovalQueue
+
+        with_q = _fake_server_with_tools(
+            [("ha_search", ["Search"])], approval_queue=ApprovalQueue()
+        )
+        res_live = await DevTools(MagicMock(), server=with_q).ha_dev_manage_settings(
+            action="list_tools"
+        )
+        assert res_live["data"]["policies_live"] is True
+
+        without_q = _fake_server_with_tools([("ha_search", ["Search"])])
+        res_off = await DevTools(MagicMock(), server=without_q).ha_dev_manage_settings(
+            action="list_tools"
+        )
+        assert res_off["data"]["policies_live"] is False
+
+
+class TestRememberCacheCleared:
+    """clear_remember_cache must actually fire on a rule change (security)."""
+
+    def _server_with_remembered(self):
+        from types import SimpleNamespace
+
+        from ha_mcp.policy.approval_queue import ApprovalQueue
+
+        queue = ApprovalQueue()
+        queue.remember("ha_call_service", "argshash", minutes=10)
+        assert queue.is_remembered("ha_call_service", "argshash")
+        return SimpleNamespace(approval_queue=queue), queue
+
+    async def test_set_tool_gate_clears_cache(self):
+        server, queue = self._server_with_remembered()
+        await DevTools(MagicMock(), server=server).ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=True
+        )
+        assert not queue.is_remembered("ha_call_service", "argshash")
+
+    async def test_set_policy_clears_cache_on_rule_change(self):
+        server, queue = self._server_with_remembered()
+        await DevTools(MagicMock(), server=server).ha_dev_manage_settings(
+            action="set_policy",
+            policy={"rules": [{"tool_name": "ha_call_service"}]},
+        )
+        assert not queue.is_remembered("ha_call_service", "argshash")
+
+
+class TestSetToolPartialCommit:
+    async def test_partial_commit_surfaced_when_gate_write_fails(self, monkeypatch):
+        # tool_config saves first; force the policy save to fail and assert the
+        # error tells the caller the state change already persisted.
+        def _boom(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("ha_mcp.policy.persistence.save_policy", _boom)
+        with pytest.raises(ToolError, match="already saved"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set_tool", tool="ha_get_history", state="pinned", gated=True
+            )
+        assert _tool_config()["tools"]["ha_get_history"] == "pinned"
+
+
+class TestBackupConfigAddon:
+    @pytest.fixture(autouse=True)
+    def _addon(self, monkeypatch):
+        from ha_mcp.config import BACKUP_OVERRIDE_FIELDS
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+        for _field, env_name, _ftype in BACKUP_OVERRIDE_FIELDS:
+            monkeypatch.delenv(env_name, raising=False)
+        reset_global_settings()
+
+    async def test_addon_routes_through_supervisor(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from ha_mcp import settings_ui
+
+        calls: list[dict] = []
+
+        async def _fake_merge(verify_ssl, clean):
+            calls.append(clean)
+            return True, None
+
+        monkeypatch.setattr(
+            settings_ui._supervisor, "_supervisor_merge_and_post_options", _fake_merge
+        )
+        server = SimpleNamespace(settings=get_global_settings())
+        result = await DevTools(MagicMock(), server=server).ha_dev_manage_settings(
+            action="set_backup_config", backup={"enable_auto_backup": False}
+        )
+        assert calls == [{"enable_auto_backup": False}]
+        assert result["data"]["mode"] == "addon"
+        assert result["data"]["restart_required"] is True
+
+
+class TestCoerceBoolBranch:
+    def test_coerce_bool_or_raise_rejects_non_bool(self):
+        with pytest.raises(ToolError, match="must be a boolean"):
+            DevTools._coerce_bool_or_raise("not-a-bool", "llm_api")
+
+
+class TestSetToolNameValidation:
+    """set_tool rejects unknown tool names before persisting any guard.
+
+    A typo'd gate ("ha_call_servce") previously saved a rule for a
+    nonexistent tool and reported success while the intended tool stayed
+    ungated (Codex #1993 round 3).
+    """
+
+    async def test_unknown_tool_rejected(self):
+        _seed_metadata([{"name": "ha_call_service", "tags": ["Control"]}])
+        with pytest.raises(ToolError, match="Unknown tool"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set_tool", tool="ha_call_servce", gated=True
+            )
+
+    async def test_feature_gated_stub_accepted(self):
+        # Currently-unavailable (flag-off) tools are still configurable.
+        _seed_metadata(
+            [
+                {
+                    "name": "ha_write_file",
+                    "tags": ["Files"],
+                    "disabled_by": "enable_filesystem_tools",
+                }
+            ]
+        )
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(
+            action="set_tool", tool="ha_write_file", state="disabled"
+        )
+        assert result["data"]["state"] == "disabled"
+
+    async def test_validation_skipped_without_metadata(self):
+        # Defensive server-less path with an empty cache: don't brick set_tool.
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(
+            action="set_tool", tool="ha_anything", state="pinned"
+        )
+        assert result["data"]["state"] == "pinned"

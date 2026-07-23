@@ -1194,6 +1194,324 @@ class TestPolicyTabFlow:
             f"got {[f.get('body') for f in flag_posts]}"
         )
 
+    def test_gate_toggle_preserves_conditional_rules(
+        self, settings_script: str
+    ) -> None:
+        """Un-gating a tool must remove only the bare unconditional rule, not
+        a predicate-bearing rule the user authored in the policy editor. The
+        gate toggle keys on the ``when == []`` rule; conditional rules survive."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 3,
+                    "rules": [
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.domain", "op": "eq", "value": "lock"}
+                            ],
+                            "remember_minutes": 0,
+                        }
+                    ],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="await window.syncPolicyRule('ha_call_service', false);",
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1, (
+            f"expected one PUT to policy config; got {result.fetches}"
+        )
+        body = json.loads(puts[0]["body"])
+        rules = body.get("rules", [])
+        # The conditional rule survives un-gating; nothing was wiped.
+        assert len(rules) == 1, f"conditional rule was wrongly removed: {rules}"
+        assert rules[0]["when"], "expected the predicate-bearing rule to remain"
+
+    def test_gate_toggle_on_adds_bare_rule_beside_conditional(
+        self, settings_script: str
+    ) -> None:
+        """Enable direction: turning the Tools-tab gate ON when a conditional
+        rule already exists must ADD the bare unconditional rule (not silently
+        no-op), so the tool is gated for every call."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 2,
+                    "rules": [
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.domain", "op": "eq", "value": "lock"}
+                            ],
+                            "remember_minutes": 0,
+                        }
+                    ],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="await window.syncPolicyRule('ha_call_service', true);",
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1
+        rules = json.loads(puts[0]["body"])["rules"]
+        assert len(rules) == 2
+        assert any(r["tool_name"] == "ha_call_service" and not r["when"] for r in rules)
+        assert any(r["when"] for r in rules)  # conditional rule preserved
+
+    def test_save_rule_expands_conditions_into_separate_rules(
+        self, settings_script: str
+    ) -> None:
+        """Each condition on a card persists as its OWN rule so they OR at
+        evaluation (gate if ANY matches), not one AND-ed rule."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 0,
+                    "rules": [],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await window.savePolicyRule('ha_call_service', {
+                tool_name: 'ha_call_service',
+                conditions: [
+                  [{path: 'args.domain', op: 'eq', value: 'lock'}],
+                  [{path: 'args.domain', op: 'eq', value: 'alarm_control_panel'}]
+                ],
+                remember_minutes: 0
+              });
+            """,
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1
+        rules = json.loads(puts[0]["body"])["rules"]
+        assert len(rules) == 2, f"expected one rule per condition; got {rules}"
+        assert all(
+            r["tool_name"] == "ha_call_service" and len(r["when"]) == 1 for r in rules
+        )
+
+    def test_save_rule_preserves_multi_predicate_condition(
+        self, settings_script: str
+    ) -> None:
+        """A condition with AND-ed sub-parameters (multi-predicate rule) must
+        round-trip as ONE rule — not be flattened into separate OR rules."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 0,
+                    "rules": [],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await window.savePolicyRule('ha_call_service', {
+                tool_name: 'ha_call_service',
+                conditions: [
+                  [
+                    {path: 'args.domain', op: 'eq', value: 'lock'},
+                    {path: 'args.service', op: 'eq', value: 'unlock'}
+                  ]
+                ],
+                remember_minutes: 0
+              });
+            """,
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1
+        rules = json.loads(puts[0]["body"])["rules"]
+        assert len(rules) == 1, f"multi-predicate condition was split: {rules}"
+        assert len(rules[0]["when"]) == 2
+
+    def test_save_rule_preserves_rule_order(self, settings_script: str) -> None:
+        """Saving a card must replace the tool's rules IN PLACE — rule order
+        is behaviorally significant (find_matching_rule takes the FIRST
+        match's remember_minutes), so a tool rule must not slide behind a
+        wildcard rule on edit (Codex #1993 round 3)."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 1,
+                    "rules": [
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.domain", "op": "eq", "value": "lock"}
+                            ],
+                            "remember_minutes": 5,
+                        },
+                        {"tool_name": "*", "when": [], "remember_minutes": 60},
+                    ],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await window.savePolicyRule('ha_call_service', {
+                tool_name: 'ha_call_service',
+                conditions: [[{path: 'args.domain', op: 'eq', value: 'lock'}]],
+                remember_minutes: 5
+              });
+            """,
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1
+        rules = json.loads(puts[0]["body"])["rules"]
+        assert [r["tool_name"] for r in rules] == ["ha_call_service", "*"], (
+            f"tool rule moved behind the wildcard: {rules}"
+        )
+
+    def test_load_collapses_tool_rules_into_one_card(
+        self, settings_script: str
+    ) -> None:
+        """Read side of renderPolicyCards: a tool's on-disk rules collapse into
+        ONE card, one condition row per rule in order. Only single-predicate
+        rows get the edit button; the hand-authored multi-predicate row joins
+        its predicates with ' AND ' and offers no edit. The single remember
+        input shows the MAX across the rules (60), so a save that never touches
+        it can't silently shorten a longer window."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 4,
+                    "rules": [
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.domain", "op": "eq", "value": "lock"}
+                            ],
+                            "remember_minutes": 1,
+                        },
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.service", "op": "eq", "value": "unlock"}
+                            ],
+                            "remember_minutes": 60,
+                        },
+                        {
+                            "tool_name": "ha_call_service",
+                            "when": [
+                                {"path": "args.domain", "op": "eq", "value": "lock"},
+                                {"path": "args.service", "op": "eq", "value": "unlock"},
+                            ],
+                            "remember_minutes": 0,
+                        },
+                    ],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await window.policyLoadConfig();
+              const cards = document.querySelectorAll('.policy-rule-card');
+              document.body.setAttribute('data-card-count', String(cards.length));
+              const card = cards[0];
+              const rows = card
+                ? Array.from(card.querySelectorAll('.policy-predicate-row'))
+                : [];
+              document.body.setAttribute('data-row-count', String(rows.length));
+              const codeText = (r) =>
+                (r && r.querySelector('code')) ? r.querySelector('code').textContent : '';
+              const hasEdit = (r) =>
+                String(!!(r && r.querySelector('.policy-edit-predicate')));
+              document.body.setAttribute(
+                'data-multi-has-and', String(codeText(rows[2]).includes(' AND ')));
+              document.body.setAttribute('data-multi-has-edit', hasEdit(rows[2]));
+              document.body.setAttribute('data-single0-has-edit', hasEdit(rows[0]));
+              document.body.setAttribute('data-single1-has-edit', hasEdit(rows[1]));
+              const rem = card ? card.querySelector('.policy-remember-minutes') : null;
+              document.body.setAttribute('data-remember', rem ? String(rem.value) : '');
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "card-count") == "1", (
+            "tool rules did not collapse to one card"
+        )
+        assert _probe(result, "row-count") == "3", "expected one condition row per rule"
+        assert _probe(result, "multi-has-and") == "true", (
+            "multi-predicate row missing ' AND ' join"
+        )
+        assert _probe(result, "multi-has-edit") == "false", (
+            "multi-predicate row should not be editable"
+        )
+        assert _probe(result, "single0-has-edit") == "true"
+        assert _probe(result, "single1-has-edit") == "true"
+        assert _probe(result, "remember") == "60", (
+            "remember input should show the max across rules"
+        )
+
     def test_pending_list_shows_off_message_when_feature_disabled(
         self, settings_script: str
     ) -> None:

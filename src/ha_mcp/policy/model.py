@@ -16,6 +16,14 @@ PredicateOp = Literal[
     "eq", "neq", "in", "not_in", "regex", "contains", "exists", "gt", "lt"
 ]
 
+# Schema generation of the persisted policy file. Version 2 = ANY-match
+# condition semantics (PR #1993): each UI condition is its own rule; a rule's
+# predicates AND together (a condition with sub-parameters). Files WITHOUT the
+# marker were written under the pre-#1993 editor, which packed every condition
+# into one AND-ed rule — ``persistence.migrate_policy_any_semantics`` splits
+# those once at startup and stamps the file.
+POLICY_SCHEMA_VERSION = 2
+
 
 class Predicate(BaseModel):
     """Single condition on a tool call's arguments (e.g. args.domain in [...])."""
@@ -103,6 +111,9 @@ class Policy(BaseModel):
     approval_ttl_minutes: int = Field(default=5, ge=1, le=60)
     rules: list[Rule] = Field(default_factory=list)
     version: int = Field(default=0, ge=0)
+    # ANY-match schema marker (see POLICY_SCHEMA_VERSION). Detection of
+    # unmigrated files reads the RAW json (this default would mask it).
+    schema_version: int = Field(default=POLICY_SCHEMA_VERSION, ge=1)
 
     @model_validator(mode="after")
     def _wait_must_be_less_than_ttl(self) -> "Policy":

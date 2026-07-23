@@ -249,7 +249,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # what it offers to Home Assistant conversation agents on it.
         from .llm_exposure import LlmExposureMiddleware
 
-        self.mcp.add_middleware(LlmExposureMiddleware())
+        # policy_live: whether the gating middleware/queue actually wired at
+        # startup — stamped so a client can distinguish "configured" from
+        # "enforcing" on the very connection it is using (#1990).
+        self.mcp.add_middleware(
+            LlmExposureMiddleware(
+                policy_live=lambda: getattr(self, "approval_queue", None) is not None
+            )
+        )
 
         # Read Only Mode write blocker (discussion #1569) — always
         # installed, consults the live flag per call. Before
@@ -1008,6 +1015,21 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         UI take effect immediately without restart and without a stale
         in-memory cache.
         """
+        # One-time ANY-match schema migration (PR #1993) runs even when
+        # policies are disabled, so the file already matches the editor's
+        # ANY semantics whenever the user turns the feature on. Never
+        # blocks startup.
+        try:
+            from .policy.persistence import migrate_policy_any_semantics
+            from .utils.data_paths import get_data_dir as _get_data_dir
+
+            migrate_policy_any_semantics(_get_data_dir())
+        except Exception:
+            logger.warning(
+                "tool_policy.json ANY-match migration failed; continuing",
+                exc_info=True,
+            )
+
         if not self.settings.enable_tool_security_policies:
             return
 

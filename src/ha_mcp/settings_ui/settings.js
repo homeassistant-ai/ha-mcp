@@ -288,7 +288,13 @@ async function loadPolicyState() {
       return;
     }
     const p = await r.json();
-    policyState.gatedTools = new Set((p.rules || []).map(rule => rule.tool_name));
+    // The Tools-tab gate toggle reflects the BARE unconditional rule only
+    // (no predicates); conditional rules are managed in the Policies tab.
+    policyState.gatedTools = new Set(
+      (p.rules || [])
+        .filter(rule => !rule.when || rule.when.length === 0)
+        .map(rule => rule.tool_name)
+    );
   } catch (e) {
     // Policy endpoint unavailable (sidecar stub) or network blip — keep the
     // prior gatedTools rather than resetting it to empty. On first load it
@@ -326,12 +332,18 @@ async function syncPolicyRule(toolName, gated) {
   if (!r.ok) throw new Error(t('policies.errors.load', {status: r.status}, 'Could not load policy: ' + r.status));
   const policy = await r.json();
   policy.rules = policy.rules || [];
+  // The gate toggle manages ONLY the bare, unconditional rule (empty `when`)
+  // for this tool; predicate-bearing rules authored in the policy editor are
+  // preserved. A conditional rule must not be mistaken for the gate (enabling
+  // would silently no-op) nor wiped on un-gate.
+  const isBareGate = rule =>
+    rule.tool_name === toolName && (!rule.when || rule.when.length === 0);
   if (gated) {
-    if (!policy.rules.some(rule => rule.tool_name === toolName)) {
+    if (!policy.rules.some(isBareGate)) {
       policy.rules.push({tool_name: toolName, when: [], remember_minutes: 0});
     }
   } else {
-    policy.rules = policy.rules.filter(rule => rule.tool_name !== toolName);
+    policy.rules = policy.rules.filter(rule => !isBareGate(rule));
   }
   await policyPut(policy, t('policies.operations.sync_gated', {}, 'Sync gated toggle'));
 }
@@ -2494,22 +2506,35 @@ function renderPolicyCards(policy) {
     return;
   }
   emptyEl.style.display = 'none';
-  // Group rules by tool_name. The Tools-tab toggle creates exactly one
-  // rule per tool; defensively handle the case where a hand-edited file
-  // has multiple entries: each becomes its own card so the user can
-  // see/edit them all.
+  // Each condition is its own rule on disk (OR: the tool gates if ANY rule
+  // matches). Collapse all of a tool's rules into ONE card whose "conditions"
+  // are the tool's rules — one condition per rule, each being that rule's
+  // whole predicate list; the card re-expands to one rule per condition on
+  // save (savePolicyRule). Order preserved by first sight.
   const byTool = {};
-  rules.forEach((r, idx) => {
-    const key = r.tool_name + '\0' + idx;
-    byTool[key] = {tool_name: r.tool_name, rule: r, originalIndex: idx};
+  const order = [];
+  rules.forEach(r => {
+    if (!byTool[r.tool_name]) { byTool[r.tool_name] = []; order.push(r.tool_name); }
+    byTool[r.tool_name].push(r);
   });
-  Object.keys(byTool).forEach(key => {
-    const entry = byTool[key];
-    // Deep clone the rule into the edit buffer so card-local changes
-    // don't mutate the server response until "Save changes".
-    const editKey = entry.tool_name;
-    policyRuleEdits[editKey] = JSON.parse(JSON.stringify(entry.rule));
-    listEl.appendChild(renderPolicyCard(entry.tool_name, policyRuleEdits[editKey]));
+  order.forEach(toolName => {
+    const toolRules = byTool[toolName];
+    // One card per tool; each RULE is one condition row. A rule's predicates
+    // stay together as a unit (a condition with AND-ed sub-parameters), so a
+    // card edit round-trips multi-predicate rules intact instead of
+    // flattening them.
+    const conditions = toolRules.map(r => r.when || []);
+    // The card has ONE remember-minutes input; DISPLAY the max across the
+    // tool's rules, but keep each condition's own value (remembers[i]) so a
+    // save that never touched the input can't silently rewrite heterogeneous
+    // per-condition lifetimes (rememberDirty gates which one is persisted).
+    const remembers = toolRules.map(r => r.remember_minutes || 0);
+    const remember = Math.max(0, ...remembers);
+    policyRuleEdits[toolName] = JSON.parse(JSON.stringify(
+      {tool_name: toolName, conditions: conditions, remembers: remembers,
+       remember_minutes: remember, rememberDirty: false}
+    ));
+    listEl.appendChild(renderPolicyCard(toolName, policyRuleEdits[toolName]));
   });
 }
 
@@ -2524,15 +2549,24 @@ function renderPolicyCard(toolName, rule) {
   const card = document.createElement('div');
   card.className = 'policy-rule-card';
   card.dataset.tool = toolName;
-  rule.when = rule.when || [];
-  const predicateRows = rule.when.map((p, i) => (
+  rule.conditions = rule.conditions || [];
+  // A condition = one rule's predicate list. Multiple predicates in one
+  // condition AND together (sub-parameters); separate conditions OR. Only
+  // single-predicate conditions get the edit button — the form edits one
+  // predicate; multi-predicate conditions (hand-authored) can be removed.
+  const displayCondition = (preds) => (preds.length
+    ? preds.map(displayPredicate).join(t('policies.card.and_join', {}, ' AND '))
+    : t('policies.card.always_row', {}, '(always — gates every call to this tool)'));
+  const predicateRows = rule.conditions.map((preds, i) => (
     '<li class="policy-predicate-row" data-idx="' + i + '">' +
-      '<code>' + escapeHtml(displayPredicate(p)) + '</code>' +
-      '<button class="policy-edit-predicate" data-idx="' + i + '">' + escapeHtml(t('actions.edit', {}, 'edit')) + '</button>' +
+      '<code>' + escapeHtml(displayCondition(preds)) + '</code>' +
+      (preds.length === 1
+        ? '<button class="policy-edit-predicate" data-idx="' + i + '">' + escapeHtml(t('actions.edit', {}, 'edit')) + '</button>'
+        : '') +
       '<button class="policy-remove-predicate" data-idx="' + i + '" aria-label="' + escapeHtml(t('actions.remove', {}, 'Remove')) + '">×</button>' +
     '</li>'
   )).join('');
-  const emptyHint = rule.when.length === 0
+  const emptyHint = rule.conditions.length === 0
     ? '<li class="policy-predicate-row"><em style="color:var(--text-secondary);font-size:0.8rem">' +
       escapeHtml(t('policies.card.no_conditions', {}, '(no conditions, rule matches every call to this tool)')) + '</em></li>'
     : '';
@@ -2543,7 +2577,7 @@ function renderPolicyCard(toolName, rule) {
     '</div>' +
     '<div class="policy-rule-predicates">' +
       '<label class="features-sub" style="display:block;margin-bottom:4px">' +
-        escapeHtml(t('policies.card.conditions_intro', {}, 'Require approval when ALL of these conditions match (no conditions = always require approval):')) +
+        escapeHtml(t('policies.card.conditions_intro', {}, 'Require approval when ANY of these conditions matches (no conditions = always require approval):')) +
       '</label>' +
       '<ul class="policy-predicate-list">' + emptyHint + predicateRows + '</ul>' +
       '<button class="policy-add-predicate">' + escapeHtml(t('policies.card.add_condition', {}, '+ Add condition')) + '</button>' +
@@ -2592,7 +2626,8 @@ function renderPolicyCard(toolName, rule) {
 
   // Auto-save: every condition add/edit/remove and every remember-minutes
   // change immediately PUTs the rule to disk. No manual "Save changes"
-  // button — the only signal is the small status text below the card.
+  // button. Returns whether the save landed so callers skip re-rendering a
+  // card that no longer reflects the server.
   let autoSaveSeq = 0;
   const autoSave = async () => {
     const status = card.querySelector('.policy-save-status');
@@ -2602,10 +2637,22 @@ function renderPolicyCard(toolName, rule) {
       await savePolicyRule(toolName, rule);
       // Skip the success label if a newer save started (rapid edits)
       if (mySeq === autoSaveSeq) status.textContent = t('status.saved', {}, 'Saved.');
+      return true;
     } catch (err) {
-      if (mySeq === autoSaveSeq) {
-        status.textContent = t('errors.save_failed_detail', {message: err.message}, 'Save failed: ' + err.message);
+      // A failed save must be LOUD and must not leave the card displaying a
+      // condition the server never persisted — a phantom SECURITY rule the
+      // user would trust (the #1990 failure shape). The tiny status text is
+      // missable, so toast like every other save surface, then resync every
+      // card from the server's actual policy.
+      const message = t('errors.save_failed_detail', {message: err.message}, 'Save failed: ' + err.message);
+      if (mySeq === autoSaveSeq) status.textContent = message;
+      showToast(message, {isError: true});
+      try {
+        await policyLoadConfig();
+      } catch (_e) {
+        // Reload failed too (e.g. network down) — the toast already fired.
       }
+      return false;
     }
   };
 
@@ -2635,6 +2682,9 @@ function renderPolicyCard(toolName, rule) {
   let rmDebounce = null;
   card.querySelector('.policy-remember-minutes').addEventListener('input', (e) => {
     rule.remember_minutes = parseInt(e.target.value, 10) || 0;
+    // Only an explicit touch of this input rewrites every condition's
+    // lifetime on save; otherwise per-condition values are preserved.
+    rule.rememberDirty = true;
     if (rmDebounce) clearTimeout(rmDebounce);
     rmDebounce = setTimeout(autoSave, 500);
   });
@@ -2991,7 +3041,8 @@ function renderPolicyCard(toolName, rule) {
     formEl.style.display = '';
     await fetchToolSchema();
     if (idx >= 0) {
-      const p = rule.when[idx];
+      // Edit is only offered for single-predicate conditions.
+      const p = rule.conditions[idx][0];
       opEl.value = p.op || 'eq';
       populatePathSelect(p.path || '');
       await renderValueControl(p.value);
@@ -3011,9 +3062,11 @@ function renderPolicyCard(toolName, rule) {
   card.querySelectorAll('.policy-remove-predicate').forEach(btn => {
     btn.addEventListener('click', async () => {
       const idx = parseInt(btn.dataset.idx, 10);
-      rule.when.splice(idx, 1);
-      await autoSave();
-      rerenderCard();
+      rule.conditions.splice(idx, 1);
+      if (rule.remembers) rule.remembers.splice(idx, 1);
+      // On failure autoSave toasts + rebuilds all cards from the server, so
+      // only re-render this (now stale) card when the save actually landed.
+      if (await autoSave()) rerenderCard();
     });
   });
 
@@ -3054,12 +3107,15 @@ function renderPolicyCard(toolName, rule) {
       }
     }
     if (editingIdx >= 0) {
-      rule.when[editingIdx] = predicate;
+      rule.conditions[editingIdx] = [predicate];
     } else {
-      rule.when.push(predicate);
+      rule.conditions.push([predicate]);
+      // A new condition takes the card's current lifetime value.
+      (rule.remembers = rule.remembers || []).push(rule.remember_minutes || 0);
     }
-    await autoSave();
-    rerenderCard();
+    // On failure autoSave toasts + rebuilds all cards from the server, so
+    // only re-render this (now stale) card when the save actually landed.
+    if (await autoSave()) rerenderCard();
   });
 
   return card;
@@ -3070,23 +3126,50 @@ async function savePolicyRule(toolName, ruleObj) {
   if (!r.ok) throw new Error(t('policies.errors.load', {status: r.status}, 'Could not load policy: ' + r.status));
   const policy = await r.json();
   policy.rules = policy.rules || [];
-  const idx = policy.rules.findIndex(rule => rule.tool_name === toolName);
-  if (idx >= 0) {
-    policy.rules[idx] = ruleObj;
-  } else {
-    // Defensive: a card exists for a tool with no server-side rule
-    // (e.g. the user removed the rule from another tab between load
-    // and save). Append rather than silently drop the edit.
-    policy.rules.push(ruleObj);
-  }
+  // Expand the card's conditions into ONE rule each (they OR at evaluation —
+  // the tool gates if ANY condition matches; a condition's own predicates AND
+  // together as sub-parameters). No conditions = a single bare rule that
+  // always requires approval. Replaces all of this tool's rules.
+  const remember = ruleObj.remember_minutes || 0;
+  const conditions = ruleObj.conditions || [];
+  const remembers = ruleObj.remembers || [];
+  // Preserve each condition's own lifetime unless the user actually touched
+  // the card's remember input (rememberDirty) — an unrelated predicate edit
+  // must not silently rewrite heterogeneous per-condition remember values.
+  const rememberFor = (i) => (ruleObj.rememberDirty
+    ? remember
+    : (remembers[i] !== undefined ? remembers[i] : remember));
+  const expanded = conditions.length === 0
+    ? [{tool_name: toolName, when: [], remember_minutes: remember}]
+    : conditions.map((preds, i) => ({tool_name: toolName, when: preds, remember_minutes: rememberFor(i)}));
+  // Replace the tool's rules IN PLACE (at the position of its first rule)
+  // rather than appending at the end: rule order is behaviorally significant
+  // — find_matching_rule() takes the FIRST match's remember_minutes, so
+  // moving a tool-specific rule behind a wildcard rule would silently switch
+  // matching calls to the wildcard's approval lifetime.
+  const others = [];
+  let insertAt = -1;
+  policy.rules.forEach(rule => {
+    if (rule.tool_name === toolName) {
+      if (insertAt === -1) insertAt = others.length;
+    } else {
+      others.push(rule);
+    }
+  });
+  if (insertAt === -1) insertAt = others.length;
+  policy.rules = others.slice(0, insertAt).concat(expanded, others.slice(insertAt));
   await policyPut(policy, t('policies.operations.save_rule', {}, 'Save rule'));
 }
 
 async function removePolicyRule(toolName) {
-  // Mirror syncPolicyRule(toolName, false) — kept as a separate helper
-  // so the card's remove button stays self-contained, but the on-wire
-  // shape is identical.
-  await syncPolicyRule(toolName, false);
+  // The card's "Remove from policy" button removes ALL of the tool's rules
+  // (every condition), unlike the Tools-tab gate toggle which manages only
+  // the bare unconditional rule via syncPolicyRule.
+  const r = await fetch('./api/policy/config');
+  if (!r.ok) throw new Error(t('policies.errors.load', {status: r.status}, 'Could not load policy: ' + r.status));
+  const policy = await r.json();
+  policy.rules = (policy.rules || []).filter(rule => rule.tool_name !== toolName);
+  await policyPut(policy, t('policies.operations.save_rule', {}, 'Remove rule'));
 }
 
 async function saveGlobalSettings() {

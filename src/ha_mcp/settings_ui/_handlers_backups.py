@@ -244,32 +244,42 @@ async def _delete_backups_bulk(
     )
 
 
-async def _get_backup_config(
-    server: HomeAssistantSmartMCPServer | None, _: Request
-) -> JSONResponse:
-    """Return live auto-backup config + per-field origin + editable flag.
+def backup_config_fields() -> list[dict[str, Any]]:
+    """Auto-backup fields with per-field value/origin/editable.
 
-    Per-field origin/editable matrix (see ``config.get_backup_setting_origin``):
-    - ``addon``: editable — POST routes through Supervisor.
-    - ``env``: read-only — env var wins; user must unset to edit.
-    - ``file``/``default``: editable — POST writes the override file.
+    Shared by the HTTP ``_get_backup_config`` handler and the
+    ``ha_dev_manage_settings`` developer tool so the two never drift.
+    Origin/editable matrix (see ``config.get_backup_setting_origin``):
+    ``addon`` editable (Supervisor), ``env`` read-only, ``file``/``default``
+    editable (override file).
     """
     settings = get_global_settings()
-    addon_mode = is_running_in_addon()
-    fields = []
+    fields: list[dict[str, Any]] = []
     for field_name, env_name, _ftype in BACKUP_OVERRIDE_FIELDS:
         origin = get_backup_setting_origin(env_name)
-        editable = origin in ("addon", "file", "default")
         fields.append(
             {
                 "field": field_name,
                 "env_var": env_name,
                 "value": getattr(settings, field_name),
                 "origin": origin,
-                "editable": editable,
+                "editable": origin in ("addon", "file", "default"),
             }
         )
-    return JSONResponse({"success": True, "is_addon": addon_mode, "fields": fields})
+    return fields
+
+
+async def _get_backup_config(
+    server: HomeAssistantSmartMCPServer | None, _: Request
+) -> JSONResponse:
+    """Return live auto-backup config + per-field origin + editable flag."""
+    return JSONResponse(
+        {
+            "success": True,
+            "is_addon": is_running_in_addon(),
+            "fields": backup_config_fields(),
+        }
+    )
 
 
 # Inclusive bounds for the integer auto-backup fields; a field absent here
@@ -414,36 +424,15 @@ async def _save_backup_config_addon(
     )
 
 
-async def _save_backup_config(
-    server: HomeAssistantSmartMCPServer | None, request: Request
-) -> JSONResponse:
-    """Persist auto-backup config edits and publish to the live process.
+def _apply_backup_config_file(clean: dict[str, Any]) -> JSONResponse:
+    """Standalone/file-mode branch of ``apply_backup_config``.
 
-    Routing:
-    - Addon mode: POST ``/addons/self/options`` and return
-      ``restart_required=True`` (see ``_save_backup_config_addon``).
-    - Standalone (file) mode: refuse any field that's pinned by an env var
-      (process or ``.env``) — return 409 with the offending names so the UI
-      can refresh and show the read-only banner. Editable fields merge into
-      ``<data_dir>/backup_settings.json`` and a Settings cache reset
-      publishes them immediately, hence ``restart_required=False``.
+    Refuse any field pinned by an env var (process or ``.env``) — 409 with
+    the offending names so the UI can refresh and show the read-only banner.
+    Editable fields merge into ``<data_dir>/backup_settings.json`` and a
+    Settings cache reset publishes them immediately, hence
+    ``restart_required=False``.
     """
-    try:
-        payload = await request.json()
-    except (ValueError, json.JSONDecodeError):
-        return _bad_request("Invalid JSON body")
-    clean, err = _validate_backup_payload(payload)
-    if err is not None:
-        return _bad_request(err)
-
-    if is_running_in_addon():
-        # ``is_running_in_addon()`` checks SUPERVISOR_TOKEN — the
-        # ``_save_backup_config_addon`` helper called below also catches the
-        # missing-token ``RuntimeError`` from ``make_supervisor_httpx_client``
-        # as defense-in-depth.
-        return await _save_backup_config_addon(server, clean)
-
-    # Standalone (file) mode — refuse to override env-pinned fields.
     rejected = _filter_env_pinned_backup_fields(clean)
     if rejected:
         return JSONResponse(
@@ -481,6 +470,51 @@ async def _save_backup_config(
     return JSONResponse(
         {"success": True, "applied": clean, "mode": "file", "restart_required": False}
     )
+
+
+async def apply_backup_config(
+    server: HomeAssistantSmartMCPServer | None, clean: dict[str, Any]
+) -> JSONResponse:
+    """Route already-validated auto-backup fields to their persistence path.
+
+    Addon mode POSTs to Supervisor (``_save_backup_config_addon``);
+    standalone/file mode merges the override file (``_apply_backup_config_file``).
+    Shared core of the HTTP save handler (``_save_backup_config``) and the
+    ``ha_dev_manage_settings`` developer tool so both take identical
+    addon-vs-file routing and env-pin rejection — ``clean`` must already be
+    validated by ``_validate_backup_payload``.
+    """
+    if is_running_in_addon():
+        # ``is_running_in_addon()`` checks SUPERVISOR_TOKEN — the
+        # ``_save_backup_config_addon`` helper also catches the missing-token
+        # ``RuntimeError`` from ``make_supervisor_httpx_client`` as
+        # defense-in-depth.
+        return await _save_backup_config_addon(server, clean)
+    # Same write-guard treatment as tool_config/tool_policy: the RMW is
+    # synchronous (safe in-process), but the guard's file lock keeps a
+    # writer in another process from interleaving with it.
+    from ..utils.config_write_lock import config_write_guard
+
+    async with config_write_guard():
+        return _apply_backup_config_file(clean)
+
+
+async def _save_backup_config(
+    server: HomeAssistantSmartMCPServer | None, request: Request
+) -> JSONResponse:
+    """Persist auto-backup config edits and publish to the live process.
+
+    Parses and validates the request body, then delegates the addon-vs-file
+    routing to ``apply_backup_config`` (shared with the developer tool).
+    """
+    try:
+        payload = await request.json()
+    except (ValueError, json.JSONDecodeError):
+        return _bad_request("Invalid JSON body")
+    clean, err = _validate_backup_payload(payload)
+    if err is not None:
+        return _bad_request(err)
+    return await apply_backup_config(server, clean)
 
 
 def build_backups_handlers(
