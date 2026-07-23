@@ -1253,6 +1253,17 @@ def _normalize_state_filter(state_filter: str | None) -> str | None:
     return state_filter
 
 
+def _state_matches(record: dict[str, Any], state_filter: str) -> bool:
+    """True when ``record``'s state equals ``state_filter``, case-insensitively.
+
+    ``state_filter`` is already lowercased by ``_normalize_state_filter``; the
+    record side is lowered here so an uppercase entity state (e.g. an
+    input_select holding "Vacation") still matches the documented
+    case-insensitive contract.
+    """
+    return (record.get("state") or "").lower() == state_filter
+
+
 def _validate_entity_search_params(
     query: str | None,
     domain_filter: str | None,
@@ -1541,7 +1552,7 @@ async def _exact_match_search(
             results.append(match)
 
     if state_filter:
-        results = [r for r in results if r.get("state") == state_filter]
+        results = [r for r in results if _state_matches(r, state_filter)]
 
     # Sort by score descending, tie-break on entity_id for stable
     # pagination when many results share a score (visible substring
@@ -1711,8 +1722,8 @@ class SearchTools:
                     "Filter entity-registry results to a specific state "
                     '(e.g. "on", "off", "unavailable"). Case-insensitive. '
                     "Can be used standalone (no query/domain/area) to enumerate "
-                    "every entity in that state; total_matches reflects the "
-                    "filtered count."
+                    "every entity in that state; entity_total_matches reflects "
+                    "the filtered count."
                 ),
             ),
         ] = None,
@@ -2267,15 +2278,18 @@ class SearchTools:
     ) -> dict[str, Any]:
         """Search for entities (lights, sensors, switches, etc.) by name, domain, or area.
 
+        Internal helper reached through the `ha_search` tool; the examples below
+        use that tool as the entry point.
+
         When NOT to use: for searching inside automation, script, helper, or dashboard
         *configurations* (e.g. which automations call a service or reference an entity),
-        use `ha_deep_search`.
+        search config bodies via `ha_search(query=...)`.
 
-        To enumerate all entities of a domain, omit `query` and pass `domain_filter`. For
-        example, `ha_search_entities(domain_filter="calendar")` lists all calendars. To
-        enumerate every entity in a state, omit `query` and pass `state_filter` (e.g.
-        `state_filter="unavailable"`). At least one of `query`, `domain_filter`,
-        `area_filter`, or `state_filter` must be set.
+        To enumerate all entities of a domain, omit `query` and pass `domain_filter` —
+        e.g. `ha_search(domain_filter="calendar")` lists all calendars. To enumerate
+        every entity in a state, omit `query` and pass `state_filter` — e.g.
+        `ha_search(state_filter="unavailable")`. At least one of `query`,
+        `domain_filter`, `area_filter`, or `state_filter` must be set.
 
         ``prefetched_states`` / ``prefetched_registry`` are the orchestrator's
         shared snapshots; they only reach the regular (non-area, non-domain-only)
@@ -2395,6 +2409,7 @@ class SearchTools:
                         "query": query,
                         "domain_filter": domain_filter,
                         "area_filter": area_filter,
+                        "state_filter": state_filter,
                     },
                 )
             )
@@ -2406,11 +2421,12 @@ class SearchTools:
                     "query": query,
                     "domain_filter": domain_filter,
                     "area_filter": area_filter,
+                    "state_filter": state_filter,
                 },
                 suggestions=[
                     "Check Home Assistant connection",
                     "Try simpler search terms",
-                    "Check area/domain filter spelling",
+                    "Check area/domain/state filter spelling",
                 ],
             )
             return None  # unreachable: error helpers above always raise
@@ -2676,7 +2692,7 @@ class SearchTools:
         ]
 
         if state_filter:
-            results = [r for r in results if r.get("state") == state_filter]
+            results = [r for r in results if _state_matches(r, state_filter)]
 
         pagination = _build_pagination_metadata(total_matches, offset, limit, results)
 
@@ -2757,7 +2773,7 @@ class SearchTools:
 
         all_results.sort(key=lambda x: (-x["score"], x["entity_id"]))
         if state_filter:
-            all_results = [r for r in all_results if r.get("state") == state_filter]
+            all_results = [r for r in all_results if _state_matches(r, state_filter)]
         paginated = all_results[offset : offset + limit]
 
         area_search_data: dict[str, Any] = {
@@ -2951,7 +2967,7 @@ class SearchTools:
         scored_entities.sort(key=lambda x: (-x["score"], x["entity_id"]))
         if state_filter:
             scored_entities = [
-                e for e in scored_entities if e.get("state") == state_filter
+                e for e in scored_entities if _state_matches(e, state_filter)
             ]
         results = scored_entities[offset : offset + limit]
 
@@ -3014,7 +3030,7 @@ class SearchTools:
             e
             for e in states_result
             if (eid := e.get("entity_id", "")) not in visibility_hidden
-            and e.get("state") == state_filter
+            and _state_matches(e, state_filter)
             and (include_hidden_bool or eid not in hidden_ids)
         ]
 
@@ -3159,7 +3175,7 @@ class SearchTools:
         # page-only — smart_entity_search already paginated internally, so
         # total_matches/has_more reflect the unfiltered dataset.
         if state_filter and "results" in result and search_type == "fuzzy_search":
-            filtered = [r for r in result["results"] if r.get("state") == state_filter]
+            filtered = [r for r in result["results"] if _state_matches(r, state_filter)]
             result["results"] = filtered
             result["count"] = len(filtered)
             result["state_filter_note"] = (
