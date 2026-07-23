@@ -582,7 +582,7 @@ class TestResultFieldsEnrichment:
 
 
 class TestListingModesBypassComponent:
-    """The three legacy listing modes must NEVER route through the component.
+    """The legacy listing modes must NEVER route through the component.
 
     Regression for the first live e2e run of the component path
     (test_search_entities.py::test_search_entities_{empty,whitespace}_query_
@@ -590,7 +590,9 @@ class TestListingModesBypassComponent:
     component path stamped ``search_type: exact_match`` onto responses the
     legacy path labels ``domain_listing`` / ``area_only`` — and those modes
     carry mode-specific response shapes the component does not replicate.
-    Only query-driven, non-area searches may route through the component.
+    Only query-driven, non-area searches may route through the component — the
+    state_filter-only listing (issue #2002) has an empty query, so it stays on
+    the legacy path too.
     """
 
     @pytest.mark.asyncio
@@ -649,6 +651,21 @@ class TestListingModesBypassComponent:
         assert data.get("search_type") == "area_filtered_query", data
         assert not ws.send_command.await_count, (
             "component must not be consulted for area-scoped queries"
+        )
+
+    @pytest.mark.asyncio
+    async def test_state_filter_only_bypasses_component(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        client = ListingModeClient()
+        ha_search = _build_ha_search(client)
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
+        with patch_ws(ws, tools_search):
+            data = await ha_search(state_filter="on")
+        assert data.get("search_type") == "state_listing", data
+        assert not ws.send_command.await_count, (
+            "component must not be consulted for state listings"
         )
 
 

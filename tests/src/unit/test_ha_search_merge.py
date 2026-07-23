@@ -24,6 +24,7 @@ from ha_mcp.tools.tools_search import (
     _mirror_partial_to_warnings,
     _project_response_fields,
     _synthesize_combined_pagination,
+    _validate_entity_search_params,
     _validate_search_types,
 )
 
@@ -268,10 +269,18 @@ def test_gate_area_only_runs_entity_only() -> None:
     assert _gate(area="Living Room") == (True, False, False)
 
 
-def test_gate_state_only_is_rejected() -> None:
-    """``state_filter`` alone doesn't unlock registry (unchanged from
-    pre-NEW1 behavior); body has no query either. Caller hits validation."""
-    assert _gate(state="on") == (False, False, False)
+def test_gate_state_only_runs_entity_only() -> None:
+    """``state_filter`` alone now unlocks the registry branch (issue #2002):
+    it enumerates every entity in that state, mirroring the domain-only
+    listing mode. Body stays ineligible (no query term)."""
+    assert _gate(state="on") == (True, False, False)
+
+
+def test_gate_state_only_plus_pin_is_rejected() -> None:
+    """An explicit ``search_types`` pin scopes the call to config-only, so the
+    state-only registry listing is suppressed and body has no query to match.
+    Caller hits validation."""
+    assert _gate(state="on", pin=True) == (False, False, False)
 
 
 def test_gate_query_plus_domain_skips_body_NEW() -> None:
@@ -329,6 +338,31 @@ def test_gate_query_plus_all_filters_plus_pin_runs_body() -> None:
         True,
         False,
     )
+
+
+# ``_validate_entity_search_params`` is the entity-branch input gate. It must
+# accept a state_filter-only call (issue #2002) and still reject a call with no
+# usable criterion at all.
+
+
+def test_validate_entity_params_state_only_accepted() -> None:
+    """state_filter alone satisfies the at-least-one-criterion check; the
+    return tuple is unchanged (state_filter is normalised by the caller)."""
+    result = _validate_entity_search_params(None, None, None, None, "unavailable")
+    assert result == ("", None, None, None)
+
+
+def test_validate_entity_params_whitespace_state_only_rejected() -> None:
+    """A whitespace-only state_filter collapses to nothing, so an otherwise
+    empty call is still rejected."""
+    with pytest.raises(ToolError):
+        _validate_entity_search_params(None, None, None, None, "   ")
+
+
+def test_validate_entity_params_all_empty_rejected() -> None:
+    """No query, domain, area, or state — validation error."""
+    with pytest.raises(ToolError):
+        _validate_entity_search_params(None, None, None, None)
 
 
 def test_empty_payload_is_noop() -> None:

@@ -138,6 +138,81 @@ def test_domain_only_search_excludes_denied_and_counts_stay_coherent(
     assert res["total_matches"] == 1  # count reflects post-filter set, not raw 2
 
 
+def test_state_only_search_excludes_denied_and_counts_stay_coherent(
+    tmp_path, monkeypatch
+):
+    """_search_state_only applies the filter before pagination, so a denied
+    entity in the target state is gone AND total_matches reflects the
+    post-filter set (not the raw count of entities in that state)."""
+    states = [
+        {"entity_id": "sensor.on_keep", "state": "on", "attributes": {}},
+        {"entity_id": "sensor.on_keep2", "state": "on", "attributes": {}},
+        {"entity_id": "sensor.on_drop", "state": "on", "attributes": {}},
+        {"entity_id": "sensor.off_ignore", "state": "off", "attributes": {}},
+    ]
+    registry = {
+        "success": True,
+        "result": [
+            {"entity_id": "sensor.on_keep", "entity_category": None},
+            {"entity_id": "sensor.on_keep2", "entity_category": None},
+            {"entity_id": "sensor.on_drop", "entity_category": "diagnostic"},
+            {"entity_id": "sensor.off_ignore", "entity_category": None},
+        ],
+    }
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(enabled=True, exclude_categories=["diagnostic"]),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    tools = tools_search.SearchTools(_DomainClient(states, registry), smart_tools=None)
+    res = asyncio.run(
+        tools._search_state_only(
+            "on",
+            limit=10,
+            offset=0,
+            include_hidden_bool=True,
+            group_by_domain_bool=False,
+            per_domain_limit_int=None,
+            parsed_result_fields=None,
+        )
+    )
+    ids = sorted(r["entity_id"] for r in res["results"])
+    assert ids == ["sensor.on_keep", "sensor.on_keep2"]  # diagnostic on_drop excluded
+    assert res["total_matches"] == 2  # post-filter count (2 "on"), not raw 4
+
+
+def test_state_only_search_is_case_insensitive(tmp_path, monkeypatch):
+    """A mixed-case entity state matches a (lowercased) state_filter."""
+    states = [
+        {"entity_id": "input_select.mode", "state": "Vacation", "attributes": {}},
+        {"entity_id": "input_select.other", "state": "Home", "attributes": {}},
+    ]
+    registry = {
+        "success": True,
+        "result": [
+            {"entity_id": "input_select.mode", "entity_category": None},
+            {"entity_id": "input_select.other", "entity_category": None},
+        ],
+    }
+    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    tools = tools_search.SearchTools(_DomainClient(states, registry), smart_tools=None)
+    res = asyncio.run(
+        tools._search_state_only(
+            "vacation",
+            limit=10,
+            offset=0,
+            include_hidden_bool=True,
+            group_by_domain_bool=False,
+            per_domain_limit_int=None,
+            parsed_result_fields=None,
+        )
+    )
+    ids = [r["entity_id"] for r in res["results"]]
+    assert ids == ["input_select.mode"]  # "Vacation" matches "vacation"
+    assert res["total_matches"] == 1
+
+
 class _GetStateClient:
     """Minimal client for the targeted single-entity read path."""
 
