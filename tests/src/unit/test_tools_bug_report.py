@@ -763,6 +763,78 @@ class TestBugReportTool:
         assert "Add-on Container Logs" not in result["formatted_report"]
         assert "Add-on Container Logs" not in result["runtime_bug_template"]
 
+    @pytest.mark.asyncio
+    async def test_fields_projection_returns_only_requested_keys(
+        self, ha_report_issue_func, mock_client
+    ):
+        """fields=... trims the very large full response down to the keys the
+        agent actually needs (issue #2010's ha_report_issue note)."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        result = await ha_report_issue_func(
+            fields=["runtime_bug_template", "suggested_title"]
+        )
+
+        assert result["success"] is True
+        assert set(result) <= {
+            "success",
+            "warnings",
+            "runtime_bug_template",
+            "suggested_title",
+        }
+        assert "recent_logs" not in result
+        assert "agent_behavior_template" not in result
+
+    @pytest.mark.asyncio
+    async def test_fields_projection_accepts_csv_string(
+        self, ha_report_issue_func, mock_client
+    ):
+        """The docstring's recommended usage is a CSV string — pin that form."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        result = await ha_report_issue_func(
+            fields="suggested_title,runtime_bug_submit_url"
+        )
+
+        assert set(result) <= {
+            "success",
+            "warnings",
+            "suggested_title",
+            "runtime_bug_submit_url",
+        }
+        assert result["suggested_title"]
+
+    @pytest.mark.asyncio
+    async def test_fields_projection_unknown_key_warns(
+        self, ha_report_issue_func, mock_client
+    ):
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        result = await ha_report_issue_func(fields=["no_such_key"])
+
+        assert any("no_such_key" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_fields_none_returns_full_response(
+        self, ha_report_issue_func, mock_client
+    ):
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        result = await ha_report_issue_func()
+
+        for key in (
+            "runtime_bug_template",
+            "agent_behavior_template",
+            "formatted_report",
+            "recent_logs",
+            "instructions",
+        ):
+            assert key in result
+
 
 class TestDetectComponentVersion:
     """``_detect_component_version`` prefers the shared cached caps probe and

@@ -34,7 +34,7 @@ from ..utils.usage_logger import (
 )
 from .component_api import get_component_caps
 from .helpers import log_tool_usage, register_tool_methods
-from .util_helpers import ANSI_ESCAPE_RE
+from .util_helpers import ANSI_ESCAPE_RE, JSON_STRING_COERCION, project_fields
 
 logger = logging.getLogger(__name__)
 
@@ -676,10 +676,38 @@ class BugReportTools:
                 ),
             ),
         ] = 10,
+        fields: Annotated[
+            str | list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys — the "
+                    "full response (both templates + logs + diagnostics, with "
+                    "log content repeated across the raw keys and templates) "
+                    "is very large. "
+                    "None = full response. Typical for a runtime bug: "
+                    "'runtime_bug_template,suggested_title,"
+                    "runtime_bug_submit_url,duplicate_check_urls,"
+                    "anonymization_guide,instructions'; for agent feedback "
+                    "swap in agent_behavior_template and "
+                    "agent_behavior_submit_url. The templates already embed "
+                    "the relevant logs, so the raw log keys are only needed "
+                    "for your own analysis. "
+                    "Available keys: diagnostic_info, recent_logs, "
+                    "startup_logs, addon_logs, core_error_log, log_count, "
+                    "startup_log_count, formatted_report, "
+                    "runtime_bug_template, agent_behavior_template, "
+                    "anonymization_guide, suggested_title, "
+                    "runtime_bug_submit_url, agent_behavior_submit_url, "
+                    "duplicate_check_urls, missing_tool_hint, instructions."
+                ),
+            ),
+        ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
-        Collect diagnostic information for filing issue reports or feedback.
+        Get diagnostic information and templates for filing issue reports or feedback.
 
         This tool generates templates for TWO types of reports:
         1. **Runtime Bug Report** - For ha-mcp errors, failures, unexpected behavior
@@ -709,7 +737,10 @@ class BugReportTools:
         - "That was inefficient"
 
         **OUTPUT:**
-        Returns both templates plus diagnostic data. Key fields:
+        Returns both templates plus diagnostic data. The full response is
+        LARGE (the captured logs appear in the raw log keys AND inside each
+        template) — pass fields=... to fetch only the keys you need once you
+        know which template applies. Key fields:
         - `runtime_bug_template`, `agent_behavior_template` — pick based on context
         - `recent_logs`, `startup_logs` — captured ha-mcp tool/server log entries
         - `addon_logs` — addon container stdout/stderr (HA add-on installs only;
@@ -843,7 +874,7 @@ class BugReportTools:
             for keyword in search_keywords[:3]  # Limit to top 3 keywords
         ]
 
-        return {
+        result: dict[str, Any] = {
             "success": True,
             "diagnostic_info": diagnostic_info,
             "recent_logs": recent_logs,
@@ -934,6 +965,7 @@ class BugReportTools:
                 "CRITICAL: Always ANONYMIZE the report BEFORE presenting it in markdown code blocks!"
             ),
         }
+        return project_fields(result, fields)
 
 
 def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
