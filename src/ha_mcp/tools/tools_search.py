@@ -973,6 +973,41 @@ def _merge_component_visibility_warnings(
         )
 
 
+async def _scrub_component_config_buckets(response: dict[str, Any]) -> None:
+    """Omit component config-body records referencing a hidden entity (enforce mode).
+
+    The component's ``search_visibility`` wire applies the hide dimensions to
+    ENTITY results only; its config-body records (automations/scripts/scenes/
+    helpers/dashboards) can still reference a hidden entity, and the enforcement
+    middleware's outbound scan would then refuse the whole search on contact
+    instead of the issue-#2015 "collection reads omit" contract. Mirror of the
+    legacy path's scrub (``_deep._scrub_results_for_enforce``), applied after
+    ``_shape_component_search_response``. Totals are decremented by the dropped
+    count — the component's corpus-side match count cannot be recomputed
+    server-side. No-op unless enforce mode is active.
+    """
+    from ..visibility.enforcement import active_hidden_regex, scrub_records
+
+    regex = await active_hidden_regex()
+    if regex is None:
+        return
+    dropped = 0
+    for bucket in _CONFIG_BUCKETS:
+        records = response.get(bucket)
+        if records:
+            kept = scrub_records(records, regex)
+            dropped += len(records) - len(kept)
+            response[bucket] = kept
+    if not dropped:
+        return
+    if isinstance(response.get("config_total_matches"), int):
+        response["config_total_matches"] = max(
+            0, response["config_total_matches"] - dropped
+        )
+    if isinstance(response.get("count"), int):
+        response["count"] = max(0, response["count"] - dropped)
+
+
 def _shape_component_search_response(
     req: _ResolvedSearch, component_result: dict[str, Any]
 ) -> dict[str, Any]:
@@ -2035,7 +2070,9 @@ class SearchTools:
                 "ha_mcp_tools/search connection error; fell back to legacy: %r", exc
             )
             return legacy
-        return _shape_component_search_response(req, raw.get("result") or {})
+        response = _shape_component_search_response(req, raw.get("result") or {})
+        await _scrub_component_config_buckets(response)
+        return response
 
     async def _send_component_search(
         self, req: _ResolvedSearch, visibility: dict[str, Any] | None = None

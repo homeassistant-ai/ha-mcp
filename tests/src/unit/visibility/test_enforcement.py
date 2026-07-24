@@ -770,3 +770,62 @@ class TestFallbackScoping:
                 _unreached_call_next,
             )
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+
+class TestComponentBucketScrub:
+    @pytest.fixture(autouse=True)
+    def _unregister_after(self):
+        yield
+        register_active_enforcer(None)
+
+    async def test_component_config_buckets_scrubbed_and_totals_adjusted(
+        self, set_config
+    ):
+        from ha_mcp.tools.tools_search import _scrub_component_config_buckets
+
+        set_config(
+            enabled=True,
+            enforce=True,
+            deny_entity_ids=["input_boolean.hidden_probe"],
+        )
+        client = FakeClient()
+        register_active_enforcer(
+            VisibilityEnforcementMiddleware(get_client=lambda: client)
+        )
+        response = {
+            "entities": [],
+            "automations": [],
+            "scripts": [],
+            "scenes": [],
+            "helpers": [
+                {"entity_id": "input_boolean.hidden_probe", "name": "Hidden"},
+                {"entity_id": "input_boolean.visible", "name": "Visible"},
+            ],
+            "dashboards": [],
+            "config_total_matches": 2,
+            "count": 2,
+        }
+        await _scrub_component_config_buckets(response)
+        assert [r["entity_id"] for r in response["helpers"]] == [
+            "input_boolean.visible"
+        ]
+        assert response["config_total_matches"] == 1
+        assert response["count"] == 1
+
+    async def test_component_scrub_noop_when_enforce_off(self, set_config):
+        from ha_mcp.tools.tools_search import _scrub_component_config_buckets
+
+        set_config(
+            enabled=True,
+            enforce=False,
+            deny_entity_ids=["input_boolean.hidden_probe"],
+        )
+        register_active_enforcer(VisibilityEnforcementMiddleware(get_client=FakeClient))
+        response = {
+            "helpers": [{"entity_id": "input_boolean.hidden_probe"}],
+            "config_total_matches": 1,
+            "count": 1,
+        }
+        await _scrub_component_config_buckets(response)
+        assert response["helpers"] == [{"entity_id": "input_boolean.hidden_probe"}]
+        assert response["config_total_matches"] == 1
