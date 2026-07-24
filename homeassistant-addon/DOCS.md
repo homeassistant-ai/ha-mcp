@@ -628,7 +628,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### Utilities
 - `ha_eval_template` — Evaluate Jinja2 templates using Home Assistant's template engine.
-- `ha_report_issue` — Collect diagnostic information for filing issue reports or feedback.
+- `ha_report_issue` — Get diagnostic information and templates for filing issue reports or feedback.
 
 ### Zones
 - `ha_get_zone` — Get zone information - list all zones or get details for a specific one.
