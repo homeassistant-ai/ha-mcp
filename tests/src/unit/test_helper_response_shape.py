@@ -18,6 +18,7 @@ import pytest
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
+    SceneResolution,
 )
 
 
@@ -744,6 +745,18 @@ class TestLifecycleWriteWarningsShape:
         client.resolve_scene_id = AsyncMock(
             side_effect=lambda sid: sid.removeprefix("scene.")
         )
+        # The remove path resolves via ``_resolve_scene`` (issue #1971).
+        client._resolve_scene = AsyncMock(
+            side_effect=lambda sid: SceneResolution(
+                storage_key=sid.removeprefix("scene."),
+                registry_hit=False,
+                platform=None,
+            )
+        )
+        # On that registry miss the no-hash set path also asks the state machine,
+        # to tell an ``id``-less YAML scene from a genuine create (#1971). False
+        # keeps these fixtures on the create path whose warnings they assert.
+        client._scene_state_exists = AsyncMock(return_value=False)
         client.get_entity_state = AsyncMock(
             return_value={
                 "state": "2026-05-18T00:00:00+00:00",
