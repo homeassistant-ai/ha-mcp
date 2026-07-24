@@ -766,16 +766,18 @@ class BackupManager:
 
     # ----- legacy store (pre-#1579 .ha_mcp_tools_backups/) ---------------
 
-    async def list_legacy(self) -> list[dict[str, Any]]:
+    async def list_legacy(self) -> tuple[list[dict[str, Any]], str | None]:
         """List pre-#1579 ``.bak`` backups via the component service.
 
         Each entry is normalized to a synthetic ``name`` (``legacy:<file>``)
         plus ``source="legacy"`` and the decode hints (``file_path`` /
         ``path_ambiguous``) so the caller can route view/diff/restore and warn
-        on un-restorable (ambiguous) names. Returns ``[]`` when the component
-        is too old to expose the service, so ``list`` still works.
+        on un-restorable (ambiguous) names. Returns ``(entries,
+        unavailable_reason)``: entries is ``[]`` when the component is too
+        old, unconfigured, or absent — ``list`` still works — and the reason
+        (when set) lets the caller flag the omission.
         """
-        backups = await _list_legacy_backups(self._client)
+        backups, unavailable_reason = await _list_legacy_backups(self._client)
         out: list[dict[str, Any]] = []
         for b in backups:
             filename = b.get("filename")
@@ -792,7 +794,7 @@ class BackupManager:
                     "path_ambiguous": b.get("path_ambiguous", True),
                 }
             )
-        return out
+        return out, unavailable_reason
 
     async def read_legacy(self, filename: str) -> dict[str, Any]:
         """Read one legacy ``.bak`` (raw content + decode hints).
@@ -815,7 +817,7 @@ class BackupManager:
         domain: str | None = None,
         entity_id: str | None = None,
         limit: int | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         """Edits-store snapshots plus pre-#1579 legacy ``.bak`` entries (#1579).
 
         ``list_snapshots`` is sync (dir glob, run off-thread); the legacy store
@@ -828,9 +830,22 @@ class BackupManager:
         Legacy entries get reserved room within ``limit`` so a full edits store
         (>= ``limit`` snapshots) can't truncate the few historical legacy
         entries out of the listing — surfacing them is the whole point.
+
+        Returns ``(entries, warnings)``: when the legacy sub-fetch was
+        suppressed (tools entry not set up / component too old), ``warnings``
+        says so, so the tool response doesn't read as a clean, complete list
+        with the ``.bak`` history silently missing (#1996).
         """
         want_legacy = domain in (None, "yaml_file") and entity_id is None
-        legacy = await self.list_legacy() if want_legacy else []
+        legacy: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        if want_legacy:
+            legacy, unavailable_reason = await self.list_legacy()
+            if unavailable_reason:
+                warnings.append(
+                    "Legacy .bak backups could not be listed and are omitted: "
+                    f"{unavailable_reason}"
+                )
         edits_limit = max(1, limit - len(legacy)) if limit and legacy else limit
         entries = await asyncio.to_thread(
             self.list_snapshots, domain=domain, entity_id=entity_id, limit=edits_limit
@@ -838,7 +853,7 @@ class BackupManager:
         entries.extend(legacy)
         if limit:
             entries = entries[:limit]
-        return entries
+        return entries, warnings
 
     async def _diff_legacy(self, filename: str) -> DiffResponseText:
         info = await self.read_legacy(filename)
@@ -2173,30 +2188,37 @@ async def _restore_yaml_file(client: Any, entity_id: str, config: Any) -> Any:
     return result
 
 
-async def _list_legacy_backups(client: Any) -> list[dict[str, Any]]:
+async def _list_legacy_backups(client: Any) -> tuple[list[dict[str, Any]], str | None]:
     """Fetch pre-#1579 ``.bak`` backups via the component list_legacy_backups
     service.
 
-    Returns ``[]`` (logged at debug) when the component predates the service —
-    a service-unavailable rejection surfaces either as a ``success: False``
-    response or a ``HomeAssistantError`` — so the edits ``list`` still works
-    against an older standalone component. Genuine programming errors propagate.
+    Returns ``(backups, unavailable_reason)``. The legacy store is
+    best-effort: when the component predates the service, isn't configured
+    (tools entry not set up), or is missing entirely, the entry list is ``[]``
+    and ``unavailable_reason`` carries the human-readable cause — a
+    ``HomeAssistantError`` or any ``ToolError`` out of
+    ``call_mcp_tools_service`` (all its caller-token gates included) lands
+    here (also logged at debug), so the edits ``list`` still works and the
+    caller can surface the degradation as a warning. A ``success: False``
+    service response degrades silently as before. Genuine programming errors
+    propagate.
     """
+    from .tools.helpers import extract_structured_error_reason
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response
 
     try:
         result = await call_mcp_tools_service(client, "list_legacy_backups", {})
-    except HomeAssistantError as err:
+    except (HomeAssistantError, ToolError) as err:
         logger.debug("legacy backup list unavailable: %s", err)
-        return []
+        return [], extract_structured_error_reason(err) or str(err)
     if not isinstance(result, dict):
-        return []
+        return [], None
     result = unwrap_service_response(result)
     if not result.get("success", False):
-        return []
+        return [], None
     backups = result.get("backups")
-    return backups if isinstance(backups, list) else []
+    return (backups, None) if isinstance(backups, list) else ([], None)
 
 
 async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
@@ -2204,9 +2226,11 @@ async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
 
     Returns the unwrapped service response (carries ``success`` / ``content`` /
     ``file_path`` / ``path_ambiguous`` / ``timestamp``). A service-unavailable
-    ``HomeAssistantError`` is mapped to a ``success: False`` dict so the caller
-    surfaces a not-found rather than crashing.
+    ``HomeAssistantError`` — or a ``ToolError`` from the caller-token gates —
+    is mapped to a ``success: False`` dict so the caller surfaces a not-found
+    rather than crashing.
     """
+    from .tools.helpers import extract_structured_error_reason
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response
 
@@ -2214,8 +2238,14 @@ async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
         result = await call_mcp_tools_service(
             client, "read_legacy_backup", {"filename": filename}
         )
-    except HomeAssistantError as err:
-        return {"success": False, "error": str(err)}
+    except (HomeAssistantError, ToolError) as err:
+        # The human reason, not str(err) verbatim: a ToolError's string is
+        # the whole JSON envelope, which would reach the tool layer as an
+        # unreadable JSON-in-JSON message (#1996's original symptom).
+        return {
+            "success": False,
+            "error": extract_structured_error_reason(err) or str(err),
+        }
     if not isinstance(result, dict):
         return {"success": False, "error": f"no response for {filename!r}"}
     return unwrap_service_response(result)

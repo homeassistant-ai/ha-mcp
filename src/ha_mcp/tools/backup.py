@@ -1908,12 +1908,12 @@ async def _edits_list(
     # Edits-store snapshots + pre-#1579 legacy .bak entries (#1579).
     # The manager owns the merge (sync dir-glob off-thread + async
     # legacy service call) so this layer stays source-agnostic.
-    entries = await mgr.list_edits_and_legacy(
+    entries, warnings = await mgr.list_edits_and_legacy(
         domain=domain,
         entity_id=entity_id,
         limit=limit,
     )
-    return {
+    response: dict[str, Any] = {
         "success": True,
         "data": {
             "backups": entries,
@@ -1924,6 +1924,9 @@ async def _edits_list(
             "retain_per_entity": settings.auto_backup_retain_per_entity,
         },
     }
+    if warnings:
+        response["warnings"] = warnings
+    return response
 
 
 async def _edits_view(

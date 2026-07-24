@@ -25,6 +25,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -442,11 +443,18 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             if bool(opts.get(OPT_ENABLE_SIDEBAR_PANEL, True))
             else ""
         )
+        # The tools-module status renders as its own paragraph directly under
+        # the version line, sharing the {versions} placeholder so every
+        # translation shows it without a strings change.
+        versions = await self._versions_hint()
+        tools_hint = self._tools_module_hint()
+        if tools_hint:
+            versions = f"{versions}\n\n{tools_hint}"
         return self.async_show_form(
             step_id="init",
             data_schema=schema,
             description_placeholders={
-                "versions": await self._versions_hint(),
+                "versions": versions,
                 "connect_url": await self._connect_url_hint(),
                 "oauth_creds": self._oauth_creds_hint(),
                 "llm_api_docs_url": LLM_API_DOCS_URL,
@@ -533,6 +541,48 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         return (
             f"Component {component_version} - "
             f"Server ha-mcp {server_version} ({channel} channel)"
+        )
+
+    def _tools_module_hint(self) -> str | None:
+        """Return the File & YAML tools entry status line, or None if unreadable.
+
+        Shown directly under the version line (#1996): users routinely add the
+        server entry only and never learn the file / YAML tools need the second
+        "HA-MCP File & YAML Tools" entry until a tool call fails. An entry
+        that exists but is not loaded (disabled, or setup failed) serves no
+        services either, so it reports "not loaded" rather than Installed.
+        Failure-proof like the other hints: any read error drops the line
+        rather than breaking the options form.
+        """
+        hass = getattr(self, "hass", None)
+        if hass is None:
+            return None
+        try:
+            # A missing entry_type means tools (pre-#1527 entries never carried
+            # the discriminator) — same default async_setup_entry dispatches on.
+            tools_entries = [
+                entry
+                for entry in hass.config_entries.async_entries(DOMAIN)
+                if entry.data.get(CONF_ENTRY_TYPE, ENTRY_TYPE_TOOLS) == ENTRY_TYPE_TOOLS
+            ]
+            loaded = any(
+                entry.state is ConfigEntryState.LOADED for entry in tools_entries
+            )
+        except Exception as err:
+            _LOGGER.debug("Could not read the tools-entry state for the hint: %s", err)
+            return None
+        if loaded:
+            return "Beta/advanced file & YAML tools module (optional): Installed"
+        if tools_entries:
+            return (
+                "Beta/advanced file & YAML tools module (optional): Installed "
+                'but not loaded — enable or reload the "HA-MCP File & YAML '
+                "Tools\" entry on this integration's page"
+            )
+        return (
+            "Beta/advanced file & YAML tools module (optional): Not installed — "
+            'press "Add entry" on this integration\'s page and choose '
+            '"HA-MCP File & YAML Tools" to add it'
         )
 
     async def _connect_url_hint(self) -> str:

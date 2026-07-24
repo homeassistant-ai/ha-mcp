@@ -260,11 +260,14 @@ class TestAssertMcpToolsAvailableCapsFirst:
                 "ha_mcp.tools.tools_filesystem.get_component_caps",
                 AsyncMock(return_value=None),
             ),
-            pytest.raises(ToolError),
+            pytest.raises(ToolError) as exc_info,
         ):
             await _assert_mcp_tools_available(client)
 
         client.get_services.assert_awaited_once()
+        # Routes to the "add the entry" error (#1996), not "too old".
+        assert "HA-MCP File & YAML Tools" in str(exc_info.value)
+        assert "too old" not in str(exc_info.value)
 
 
 class TestRegisterFilesystemTools:
