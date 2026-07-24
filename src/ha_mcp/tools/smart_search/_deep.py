@@ -983,6 +983,13 @@ class DeepSearchMixin(SceneSearchMixin):
         if rows is None:
             return None
         yaml_excluded = sum(1 for row in rows if row.get("mode") == "yaml")
+        # Legacy records carry the REGISTRY row's title; the component match
+        # only knows the config body's (often absent) — join rows for parity.
+        row_titles = {
+            row.get("url_path"): row.get("title")
+            for row in rows
+            if isinstance(row, dict)
+        }
 
         records: dict[str, dict[str, Any]] = {}
         for match in matches:
@@ -991,7 +998,7 @@ class DeepSearchMixin(SceneSearchMixin):
             url_path = match.get("url_path") or "default"
             if url_path in records:
                 continue
-            title = match.get("title")
+            title = row_titles.get(url_path) or match.get("title")
             if title is None:
                 title = "Default Dashboard" if url_path == "default" else url_path
             records[url_path] = {

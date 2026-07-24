@@ -311,7 +311,9 @@ class TestDashboardBucketViaComponent:
             {"url_path": "energy", "title": "Energy", "card_path": "views[0].cards[3]"},
             {"url_path": None, "title": None, "card_path": "views[1].cards[2]"},
         ]
-        rows = [{"url_path": "energy", "mode": "storage"}]
+        # The registry row's title wins over the match's config-body title —
+        # parity with the legacy records, which read the registry row.
+        rows = [{"url_path": "energy", "title": "Energy Registry", "mode": "storage"}]
         tools, client, component_result = self._tools_with_component(matches, rows)
 
         with (
@@ -334,7 +336,7 @@ class TestDashboardBucketViaComponent:
             assert rec["score"] == 100
             assert rec["match_in_config"] is True
         by_url = {d["dashboard_url"]: d for d in dashboards}
-        assert by_url["energy"]["dashboard_title"] == "Energy"
+        assert by_url["energy"]["dashboard_title"] == "Energy Registry"
         assert by_url["default"]["dashboard_title"] == "Default Dashboard"
         assert not result.get("partial")
 
