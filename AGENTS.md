@@ -675,8 +675,10 @@ fully validate a component change before merge.
     pending version otherwise; per-revision bumps skip never-shipped numbers and
     desync the version from the release cycle.
   - CI enforces the level-with-stable case twice: the PR-level **Component
-    Version Gate** fails a component change whose manifest version equals the
-    mirror's released stable, and the mirror sync's stable tag step fails loud
+    Version Gate** fails a component change whose manifest version does not
+    strictly lead the mirror's released stable (equal = bump to open the
+    pending version; behind = a stale tree or bad merge resurrected an old
+    version), and the mirror sync's stable tag step fails loud
     when an already-tagged version's component content has drifted (changes
     merged onto a shipped version would otherwise strand with no installable
     release — the gap is a PR opened while a version is pending that merges

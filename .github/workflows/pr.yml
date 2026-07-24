@@ -66,11 +66,28 @@ jobs:
           fi
           stable="${latest#v}"
           echo "component changed; manifest=${VER} released-stable=${stable}"
+          # Strict version comparison, not equality: a version BEHIND the
+          # released stable (a stale tree or bad merge resurrecting an old
+          # manifest) must fail here too, not slip through to a late
+          # release-time failure. sort -V gives semver ordering; both inputs
+          # come from our own manifest / release automation.
           if [ "$VER" = "$stable" ]; then
-            echo "::error::This PR changes custom_components/ha_mcp_tools but keeps the component version at ${VER}, which is already released as the mirror's latest stable - merged this way the changes never ship (the stable tag step skips existing tags; dev pre-release tags sort below the equal stable). Master is level with stable: bump manifest.json + const.py (and the parity-test literal) once to open the next pending version, per AGENTS.md 'Version bumps ride the stable release cycle'."
-            exit 1
+            verdict=equal
+          elif [ "$(printf '%s\n%s\n' "$stable" "$VER" | sort -V | tail -1)" = "$VER" ]; then
+            verdict=ahead
+          else
+            verdict=behind
           fi
-          echo "version gate ok: pending ${VER} is ahead of released ${stable}"
+          case "$verdict" in
+            ahead)
+              echo "version gate ok: pending ${VER} is strictly ahead of released ${stable}" ;;
+            equal)
+              echo "::error::This PR changes custom_components/ha_mcp_tools but keeps the component version at ${VER}, which is already released as the mirror's latest stable - merged this way the changes never ship (the stable tag step skips existing tags; dev pre-release tags sort below the equal stable). Master is level with stable: bump manifest.json + const.py (and the parity-test literal) once to open the next pending version, per AGENTS.md 'Version bumps ride the stable release cycle'."
+              exit 1 ;;
+            behind)
+              echo "::error::This PR changes custom_components/ha_mcp_tools with version ${VER}, which is BEHIND the mirror's released stable ${stable} - a stale tree or bad merge resurrected an old version. Restore the version to lead the released stable (per AGENTS.md 'Version bumps ride the stable release cycle')."
+              exit 1 ;;
+          esac
 
   changes:
     name: Detect relevant changes
