@@ -286,11 +286,6 @@ class VisibilityEnforcementMiddleware(Middleware):
 
     def __init__(self, *, get_client: Callable[[], Any]) -> None:
         self._get_client = get_client
-        self._lock = asyncio.Lock()
-        self._cached_hidden: set[str] | None = None
-        self._cached_regex: re.Pattern[str] | None = None
-        self._cache_key: str | None = None
-        self._cache_expiry = 0.0
         self._last_good_config: VisibilityConfig | None = None
 
     async def _load_config(self) -> VisibilityConfig:
@@ -393,35 +388,87 @@ class VisibilityEnforcementMiddleware(Middleware):
     async def _hidden_and_regex(
         self, config: VisibilityConfig
     ) -> tuple[set[str], re.Pattern[str] | None]:
-        """Return the cached hidden set + regex, refreshing on TTL/config change.
+        """Resolve the hidden set + regex through the module-shared cache."""
+        return await _hidden_cache.get(config, self._get_client())
 
-        On a refresh failure while enforce is active: fall back to the last-known-
-        good set; with no last-known-good ever, raise ``VisibilityDataUnavailable``
-        so the caller fails closed. The lock prevents a refresh stampede.
-        """
+
+async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> set[str]:
+    """Fetch registry/states (+device registry when needed) and resolve strictly.
+
+    Mirrors the search seam's fetches. Any fetch error, or a strict resolver
+    degradation, raises so the caller applies its fallback policy.
+    """
+    need_device = config_needs_device_registry(config)
+    coros: list[Any] = [
+        client.get_states(),
+        client.send_websocket_message({"type": "config/entity_registry/list"}),
+    ]
+    if need_device:
+        coros.append(
+            client.send_websocket_message({"type": "config/device_registry/list"})
+        )
+    fetched = await asyncio.gather(*coros, return_exceptions=True)
+    for item in fetched:
+        if isinstance(item, BaseException):
+            raise VisibilityDataUnavailable("registry/state fetch failed") from item
+    device_result = fetched[2] if need_device else None
+    if need_device and not (
+        isinstance(device_result, dict)
+        and device_result.get("success")
+        and isinstance(device_result.get("result"), list)
+    ):
+        # The resolver's device parser fails open to empty maps even under
+        # strict (the search path relies on that), so a device-registry
+        # payload an active area/label dimension NEEDS must be validated
+        # here: an entity restricted only via its device's area/labels
+        # would otherwise silently drop out of the hidden set.
+        raise VisibilityDataUnavailable("device registry unusable")
+    hidden, _warnings = await load_hidden_set(
+        fetched[1], fetched[0], client, device_result, strict=True
+    )
+    return hidden
+
+
+class _HiddenSetCache:
+    """Module-shared TTL cache of the enforced hidden set, keyed on hide dimensions.
+
+    MODULE-shared, not middleware-instance-shared, deliberately: a process can
+    hold several server instances over its lifetime (the e2e suite does), and a
+    tool-side scrub that reached the cache through a stale instance would see a
+    cold cache and that instance's CLOSED client ("Cannot send a request, as the
+    client has been closed" — CI round 3). Every ``get`` therefore takes the
+    caller's own live client for any refresh, and all callers share one view of
+    the hidden set. On a refresh failure: fall back to the last-known-good set
+    for the SAME config key (a set computed under a different denylist is a
+    different policy); with none, raise ``VisibilityDataUnavailable`` so call
+    gates fail closed. The lock prevents a refresh stampede.
+    """
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._hidden: set[str] | None = None
+        self._regex: re.Pattern[str] | None = None
+        self._key: str | None = None
+        self._expiry = 0.0
+
+    async def get(
+        self, config: VisibilityConfig, client: Any
+    ) -> tuple[set[str], re.Pattern[str] | None]:
         key = _config_cache_key(config)
         now = time.monotonic()
         async with self._lock:
-            if (
-                self._cached_hidden is not None
-                and self._cache_key == key
-                and now < self._cache_expiry
-            ):
-                return self._cached_hidden, self._cached_regex
+            if self._hidden is not None and self._key == key and now < self._expiry:
+                return self._hidden, self._regex
             try:
-                hidden = await self._refresh_hidden_set(config)
+                hidden = await _refresh_hidden_set(config, client)
             except Exception:
-                # Last-known-good is only valid for the SAME config key: a set
-                # computed under a different denylist/allowlist is a different
-                # policy, and reusing it would let entities the NEW config hides
-                # pass until HA recovers. Changed key + failed refresh = closed.
-                if self._cached_hidden is not None and self._cache_key == key:
+                if self._hidden is not None and self._key == key:
                     logger.warning(
                         "visibility enforce: hidden-set refresh failed; using "
                         "last-known-good set",
                         exc_info=True,
                     )
-                    return self._cached_hidden, self._cached_regex
+                    return self._hidden, self._regex
                 logger.warning(
                     "visibility enforce: hidden-set refresh failed with no "
                     "last-known-good for this config; failing closed",
@@ -429,89 +476,40 @@ class VisibilityEnforcementMiddleware(Middleware):
                 )
                 raise VisibilityDataUnavailable("hidden set unavailable") from None
             regex = _build_hidden_regex(hidden)
-            self._cached_hidden = hidden
-            self._cached_regex = regex
-            self._cache_key = key
-            self._cache_expiry = now + _CACHE_TTL_SECONDS
+            self._hidden = hidden
+            self._regex = regex
+            self._key = key
+            self._expiry = now + _CACHE_TTL_SECONDS
             return hidden, regex
 
-    async def _refresh_hidden_set(self, config: VisibilityConfig) -> set[str]:
-        """Fetch registry/states (+device registry when needed) and resolve strictly.
 
-        Mirrors the search seam's fetches. Any fetch error, or a strict resolver
-        degradation, raises so the caller applies its fallback policy.
-        """
-        client = self._get_client()
-        need_device = config_needs_device_registry(config)
-        coros: list[Any] = [
-            client.get_states(),
-            client.send_websocket_message({"type": "config/entity_registry/list"}),
-        ]
-        if need_device:
-            coros.append(
-                client.send_websocket_message({"type": "config/device_registry/list"})
-            )
-        fetched = await asyncio.gather(*coros, return_exceptions=True)
-        for item in fetched:
-            if isinstance(item, BaseException):
-                raise VisibilityDataUnavailable("registry/state fetch failed") from item
-        device_result = fetched[2] if need_device else None
-        if need_device and not (
-            isinstance(device_result, dict)
-            and device_result.get("success")
-            and isinstance(device_result.get("result"), list)
-        ):
-            # The resolver's device parser fails open to empty maps even under
-            # strict (the search path relies on that), so a device-registry
-            # payload an active area/label dimension NEEDS must be validated
-            # here: an entity restricted only via its device's area/labels
-            # would otherwise silently drop out of the hidden set.
-            raise VisibilityDataUnavailable("device registry unusable")
-        hidden, _warnings = await load_hidden_set(
-            fetched[1], fetched[0], client, device_result, strict=True
-        )
-        return hidden
+_hidden_cache = _HiddenSetCache()
 
 
-# The installed middleware instance, published by server wiring. Read-side
-# surfaces that must OMIT records rather than have the whole call refused —
-# ha_search's config-body branch — reach the SAME TTL-cached hidden set through
-# this seam, so tool-side scrubs and the middleware always share one view.
-_active_enforcer: VisibilityEnforcementMiddleware | None = None
-
-
-def register_active_enforcer(
-    middleware: VisibilityEnforcementMiddleware | None,
-) -> None:
-    """Publish the installed enforcement middleware for in-tool scrubs."""
-    global _active_enforcer
-    _active_enforcer = middleware
-
-
-async def active_hidden_regex() -> re.Pattern[str] | None:
+async def active_hidden_regex(client: Any) -> re.Pattern[str] | None:
     """Return the hidden-set regex while enforce mode is active, else ``None``.
 
-    Collection-read surfaces (the ha_search config-body branch) call this to
-    OMIT records referencing a hidden entity before the response reaches the
-    middleware's outbound scan — which would otherwise refuse the whole call on
-    contact, turning the issue-#2015 "collection reads omit" contract into a
-    wholesale refusal. Shares the middleware's TTL cache. Fail-soft to ``None``
-    on any load/data error: the fail-closed policy is owned by the middleware's
-    own call gates (which already ran for the request in flight), not by this
-    best-effort scrub seam.
+    Collection-read surfaces (the ha_search config-body branches, legacy and
+    component) call this to OMIT records referencing a hidden entity before the
+    response reaches the middleware's outbound scan — which would otherwise
+    refuse the whole call on contact, turning the issue-#2015 "collection reads
+    omit" contract into a wholesale refusal. ``client`` is the CALLER's live
+    client, used only if the shared cache needs a refresh (the middleware's
+    inbound gate for the request in flight normally primed it already).
+    Fail-soft to ``None`` on any load/data error: the fail-closed policy is
+    owned by the middleware's call gates, not by this best-effort scrub seam.
     """
-    middleware = _active_enforcer
-    if middleware is None:
-        return None
     try:
-        config = await middleware._load_config()
+        config = await asyncio.to_thread(
+            resolver.load_visibility_config, resolver.get_data_dir()
+        )
         if not (
             config.enabled
             and config.enforce
             and config_has_active_hide_dimensions(config)
         ):
             return None
-        _hidden, regex = await middleware._hidden_and_regex(config)
+        _hidden, regex = await _hidden_cache.get(config, client)
     except Exception:
         return None
     return regex

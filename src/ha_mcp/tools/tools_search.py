@@ -973,7 +973,9 @@ def _merge_component_visibility_warnings(
         )
 
 
-async def _scrub_component_config_buckets(response: dict[str, Any]) -> None:
+async def _scrub_component_config_buckets(
+    response: dict[str, Any], client: Any
+) -> None:
     """Omit component config-body records referencing a hidden entity (enforce mode).
 
     The component's ``search_visibility`` wire applies the hide dimensions to
@@ -988,7 +990,7 @@ async def _scrub_component_config_buckets(response: dict[str, Any]) -> None:
     """
     from ..visibility.enforcement import active_hidden_regex, scrub_records
 
-    regex = await active_hidden_regex()
+    regex = await active_hidden_regex(client)
     if regex is None:
         return
     dropped = 0
@@ -2071,7 +2073,7 @@ class SearchTools:
             )
             return legacy
         response = _shape_component_search_response(req, raw.get("result") or {})
-        await _scrub_component_config_buckets(response)
+        await _scrub_component_config_buckets(response, self._client)
         return response
 
     async def _send_component_search(

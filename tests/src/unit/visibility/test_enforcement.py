@@ -19,7 +19,6 @@ from ha_mcp.visibility.enforcement import (
     VisibilityEnforcementMiddleware,
     _build_hidden_regex,
     active_hidden_regex,
-    register_active_enforcer,
     scrub_records,
 )
 from ha_mcp.visibility.model import VisibilityConfig
@@ -98,6 +97,17 @@ def set_config(monkeypatch, tmp_path):
         return state["config"]
 
     return _set
+
+
+@pytest.fixture(autouse=True)
+def _fresh_hidden_cache(monkeypatch):
+    """Isolate the module-shared hidden-set cache per test.
+
+    The cache is deliberately module-global (a process can hold several server
+    instances — see _HiddenSetCache), so without this every test would inherit
+    the previous test's cached hidden set.
+    """
+    monkeypatch.setattr(enforcement, "_hidden_cache", enforcement._HiddenSetCache())
 
 
 def _error_body(exc: pytest.ExceptionInfo[ToolError]) -> dict:
@@ -667,11 +677,6 @@ class TestStrictResolver:
 
 
 class TestScrubSeam:
-    @pytest.fixture(autouse=True)
-    def _unregister_after(self):
-        yield
-        register_active_enforcer(None)
-
     def test_scrub_records_drops_embedded_hidden_id(self):
         regex = _build_hidden_regex({"input_boolean.hidden_probe"})
         records = [
@@ -690,42 +695,42 @@ class TestScrubSeam:
         records = [{"entity_id": "sensor.foo2"}, {"entity_id": "my_sensor.foo"}]
         assert scrub_records(records, regex) == records
 
-    async def test_active_hidden_regex_none_without_enforcer(self):
-        register_active_enforcer(None)
-        assert await active_hidden_regex() is None
-
     async def test_active_hidden_regex_none_when_enforce_off(self, set_config):
         set_config(enabled=True, enforce=False, deny_entity_ids=["sensor.hidden"])
         client = FakeClient()
-        register_active_enforcer(
-            VisibilityEnforcementMiddleware(get_client=lambda: client)
-        )
-        assert await active_hidden_regex() is None
+        assert await active_hidden_regex(client) is None
         assert client.get_states_calls == 0  # inactive: no hidden-set fetch
 
-    async def test_active_hidden_regex_shares_middleware_cache(self, set_config):
+    async def test_active_hidden_regex_uses_shared_cache(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
         client = FakeClient()
         mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
-        register_active_enforcer(mw)
-        # Middleware call primes the TTL cache...
+        # Middleware call primes the module-shared TTL cache...
         await mw.on_call_tool(
             make_context("ha_get_overview", {}), _returns(text_result("clean"))
         )
         assert client.get_states_calls == 1
-        # ...and the scrub seam reuses it (no second refresh).
-        regex = await active_hidden_regex()
+        # ...and the scrub seam reuses it: even a DEAD client works because no
+        # refresh is needed. Regression for CI round 3, where the scrub reached
+        # a cold cache through a stale server instance's closed client and
+        # skipped the scrub entirely.
+        regex = await active_hidden_regex(FakeClient(fail=True))
         assert regex is not None
         assert regex.search("states.sensor.hidden reference")
         assert not regex.search("sensor.hidden2")
         assert client.get_states_calls == 1
 
+    async def test_active_hidden_regex_refreshes_with_caller_client(self, set_config):
+        # Cold cache: the scrub refreshes using the CALLER's live client.
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        client = FakeClient()
+        regex = await active_hidden_regex(client)
+        assert regex is not None
+        assert client.get_states_calls == 1
+
     async def test_active_hidden_regex_fail_soft_on_data_error(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
-        register_active_enforcer(
-            VisibilityEnforcementMiddleware(get_client=lambda: FakeClient(fail=True))
-        )
-        assert await active_hidden_regex() is None
+        assert await active_hidden_regex(FakeClient(fail=True)) is None
 
 
 # ---------------------------------------------------------------------------
@@ -773,11 +778,6 @@ class TestFallbackScoping:
 
 
 class TestComponentBucketScrub:
-    @pytest.fixture(autouse=True)
-    def _unregister_after(self):
-        yield
-        register_active_enforcer(None)
-
     async def test_component_config_buckets_scrubbed_and_totals_adjusted(
         self, set_config
     ):
@@ -789,9 +789,6 @@ class TestComponentBucketScrub:
             deny_entity_ids=["input_boolean.hidden_probe"],
         )
         client = FakeClient()
-        register_active_enforcer(
-            VisibilityEnforcementMiddleware(get_client=lambda: client)
-        )
         response = {
             "entities": [],
             "automations": [],
@@ -805,7 +802,7 @@ class TestComponentBucketScrub:
             "config_total_matches": 2,
             "count": 2,
         }
-        await _scrub_component_config_buckets(response)
+        await _scrub_component_config_buckets(response, client)
         assert [r["entity_id"] for r in response["helpers"]] == [
             "input_boolean.visible"
         ]
@@ -820,12 +817,11 @@ class TestComponentBucketScrub:
             enforce=False,
             deny_entity_ids=["input_boolean.hidden_probe"],
         )
-        register_active_enforcer(VisibilityEnforcementMiddleware(get_client=FakeClient))
         response = {
             "helpers": [{"entity_id": "input_boolean.hidden_probe"}],
             "config_total_matches": 1,
             "count": 1,
         }
-        await _scrub_component_config_buckets(response)
+        await _scrub_component_config_buckets(response, FakeClient())
         assert response["helpers"] == [{"entity_id": "input_boolean.hidden_probe"}]
         assert response["config_total_matches"] == 1

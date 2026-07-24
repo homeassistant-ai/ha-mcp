@@ -1142,17 +1142,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         inject the lazy client accessor so no eager connection is made at
         startup.
         """
-        from .visibility.enforcement import (
-            VisibilityEnforcementMiddleware,
-            register_active_enforcer,
-        )
+        from .visibility.enforcement import VisibilityEnforcementMiddleware
 
-        middleware = VisibilityEnforcementMiddleware(get_client=lambda: self.client)
-        # Published so the ha_search config-body branch can OMIT records
-        # referencing a hidden entity through the same TTL-cached hidden set,
-        # instead of the outbound scan refusing the whole search on contact.
-        register_active_enforcer(middleware)
-        self.mcp.add_middleware(middleware)
+        self.mcp.add_middleware(
+            VisibilityEnforcementMiddleware(get_client=lambda: self.client)
+        )
 
     # Shared action-phrased keyword block for retrieval. Some MCP clients
     # (Claude Code, others) rank candidate tools by token-overlap between

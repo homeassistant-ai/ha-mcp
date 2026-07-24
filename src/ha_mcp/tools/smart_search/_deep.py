@@ -33,19 +33,21 @@ logger = logging.getLogger(__name__)
 
 async def _scrub_results_for_enforce(
     results: dict[str, list[dict[str, Any]]],
+    client: Any,
 ) -> None:
     """Omit config-body records referencing a hidden entity in enforce mode.
 
     Enforce mode (issue #2015): config-body records are collection reads, so a
     record referencing a hidden entity is OMITTED here — mirroring the entity
     branch — rather than letting the enforcement middleware's outbound scan
-    refuse the whole search on contact. No-op (single memoized config load)
-    unless the enforcement middleware is installed and active. Lazy import so
+    refuse the whole search on contact. ``client`` is this search's own live
+    client, used only if the shared hidden-set cache needs a refresh. No-op
+    (single memoized config load) unless enforce mode is active. Lazy import so
     the visibility package is only touched at call time, not module import.
     """
     from ...visibility.enforcement import active_hidden_regex, scrub_records
 
-    enforce_regex = await active_hidden_regex()
+    enforce_regex = await active_hidden_regex(client)
     if enforce_regex is None:
         return
     for category, items in results.items():
@@ -288,7 +290,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     message=f"dashboards searched ({len(results['dashboards'])} matches)",
                 )
 
-            await _scrub_results_for_enforce(results)
+            await _scrub_results_for_enforce(results, self.client)
 
             return self._paginate_and_build_response(
                 results,
