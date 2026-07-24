@@ -912,6 +912,33 @@ def _normalize_component_config_record(
     return out
 
 
+# Body surfaces the ``ha_mcp_tools`` component's ``search`` command accepts
+# (its voluptuous allowlist also has ``entity``, appended separately by
+# ``_build_component_search_request``). ``dashboard`` is deliberately absent:
+# the component has no dashboard scanner, so a request naming it must stay on
+# the legacy path — forwarding it just bounced off the component schema into a
+# warning-laden fallback on every call (issue #2008).
+_COMPONENT_BODY_SEARCH_TYPES: frozenset[str] = frozenset(
+    {"automation", "script", "scene", "helper"}
+)
+
+
+def _component_serves_search_types(req: _ResolvedSearch) -> bool:
+    """True when the component's search command accepts every requested surface.
+
+    Only an explicit ``search_types`` list can name an unsupported surface, and
+    only the body-eligible branch forwards it to the component — a
+    body-ineligible request sends the entity surface alone, which the component
+    always accepts. Routing is all-or-nothing per command (design § 4), so one
+    unsupported surface sends the whole request to the legacy path, silently —
+    the same treatment as the other route-ineligible modes, not the
+    warning-emitting failure fallback.
+    """
+    if not req.body_eligible or req.parsed_search_types is None:
+        return True
+    return all(t in _COMPONENT_BODY_SEARCH_TYPES for t in req.parsed_search_types)
+
+
 def _build_component_search_request(req: _ResolvedSearch) -> dict[str, Any]:
     """Translate resolved ha_search inputs into an ``ha_mcp_tools/search`` request.
 
@@ -1888,7 +1915,9 @@ class SearchTools:
         # response keys) — keep the legacy path: their response contracts
         # differ per mode, and after the request-dedup work they are cheap
         # registry-only calls, so the component round-trip buys nothing worth
-        # the shape risk.
+        # the shape risk. A ``search_types`` naming a surface the component
+        # lacks (``dashboard``) also stays legacy — see
+        # ``_component_serves_search_types`` (issue #2008).
         #
         # Entity-visibility gate. A plain ``search`` component applies no
         # filtering, so an install with an ACTIVE visibility filter would leak
@@ -1903,7 +1932,11 @@ class SearchTools:
         # needs no analogous gate — it re-applies the filter server-side over the
         # component's raw slices. Checked only when the component would otherwise
         # serve, so the common (no-component / filter-off) install pays nothing.
-        if req.query_text and not (req.area_filter or "").strip():
+        if (
+            req.query_text
+            and not (req.area_filter or "").strip()
+            and _component_serves_search_types(req)
+        ):
             caps = await get_component_caps(self._client)
             if component_supports(caps, "search"):
                 (

@@ -31,6 +31,23 @@ from ._scenes import SceneSearchMixin
 logger = logging.getLogger(__name__)
 
 
+def _is_config_not_found(resp: dict[str, Any]) -> bool:
+    """True when a failed ``lovelace/config`` envelope carries HA's
+    ``config_not_found`` code — the dashboard has no stored config (an
+    auto-generated dashboard that was never taken control of), which is a
+    clean no-match for a config scan rather than a backend failure
+    (issue #2008).
+
+    ``send_websocket_message`` surfaces the structured code top-level
+    (``error_code``); a raw HA result frame nests it (``error.code``) —
+    accept both shapes.
+    """
+    if resp.get("error_code") == "config_not_found":
+        return True
+    error = resp.get("error")
+    return isinstance(error, dict) and error.get("code") == "config_not_found"
+
+
 class DeepSearchMixin(SceneSearchMixin):
     """deep_search orchestration + per-type automation/script/helper/dashboard/flow search."""
 
@@ -886,6 +903,12 @@ class DeepSearchMixin(SceneSearchMixin):
         distinct from a successful no-match. Surfacing it lets
         ``ha_search(search_types=["dashboard"])`` report ``partial`` instead
         of a complete-looking empty result.
+
+        ``config_not_found`` is the deliberate exception: an auto-generated
+        dashboard (strategy-backed, never taken control of) has no stored
+        config, so there is nothing to scan and the envelope reads as a clean
+        no-match. Counting it as failed made every dashboard search on a
+        stock install report ``partial`` (issue #2008).
         """
         async with semaphore:
             try:
@@ -906,6 +929,12 @@ class DeepSearchMixin(SceneSearchMixin):
                 # shape explicitly (``success is False``) so a missing-success
                 # raw response still falls through to the ``result`` fallback.
                 if isinstance(resp, dict) and resp.get("success") is False:
+                    if _is_config_not_found(resp):
+                        logger.debug(
+                            f"Dashboard has no stored config ({url_path}); "
+                            "auto-generated — nothing to scan"
+                        )
+                        return [], False
                     logger.debug(
                         f"Dashboard config returned non-success ({url_path}): {resp!r}"
                     )
