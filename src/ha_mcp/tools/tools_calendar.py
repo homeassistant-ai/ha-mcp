@@ -233,19 +233,6 @@ class CalendarTools:
     ) -> Any:
         """Create a one-off calendar event via the calendar.create_event service."""
         start_is_date = self._is_date_only(start)
-        end_is_date = self._is_date_only(end)
-        if start_is_date != end_is_date:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Calendar event start and end must both be dates or both be datetimes",
-                    context={"start": start, "end": end},
-                    suggestions=[
-                        "Use YYYY-MM-DD for both values to create an all-day event",
-                        "Use ISO 8601 datetimes for both values to create a timed event",
-                    ],
-                )
-            )
 
         service_data: dict[str, Any] = {
             "entity_id": entity_id,
@@ -304,6 +291,16 @@ class CalendarTools:
             suggestions.insert(0, f"Calendar entity '{entity_id}' not found")
         if "not supported" in error_str.lower():
             suggestions.insert(0, "This calendar does not support event creation")
+        # HA enforces MIN_NEW_EVENT_DURATION (1 second): for all-day events the
+        # end date is exclusive, so start == end has zero duration and is
+        # rejected. Steer the agent to bump the end date by a day.
+        if "duration" in error_str.lower() or "must be" in error_str.lower():
+            suggestions.insert(
+                0,
+                "For an all-day event the end date is exclusive — set end to "
+                "start + 1 day (a single-day all-day event cannot have "
+                "start == end)",
+            )
 
         return suggestions
 
@@ -337,7 +334,14 @@ class CalendarTools:
             str, Field(description="Event start date or datetime in ISO format")
         ],
         end: Annotated[
-            str, Field(description="Event end date or datetime in ISO format")
+            str,
+            Field(
+                description=(
+                    "Event end date or datetime in ISO format. For all-day "
+                    "events (date-only) the end date is exclusive; a "
+                    "single-day all-day event needs end = start + 1 day."
+                )
+            ),
         ],
         description: Annotated[
             str | None,
@@ -397,9 +401,25 @@ class CalendarTools:
             end="2024-01-15T11:00:00",
             rrule="FREQ=WEEKLY;BYDAY=MO;COUNT=10"
         )
+
+        # Create an all-day event (date-only, no time component). The end
+        # date is EXCLUSIVE, so this spans 2026-07-04 through 2026-07-10.
+        result = ha_config_set_calendar_event(
+            "calendar.family",
+            summary="Vacation",
+            start="2026-07-04",
+            end="2026-07-11"
+        )
         ```
 
         **Note:**
+        Passing date-only values (``YYYY-MM-DD``) for both ``start`` and
+        ``end`` creates an all-day event; passing full ISO datetimes creates
+        a timed event. The two forms cannot be mixed — a date-only ``start``
+        with a datetime ``end`` (or vice versa) is rejected. Because the
+        all-day ``end`` date is exclusive, a single-day all-day event must
+        set ``end`` to ``start + 1 day``.
+
         Not every calendar integration supports event creation; recurring
         events additionally require the integration to support recurrence
         (the built-in Local Calendar does).
@@ -418,6 +438,23 @@ class CalendarTools:
                         suggestions=[
                             "Use ha_search(query='calendar', domain_filter='calendar') to find calendar entities",
                             "Calendar entity IDs start with 'calendar.' prefix",
+                        ],
+                    )
+                )
+
+            # Reject mixed date/datetime up front so both the simple and the
+            # recurring (rrule) paths give the same clear validation error —
+            # the rrule branch does not route through
+            # ``_create_simple_calendar_event`` where this used to live.
+            if self._is_date_only(start) != self._is_date_only(end):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Calendar event start and end must both be dates or both be datetimes",
+                        context={"start": start, "end": end},
+                        suggestions=[
+                            "Use YYYY-MM-DD for both values to create an all-day event",
+                            "Use ISO 8601 datetimes for both values to create a timed event",
                         ],
                     )
                 )

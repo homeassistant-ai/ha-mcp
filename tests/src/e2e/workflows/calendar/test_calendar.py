@@ -277,6 +277,104 @@ class TestCalendarEventLifecycle:
 
         logger.info("ha_config_set_calendar_event test completed")
 
+    async def test_create_all_day_calendar_event(self, mcp_client):
+        """
+        Test: Create an all-day event from date-only values and read it back.
+
+        Passing ``YYYY-MM-DD`` (no time component) for both start and end
+        must produce an all-day event. This proves the round-trip: HA should
+        return the occurrence with a date-only ``{"date": ...}`` start, NOT a
+        ``{"dateTime": ...}`` start. The all-day ``end`` date is exclusive, so
+        a single-day event spans start .. start + 1 day.
+        """
+        calendar_entity = await self._find_writable_calendar(mcp_client)
+        if not calendar_entity:
+            pytest.skip("No calendar entities available for testing")
+
+        summary = f"E2E All-Day Test Event {uuid.uuid4().hex[:8]}"
+        # Date-only, well into the future to avoid colliding with the default
+        # get-events window used elsewhere. end is exclusive -> single day.
+        start_date = (datetime.now(UTC) + timedelta(days=2)).date()
+        end_date = start_date + timedelta(days=1)
+        list_args = {
+            "entity_id": calendar_entity,
+            "start": datetime.combine(
+                start_date, datetime.min.time(), tzinfo=UTC
+            ).isoformat(),
+            "end": datetime.combine(
+                end_date + timedelta(days=1), datetime.min.time(), tzinfo=UTC
+            ).isoformat(),
+        }
+
+        def _match(data: dict) -> list[dict]:
+            return [e for e in data.get("events", []) if e.get("summary") == summary]
+
+        create_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_calendar_event",
+            {
+                "entity_id": calendar_entity,
+                "summary": summary,
+                "start": start_date.isoformat(),
+                "end": end_date.isoformat(),
+            },
+        )
+        if not create_data.get("success"):
+            pytest.skip(
+                f"Calendar {calendar_entity} does not support event creation: "
+                f"{extract_error_message(create_data) or 'Unknown'}"
+            )
+
+        event_uid: str | None = None
+        try:
+            events_data = await wait_for_tool_result(
+                mcp_client,
+                "ha_config_get_calendar_events",
+                list_args,
+                predicate=lambda d: bool(_match(d)),
+                timeout=15,
+                description=f"read-back of all-day event '{summary}'",
+            )
+            matches = _match(events_data)
+            assert matches, f"created all-day event '{summary}' did not surface"
+            event = matches[0]
+            event_uid = event.get("uid")
+
+            # Core assertion: an all-day event round-trips as a date-only
+            # start ({"date": ...}), never a timed start ({"dateTime": ...}).
+            start_field = event.get("start")
+            if isinstance(start_field, dict):
+                assert "date" in start_field, (
+                    f"all-day event start should be date-only, got {start_field}"
+                )
+                assert "dateTime" not in start_field, (
+                    f"all-day event start must not be a datetime, got {start_field}"
+                )
+                assert start_field["date"] == start_date.isoformat(), (
+                    f"expected start date {start_date.isoformat()}, got {start_field}"
+                )
+            else:
+                # Some backends flatten to a bare string; it must still be the
+                # date-only form with no time component.
+                assert str(start_field) == start_date.isoformat(), (
+                    f"all-day event start should be date-only "
+                    f"{start_date.isoformat()}, got {start_field!r}"
+                )
+        finally:
+            if event_uid:
+                try:
+                    await mcp_client.call_tool(
+                        "ha_config_remove_calendar_event",
+                        {"entity_id": calendar_entity, "uid": event_uid},
+                    )
+                except Exception as cleanup_error:
+                    logger.warning(
+                        f"Cleanup of all-day test event {event_uid} on "
+                        f"{calendar_entity}: {cleanup_error}"
+                    )
+
+        logger.info("All-day calendar event round-trip test completed")
+
     async def test_create_calendar_event_invalid_entity(self, mcp_client):
         """
         Test: Create event with invalid calendar entity
