@@ -12,7 +12,10 @@ from ...client.rest_client import HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
 from ..config_entry_flow import FLOW_HELPER_TYPES
 from ..helpers import exception_to_structured_error, safe_info, safe_progress
-from ..tools_config_dashboards import fetch_dashboards_list
+from ..tools_config_dashboards import (
+    _dashboards_via_component,
+    fetch_dashboards_list,
+)
 from ..tools_integrations import fetch_entry_options_with_status
 from ._config import (
     AUTOMATION_CONFIG_TIME_BUDGET,
@@ -197,6 +200,7 @@ class DeepSearchMixin(SceneSearchMixin):
             script_failed_sample: str | None = None
             helper_failed = 0
             dashboard_failed = 0
+            dashboard_yaml_excluded = 0
 
             if "automation" in search_types:
                 (
@@ -290,8 +294,12 @@ class DeepSearchMixin(SceneSearchMixin):
                 (
                     results["dashboards"],
                     dashboard_failed,
-                ) = await self._deep_search_dashboards(
-                    query_lower, exact_match, semaphore
+                    dashboard_yaml_excluded,
+                ) = await self._search_dashboards_surface(
+                    query_lower,
+                    exact_match,
+                    semaphore,
+                    include_config=include_config,
                 )
                 phase_done += 1
                 await safe_progress(
@@ -321,6 +329,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 script_failed_sample=script_failed_sample,
                 helper_failed=helper_failed,
                 dashboard_failed=dashboard_failed,
+                dashboard_yaml_excluded=dashboard_yaml_excluded,
             )
 
         except ToolError:
@@ -905,6 +914,94 @@ class DeepSearchMixin(SceneSearchMixin):
         failed_type_count += flow_failed_count
         return results, failed_type_count
 
+    async def _search_dashboards_surface(
+        self,
+        query_lower: str,
+        exact_match: bool,
+        semaphore: asyncio.Semaphore,
+        *,
+        include_config: bool,
+    ) -> tuple[list[dict[str, Any]], int, int]:
+        """The dashboard bucket: component-first, legacy fallback.
+
+        Returns ``(records, failed_count, yaml_excluded_count)``. The
+        component's in-process ``search`` frame (issue #2008) serves the
+        exact-match, no-body shape — the default ``ha_search`` call —
+        mirroring the ``ha_config_get_dashboard(mode="search")`` routing;
+        fuzzy scoring and ``include_config`` bodies are legacy-only (the
+        component walk is substring and its matches carry no bodies), as is
+        every ``None`` fallback case of
+        :meth:`_component_dashboard_search`.
+        """
+        if exact_match and not include_config:
+            component = await self._component_dashboard_search(query_lower)
+            if component is not None:
+                records, yaml_excluded = component
+                return records, 0, yaml_excluded
+        records, failed = await self._deep_search_dashboards(
+            query_lower, exact_match, semaphore
+        )
+        return records, failed, 0
+
+    async def _component_dashboard_search(
+        self, query_lower: str
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        """The dashboard bucket via the component's in-process ``search`` frame.
+
+        Returns ``(records, yaml_excluded_count)`` — one legacy-shaped record
+        per matching dashboard (score 100 / ``match_in_config`` — exact
+        substring parity with ``_search_in_dict``) plus the count of YAML-mode
+        registry rows the component deliberately never scans (their bodies can
+        carry resolved ``!secret`` values; the caller surfaces the exclusion as
+        ``partial``). The component walk is card-scoped (cards, badges, header
+        cards) — the surface ha_search documents as its dashboard corpus and
+        the same walk ``ha_config_get_dashboard(mode="search")`` pins parity
+        on. A config-less auto-generated dashboard is skipped in-process
+        (nothing to scan), consistent with :func:`_is_no_stored_config`.
+
+        ``None`` ⇒ run the legacy per-dashboard walk instead: capability miss /
+        component error / lovelace unavailable (``_dashboards_via_component``'s
+        taxonomy), an empty query, a ``truncated`` frame (the per-card match
+        cap was hit, so grouped-by-dashboard completeness can't be proven), a
+        malformed ``matches``, or a failed registry-list read (without the
+        rows the YAML exclusion could not be reported honestly). A default
+        dashboard forced to YAML mode (``lovelace: mode: yaml``) has no
+        registry row, so it is not counted in ``yaml_excluded_count`` — the
+        one row-less corner of the exclusion accounting.
+        """
+        if not query_lower:
+            return None
+        result = await _dashboards_via_component(
+            self.client, "search", query=query_lower
+        )
+        if result is None or result.get("truncated"):
+            return None
+        matches = result.get("matches")
+        if not isinstance(matches, list):
+            return None
+        rows = await fetch_dashboards_list(self.client)
+        if rows is None:
+            return None
+        yaml_excluded = sum(1 for row in rows if row.get("mode") == "yaml")
+
+        records: dict[str, dict[str, Any]] = {}
+        for match in matches:
+            if not isinstance(match, dict):
+                continue
+            url_path = match.get("url_path") or "default"
+            if url_path in records:
+                continue
+            title = match.get("title")
+            if title is None:
+                title = "Default Dashboard" if url_path == "default" else url_path
+            records[url_path] = {
+                "dashboard_url": url_path,
+                "dashboard_title": title,
+                "score": 100,
+                "match_in_config": True,
+            }
+        return list(records.values()), yaml_excluded
+
     async def _search_one_dashboard(
         self,
         url_path: str,
@@ -1069,6 +1166,7 @@ class DeepSearchMixin(SceneSearchMixin):
         script_failed_sample: str | None = None,
         helper_failed: int = 0,
         dashboard_failed: int = 0,
+        dashboard_yaml_excluded: int = 0,
     ) -> dict[str, Any]:
         """Merge per-type results, sort by score, paginate, and assemble the response."""
         tagged_results: list[tuple[str, dict[str, Any]]] = []
@@ -1133,6 +1231,7 @@ class DeepSearchMixin(SceneSearchMixin):
             script_failed_sample=script_failed_sample,
             helper_failed=helper_failed,
             dashboard_failed=dashboard_failed,
+            dashboard_yaml_excluded=dashboard_yaml_excluded,
         )
         return response
 
@@ -1152,6 +1251,7 @@ class DeepSearchMixin(SceneSearchMixin):
         script_failed_sample: str | None = None,
         helper_failed: int = 0,
         dashboard_failed: int = 0,
+        dashboard_yaml_excluded: int = 0,
     ) -> None:
         """Set ``partial: True`` when the deep-search per-type fetch path lost
         data — either the Attempt-C wall-clock budget exhausted
@@ -1166,7 +1266,10 @@ class DeepSearchMixin(SceneSearchMixin):
         ``helper_failed`` / ``dashboard_failed`` cover the helper- and
         dashboard-list/config backends, whose per-unit ``except`` blocks
         would otherwise swallow a backend outage to an empty list with no
-        signal.
+        signal. ``dashboard_yaml_excluded`` is the component search path's
+        deliberate YAML-mode exclusion (bodies can carry resolved
+        ``!secret`` values) — not a failure, but still unscanned content
+        the caller must not mistake for an exhaustive answer.
 
         Mirrors ``_apply_scene_partial_flag`` 's "looks complete when it
         isn't" coverage onto the automation/script/helper/dashboard paths —
@@ -1287,6 +1390,14 @@ class DeepSearchMixin(SceneSearchMixin):
                 f"{dashboard_failed} dashboard(s) not scanned (config or list "
                 "fetch failed) — their match status is unknown; this result is "
                 "not exhaustive."
+            )
+        if dashboard_yaml_excluded:
+            reasons.append(
+                f"{dashboard_yaml_excluded} YAML-mode dashboard(s) not scanned "
+                "(YAML dashboard bodies can carry resolved !secret values, so "
+                "the in-process dashboard search reads storage dashboards "
+                "only) — their match status is unknown; this result is not "
+                "exhaustive."
             )
         if not reasons:
             return

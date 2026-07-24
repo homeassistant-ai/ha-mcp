@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections import Counter
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -25,7 +25,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import tools_search
+from ha_mcp.tools import tools_config_dashboards, tools_search
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import register_search_tools
 from ha_mcp.visibility import resolver
@@ -873,6 +873,78 @@ class TestDashboardSearchTypesGate:
         # The legacy pipeline served both surfaces.
         assert client.get_states_calls >= 1
         assert client.ws_types["lovelace/dashboards/list"] == 1
+
+    @pytest.mark.asyncio
+    async def test_dashboard_search_served_by_component_dashboards_frame(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """With the ``dashboards`` capability the whole dashboard search is
+        served in-process — one ``search`` + one ``list`` frame, zero legacy
+        ``lovelace/*`` round-trips — while the ``ha_mcp_tools/search``
+        command (which has no dashboard surface) still never runs."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        caps = {
+            "schema_version": 1,
+            "component_version": "1.2.0",
+            "capabilities": ["search", "dashboards"],
+            "limits": {},
+        }
+
+        async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+            if command_type == "ha_mcp_tools/info":
+                return {"success": True, "result": caps}
+            if command_type == "ha_mcp_tools/dashboards":
+                if kwargs.get("mode") == "search":
+                    return {
+                        "success": True,
+                        "result": {
+                            "mode": "search",
+                            "available": True,
+                            "matches": [
+                                {
+                                    "url_path": "energy",
+                                    "title": "Energy",
+                                    "card_path": "views[0].cards[0]",
+                                }
+                            ],
+                            "truncated": False,
+                        },
+                    }
+                return {
+                    "success": True,
+                    "result": {
+                        "mode": "list",
+                        "available": True,
+                        "dashboards": [{"url_path": "energy", "mode": "storage"}],
+                    },
+                }
+            raise AssertionError(f"unexpected command {command_type!r}")
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(side_effect=_send)
+        client = RoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with (
+            patch_ws(ws, tools_search),
+            patch.object(
+                tools_config_dashboards,
+                "get_websocket_client",
+                AsyncMock(return_value=ws),
+            ),
+        ):
+            resp = await ha_search(query="energy", search_types=["dashboard"])
+
+        assert resp["success"] is True
+        assert resp["dashboards"][0]["dashboard_url"] == "energy"
+        assert not resp.get("partial")
+        assert resp.get("warnings", []) == []
+        # Zero legacy lovelace round-trips.
+        assert client.ws_types.get("lovelace/dashboards/list", 0) == 0
+        assert client.ws_types.get("lovelace/config", 0) == 0
+        sent = [c.args[0] for c in ws.send_command.call_args_list]
+        assert "ha_mcp_tools/search" not in sent
+        assert sent.count("ha_mcp_tools/dashboards") == 2
 
     @pytest.mark.asyncio
     async def test_dashboard_search_with_config_not_found_not_partial(
