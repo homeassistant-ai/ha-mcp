@@ -22,6 +22,8 @@ reach it (see the marker rationale in ``pyproject.toml``). The component path
 is backend-identical, so the container run covers it.
 """
 
+import json
+
 import pytest
 
 from ha_mcp.visibility import resolver
@@ -459,11 +461,15 @@ async def test_visibility_enforce_conceals_and_refuses_across_tools(
         )
         assert tmpl.get("error", {}).get("code") == "ENTITY_VISIBILITY_ENFORCED"
 
-        # Collection read still omits it (unchanged from the soft filter).
+        # Collection read still omits it (unchanged from the soft filter) — and
+        # not just from the entity results: the config-body branch must OMIT the
+        # probe helper too (the enforce scrub, see _deep.py), or the enforcement
+        # middleware's outbound scan would refuse this whole search on contact.
         searched = parse_mcp_result(
             await mcp_client.call_tool("ha_search", {"query": probe_query, "limit": 10})
         )
         assert probe_id not in _entity_ids(searched)
+        assert probe_id not in json.dumps(searched)
 
         # A service call naming the denied entity is concealed (inbound scan runs
         # before the service, so nothing is toggled).
@@ -489,6 +495,10 @@ async def test_visibility_enforce_conceals_and_refuses_across_tools(
         assert parse_mcp_result(got_again).get("data", {}).get("entity_id") == probe_id
 
     finally:
+        # Drop enforce BEFORE cleanup: if an assertion above failed while
+        # enforce was still on, the helper removal would be refused by the
+        # outbound scan and its ToolError would MASK the real test failure.
+        save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
         await mcp_client.call_tool(
             "ha_remove_helpers_integrations",
             {"helper_type": "input_boolean", "target": probe_query, "confirm": True},

@@ -66,6 +66,7 @@ _CACHE_TTL_SECONDS = 30.0
 # Tools whose output cannot be text-scanned for a hidden entity_id.
 _SCREENSHOT_TOOL = "ha_get_dashboard_screenshot"
 _DASHBOARD_TOOL = "ha_config_get_dashboard"
+_DASHBOARD_SET_TOOL = "ha_config_set_dashboard"
 _CUSTOM_TOOL = "ha_manage_custom_tool"
 
 _SANDBOX_REASON = (
@@ -112,9 +113,9 @@ def _raise_enforced(tool_name: str, reason: str) -> NoReturn:
             f"server. {reason} No data was returned.",
             suggestions=[
                 "The entity is restricted by the entity visibility filter's enforce "
-                "mode; do not retry the same request.",
+                + "mode; do not retry the same request.",
                 "If the user wants this data, they must adjust or turn off enforce "
-                "mode in the ha-mcp settings UI (Entity Visibility tab).",
+                + "mode in the ha-mcp settings UI (Entity Visibility tab).",
             ],
             context={"tool_name": tool_name, "visibility_enforced": True},
         )
@@ -220,6 +221,11 @@ def _unscannable_reason(name: str, args: dict[str, Any]) -> str | None:
     if name == _SCREENSHOT_TOOL:
         return _SCREENSHOT_REASON.format(name=name)
     if name == _DASHBOARD_TOOL and args.get("include_screenshot"):
+        return _SCREENSHOT_REASON.format(name=name)
+    # The dashboard WRITE tool shares the same native-image capture path via
+    # return_screenshot: a benign edit to a dashboard that references a hidden
+    # entity would hand back that entity rendered in pixels.
+    if name == _DASHBOARD_SET_TOOL and args.get("return_screenshot"):
         return _SCREENSHOT_REASON.format(name=name)
     if name == _CUSTOM_TOOL and (args.get("code") or args.get("run_saved")):
         return _SANDBOX_REASON.format(name=name)
@@ -405,7 +411,11 @@ class VisibilityEnforcementMiddleware(Middleware):
             try:
                 hidden = await self._refresh_hidden_set(config)
             except Exception:
-                if self._cached_hidden is not None:
+                # Last-known-good is only valid for the SAME config key: a set
+                # computed under a different denylist/allowlist is a different
+                # policy, and reusing it would let entities the NEW config hides
+                # pass until HA recovers. Changed key + failed refresh = closed.
+                if self._cached_hidden is not None and self._cache_key == key:
                     logger.warning(
                         "visibility enforce: hidden-set refresh failed; using "
                         "last-known-good set",
@@ -414,7 +424,7 @@ class VisibilityEnforcementMiddleware(Middleware):
                     return self._cached_hidden, self._cached_regex
                 logger.warning(
                     "visibility enforce: hidden-set refresh failed with no "
-                    "last-known-good; failing closed",
+                    "last-known-good for this config; failing closed",
                     exc_info=True,
                 )
                 raise VisibilityDataUnavailable("hidden set unavailable") from None
@@ -446,7 +456,82 @@ class VisibilityEnforcementMiddleware(Middleware):
             if isinstance(item, BaseException):
                 raise VisibilityDataUnavailable("registry/state fetch failed") from item
         device_result = fetched[2] if need_device else None
+        if need_device and not (
+            isinstance(device_result, dict)
+            and device_result.get("success")
+            and isinstance(device_result.get("result"), list)
+        ):
+            # The resolver's device parser fails open to empty maps even under
+            # strict (the search path relies on that), so a device-registry
+            # payload an active area/label dimension NEEDS must be validated
+            # here: an entity restricted only via its device's area/labels
+            # would otherwise silently drop out of the hidden set.
+            raise VisibilityDataUnavailable("device registry unusable")
         hidden, _warnings = await load_hidden_set(
             fetched[1], fetched[0], client, device_result, strict=True
         )
         return hidden
+
+
+# The installed middleware instance, published by server wiring. Read-side
+# surfaces that must OMIT records rather than have the whole call refused —
+# ha_search's config-body branch — reach the SAME TTL-cached hidden set through
+# this seam, so tool-side scrubs and the middleware always share one view.
+_active_enforcer: VisibilityEnforcementMiddleware | None = None
+
+
+def register_active_enforcer(
+    middleware: VisibilityEnforcementMiddleware | None,
+) -> None:
+    """Publish the installed enforcement middleware for in-tool scrubs."""
+    global _active_enforcer
+    _active_enforcer = middleware
+
+
+async def active_hidden_regex() -> re.Pattern[str] | None:
+    """Return the hidden-set regex while enforce mode is active, else ``None``.
+
+    Collection-read surfaces (the ha_search config-body branch) call this to
+    OMIT records referencing a hidden entity before the response reaches the
+    middleware's outbound scan — which would otherwise refuse the whole call on
+    contact, turning the issue-#2015 "collection reads omit" contract into a
+    wholesale refusal. Shares the middleware's TTL cache. Fail-soft to ``None``
+    on any load/data error: the fail-closed policy is owned by the middleware's
+    own call gates (which already ran for the request in flight), not by this
+    best-effort scrub seam.
+    """
+    middleware = _active_enforcer
+    if middleware is None:
+        return None
+    try:
+        config = await middleware._load_config()
+        if not (
+            config.enabled
+            and config.enforce
+            and config_has_active_hide_dimensions(config)
+        ):
+            return None
+        _hidden, regex = await middleware._hidden_and_regex(config)
+    except Exception:
+        return None
+    return regex
+
+
+def scrub_records(
+    records: list[dict[str, Any]], regex: re.Pattern[str]
+) -> list[dict[str, Any]]:
+    """Drop records whose serialized form references a hidden entity.
+
+    The omit-not-refuse counterpart to the outbound scan, for collection reads.
+    A record that cannot be serialized is scanned via ``str()`` so it can never
+    dodge the scrub by being unserializable.
+    """
+    kept: list[dict[str, Any]] = []
+    for record in records:
+        try:
+            blob = json.dumps(record, default=str)
+        except (TypeError, ValueError):
+            blob = str(record)
+        if not regex.search(blob):
+            kept.append(record)
+    return kept

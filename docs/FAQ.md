@@ -435,6 +435,10 @@ least one active hide dimension. What it covers:
   also means a bulk read that co-lists one hidden entity is refused as a whole
   — retry without the hidden id to read the rest.
 - **Collection reads omit** hidden entities, exactly as they do without enforce.
+  In enforce mode this extends to `ha_search`'s configuration-body matches: an
+  automation, script, scene, helper, or dashboard record that references a
+  hidden entity is omitted from the config results (in the default soft mode
+  such records still appear — that is the documented soft-filter behavior).
 - **Content reads are refused on contact.** A dashboard config, template result,
   automation/script body, trace, log, or file read whose output would surface a
   hidden entity_id is refused with a generic `ENTITY_VISIBILITY_ENFORCED` error
