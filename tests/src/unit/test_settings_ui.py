@@ -4501,20 +4501,21 @@ class TestFsCustomPathsEndpoints:
         # #1996: a structured ToolError (e.g. the File & YAML Tools entry is
         # not set up) must surface its human message plus the actionable first
         # suggestion — not a "could not reach" prefix wrapping a raw JSON blob.
+        # The payload is built via create_error_response so the test exercises
+        # the REAL serialization: a single suggestion lands under the singular
+        # "suggestion" key only (the plural list needs two or more).
         from fastmcp.exceptions import ToolError
 
         import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.errors import ErrorCode, create_error_response
         from ha_mcp.settings_ui import build_settings_handlers
 
         payload = json.dumps(
-            {
-                "success": False,
-                "error": {
-                    "code": "COMPONENT_NOT_INSTALLED",
-                    "message": "The optional entry is not set up.",
-                    "suggestions": ["Press Add entry to add it."],
-                },
-            }
+            create_error_response(
+                ErrorCode.COMPONENT_NOT_INSTALLED,
+                "The optional entry is not set up.",
+                suggestions=["Press Add entry to add it."],
+            )
         )
 
         monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
@@ -4533,6 +4534,61 @@ class TestFsCustomPathsEndpoints:
             == "The optional entry is not set up. Press Add entry to add it."
         )
         assert "Could not reach" not in body["reason"]
+
+    @pytest.mark.asyncio
+    async def test_get_falls_back_on_json_that_is_not_an_envelope(self, monkeypatch):
+        # A ToolError whose string parses as JSON but is not the structured
+        # error envelope must NOT be embedded bare — the generic prefix applies.
+        from fastmcp.exceptions import ToolError
+
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+
+        async def boom(client, service, data):
+            raise ToolError("[1, 2]")
+
+        monkeypatch.setattr(tf, "call_mcp_tools_service", boom)
+        handlers = build_settings_handlers(server=MagicMock())
+        resp = await handlers["get_fs_custom_paths"](MagicMock())
+        body = json.loads(resp.body)
+        assert body["available"] is False
+        assert body["reason"].startswith("Could not reach the ha_mcp_tools component:")
+
+    @pytest.mark.asyncio
+    async def test_save_surfaces_structured_tool_error_message(self, monkeypatch):
+        # The save path carries the same extraction: a user fixing custom paths
+        # while the entry is missing hits POST, not GET (#1996).
+        from fastmcp.exceptions import ToolError
+
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.errors import ErrorCode, create_error_response
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        payload = json.dumps(
+            create_error_response(
+                ErrorCode.COMPONENT_NOT_INSTALLED,
+                "The optional entry is not set up.",
+                suggestions=["Press Add entry to add it.", "Then retry."],
+            )
+        )
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+
+        async def boom(client, service, data):
+            raise ToolError(payload)
+
+        monkeypatch.setattr(tf, "call_mcp_tools_service", boom)
+        handlers = build_settings_handlers(server=MagicMock())
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"paths": ["pyscript"]})
+        resp = await handlers["save_fs_custom_paths"](req)
+        assert resp.status_code == 502
+        body = json.loads(resp.body)
+        message = body["error"]["message"]
+        assert message == "The optional entry is not set up. Press Add entry to add it."
+        assert "Could not reach" not in message
 
     @pytest.mark.asyncio
     async def test_save_disabled_returns_409(self, monkeypatch):

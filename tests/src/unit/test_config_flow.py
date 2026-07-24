@@ -501,6 +501,33 @@ class TestServerOptionsFlow:
         assert "not loaded" in versions
         assert "enable or reload" in versions
 
+    def test_tools_module_hint_mixed_entry_states_reads_installed(self, monkeypatch):
+        # With several tools entries, one loaded entry is enough for Installed
+        # (the any() semantics) — the unloaded sibling must not downgrade it.
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        flow.hass = self._hass_with_entries(
+            [
+                SimpleNamespace(
+                    data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS},
+                    state=cf.ConfigEntryState.NOT_LOADED,
+                ),
+                SimpleNamespace(
+                    data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS},
+                    state=cf.ConfigEntryState.LOADED,
+                ),
+            ]
+        )
+        form = asyncio.run(flow.async_step_init(None))
+        versions = form["description_placeholders"]["versions"]
+        assert "tools module (optional): Installed" in versions
+        assert "not loaded" not in versions
+
     def test_tools_module_hint_read_error_drops_line(self, monkeypatch):
         # Failure-proof like the sibling hints: a raising entry-registry read
         # drops the status line rather than breaking the options form.

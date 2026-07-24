@@ -12,6 +12,7 @@ the client and handler fetch/restore coroutines.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -2010,32 +2011,48 @@ class TestLegacyList:
         monkeypatch.setattr(
             "ha_mcp.tools.tools_filesystem.call_mcp_tools_service", boom
         )
-        assert await bm._list_legacy_backups(_StubClient()) == []
+        backups, reason = await bm._list_legacy_backups(_StubClient())
+        assert backups == []
+        assert reason == "service not found"
 
     async def test_tool_error_from_token_gates_degrades_to_empty(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # The caller-token gates (tools entry not set up / component too old)
-        # raise ToolError, not HomeAssistantError — the edits list must still
-        # degrade to [] instead of failing wholesale (#1996 exercise path).
+        # raise ToolError, not HomeAssistantError — both the edits list and the
+        # legacy read must still degrade instead of failing wholesale, and the
+        # surfaced reason must be the human message, not the raw JSON envelope
+        # (#1996 exercise path).
         from fastmcp.exceptions import ToolError
 
+        from ha_mcp.errors import ErrorCode, create_error_response
+
+        payload = json.dumps(
+            create_error_response(
+                ErrorCode.COMPONENT_NOT_INSTALLED,
+                "Entry not set up.",
+                suggestions=["Add the entry."],
+            )
+        )
+
         async def boom(_c: Any, _s: str, _d: dict[str, Any]) -> Any:
-            raise ToolError('{"success": false, "error": {"code": "X"}}')
+            raise ToolError(payload)
 
         monkeypatch.setattr(
             "ha_mcp.tools.tools_filesystem.call_mcp_tools_service", boom
         )
-        assert await bm._list_legacy_backups(_StubClient()) == []
-        assert (await bm._read_legacy_backup(_StubClient(), "x.bak"))[
-            "success"
-        ] is False
+        backups, reason = await bm._list_legacy_backups(_StubClient())
+        assert backups == []
+        assert reason == "Entry not set up. Add the entry."
+        read = await bm._read_legacy_backup(_StubClient(), "x.bak")
+        assert read["success"] is False
+        assert read["error"] == "Entry not set up. Add the entry."
 
     async def test_unsuccessful_response_degrades_to_empty(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _patch_services(monkeypatch, {"list_legacy_backups": {"success": False}}, [])
-        assert await bm._list_legacy_backups(_StubClient()) == []
+        assert await bm._list_legacy_backups(_StubClient()) == ([], None)
 
     async def test_manager_normalizes_entries(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2059,7 +2076,8 @@ class TestLegacyList:
             [],
         )
         mgr = _mk_manager(tmp_path)
-        out = await mgr.list_legacy()
+        out, reason = await mgr.list_legacy()
+        assert reason is None
         assert out[0]["name"] == "legacy:configuration.yaml.20260101_120000.bak"
         assert out[0]["domain"] == "yaml_file"
         assert out[0]["source"] == "legacy"
@@ -2296,13 +2314,15 @@ class TestListEditsAndLegacy:
             lambda **_kw: [{"name": "file.x.20260101_000000.yaml", "domain": "file"}],
         )
 
-        async def _legacy() -> list[Any]:
-            return [{"name": "legacy:configuration.yaml.20200101_000000.bak"}]
+        async def _legacy() -> tuple[list[Any], str | None]:
+            return [{"name": "legacy:configuration.yaml.20200101_000000.bak"}], None
 
         monkeypatch.setattr(mgr, "list_legacy", _legacy)
-        names = [e["name"] for e in await mgr.list_edits_and_legacy()]
+        entries, warnings = await mgr.list_edits_and_legacy()
+        names = [e["name"] for e in entries]
         assert "file.x.20260101_000000.yaml" in names
         assert "legacy:configuration.yaml.20200101_000000.bak" in names
+        assert warnings == []
 
     async def test_legacy_skipped_when_filtered(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2310,18 +2330,18 @@ class TestListEditsAndLegacy:
         mgr = _mk_manager(tmp_path)
         monkeypatch.setattr(mgr, "list_snapshots", lambda **_kw: [])
 
-        async def _legacy() -> list[Any]:
-            return [{"name": "legacy:x.bak"}]
+        async def _legacy() -> tuple[list[Any], str | None]:
+            return [{"name": "legacy:x.bak"}], None
 
         monkeypatch.setattr(mgr, "list_legacy", _legacy)
         # A non-yaml_file domain filter excludes legacy (legacy maps to yaml_file).
-        assert await mgr.list_edits_and_legacy(domain="automation") == []
+        assert await mgr.list_edits_and_legacy(domain="automation") == ([], [])
         # An entity_id filter excludes legacy (decoded path != sanitized filter).
-        assert await mgr.list_edits_and_legacy(entity_id="foo") == []
+        assert await mgr.list_edits_and_legacy(entity_id="foo") == ([], [])
         # Unfiltered (or explicit yaml_file) surfaces it.
-        out = await mgr.list_edits_and_legacy()
+        out, _ = await mgr.list_edits_and_legacy()
         assert any(e["name"] == "legacy:x.bak" for e in out)
-        out2 = await mgr.list_edits_and_legacy(domain="yaml_file")
+        out2, _ = await mgr.list_edits_and_legacy(domain="yaml_file")
         assert any(e["name"] == "legacy:x.bak" for e in out2)
 
     async def test_limit_reserves_room_for_legacy(
@@ -2337,12 +2357,56 @@ class TestListEditsAndLegacy:
 
         monkeypatch.setattr(mgr, "list_snapshots", _snaps)
 
-        async def _legacy() -> list[Any]:
-            return [{"name": "legacy:a.bak"}, {"name": "legacy:b.bak"}]
+        async def _legacy() -> tuple[list[Any], str | None]:
+            return [{"name": "legacy:a.bak"}, {"name": "legacy:b.bak"}], None
 
         monkeypatch.setattr(mgr, "list_legacy", _legacy)
-        out = await mgr.list_edits_and_legacy(limit=4)
+        out, _ = await mgr.list_edits_and_legacy(limit=4)
         assert len(out) == 4
         names = {e["name"] for e in out}
         # Legacy survives the cap (room reserved): 2 edits + 2 legacy.
         assert "legacy:a.bak" in names and "legacy:b.bak" in names
+
+    async def test_suppressed_legacy_fetch_surfaces_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # When the legacy sub-fetch is unavailable (tools entry not set up /
+        # component too old), the merged list must carry a warning instead of
+        # reading as a clean, complete listing (#1996).
+        mgr = _mk_manager(tmp_path)
+        monkeypatch.setattr(mgr, "list_snapshots", lambda **_kw: [])
+
+        async def _legacy() -> tuple[list[Any], str | None]:
+            return [], "Entry not set up. Add the entry."
+
+        monkeypatch.setattr(mgr, "list_legacy", _legacy)
+        entries, warnings = await mgr.list_edits_and_legacy()
+        assert entries == []
+        assert len(warnings) == 1
+        assert "omitted" in warnings[0]
+        assert "Entry not set up. Add the entry." in warnings[0]
+
+    async def test_warnings_reach_the_tool_response(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Top-level warnings contract (AGENTS.md Return Values): present when
+        # the legacy fetch was suppressed, omitted entirely when clean.
+        from ha_mcp.tools.backup import _edits_list
+
+        mgr = _mk_manager(tmp_path)
+        monkeypatch.setattr(mgr, "list_snapshots", lambda **_kw: [])
+
+        async def _legacy_down() -> tuple[list[Any], str | None]:
+            return [], "Entry not set up."
+
+        monkeypatch.setattr(mgr, "list_legacy", _legacy_down)
+        out = await _edits_list(mgr, _StubSettings(), None, None, 50)
+        assert out["success"] is True
+        assert "Entry not set up." in out["warnings"][0]
+
+        async def _legacy_ok() -> tuple[list[Any], str | None]:
+            return [], None
+
+        monkeypatch.setattr(mgr, "list_legacy", _legacy_ok)
+        out = await _edits_list(mgr, _StubSettings(), None, None, 50)
+        assert "warnings" not in out

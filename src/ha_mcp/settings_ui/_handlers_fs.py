@@ -11,7 +11,6 @@ into thin request-only wrappers for the route table.
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -27,35 +26,17 @@ logger = logging.getLogger(__name__)
 
 
 def _component_error_reason(exc: Exception) -> str | None:
-    """Extract the human-readable message from a structured ``ToolError``.
+    """Extract the human message from a structured ``ToolError``, else None.
 
     ``raise_tool_error`` serializes the whole error envelope into the
     exception string, so rendering ``str(exc)`` verbatim shows the settings
     UI a raw JSON blob behind a misleading "could not reach" prefix — the
-    hard-to-read surface from #1996. Returns the message plus the first
-    suggestion (which carries the actionable step), or None for anything
-    that is not a structured error payload.
+    hard-to-read surface from #1996. Thin seam over the shared extractor
+    (imported lazily like the other tools imports in this module).
     """
-    try:
-        payload = json.loads(str(exc))
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    error = payload.get("error")
-    if not isinstance(error, dict):
-        return None
-    message = error.get("message")
-    if not isinstance(message, str) or not message:
-        return None
-    suggestions = error.get("suggestions")
-    if (
-        isinstance(suggestions, list)
-        and suggestions
-        and isinstance(suggestions[0], str)
-    ):
-        return f"{message} {suggestions[0]}"
-    return message
+    from ..tools.helpers import extract_structured_error_reason
+
+    return extract_structured_error_reason(exc)
 
 
 async def _fs_custom_paths_call(

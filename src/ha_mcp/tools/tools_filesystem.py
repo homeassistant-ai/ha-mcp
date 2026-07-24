@@ -137,8 +137,8 @@ async def _bootstrap_service_state(client: Any) -> tuple[bool, bool]:
       (<0.5.0) component that pre-dates the bootstrap service; the call would
       otherwise fail with an opaque 400 from HA. This one IS fixed by updating.
     """
-    # HA /api/services returns a list of {"domain": str, "services": {...}} objects.
-    # This format has been stable since before HA 0.7 (the first public release).
+    # HA /api/services returns a list of {"domain": str, "services": {...}}
+    # objects — stable across all supported HA versions.
     services = await client.get_services()
     for entry in services:
         if not isinstance(entry, dict):
