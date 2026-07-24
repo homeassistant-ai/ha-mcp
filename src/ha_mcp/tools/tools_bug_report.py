@@ -556,6 +556,49 @@ async def _fetch_core_error_log(client: Any) -> str:
     return sanitized
 
 
+def _format_tools_entry_value(diagnostic_info: dict[str, Any]) -> str:
+    """Render the File & YAML Tools entry status for the report templates."""
+    return diagnostic_info.get("tools_entry_status") or "unknown (probe failed)"
+
+
+def _format_server_entry_value(diagnostic_info: dict[str, Any]) -> str:
+    """Render the in-process server entry status for the report templates."""
+    return diagnostic_info.get("server_entry_status") or "unknown (probe failed)"
+
+
+# Entry titles assigned by the component's config flow (config_flow.py /
+# const.py in custom_components/ha_mcp_tools) — the server code cannot import
+# the separately-shipped component package, so the defaults are mirrored here.
+# "HA MCP Tools" is the pre-#1853 tools-entry title an unloaded legacy entry
+# may still carry. A user-renamed entry lands in the "unrecognized" bucket
+# rather than being misclassified.
+_SERVER_ENTRY_TITLE = "HA-MCP Server"
+_TOOLS_ENTRY_TITLES = frozenset({"HA-MCP File & YAML Tools", "HA MCP Tools"})
+
+
+def _classify_component_entries(
+    entries: list[Any],
+) -> tuple[list[str], list[str]]:
+    """Split ha_mcp_tools config entries into server-entry and unrecognized.
+
+    Tools-entry titles are dropped: their functional state comes from the
+    services probe (``_detect_tools_entry_status``), which sees whether the
+    entry actually serves, not just whether it exists.
+    """
+    server: list[str] = []
+    unrecognized: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "untitled")
+        state = str(entry.get("state") or "unknown state")
+        if title == _SERVER_ENTRY_TITLE:
+            server.append(f"added ({state})")
+        elif title not in _TOOLS_ENTRY_TITLES:
+            unrecognized.append(f'"{title}" ({state})')
+    return server, unrecognized
+
+
 def _build_formatted_report(
     diagnostic_info: dict[str, Any],
     mcp_transport: str,
@@ -574,6 +617,8 @@ def _build_formatted_report(
         "",
         f"ha-mcp Version: {_format_version_value(diagnostic_info)}",
         f"Custom Component: {diagnostic_info.get('component_version') or 'not detected (not installed, or probe failed)'}",
+        f"File & YAML Tools entry: {_format_tools_entry_value(diagnostic_info)}",
+        f"In-process Server entry: {_format_server_entry_value(diagnostic_info)}",
         f"Installation Method: {diagnostic_info['installation_method']}",
         f"MCP Transport: {mcp_transport}",
         f"MCP Client: {_format_client_info_for_template(client_info)}",
@@ -648,6 +693,70 @@ class BugReportTools:
         except Exception as e:
             logger.info("Component version probe failed: %s", e)
             return None
+
+    async def _detect_tools_entry_status(self) -> str | None:
+        """Describe the File & YAML Tools entry state for the report, best-effort.
+
+        The ``ha_mcp_tools`` services register only in that entry's setup, so
+        the service registry distinguishes "entry set up" from the #1996
+        state — integration installed but the second entry never added —
+        which the component version alone cannot show. Returns None when the
+        probe fails; the report path must never break on it.
+        """
+        from .tools_filesystem import _bootstrap_service_state
+
+        try:
+            domain_registered, bootstrap_registered = await _bootstrap_service_state(
+                self._client
+            )
+        except Exception as e:
+            logger.info("Tools-entry status probe failed: %s", e)
+            return None
+        if not domain_registered:
+            return (
+                "not set up — no ha_mcp_tools services registered; add the "
+                '"HA-MCP File & YAML Tools" entry via "Add entry" on the '
+                "HA-MCP Custom Component integration (or install the "
+                "component first)"
+            )
+        if not bootstrap_registered:
+            return "set up, but the component is pre-0.5.0 (update via HACS)"
+        return "set up (ha_mcp_tools services registered)"
+
+    async def _detect_server_entry_status(self) -> str | None:
+        """Describe the in-process "HA-MCP Server" entry state, best-effort.
+
+        Both parts of the custom component ship under the single
+        ``ha_mcp_tools`` domain, so "the component is installed" says nothing
+        about WHICH part is set up. The File & YAML tools part is covered by
+        the services probe; this one classifies the domain's config entries by
+        their flow-assigned titles to show whether the in-process server entry
+        exists — e.g. an add-on install that erroneously also added it (a
+        second, redundant server) becomes visible next to Installation Method.
+        Returns None when the probe fails; the report must never break on it.
+        """
+        try:
+            response = await self._client.send_websocket_message(
+                {"type": "config_entries/get", "domain": "ha_mcp_tools"}
+            )
+            if not isinstance(response, dict) or not response.get("success"):
+                return None
+            result = response.get("result")
+            if not isinstance(result, list):
+                return None
+        except Exception as e:
+            logger.info("Server-entry status probe failed: %s", e)
+            return None
+        server, unrecognized = _classify_component_entries(result)
+        if server:
+            return ", ".join(server)
+        if unrecognized:
+            # A renamed entry cannot be classified by title — report it
+            # rather than claiming the server entry is absent.
+            return "not identified — unrecognized ha_mcp_tools entries: " + ", ".join(
+                unrecognized
+            )
+        return "not added"
 
     @tool(
         name="ha_report_issue",
@@ -760,6 +869,8 @@ class BugReportTools:
         client_info = _extract_client_info(ctx)
         installed_version = await asyncio.to_thread(_detect_installed_version)
         component_version = await self._detect_component_version()
+        tools_entry_status = await self._detect_tools_entry_status()
+        server_entry_status = await self._detect_server_entry_status()
 
         diagnostic_info: dict[str, Any] = {
             "ha_mcp_version": __version__,
@@ -768,6 +879,8 @@ class BugReportTools:
                 installed_version and installed_version != __version__
             ),
             "component_version": component_version,
+            "tools_entry_status": tools_entry_status,
+            "server_entry_status": server_entry_status,
             "instance": _instance_identity(),
             "installation_method": install_method,
             "platform": platform_info,
@@ -1278,6 +1391,8 @@ ha_call_service(domain="light", service="turn_on", entity_id="light.example")
 
 - **ha-mcp Version:** {_format_version_value(diagnostic_info)}
 - **Custom Component:** {diagnostic_info.get("component_version") or "not detected (not installed, or probe failed)"}
+- **File & YAML Tools entry:** {_format_tools_entry_value(diagnostic_info)}
+- **In-process Server entry:** {_format_server_entry_value(diagnostic_info)}
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
@@ -1443,6 +1558,8 @@ def _generate_agent_behavior_template(
 
 - **ha-mcp Version:** {_format_version_value(diagnostic_info)}
 - **Custom Component:** {diagnostic_info.get("component_version") or "not detected (not installed, or probe failed)"}
+- **File & YAML Tools entry:** {_format_tools_entry_value(diagnostic_info)}
+- **In-process Server entry:** {_format_server_entry_value(diagnostic_info)}
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_

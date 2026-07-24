@@ -168,6 +168,192 @@ class TestBugReportTool:
         assert "KEEP AS-IS" in anon_guide
 
     @pytest.mark.asyncio
+    async def test_tools_entry_status_not_set_up(
+        self, ha_report_issue_func, mock_client
+    ):
+        """No ha_mcp_tools services → the report flags the missing File & YAML
+        Tools entry with the Add-entry pointer instead of conflating it with
+        "component not installed" (#1996)."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.get_services = AsyncMock(
+            return_value=[{"domain": "light", "services": {"turn_on": {}}}]
+        )
+
+        result = await ha_report_issue_func()
+
+        status = result["diagnostic_info"]["tools_entry_status"]
+        assert "not set up" in status
+        assert "Add entry" in status
+        report = result["formatted_report"]
+        assert "File & YAML Tools entry: not set up" in report
+        assert "File & YAML Tools entry:" in result["runtime_bug_template"]
+
+    @pytest.mark.asyncio
+    async def test_tools_entry_status_set_up(self, ha_report_issue_func, mock_client):
+        """ha_mcp_tools services present (incl. get_caller_token) → the report
+        shows the entry as set up."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.get_services = AsyncMock(
+            return_value=[
+                {
+                    "domain": "ha_mcp_tools",
+                    "services": {"get_caller_token": {}, "list_files": {}},
+                }
+            ]
+        )
+
+        result = await ha_report_issue_func()
+
+        status = result["diagnostic_info"]["tools_entry_status"]
+        assert status == "set up (ha_mcp_tools services registered)"
+        assert (
+            "File & YAML Tools entry: set up (ha_mcp_tools services registered)"
+            in result["formatted_report"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_tools_entry_status_pre_050_component(
+        self, ha_report_issue_func, mock_client
+    ):
+        """Domain services present but no get_caller_token → the report names
+        the pre-0.5.0 state distinctly from entry-not-set-up."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.get_services = AsyncMock(
+            return_value=[{"domain": "ha_mcp_tools", "services": {"list_files": {}}}]
+        )
+
+        result = await ha_report_issue_func()
+
+        status = result["diagnostic_info"]["tools_entry_status"]
+        assert status == "set up, but the component is pre-0.5.0 (update via HACS)"
+
+    @pytest.mark.asyncio
+    async def test_tools_entry_status_probe_failure_degrades(
+        self, ha_report_issue_func, mock_client
+    ):
+        """Failing probes must not break the report — the lines read unknown."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.get_services = AsyncMock(side_effect=RuntimeError("probe boom"))
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=RuntimeError("probe boom")
+        )
+
+        result = await ha_report_issue_func()
+
+        assert result["success"] is True
+        assert result["diagnostic_info"]["tools_entry_status"] is None
+        assert result["diagnostic_info"]["server_entry_status"] is None
+        assert (
+            "File & YAML Tools entry: unknown (probe failed)"
+            in (result["formatted_report"])
+        )
+        assert (
+            "In-process Server entry: unknown (probe failed)"
+            in (result["formatted_report"])
+        )
+
+    @pytest.mark.asyncio
+    async def test_server_entry_status_added(self, ha_report_issue_func, mock_client):
+        """The report names the in-process server entry distinctly — so e.g.
+        an add-on install that also (erroneously) added the "HA-MCP Server"
+        entry shows both parts of the component next to Installation Method."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"entry_id": "a1", "title": "HA-MCP Server", "state": "loaded"},
+                    {
+                        "entry_id": "b2",
+                        "title": "HA-MCP File & YAML Tools",
+                        "state": "loaded",
+                    },
+                ],
+            }
+        )
+
+        result = await ha_report_issue_func()
+
+        assert result["diagnostic_info"]["server_entry_status"] == "added (loaded)"
+        assert "In-process Server entry: added (loaded)" in result["formatted_report"]
+        assert "In-process Server entry:" in result["runtime_bug_template"]
+
+    @pytest.mark.asyncio
+    async def test_server_entry_status_not_added(
+        self, ha_report_issue_func, mock_client
+    ):
+        """Only tools entries exist (current or pre-#1853 legacy title) → the
+        server entry reads not added (the tools entry's own state comes from
+        the services probe, not here)."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {
+                        "entry_id": "b2",
+                        "title": "HA-MCP File & YAML Tools",
+                        "state": "loaded",
+                    },
+                    {"entry_id": "c3", "title": "HA MCP Tools", "state": "not_loaded"},
+                ],
+            }
+        )
+
+        result = await ha_report_issue_func()
+
+        assert result["diagnostic_info"]["server_entry_status"] == "not added"
+        assert "In-process Server entry: not added" in result["formatted_report"]
+
+    @pytest.mark.asyncio
+    async def test_server_entry_status_unknown_on_ws_rejection(
+        self, ha_report_issue_func, mock_client
+    ):
+        """A rejected config_entries/get (success False) degrades to unknown."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "nope"}
+        )
+
+        result = await ha_report_issue_func()
+
+        assert result["diagnostic_info"]["server_entry_status"] is None
+        assert (
+            "In-process Server entry: unknown (probe failed)"
+            in result["formatted_report"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_server_entry_status_renamed_entry_reported_unrecognized(
+        self, ha_report_issue_func, mock_client
+    ):
+        """A user-renamed entry cannot be classified by title — the report
+        lists it as unrecognized instead of wrongly claiming not added."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"entry_id": "a1", "title": "My Renamed Entry", "state": "loaded"}
+                ],
+            }
+        )
+
+        result = await ha_report_issue_func()
+
+        status = result["diagnostic_info"]["server_entry_status"]
+        assert status.startswith("not identified — unrecognized")
+        assert '"My Renamed Entry" (loaded)' in status
+
+    @pytest.mark.asyncio
     async def test_bug_report_connection_error(self, registered_tools, mock_client):
         """Test bug report when connection fails."""
         # Setup mock to raise exception

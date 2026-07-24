@@ -122,11 +122,23 @@ def _get_token_lock(client: Any) -> asyncio.Lock:
     return lock
 
 
-async def _is_bootstrap_service_registered(client: Any) -> bool:
-    """Returns True if ha_mcp_tools.get_caller_token is present in HA's
-    service registry. Old (<0.5.0) versions of the custom component
-    didn't ship this service; the bootstrap call would otherwise fail
-    with an opaque 400 from HA."""
+async def _bootstrap_service_state(client: Any) -> tuple[bool, bool]:
+    """Return ``(domain_registered, bootstrap_registered)`` from HA's service
+    registry.
+
+    The two flags distinguish the two very different ways the
+    ``get_caller_token`` bootstrap can be missing (#1996):
+
+    - No ``ha_mcp_tools`` services at all — the component's "HA-MCP File &
+      YAML Tools" config entry was never added (the services register only in
+      that entry's setup), or the component isn't installed. A HACS update
+      cannot fix this.
+    - Domain services present but no ``get_caller_token`` — a genuinely old
+      (<0.5.0) component that pre-dates the bootstrap service; the call would
+      otherwise fail with an opaque 400 from HA. This one IS fixed by updating.
+    """
+    # HA /api/services returns a list of {"domain": str, "services": {...}}
+    # objects — stable across all supported HA versions.
     services = await client.get_services()
     for entry in services:
         if not isinstance(entry, dict):
@@ -134,8 +146,42 @@ async def _is_bootstrap_service_registered(client: Any) -> bool:
         if entry.get("domain") != MCP_TOOLS_DOMAIN:
             continue
         domain_services = entry.get("services") or {}
-        return CALLER_TOKEN_BOOTSTRAP_SERVICE in domain_services
-    return False
+        return True, CALLER_TOKEN_BOOTSTRAP_SERVICE in domain_services
+    return False, False
+
+
+def _raise_tools_entry_not_set_up() -> NoReturn:
+    """Actionable error for the no-services state (#1996).
+
+    Installing the HA-MCP integration is not enough for the file / YAML
+    tools: they need the separate "HA-MCP File & YAML Tools" config entry,
+    which users routinely miss. Lead with the "Add entry" step; the full
+    HACS install is the fallback for a component that isn't there at all.
+    """
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.COMPONENT_NOT_INSTALLED,
+            'The optional "HA-MCP File & YAML Tools" entry is not set up in '
+            "Home Assistant, so the file and YAML tools are unavailable. "
+            "Installing the HA-MCP integration alone is not enough — this "
+            "second entry must be added to it.",
+            suggestions=[
+                "In Home Assistant: Settings → Devices & Services → "
+                + 'HA-MCP Custom Component → "Add entry" → choose '
+                + '"HA-MCP File & YAML Tools" (NOT '
+                + '"HA-MCP Server", which starts a second in-process server '
+                + "this ha-mcp server does not need)",
+                "If the HA-MCP integration is not listed there, install it "
+                + 'first: ha_manage_hacs(action="add_repository", '
+                + 'repository="homeassistant-ai/ha-mcp-integration", '
+                + 'category="integration"), then ha_manage_hacs('
+                + 'action="download", '
+                + 'repository_id="homeassistant-ai/ha-mcp-integration"), '
+                + "then restart Home Assistant (ha_restart)",
+                "Then retry the operation",
+            ],
+        )
+    )
 
 
 def _raise_component_too_old(detail: str) -> NoReturn:
@@ -158,12 +204,17 @@ def _raise_component_too_old(detail: str) -> NoReturn:
 async def _fetch_caller_token(client: Any) -> str:
     """Call the bootstrap service and cache the returned token.
 
-    Two version gates:
+    Three gates, pre-flighted via ``_bootstrap_service_state``:
 
-    1. ``_is_bootstrap_service_registered`` — pre-0.5.0 components don't
-       ship ``get_caller_token`` at all. Surface an actionable "update"
+    1. No ``ha_mcp_tools`` services registered at all — the "HA-MCP File &
+       YAML Tools" config entry was never added (or the component isn't
+       installed). Surface the "add the entry" error, NOT an update prompt:
+       a current component in this state misled users into fruitless HACS
+       updates when the old code lumped it in with "too old" (#1996).
+    2. Domain present but no ``get_caller_token`` — pre-0.5.0 components
+       don't ship the bootstrap service. Surface an actionable "update"
        error instead of letting HA return an opaque 400 to the caller.
-    2. ``MIN_COMPONENT_VERSION`` — even when the bootstrap service is
+    3. ``MIN_COMPONENT_VERSION`` — even when the bootstrap service is
        present, the response now carries the component's manifest
        version. ha-mcp releases that depend on newer custom-component
        behavior (e.g. a new accepted yaml_path key, a new schema field)
@@ -176,7 +227,10 @@ async def _fetch_caller_token(client: Any) -> str:
     reason: the absence of the field IS the signal that the component
     doesn't yet know how to report its capabilities to ha-mcp.
     """
-    if not await _is_bootstrap_service_registered(client):
+    domain_registered, bootstrap_registered = await _bootstrap_service_state(client)
+    if not domain_registered:
+        _raise_tools_entry_not_set_up()
+    if not bootstrap_registered:
         _raise_component_too_old(
             "the get_caller_token bootstrap service is not registered (pre-0.5.0)"
         )
@@ -312,17 +366,16 @@ def is_filesystem_tools_enabled() -> bool:
 
 
 async def _is_mcp_tools_available(client: Any) -> bool:
-    """Return True if the ha_mcp_tools custom component is registered in HA services.
+    """Return True if any ha_mcp_tools services are registered in HA.
 
-    Raises if the services API call fails — callers handle API errors via
-    their own exception_to_structured_error blocks.
+    No services means the File & YAML Tools entry is not set up (or the
+    component is absent entirely — indistinguishable from here, see
+    ``_bootstrap_service_state``). Raises if the services API call fails —
+    callers handle API errors via their own exception_to_structured_error
+    blocks.
     """
-    # HA /api/services returns a list of {"domain": str, "services": {...}} objects.
-    # This format has been stable since before HA 0.7 (the first public release).
-    services = await client.get_services()
-    return any(
-        isinstance(s, dict) and s.get("domain") == MCP_TOOLS_DOMAIN for s in services
-    )
+    domain_registered, _ = await _bootstrap_service_state(client)
+    return domain_registered
 
 
 def _assert_caps_version_ok(caps: ComponentCaps) -> None:
@@ -352,7 +405,10 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     ``caps.component_version`` (info shipped in 1.1.0, already past the floor).
     Legacy fallback: caps is None for a component in the 0.11.0-1.1.0 band
     (services, no info command) or an absent one, so fall back to the per-call
-    ``get_services()`` existence probe.
+    ``get_services()`` existence probe. A no-services verdict raises the
+    "File & YAML Tools entry not set up" error
+    (``_raise_tools_entry_not_set_up``), not an install-the-component prompt —
+    the entry-not-added state is the common cause (#1996).
 
     Must be called within a try block that handles API errors via
     exception_to_structured_error, so connection failures are classified
@@ -365,22 +421,7 @@ async def _assert_mcp_tools_available(client: Any) -> None:
         _assert_caps_version_ok(caps)
         return
     if not await _is_mcp_tools_available(client):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.COMPONENT_NOT_INSTALLED,
-                f"The {MCP_TOOLS_DOMAIN} custom component is not installed.",
-                suggestions=[
-                    'Add the repository to HACS: ha_manage_hacs(action="add_repository",'
-                    + ' repository="homeassistant-ai/ha-mcp-integration", category="integration")',
-                    'Download the component: ha_manage_hacs(action="download",'
-                    + ' repository_id="homeassistant-ai/ha-mcp-integration")',
-                    "Restart Home Assistant (ha_restart) so the integration loads",
-                    'In HA, add the "HA-MCP Custom Component" integration and choose the'
-                    + ' "HA-MCP File & YAML Tools" entry — NOT "HA-MCP Server", which starts'
-                    + " a second in-process server this ha-mcp server does not need",
-                ],
-            )
-        )
+        _raise_tools_entry_not_set_up()
 
 
 class FilesystemTools:
