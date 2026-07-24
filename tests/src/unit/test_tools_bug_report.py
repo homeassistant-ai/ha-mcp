@@ -214,14 +214,33 @@ class TestBugReportTool:
         )
 
     @pytest.mark.asyncio
+    async def test_tools_entry_status_pre_050_component(
+        self, ha_report_issue_func, mock_client
+    ):
+        """Domain services present but no get_caller_token → the report names
+        the pre-0.5.0 state distinctly from entry-not-set-up."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.get_services = AsyncMock(
+            return_value=[{"domain": "ha_mcp_tools", "services": {"list_files": {}}}]
+        )
+
+        result = await ha_report_issue_func()
+
+        status = result["diagnostic_info"]["tools_entry_status"]
+        assert status == "set up, but the component is pre-0.5.0 (update via HACS)"
+
+    @pytest.mark.asyncio
     async def test_tools_entry_status_probe_failure_degrades(
         self, ha_report_issue_func, mock_client
     ):
-        """Failing probes must not break the report — the lines read unknown.
-        (The fixture's MagicMock get_services / send_websocket_message are not
-        awaitable, which is exactly a probe failure.)"""
+        """Failing probes must not break the report — the lines read unknown."""
         mock_client.get_config.return_value = {"version": "2024.12.0"}
         mock_client.get_states.return_value = []
+        mock_client.get_services = AsyncMock(side_effect=RuntimeError("probe boom"))
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=RuntimeError("probe boom")
+        )
 
         result = await ha_report_issue_func()
 
@@ -268,8 +287,9 @@ class TestBugReportTool:
     async def test_server_entry_status_not_added(
         self, ha_report_issue_func, mock_client
     ):
-        """Only the tools entry exists → the server entry reads not added
-        (the tools entry's own state comes from the services probe, not here)."""
+        """Only tools entries exist (current or pre-#1853 legacy title) → the
+        server entry reads not added (the tools entry's own state comes from
+        the services probe, not here)."""
         mock_client.get_config.return_value = {"version": "2024.12.0"}
         mock_client.get_states.return_value = []
         mock_client.send_websocket_message = AsyncMock(
@@ -280,7 +300,8 @@ class TestBugReportTool:
                         "entry_id": "b2",
                         "title": "HA-MCP File & YAML Tools",
                         "state": "loaded",
-                    }
+                    },
+                    {"entry_id": "c3", "title": "HA MCP Tools", "state": "not_loaded"},
                 ],
             }
         )
@@ -289,6 +310,25 @@ class TestBugReportTool:
 
         assert result["diagnostic_info"]["server_entry_status"] == "not added"
         assert "In-process Server entry: not added" in result["formatted_report"]
+
+    @pytest.mark.asyncio
+    async def test_server_entry_status_unknown_on_ws_rejection(
+        self, ha_report_issue_func, mock_client
+    ):
+        """A rejected config_entries/get (success False) degrades to unknown."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "nope"}
+        )
+
+        result = await ha_report_issue_func()
+
+        assert result["diagnostic_info"]["server_entry_status"] is None
+        assert (
+            "In-process Server entry: unknown (probe failed)"
+            in result["formatted_report"]
+        )
 
     @pytest.mark.asyncio
     async def test_server_entry_status_renamed_entry_reported_unrecognized(

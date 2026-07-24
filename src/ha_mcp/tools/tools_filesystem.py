@@ -366,10 +366,13 @@ def is_filesystem_tools_enabled() -> bool:
 
 
 async def _is_mcp_tools_available(client: Any) -> bool:
-    """Return True if the ha_mcp_tools custom component is registered in HA services.
+    """Return True if any ha_mcp_tools services are registered in HA.
 
-    Raises if the services API call fails — callers handle API errors via
-    their own exception_to_structured_error blocks.
+    No services means the File & YAML Tools entry is not set up (or the
+    component is absent entirely — indistinguishable from here, see
+    ``_bootstrap_service_state``). Raises if the services API call fails —
+    callers handle API errors via their own exception_to_structured_error
+    blocks.
     """
     domain_registered, _ = await _bootstrap_service_state(client)
     return domain_registered
@@ -402,7 +405,10 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     ``caps.component_version`` (info shipped in 1.1.0, already past the floor).
     Legacy fallback: caps is None for a component in the 0.11.0-1.1.0 band
     (services, no info command) or an absent one, so fall back to the per-call
-    ``get_services()`` existence probe.
+    ``get_services()`` existence probe. A no-services verdict raises the
+    "File & YAML Tools entry not set up" error
+    (``_raise_tools_entry_not_set_up``), not an install-the-component prompt —
+    the entry-not-added state is the common cause (#1996).
 
     Must be called within a try block that handles API errors via
     exception_to_structured_error, so connection failures are classified

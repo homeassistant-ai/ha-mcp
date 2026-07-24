@@ -2242,6 +2242,7 @@ async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
         # The human reason, not str(err) verbatim: a ToolError's string is
         # the whole JSON envelope, which would reach the tool layer as an
         # unreadable JSON-in-JSON message (#1996's original symptom).
+        logger.debug("legacy backup read unavailable: %s", err)
         return {
             "success": False,
             "error": extract_structured_error_reason(err) or str(err),
