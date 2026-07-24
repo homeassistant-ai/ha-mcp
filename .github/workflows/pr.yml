@@ -27,6 +27,51 @@ jobs:
   # DO matter and always count as code. On non-PR events (manual dispatch)
   # always run. Consumed by e2e-validation's `if:` below — a job-level skip
   # reports Success to a required check (a workflow path-skip would not).
+  # PR-time guard for the release-cycle version invariant (AGENTS.md "Version
+  # bumps ride the stable release cycle"): a PR that changes the component
+  # while the manifest version EQUALS the mirror's latest stable release would
+  # merge changes onto an already-shipped version — the mirror's stable tag
+  # step skips existing tags and v<VER>-dev.N pre-release tags sort BELOW the
+  # equal stable tag, so the changes would silently reach nobody. Level with
+  # stable means: bump once to open the pending version. The gate fires only
+  # on a provable component diff and fails open (with a warning) when the base
+  # or the mirror API cannot be read — the mirror sync's stable tag step
+  # carries the loud release-time backstop for what this check cannot see
+  # (stable shipping while the PR sits idle re-runs no PR checks).
+  component-version-gate:
+    name: Component Version Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fail component changes riding an already-released version
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! git fetch --depth=1 origin "$BASE_REF" \
+            || ! base_sha=$(git rev-parse "origin/$BASE_REF"); then
+            echo "::warning::could not resolve the base ref - skipping the version gate (the release-time backstop still applies)"
+            exit 0
+          fi
+          if git diff --quiet "$base_sha" HEAD -- custom_components/ha_mcp_tools; then
+            echo "no component changes - gate not applicable"
+            exit 0
+          fi
+          VER=$(python3 -c "import json; print(json.load(open('custom_components/ha_mcp_tools/manifest.json'))['version'])")
+          if ! latest=$(gh api repos/homeassistant-ai/ha-mcp-integration/releases/latest --jq .tag_name); then
+            echo "::warning::could not read the mirror's latest stable release - skipping the version gate (the release-time backstop still applies)"
+            exit 0
+          fi
+          stable="${latest#v}"
+          echo "component changed; manifest=${VER} released-stable=${stable}"
+          if [ "$VER" = "$stable" ]; then
+            echo "::error::This PR changes custom_components/ha_mcp_tools but keeps the component version at ${VER}, which is already released as the mirror's latest stable - merged this way the changes never ship (the stable tag step skips existing tags; dev pre-release tags sort below the equal stable). Master is level with stable: bump manifest.json + const.py (and the parity-test literal) once to open the next pending version, per AGENTS.md 'Version bumps ride the stable release cycle'."
+            exit 1
+          fi
+          echo "version gate ok: pending ${VER} is ahead of released ${stable}"
+
   changes:
     name: Detect relevant changes
     runs-on: ubuntu-latest
