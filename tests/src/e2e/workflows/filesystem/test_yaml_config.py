@@ -1579,3 +1579,168 @@ class TestYamlConfirmFlow:
         assert not read.get("success", False), (
             f"wrong-token preview must not write the file: {read}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Extra YAML write keys configured via the component store (integration UI)
+# ---------------------------------------------------------------------------
+
+
+async def _bootstrap_caller_token(base_url: str) -> str:
+    """Fetch the caller token via the admin-gated bootstrap service.
+
+    Mirrors ``test_custom_paths.py``: the component services are driven
+    directly over HA REST with the admin token, exactly as the ha-mcp server
+    drives them.
+    """
+    import httpx
+
+    from tests.test_constants import TEST_TOKEN
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{base_url}/api/services/ha_mcp_tools/get_caller_token",
+            headers={
+                "Authorization": f"Bearer {TEST_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            params={"return_response": ""},
+            json={},
+        )
+    assert resp.status_code == 200, f"get_caller_token failed: {resp.text!r}"
+    service_response = resp.json().get("service_response", {})
+    assert service_response.get("success") is True, f"bootstrap failed: {resp.text!r}"
+    return service_response["token"]
+
+
+async def _set_extra_yaml_keys(base_url: str, token: str, keys: list[str]) -> dict:
+    """Call set_extra_yaml_keys with the admin token + caller token; return the
+    structured service response (``{success, keys, rejected}``)."""
+    import httpx
+
+    from tests.test_constants import TEST_TOKEN
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{base_url}/api/services/ha_mcp_tools/set_extra_yaml_keys",
+            headers={
+                "Authorization": f"Bearer {TEST_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            params={"return_response": ""},
+            json={"_ha_mcp_token": token, "keys": keys},
+        )
+    assert resp.status_code == 200, f"set_extra_yaml_keys failed: {resp.text!r}"
+    return resp.json().get("service_response", {})
+
+
+@pytest.mark.filesystem
+class TestExtraYamlKeysStorePathLive:
+    """The extra-key setting configured through the integration UI writes live.
+
+    The sibling ``test_extra_key_write_succeeds_against_real_component`` proves
+    the capability when the key is seeded via the ``HA_MCP_EXTRA_YAML_KEYS``
+    boot env. This class proves the other operator source (#1887): a key
+    configured only through the component's own store via the real
+    ``set_extra_yaml_keys`` service (the integration-UI path) with no env
+    seeding of that key. The server reads that store and unions it into the
+    write allowlist, so the write reaches the component. It also pins that the
+    deny floor is enforced on the store: a denylisted key pushed through the
+    service is dropped at save and still refused at the write.
+
+    Cross-lane (no backend marker): the store lives in the component (HA
+    process), so unlike the env-var path it is available in every backend,
+    including inaddon. Mirrors ``test_custom_paths.py`` for the REST-driven
+    service calls; the write goes through the MCP ``ha_config_set_yaml`` tool.
+    """
+
+    async def test_store_configured_key_writes_live(
+        self, mcp_client_with_yaml_config, ha_container_with_fresh_config
+    ):
+        """A key configured only via the store writes successfully (#1887).
+
+        ``alert2_store`` is not in ``ALLOWED_YAML_KEYS`` and is not the env-seeded
+        ``alert2``, so it reaches the write solely through the component store the
+        options flow writes. Without the store entry the same write would take the
+        generic allowlist rejection, so the success actually pins the store path.
+        """
+        base_url = ha_container_with_fresh_config["base_url"]
+        token = await _bootstrap_caller_token(base_url)
+        # Session-scoped container: delete the package in finally so it does not
+        # linger for later tests (parity with test_custom_paths.py).
+        fname = f"packages/_e2e_store_key_{uuid.uuid4().hex[:8]}.yaml"
+        try:
+            sr = await _set_extra_yaml_keys(base_url, token, ["alert2_store"])
+            assert sr.get("success") is True, sr
+            assert sr.get("keys") == ["alert2_store"], sr
+            assert not sr.get("rejected"), sr
+
+            async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+                data = await call_set_yaml_confirmed(
+                    mcp,
+                    {
+                        "yaml_path": "alert2_store",
+                        "action": "add",
+                        "content": "defaults: {}\n",
+                        "file": fname,
+                    },
+                )
+                assert data.get("success") is True, (
+                    f"store-configured extra key should write: {data}"
+                )
+                assert data.get("action") == "add"
+                # alert2_store has no reload service, so it defaults to restart.
+                assert data.get("post_action") == "restart_required", (
+                    f"alert2_store should default to restart_required: {data}"
+                )
+                logger.info("Store-configured extra key alert2_store wrote live")
+        finally:
+            await safe_call_tool(
+                mcp_client_with_yaml_config,
+                "ha_delete_file",
+                {"path": fname, "confirm": True},
+            )
+            await _set_extra_yaml_keys(base_url, token, [])
+
+    async def test_deny_floor_drops_store_key_and_blocks_write_live(
+        self, mcp_client_with_yaml_config, ha_container_with_fresh_config
+    ):
+        """A denylisted key pushed through the store is dropped and stays refused.
+
+        The store cannot widen the deny floor (#1887): ``set_extra_yaml_keys``
+        strips ``YAML_KEY_DENYLIST`` members on save (reporting them in
+        ``rejected``), and enforcement re-checks the floor first, so the write of
+        a denied key is refused live even after it was pushed through the service.
+        """
+        base_url = ha_container_with_fresh_config["base_url"]
+        token = await _bootstrap_caller_token(base_url)
+        try:
+            # Push a denylisted key alongside a valid one in a single set.
+            sr = await _set_extra_yaml_keys(
+                base_url, token, ["homeassistant", "alert2_store"]
+            )
+            assert "homeassistant" in sr.get("rejected", []), sr
+            assert "homeassistant" not in sr.get("keys", []), sr
+            assert sr.get("keys") == ["alert2_store"], sr
+
+            # Even after the attempt, the denied key takes the categorical floor
+            # message at the write, not the generic allowlist dump.
+            data = await safe_call_tool(
+                mcp_client_with_yaml_config,
+                TOOL_NAME,
+                {
+                    "yaml_path": "homeassistant",
+                    "action": "replace",
+                    "content": "name: Hacked",
+                    "file": "configuration.yaml",
+                },
+            )
+            assert data.get("success") is False, (
+                f"homeassistant must be refused: {data}"
+            )
+            message = extract_error_message(data).lower()
+            assert "can never be edited" in message, message
+            assert "cannot be lifted" in message, message
+            logger.info("Deny floor dropped the store key and blocked the write")
+        finally:
+            await _set_extra_yaml_keys(base_url, token, [])
