@@ -75,6 +75,11 @@ def mock_client():
             platform=None,
         )
     )
+    # On a registry miss the no-hash set path falls back to the state machine to
+    # tell an ``id``-less YAML scene (exists, shadow-creatable) from a genuine
+    # create (#1971). Default False = "not there", matching the create-shaped
+    # default above; the tests pinning the YAML arm override it.
+    client._scene_state_exists = AsyncMock(return_value=False)
     return client
 
 
@@ -2730,3 +2735,53 @@ class TestSceneNotStorageScene:
         assert "hue" in error["message"].lower()
         # The shadow-create is exactly what the pre-check prevents.
         mock_client.upsert_scene_config.assert_not_called()
+
+    async def test_set_scene_no_hash_idless_yaml_scene_maps_to_config_not_found(
+        self, tools, mock_client
+    ):
+        """#1971 P1, registry-miss arm: an ``id``-less YAML scene has no registry
+        unique_id, so ``registry_hit`` is False, yet it exists in the state
+        machine and a plain no-hash ``set`` would shadow-create over it. The state
+        check must open the same pre-check the registry hit does."""
+        # Fixture default already yields registry_hit=False; the scene is real.
+        mock_client._scene_state_exists = AsyncMock(return_value=True)
+        mock_client.get_scene_config = AsyncMock(
+            side_effect=SceneStorageConfigNotFoundError(
+                "movie_night", platform=None, storage_key="movie_night"
+            )
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="movie_night",
+                config={"name": "x", "entities": {"light.kitchen": {"state": "on"}}},
+                wait=False,
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "CONFIG_NOT_FOUND"
+        mock_client._scene_state_exists.assert_awaited_once_with("movie_night")
+        mock_client.upsert_scene_config.assert_not_called()
+
+    async def test_set_scene_no_hash_absent_scene_still_creates(
+        self, tools, mock_client
+    ):
+        """Contrast to the two arms above: a scene in neither the registry nor the
+        state machine is a genuine create, so the pre-check is skipped entirely
+        and the upsert runs unchanged (#1971 must not turn creates into errors)."""
+        mock_client._scene_state_exists = AsyncMock(return_value=False)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="brand_new_scene",
+            config={
+                "name": "Brand New",
+                "entities": {"light.kitchen": {"state": "on"}},
+            },
+            wait=False,
+        )
+
+        assert result["success"] is True
+        mock_client._scene_state_exists.assert_awaited_once_with("brand_new_scene")
+        # No pre-check read on the create path - that is the whole point of gating.
+        mock_client.get_scene_config.assert_not_called()
+        mock_client.upsert_scene_config.assert_called_once()

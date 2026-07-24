@@ -67,12 +67,13 @@ logger = logging.getLogger(__name__)
 def _raise_scene_not_storage_error(scene_id: str, platform: str | None) -> NoReturn:
     """Raise ``CONFIG_NOT_FOUND`` for a scene that exists but has no editable config.
 
-    The scene entity resolved in the registry, but ``config/scene/config/{id}`` -
-    backed only by the managed ``scenes.yaml`` - has no entry for it. That is the
-    not-a-storage-scene case (a Hue/vendor scene, or a scene defined directly in
-    YAML): the entity EXISTS, so ``ENTITY_NOT_FOUND`` would be wrong (issue #1971).
-    ``platform`` names the owning integration when the registry exposed it; the
-    message stays generic otherwise.
+    The scene entity was confirmed to exist - in the entity registry, or, for an
+    ``id``-less YAML scene that has no registry entry, in the state machine - but
+    ``config/scene/config/{id}``, backed only by the managed ``scenes.yaml``, has
+    no entry for it. That is the not-a-storage-scene case (a Hue/vendor scene, or
+    a scene defined directly in YAML): the entity EXISTS, so ``ENTITY_NOT_FOUND``
+    would be wrong (issue #1971). ``platform`` names the owning integration when
+    the registry exposed it; the message stays generic otherwise.
     """
     entity_id = f"scene.{scene_id.removeprefix('scene.')}"
     suggestions = [
@@ -1149,16 +1150,20 @@ class ConfigSceneTools:
         else:
             resolution = await self._client._resolve_scene(scene_id)
             resolved_id = resolution.storage_key
-            if resolution.registry_hit:
-                # The entity already exists, so this is an EDIT. Without a
-                # hash there is no prior read, and a POST to
-                # ``config/scene/config/<unique_id>`` for a Hue/vendor or
-                # raw-YAML scene would CREATE a brand-new managed
-                # ``scenes.yaml`` entry keyed by that id – a shadow
-                # duplicate – instead of erroring. Pre-check the config
-                # API: a 404 raises SceneStorageConfigNotFoundError, which
-                # the outer handler maps to CONFIG_NOT_FOUND. A registry
-                # miss (registry_hit False) stays a normal create, unchanged.
+            # If the scene already exists this is an EDIT, and without a hash
+            # there is no prior read: a POST to ``config/scene/config/<key>``
+            # for a Hue/vendor or YAML scene would CREATE a duplicate managed
+            # ``scenes.yaml`` entry instead of erroring. Pre-check the config
+            # API first – its 404 raises SceneStorageConfigNotFoundError, which
+            # the outer handler maps to CONFIG_NOT_FOUND.
+            #
+            # Existence takes both signals: an ``id``-less YAML scene has no
+            # registry unique_id yet still holds a state-machine entity, and
+            # shadow-creates just the same. Only a scene missing from both is a
+            # real create, at the price of one extra ``/states/`` GET there.
+            if resolution.registry_hit or await self._client._scene_state_exists(
+                resolved_id
+            ):
                 await self._client.get_scene_config(scene_id, resolution=resolution)
 
         # Cross-check literal service and entity references against the

@@ -1034,6 +1034,12 @@ E2E_YAML_PACKAGE_SCENE_ENTITY_ID = (
 E2E_YAML_PACKAGE_SCENE_UID = (
     "e2e_yaml_scene_1971_storage_uid"  # declared id / storage key
 )
+# Sibling scene declaring NO ``id``. HA core makes ``id`` optional and maps it
+# straight to the entity's unique_id (homeassistant/components/homeassistant/
+# scene.py: ``unique_id`` -> ``scene_config.id``), so this one gets no registry
+# entry at all while still living in the state machine under its name slug -
+# the registry-MISS arm of the same not-storage-scene case.
+E2E_YAML_PACKAGE_SCENE_IDLESS_ENTITY_ID = "e2e_yaml_scene_1971_idless"
 
 
 def _seed_yaml_package_scene(config_path: Path) -> None:
@@ -1059,6 +1065,12 @@ def _seed_yaml_package_scene(config_path: Path) -> None:
     e2e. That makes the test pin the registry-hit path, not just the state-check
     fallback.
 
+    A second scene in the same package declares NO ``id``. It therefore has no
+    registry entry at all (registry MISS) yet still exists in the state machine,
+    which is the other arm the classification has to cover: on the read path via
+    the state check, and on the no-hash write path so a plain ``set`` cannot
+    shadow-create over it either.
+
     The filename must NOT start with an underscore: ``!include_dir_named`` uses
     the file stem as the package name, and ``PACKAGES_CONFIG_SCHEMA`` validates
     each package name with ``cv.slug``, which rejects a leading underscore
@@ -1071,6 +1083,10 @@ def _seed_yaml_package_scene(config_path: Path) -> None:
         "scene:\n"
         f"  - id: {E2E_YAML_PACKAGE_SCENE_UID}\n"
         "    name: E2E YAML Scene 1971\n"
+        "    entities:\n"
+        "      light.bed_light:\n"
+        '        state: "on"\n'
+        "  - name: E2E YAML Scene 1971 Idless\n"
         "    entities:\n"
         "      light.bed_light:\n"
         '        state: "on"\n'
