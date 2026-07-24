@@ -168,6 +168,71 @@ class TestBugReportTool:
         assert "KEEP AS-IS" in anon_guide
 
     @pytest.mark.asyncio
+    async def test_tools_entry_status_not_set_up(
+        self, ha_report_issue_func, mock_client
+    ):
+        """No ha_mcp_tools services → the report flags the missing File & YAML
+        Tools entry with the Add-entry pointer instead of conflating it with
+        "component not installed" (#1996)."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.get_services = AsyncMock(
+            return_value=[{"domain": "light", "services": {"turn_on": {}}}]
+        )
+
+        result = await ha_report_issue_func()
+
+        status = result["diagnostic_info"]["tools_entry_status"]
+        assert "not set up" in status
+        assert "Add entry" in status
+        report = result["formatted_report"]
+        assert "File & YAML Tools entry: not set up" in report
+        assert "File & YAML Tools entry:" in result["runtime_bug_template"]
+
+    @pytest.mark.asyncio
+    async def test_tools_entry_status_set_up(self, ha_report_issue_func, mock_client):
+        """ha_mcp_tools services present (incl. get_caller_token) → the report
+        shows the entry as set up."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.get_services = AsyncMock(
+            return_value=[
+                {
+                    "domain": "ha_mcp_tools",
+                    "services": {"get_caller_token": {}, "list_files": {}},
+                }
+            ]
+        )
+
+        result = await ha_report_issue_func()
+
+        status = result["diagnostic_info"]["tools_entry_status"]
+        assert status == "set up (ha_mcp_tools services registered)"
+        assert (
+            "File & YAML Tools entry: set up (ha_mcp_tools services registered)"
+            in result["formatted_report"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_tools_entry_status_probe_failure_degrades(
+        self, ha_report_issue_func, mock_client
+    ):
+        """A failing services probe must not break the report — the line reads
+        unknown. (The fixture's MagicMock get_services is not awaitable, which
+        is exactly a probe failure.)"""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        result = await ha_report_issue_func()
+
+        assert result["success"] is True
+        assert result["diagnostic_info"]["tools_entry_status"] is None
+        assert (
+            "File & YAML Tools entry: unknown (probe failed)"
+            in (result["formatted_report"])
+        )
+
+    @pytest.mark.asyncio
     async def test_bug_report_connection_error(self, registered_tools, mock_client):
         """Test bug report when connection fails."""
         # Setup mock to raise exception

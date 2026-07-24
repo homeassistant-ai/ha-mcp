@@ -556,6 +556,11 @@ async def _fetch_core_error_log(client: Any) -> str:
     return sanitized
 
 
+def _format_tools_entry_value(diagnostic_info: dict[str, Any]) -> str:
+    """Render the File & YAML Tools entry status for the report templates."""
+    return diagnostic_info.get("tools_entry_status") or "unknown (probe failed)"
+
+
 def _build_formatted_report(
     diagnostic_info: dict[str, Any],
     mcp_transport: str,
@@ -574,6 +579,7 @@ def _build_formatted_report(
         "",
         f"ha-mcp Version: {_format_version_value(diagnostic_info)}",
         f"Custom Component: {diagnostic_info.get('component_version') or 'not detected (not installed, or probe failed)'}",
+        f"File & YAML Tools entry: {_format_tools_entry_value(diagnostic_info)}",
         f"Installation Method: {diagnostic_info['installation_method']}",
         f"MCP Transport: {mcp_transport}",
         f"MCP Client: {_format_client_info_for_template(client_info)}",
@@ -648,6 +654,35 @@ class BugReportTools:
         except Exception as e:
             logger.info("Component version probe failed: %s", e)
             return None
+
+    async def _detect_tools_entry_status(self) -> str | None:
+        """Describe the File & YAML Tools entry state for the report, best-effort.
+
+        The ``ha_mcp_tools`` services register only in that entry's setup, so
+        the service registry distinguishes "entry set up" from the #1996
+        state — integration installed but the second entry never added —
+        which the component version alone cannot show. Returns None when the
+        probe fails; the report path must never break on it.
+        """
+        from .tools_filesystem import _bootstrap_service_state
+
+        try:
+            domain_registered, bootstrap_registered = await _bootstrap_service_state(
+                self._client
+            )
+        except Exception as e:
+            logger.info("Tools-entry status probe failed: %s", e)
+            return None
+        if not domain_registered:
+            return (
+                "not set up — no ha_mcp_tools services registered; add the "
+                '"HA-MCP File & YAML Tools" entry via "Add entry" on the '
+                "HA-MCP Custom Component integration (or install the "
+                "component first)"
+            )
+        if not bootstrap_registered:
+            return "set up, but the component is pre-0.5.0 (update via HACS)"
+        return "set up (ha_mcp_tools services registered)"
 
     @tool(
         name="ha_report_issue",
@@ -729,6 +764,7 @@ class BugReportTools:
         client_info = _extract_client_info(ctx)
         installed_version = await asyncio.to_thread(_detect_installed_version)
         component_version = await self._detect_component_version()
+        tools_entry_status = await self._detect_tools_entry_status()
 
         diagnostic_info: dict[str, Any] = {
             "ha_mcp_version": __version__,
@@ -737,6 +773,7 @@ class BugReportTools:
                 installed_version and installed_version != __version__
             ),
             "component_version": component_version,
+            "tools_entry_status": tools_entry_status,
             "instance": _instance_identity(),
             "installation_method": install_method,
             "platform": platform_info,
@@ -1246,6 +1283,7 @@ ha_call_service(domain="light", service="turn_on", entity_id="light.example")
 
 - **ha-mcp Version:** {_format_version_value(diagnostic_info)}
 - **Custom Component:** {diagnostic_info.get("component_version") or "not detected (not installed, or probe failed)"}
+- **File & YAML Tools entry:** {_format_tools_entry_value(diagnostic_info)}
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
@@ -1411,6 +1449,7 @@ def _generate_agent_behavior_template(
 
 - **ha-mcp Version:** {_format_version_value(diagnostic_info)}
 - **Custom Component:** {diagnostic_info.get("component_version") or "not detected (not installed, or probe failed)"}
+- **File & YAML Tools entry:** {_format_tools_entry_value(diagnostic_info)}
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
