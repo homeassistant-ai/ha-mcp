@@ -1814,8 +1814,6 @@ class TestMandatoryGate:
 
     @staticmethod
     def _error_code(exc: ToolError) -> str:
-        import json
-
         return str(json.loads(str(exc))["error"]["code"])
 
     async def test_refuses_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
