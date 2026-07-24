@@ -929,10 +929,10 @@ def _component_serves_search_types(req: _ResolvedSearch) -> bool:
     Only an explicit ``search_types`` list can name an unsupported surface, and
     only the body-eligible branch forwards it to the component — a
     body-ineligible request sends the entity surface alone, which the component
-    always accepts. Routing is all-or-nothing per command (design § 4), so one
-    unsupported surface sends the whole request to the legacy path, silently —
-    the same treatment as the other route-ineligible modes, not the
-    warning-emitting failure fallback.
+    always accepts. Routing is all-or-nothing per command, so one unsupported
+    surface sends the whole request to the legacy path, silently — the same
+    treatment as the other route-ineligible modes, not the warning-emitting
+    failure fallback.
     """
     if not req.body_eligible or req.parsed_search_types is None:
         return True

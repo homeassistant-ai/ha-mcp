@@ -30,6 +30,8 @@ entity-id KEYS of ``states`` (here ``light.contractmarker_lamp``).
 from __future__ import annotations
 
 from ha_mcp.tools.tools_search import (
+    _COMPONENT_BODY_SEARCH_TYPES,
+    _VALID_SEARCH_TYPES,
     _ResolvedSearch,
     _shape_component_search_response,
 )
@@ -423,3 +425,21 @@ def test_envelope_matches_legacy_keys(monkeypatch) -> None:
         "next_offset",
     ):
         assert key in shaped, f"envelope key missing: {key}"
+
+
+def test_component_body_search_types_lockstep() -> None:
+    """The routing gate's allowlist tracks the REAL component schema and the
+    public ``search_types`` vocabulary (issue #2008 drift guard).
+
+    The route-ineligible legacy fallback is deliberately silent, so a
+    ``search_types`` value that is server-valid but neither component-served
+    nor named here would reproduce #2008's schema bounce with no warning left
+    to catch it. Growing either vocabulary must fail this pin and force a
+    conscious routing decision.
+    """
+    # The gate's allowlist is exactly the component's search surfaces minus
+    # the entity surface (appended separately by the request builder).
+    assert set(wsapi.ALL_SEARCH_TYPES) - {"entity"} == _COMPONENT_BODY_SEARCH_TYPES
+    # Every public search_types value is either component-served or on the
+    # deliberate legacy-only list.
+    assert {"dashboard"} == _VALID_SEARCH_TYPES - _COMPONENT_BODY_SEARCH_TYPES

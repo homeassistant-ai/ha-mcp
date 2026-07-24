@@ -9,6 +9,7 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 from ...client.rest_client import HomeAssistantAPIError
+from ...errors import get_error_code, get_error_message
 from ..config_entry_flow import FLOW_HELPER_TYPES
 from ..helpers import exception_to_structured_error, safe_info, safe_progress
 from ..tools_config_dashboards import fetch_dashboards_list
@@ -31,21 +32,38 @@ from ._scenes import SceneSearchMixin
 logger = logging.getLogger(__name__)
 
 
-def _is_config_not_found(resp: dict[str, Any]) -> bool:
-    """True when a failed ``lovelace/config`` envelope carries HA's
-    ``config_not_found`` code — the dashboard has no stored config (an
-    auto-generated dashboard that was never taken control of), which is a
-    clean no-match for a config scan rather than a backend failure
-    (issue #2008).
+# The ``lovelace/config`` messages meaning "this dashboard has no stored
+# config" — bare (nested error shape) and as ``send_websocket_message``'s
+# flat envelope prefixes it. Mirrors ``dashboard_screenshot/paths.py``.
+_NO_STORED_CONFIG_MESSAGES = frozenset(
+    {"No config found.", "Command failed: No config found."}
+)
 
-    ``send_websocket_message`` surfaces the structured code top-level
-    (``error_code``); a raw HA result frame nests it (``error.code``) —
-    accept both shapes.
+
+def _is_no_stored_config(resp: dict[str, Any]) -> bool:
+    """True when a failed ``lovelace/config`` envelope means the dashboard
+    has no stored config — an auto-generated dashboard that was never taken
+    control of — which is a clean no-match for a config scan rather than a
+    backend failure (issue #2008).
+
+    HA reports the ``config_not_found`` code for two distinct causes
+    (``homeassistant/components/lovelace/websocket.py``, ``_handle_errors``):
+    no stored config ("No config found.") and an unresolvable url_path
+    ("Unknown config specified: ..."), e.g. a dashboard deleted between the
+    registry-list snapshot and this fetch. Only the former is a clean skip,
+    so the message is matched too; the latter stays a counted failure.
+
+    ``send_websocket_message`` normalizes command failures to a flat envelope
+    (code top-level as ``error_code``, message as the ``error`` string); the
+    nested ``error.code``/``error.message`` shape is accepted defensively via
+    the canonical :func:`get_error_code` / :func:`get_error_message`
+    extractors, matching ``dashboard_screenshot/paths.py``'s detection of the
+    same HA error.
     """
-    if resp.get("error_code") == "config_not_found":
-        return True
-    error = resp.get("error")
-    return isinstance(error, dict) and error.get("code") == "config_not_found"
+    code = resp.get("error_code") or get_error_code(resp)
+    if code != "config_not_found":
+        return False
+    return get_error_message(resp) in _NO_STORED_CONFIG_MESSAGES
 
 
 class DeepSearchMixin(SceneSearchMixin):
@@ -904,11 +922,14 @@ class DeepSearchMixin(SceneSearchMixin):
         ``ha_search(search_types=["dashboard"])`` report ``partial`` instead
         of a complete-looking empty result.
 
-        ``config_not_found`` is the deliberate exception: an auto-generated
-        dashboard (strategy-backed, never taken control of) has no stored
-        config, so there is nothing to scan and the envelope reads as a clean
-        no-match. Counting it as failed made every dashboard search on a
-        stock install report ``partial`` (issue #2008).
+        The no-stored-config envelope (``config_not_found`` + "No config
+        found.", see :func:`_is_no_stored_config`) is the deliberate
+        exception: an auto-generated dashboard (strategy-backed, never taken
+        control of) has nothing to scan, so it reads as a clean no-match.
+        Counting it as failed made every dashboard search on a stock install
+        report ``partial`` (issue #2008). The code's other cause — "Unknown
+        config specified", a dashboard deleted since the registry-list
+        snapshot — stays a counted failure.
         """
         async with semaphore:
             try:
@@ -929,7 +950,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 # shape explicitly (``success is False``) so a missing-success
                 # raw response still falls through to the ``result`` fallback.
                 if isinstance(resp, dict) and resp.get("success") is False:
-                    if _is_config_not_found(resp):
+                    if _is_no_stored_config(resp):
                         logger.debug(
                             f"Dashboard has no stored config ({url_path}); "
                             "auto-generated — nothing to scan"

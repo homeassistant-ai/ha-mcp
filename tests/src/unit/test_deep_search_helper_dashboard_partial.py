@@ -136,11 +136,34 @@ class TestDashboardFailure:
         assert matches == []
         assert failed is False
 
+    async def test_one_dashboard_unknown_config_still_signals_failed(self) -> None:
+        """``config_not_found`` with the "Unknown config specified" message
+        is HA's OTHER cause for the same code — the url_path no longer
+        resolves (dashboard deleted between the registry-list snapshot and
+        this fetch). That is a genuine scan gap and must stay ``failed=True``;
+        only the no-stored-config form is a clean skip."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: Unknown config specified: gone-dash",
+                "error_code": "config_not_found",
+            }
+        )
+        tools = _make_tools(client)
+        matches, failed = await tools._search_one_dashboard(
+            "gone-dash", "Gone", "x", True, asyncio.Semaphore(4)
+        )
+        assert matches == []
+        assert failed is True
+
     async def test_one_dashboard_nested_config_not_found_is_clean_no_match(
         self,
     ) -> None:
-        """The raw HA result-frame shape nests the code (``error.code``) —
-        accepted alongside the client envelope's top-level ``error_code``."""
+        """The nested ``error.code``/``error.message`` shape is accepted
+        defensively alongside the client envelope's flat form (the flat shape
+        is the only one ``send_websocket_message`` emits today; the nested
+        check mirrors ``dashboard_screenshot/paths.py``'s detection)."""
         client = MagicMock()
         client.send_websocket_message = AsyncMock(
             return_value={
