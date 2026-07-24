@@ -1274,13 +1274,20 @@ def _search_entities(
     """Score every state against the query over the joined registry view."""
     results: list[dict[str, Any]] = []
     area_filter_lower = area_filter.lower() if area_filter else None
+    # Lower the state filter once; the entity state is lowered per record so the
+    # compare is case-insensitive (e.g. an input_select holding "Vacation"
+    # matches state_filter="vacation").
+    state_filter_lower = state_filter.lower() if state_filter is not None else None
     for state in _iter_states(hass):
         rec = _entity_record(state, view)
         if domain_filter and rec["domain"] != domain_filter:
             continue
         if rec["_hidden"] and not include_hidden:
             continue
-        if state_filter is not None and rec["state"] != state_filter:
+        if (
+            state_filter_lower is not None
+            and (rec["state"] or "").lower() != state_filter_lower
+        ):
             continue
         if area_filter_lower is not None and not _entity_matches_area(
             rec, area_filter_lower

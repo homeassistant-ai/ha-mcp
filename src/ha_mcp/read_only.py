@@ -143,14 +143,6 @@ def _updates_write(args: dict[str, Any]) -> str | None:
     return f"action={action!r}"
 
 
-def _dashboard_get_write(args: dict[str, Any]) -> str | None:
-    """Allow config/list/search reads; fail closed on a screenshot render."""
-    include_screenshot = args.get("include_screenshot")
-    if include_screenshot is None or include_screenshot is False:
-        return None
-    return "dashboard screenshot render (Puppet persists theme/dark preferences)"
-
-
 def _radio_write(args: dict[str, Any]) -> str | None:
     action = args.get("action")
     # Reads (allowed): per-node diagnostics, the integration/network summary,
@@ -191,10 +183,6 @@ def _radio_write(args: dict[str, Any]) -> str | None:
 # against the real registered catalog at PR time, so the two sets
 # cannot drift apart silently.
 READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
-    "ha_config_get_dashboard": ReadOnlyExemption(
-        _dashboard_get_write,
-        "dashboard config, list, and search reads with include_screenshot=false",
-    ),
     "ha_manage_backup": ReadOnlyExemption(
         _backup_write,
         "listing, viewing, and diffing per-edit backups (scope='edits', "

@@ -98,6 +98,28 @@ def test_locale_normalization_and_priority(tmp_path: Path) -> None:
     assert select_locale(accept_language="de-DE", catalogs=catalogs) == "en"
 
 
+def test_zh_cn_region_normalizes_to_zh_hans(tmp_path: Path) -> None:
+    _write_catalog(tmp_path, "en", native_name="English", messages={})
+    _write_catalog(
+        tmp_path,
+        "zh-Hans",
+        native_name="简体中文",
+        messages={"greeting": "你好"},
+    )
+    catalogs = load_catalogs(tmp_path)
+
+    assert normalize_locale("zh-CN", catalogs) == "zh-hans"
+    assert normalize_locale("zh-SG", catalogs) == "zh-hans"
+    assert normalize_locale("zh", catalogs) == "zh-hans"
+    assert normalize_locale("zh-Hans", catalogs) == "zh-hans"
+    # zh-TW should NOT resolve to zh-hans (no Traditional Chinese catalog)
+    assert normalize_locale("zh-TW", catalogs) is None
+    assert select_locale(ha_language="zh-CN", catalogs=catalogs) == "zh-hans"
+    assert (
+        select_locale(accept_language="zh-CN,zh;q=0.9", catalogs=catalogs) == "zh-hans"
+    )
+
+
 def test_placeholder_mismatch_is_rejected(tmp_path: Path) -> None:
     _write_catalog(
         tmp_path,
@@ -192,6 +214,17 @@ def test_de_catalog_loads_and_is_registered() -> None:
     assert "de" in CATALOGS
     assert CATALOGS["de"]["meta"]["native_name"] == "Deutsch"
     assert CATALOGS["de"]["meta"]["dir"] == "ltr"
+
+
+def test_zh_hans_catalog_loads_and_is_registered() -> None:
+    from ha_mcp.settings_ui._i18n import CATALOGS
+
+    assert "zh-hans" in CATALOGS
+    assert CATALOGS["zh-hans"]["meta"]["native_name"] == "简体中文"
+    assert CATALOGS["zh-hans"]["meta"]["dir"] == "ltr"
+    # 工具分组与工具 UI 翻译须已填充，避免空翻译漏过 CI
+    assert CATALOGS["zh-hans"]["tool_groups"]
+    assert CATALOGS["zh-hans"]["tools"]
 
 
 def test_disallowed_inline_markup_is_rejected(tmp_path: Path) -> None:

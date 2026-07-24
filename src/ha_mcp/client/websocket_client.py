@@ -8,6 +8,7 @@ This module handles WebSocket connections to Home Assistant for:
 """
 
 import asyncio
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -1036,6 +1037,21 @@ class HomeAssistantWebSocketClient:
 MAX_POOL_SIZE = 50
 
 
+def _log_stale_disconnect(future: "concurrent.futures.Future[None]") -> None:
+    """Report how a disconnect scheduled on a stale event loop ended.
+
+    Nothing awaits that future, so without this the outcome would be invisible
+    at every log level: a ``concurrent.futures.Future`` never warns about an
+    exception no one retrieved.
+    """
+    if future.cancelled():
+        logger.debug("Stale WebSocket disconnect was cancelled with its loop")
+        return
+    error = future.exception()
+    if error is not None:
+        logger.debug("Stale WebSocket disconnect failed: %s", error)
+
+
 class WebSocketManager:
     """Singleton manager for Home Assistant WebSocket connections.
 
@@ -1114,6 +1130,56 @@ class WebSocketManager:
             )
             return True
 
+    @staticmethod
+    def _release_stale_clients(
+        clients: list[HomeAssistantWebSocketClient],
+        loop: asyncio.AbstractEventLoop | None,
+    ) -> None:
+        """Best-effort cleanup of clients orphaned by an event-loop change.
+
+        Never awaits: the connections belong to ``loop``, and awaiting them
+        from the loop that replaced it is exactly the cross-loop failure this
+        avoids. Each disconnect is scheduled on the owning loop and
+        deliberately not waited for. A merely stopped loop is scheduled too:
+        it still owns live transports and still accepts callbacks, so the
+        disconnect runs once that loop is resumed, and otherwise stays an
+        unrun callback like any other the abandoned loop still holds. Only a
+        closed or unknown loop has nothing left to schedule on; its
+        connection is abandoned and the socket closes when the orphaned
+        transport is garbage-collected (with a ``ResourceWarning``), because
+        closing a loop does not close the transports it carried. Either way
+        the caller has already detached the pool, so a failure here cannot
+        make it stale again.
+        """
+        if not clients:
+            return
+        if loop is None or loop.is_closed():
+            logger.debug(
+                "Abandoning %d stale WebSocket client(s): the owning event "
+                "loop is gone",
+                len(clients),
+            )
+            return
+        for client in clients:
+            coro = client.disconnect()
+            try:
+                future = asyncio.run_coroutine_threadsafe(coro, loop)
+            except RuntimeError:
+                # The loop closed between the check above and now. Closing the
+                # coroutine keeps it from surfacing as "never awaited". The
+                # narrower window stays open by construction: a loop that
+                # accepts the callback and then stops before draining it never
+                # runs the coroutine at all, and ``run_coroutine_threadsafe``
+                # needs the coroutine object up front, so there is nothing left
+                # to reclaim from this side.
+                coro.close()
+                logger.debug(
+                    "Could not schedule disconnect of a stale WebSocket client",
+                    exc_info=True,
+                )
+                continue
+            future.add_done_callback(_log_stale_disconnect)
+
     async def get_client(
         self,
         url: str | None = None,
@@ -1143,22 +1209,21 @@ class WebSocketManager:
         if not self._lock:
             raise Exception("Lock not initialized")
         async with self._lock:
-            if self._current_loop is not None and self._current_loop != current_loop:
-                # Event loop changed — disconnect all clients
-                for client in self._clients.values():
-                    try:
-                        await client.disconnect()
-                    except (OSError, asyncio.CancelledError):
-                        # Best-effort cleanup — failure is expected when the
-                        # event loop changed and connections are stale.
-                        logger.debug(
-                            "Ignoring error disconnecting stale WebSocket client",
-                            exc_info=True,
-                        )
+            previous_loop = self._current_loop
+            stale_clients: list[HomeAssistantWebSocketClient] = []
+            if previous_loop is not None and previous_loop is not current_loop:
+                # Event loop changed: detach the pool BEFORE cleaning it up.
+                # The pooled clients' futures belong to ``previous_loop``, so
+                # awaiting their ``disconnect()`` here raises ``RuntimeError:
+                # ... attached to a different loop``, which used to escape the
+                # best-effort catch and leave both the pool and the loop
+                # reference stale for every later call (issue #1994).
+                stale_clients = list(self._clients.values())
                 self._clients.clear()
                 self._last_used.clear()
 
             self._current_loop = current_loop
+            self._release_stale_clients(stale_clients, previous_loop)
 
             # Determine credentials to use
             if url and token:
@@ -1226,7 +1291,7 @@ class WebSocketManager:
         if stale:
             try:
                 await stale.disconnect()
-            except (OSError, asyncio.CancelledError):
+            except (OSError, RuntimeError, asyncio.CancelledError):
                 logger.warning(
                     "Error disconnecting evicted WebSocket client",
                     exc_info=True,
@@ -1239,16 +1304,27 @@ class WebSocketManager:
         if not self._lock:
             raise Exception("Lock not initialized")
         async with self._lock:
-            for client in self._clients.values():
-                try:
-                    await client.disconnect()
-                except (OSError, asyncio.CancelledError):
-                    logger.warning(
-                        "Error disconnecting WebSocket client", exc_info=True
-                    )
+            # Detach the pool before disconnecting so a raising disconnect
+            # cannot leave it populated (the bookkeeping half of the
+            # loop-change branch in ``get_client``). The only caller,
+            # ``__main__``'s shutdown, runs on the pool's own loop, so each
+            # ``disconnect()`` is awaited to completion here. ``RuntimeError``
+            # is caught purely defensively: were this ever driven from a
+            # different loop, the cross-loop future would raise instead of
+            # hanging the shutdown. Unlike ``get_client`` it does not
+            # reschedule onto the owning loop, because the process is going
+            # away and there is nothing left to resume it.
+            clients = list(self._clients.values())
             self._clients.clear()
             self._last_used.clear()
             self._current_loop = None
+            for client in clients:
+                try:
+                    await client.disconnect()
+                except (OSError, RuntimeError, asyncio.CancelledError):
+                    logger.warning(
+                        "Error disconnecting WebSocket client", exc_info=True
+                    )
 
 
 # Global WebSocket manager instance

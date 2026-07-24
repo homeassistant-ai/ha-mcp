@@ -605,6 +605,25 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
         # Both should return the same number of results (no filtering applied)
         assert ws_filter_count == no_filter_count
 
+    @pytest.mark.asyncio
+    async def test_state_only_group_by_domain_spans_domains(self, search_tool):
+        """state_filter-only + group_by_domain groups matches across domains.
+
+        _MULTI_ENTITY_STATES has light.kitchen=on and switch.fan=on, so a
+        state_filter="on" listing with group_by_domain=True must produce a
+        by_domain map keyed by BOTH domains (the cross-domain grouping helper,
+        not the single-domain one).
+        """
+        result = await search_tool(state_filter="on", group_by_domain=True, limit=20)
+        assert result.get("search_type") == "state_listing"
+        by_domain = result.get("by_domain", {})
+        assert "light" in by_domain and "switch" in by_domain, (
+            f"expected both 'light' and 'switch' domains, got {sorted(by_domain)}"
+        )
+        for entities in by_domain.values():
+            for entity in entities:
+                assert entity["state"] == "on"
+
 
 class TestHaSearchEntitiesResultFields(_SearchToolFixture):
     """Tests for result_fields= per-record projection (issue #1199)."""
