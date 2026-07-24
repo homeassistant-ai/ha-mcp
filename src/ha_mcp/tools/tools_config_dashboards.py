@@ -1508,12 +1508,14 @@ def _note_screenshot_ignored(
     options: _DashboardScreenshotOptions | None = None,
     mode: str,
 ) -> None:
-    """Warn when a screenshot was requested in a mode that can't render one.
+    """Warn when get-mode-only options are passed to a mode that ignores them.
 
-    Screenshot options are only honoured in get mode. In list and search mode
-    they are accepted but inapplicable, so surface a
-    ``warnings`` entry rather than dropping the request as a silent no-op
-    (matches the warn-don't-fail contract the params document)."""
+    Screenshot options — and ``view_path``, which is a get-mode scoping
+    parameter that merely travels inside the options dataclass — are only
+    honoured in get mode. In list and search mode they are accepted but
+    inapplicable, so surface a ``warnings`` entry rather than dropping the
+    request as a silent no-op (matches the warn-don't-fail contract the
+    params document)."""
     capture_options = options or _DashboardScreenshotOptions(full_page=full_page)
     if include_screenshot or capture_options != _DashboardScreenshotOptions():
         result.setdefault("warnings", []).append(
@@ -1833,7 +1835,7 @@ class DashboardConfigTools:
         view_path: Annotated[
             str | None,
             Field(
-                description="Get mode: return ONLY the view whose stable "
+                description="Get mode: return ONLY the view whose "
                 "Lovelace views[].path matches (response carries 'view' + "
                 "'view_index' instead of the full 'config') — use this to keep "
                 "multi-view dashboards from blowing up the response when you "
@@ -1943,7 +1945,11 @@ class DashboardConfigTools:
         try:
             if mode == "search":
                 # Cross-dashboard search takes precedence over every other mode.
-                return await self._get_dashboard_search_all_mode(query)
+                return await self._get_dashboard_search_all_mode(
+                    query,
+                    include_screenshot=include_screenshot,
+                    screenshot_options=screenshot_options,
+                )
 
             if list_only:
                 return await self._get_dashboard_list_mode(
@@ -2298,7 +2304,13 @@ class DashboardConfigTools:
         )
         return search_result
 
-    async def _get_dashboard_search_all_mode(self, query: str | None) -> dict[str, Any]:
+    async def _get_dashboard_search_all_mode(
+        self,
+        query: str | None,
+        *,
+        include_screenshot: bool,
+        screenshot_options: _DashboardScreenshotOptions,
+    ) -> dict[str, Any]:
         """mode='search': find which storage dashboards contain ``query``.
 
         The component ``search`` walks every storage dashboard in one in-process
@@ -2340,6 +2352,12 @@ class DashboardConfigTools:
                 f"Results capped at {_SEARCH_ALL_MATCH_CAP} matches; "
                 "refine the query for a complete list."
             ]
+        _note_screenshot_ignored(
+            result,
+            include_screenshot=include_screenshot,
+            options=screenshot_options,
+            mode="search",
+        )
         return result
 
     async def _search_all_dashboards(

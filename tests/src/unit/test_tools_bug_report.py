@@ -787,6 +787,26 @@ class TestBugReportTool:
         assert "agent_behavior_template" not in result
 
     @pytest.mark.asyncio
+    async def test_fields_projection_accepts_csv_string(
+        self, ha_report_issue_func, mock_client
+    ):
+        """The docstring's recommended usage is a CSV string — pin that form."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        result = await ha_report_issue_func(
+            fields="suggested_title,runtime_bug_submit_url"
+        )
+
+        assert set(result) <= {
+            "success",
+            "warnings",
+            "suggested_title",
+            "runtime_bug_submit_url",
+        }
+        assert result["suggested_title"]
+
+    @pytest.mark.asyncio
     async def test_fields_projection_unknown_key_warns(
         self, ha_report_issue_func, mock_client
     ):

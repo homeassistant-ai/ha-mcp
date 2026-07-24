@@ -684,23 +684,30 @@ class BugReportTools:
                 description=(
                     "Return only the specified top-level response keys — the "
                     "full response (both templates + logs + diagnostics, with "
-                    "the same log content repeated in each) is very large. "
+                    "log content repeated across the raw keys and templates) "
+                    "is very large. "
                     "None = full response. Typical for a runtime bug: "
                     "'runtime_bug_template,suggested_title,"
                     "runtime_bug_submit_url,duplicate_check_urls,"
                     "anonymization_guide,instructions'; for agent feedback "
-                    "swap in agent_behavior_template/agent_behavior_submit_url. "
-                    "The templates already embed the relevant logs, so the raw "
-                    "recent_logs/startup_logs/addon_logs/core_error_log/"
-                    "formatted_report keys are only needed for your own "
-                    "analysis."
+                    "swap in agent_behavior_template and "
+                    "agent_behavior_submit_url. The templates already embed "
+                    "the relevant logs, so the raw log keys are only needed "
+                    "for your own analysis. "
+                    "Available keys: diagnostic_info, recent_logs, "
+                    "startup_logs, addon_logs, core_error_log, log_count, "
+                    "startup_log_count, formatted_report, "
+                    "runtime_bug_template, agent_behavior_template, "
+                    "anonymization_guide, suggested_title, "
+                    "runtime_bug_submit_url, agent_behavior_submit_url, "
+                    "duplicate_check_urls, missing_tool_hint, instructions."
                 ),
             ),
         ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
-        Collect diagnostic information for filing issue reports or feedback.
+        Get diagnostic information and templates for filing issue reports or feedback.
 
         This tool generates templates for TWO types of reports:
         1. **Runtime Bug Report** - For ha-mcp errors, failures, unexpected behavior

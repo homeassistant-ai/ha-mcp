@@ -130,6 +130,54 @@ async def test_strategy_dashboard_view_path_errors_with_get_suggestion(mock_clie
 
 
 @pytest.mark.asyncio
+async def test_non_dict_config_with_view_path_errors(mock_client):
+    """A malformed (non-dict) HA config cannot be scoped — structured error,
+    not an AttributeError from walking a list."""
+    mock_client.send_websocket_message = AsyncMock(return_value={"result": ["nope"]})
+    tool = DashboardConfigTools(mock_client).ha_config_get_dashboard
+
+    with pytest.raises(ToolError) as exc_info:
+        await tool(url_path="default", view_path="office")
+
+    error = json.loads(str(exc_info.value))
+    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert "view_path cannot be resolved" in error["error"]["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "include_screenshot,expected_view_path",
+    [(True, "office"), (False, None)],
+)
+async def test_screenshot_options_view_path_follows_request(
+    mock_client, monkeypatch, include_screenshot, expected_view_path
+):
+    """view_path drives BOTH scoping and the render target: it stays in the
+    screenshot options when a screenshot is requested, and is stripped when
+    not (so the ignored-options warning can't fire on a plain scoped read)."""
+    captured = {}
+
+    async def fake_attach(result, url_path, requested, **kwargs):
+        captured["requested"] = requested
+        captured["options"] = kwargs["options"]
+        return result
+
+    monkeypatch.setattr(
+        "ha_mcp.tools.tools_config_dashboards._maybe_attach_screenshot",
+        fake_attach,
+    )
+    tool = DashboardConfigTools(mock_client).ha_config_get_dashboard
+
+    result = await tool(
+        url_path="default", view_path="office", include_screenshot=include_screenshot
+    )
+
+    assert result["view"] == _CONFIG["views"][1]
+    assert captured["requested"] is include_screenshot
+    assert captured["options"].view_path == expected_view_path
+
+
+@pytest.mark.asyncio
 async def test_full_get_unchanged_without_view_path(get_dashboard_tool):
     result = await get_dashboard_tool(url_path="default")
 
@@ -175,4 +223,18 @@ async def test_view_path_in_search_mode_warns_ignored(get_dashboard_tool):
     )
 
     assert result["match_count"] == 1
+    assert any("view_path" in w and "ignored" in w for w in result["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_view_path_in_search_all_mode_warns_ignored(mock_client):
+    """MODE 4 (mode='search') must warn like the other non-get modes instead
+    of silently dropping view_path."""
+    mock_client.send_websocket_message = AsyncMock(return_value={"result": []})
+    tool = DashboardConfigTools(mock_client).ha_config_get_dashboard
+
+    result = await tool(mode="search", query="light.desk", view_path="office")
+
+    assert result["success"] is True
+    assert result["action"] == "search_all"
     assert any("view_path" in w and "ignored" in w for w in result["warnings"])
