@@ -10,6 +10,7 @@ from fastmcp.exceptions import ToolError
 
 from ...client.rest_client import HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
+from ..component_api import component_supports, get_component_caps
 from ..config_entry_flow import FLOW_HELPER_TYPES
 from ..helpers import exception_to_structured_error, safe_info, safe_progress
 from ..tools_config_dashboards import (
@@ -936,8 +937,7 @@ class DeepSearchMixin(SceneSearchMixin):
         if exact_match and not include_config:
             component = await self._component_dashboard_search(query_lower)
             if component is not None:
-                records, yaml_excluded = component
-                return records, 0, yaml_excluded
+                return component
         records, failed = await self._deep_search_dashboards(
             query_lower, exact_match, semaphore
         )
@@ -945,60 +945,55 @@ class DeepSearchMixin(SceneSearchMixin):
 
     async def _component_dashboard_search(
         self, query_lower: str
-    ) -> tuple[list[dict[str, Any]], int] | None:
+    ) -> tuple[list[dict[str, Any]], int, int] | None:
         """The dashboard bucket via the component's in-process ``search`` frame.
 
-        Returns ``(records, yaml_excluded_count)`` — one legacy-shaped record
-        per matching dashboard (score 100 / ``match_in_config`` — exact
-        substring parity with ``_search_in_dict``) plus the count of YAML-mode
-        registry rows the component deliberately never scans (their bodies can
-        carry resolved ``!secret`` values; the caller surfaces the exclusion as
-        ``partial``). The component walk is card-scoped (cards, badges, header
-        cards) — the surface ha_search documents as its dashboard corpus and
-        the same walk ``ha_config_get_dashboard(mode="search")`` pins parity
-        on. A config-less auto-generated dashboard is skipped in-process
-        (nothing to scan), consistent with :func:`_is_no_stored_config`.
+        Returns ``(records, failed_count, yaml_excluded_count)`` — one
+        legacy-shaped record per matching dashboard from the component's
+        ``document_matches`` (a whole-document substring verdict per storage
+        dashboard, ported from ``_search_in_dict`` leaf for leaf, so view
+        titles and dashboard-level keys match exactly as the legacy walk
+        matches them); ``failed_count`` is the component's ``load_failed``
+        (storage dashboards whose config load raised — surfaced as the same
+        ``dashboard(s) not scanned`` partial the legacy scan reports) and
+        ``yaml_excluded_count`` its ``yaml_skipped`` (the YAML-mode entries
+        the component never scans because their bodies can carry resolved
+        ``!secret`` values — counted in-process over the full dashboards map,
+        default dashboard included). A config-less auto-generated dashboard
+        is skipped in-process (nothing to scan), consistent with
+        :func:`_is_no_stored_config`.
 
-        ``None`` ⇒ run the legacy per-dashboard walk instead: capability miss /
-        component error / lovelace unavailable (``_dashboards_via_component``'s
-        taxonomy), an empty query, a ``truncated`` frame (the per-card match
-        cap was hit, so grouped-by-dashboard completeness can't be proven), a
-        malformed ``matches``, or a failed registry-list read (without the
-        rows the YAML exclusion could not be reported honestly). A default
-        dashboard forced to YAML mode (``lovelace: mode: yaml``) has no
-        registry row, so it is not counted in ``yaml_excluded_count`` — the
-        one row-less corner of the exclusion accounting.
+        ``None`` ⇒ run the legacy per-dashboard walk instead: the component
+        lacks the ``dashboards_doc_search`` capability (pre-1.3.0 components
+        emit only the card-scoped ``matches``, which would silently narrow
+        coverage), any ``_dashboards_via_component`` fallback (capability
+        miss / command error / lovelace unavailable), an empty query, or a
+        malformed ``document_matches``.
         """
         if not query_lower:
+            return None
+        caps = await get_component_caps(self.client)
+        if not component_supports(caps, "dashboards_doc_search"):
             return None
         result = await _dashboards_via_component(
             self.client, "search", query=query_lower
         )
-        if result is None or result.get("truncated"):
+        if result is None:
             return None
-        matches = result.get("matches")
-        if not isinstance(matches, list):
+        document_matches = result.get("document_matches")
+        if not isinstance(document_matches, list):
             return None
-        rows = await fetch_dashboards_list(self.client)
-        if rows is None:
-            return None
-        yaml_excluded = sum(1 for row in rows if row.get("mode") == "yaml")
-        # Legacy records carry the REGISTRY row's title; the component match
-        # only knows the config body's (often absent) — join rows for parity.
-        row_titles = {
-            row.get("url_path"): row.get("title")
-            for row in rows
-            if isinstance(row, dict)
-        }
+        failed = int(result.get("load_failed", 0) or 0)
+        yaml_excluded = int(result.get("yaml_skipped", 0) or 0)
 
         records: dict[str, dict[str, Any]] = {}
-        for match in matches:
+        for match in document_matches:
             if not isinstance(match, dict):
                 continue
             url_path = match.get("url_path") or "default"
             if url_path in records:
                 continue
-            title = row_titles.get(url_path) or match.get("title")
+            title = match.get("title")
             if title is None:
                 title = "Default Dashboard" if url_path == "default" else url_path
             records[url_path] = {
@@ -1007,7 +1002,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 "score": 100,
                 "match_in_config": True,
             }
-        return list(records.values()), yaml_excluded
+        return list(records.values()), failed, yaml_excluded
 
     async def _search_one_dashboard(
         self,

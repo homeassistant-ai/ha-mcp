@@ -272,16 +272,27 @@ class TestDashboardFailure:
 @pytest.mark.asyncio
 class TestDashboardBucketViaComponent:
     """The dashboard bucket rides the component's in-process ``search`` frame
-    when the component serves it (issue #2008 follow-through): exact-match,
-    no-config-body searches — the default ``ha_search`` shape — must not fan
-    out one ``lovelace/config`` read per dashboard when one WS frame answers
-    them, mirroring the ``ha_config_get_dashboard(mode="search")`` routing."""
+    when it advertises ``dashboards_doc_search`` (issue #2008 follow-through):
+    exact-match, no-config-body searches — the default ``ha_search`` shape —
+    consume the component's whole-document verdicts instead of fanning out one
+    ``lovelace/config`` read per dashboard. The component's honesty counters
+    (``yaml_skipped`` / ``load_failed``) drive the same partial reporting the
+    legacy walk provides."""
 
-    def _tools_with_component(self, matches, rows, *, truncated=False):
-        """SmartSearchTools whose component seams are patched: the dashboards
-        ``search`` frame returns ``matches`` and the (component-served) list
-        returns ``rows``. Any ``lovelace/*`` WS frame explodes — the legacy
-        per-dashboard scan must never run on the component path."""
+    def _component_result(self, document_matches, *, yaml_skipped=0, load_failed=0):
+        return {
+            "mode": "search",
+            "available": True,
+            "matches": [],
+            "truncated": False,
+            "document_matches": document_matches,
+            "yaml_skipped": yaml_skipped,
+            "load_failed": load_failed,
+        }
+
+    def _tools_no_lovelace(self):
+        """SmartSearchTools whose client explodes on any legacy lovelace frame
+        — the per-dashboard walk must never run on the component path."""
 
         async def _ws(msg):
             if str(msg.get("type", "")).startswith("lovelace/"):
@@ -293,37 +304,52 @@ class TestDashboardBucketViaComponent:
         client = MagicMock()
         client.get_states = AsyncMock(return_value=[])
         client.send_websocket_message = AsyncMock(side_effect=_ws)
-        tools = _make_tools(client)
-        component_result = {
-            "mode": "search",
-            "available": True,
-            "matches": matches,
-            "truncated": truncated,
-        }
-        return tools, client, component_result
+        return _make_tools(client)
 
-    async def test_component_matches_map_to_bucket_records(self) -> None:
-        """Component card-level matches group to one bucket record per
-        dashboard with the legacy record shape (score 100 exact parity);
-        no per-dashboard lovelace/config fetches happen."""
-        matches = [
-            {"url_path": "energy", "title": "Energy", "card_path": "views[0].cards[0]"},
-            {"url_path": "energy", "title": "Energy", "card_path": "views[0].cards[3]"},
-            {"url_path": None, "title": None, "card_path": "views[1].cards[2]"},
-        ]
-        # The registry row's title wins over the match's config-body title —
-        # parity with the legacy records, which read the registry row.
-        rows = [{"url_path": "energy", "title": "Energy Registry", "mode": "storage"}]
-        tools, client, component_result = self._tools_with_component(matches, rows)
+    def _tools_legacy_clean(self):
+        """SmartSearchTools whose client serves a clean legacy dashboard walk."""
+
+        async def _ws(msg):
+            if msg.get("type") == "lovelace/dashboards/list":
+                return {"result": []}
+            return {"result": {"views": []}}
+
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(side_effect=_ws)
+        return _make_tools(client), client
+
+    def _caps_on(self):
+        return (
+            patch(
+                "ha_mcp.tools.smart_search._deep.get_component_caps",
+                AsyncMock(return_value=object()),
+            ),
+            patch(
+                "ha_mcp.tools.smart_search._deep.component_supports",
+                lambda caps, cap: True,
+            ),
+        )
+
+    async def test_document_matches_map_to_bucket_records(self) -> None:
+        """Whole-document verdicts group to legacy-shaped records (score 100
+        exact parity, ``None`` url_path → the default dashboard) with no
+        per-dashboard lovelace/config fetches."""
+        component_result = self._component_result(
+            [
+                {"url_path": "energy", "title": "Energy Registry"},
+                {"url_path": None, "title": None},
+            ]
+        )
+        tools = self._tools_no_lovelace()
+        caps_a, caps_b = self._caps_on()
 
         with (
+            caps_a,
+            caps_b,
             patch(
                 "ha_mcp.tools.smart_search._deep._dashboards_via_component",
                 AsyncMock(return_value=component_result),
-            ),
-            patch(
-                "ha_mcp.tools.smart_search._deep.fetch_dashboards_list",
-                AsyncMock(return_value=rows),
             ),
         ):
             result = await tools.deep_search(
@@ -340,24 +366,20 @@ class TestDashboardBucketViaComponent:
         assert by_url["default"]["dashboard_title"] == "Default Dashboard"
         assert not result.get("partial")
 
-    async def test_component_yaml_rows_surface_partial(self) -> None:
+    async def test_component_yaml_skipped_surfaces_partial(self) -> None:
         """YAML-mode dashboards are excluded from the component's in-process
         search by design (their bodies can carry resolved !secret values) —
         the response must say so instead of looking exhaustive."""
-        rows = [
-            {"url_path": "energy", "mode": "storage"},
-            {"url_path": "yaml-dash", "mode": "yaml"},
-        ]
-        tools, client, component_result = self._tools_with_component([], rows)
+        component_result = self._component_result([], yaml_skipped=1)
+        tools = self._tools_no_lovelace()
+        caps_a, caps_b = self._caps_on()
 
         with (
+            caps_a,
+            caps_b,
             patch(
                 "ha_mcp.tools.smart_search._deep._dashboards_via_component",
                 AsyncMock(return_value=component_result),
-            ),
-            patch(
-                "ha_mcp.tools.smart_search._deep.fetch_dashboards_list",
-                AsyncMock(return_value=rows),
             ),
         ):
             result = await tools.deep_search(
@@ -368,35 +390,54 @@ class TestDashboardBucketViaComponent:
         assert "YAML-mode dashboard(s) not scanned" in result["partial_reason"]
         assert re.search(r"\b1 YAML-mode dashboard\(s\)", result["partial_reason"])
 
-    async def test_component_truncated_falls_back_to_legacy(self) -> None:
-        """A truncated component frame cannot prove per-dashboard completeness
-        — the legacy exhaustive walk serves instead."""
+    async def test_component_load_failed_surfaces_partial(self) -> None:
+        """The component's ``load_failed`` maps onto the same ``dashboard(s)
+        not scanned`` partial the legacy walk reports for a failed
+        ``lovelace/config`` fetch — an unreadable storage dashboard must not
+        produce a clean-looking result (issue #2008 review)."""
+        component_result = self._component_result([], load_failed=1)
+        tools = self._tools_no_lovelace()
+        caps_a, caps_b = self._caps_on()
 
-        async def _ws(msg):
-            if msg.get("type") == "lovelace/dashboards/list":
-                return {"result": []}
-            return {"result": {"views": []}}
-
-        client = MagicMock()
-        client.get_states = AsyncMock(return_value=[])
-        client.send_websocket_message = AsyncMock(side_effect=_ws)
-        tools = _make_tools(client)
-        component_result = {
-            "mode": "search",
-            "available": True,
-            "matches": [{"url_path": "energy", "title": "Energy"}],
-            "truncated": True,
-        }
-
-        with patch(
-            "ha_mcp.tools.smart_search._deep._dashboards_via_component",
-            AsyncMock(return_value=component_result),
+        with (
+            caps_a,
+            caps_b,
+            patch(
+                "ha_mcp.tools.smart_search._deep._dashboards_via_component",
+                AsyncMock(return_value=component_result),
+            ),
         ):
             result = await tools.deep_search(
                 query="zzznomatch", search_types=["dashboard"], limit=10
             )
 
-        # Legacy walk ran (clean empty) rather than trusting the capped frame.
+        assert result["partial"] is True
+        assert re.search(r"\b1 dashboard\(s\) not scanned", result["partial_reason"])
+
+    async def test_missing_document_matches_falls_back_to_legacy(self) -> None:
+        """A result without ``document_matches`` (malformed / stale component)
+        cannot prove whole-document coverage — the legacy walk serves."""
+        component_result = {
+            "mode": "search",
+            "available": True,
+            "matches": [{"url_path": "energy", "title": "Energy"}],
+            "truncated": False,
+        }
+        tools, client = self._tools_legacy_clean()
+        caps_a, caps_b = self._caps_on()
+
+        with (
+            caps_a,
+            caps_b,
+            patch(
+                "ha_mcp.tools.smart_search._deep._dashboards_via_component",
+                AsyncMock(return_value=component_result),
+            ),
+        ):
+            result = await tools.deep_search(
+                query="zzznomatch", search_types=["dashboard"], limit=10
+            )
+
         assert result["dashboards"] == []
         assert not result.get("partial")
         assert any(
@@ -404,19 +445,37 @@ class TestDashboardBucketViaComponent:
             for c in client.send_websocket_message.call_args_list
         )
 
+    async def test_capability_miss_stays_legacy(self) -> None:
+        """Without ``dashboards_doc_search`` the component frame is never sent
+        — a pre-1.3.0 component only has the card-scoped walk, which would
+        silently narrow coverage."""
+        tools, client = self._tools_legacy_clean()
+        component = AsyncMock()
+
+        with (
+            patch(
+                "ha_mcp.tools.smart_search._deep.get_component_caps",
+                AsyncMock(return_value=object()),
+            ),
+            patch(
+                "ha_mcp.tools.smart_search._deep.component_supports",
+                lambda caps, cap: False,
+            ),
+            patch(
+                "ha_mcp.tools.smart_search._deep._dashboards_via_component", component
+            ),
+        ):
+            result = await tools.deep_search(
+                query="zzznomatch", search_types=["dashboard"], limit=10
+            )
+
+        component.assert_not_awaited()
+        assert result["dashboards"] == []
+
     async def test_fuzzy_search_stays_legacy(self) -> None:
         """exact_match=False is BM25/fuzzy scoring the component's substring
         walk cannot serve — the component frame must not even be attempted."""
-
-        async def _ws(msg):
-            if msg.get("type") == "lovelace/dashboards/list":
-                return {"result": []}
-            return {"result": {"views": []}}
-
-        client = MagicMock()
-        client.get_states = AsyncMock(return_value=[])
-        client.send_websocket_message = AsyncMock(side_effect=_ws)
-        tools = _make_tools(client)
+        tools, client = self._tools_legacy_clean()
         component = AsyncMock()
 
         with patch(
@@ -434,16 +493,7 @@ class TestDashboardBucketViaComponent:
     async def test_include_config_stays_legacy(self) -> None:
         """include_config=True needs full bodies the component search frame
         does not carry — the legacy per-dashboard walk serves it."""
-
-        async def _ws(msg):
-            if msg.get("type") == "lovelace/dashboards/list":
-                return {"result": []}
-            return {"result": {"views": []}}
-
-        client = MagicMock()
-        client.get_states = AsyncMock(return_value=[])
-        client.send_websocket_message = AsyncMock(side_effect=_ws)
-        tools = _make_tools(client)
+        tools, client = self._tools_legacy_clean()
         component = AsyncMock()
 
         with patch(
@@ -459,23 +509,18 @@ class TestDashboardBucketViaComponent:
         component.assert_not_awaited()
 
     async def test_component_unavailable_falls_back_to_legacy(self) -> None:
-        """``None`` from the component helper (capability miss / error /
-        unavailable) keeps the unchanged legacy walk — including its failure
-        accounting."""
+        """``None`` from the component helper (command error / lovelace
+        unavailable) keeps the unchanged legacy walk."""
+        tools, client = self._tools_legacy_clean()
+        caps_a, caps_b = self._caps_on()
 
-        async def _ws(msg):
-            if msg.get("type") == "lovelace/dashboards/list":
-                return {"result": []}
-            return {"result": {"views": []}}
-
-        client = MagicMock()
-        client.get_states = AsyncMock(return_value=[])
-        client.send_websocket_message = AsyncMock(side_effect=_ws)
-        tools = _make_tools(client)
-
-        with patch(
-            "ha_mcp.tools.smart_search._deep._dashboards_via_component",
-            AsyncMock(return_value=None),
+        with (
+            caps_a,
+            caps_b,
+            patch(
+                "ha_mcp.tools.smart_search._deep._dashboards_via_component",
+                AsyncMock(return_value=None),
+            ),
         ):
             result = await tools.deep_search(
                 query="zzznomatch", search_types=["dashboard"], limit=10

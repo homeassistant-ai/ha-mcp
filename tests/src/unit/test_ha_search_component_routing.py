@@ -878,15 +878,16 @@ class TestDashboardSearchTypesGate:
     async def test_dashboard_search_served_by_component_dashboards_frame(
         self, tmp_path, monkeypatch
     ) -> None:
-        """With the ``dashboards`` capability the whole dashboard search is
-        served in-process — one ``search`` + one ``list`` frame, zero legacy
-        ``lovelace/*`` round-trips — while the ``ha_mcp_tools/search``
-        command (which has no dashboard surface) still never runs."""
+        """With the ``dashboards_doc_search`` capability the whole dashboard
+        search is served in-process — ONE ``ha_mcp_tools/dashboards`` frame,
+        zero legacy ``lovelace/*`` round-trips — while the
+        ``ha_mcp_tools/search`` command (which has no dashboard surface)
+        still never runs."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
         caps = {
             "schema_version": 1,
-            "component_version": "1.2.0",
-            "capabilities": ["search", "dashboards"],
+            "component_version": "1.3.0",
+            "capabilities": ["search", "dashboards", "dashboards_doc_search"],
             "limits": {},
         }
 
@@ -894,28 +895,23 @@ class TestDashboardSearchTypesGate:
             if command_type == "ha_mcp_tools/info":
                 return {"success": True, "result": caps}
             if command_type == "ha_mcp_tools/dashboards":
-                if kwargs.get("mode") == "search":
-                    return {
-                        "success": True,
-                        "result": {
-                            "mode": "search",
-                            "available": True,
-                            "matches": [
-                                {
-                                    "url_path": "energy",
-                                    "title": "Energy",
-                                    "card_path": "views[0].cards[0]",
-                                }
-                            ],
-                            "truncated": False,
-                        },
-                    }
+                assert kwargs.get("mode") == "search"
                 return {
                     "success": True,
                     "result": {
-                        "mode": "list",
+                        "mode": "search",
                         "available": True,
-                        "dashboards": [{"url_path": "energy", "mode": "storage"}],
+                        "matches": [
+                            {
+                                "url_path": "energy",
+                                "title": "Energy",
+                                "card_path": "views[0].cards[0]",
+                            }
+                        ],
+                        "truncated": False,
+                        "document_matches": [{"url_path": "energy", "title": "Energy"}],
+                        "yaml_skipped": 0,
+                        "load_failed": 0,
                     },
                 }
             raise AssertionError(f"unexpected command {command_type!r}")
@@ -944,7 +940,7 @@ class TestDashboardSearchTypesGate:
         assert client.ws_types.get("lovelace/config", 0) == 0
         sent = [c.args[0] for c in ws.send_command.call_args_list]
         assert "ha_mcp_tools/search" not in sent
-        assert sent.count("ha_mcp_tools/dashboards") == 2
+        assert sent.count("ha_mcp_tools/dashboards") == 1
 
     @pytest.mark.asyncio
     async def test_dashboard_search_with_config_not_found_not_partial(
