@@ -25,6 +25,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _component_error_reason(exc: Exception) -> str | None:
+    """Extract the human message from a structured ``ToolError``, else None.
+
+    ``raise_tool_error`` serializes the whole error envelope into the
+    exception string, so rendering ``str(exc)`` verbatim shows the settings
+    UI a raw JSON blob behind a misleading "could not reach" prefix — the
+    hard-to-read surface from #1996. Thin seam over the shared extractor
+    (imported lazily like the other tools imports in this module).
+    """
+    from ..tools.helpers import extract_structured_error_reason
+
+    return extract_structured_error_reason(exc)
+
+
 async def _fs_custom_paths_call(
     server: HomeAssistantSmartMCPServer | None, service: str, data: dict[str, Any]
 ) -> Any:
@@ -90,7 +104,10 @@ async def _get_fs_custom_paths(
         result = await _fs_custom_paths_call(server, "get_allowed_paths", {})
     except Exception as exc:
         logger.warning("fs-custom-paths GET could not reach ha_mcp_tools: %s", exc)
-        return _unavailable(f"Could not reach the ha_mcp_tools component: {exc}")
+        return _unavailable(
+            _component_error_reason(exc)
+            or f"Could not reach the ha_mcp_tools component: {exc}"
+        )
 
     data = unwrap_service_response(result) if isinstance(result, dict) else {}
     if not isinstance(data, dict) or not data.get("success", False):
@@ -163,7 +180,8 @@ async def _save_fs_custom_paths(
         return JSONResponse(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                f"Could not reach the ha_mcp_tools component: {exc}",
+                _component_error_reason(exc)
+                or f"Could not reach the ha_mcp_tools component: {exc}",
             ),
             status_code=502,
         )

@@ -37,6 +37,7 @@ from ..dashboard_screenshot.content import (
 from ..dashboard_screenshot.paths import (
     dashboard_frontend_path,
     dashboard_render_paths,
+    match_dashboard_view,
     resolve_dashboard_view,
 )
 from ..errors import ErrorCode, create_error_response
@@ -1509,19 +1510,21 @@ def _note_screenshot_ignored(
     options: _DashboardScreenshotOptions | None = None,
     mode: str,
 ) -> None:
-    """Warn when a screenshot was requested in a mode that can't render one.
+    """Warn when get-mode-only options are passed to a mode that ignores them.
 
-    Screenshot options are only honoured in get mode. In list and search mode
-    they are accepted but inapplicable, so surface a
-    ``warnings`` entry rather than dropping the request as a silent no-op
-    (matches the warn-don't-fail contract the params document)."""
+    Screenshot options — and ``view_path``, which is a get-mode scoping
+    parameter that merely travels inside the options dataclass — are only
+    honoured in get mode. In list and search mode they are accepted but
+    inapplicable, so surface a ``warnings`` entry rather than dropping the
+    request as a silent no-op (matches the warn-don't-fail contract the
+    params document)."""
     capture_options = options or _DashboardScreenshotOptions(full_page=full_page)
     if include_screenshot or capture_options != _DashboardScreenshotOptions():
         result.setdefault("warnings", []).append(
-            f"include_screenshot and screenshot render options are ignored in {mode} "
-            "mode; call "
+            f"include_screenshot, view_path, and screenshot render options are "
+            f"ignored in {mode} mode; call "
             "ha_config_get_dashboard with a url_path (and no search criteria) "
-            "to get a screenshot."
+            "to scope to a view or get a screenshot."
         )
 
 
@@ -1834,8 +1837,13 @@ class DashboardConfigTools:
         view_path: Annotated[
             str | None,
             Field(
-                description="With include_screenshot: stable Lovelace "
-                "views[].path to render. Omit to render the dashboard base route."
+                description="Get mode: return ONLY the view whose "
+                "Lovelace views[].path matches (response carries 'view' + "
+                "'view_index' instead of the full 'config') — use this to keep "
+                "multi-view dashboards from blowing up the response when you "
+                "only need one view. Does not require any beta feature. With "
+                "include_screenshot, also selects the view to render. Ignored "
+                "in list/search mode. Omit for the full config."
             ),
         ] = None,
         mode: Annotated[
@@ -1882,6 +1890,13 @@ class DashboardConfigTools:
         MODE 3 — Get: Active when list_only=False and no search parameters are provided.
           Returns the full Lovelace dashboard config, defaulting to the
           main dashboard if url_path is omitted.
+          Pass view_path=<views[].path> to return ONLY that view: the response
+          then carries `view` + `view_index` instead of `config`, keeping the
+          payload small on multi-view dashboards. `config_hash` still covers
+          the FULL config, so a follow-up
+          ha_config_set_dashboard(python_transform=...) addressing
+          config['views'][view_index] validates unchanged. An unknown
+          view_path errors and lists the available view paths.
 
         MODE 4 — Search all: mode="search" with query=<entity_id or text>
           Answers "which dashboards contain this entity/card" by walking every
@@ -1902,6 +1917,7 @@ class DashboardConfigTools:
         - List all dashboards: ha_config_get_dashboard(list_only=True)
         - Get default dashboard: ha_config_get_dashboard(url_path="default")
         - Get custom dashboard: ha_config_get_dashboard(url_path="lovelace-mobile")
+        - Get one view only: ha_config_get_dashboard(url_path="lovelace-mobile", view_path="office")
         - Force reload: ha_config_get_dashboard(url_path="lovelace-home", force_reload=True)
         - Find cards by entity: ha_config_get_dashboard(url_path="my-dash", entity_id="light.living_room")
         - Find by wildcard: ha_config_get_dashboard(url_path="my-dash", entity_id="sensor.temperature_*")
@@ -1931,7 +1947,11 @@ class DashboardConfigTools:
         try:
             if mode == "search":
                 # Cross-dashboard search takes precedence over every other mode.
-                return await self._get_dashboard_search_all_mode(query)
+                return await self._get_dashboard_search_all_mode(
+                    query,
+                    include_screenshot=include_screenshot,
+                    screenshot_options=screenshot_options,
+                )
 
             if list_only:
                 return await self._get_dashboard_list_mode(
@@ -1974,6 +1994,7 @@ class DashboardConfigTools:
                 url_path,
                 resolved_url_path=resolved_url_path,
                 force_reload=force_reload,
+                view_path=view_path,
                 include_screenshot=include_screenshot,
                 screenshot_options=screenshot_options,
             )
@@ -2285,7 +2306,13 @@ class DashboardConfigTools:
         )
         return search_result
 
-    async def _get_dashboard_search_all_mode(self, query: str | None) -> dict[str, Any]:
+    async def _get_dashboard_search_all_mode(
+        self,
+        query: str | None,
+        *,
+        include_screenshot: bool,
+        screenshot_options: _DashboardScreenshotOptions,
+    ) -> dict[str, Any]:
         """mode='search': find which storage dashboards contain ``query``.
 
         The component ``search`` walks every storage dashboard in one in-process
@@ -2327,6 +2354,12 @@ class DashboardConfigTools:
                 f"Results capped at {_SEARCH_ALL_MATCH_CAP} matches; "
                 "refine the query for a complete list."
             ]
+        _note_screenshot_ignored(
+            result,
+            include_screenshot=include_screenshot,
+            options=screenshot_options,
+            mode="search",
+        )
         return result
 
     async def _search_all_dashboards(
@@ -2436,6 +2469,7 @@ class DashboardConfigTools:
         *,
         resolved_url_path: list[str | None],
         force_reload: bool,
+        view_path: str | None,
         include_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
     ) -> "dict[str, Any] | ToolResult":
@@ -2470,6 +2504,7 @@ class DashboardConfigTools:
                 url_path,
                 component_config,
                 original_url_path=url_path,
+                view_path=view_path,
                 include_screenshot=include_screenshot,
                 screenshot_options=screenshot_options,
             )
@@ -2520,6 +2555,7 @@ class DashboardConfigTools:
             url_path,
             config,
             original_url_path=original_url_path,
+            view_path=view_path,
             include_screenshot=include_screenshot,
             screenshot_options=screenshot_options,
         )
@@ -2530,6 +2566,7 @@ class DashboardConfigTools:
         config: Any,
         *,
         original_url_path: str | None,
+        view_path: str | None,
         include_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
     ) -> "dict[str, Any] | ToolResult":
@@ -2540,6 +2577,14 @@ class DashboardConfigTools:
         render paths, ``resolved_from`` (when the legacy lazy resolver
         canonicalised an internal id), the large-config disclosure hint, and an
         optional screenshot.
+
+        ``view_path`` scopes the payload to one view: the response carries
+        ``view`` + ``view_index`` instead of ``config``. The scoped envelope
+        deliberately has NO ``config`` key so the view object cannot be
+        mistaken for a full config and pushed back through
+        ``ha_config_set_dashboard(config=...)``, which would drop every other
+        view; ``config_hash``/``config_size_bytes`` still describe the full
+        config so ``python_transform`` optimistic locking works unchanged.
         """
         # Compute hash for optimistic locking in subsequent operations
         config_hash = compute_config_hash(config) if isinstance(config, dict) else None
@@ -2547,19 +2592,37 @@ class DashboardConfigTools:
         # Calculate config size for progressive disclosure hint
         config_size = len(json.dumps(config)) if isinstance(config, dict) else 0
 
-        get_result: dict[str, Any] = {
-            "success": True,
-            "action": "get",
-            "url_path": url_path,
-            "config": config,
-            "config_hash": config_hash,
-            "config_size_bytes": config_size,
-        }
-        _attach_dashboard_render_paths(
-            get_result,
-            url_path,
-            config if isinstance(config, dict) else None,
-        )
+        if view_path is not None:
+            get_result = self._scoped_view_get_result(
+                url_path,
+                config,
+                view_path=view_path,
+                config_hash=config_hash,
+                config_size=config_size,
+            )
+        else:
+            get_result = {
+                "success": True,
+                "action": "get",
+                "url_path": url_path,
+                "config": config,
+                "config_hash": config_hash,
+                "config_size_bytes": config_size,
+            }
+            _attach_dashboard_render_paths(
+                get_result,
+                url_path,
+                config if isinstance(config, dict) else None,
+            )
+            # Add hint for large configs (progressive disclosure) - 10KB ≈ 2-3k tokens
+            if config_size >= 10000:
+                get_result["hint"] = (
+                    f"Large config ({config_size:,} bytes). Pass view_path=... "
+                    "to fetch a single view, or use "
+                    "ha_config_get_dashboard(entity_id=...) to find card positions, "
+                    "then ha_config_set_dashboard(python_transform=...) "
+                    "instead of full config replacement."
+                )
         # Surface the original caller-passed identifier when the lazy
         # resolver canonicalised it (parity with delete_dashboard's
         # resolved_id field). Caller can use this to detect that their
@@ -2567,24 +2630,90 @@ class DashboardConfigTools:
         if original_url_path is not None and original_url_path != url_path:
             get_result["resolved_from"] = original_url_path
 
-        # Add hint for large configs (progressive disclosure) - 10KB ≈ 2-3k tokens
-        if config_size >= 10000:
-            get_result["hint"] = (
-                f"Large config ({config_size:,} bytes). For edits, use "
-                "ha_config_get_dashboard(entity_id=...) to find card positions, "
-                "then ha_config_set_dashboard(python_transform=...) "
-                "instead of full config replacement."
-            )
-
         return await _maybe_attach_screenshot(
             get_result,
             url_path,
             include_screenshot,
             client=self._client,
             config=config if isinstance(config, dict) else None,
-            options=screenshot_options,
+            # view_path doubles as the get-mode scoping parameter now, so a
+            # scoped read without a screenshot request must not trip the
+            # "screenshot render options are ignored" warning.
+            options=(
+                screenshot_options
+                if include_screenshot
+                else replace(screenshot_options, view_path=None)
+            ),
             raise_on_failure=True,
         )
+
+    def _scoped_view_get_result(
+        self,
+        url_path: str | None,
+        config: Any,
+        *,
+        view_path: str,
+        config_hash: str | None,
+        config_size: int,
+    ) -> dict[str, Any]:
+        """Build the view-scoped get-mode envelope (issue #2010).
+
+        Raises the shared matcher's structured errors for an empty, unknown,
+        or ambiguous ``view_path`` and for strategy dashboards (no static
+        views). Pure config walking — works whether or not the dashboard
+        screenshot beta feature is enabled.
+        """
+        if not isinstance(config, dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    "Dashboard config is unavailable, so view_path cannot be resolved.",
+                    context={"url_path": url_path, "view_path": view_path},
+                    suggestions=["Retry without view_path to inspect the raw response"],
+                )
+            )
+        view_index, view = match_dashboard_view(
+            url_path or "default",
+            config,
+            view_path,
+            strategy_suggestions=(
+                "Omit view_path — strategy dashboards generate their views at "
+                "runtime, so there is no static view config to return",
+            ),
+        )
+        views = config.get("views")
+        view_count = len(views) if isinstance(views, list) else 0
+        get_result: dict[str, Any] = {
+            "success": True,
+            "action": "get",
+            "url_path": url_path,
+            "view_path": view_path,
+            "view_index": view_index,
+            "view_count": view_count,
+            "view": view,
+            "config_hash": config_hash,
+            "config_size_bytes": config_size,
+            "view_size_bytes": len(json.dumps(view)),
+            "hint": (
+                f"Scoped to view '{view_path}' — config['views'][{view_index}] "
+                f"of {view_count} views. config_hash and config_size_bytes "
+                "cover the FULL dashboard config, so "
+                "ha_config_set_dashboard(python_transform=...) edits addressed "
+                f"via config['views'][{view_index}] validate as-is. Do NOT "
+                "pass this view object as the config parameter — that would "
+                "replace the entire dashboard. Omit view_path for the full "
+                "config."
+            ),
+        }
+        _attach_dashboard_render_paths(get_result, url_path, config)
+        render_paths = get_result.get("render_paths")
+        if isinstance(render_paths, list):
+            get_result["render_paths"] = [
+                row
+                for row in render_paths
+                if isinstance(row, dict) and row.get("view_index") == view_index
+            ]
+        return get_result
 
     @tool(
         name="ha_config_set_dashboard",
