@@ -1,10 +1,11 @@
 """Unit tests for entity visibility enforce mode (visibility/enforcement.py, #2015).
 
-Drives ``VisibilityEnforcementMiddleware.on_call_tool`` directly with a fake
-context + fake call_next (mirrors tests/src/unit/test_read_only.py). The config
-load and the resolver's ``load_hidden_set`` are both steered by patching the
-resolver module's ``get_data_dir`` / ``load_visibility_config`` seam, so no file
-I/O or Docker is needed.
+Drives the inbound + outbound enforcement middleware pair directly with a fake
+context + fake call_next (mirrors tests/src/unit/test_read_only.py), chained in
+server registration order via ``make_mw``. The config load and the resolver's
+``load_hidden_set`` are both steered by patching the resolver module's
+``get_data_dir`` / ``load_visibility_config`` seam, so no file I/O or Docker is
+needed.
 """
 
 import json
@@ -16,7 +17,8 @@ from fastmcp.exceptions import ToolError
 from ha_mcp.errors import create_entity_not_found_error
 from ha_mcp.visibility import enforcement, resolver
 from ha_mcp.visibility.enforcement import (
-    VisibilityEnforcementMiddleware,
+    VisibilityInboundEnforcement,
+    VisibilityOutboundEnforcement,
     _build_hidden_regex,
     active_hidden_regex,
     scrub_records,
@@ -52,6 +54,30 @@ def _returns(result):
         return result
 
     return _call_next
+
+
+class _ChainedEnforcement:
+    """Inbound + outbound halves chained in server registration order.
+
+    The server registers the inbound half before read-only/policy and the
+    outbound half innermost; from the enforcement pair's own perspective the
+    composition is inbound-wrapping-outbound, which this reproduces so tests
+    exercise the full conceal/refuse/scan pipeline through one entry point.
+    """
+
+    def __init__(self, get_client):
+        self.inbound = VisibilityInboundEnforcement(get_client=get_client)
+        self.outbound = VisibilityOutboundEnforcement(get_client=get_client)
+
+    async def on_call_tool(self, context, call_next):
+        async def _inner(ctx):
+            return await self.outbound.on_call_tool(ctx, call_next)
+
+        return await self.inbound.on_call_tool(context, _inner)
+
+
+def make_mw(*, get_client):
+    return _ChainedEnforcement(get_client)
 
 
 class FakeClient:
@@ -123,7 +149,7 @@ class TestInactivePassthrough:
     async def test_disabled_passes_through(self, set_config):
         set_config(enabled=False, enforce=True, deny_entity_ids=["sensor.hidden"])
         client = FakeClient()
-        mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
+        mw = make_mw(get_client=lambda: client)
         result = await mw.on_call_tool(
             make_context("ha_get_state", {"entity_id": "sensor.hidden"}),
             _returns(text_result("body")),
@@ -134,7 +160,7 @@ class TestInactivePassthrough:
     async def test_enforce_off_passes_through(self, set_config):
         set_config(enabled=True, enforce=False, deny_entity_ids=["sensor.hidden"])
         client = FakeClient()
-        mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
+        mw = make_mw(get_client=lambda: client)
         result = await mw.on_call_tool(
             make_context("ha_get_state", {"entity_id": "sensor.hidden"}),
             _returns(text_result("body")),
@@ -146,7 +172,7 @@ class TestInactivePassthrough:
         # enabled + enforce but every hide dimension cleared -> hides nothing.
         set_config(enabled=True, enforce=True)
         client = FakeClient()
-        mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
+        mw = make_mw(get_client=lambda: client)
         result = await mw.on_call_tool(
             make_context("ha_get_state", {"entity_id": "sensor.whatever"}),
             _returns(text_result("body")),
@@ -163,7 +189,7 @@ class TestInactivePassthrough:
 class TestInboundScan:
     async def test_exact_match_concealed_as_not_found(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context("ha_get_state", {"entity_id": "sensor.hidden"}),
@@ -177,7 +203,7 @@ class TestInboundScan:
     async def test_exact_match_on_service_call_write_is_concealed(self, set_config):
         # The inbound scan applies to EVERY tool, including a write/service call.
         set_config(enabled=True, enforce=True, deny_entity_ids=["lock.front"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context(
@@ -192,7 +218,7 @@ class TestInboundScan:
 
     async def test_embedded_match_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context(
@@ -206,7 +232,7 @@ class TestInboundScan:
 
     async def test_clean_args_pass_to_tool(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         result = await mw.on_call_tool(
             make_context("ha_get_state", {"entity_id": "light.visible"}),
             _returns(text_result("visible body")),
@@ -217,7 +243,7 @@ class TestInboundScan:
         # HA config payloads key maps by entity_id (a scene's ``entities``); a
         # hidden id positioned as a dict KEY must be caught like a value.
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context(
@@ -232,7 +258,7 @@ class TestInboundScan:
 
     async def test_embedded_match_in_dict_key_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context(
@@ -271,7 +297,7 @@ class TestConfigLoadFailure:
         # enforcement. With no last-known-good config it fails closed with the
         # structured enforce-mode error.
         breakable_config["broken"] = True
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context("ha_get_state", {"entity_id": "light.any"}),
@@ -286,7 +312,7 @@ class TestConfigLoadFailure:
     ):
         # Availability: a non-enforce install whose file corrupts mid-session
         # keeps working on the last-known-good (enforce-off) config.
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         result = await mw.on_call_tool(
             make_context("ha_get_state", {"entity_id": "light.any"}),
             _returns(text_result("first")),
@@ -310,7 +336,7 @@ class TestConfigLoadFailure:
             exclude_categories=[],
             deny_entity_ids=["sensor.hidden"],
         )
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         result = await mw.on_call_tool(
             make_context("ha_get_state", {"entity_id": "light.visible"}),
             _returns(text_result("fine")),
@@ -337,7 +363,7 @@ class TestProxyUnwrap:
         # the raw string only *embeds* the id, but unwrapping parses it so the
         # inner exact entity_id yields concealment, not the generic refusal.
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context(
@@ -362,7 +388,7 @@ class TestProxyUnwrap:
 class TestOutboundScan:
     async def test_text_content_hit_refused_without_naming_entity(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context("ha_get_logs", {}),
@@ -375,7 +401,7 @@ class TestOutboundScan:
 
     async def test_structured_content_hit_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context("ha_config_get_dashboard", {}),
@@ -387,7 +413,7 @@ class TestOutboundScan:
 
     async def test_clean_output_passes_through(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         result = await mw.on_call_tool(
             make_context("ha_get_logs", {}),
             _returns(text_result("nothing restricted here", structured={"ok": True})),
@@ -396,7 +422,7 @@ class TestOutboundScan:
 
     async def test_clean_tool_error_passes_through_unmodified(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         original = json.dumps(
             {"error": {"code": "SERVICE_CALL_FAILED", "message": "x"}}
         )
@@ -410,7 +436,7 @@ class TestOutboundScan:
 
     async def test_tool_error_naming_hidden_id_replaced(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
 
         async def _raise_leaky(context):
             raise ToolError(
@@ -454,7 +480,7 @@ class TestBoundaryRegex:
 class TestUnscannableSurfaces:
     async def test_custom_tool_code_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context("ha_manage_custom_tool", {"code": "print(1)"}),
@@ -464,7 +490,7 @@ class TestUnscannableSurfaces:
 
     async def test_custom_tool_run_saved_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError):
             await mw.on_call_tool(
                 make_context("ha_manage_custom_tool", {"run_saved": "t"}),
@@ -473,7 +499,7 @@ class TestUnscannableSurfaces:
 
     async def test_custom_tool_list_saved_allowed(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         result = await mw.on_call_tool(
             make_context("ha_manage_custom_tool", {"list_saved": True}),
             _returns(text_result("saved tools list")),
@@ -482,7 +508,7 @@ class TestUnscannableSurfaces:
 
     async def test_screenshot_tool_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context("ha_get_dashboard_screenshot", {"dashboard": "x"}),
@@ -494,7 +520,7 @@ class TestUnscannableSurfaces:
         # The dashboard WRITE tool shares the native-image capture path:
         # return_screenshot hands back pixels no text scan can inspect.
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context(
@@ -507,7 +533,7 @@ class TestUnscannableSurfaces:
 
     async def test_set_dashboard_without_screenshot_allowed(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         result = await mw.on_call_tool(
             make_context("ha_config_set_dashboard", {"url_path": "clean-dash"}),
             _returns(text_result("dashboard saved")),
@@ -516,7 +542,7 @@ class TestUnscannableSurfaces:
 
     async def test_dashboard_with_screenshot_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError):
             await mw.on_call_tool(
                 make_context("ha_config_get_dashboard", {"include_screenshot": True}),
@@ -525,7 +551,7 @@ class TestUnscannableSurfaces:
 
     async def test_plain_dashboard_read_allowed_and_scanned(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
-        mw = VisibilityEnforcementMiddleware(get_client=FakeClient)
+        mw = make_mw(get_client=FakeClient)
         result = await mw.on_call_tool(
             make_context("ha_config_get_dashboard", {}),
             _returns(text_result("clean dashboard config")),
@@ -542,7 +568,7 @@ class TestCacheAndFallback:
     async def test_cache_reused_within_ttl(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.a"])
         client = FakeClient()
-        mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
+        mw = make_mw(get_client=lambda: client)
         for _ in range(3):
             await mw.on_call_tool(
                 make_context("ha_get_overview", {}), _returns(text_result("clean"))
@@ -552,7 +578,7 @@ class TestCacheAndFallback:
     async def test_cache_invalidated_on_config_change(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.a"])
         client = FakeClient()
-        mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
+        mw = make_mw(get_client=lambda: client)
         await mw.on_call_tool(
             make_context("ha_get_overview", {}), _returns(text_result("clean"))
         )
@@ -569,7 +595,7 @@ class TestCacheAndFallback:
         clock = {"t": 1000.0}
         monkeypatch.setattr(enforcement.time, "monotonic", lambda: clock["t"])
         client = FakeClient()
-        mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
+        mw = make_mw(get_client=lambda: client)
         await mw.on_call_tool(
             make_context("ha_get_overview", {}), _returns(text_result("clean"))
         )
@@ -587,7 +613,7 @@ class TestCacheAndFallback:
         clock = {"t": 1000.0}
         monkeypatch.setattr(enforcement.time, "monotonic", lambda: clock["t"])
         client = FakeClient()
-        mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
+        mw = make_mw(get_client=lambda: client)
         # Prime the cache with a good refresh.
         await mw.on_call_tool(
             make_context("ha_get_overview", {}), _returns(text_result("clean"))
@@ -606,7 +632,7 @@ class TestCacheAndFallback:
     async def test_fail_closed_with_no_data(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
         client = FakeClient(fail=True)  # no good refresh ever
-        mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
+        mw = make_mw(get_client=lambda: client)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context("ha_get_state", {"entity_id": "sensor.anything"}),
@@ -704,7 +730,7 @@ class TestScrubSeam:
     async def test_active_hidden_regex_uses_shared_cache(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
         client = FakeClient()
-        mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
+        mw = make_mw(get_client=lambda: client)
         # Middleware call primes the module-shared TTL cache...
         await mw.on_call_tool(
             make_context("ha_get_overview", {}), _returns(text_result("clean"))
@@ -745,7 +771,7 @@ class TestFallbackScoping:
         # failing, the middleware must fail closed, not serve A's set.
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.a"])
         client = FakeClient()
-        mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
+        mw = make_mw(get_client=lambda: client)
         await mw.on_call_tool(
             make_context("ha_get_overview", {}), _returns(text_result("clean"))
         )
@@ -768,7 +794,22 @@ class TestFallbackScoping:
         # a returned-but-unusable payload as data-unavailable.
         set_config(enabled=True, enforce=True, exclude_areas=["bedroom"])
         client = FakeClient(device={"success": False})
-        mw = VisibilityEnforcementMiddleware(get_client=lambda: client)
+        mw = make_mw(get_client=lambda: client)
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "light.any"}),
+                _unreached_call_next,
+            )
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_null_device_registry_entry_fails_closed(self, set_config):
+        # A degenerate success payload ({"result": [null]}) passes the shape
+        # check but parses to empty device maps — per-entry validation must
+        # treat it as unavailable rather than silently dropping device-
+        # inherited area/label denies (Codex round 2, P2).
+        set_config(enabled=True, enforce=True, exclude_areas=["bedroom"])
+        client = FakeClient(device={"success": True, "result": [None]})
+        mw = make_mw(get_client=lambda: client)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context("ha_get_state", {"entity_id": "light.any"}),

@@ -2,8 +2,10 @@
 
 The visibility filter (``visibility/``) normally only declutters ``ha_search`` /
 ``ha_get_overview``. When a user turns on ``enforce`` (Entity Visibility tab, or
-``"enforce": true`` in ``entity_visibility.json``), :class:`VisibilityEnforcementMiddleware`
-makes the hidden set genuinely unreadable across ALL tools — "refuse on contact":
+``"enforce": true`` in ``entity_visibility.json``), the
+:class:`VisibilityInboundEnforcement` / :class:`VisibilityOutboundEnforcement`
+middleware pair makes the hidden set genuinely unreadable across ALL tools —
+"refuse on contact":
 
 - **Direct reads are concealed.** A call whose arguments name a hidden entity_id
   exactly is refused BEFORE the tool runs with a canonical ``ENTITY_NOT_FOUND``,
@@ -275,13 +277,18 @@ def _config_cache_key(config: VisibilityConfig) -> str:
     return json.dumps(config.to_wire(), sort_keys=True)
 
 
-class VisibilityEnforcementMiddleware(Middleware):
-    """Refuse-on-contact enforcement of the entity visibility filter (#2015).
+class _VisibilityEnforcementBase(Middleware):
+    """Shared config gate + hidden-set access for the two enforcement halves.
 
-    Installed innermost so its outbound scan sees the raw tool output before any
-    other middleware transforms it. Consults the live config per request via the
-    memoized loader; a passthrough (with only the config-load cost) whenever
-    enforce is off or the config hides nothing.
+    Enforcement is deliberately SPLIT into an inbound and an outbound middleware
+    (issue #2015, Codex round 2): the inbound conceal/refuse gate must run
+    BEFORE PolicyMiddleware and the read-only guard, or a call naming a hidden
+    entity would be stored verbatim in the approval queue (and the client would
+    see an approval-pending response instead of the promised not-found —
+    confirming existence). The outbound scan must instead run INNERMOST so it
+    sees the raw tool output before any other middleware transforms it. Both
+    halves consult the live config per request via the memoized loader and are
+    a passthrough whenever enforce is off or the config hides nothing.
     """
 
     def __init__(self, *, get_client: Callable[[], Any]) -> None:
@@ -295,16 +302,17 @@ class VisibilityEnforcementMiddleware(Middleware):
             resolver.load_visibility_config, resolver.get_data_dir()
         )
 
-    async def on_call_tool(
-        self, context: MiddlewareContext, call_next: CallNext
-    ) -> Any:
-        # The active-mode gate must not crash the call with an opaque trace on an
-        # unloadable config (a hand-edit typo would break EVERY tool call), nor
-        # silently disable enforcement (the file is the only record of whether
-        # enforce was on). Policy: fall back to the last config this process
-        # loaded successfully — for the common non-enforce install that preserves
-        # availability, and for an enforce install it preserves the boundary.
-        # With no good load ever, fail CLOSED like PolicyMiddleware does.
+    async def _active_config(self, tool_name: str) -> VisibilityConfig | None:
+        """Return the config when enforce is active, ``None`` when passthrough.
+
+        The active-mode gate must not crash the call with an opaque trace on an
+        unloadable config (a hand-edit typo would break EVERY tool call), nor
+        silently disable enforcement (the file is the only record of whether
+        enforce was on). Policy: fall back to the last config this process
+        loaded successfully — for the common non-enforce install that preserves
+        availability, and for an enforce install it preserves the boundary.
+        With no good load ever, fail CLOSED like PolicyMiddleware does.
+        """
         config: VisibilityConfig | None
         try:
             config = await self._load_config()
@@ -317,12 +325,37 @@ class VisibilityEnforcementMiddleware(Middleware):
                 exc_info=True,
             )
         if config is None:
-            _raise_enforced(context.message.name, _CONFIG_LOAD_FAILED_REASON)
+            _raise_enforced(tool_name, _CONFIG_LOAD_FAILED_REASON)
         if not (
             config.enabled
             and config.enforce
             and config_has_active_hide_dimensions(config)
         ):
+            return None
+        return config
+
+    async def _hidden_and_regex(
+        self, config: VisibilityConfig
+    ) -> tuple[set[str], re.Pattern[str] | None]:
+        """Resolve the hidden set + regex through the module-shared cache."""
+        return await _hidden_cache.get(config, self._get_client())
+
+
+class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
+    """Pre-execution half: unscannable refusals + argument conceal/refuse.
+
+    Registered BEFORE the read-only guard and PolicyMiddleware so a hidden
+    entity_id is concealed before it can reach the approval queue (raw
+    arguments are stored there and rendered in the settings UI) and so the
+    concealing not-found — which reveals the least — wins over a read-only or
+    approval response.
+    """
+
+    async def on_call_tool(
+        self, context: MiddlewareContext, call_next: CallNext
+    ) -> Any:
+        config = await self._active_config(context.message.name)
+        if config is None:
             return await call_next(context)
 
         name = context.message.name
@@ -339,7 +372,7 @@ class VisibilityEnforcementMiddleware(Middleware):
             _raise_enforced(name, _FAIL_CLOSED_REASON)
 
         self._scan_inbound(name, args, hidden, regex)
-        return await self._call_and_scan_outbound(name, context, call_next, regex)
+        return await call_next(context)
 
     def _scan_inbound(
         self,
@@ -365,6 +398,27 @@ class VisibilityEnforcementMiddleware(Middleware):
             logger.info("visibility enforce: refused embedded hidden id in %s", name)
             _raise_enforced(name, _inbound_reason(name))
 
+
+class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
+    """Post-execution half: refuse any result (or tool error) naming a hidden id.
+
+    Registered LAST (innermost) so it scans the raw tool output before any
+    other middleware transforms it.
+    """
+
+    async def on_call_tool(
+        self, context: MiddlewareContext, call_next: CallNext
+    ) -> Any:
+        config = await self._active_config(context.message.name)
+        if config is None:
+            return await call_next(context)
+        name = context.message.name
+        try:
+            _hidden, regex = await self._hidden_and_regex(config)
+        except VisibilityDataUnavailable:
+            _raise_enforced(name, _FAIL_CLOSED_REASON)
+        return await self._call_and_scan_outbound(name, context, call_next, regex)
+
     async def _call_and_scan_outbound(
         self,
         name: str,
@@ -384,12 +438,6 @@ class VisibilityEnforcementMiddleware(Middleware):
             logger.info("visibility enforce: refused result from %s", name)
             _raise_enforced(name, _outbound_reason(name))
         return result
-
-    async def _hidden_and_regex(
-        self, config: VisibilityConfig
-    ) -> tuple[set[str], re.Pattern[str] | None]:
-        """Resolve the hidden set + regex through the module-shared cache."""
-        return await _hidden_cache.get(config, self._get_client())
 
 
 async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> set[str]:
@@ -412,17 +460,24 @@ async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> set[str]
         if isinstance(item, BaseException):
             raise VisibilityDataUnavailable("registry/state fetch failed") from item
     device_result = fetched[2] if need_device else None
-    if need_device and not (
-        isinstance(device_result, dict)
-        and device_result.get("success")
-        and isinstance(device_result.get("result"), list)
-    ):
-        # The resolver's device parser fails open to empty maps even under
-        # strict (the search path relies on that), so a device-registry
-        # payload an active area/label dimension NEEDS must be validated
-        # here: an entity restricted only via its device's area/labels
-        # would otherwise silently drop out of the hidden set.
-        raise VisibilityDataUnavailable("device registry unusable")
+    if need_device:
+        # The resolver's device parser fails open (skips unusable payloads and
+        # entries) even under strict — the search path relies on that — so a
+        # device-registry payload an active area/label dimension NEEDS must be
+        # validated here: an entity restricted only via its device's area or
+        # labels would otherwise silently drop out of the hidden set. That
+        # includes per-ENTRY validation (a well-formed HA device entry is a
+        # dict with an ``id``): a degenerate ``{"success": true, "result":
+        # [null]}`` payload passes the shape check but parses to empty maps.
+        if not (
+            isinstance(device_result, dict)
+            and device_result.get("success")
+            and isinstance(device_result.get("result"), list)
+        ):
+            raise VisibilityDataUnavailable("device registry unusable")
+        for device in device_result["result"]:
+            if not isinstance(device, dict) or not device.get("id"):
+                raise VisibilityDataUnavailable("device registry entry unusable")
     hidden, _warnings = await load_hidden_set(
         fetched[1], fetched[0], client, device_result, strict=True
     )
