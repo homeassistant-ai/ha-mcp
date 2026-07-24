@@ -23,6 +23,7 @@ import contextlib
 import logging
 import os
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 
 try:  # POSIX
     import fcntl
@@ -55,15 +56,30 @@ async def config_write_guard() -> AsyncIterator[None]:
     writers (the dev tools' ``asyncio.to_thread`` sections) hold the asyncio
     lock on the loop and take ``config_file_lock()`` inside the thread
     instead.
+
+    The file lock is acquired and released in a worker thread: ``flock`` is a
+    blocking syscall, and taking it on the event loop would stall every
+    connected client whenever another process holds the lock (or the data dir
+    sits on a filesystem where locking is slow). Cross-thread enter/exit is
+    safe — flock and msvcrt locks belong to the open file description, not
+    the acquiring thread.
     """
     async with get_config_write_lock():
-        with config_file_lock():
+        file_lock = config_file_lock()
+        await asyncio.to_thread(file_lock.__enter__)
+        try:
             yield
+        finally:
+            await asyncio.to_thread(file_lock.__exit__, None, None, None)
 
 
 @contextlib.contextmanager
-def config_file_lock() -> Iterator[None]:
+def config_file_lock(data_dir: Path | None = None) -> Iterator[None]:
     """Advisory CROSS-PROCESS lock over the config/policy write files.
+
+    ``data_dir`` overrides the lockfile directory (default: the live data
+    dir) — pass it when operating on an explicit directory, as the policy
+    migration does, so the lock lives beside the files it guards.
 
     The asyncio lock above only serializes writers within one process, but
     stdio deployments run the settings-UI sidecar as a SEPARATE process from
@@ -81,13 +97,12 @@ def config_file_lock() -> Iterator[None]:
     """
     from .data_paths import get_data_dir
 
+    lock_dir = data_dir if data_dir is not None else get_data_dir()
     fd: int | None = None
     locked = False
     try:
         try:
-            fd = os.open(
-                get_data_dir() / ".config_write.lock", os.O_CREAT | os.O_RDWR, 0o600
-            )
+            fd = os.open(lock_dir / ".config_write.lock", os.O_CREAT | os.O_RDWR, 0o600)
             if fcntl is not None:
                 fcntl.flock(fd, fcntl.LOCK_EX)
                 locked = True

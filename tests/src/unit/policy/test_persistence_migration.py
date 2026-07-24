@@ -137,3 +137,23 @@ class TestMigration:
     def test_invalid_schema_left_alone(self, tmp_path):
         _write_raw(tmp_path, {"rules": [{"tool_name": ""}], "version": 0})
         assert migrate_policy_any_semantics(tmp_path) is False
+
+    def test_migration_holds_cross_process_lock(self, tmp_path, monkeypatch):
+        # The read-split-save must run under config_file_lock(data_dir) so a
+        # concurrent writer in another process (the stdio sidecar) can't
+        # interleave with the migration (Patch76 review).
+        import contextlib
+
+        from ha_mcp.utils import config_write_lock as cwl
+
+        entered: list = []
+
+        @contextlib.contextmanager
+        def recording_lock(data_dir=None):
+            entered.append(data_dir)
+            yield
+
+        monkeypatch.setattr(cwl, "config_file_lock", recording_lock)
+        _write_raw(tmp_path, {"rules": [], "version": 0})
+        migrate_policy_any_semantics(tmp_path)
+        assert entered == [tmp_path]

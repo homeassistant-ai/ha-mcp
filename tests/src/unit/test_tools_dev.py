@@ -847,6 +847,22 @@ class TestManageToolsGate:
         assert len(rules) == 1
         assert rules[0].when  # the conditional rule remains
 
+    async def test_gate_on_inserts_before_wildcard(self, dev_tools):
+        # A NEW bare gate lands BEFORE an existing wildcard rule, mirroring
+        # the web UI's wildcardInsertIndex: find_matching_rule() is
+        # first-match, so a gate appended after `*` would resolve this tool's
+        # calls to the wildcard's remember_minutes/matched_rule (Patch76).
+        from ha_mcp.policy.model import Policy, Rule
+        from ha_mcp.policy.persistence import save_policy
+
+        save_policy(
+            get_data_dir(), Policy(rules=[Rule(tool_name="*", remember_minutes=60)])
+        )
+        await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=True
+        )
+        assert [r.tool_name for r in self._rules()] == ["ha_call_service", "*"]
+
     async def test_combined_set_tool_is_atomic_on_validation_failure(self, dev_tools):
         # A combined state+gate request whose state fails validation must NOT
         # have persisted the gate rule — preflight validates before any write.
@@ -891,6 +907,17 @@ class TestListToolStates:
         rows = {r["name"]: r for r in result["data"]["tools"]}
         assert rows["ha_search"]["mandatory"] is True
         assert rows["ha_get_skill_guide"]["bps_locked"] is True
+
+    async def test_list_warns_on_corrupt_policy(self):
+        # A corrupt tool_policy.json must not read as a clean no-gates
+        # policy: the listing degrades (gated=False everywhere) but carries
+        # a warning, where get_policy/set_tool raise CONFIG_INVALID.
+        _seed_metadata([{"name": "ha_search", "tags": ["Search"]}])
+        (get_data_dir() / "tool_policy.json").write_text("{not json", encoding="utf-8")
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(action="list_tools")
+        rows = {r["name"]: r for r in result["data"]["tools"]}
+        assert rows["ha_search"]["gated"] is False
+        assert any("tool_policy.json is invalid" in w for w in result["warnings"])
 
 
 class TestManagePolicy:

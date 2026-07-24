@@ -46,7 +46,19 @@ def migrate_policy_any_semantics(data_dir: Path) -> bool:
     Detection reads the RAW json: the Policy model defaults
     ``schema_version`` to current, which would mask an unstamped file.
     Missing or corrupt files are left alone (load_policy surfaces corruption).
+
+    The whole read-split-save runs under ``config_file_lock()`` so a
+    concurrent writer in another process (the stdio settings sidecar) can't
+    interleave with the migration's read-modify-write. Startup runs before
+    the event loop, so taking the blocking lock inline is safe here.
     """
+    from ..utils.config_write_lock import config_file_lock
+
+    with config_file_lock(data_dir):
+        return _migrate_policy_any_semantics_locked(data_dir)
+
+
+def _migrate_policy_any_semantics_locked(data_dir: Path) -> bool:
     path = data_dir / POLICY_FILENAME
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))

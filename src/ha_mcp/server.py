@@ -1025,8 +1025,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
             migrate_policy_any_semantics(_get_data_dir())
         except Exception:
-            logger.warning(
-                "tool_policy.json ANY-match migration failed; continuing",
+            logger.error(
+                "tool_policy.json ANY-match migration failed; continuing. The "
+                "file may still carry pre-ANY semantics: multi-condition rules "
+                "will gate only when ALL conditions match, while the policy "
+                "editor presents them as ANY-match. Fix the file (or re-save "
+                "the policy in the settings UI) and restart.",
                 exc_info=True,
             )
 

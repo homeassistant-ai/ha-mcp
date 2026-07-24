@@ -884,13 +884,18 @@ class DevTools:
         return load_tool_metadata_cache()
 
     @staticmethod
-    def _gated_tool_names() -> set[str]:
+    def _gated_tool_names() -> set[str] | None:
         """Tool names carrying the bare unconditional gate (the Tools-tab toggle).
 
         The Tools-tab per-tool gate toggle manages only the bare rule (no
         predicates); conditional rules are authored in the Policies tab. Keying
         this on the bare rule keeps the reported toggle state consistent with
         what set_tool(gated=...) writes.
+
+        Returns ``None`` when ``tool_policy.json`` is unreadable — the caller
+        must surface that (a silent ``set()`` would render every tool
+        ``gated=False``, indistinguishable from a clean no-gates policy, while
+        the sibling actions raise CONFIG_INVALID for the same file).
         """
         from ..policy.persistence import load_policy
         from ..utils.data_paths import get_data_dir
@@ -898,7 +903,7 @@ class DevTools:
         try:
             policy = load_policy(get_data_dir())
         except ValueError:
-            return set()
+            return None
         return {rule.tool_name for rule in policy.rules if not rule.when}
 
     async def _list_tool_states(self) -> dict[str, Any]:
@@ -924,6 +929,16 @@ class DevTools:
         env_pinned = env_pinned_tools()
         overrides = load_llm_api_overrides()
         gated = self._gated_tool_names()
+        warnings: list[str] = []
+        if gated is None:
+            # Degrade rather than fail the whole listing: states/exposure stay
+            # useful for troubleshooting, but the gate column must not read as
+            # a clean no-gates policy.
+            gated = set()
+            warnings.append(
+                "tool_policy.json is invalid; 'gated' is reported as false "
+                "for every tool. Call get_policy for the parse error."
+            )
         mandatory = effective_mandatory_tools(settings)
         bps_locked = set(_bps_locked_tools())
 
@@ -957,7 +972,7 @@ class DevTools:
             }
             for t in metadata
         ]
-        return {
+        result: dict[str, Any] = {
             "success": True,
             "data": {
                 "tools": rows,
@@ -971,6 +986,9 @@ class DevTools:
                 "llm_api_available": is_embedded(),
             },
         }
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     async def _apply_set_tool(
         self,
@@ -1309,9 +1327,16 @@ class DevTools:
 
         has_bare = any(r.tool_name == tool and not r.when for r in policy.rules)
         if gated and not has_bare:
-            updated = policy.model_copy(
-                update={"rules": [*policy.rules, Rule(tool_name=tool)]}
+            # Insert before the first wildcard rule (mirrors the web UI's
+            # wildcardInsertIndex): find_matching_rule() is first-match, so a
+            # gate appended after a `*` rule would never supply this tool's
+            # remember_minutes / matched_rule.
+            rules = list(policy.rules)
+            insert_at = next(
+                (i for i, r in enumerate(rules) if r.tool_name == "*"), len(rules)
             )
+            rules.insert(insert_at, Rule(tool_name=tool))
+            updated = policy.model_copy(update={"rules": rules})
             return updated, True
         if not gated and has_bare:
             updated = policy.model_copy(

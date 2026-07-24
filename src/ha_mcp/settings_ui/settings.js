@@ -327,6 +327,15 @@ async function policyPut(policy, opLabel) {
   return await w.json();
 }
 
+// Where a NEW tool's rules belong in the rule list: before the first
+// wildcard rule, else at the end. find_matching_rule() is first-match (it
+// supplies remember_minutes and the matched_rule shown to the user), so a
+// tool-specific rule appended after a `*` rule would never be the match.
+function wildcardInsertIndex(rules) {
+  const idx = rules.findIndex(rule => rule.tool_name === '*');
+  return idx === -1 ? rules.length : idx;
+}
+
 async function syncPolicyRule(toolName, gated) {
   const r = await fetch('./api/policy/config');
   if (!r.ok) throw new Error(t('policies.errors.load', {status: r.status}, 'Could not load policy: ' + r.status));
@@ -340,7 +349,8 @@ async function syncPolicyRule(toolName, gated) {
     rule.tool_name === toolName && (!rule.when || rule.when.length === 0);
   if (gated) {
     if (!policy.rules.some(isBareGate)) {
-      policy.rules.push({tool_name: toolName, when: [], remember_minutes: 0});
+      policy.rules.splice(wildcardInsertIndex(policy.rules), 0,
+        {tool_name: toolName, when: [], remember_minutes: 0});
     }
   } else {
     policy.rules = policy.rules.filter(rule => !isBareGate(rule));
@@ -3156,7 +3166,10 @@ async function savePolicyRule(toolName, ruleObj) {
       others.push(rule);
     }
   });
-  if (insertAt === -1) insertAt = others.length;
+  // A tool with no existing rule inserts before the first wildcard rule (not
+  // at the end): first-match would otherwise resolve the tool's calls to the
+  // wildcard's remember_minutes, never the new rule's.
+  if (insertAt === -1) insertAt = wildcardInsertIndex(others);
   policy.rules = others.slice(0, insertAt).concat(expanded, others.slice(insertAt));
   await policyPut(policy, t('policies.operations.save_rule', {}, 'Save rule'));
 }

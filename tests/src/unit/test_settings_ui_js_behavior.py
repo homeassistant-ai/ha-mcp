@@ -1425,6 +1425,87 @@ class TestPolicyTabFlow:
             f"tool rule moved behind the wildcard: {rules}"
         )
 
+    def test_new_tool_rule_inserts_before_wildcard(self, settings_script: str) -> None:
+        """A tool with NO existing rule must insert BEFORE a wildcard rule,
+        not append after it — first-match would otherwise resolve the tool's
+        calls to the wildcard's remember_minutes (Patch76 review: the branch
+        the in-place reorder fix doesn't cover)."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 1,
+                    "rules": [
+                        {"tool_name": "ha_restart", "when": [], "remember_minutes": 0},
+                        {"tool_name": "*", "when": [], "remember_minutes": 60},
+                    ],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await window.savePolicyRule('ha_call_service', {
+                tool_name: 'ha_call_service',
+                conditions: [[{path: 'args.domain', op: 'eq', value: 'lock'}]],
+                remember_minutes: 5
+              });
+            """,
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1
+        rules = json.loads(puts[0]["body"])["rules"]
+        assert [r["tool_name"] for r in rules] == [
+            "ha_restart",
+            "ha_call_service",
+            "*",
+        ], f"new tool rule appended after the wildcard: {rules}"
+
+    def test_gate_toggle_on_inserts_before_wildcard(self, settings_script: str) -> None:
+        """The Tools-tab gate toggle has the same new-rule case: a fresh bare
+        gate must land before an existing wildcard rule."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 1,
+                    "rules": [
+                        {"tool_name": "*", "when": [], "remember_minutes": 60},
+                    ],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="await window.syncPolicyRule('ha_call_service', true);",
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+        assert len(puts) == 1
+        rules = json.loads(puts[0]["body"])["rules"]
+        assert [r["tool_name"] for r in rules] == ["ha_call_service", "*"], (
+            f"bare gate appended after the wildcard: {rules}"
+        )
+
     def test_load_collapses_tool_rules_into_one_card(
         self, settings_script: str
     ) -> None:
