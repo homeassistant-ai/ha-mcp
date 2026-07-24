@@ -161,9 +161,11 @@ class TestCapabilityPresence:
             assert cap in wsapi.CAPABILITIES
 
     def test_component_version(self):
-        # Capabilities are advertised by name, never version-inferred, so new
-        # caps ride any pending version without a bump; this assertion just
-        # pins the declared version (dashboards_doc_search shipped in 1.2.4).
+        # 1.2.4 OPENS the pending version: the latest stable (v7.14.2, the
+        # `stable` tag) shipped 1.2.3, so master was level with stable and
+        # AGENTS.md's release-cycle rule calls for one patch bump. Capabilities
+        # are advertised by name, never version-inferred; this assertion just
+        # pins the declared version (dashboards_doc_search rides 1.2.4).
         assert wsapi.COMPONENT_VERSION == "1.2.4"
 
 
