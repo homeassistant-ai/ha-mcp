@@ -160,13 +160,13 @@ class TestCapabilityPresence:
         ):
             assert cap in wsapi.CAPABILITIES
 
-    # NOTE: no literal component-version pin here. Capabilities are advertised
-    # by name, never version-inferred, and manifest/const lockstep is covered by
-    # test_manifest_version_parity — a literal pin only forced test churn on
-    # every bump and bred release-cycle narration in comments that rotted as
-    # soon as the next stable shipped (a "Pending 1.2.3" claim outlived its
-    # truth by exactly one release). The release-cycle bump rules live in
-    # AGENTS.md ("Version bumps ride the stable release cycle").
+    # NOTE: no version pin here. Capabilities are advertised by name, never
+    # version-inferred, and the single authoritative version pin (lockstep +
+    # literal, downgrade/conscious-ack guard) is test_manifest_version_parity —
+    # duplicating the literal here only doubled per-bump churn and bred
+    # release-cycle narration in comments that rotted as soon as the next
+    # stable shipped (a "Pending 1.2.3" claim outlived its truth by one
+    # release). Bump rules live in AGENTS.md.
 
 
 # =============================================================================
