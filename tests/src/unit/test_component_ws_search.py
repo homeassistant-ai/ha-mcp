@@ -739,6 +739,7 @@ class TestInfo:
             "backup_prep",
             "registries",
             "dashboards",
+            "dashboards_doc_search",
             "services_list",
             "reference_data",
             "search_visibility",
@@ -768,7 +769,7 @@ class TestInfo:
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "1.2.3"
+        assert manifest["version"] == COMPONENT_VERSION == "1.3.0"
 
 
 # =============================================================================

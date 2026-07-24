@@ -4235,7 +4235,7 @@ async def _dashboard_search_docs(
     try:
         from homeassistant.components.lovelace.const import ConfigNotFound
     except Exception:  # pragma: no cover - defensive; core drift
-        ConfigNotFound = None  # type: ignore[assignment]
+        ConfigNotFound = None
 
     docs: list[dict[str, Any]] = []
     yaml_skipped = 0
