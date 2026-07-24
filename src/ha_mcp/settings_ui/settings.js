@@ -4105,6 +4105,7 @@ async function visibilityLoadConfig() {
   visibilityVersion = c.version ?? 1;
   const cats = c.exclude_categories || [];
   document.getElementById('visibility-enabled').checked = !!c.enabled;
+  document.getElementById('visibility-enforce').checked = !!c.enforce;
   document.getElementById('visibility-cat-diagnostic').checked = cats.includes('diagnostic');
   document.getElementById('visibility-cat-config').checked = cats.includes('config');
   document.getElementById('visibility-exclude-hidden').checked = !!c.exclude_hidden;
@@ -4125,6 +4126,7 @@ async function visibilitySaveConfig() {
   const config = {
     version: visibilityVersion,
     enabled: document.getElementById('visibility-enabled').checked,
+    enforce: document.getElementById('visibility-enforce').checked,
     exclude_categories: cats,
     exclude_hidden: document.getElementById('visibility-exclude-hidden').checked,
     deny_entity_ids: _visibilityParseList(document.getElementById('visibility-deny').value, '\n'),

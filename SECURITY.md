@@ -95,6 +95,28 @@ they are the intended behavior. Restricting HA permissions is done in Home
 Assistant (e.g. by creating a non-admin user and generating a token for that
 user).
 
+### Entity visibility enforce mode is best-effort concealment
+
+The opt-in entity visibility filter's **enforce mode** (`"enforce": true`, see
+the [Entity visibility filter FAQ](docs/FAQ.md#enforce-mode)) makes a hidden set
+unreadable across all tools: direct reads of a hidden entity are refused with a
+generic not-found before the tool runs, and content reads (dashboards, templates,
+automations, traces, logs, files) that would surface a hidden entity_id are
+refused on contact. It fails closed when the registry cannot be loaded. This is a
+strong barrier against an agent *incidentally* surfacing a hidden entity, not a
+cryptographic guarantee: enforcement is a text scan for the hidden entity_id, so a
+Jinja template or sandbox-adjacent computation that *derives* a hidden entity's
+state without ever naming its entity_id cannot be caught. The guaranteed property
+is that a hidden entity's data never flows to the client — existence concealment
+is best-effort: the concealment error is a canonical not-found, and per-tool
+not-found shapes vary (details text, suggestions, bulk reads that normally
+partial-succeed), so a prober comparing error shapes may infer that an id is
+hidden rather than absent. Enforce mode is not a
+defense against an adversarial prompt author deliberately trying to exfiltrate a
+hidden entity's state, and (like the default filter) it is not a substitute for
+Home Assistant's own permission model — restrict what the configured token can
+reach in HA for a hard boundary.
+
 ### OAuth Bearer token design
 
 In OAuth mode, access and refresh tokens are HMAC-signed, stateless Bearer

@@ -28,7 +28,11 @@ from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
 
-from .utilities.assertions import assert_mcp_success, parse_mcp_result
+from .utilities.assertions import (
+    assert_mcp_success,
+    parse_mcp_result,
+    safe_call_tool,
+)
 from .utilities.wait_helpers import wait_for_tool_result
 
 # Unique so the exact-match query resolves to exactly this one entity — that
@@ -394,6 +398,95 @@ async def test_visibility_filter_applies_to_get_overview(
         assert filtered.get("success") is True
         # Exactly the denied probe left the counted universe.
         assert filtered["system_summary"]["total_entities"] == baseline_total - 1
+
+    finally:
+        await mcp_client.call_tool(
+            "ha_remove_helpers_integrations",
+            {"helper_type": "input_boolean", "target": probe_query, "confirm": True},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.external_only
+async def test_visibility_enforce_conceals_and_refuses_across_tools(
+    mcp_client, ha_container_with_fresh_config, tmp_path, monkeypatch
+):
+    """Enforce mode (#2015): a denied entity becomes genuinely unreadable across
+    tools — a direct read is concealed as not-found, a template naming it is
+    refused, search still omits it, and a service call naming it is concealed —
+    while turning enforce off restores the direct read."""
+    probe_name = "Zzvis Enforce Probe E2E"
+    probe_id = "input_boolean.zzvis_enforce_probe_e2e"
+    probe_query = "zzvis_enforce_probe_e2e"
+
+    create = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "input_boolean", "name": probe_name},
+    )
+    assert_mcp_success(create, "Create enforce probe")
+
+    try:
+        # Baseline (filter OFF): the probe is directly readable and searchable.
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search",
+            arguments={"query": probe_query, "limit": 10},
+            predicate=lambda d: probe_id in _entity_ids(d),
+            description="baseline search finds enforce probe",
+        )
+
+        # Act: enable enforce mode with the probe on the denylist.
+        save_visibility_config(
+            tmp_path,
+            VisibilityConfig(
+                enabled=True,
+                enforce=True,
+                exclude_categories=[],
+                deny_entity_ids=[probe_id],
+            ),
+        )
+        monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+        # Direct read is concealed: the SAME not-found a nonexistent entity gives.
+        got = await safe_call_tool(mcp_client, "ha_get_state", {"entity_id": probe_id})
+        assert got.get("error", {}).get("code") == "ENTITY_NOT_FOUND"
+
+        # A template naming the denied entity is refused on contact.
+        tmpl = await safe_call_tool(
+            mcp_client,
+            "ha_eval_template",
+            {"template": "{{ states('" + probe_id + "') }}"},
+        )
+        assert tmpl.get("error", {}).get("code") == "ENTITY_VISIBILITY_ENFORCED"
+
+        # Collection read still omits it (unchanged from the soft filter).
+        searched = parse_mcp_result(
+            await mcp_client.call_tool("ha_search", {"query": probe_query, "limit": 10})
+        )
+        assert probe_id not in _entity_ids(searched)
+
+        # A service call naming the denied entity is concealed (inbound scan runs
+        # before the service, so nothing is toggled).
+        called = await safe_call_tool(
+            mcp_client,
+            "ha_call_service",
+            {"domain": "input_boolean", "service": "toggle", "entity_id": probe_id},
+        )
+        assert called.get("error", {}).get("code") == "ENTITY_NOT_FOUND"
+
+        # Turn enforce OFF (filter still enabled): the direct read works again.
+        save_visibility_config(
+            tmp_path,
+            VisibilityConfig(
+                enabled=True,
+                enforce=False,
+                exclude_categories=[],
+                deny_entity_ids=[probe_id],
+            ),
+        )
+        got_again = await mcp_client.call_tool("ha_get_state", {"entity_id": probe_id})
+        assert_mcp_success(got_again, "direct read works with enforce off")
+        assert parse_mcp_result(got_again).get("data", {}).get("entity_id") == probe_id
 
     finally:
         await mcp_client.call_tool(

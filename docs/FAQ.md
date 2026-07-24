@@ -333,19 +333,25 @@ ChatGPT (web, including Codex Work Mode) caches a connector's tool list and some
 
 By default the agent sees every entity. If auto-generated diagnostic or helper
 entities clutter search and overview results, you can hide a chosen set of them
-from the *collection* read tools (`ha_search`, `ha_get_overview`). This is
-**noise reduction, not access control** – a hidden entity is still returned by a
-direct `ha_get_state` / `ha_get_entity` on its `entity_id`, and still appears in
-automation, dashboard, and template content, so do not rely on it as a security
-boundary.
+from the *collection* read tools (`ha_search`, `ha_get_overview`). In its default
+form this is **noise reduction, not access control** – a hidden entity is still
+returned by a direct `ha_get_state` / `ha_get_entity` on its `entity_id`, and
+still appears in automation, dashboard, and template content, so do not rely on
+the default filter as a security boundary. The opt-in **[Enforce mode](#enforce-mode)**
+below turns it into a genuine read barrier: with `"enforce": true`, direct reads
+of a hidden entity are concealed and content reads that would surface one are
+refused across every tool.
 
-**Reads only – it does not gate control tools.** The filter scopes what the
-*collection read* tools return. It does **not** stop an agent from calling a
-service on a hidden `entity_id`: gating writes is a separate concern handled by
-the Tool Security Policies engine (which matches on a call's arguments), not by
-visibility. Visibility is deliberately read-scoping only, precisely because it
-is noise reduction and cannot be a security boundary (content-bearing reads such
-as automation and template bodies would leak hidden entities anyway).
+**Default form: reads only – it does not gate control tools.** Without enforce
+mode the filter only scopes what the *collection read* tools return. It does
+**not** stop an agent from calling a service on a hidden `entity_id`: gating
+writes is a separate concern handled by the Tool Security Policies engine (which
+matches on a call's arguments), not by visibility. In the default form,
+visibility is deliberately read-scoping only, precisely because it is noise
+reduction and cannot be a security boundary (content-bearing reads such as
+automation and template bodies would leak hidden entities anyway). Enforce mode
+changes this by also concealing hidden entities named in a write call's arguments
+(see below).
 
 The easiest way to configure it is the **Entity Visibility** tab in the ha-mcp
 settings UI (enable toggle, category checkboxes, area/label fields, per-entity
@@ -368,7 +374,8 @@ directory (the same directory as `tool_policy.json`; `/data` in the add-on) with
   "allow_entity_ids": [],
   "allow_areas": [],
   "allow_labels": [],
-  "respect_assist_exposure": false
+  "respect_assist_exposure": false,
+  "enforce": false
 }
 ```
 
@@ -409,12 +416,72 @@ it passes every active one.
   when it is *exposed*; an explicit un-expose cannot be observed there, so such an
   entity falls to its domain/device-class default and stays visible (fail-open).
 
+#### Enforce mode
+
+Set `"enforce": true` (or the **Enforce mode** toggle in the Entity Visibility
+tab) to turn the same hidden set into a genuine read barrier applied across
+**every** tool, not just `ha_search` / `ha_get_overview`. `enforce` is not a hide
+dimension — it does not change *which* entities are hidden, only how strongly the
+hiding is applied — so it is inert unless the filter is also `enabled` with at
+least one active hide dimension. What it covers:
+
+- **Direct reads are concealed.** A call whose arguments name a hidden entity_id
+  exactly (`ha_get_state`, `ha_get_history`, …) is refused *before the tool
+  runs* with a canonical `ENTITY_NOT_FOUND`, so the entity's state and
+  attributes never flow. Concealment of *existence* is best-effort: per-tool
+  not-found shapes vary (a bulk `ha_get_state` normally partial-succeeds, and
+  details/suggestions differ per tool), so a caller deliberately comparing
+  error shapes may infer that an id is hidden rather than absent. Note this
+  also means a bulk read that co-lists one hidden entity is refused as a whole
+  — retry without the hidden id to read the rest.
+- **Collection reads omit** hidden entities, exactly as they do without enforce.
+- **Content reads are refused on contact.** A dashboard config, template result,
+  automation/script body, trace, log, or file read whose output would surface a
+  hidden entity_id is refused with a generic `ENTITY_VISIBILITY_ENFORCED` error
+  that never names the matched id.
+- **Writes naming a hidden entity are concealed too.** The inbound argument scan
+  applies to *every* tool, including service calls: a `ha_call_service` targeting
+  a hidden entity_id is concealed as not-found, so an agent cannot confirm the
+  entity by trying to control it.
+
+What it deliberately **refuses** (their output cannot be text-scanned): sandbox
+code execution via `ha_manage_custom_tool` (`code` / `run_saved` — pure
+`list_saved` stays allowed) and screenshot/pixel output
+(`ha_get_dashboard_screenshot`, or `ha_config_get_dashboard` with
+`include_screenshot`).
+
+Enforce mode **fails closed**: if the entity registry (or the config file
+itself) cannot be loaded, the server falls back to the last good read from this
+session — and with none available, tool calls are refused rather than risk
+leaking a restricted entity. The hidden set is cached for ~30s, so an area/label
+membership change in Home Assistant can take up to that long to take effect for
+the area/label dimensions (a config edit in the settings UI applies on the next
+call).
+
+Because refuse-on-contact applies to the *whole* hidden set, broad hide
+dimensions make refusals frequent: with the default `diagnostic`/`config`
+category excludes still active, any log, automation, or dashboard read that
+mentions a diagnostic entity is refused wholesale. Enforce mode works best with
+a *targeted* deny — the private areas, labels, or entity_ids you actually need
+concealed — rather than broad decluttering dimensions.
+
+**Honest residual limits.** This is a strong barrier against *incidental*
+exposure, not a cryptographic guarantee. A Jinja template (or code) that *derives*
+a hidden entity's state without ever naming its entity_id — e.g.
+`{{ states | selectattr('state','eq','on') | list | count }}` — cannot be caught
+by a text scan. Treat enforce mode as robust protection against an agent stumbling
+onto hidden entities, not as a boundary against an adversarial prompt author who
+is deliberately trying to exfiltrate a hidden entity's state.
+
 `version` drives optimistic-concurrency for the settings UI (it bumps
 on each save so two tabs can't clobber each other); when hand-editing the file,
 leave it as-is. The config is read live per request, so edits apply on the next
-call; a missing or invalid file leaves the filter off (and, when enabled but the
-registry read degrades, results are unfiltered with a `warnings` note rather than
-silently wrong).
+call. A missing file leaves the filter off; an *invalid* one leaves the filter
+off for search/overview (with a `warnings` note) while enforce-mode safety falls
+back to the session's last good config — with none, tool calls are refused until
+the file is fixed (see *Enforce mode* above). When the filter is enabled but the
+registry read degrades, search results are unfiltered with a `warnings` note
+rather than silently wrong.
 
 ---
 

@@ -79,6 +79,21 @@ _ALLOWLIST_REGISTRY_EMPTY_WARNING = (
 )
 
 
+class VisibilityDataUnavailable(Exception):
+    """Raised in strict resolver mode when a hide dimension would degrade open.
+
+    The default (search) resolver path is fail-OPEN: a degraded registry drops the
+    registry-derived dimensions and returns a warning so a config problem never
+    blanks the instance from the agent. Enforcement mode (issue #2015) cannot
+    tolerate that — a silently dropped area/label deny would leak the very entities
+    it must conceal — so it calls the resolver with ``strict=True``, turning every
+    degradation that would otherwise surface a degraded-dimension warning
+    (``_REGISTRY_UNAVAILABLE_WARNING``, ``_ALLOWLIST_REGISTRY_EMPTY_WARNING``,
+    ``_ASSIST_UNAVAILABLE_WARNING``, or a config-load failure) into this exception
+    (fail closed). Benign notes (unknown ``exclude_categories``) never raise.
+    """
+
+
 def _normalize_labels(raw: object) -> list[str]:
     """Coerce a registry entry's ``labels`` field to a list for set ops.
 
@@ -301,6 +316,38 @@ def _candidate_hidden(
     return newly_hidden
 
 
+def _usable_registry_entries(
+    registry_result: object, strict: bool, warnings: list[str]
+) -> list[Any] | None:
+    """Return the registry entries list, or None to degrade to denylist-only.
+
+    A degraded registry (not a success dict, or a non-list ``result``) fails OPEN
+    for search callers — logs, appends ``_REGISTRY_UNAVAILABLE_WARNING``, and
+    returns None so the caller honors just the denylist. Under ``strict`` it raises
+    :class:`VisibilityDataUnavailable` instead (enforcement fails closed).
+    """
+    if not isinstance(registry_result, dict) or not registry_result.get("success"):
+        if strict:
+            raise VisibilityDataUnavailable(_REGISTRY_UNAVAILABLE_WARNING)
+        logger.warning(
+            "entity visibility filter enabled but the registry payload was "
+            "unusable; degrading to unfiltered for this request"
+        )
+        warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
+        return None
+    entries = registry_result.get("result", [])
+    if not isinstance(entries, list):
+        if strict:
+            raise VisibilityDataUnavailable(_REGISTRY_UNAVAILABLE_WARNING)
+        logger.warning(
+            "entity visibility filter enabled but the registry 'result' was not "
+            "a list; degrading to unfiltered for this request"
+        )
+        warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
+        return None
+    return entries
+
+
 def hidden_entity_ids(
     registry_result: object,
     config: VisibilityConfig,
@@ -308,8 +355,16 @@ def hidden_entity_ids(
     assist_overrides: dict[str, bool] | None = None,
     expose_new: bool = False,
     device_registry_result: object | None = None,
+    *,
+    strict: bool = False,
 ) -> tuple[set[str], list[str]]:
     """Return ``(hidden_entity_ids, warnings)``.
+
+    ``strict`` (default False, used only by the enforcement middleware) flips every
+    fail-open degradation that would produce a degraded-dimension warning into a
+    :class:`VisibilityDataUnavailable` raise instead, so a degraded registry never
+    silently leaks the entities an enforced area/label/allow deny should conceal.
+    Benign notes (unknown ``exclude_categories``) still warn, never raise.
 
     ``hidden`` is empty when disabled or the registry payload is unusable
     (fail-open — never hide on bad input), except the denylist which needs no
@@ -364,22 +419,10 @@ def hidden_entity_ids(
 
     # Enabled past this point, so an unusable registry is a real degradation the
     # operator should see as a warning. Honor the denylist regardless (it needs no
-    # registry data); only the registry-derived dimensions degrade to open.
-    if not isinstance(registry_result, dict) or not registry_result.get("success"):
-        logger.warning(
-            "entity visibility filter enabled but the registry payload was "
-            "unusable; degrading to unfiltered for this request"
-        )
-        warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
-        return denied, warnings
-
-    entries: Any = registry_result.get("result", [])
-    if not isinstance(entries, list):
-        logger.warning(
-            "entity visibility filter enabled but the registry 'result' was not "
-            "a list; degrading to unfiltered for this request"
-        )
-        warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
+    # registry data); only the registry-derived dimensions degrade to open (or, in
+    # strict mode, _usable_registry_entries raises instead of degrading).
+    entries = _usable_registry_entries(registry_result, strict, warnings)
+    if entries is None:
         return denied, warnings
 
     # Index the registry by entity_id and index the live states for device_class
@@ -412,6 +455,8 @@ def hidden_entity_ids(
     # dimensions and warn; a registry-independent allow_entity_ids list still
     # applies. Only fires when there are states-only candidates to protect.
     if (allow_areas or allow_labels) and not registry_by_id and state_device_class:
+        if strict:
+            raise VisibilityDataUnavailable(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
         warnings.append(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
         allow_areas = set()
         allow_labels = set()
@@ -445,7 +490,10 @@ def hidden_entity_ids(
         assist_active = config.respect_assist_exposure and assist_overrides is not None
         if config.respect_assist_exposure and assist_overrides is None:
             # The seam could not supply Assist data; skip that dimension rather
-            # than hide everything, and tell the operator.
+            # than hide everything, and tell the operator. Under strict mode a
+            # skipped Assist dimension could leak an un-exposed entity, so raise.
+            if strict:
+                raise VisibilityDataUnavailable(_ASSIST_UNAVAILABLE_WARNING)
             warnings.append(_ASSIST_UNAVAILABLE_WARNING)
         overrides = _build_assist_overrides(
             registry_by_id, assist_overrides, assist_active
@@ -678,6 +726,8 @@ async def load_hidden_set(
     states_result: object | None = None,
     client: Any | None = None,
     device_registry_result: object | None = None,
+    *,
+    strict: bool = False,
 ) -> tuple[set[str], list[str]]:
     """Load the visibility config off-loop and resolve ``(hidden, warnings)``.
 
@@ -691,9 +741,27 @@ async def load_hidden_set(
     ``respect_assist_exposure`` and a ``client`` is given, the two Assist
     exposure websocket reads are fetched here (once per call, in parallel) and
     fed to the pure resolver; the fetch fails soft (only that dimension drops).
+
+    ``strict`` (used only by the enforcement middleware) fails CLOSED instead:
+    a config-load failure or any resolver degradation raises
+    :class:`VisibilityDataUnavailable` rather than returning an empty set, so the
+    enforcement path never leaks on degraded data. Search callers leave it False
+    and keep the fail-open behavior unchanged.
     """
     try:
         config = await asyncio.to_thread(load_visibility_config, get_data_dir())
+    except Exception as exc:
+        if strict:
+            raise VisibilityDataUnavailable(
+                "entity visibility config could not be loaded"
+            ) from exc
+        logger.warning(
+            "entity visibility config load failed; filter disabled", exc_info=True
+        )
+        return set(), [
+            "Entity visibility config could not be loaded; the filter is disabled."
+        ]
+    try:
         assist_overrides: dict[str, bool] | None = None
         expose_new = False
         if config.enabled and config.respect_assist_exposure and client is not None:
@@ -705,8 +773,16 @@ async def load_hidden_set(
             assist_overrides,
             expose_new,
             device_registry_result,
+            strict=strict,
         )
-    except Exception:
+    except VisibilityDataUnavailable:
+        # Strict degradation from the pure resolver — propagate (fail closed).
+        raise
+    except Exception as exc:
+        if strict:
+            raise VisibilityDataUnavailable(
+                "entity visibility hidden-set resolution failed"
+            ) from exc
         logger.warning(
             "entity visibility config load failed; filter disabled", exc_info=True
         )

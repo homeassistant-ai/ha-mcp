@@ -269,6 +269,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # wraps the final tool surface (including the search proxies).
         self._apply_tool_security_policies()
 
+        # Entity visibility enforce mode (#2015) — always installed, consults
+        # the live config per request (no-op unless enforce is on with an active
+        # hide dimension). Added LAST so it is innermost: its outbound scan sees
+        # the raw tool output before any other middleware transforms it.
+        self._apply_visibility_enforcement_middleware()
+
     def _get_skills_dir(self) -> Path | None:
         """Return the bundled skills directory if it exists.
 
@@ -1124,6 +1130,23 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             return await self.mcp.local_provider._list_tools()
 
         self.mcp.add_middleware(StrictBpsMiddleware(list_tools=_list_all_tools))
+
+    def _apply_visibility_enforcement_middleware(self) -> None:
+        """Install the entity visibility enforce-mode middleware (#2015).
+
+        Always installed — the middleware self-no-ops at call time (loads the
+        visibility config per request and passes through unless enforce is on
+        with an active hide dimension), so a settings-UI toggle applies live in
+        standalone-HTTP/embedded mode like ``read_only_mode``. It needs the HA
+        client to fetch the registry/states for the hidden-set computation;
+        inject the lazy client accessor so no eager connection is made at
+        startup.
+        """
+        from .visibility.enforcement import VisibilityEnforcementMiddleware
+
+        self.mcp.add_middleware(
+            VisibilityEnforcementMiddleware(get_client=lambda: self.client)
+        )
 
     # Shared action-phrased keyword block for retrieval. Some MCP clients
     # (Claude Code, others) rank candidate tools by token-overlap between
