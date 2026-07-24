@@ -763,13 +763,18 @@ class TestInfo:
         assert wsapi._do_info(FakeHass())["timezone"] is None
 
     def test_manifest_version_parity(self):
-        """The manifest version and COMPONENT_VERSION must not drift."""
+        """The manifest version and COMPONENT_VERSION must not drift.
+
+        Deliberately NO literal version here: the invariant is the lockstep,
+        and a literal pin forced test churn on every bump (and bred stale
+        release-cycle comments). The bump rules live in AGENTS.md.
+        """
         manifest = json.loads(
             (
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "1.2.4"
+        assert manifest["version"] == COMPONENT_VERSION
 
 
 # =============================================================================
