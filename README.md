@@ -1,3 +1,5 @@
+[![mcpindex](https://mcpindex.ai/api/v1/badge/io-github-homeassistant-ai-ha-mcp)](https://mcpindex.ai/server/io-github-homeassistant-ai-ha-mcp)
+
 > **Breaking change (v7.3.0):** `ha_config_set_yaml` has been moved to [beta](docs/beta.md).
 
 <div align="center">
