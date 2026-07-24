@@ -772,3 +772,170 @@ class TestAreaModeEnrichmentConsolidation:
         assert rec["area"] == "Kitchen"
         assert rec["aliases"] == ["lamp"]
         assert client.ws_types["config/entity_registry/get_entries"] == 1
+
+
+class DashboardRoutingClient(RoutingClient):
+    """RoutingClient + clean lovelace list/config replies for the legacy scan."""
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        msg_type = msg.get("type", "")
+        if msg_type == "lovelace/dashboards/list":
+            self.ws_types[msg_type] += 1
+            return {"success": True, "result": []}
+        if msg_type == "lovelace/config":
+            self.ws_types[msg_type] += 1
+            return {"success": True, "result": {"views": []}}
+        return await super().send_websocket_message(msg)
+
+
+class ConfigNotFoundDashboardClient(DashboardRoutingClient):
+    """One registry dashboard whose config answers ``config_not_found``.
+
+    Models an auto-generated (never taken control of) dashboard — the
+    live shape behind issue #2008's false ``partial``. The default
+    dashboard still serves a clean config via the parent.
+    """
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        msg_type = msg.get("type", "")
+        if msg_type == "lovelace/dashboards/list":
+            self.ws_types[msg_type] += 1
+            return {
+                "success": True,
+                "result": [{"url_path": "auto-gen", "title": "Auto"}],
+            }
+        if msg_type == "lovelace/config" and msg.get("url_path") == "auto-gen":
+            self.ws_types[msg_type] += 1
+            return {
+                "success": False,
+                "error": "Command failed: No config found.",
+                "error_code": "config_not_found",
+            }
+        return await super().send_websocket_message(msg)
+
+
+class TestDashboardSearchTypesGate:
+    """``search_types`` naming a surface the component lacks stays legacy.
+
+    The component's ``search`` command has no dashboard surface — its
+    voluptuous allowlist rejects the value — so routing such a request there
+    bounced off the schema into a warning-laden fallback on every call
+    (issue #2008). The gate keeps the whole request on the legacy path,
+    silently, exactly like the other route-ineligible modes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dashboard_search_types_skip_component(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """search_types=["dashboard"] → no component frame, no fallback warning."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH)
+        client = DashboardRoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search):
+            resp = await ha_search(query="kitchen", search_types=["dashboard"])
+
+        assert resp["success"] is True
+        assert not any(
+            c.args[0] == "ha_mcp_tools/search" for c in ws.send_command.call_args_list
+        ), "a dashboard search must never reach the component search command"
+        # Silent legacy route: no component-failure warning, and a clean
+        # scan is not partial.
+        assert not any(
+            "served via legacy path" in w for w in resp.get("warnings", [])
+        ), f"the legacy route must be silent, got {resp.get('warnings')!r}"
+        assert not resp.get("partial")
+        # The legacy dashboard scan actually ran.
+        assert client.ws_types["lovelace/dashboards/list"] == 1
+
+    @pytest.mark.asyncio
+    async def test_mixed_search_types_with_dashboard_skip_component(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A mixed list including 'dashboard' is all-or-nothing → all legacy."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH)
+        client = DashboardRoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search):
+            resp = await ha_search(
+                query="kitchen", search_types=["automation", "dashboard"]
+            )
+
+        assert resp["success"] is True
+        assert not any(
+            c.args[0] == "ha_mcp_tools/search" for c in ws.send_command.call_args_list
+        ), "a mixed request naming 'dashboard' must not be split across paths"
+        assert not any("served via legacy path" in w for w in resp.get("warnings", []))
+        # The legacy pipeline served both surfaces.
+        assert client.get_states_calls >= 1
+        assert client.ws_types["lovelace/dashboards/list"] == 1
+
+    @pytest.mark.asyncio
+    async def test_dashboard_search_with_config_not_found_not_partial(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The full issue #2008 repro through the real tool: a dashboard
+        search on an instance with an auto-generated dashboard comes back
+        clean — routed to legacy silently (no component frame, no fallback
+        warning) AND without the false ``partial`` the config-less
+        dashboard used to raise. Pins the two fixes composed through
+        ``ha_search``'s outer merge, not just each half in isolation."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH)
+        client = ConfigNotFoundDashboardClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search):
+            resp = await ha_search(query="kitchen", search_types=["dashboard"])
+
+        assert resp["success"] is True
+        assert not any(
+            c.args[0] == "ha_mcp_tools/search" for c in ws.send_command.call_args_list
+        )
+        assert not resp.get("partial"), (
+            f"a config-less auto-generated dashboard must not flag the "
+            f"ha_search envelope partial; got {resp.get('partial_reason')!r}"
+        )
+        assert resp.get("warnings", []) == []
+        # Both dashboards were visited: the registry one answered
+        # config_not_found, the default one served a clean config.
+        assert client.ws_types["lovelace/config"] == 2
+
+    @pytest.mark.asyncio
+    async def test_component_supported_search_types_still_route_component(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Explicit supported types keep the fast path — the gate is not
+        over-broad (a search_types pin without 'dashboard' must not
+        de-optimize to legacy)."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        result = {
+            "automations": [],
+            "entity_total_matches": 0,
+            "entity_has_more": False,
+            "config_total_matches": 0,
+            "config_has_more": False,
+            "partial": False,
+        }
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result=result)
+        client = RoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search):
+            resp = await ha_search(query="kitchen", search_types=["automation"])
+
+        assert resp["success"] is True
+        search_calls = [
+            c
+            for c in ws.send_command.call_args_list
+            if c.args[0] == "ha_mcp_tools/search"
+        ]
+        assert len(search_calls) == 1
+        # The pinned list reached the component verbatim (config-only: the
+        # explicit search_types pin drops the entity surface).
+        assert search_calls[0].kwargs["search_types"] == ["automation"]
+        assert client.get_states_calls == 0

@@ -812,10 +812,12 @@ def _card_matches(
 #
 # Source: homeassistant/components/lovelace/websocket.py, _handle_errors —
 # emits f"Unknown config specified: {url_path}" paired with structured
-# error.code "config_not_found". The websocket client currently surfaces only
-# the message string, so substring matching is the only signal available at
-# the tool layer. If HA reformats this string, the lazy fallback regresses
-# silently to never firing — re-verify with major HA upgrades.
+# error.code "config_not_found". The client envelope does surface that code
+# top-level (``error_code``), but HA reuses it for the no-stored-config case
+# ("No config found." — an auto-generated dashboard), so the code alone cannot
+# identify an unresolved identifier; the message substring remains the only
+# discriminating signal. If HA reformats this string, the lazy fallback
+# regresses silently to never firing — re-verify with major HA upgrades.
 _LAZY_RESOLVE_TRIGGER = "Unknown config specified"
 
 

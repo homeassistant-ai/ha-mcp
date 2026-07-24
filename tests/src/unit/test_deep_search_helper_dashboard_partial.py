@@ -115,6 +115,69 @@ class TestDashboardFailure:
         assert matches == []
         assert failed is True
 
+    async def test_one_dashboard_config_not_found_is_clean_no_match(self) -> None:
+        """``config_not_found`` is NOT a backend failure: an auto-generated
+        dashboard (strategy-backed, never taken control of) has no stored
+        config, so there is nothing to scan and the failure envelope must
+        read as a clean no-match. Issue #2008: a stock default dashboard
+        made every dashboard search report partial."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: No config found.",
+                "error_code": "config_not_found",
+            }
+        )
+        tools = _make_tools(client)
+        matches, failed = await tools._search_one_dashboard(
+            "default", "Default", "x", True, asyncio.Semaphore(4)
+        )
+        assert matches == []
+        assert failed is False
+
+    async def test_one_dashboard_unknown_config_still_signals_failed(self) -> None:
+        """``config_not_found`` with the "Unknown config specified" message
+        is HA's OTHER cause for the same code — the url_path no longer
+        resolves (dashboard deleted between the registry-list snapshot and
+        this fetch). That is a genuine scan gap and must stay ``failed=True``;
+        only the no-stored-config form is a clean skip."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: Unknown config specified: gone-dash",
+                "error_code": "config_not_found",
+            }
+        )
+        tools = _make_tools(client)
+        matches, failed = await tools._search_one_dashboard(
+            "gone-dash", "Gone", "x", True, asyncio.Semaphore(4)
+        )
+        assert matches == []
+        assert failed is True
+
+    async def test_one_dashboard_nested_config_not_found_is_clean_no_match(
+        self,
+    ) -> None:
+        """The nested ``error.code``/``error.message`` shape is accepted
+        defensively alongside the client envelope's flat form (the flat shape
+        is the only one ``send_websocket_message`` emits today; the nested
+        check mirrors ``dashboard_screenshot/paths.py``'s detection)."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": {"code": "config_not_found", "message": "No config found."},
+            }
+        )
+        tools = _make_tools(client)
+        matches, failed = await tools._search_one_dashboard(
+            "auto-gen", "Auto", "x", True, asyncio.Semaphore(4)
+        )
+        assert matches == []
+        assert failed is False
+
     async def test_one_dashboard_raise_signals_failed(self) -> None:
         """A raised config fetch returns ``failed=True`` rather than swallowing
         to a silent empty list."""
@@ -408,6 +471,40 @@ class TestHelperDashboardPartialThroughDeepSearch:
         assert re.search(r"\b1 dashboard\(s\)", reason), (
             f"partial_reason must carry the real dashboard_failed count (1); "
             f"got {reason!r}"
+        )
+
+    async def test_dashboard_config_not_found_stays_not_partial(self) -> None:
+        """An auto-generated dashboard's ``config_not_found`` driven through
+        the public ``deep_search`` seam must NOT flag partial — the exact
+        false-``partial`` issue #2008 reports (one never-taken-control
+        dashboard turned every dashboard search into 'not exhaustive')."""
+
+        async def _ws(msg):
+            if msg.get("type") == "lovelace/dashboards/list":
+                return {"result": [{"url_path": "auto-gen", "title": "Auto"}]}
+            # lovelace/config: the auto-generated dashboard has no stored
+            # config; the default dashboard returns a clean empty config.
+            if msg.get("url_path") == "auto-gen":
+                return {
+                    "success": False,
+                    "error": "Command failed: No config found.",
+                    "error_code": "config_not_found",
+                }
+            return {"result": {"views": []}}
+
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(side_effect=_ws)
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="zzznomatch", search_types=["dashboard"], limit=10
+        )
+
+        assert not result.get("partial"), (
+            f"a config-less auto-generated dashboard is a clean no-match, "
+            f"not a scan failure; got {result.get('partial')!r} / "
+            f"{result.get('partial_reason')!r}"
         )
 
     async def test_clean_helper_instance_stays_not_partial(self) -> None:
