@@ -447,7 +447,7 @@ class TestDashboardBucketViaComponent:
 
     async def test_capability_miss_stays_legacy(self) -> None:
         """Without ``dashboards_doc_search`` the component frame is never sent
-        — a pre-1.3.0 component only has the card-scoped walk, which would
+        — an older component only has the card-scoped walk, which would
         silently narrow coverage."""
         tools, client = self._tools_legacy_clean()
         component = AsyncMock()

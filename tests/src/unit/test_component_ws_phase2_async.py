@@ -163,8 +163,8 @@ class TestCapabilityPresence:
     def test_component_version(self):
         # Capabilities are advertised by name, never version-inferred, so new
         # caps ride any pending version without a bump; this assertion just
-        # pins the declared version (dashboards_doc_search shipped in 1.3.0).
-        assert wsapi.COMPONENT_VERSION == "1.3.0"
+        # pins the declared version (dashboards_doc_search shipped in 1.2.4).
+        assert wsapi.COMPONENT_VERSION == "1.2.4"
 
 
 # =============================================================================

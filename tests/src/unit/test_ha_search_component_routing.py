@@ -886,7 +886,7 @@ class TestDashboardSearchTypesGate:
         _setup_visibility_disabled(tmp_path, monkeypatch)
         caps = {
             "schema_version": 1,
-            "component_version": "1.3.0",
+            "component_version": "1.2.4",
             "capabilities": ["search", "dashboards", "dashboards_doc_search"],
             "limits": {},
         }

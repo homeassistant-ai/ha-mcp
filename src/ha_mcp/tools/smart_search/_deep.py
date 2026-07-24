@@ -964,7 +964,7 @@ class DeepSearchMixin(SceneSearchMixin):
         :func:`_is_no_stored_config`.
 
         ``None`` ⇒ run the legacy per-dashboard walk instead: the component
-        lacks the ``dashboards_doc_search`` capability (pre-1.3.0 components
+        lacks the ``dashboards_doc_search`` capability (older components
         emit only the card-scoped ``matches``, which would silently narrow
         coverage), any ``_dashboards_via_component`` fallback (capability
         miss / command error / lovelace unavailable), an empty query, or a
