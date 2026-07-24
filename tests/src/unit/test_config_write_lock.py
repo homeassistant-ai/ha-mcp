@@ -85,8 +85,9 @@ class TestConfigWriteGuard:
                 pass
         finally:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            # gather (not a bare `await task`) so the CodeQL quality gate
+            # doesn't flag py/ineffectual-statement on the drain.
+            await asyncio.gather(task, return_exceptions=True)
         # A blocked loop would leave the ticker at ~0; the thread hop keeps
         # it running throughout the 0.3s acquisition (margin for slow CI).
         assert ticks >= 5
