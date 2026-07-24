@@ -1024,6 +1024,59 @@ def _seed_non_yaml_package_file(config_path: Path) -> None:
     )
 
 
+# scene_id / entity_id the YAML-package scene below lands at. HA slugifies the
+# ``name`` into the entity_id while the declared ``id`` becomes the registry
+# unique_id / storage key. They are deliberately DIFFERENT here so the e2e can
+# discriminate the registry-hit classification branch (see the helper below).
+E2E_YAML_PACKAGE_SCENE_ENTITY_ID = (
+    "e2e_yaml_scene_1971"  # HA slugifies the name to this
+)
+E2E_YAML_PACKAGE_SCENE_UID = (
+    "e2e_yaml_scene_1971_storage_uid"  # declared id / storage key
+)
+
+
+def _seed_yaml_package_scene(config_path: Path) -> None:
+    """Stage a YAML-package scene declaring an ``id`` pre-boot (#1971).
+
+    A scene defined in a YAML package with an ``id`` registers in the entity
+    registry (unique_id = that ``id``) yet has NO entry in the managed
+    ``scenes.yaml`` store, so ``config/scene/config/{id}`` 404s. That is the
+    exact registry-hit not-storage-scene case #1971 classifies as
+    CONFIG_NOT_FOUND. It is also the only arm of that case that can run
+    in-container (the Hue/vendor arm needs a real integration). No tool can
+    create it: scene writes go through the managed store, and a post-boot host
+    write to the bind-mounted config dir doesn't propagate in CI, so it is
+    staged here like the legacy backups above. The folder name matches the one
+    initial_test_state/configuration.yaml binds via ``!include_dir_named``.
+
+    The declared ``id`` is deliberately NOT the slug of ``name``: the caller
+    references the scene by its name-derived entity slug, which resolves in the
+    registry to this distinct ``id`` (registry_hit). So a regression that
+    dropped the registry-hit classification branch would fall through to the
+    state-machine check on the storage key ``id`` (which is NOT a real entity,
+    since the entity is the name slug), yielding the generic 404 and failing the
+    e2e. That makes the test pin the registry-hit path, not just the state-check
+    fallback.
+
+    The filename must NOT start with an underscore: ``!include_dir_named`` uses
+    the file stem as the package name, and ``PACKAGES_CONFIG_SCHEMA`` validates
+    each package name with ``cv.slug``, which rejects a leading underscore
+    (slugify strips it, so ``value != slugify(value)`` raises). A ``_``-prefixed
+    name makes HA discard the whole package and the scene silently never loads.
+    """
+    packages_dir = config_path / "custom_packages"
+    packages_dir.mkdir(parents=True, exist_ok=True)
+    (packages_dir / "e2e_yaml_scene.yaml").write_text(
+        "scene:\n"
+        f"  - id: {E2E_YAML_PACKAGE_SCENE_UID}\n"
+        "    name: E2E YAML Scene 1971\n"
+        "    entities:\n"
+        "      light.bed_light:\n"
+        '        state: "on"\n'
+    )
+
+
 def _collect_manifest_requirements(config_path: Path) -> list[str]:
     """Aggregate ``requirements`` from every installed custom-component manifest.
 
@@ -2004,6 +2057,10 @@ def _prepare_testcontainer_config(
     # A non-YAML file in the bound packages folder for the glob warn-and-continue
     # e2e (#1788): same pre-boot reason, and no tool can write it there.
     _seed_non_yaml_package_file(config_path)
+
+    # A YAML-package scene with an ``id`` for the not-storage-scene e2e (#1971):
+    # registers in the registry yet 404s on the config API. Same pre-boot reason.
+    _seed_yaml_package_scene(config_path)
 
     # Shift the pre-baked recorder timestamps forward so the seeded rows
     # look "recent" to history queries with a 24h window. The recorder DB in

@@ -1134,18 +1134,32 @@ class ConfigSceneTools:
         # so subsequent upsert/response builders use the storage key
         # consistently (issue #1168 R3 blocker 6).
         #
-        # Path branching: if a hash is supplied for a non-existent
-        # scene, the inner fetch raises 404 and surfaces as
-        # ENTITY_NOT_FOUND via the outer except — which is the right
-        # caller-facing semantics ("you can't lock against a scene
-        # that doesn't exist"). The no-hash branch resolves separately
-        # so a fresh create still threads the resolved id correctly.
+        # Path branching: the hash arm's inner fetch reads the config
+        # first, so a non-storage scene (Hue/vendor, raw-YAML) surfaces
+        # as CONFIG_NOT_FOUND and a genuinely-missing scene as the bare
+        # 404 – you cannot lock against a config that isn't there. The
+        # no-hash arm has no such read, so it resolves richly and, when
+        # the entity already exists, pre-checks the config API below
+        # before the upsert (issue #1971) so a plain ``set`` on a
+        # non-storage scene cannot silently shadow-create a duplicate.
         if config_hash:
             _, resolved_id = await self._fetch_and_verify_hash(
                 scene_id, config_hash, "set"
             )
         else:
-            resolved_id = await self._client.resolve_scene_id(scene_id)
+            resolution = await self._client._resolve_scene(scene_id)
+            resolved_id = resolution.storage_key
+            if resolution.registry_hit:
+                # The entity already exists, so this is an EDIT. Without a
+                # hash there is no prior read, and a POST to
+                # ``config/scene/config/<unique_id>`` for a Hue/vendor or
+                # raw-YAML scene would CREATE a brand-new managed
+                # ``scenes.yaml`` entry keyed by that id – a shadow
+                # duplicate – instead of erroring. Pre-check the config
+                # API: a 404 raises SceneStorageConfigNotFoundError, which
+                # the outer handler maps to CONFIG_NOT_FOUND. A registry
+                # miss (registry_hit False) stays a normal create, unchanged.
+                await self._client.get_scene_config(scene_id, resolution=resolution)
 
         # Cross-check literal service and entity references against the
         # live registries. Soft warnings only.

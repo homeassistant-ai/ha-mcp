@@ -1002,8 +1002,13 @@ class TestSceneResolutionDedup:
 
         client._resolve_scene = AsyncMock(side_effect=_resolve_rich)
 
-        async def _get(scene_id, *, _resolved=False):
-            rid = scene_id if _resolved else await resolve(scene_id)
+        async def _get(scene_id, *, _resolved=False, resolution=None):
+            if resolution is not None:
+                rid = resolution.storage_key
+            elif _resolved:
+                rid = scene_id
+            else:
+                rid = await resolve(scene_id)
             return {
                 "success": True,
                 "scene_id": rid,
@@ -1017,13 +1022,12 @@ class TestSceneResolutionDedup:
             rid = resolved_id if resolved_id is not None else await resolve(scene_id)
             return {"success": True, "scene_id": rid, "result": "ok"}
 
-        async def _delete(scene_id, *, _resolved=False, resolution=None):
-            if resolution is not None:
-                rid = resolution.storage_key
-            elif _resolved:
-                rid = scene_id
-            else:
-                rid = await resolve(scene_id)
+        async def _delete(scene_id, *, resolution=None):
+            rid = (
+                resolution.storage_key
+                if resolution is not None
+                else await resolve(scene_id)
+            )
             return {"success": True, "scene_id": rid, "operation": "deleted"}
 
         client.get_scene_config = AsyncMock(side_effect=_get)
@@ -1064,7 +1068,11 @@ class TestSceneResolutionDedup:
 
         assert result["success"] is True
         assert result["scene_id"] == "test_scene"
-        assert client.resolve_scene_id.await_count == 1
+        # The no-hash set arm resolves via the richer ``_resolve_scene`` exactly
+        # once (it needs ``registry_hit`` to guard the shadow-create pre-check for
+        # #1971) and never falls back to ``resolve_scene_id``.
+        assert client._resolve_scene.await_count == 1
+        assert client.resolve_scene_id.await_count == 0
         args, kwargs = client.upsert_scene_config.call_args
         # Caller id passed as scene_id; resolved storage key as resolved_id.
         assert args[1] == "test_scene"
@@ -2626,16 +2634,26 @@ class TestSceneNotStorageScene:
     async def test_remove_scene_not_storage_scene_maps_to_config_not_found(
         self, tools, mock_client
     ):
-        mock_client._resolve_scene = AsyncMock(
-            return_value=SceneResolution(
-                storage_key="hue-uuid-123", registry_hit=True, platform="hue"
-            )
+        # The registry hit and the config-404 classification are threaded through
+        # the SAME resolution: the delete mock raises only because that resolution
+        # says ``registry_hit`` – exercising the real threading rather than a
+        # hardcoded raise (a resolution-insensitive mock would leave the override
+        # dead).
+        resolution = SceneResolution(
+            storage_key="hue-uuid-123", registry_hit=True, platform="hue"
         )
-        mock_client.delete_scene_config = AsyncMock(
-            side_effect=SceneStorageConfigNotFoundError(
-                "bedroom_sleepy", platform="hue", storage_key="hue-uuid-123"
-            )
-        )
+        mock_client._resolve_scene = AsyncMock(return_value=resolution)
+
+        async def _delete(scene_id, *, resolution=None):
+            if resolution is not None and resolution.registry_hit:
+                raise SceneStorageConfigNotFoundError(
+                    scene_id,
+                    platform=resolution.platform,
+                    storage_key=resolution.storage_key,
+                )
+            return {"success": True, "scene_id": scene_id, "operation": "deleted"}
+
+        mock_client.delete_scene_config = AsyncMock(side_effect=_delete)
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_remove_scene(scene_id="bedroom_sleepy", wait=False)
@@ -2645,12 +2663,55 @@ class TestSceneNotStorageScene:
         assert error["code"] != "ENTITY_NOT_FOUND"
         assert "hue" in error["message"].lower()
 
+    @pytest.mark.parametrize("mode", ["python_transform", "config_hash"])
     async def test_set_scene_not_storage_scene_maps_to_config_not_found(
+        self, tools, mock_client, mode
+    ):
+        """Both hash-bearing set arms (python_transform and a plain config with a
+        config_hash) pre-fetch the scene; on a non-storage scene that read raises
+        SceneStorageConfigNotFoundError, which must surface as CONFIG_NOT_FOUND
+        (not a generic write failure); same handler, both arms."""
+        mock_client.get_scene_config = AsyncMock(
+            side_effect=SceneStorageConfigNotFoundError(
+                "bedroom_sleepy", platform="hue", storage_key="hue-uuid-123"
+            )
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            if mode == "python_transform":
+                await tools.ha_config_set_scene(
+                    scene_id="bedroom_sleepy",
+                    python_transform="config['name'] = 'x'",
+                    config_hash="deadbeef",
+                    wait=False,
+                )
+            else:
+                await tools.ha_config_set_scene(
+                    scene_id="bedroom_sleepy",
+                    config={
+                        "name": "x",
+                        "entities": {"light.kitchen": {"state": "on"}},
+                    },
+                    config_hash="deadbeef",
+                    wait=False,
+                )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "CONFIG_NOT_FOUND"
+        assert "hue" in error["message"].lower()
+
+    async def test_set_scene_no_hash_non_storage_scene_maps_to_config_not_found(
         self, tools, mock_client
     ):
-        """The hash-verify / python_transform set path pre-fetches the scene;
-        on a non-storage scene that read raises SceneStorageConfigNotFoundError,
-        which must surface as CONFIG_NOT_FOUND (not a generic write failure)."""
+        """#1971 P1: a plain ``set`` with NO config_hash on an already-existing
+        non-storage scene pre-checks the config API and surfaces CONFIG_NOT_FOUND
+        instead of silently shadow-creating a duplicate scenes.yaml entry. The
+        upsert must never run."""
+        mock_client._resolve_scene = AsyncMock(
+            return_value=SceneResolution(
+                storage_key="hue-uuid-123", registry_hit=True, platform="hue"
+            )
+        )
         mock_client.get_scene_config = AsyncMock(
             side_effect=SceneStorageConfigNotFoundError(
                 "bedroom_sleepy", platform="hue", storage_key="hue-uuid-123"
@@ -2660,11 +2721,12 @@ class TestSceneNotStorageScene:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_set_scene(
                 scene_id="bedroom_sleepy",
-                python_transform="config['name'] = 'x'",
-                config_hash="deadbeef",
+                config={"name": "x", "entities": {"light.kitchen": {"state": "on"}}},
                 wait=False,
             )
 
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "CONFIG_NOT_FOUND"
         assert "hue" in error["message"].lower()
+        # The shadow-create is exactly what the pre-check prevents.
+        mock_client.upsert_scene_config.assert_not_called()
