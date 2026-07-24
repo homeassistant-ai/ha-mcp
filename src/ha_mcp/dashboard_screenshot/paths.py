@@ -347,6 +347,77 @@ async def fetch_dashboard_render_config(
     return cast(dict[str, Any], config)
 
 
+def match_dashboard_view(
+    dashboard_url_path: str,
+    config: dict[str, Any],
+    view_path: str,
+    *,
+    strategy_suggestions: tuple[str, ...] = (
+        "Use dashboard_path with the frontend route instead",
+    ),
+) -> tuple[int, dict[str, Any]]:
+    """Match one named Lovelace view by its configured ``views[].path``.
+
+    Shared by screenshot view resolution and get-mode view scoping so both
+    honour identical semantics: exact match on the configured path, with
+    structured errors for an empty path, a strategy dashboard (no static
+    views to match), and a missing/ambiguous path (the not-found error lists
+    the available paths). Returns ``(view_index, view)``.
+
+    ``strategy_suggestions`` lets each caller phrase the strategy-dashboard
+    remediation in its own vocabulary (the screenshot tools have a
+    ``dashboard_path`` route parameter; config scoping does not).
+    """
+    if not view_path.strip():
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "view_path cannot be empty.",
+                context={"view_path": view_path},
+            )
+        )
+    if "strategy" in config:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Strategy dashboards do not expose static named view paths.",
+                context={
+                    "dashboard_url_path": dashboard_url_path,
+                    "view_path": view_path,
+                },
+                suggestions=list(strategy_suggestions),
+            )
+        )
+    views = config.get("views")
+    if not isinstance(views, list):
+        views = []
+    matches = [
+        (index, view)
+        for index, view in enumerate(views)
+        if _configured_view_path(view) == view_path
+    ]
+    if len(matches) != 1:
+        available = [
+            view.get("path")
+            for view in views
+            if isinstance(view, dict) and isinstance(view.get("path"), str)
+        ]
+        reason = "not found" if not matches else "ambiguous"
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Dashboard view path '{view_path}' is {reason}.",
+                context={
+                    "dashboard_url_path": dashboard_url_path,
+                    "view_path": view_path,
+                    "available_view_paths": available,
+                },
+                suggestions=["Use a view_path returned by ha_config_get_dashboard"],
+            )
+        )
+    return matches[0]
+
+
 def resolve_dashboard_view(
     dashboard_url_path: str,
     config: dict[str, Any],
@@ -381,56 +452,11 @@ def resolve_dashboard_view(
             warnings=(warning,),
         )
 
+    view_index, _ = match_dashboard_view(dashboard_url_path, config, view_path)
     cleaned_view_path = view_path
-    if not cleaned_view_path.strip():
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "view_path cannot be empty.",
-                context={"view_path": view_path},
-            )
-        )
-    if "strategy" in config:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Strategy dashboards do not expose static named view paths.",
-                context={
-                    "dashboard_url_path": dashboard_url_path,
-                    "view_path": cleaned_view_path,
-                },
-                suggestions=["Use dashboard_path with the frontend route instead"],
-            )
-        )
     views = config.get("views")
     if not isinstance(views, list):
         views = []
-    matches = [
-        (index, view)
-        for index, view in enumerate(views)
-        if _configured_view_path(view) == cleaned_view_path
-    ]
-    if len(matches) != 1:
-        available = [
-            view.get("path")
-            for view in views
-            if isinstance(view, dict) and isinstance(view.get("path"), str)
-        ]
-        reason = "not found" if not matches else "ambiguous"
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                f"Dashboard view path '{cleaned_view_path}' is {reason}.",
-                context={
-                    "dashboard_url_path": dashboard_url_path,
-                    "view_path": cleaned_view_path,
-                    "available_view_paths": available,
-                },
-                suggestions=["Use a view_path returned by ha_config_get_dashboard"],
-            )
-        )
-
-    view_index, _ = matches[0]
     render_path = _safe_named_render_path(base_path, cleaned_view_path)
     if render_path is None:
         return _fallback_view_target(
