@@ -49,8 +49,13 @@ def migrate_policy_any_semantics(data_dir: Path) -> bool:
 
     The whole read-split-save runs under ``config_file_lock()`` so a
     concurrent writer in another process (the stdio settings sidecar) can't
-    interleave with the migration's read-modify-write. Startup runs before
-    the event loop, so taking the blocking lock inline is safe here.
+    interleave with the migration's read-modify-write. The blocking lock is
+    taken inline: this runs once during server construction, before anything
+    is served. The sync entry points construct pre-loop; OAuth/OIDC construct
+    on a just-started ``asyncio.run`` loop (``_run_oauth_server`` /
+    ``_run_oidc_server``) where the sync constructor cannot await — but no
+    other task is scheduled on that loop yet, so a held lock can only delay
+    startup, never stall a served client.
     """
     from ..utils.config_write_lock import config_file_lock
 
