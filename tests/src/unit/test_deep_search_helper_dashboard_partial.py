@@ -338,7 +338,10 @@ class TestDashboardBucketViaComponent:
         component_result = self._component_result(
             [
                 {"url_path": "energy", "title": "Energy Registry"},
-                {"url_path": None, "title": None},
+                # A taken-control default CAN carry its own body title; the
+                # legacy walk always labels it "Default Dashboard", so the
+                # component-served record must too (path-shape parity).
+                {"url_path": None, "title": "My Custom Home"},
             ]
         )
         tools = self._tools_no_lovelace()

@@ -990,12 +990,20 @@ class DeepSearchMixin(SceneSearchMixin):
         for match in document_matches:
             if not isinstance(match, dict):
                 continue
-            url_path = match.get("url_path") or "default"
+            raw_url_path = match.get("url_path")
+            url_path = raw_url_path or "default"
             if url_path in records:
                 continue
-            title = match.get("title")
-            if title is None:
-                title = "Default Dashboard" if url_path == "default" else url_path
+            if not raw_url_path:
+                # The default dashboard: the legacy walk always labels it
+                # ("default", "Default Dashboard") — a taken-control default
+                # may carry its own body title, but emitting it would change
+                # the record shape between the component and legacy paths.
+                title = "Default Dashboard"
+            else:
+                title = match.get("title")
+                if title is None:
+                    title = url_path
             records[url_path] = {
                 "dashboard_url": url_path,
                 "dashboard_title": title,
