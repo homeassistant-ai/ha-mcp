@@ -45,17 +45,21 @@ time.sleep(0.5)
 """
 
 
-def _run_with_open_stdin(script: str, timeout: float = 60) -> tuple[int, str]:
+def _run_with_open_stdin(
+    script: str, timeout: float = 60, stdout: int = subprocess.DEVNULL
+) -> tuple[int, str]:
     """Run ``script`` in a subprocess whose stdin stays open until it exits.
 
     Returns (returncode, stderr). Crucially does NOT use ``communicate()``
     while the child is alive — that closes stdin, which delivers EOF, wakes
-    the parked reader thread, and destroys the scenario under test.
+    the parked reader thread, and destroys the scenario under test. Pass
+    ``stdout=subprocess.PIPE`` to leave stdout undrained so the child can
+    block on a full pipe (the blocked-writer scenario).
     """
     proc = subprocess.Popen(
         [sys.executable, "-c", script],
         stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
+        stdout=stdout,
         stderr=subprocess.PIPE,
     )
     try:
@@ -102,6 +106,26 @@ class TestForceExitMechanism:
         )
         code, stderr = _run_with_open_stdin(script)
         assert code == 7, f"stderr:\n{stderr}"
+        assert _FATAL not in stderr
+
+    def test_force_exit_with_blocked_stdout_writer_still_exits(self) -> None:
+        """A writer thread blocked on a full stdout pipe (the client stopped
+        draining) holds the buffered-writer lock; _force_exit's flush must
+        not deadlock on that lock or the hard-exit path — watchdog included
+        — turns back into a hang. The parent deliberately never reads
+        stdout so the 16 MiB write fills the pipe and blocks."""
+        script = (
+            "import sys, threading, time\n"
+            "from ha_mcp.__main__ import _force_exit\n"
+            "threading.Thread(\n"
+            "    target=lambda: sys.stdout.buffer.write(b'x' * (16 * 1024 * 1024)),\n"
+            "    daemon=True,\n"
+            ").start()\n"
+            "time.sleep(1.0)  # let the pipe fill and the writer block\n"
+            "_force_exit(5)\n"
+        )
+        code, stderr = _run_with_open_stdin(script, stdout=subprocess.PIPE)
+        assert code == 5, f"stderr:\n{stderr}"
         assert _FATAL not in stderr
 
 

@@ -727,7 +727,6 @@ def _signal_handler(signum: int, frame: Any) -> None:
         sys.exit(1)
 
     _shutdown_in_progress = True
-    logger.info(f"Received {sig_name}, initiating graceful shutdown...")
 
     if _force_exit_on_shutdown:
         # The SDK's stdio teardown hangs if a stdin read is in flight when
@@ -736,9 +735,13 @@ def _signal_handler(signum: int, frame: Any) -> None:
         # parked in a blocking stdin read, so asyncio.run never returns
         # (issue #2027 — leftover stdio instances that never exit).
         # Guarantee the process dies even if the graceful path is stuck.
+        # Armed BEFORE the log line below: logging writes to stderr, and a
+        # full stderr pipe would block this handler before it armed anything.
         watchdog = threading.Timer(_SHUTDOWN_WATCHDOG_SECONDS, _shutdown_watchdog_fire)
         watchdog.daemon = True
         watchdog.start()
+
+    logger.info(f"Received {sig_name}, initiating graceful shutdown...")
 
     # Signal the shutdown event if we have an event loop
     if _shutdown_event is not None:
@@ -776,27 +779,44 @@ def _force_exit(code: int) -> NoReturn:
     finalization entirely. By this point ``_run_with_shutdown`` has already
     run resource cleanup, and a stdio server persists nothing at exit.
 
-    The ``finally`` is load-bearing: ``os._exit`` must run even if flushing
-    raises, or the escaping exception reaches interpreter finalization and
-    reintroduces the exact abort this function exists to prevent.
+    The flush is best-effort and time-bounded in a daemon thread: if the
+    client stopped draining stdout/stderr, the SDK's writer thread can be
+    blocked on the full pipe holding the buffered-writer lock, and flushing
+    inline would wait on that same lock forever — turning the hard-exit
+    path (including the shutdown watchdog) back into a hang. ``os._exit``
+    runs unconditionally once the bounded wait elapses.
     """
-    try:
+
+    def _best_effort_flush() -> None:
         logging.shutdown()
         for stream in (sys.stdout, sys.stderr):
             try:
                 stream.flush()
             except Exception:  # nothing actionable at exit
                 pass
+
+    try:
+        flusher = threading.Thread(target=_best_effort_flush, daemon=True)
+        flusher.start()
+        flusher.join(timeout=1.0)
     finally:
         os._exit(code)
 
 
 def _shutdown_watchdog_fire() -> None:
-    """Hard-deadline fallback for a stuck graceful shutdown (issue #2027)."""
-    logger.warning(
-        "Graceful shutdown did not complete within %.0fs; forcing exit",
-        _SHUTDOWN_WATCHDOG_SECONDS,
-    )
+    """Hard-deadline fallback for a stuck graceful shutdown (issue #2027).
+
+    The warning is fire-and-forget in a daemon thread: logging writes to
+    stderr, and a full stderr pipe blocking the warning would block the
+    watchdog itself — the very condition it exists to escape.
+    """
+    threading.Thread(
+        target=lambda: logger.warning(
+            "Graceful shutdown did not complete within %.0fs; forcing exit",
+            _SHUTDOWN_WATCHDOG_SECONDS,
+        ),
+        daemon=True,
+    ).start()
     _force_exit(0)
 
 
