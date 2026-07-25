@@ -1,12 +1,13 @@
 """Regression tests for the stdio shutdown abort (issue #2027).
 
 The MCP SDK's stdio transport reads stdin through anyio's worker-thread
-pool, so a daemon thread parked in ``readline()`` holds the
+pool, so a daemon thread parked in a blocking stdin read holds the
 ``BufferedReader`` lock whenever no message is in flight. If the process
 reaches interpreter finalization in that state, CPython aborts with
 ``Fatal Python error: _enter_buffered_busy`` — SIGABRT, which macOS turns
 into a user-visible crash dialog. ``ha_mcp.__main__._force_exit`` skips
-finalization to neutralize this.
+finalization to neutralize this; a shutdown watchdog bounds the related
+hang where the SDK's stdio teardown never completes at all.
 
 Everything here spawns real subprocesses: the abort happens inside
 interpreter teardown, which cannot be reproduced in-process.
@@ -73,10 +74,13 @@ class TestForceExitMechanism:
     def test_plain_exit_with_parked_reader_aborts(self) -> None:
         """Control: sys.exit() in the parked-reader state aborts the process.
 
-        This is the bug being guarded against. If a future CPython or anyio
-        release makes this pass cleanly (returncode 0, no fatal error), the
-        _force_exit workaround in ha_mcp.__main__ can likely be removed —
-        that is the only situation in which this test should ever fail.
+        This is the bug being guarded against (no anyio involved — the abort
+        is CPython finalization behavior). If a future CPython release
+        changes buffered-IO finalization so this passes cleanly (returncode
+        0, no fatal error), the _force_exit workaround in ha_mcp.__main__
+        can likely be removed. It can also fail if the reader thread loses
+        the startup race and is not yet inside read() at exit — treat that
+        as a race to investigate, not as the upstream fix having landed.
         """
         code, stderr = _run_with_open_stdin(_PARKED_READER_PREAMBLE + "sys.exit(0)")
         assert code != 0
@@ -113,13 +117,16 @@ def _drain(stream: BufferedReader, sink: bytearray) -> None:
 )
 @pytest.mark.timeout(180)
 def test_stdio_server_sigterm_exits_cleanly(tmp_path: Path) -> None:
-    """Full-server regression test: SIGTERM mid-session must not SIGABRT.
+    """Full-server regression test: SIGTERM mid-session must exit cleanly.
 
     Reproduces the issue #2027 session-end sequence: the server is up, has
     answered ``initialize``, and its stdin reader is parked awaiting the next
-    message; the client then goes away (SIGTERM). Without _force_exit the
-    graceful-shutdown path ends in ``sys.exit`` → finalization → SIGABRT
-    (returncode -6) and a macOS crash dialog.
+    message; the client then goes away (SIGTERM). Without the fixes this
+    fails two ways: ``sys.exit`` reaching finalization aborts (returncode
+    -6, the macOS crash-dialog variant), or the SDK's stdio teardown never
+    completes while the stdin read is in flight and the process never exits
+    (the leftover-instances variant). The shutdown watchdog bounds the
+    latter, so the process must exit 0 well inside the wait below.
     """
     env = os.environ.copy()
     env.update(

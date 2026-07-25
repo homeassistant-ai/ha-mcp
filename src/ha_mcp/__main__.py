@@ -131,6 +131,16 @@ SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _shutdown_event: asyncio.Event | None = None
 _shutdown_in_progress = False
 
+# Set by the stdio entry point (main) so signal-initiated shutdown arms a
+# hard-deadline watchdog. HTTP entry points leave this False.
+_force_exit_on_shutdown = False
+
+# Hard deadline for a signal-initiated stdio shutdown. Must exceed the sum
+# of the graceful phases (server-stop wait + resource cleanup + task
+# cancellation, SHUTDOWN_TIMEOUT_SECONDS each) so it only fires when the
+# graceful path is truly stuck (issue #2027).
+_SHUTDOWN_WATCHDOG_SECONDS = 10.0
+
 # Stdin error message for Docker without -i flag
 _STDIN_ERROR_MESSAGE = """
 ==============================================================================
@@ -589,16 +599,29 @@ async def _cleanup_resources() -> None:
 
 
 async def _cancel_tasks(*tasks: asyncio.Task) -> None:
-    """Cancel tasks and wait for completion, swallowing CancelledError."""
-    for task in tasks:
-        if not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                # Expected: we just cancelled this task, swallow its
-                # CancelledError so remaining tasks still get awaited.
-                pass
+    """Cancel tasks and wait for completion, bounding the wait.
+
+    A task can ignore cancellation indefinitely — the stdio transport does
+    when a blocking stdin read is in flight (issue #2027) — so the wait is
+    bounded instead of awaiting each task unboundedly. Stragglers are
+    logged and abandoned; the stdio entry point force-exits anyway.
+    """
+    pending = [task for task in tasks if not task.done()]
+    if not pending:
+        return
+    for task in pending:
+        task.cancel()
+    done, still_pending = await asyncio.wait(pending, timeout=SHUTDOWN_TIMEOUT_SECONDS)
+    if still_pending:
+        logger.warning(
+            "%d task(s) ignored cancellation during shutdown", len(still_pending)
+        )
+    for task in done:
+        if task.cancelled():
+            continue
+        exc = task.exception()
+        if exc is not None:
+            logger.warning(f"Task raised during shutdown: {exc!r}")
 
 
 async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
@@ -622,14 +645,22 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
         if shutdown_task in done:
             logger.info("Shutdown signal received, stopping server...")
             server_task.cancel()
-            try:
-                await asyncio.wait_for(server_task, timeout=SHUTDOWN_TIMEOUT_SECONDS)
-            except TimeoutError:
+            # asyncio.wait, not wait_for: wait_for's timeout path awaits the
+            # cancellation completing, which hangs when the stdio transport
+            # ignores cancellation mid-stdin-read (issue #2027). wait simply
+            # returns after the timeout, leaving the straggler abandoned.
+            stopped, _ = await asyncio.wait(
+                {server_task}, timeout=SHUTDOWN_TIMEOUT_SECONDS
+            )
+            if server_task in stopped:
+                try:
+                    server_task.result()
+                except asyncio.CancelledError:
+                    # Expected: we just cancelled server_task above; swallow
+                    # its CancelledError so shutdown can proceed to cleanup.
+                    pass
+            else:
                 logger.warning("Server did not stop within timeout")
-            except asyncio.CancelledError:
-                # Expected: we just cancelled server_task above; swallow its
-                # CancelledError so shutdown can proceed to cleanup.
-                pass
         elif server_task in done:
             # Server task finished on its own (no shutdown signal). Re-raise any
             # exception it captured so a hard startup failure surfaces as a
@@ -698,6 +729,17 @@ def _signal_handler(signum: int, frame: Any) -> None:
     _shutdown_in_progress = True
     logger.info(f"Received {sig_name}, initiating graceful shutdown...")
 
+    if _force_exit_on_shutdown:
+        # The SDK's stdio teardown hangs if a stdin read is in flight when
+        # the server task is cancelled: the CancelledError gets stuck being
+        # thrown into stdio_server's task group while the reader thread is
+        # parked in a blocking stdin read, so asyncio.run never returns
+        # (issue #2027 — leftover stdio instances that never exit).
+        # Guarantee the process dies even if the graceful path is stuck.
+        watchdog = threading.Timer(_SHUTDOWN_WATCHDOG_SECONDS, _shutdown_watchdog_fire)
+        watchdog.daemon = True
+        watchdog.start()
+
     # Signal the shutdown event if we have an event loop
     if _shutdown_event is not None:
         try:
@@ -724,7 +766,7 @@ def _force_exit(code: int) -> NoReturn:
     """Exit the stdio process without interpreter finalization (issue #2027).
 
     The MCP SDK's stdio transport reads stdin through anyio's worker-thread
-    pool, so a daemon thread is parked in ``readline()`` holding the
+    pool, so a daemon thread is parked in a blocking stdin read holding the
     ``BufferedReader`` lock whenever no message is in flight. If the process
     exits while that read is pending — SIGTERM, or the client vanishing
     mid-read — interpreter finalization tries to close stdin, cannot acquire
@@ -733,14 +775,29 @@ def _force_exit(code: int) -> NoReturn:
     entry point neutralizes it instead: flush what matters, then skip
     finalization entirely. By this point ``_run_with_shutdown`` has already
     run resource cleanup, and a stdio server persists nothing at exit.
+
+    The ``finally`` is load-bearing: ``os._exit`` must run even if flushing
+    raises, or the escaping exception reaches interpreter finalization and
+    reintroduces the exact abort this function exists to prevent.
     """
-    logging.shutdown()
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.flush()
-        except Exception:  # nothing actionable at exit
-            pass
-    os._exit(code)
+    try:
+        logging.shutdown()
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:  # nothing actionable at exit
+                pass
+    finally:
+        os._exit(code)
+
+
+def _shutdown_watchdog_fire() -> None:
+    """Hard-deadline fallback for a stuck graceful shutdown (issue #2027)."""
+    logger.warning(
+        "Graceful shutdown did not complete within %.0fs; forcing exit",
+        _SHUTDOWN_WATCHDOG_SECONDS,
+    )
+    _force_exit(0)
 
 
 # CLI entry point (for pyproject.toml) - use FastMCP's built-in runner
@@ -781,18 +838,28 @@ def main() -> None:
     # Best-effort: failure logs a warning but doesn't block MCP startup.
     _maybe_spawn_settings_sidecar()
 
-    # Route the final exit through _force_exit: _run_entrypoint always leaves
-    # via sys.exit, and letting that SystemExit reach interpreter finalization
-    # aborts when the SDK's stdin reader thread still holds the stdin lock.
-    code = 0
+    # Route every exit through _force_exit: letting interpreter finalization
+    # run aborts when the SDK's stdin reader thread still holds the stdin
+    # lock. _run_entrypoint always leaves via sys.exit; the BaseException
+    # arm covers hard-stop paths (e.g. the re-raised CancelledError from the
+    # #1544 handling) that would otherwise bypass the force-exit. It also
+    # lets the signal handler arm the shutdown watchdog (stdio only).
+    global _force_exit_on_shutdown
+    _force_exit_on_shutdown = True
+    code = 1  # abnormal termination unless an exit says otherwise
     try:
         _run_entrypoint(_run_with_graceful_shutdown(), "Server")
+        code = 0
     except SystemExit as exc:
         if isinstance(exc.code, int):
             code = exc.code
-        elif exc.code is not None:
-            code = 1
-    _force_exit(code)
+        elif exc.code is None:
+            code = 0
+        # any other code (an error-message string) keeps the default 1
+    except BaseException:
+        logger.error("Server terminated abnormally", exc_info=True)
+    finally:
+        _force_exit(code)
 
 
 def _maybe_spawn_settings_sidecar() -> None:
