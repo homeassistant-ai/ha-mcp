@@ -467,11 +467,95 @@ class TestMainEntryPoint:
             patch.object(
                 main_module, "_run_with_graceful_shutdown", new_callable=AsyncMock
             ),
+            # main() ends in _force_exit → os._exit(), which would kill this
+            # pytest worker (issue #2027). Substitute a SystemExit so the
+            # in-process call still terminates the normal way.
+            patch.object(
+                main_module, "_force_exit", side_effect=SystemExit(0)
+            ) as mock_force_exit,
             pytest.raises(SystemExit),
         ):
             main_module.main()
 
         assert setup_called, "Signal handlers were not set up"
+        mock_force_exit.assert_called_once_with(0)
+
+    def _assert_exit_routed(self, raised: BaseException, expected: int) -> None:
+        """Run main() with _run_entrypoint raising, assert _force_exit code."""
+        import ha_mcp.__main__ as main_module
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "HOMEASSISTANT_URL": "http://test.local:8123",
+                    "HOMEASSISTANT_TOKEN": "test_token",
+                },
+            ),
+            patch.object(sys, "argv", ["ha-mcp"]),
+            patch.object(main_module, "_check_stdin_available", return_value=True),
+            patch.object(main_module, "_maybe_spawn_settings_sidecar"),
+            # Plain MagicMock: an auto-created AsyncMock would return a
+            # never-awaited coroutine and trip pytest's unraisable check.
+            patch.object(main_module, "_run_with_graceful_shutdown", new=MagicMock()),
+            patch.object(main_module, "_run_entrypoint", side_effect=raised),
+            patch.object(
+                main_module, "_force_exit", side_effect=SystemExit
+            ) as force_exit,
+            pytest.raises(SystemExit),
+        ):
+            main_module.main()
+
+        force_exit.assert_called_once_with(expected)
+
+    def test_main_routes_nonzero_exit_code_through_force_exit(self):
+        """A failed server exit (sys.exit(1) etc.) must not collapse to 0."""
+        self._assert_exit_routed(SystemExit(3), 3)
+
+    def test_main_routes_string_exit_code_as_failure(self):
+        """SystemExit with a message string is an abnormal exit → code 1."""
+        self._assert_exit_routed(SystemExit("config error"), 1)
+
+    def test_main_routes_cancelled_error_through_force_exit(self):
+        """BaseExceptions like CancelledError (the #1544 hard-stop path) must
+        still exit via _force_exit — reaching interpreter finalization with a
+        parked stdin reader is the issue #2027 abort."""
+        self._assert_exit_routed(asyncio.CancelledError(), 1)
+
+
+class TestShutdownWatchdog:
+    """Tests for the stdio shutdown watchdog (issue #2027 hang variant)."""
+
+    def _fire_first_signal(self, stdio_mode: bool) -> MagicMock:
+        import ha_mcp.__main__ as main_module
+
+        main_module._shutdown_in_progress = False
+        main_module._shutdown_event = None  # handler returns after arming
+        try:
+            with (
+                patch.object(main_module.threading, "Timer") as timer_cls,
+                patch.object(main_module, "_force_exit_on_shutdown", stdio_mode),
+            ):
+                main_module._signal_handler(signal.SIGTERM, None)
+        finally:
+            main_module._shutdown_in_progress = False
+        return timer_cls
+
+    def test_first_signal_arms_watchdog_in_stdio_mode(self):
+        timer_cls = self._fire_first_signal(stdio_mode=True)
+
+        import ha_mcp.__main__ as main_module
+
+        timer_cls.assert_called_once_with(
+            main_module._SHUTDOWN_WATCHDOG_SECONDS,
+            main_module._shutdown_watchdog_fire,
+        )
+        assert timer_cls.return_value.daemon is True
+        timer_cls.return_value.start.assert_called_once()
+
+    def test_first_signal_does_not_arm_watchdog_for_http(self):
+        timer_cls = self._fire_first_signal(stdio_mode=False)
+        timer_cls.assert_not_called()
 
 
 class TestHTTPEntryPoints:
