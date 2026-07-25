@@ -532,7 +532,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### Developer
 - `ha_dev_manage_server` — Manage the running ha-mcp server itself (developer mode).
-- `ha_dev_manage_settings` — Manage ha-mcp server settings directly (developer mode).
+- `ha_dev_manage_settings` — Manage ha-mcp server settings and the Tools/Policies/Backups surfaces (developer mode).
 
 ### Device Registry
 - `ha_get_device` — Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.
