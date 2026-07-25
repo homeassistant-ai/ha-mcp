@@ -1006,6 +1006,46 @@ class TestEditYamlConfigBackCompat:
         )
 
 
+class TestEditYamlConfigExtraAllowedKeys:
+    """Source guards for the operator extra-key wiring (#1887).
+
+    Two links in the chain are invisible to the parse-level tests: the schema
+    entry that lets the field through at all, and the handler passing it into
+    the validator. Dropping either leaves every parse test green while the
+    feature is dead - the first rejects the whole call with the opaque
+    "extra keys not allowed", the second silently ignores the operator's keys.
+    Voluptuous is mocked in this suite, so these assert at the source level.
+    """
+
+    def test_schema_accepts_extra_allowed_keys(self):
+        import inspect
+
+        import custom_components.ha_mcp_tools as comp
+
+        src = inspect.getsource(comp)
+        start = src.index("SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(")
+        block = src[start : src.index("\n)\n", start)]
+        assert 'vol.Optional("extra_allowed_keys"' in block, (
+            "edit_yaml_config dropped the extra_allowed_keys field; the strict "
+            "schema would reject every call from a server that sends it"
+        )
+
+    def test_handler_forwards_caller_extra_keys_to_validator(self):
+        import inspect
+
+        import custom_components.ha_mcp_tools as comp
+
+        src = inspect.getsource(comp)
+        start = src.index("_parse_and_validate_yaml_path(\n")
+        block = src[start : start + 400]
+        assert (
+            "extra_allowed_keys=_effective_extra_allowed_keys(hass, call)" in block
+        ), (
+            "the edit handler stopped forwarding the effective extra keys (wire "
+            "union component store); the operator setting would be silently inert"
+        )
+
+
 class TestDenyFloor:
     """The non-overridable deny floor (issue #1567): a user-configured extra
     directory can NEVER reach .storage or an unmasked secrets file, even when
@@ -1164,6 +1204,205 @@ class TestLoadAllowedPaths:
     async def test_first_run_returns_empty(self, monkeypatch, tmp_path):
         result = await self._load(monkeypatch, tmp_path, load_return=None)
         assert result == []
+
+
+class TestNormalizeExtraYamlKeys:
+    """_normalize_extra_yaml_keys strips/dedups/sorts and drops denied, blank,
+    and non-string entries so the store can never widen the deny floor (#1887)."""
+
+    def test_strips_dedups_sorts(self):
+        import custom_components.ha_mcp_tools as comp
+
+        kept, dropped = comp._normalize_extra_yaml_keys(
+            [" beta ", "alpha", "alpha", "beta"]
+        )
+        assert kept == ["alpha", "beta"]
+        assert dropped == []
+
+    def test_drops_denylist_members(self):
+        import custom_components.ha_mcp_tools as comp
+
+        kept, dropped = comp._normalize_extra_yaml_keys(
+            ["alert2", "homeassistant", "frontend"]
+        )
+        assert kept == ["alert2"]
+        assert set(dropped) == {"homeassistant", "frontend"}
+
+    def test_drops_blank_and_non_string(self):
+        import custom_components.ha_mcp_tools as comp
+
+        kept, dropped = comp._normalize_extra_yaml_keys(["ok", "   ", "", 123, None])
+        assert kept == ["ok"]
+        assert dropped == ["   ", "", 123, None]
+
+    def test_non_list_returns_empty(self):
+        import custom_components.ha_mcp_tools as comp
+
+        assert comp._normalize_extra_yaml_keys(None) == ([], [])
+        assert comp._normalize_extra_yaml_keys("alert2") == ([], [])
+
+    def test_preserves_case(self):
+        import custom_components.ha_mcp_tools as comp
+
+        kept, _ = comp._normalize_extra_yaml_keys(["Alert2", "MQTT"])
+        assert kept == ["Alert2", "MQTT"]
+
+
+class TestLoadExtraYamlKeys:
+    """_load_extra_yaml_keys re-validates the persisted store and fails safe,
+    mirroring _load_allowed_paths (Store is mocked; asyncio_mode=auto)."""
+
+    async def _load(self, monkeypatch, *, load_return=None, load_exc=None):
+        import custom_components.ha_mcp_tools as comp
+
+        hass = MagicMock()
+        store = MagicMock()
+        if load_exc is not None:
+            store.async_load = AsyncMock(side_effect=load_exc)
+        else:
+            store.async_load = AsyncMock(return_value=load_return)
+        monkeypatch.setattr(comp, "Store", lambda *a, **k: store)
+        return await comp._load_extra_yaml_keys(hass)
+
+    async def test_revalidates_and_drops_invalid(self, monkeypatch):
+        # Whitespace, a denied key, a duplicate, and a non-string are dropped;
+        # the one valid key survives.
+        result = await self._load(
+            monkeypatch,
+            load_return={"keys": [" alert2 ", "homeassistant", "alert2", 123]},
+        )
+        assert result == ["alert2"]
+
+    async def test_corrupt_load_fails_safe(self, monkeypatch):
+        assert await self._load(monkeypatch, load_exc=ValueError("corrupt")) == []
+
+    async def test_non_list_keys_ignored(self, monkeypatch):
+        assert await self._load(monkeypatch, load_return={"keys": "nope"}) == []
+
+    async def test_first_run_returns_empty(self, monkeypatch):
+        assert await self._load(monkeypatch, load_return=None) == []
+
+
+class TestEffectiveExtraAllowedKeys:
+    """_effective_extra_allowed_keys unions the per-call wire keys with the
+    component store, re-applying the deny floor to both (#1887)."""
+
+    def _hass(self, stored):
+        hass = MagicMock()
+        hass.data = {"ha_mcp_tools": {"extra_yaml_keys": stored}}
+        return hass
+
+    def _call(self, wire):
+        call = MagicMock()
+        call.data = {"extra_allowed_keys": wire}
+        return call
+
+    def test_unions_wire_and_store(self):
+        import custom_components.ha_mcp_tools as comp
+
+        result = comp._effective_extra_allowed_keys(
+            self._hass(["stored1"]), self._call(["wire1"])
+        )
+        assert result == frozenset({"wire1", "stored1"})
+
+    def test_store_only(self):
+        import custom_components.ha_mcp_tools as comp
+
+        result = comp._effective_extra_allowed_keys(
+            self._hass(["alert2"]), self._call([])
+        )
+        assert result == frozenset({"alert2"})
+
+    def test_denied_store_key_dropped(self):
+        import custom_components.ha_mcp_tools as comp
+
+        # Even if a denied key somehow sat in hass.data, the union filters it.
+        result = comp._effective_extra_allowed_keys(
+            self._hass(["homeassistant", "alert2"]), self._call([])
+        )
+        assert result == frozenset({"alert2"})
+
+    def test_missing_store_falls_back_to_wire(self):
+        import custom_components.ha_mcp_tools as comp
+
+        hass = MagicMock()
+        hass.data = {}
+        result = comp._effective_extra_allowed_keys(hass, self._call(["wire1"]))
+        assert result == frozenset({"wire1"})
+
+
+class TestExtraYamlKeysHandlers:
+    """get/set_extra_yaml_keys: admin + token gated; set drops denied keys and
+    updates hass.data live so the union applies with no restart (#1887)."""
+
+    async def test_set_persists_and_updates_hass_data(self, monkeypatch):
+        import custom_components.ha_mcp_tools as comp
+
+        saved: dict[str, list[str]] = {}
+
+        async def _save(hass, keys):
+            saved["keys"] = keys
+
+        monkeypatch.setattr(comp, "_save_extra_yaml_keys", _save)
+        monkeypatch.setattr(comp, "_caller_token_ok", lambda hass, call: True)
+        monkeypatch.setattr(comp, "_caller_is_admin", AsyncMock(return_value=True))
+
+        hass = MagicMock()
+        hass.data = {comp.DOMAIN: {}}
+        handler = comp._build_set_extra_yaml_keys_handler(hass)
+        call = MagicMock()
+        call.data = {"keys": [" alert2 ", "homeassistant", "alert2"]}
+        result = await handler(call)
+
+        assert result["success"] is True
+        assert result["keys"] == ["alert2"]
+        assert "homeassistant" in result["rejected"]
+        assert saved["keys"] == ["alert2"]
+        assert hass.data[comp.DOMAIN]["extra_yaml_keys"] == ["alert2"]
+
+    async def test_get_returns_current_keys_and_deny_floor(self, monkeypatch):
+        import custom_components.ha_mcp_tools as comp
+
+        monkeypatch.setattr(comp, "_caller_token_ok", lambda hass, call: True)
+        monkeypatch.setattr(comp, "_caller_is_admin", AsyncMock(return_value=True))
+        hass = MagicMock()
+        hass.data = {comp.DOMAIN: {"extra_yaml_keys": ["alert2"]}}
+        handler = comp._build_get_extra_yaml_keys_handler(hass)
+        result = await handler(MagicMock(data={}))
+        assert result["success"] is True
+        assert result["keys"] == ["alert2"]
+        assert "homeassistant" in result["deny_floor"]
+
+    async def test_set_rejects_non_admin(self, monkeypatch):
+        import custom_components.ha_mcp_tools as comp
+
+        monkeypatch.setattr(comp, "_caller_token_ok", lambda hass, call: True)
+        monkeypatch.setattr(comp, "_caller_is_admin", AsyncMock(return_value=False))
+        save_calls = {"n": 0}
+
+        async def _save(hass, keys):
+            save_calls["n"] += 1
+
+        monkeypatch.setattr(comp, "_save_extra_yaml_keys", _save)
+        hass = MagicMock()
+        hass.data = {comp.DOMAIN: {}}
+        handler = comp._build_set_extra_yaml_keys_handler(hass)
+        result = await handler(MagicMock(data={"keys": ["alert2"]}))
+        assert result["success"] is False
+        assert result["error_code"] == "unauthorized"
+        assert save_calls["n"] == 0
+
+    async def test_get_rejects_bad_token(self):
+        import custom_components.ha_mcp_tools as comp
+
+        # Real _caller_token_ok: a mismatched presented token is rejected before
+        # any store read.
+        hass = MagicMock()
+        hass.data = {comp.DOMAIN: {"caller_token": "good"}}
+        handler = comp._build_get_extra_yaml_keys_handler(hass)
+        result = await handler(MagicMock(data={comp.CALLER_TOKEN_FIELD: "bad"}))
+        assert result["success"] is False
+        assert result["error_code"] == "unauthorized"
 
 
 class TestLoadCallerToken:

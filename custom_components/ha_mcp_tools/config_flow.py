@@ -241,29 +241,70 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
 
 
 class HaMcpToolsInfoOptionsFlow(OptionsFlow):
-    """Options flow for the tools entry: a light informational form.
+    """Options flow for the tools entry: edit the privileged services' config.
 
-    The tools services entry has nothing to configure yet, but aborting the
-    Configure dialog reads as an error. Show an empty-schema form that explains
-    what the entry provides instead; submitting persists an empty options
-    payload.
+    Surfaces the two operator-tunable sets the file/YAML tools honour - the
+    extra read/write directories and the extra top-level YAML write keys - so
+    they are reachable from the integration UI, not only the ha-mcp server's own
+    settings. Both live in the component's own .storage (get/set_allowed_paths
+    and get/set_extra_yaml_keys), so this screen and the server settings UI edit
+    the same source of truth, applied live with no restart. The deny floor is
+    non-overridable: traversal / out-of-config directories and denylisted keys
+    are dropped on save.
 
     The form uses the ``tools_info`` step id, NOT ``init``: the server options
     flow already owns ``options.step.init`` in strings.json, so a shared step id
-    would collide. ``async_step_init`` is the required entry point (it renders
-    the form); HA routes the form's submit to ``async_step_tools_info``.
+    would collide. ``async_step_init`` renders the form; HA routes the form's
+    submit to ``async_step_tools_info``.
     """
+
+    def _tools_form_schema(self) -> vol.Schema:
+        """Build the form schema with the current stored values as defaults."""
+        from . import _current_extra_dirs, _current_extra_yaml_keys
+
+        current_dirs = _current_extra_dirs(self.hass)
+        current_keys = _current_extra_yaml_keys(self.hass)
+        return vol.Schema(
+            {
+                vol.Optional("allowed_dirs", default=current_dirs): SelectSelector(
+                    SelectSelectorConfig(
+                        options=current_dirs,
+                        multiple=True,
+                        custom_value=True,
+                        mode=SelectSelectorMode.LIST,
+                    )
+                ),
+                vol.Optional("extra_yaml_keys", default=current_keys): SelectSelector(
+                    SelectSelectorConfig(
+                        options=current_keys,
+                        multiple=True,
+                        custom_value=True,
+                        mode=SelectSelectorMode.LIST,
+                    )
+                ),
+            }
+        )
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Render the informational form under the ``tools_info`` step id."""
-        return self.async_show_form(step_id="tools_info", data_schema=vol.Schema({}))
+        """Render the editable form under the ``tools_info`` step id."""
+        return self.async_show_form(
+            step_id="tools_info", data_schema=self._tools_form_schema()
+        )
 
     async def async_step_tools_info(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Persist an empty options payload once the info form is submitted."""
+        """Persist the edited directories and keys once the form is submitted."""
+        if user_input is None:
+            return self.async_show_form(
+                step_id="tools_info", data_schema=self._tools_form_schema()
+            )
+        from . import _apply_allowed_paths, _apply_extra_yaml_keys
+
+        await _apply_allowed_paths(self.hass, user_input.get("allowed_dirs", []))
+        await _apply_extra_yaml_keys(self.hass, user_input.get("extra_yaml_keys", []))
         return self.async_create_entry(title="", data={})
 
 

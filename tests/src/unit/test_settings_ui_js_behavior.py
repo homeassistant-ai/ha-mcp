@@ -2066,7 +2066,7 @@ class TestFormControlAccessibility:
         # Sanity: the expanded fixture really did exercise the extra
         # surfaces, not silently render nothing. `adv:code_mode_max_duration`
         # is emitted by both the Advanced-panel field generator (the fixture
-        # lists it as an advanced field) and renderCodeModeSubRows, so this
+        # lists it as an advanced field) and renderAdvancedSubRows, so this
         # assert only proves *a* control with that name rendered — not the
         # code-mode sub-row specifically.
         assert 'name="adv:code_mode_max_duration"' in result.dom, (
@@ -2492,7 +2492,7 @@ class TestAddonModeLockedBannerCopy:
         ``config.yaml`` schema, so the Saved-tools-path row renders
         env-pinned and read-only and the add-on user cannot unset it —
         the standalone "unset it to edit here" copy is unactionable.
-        ``renderCodeModeSubRows`` was
+        ``renderAdvancedSubRows`` was
         overlooked when the addon-aware locked-note copy was added to
         the other render paths (see the master/advanced banner tests
         above); this pins the same rule for the code-mode sub-rows.
@@ -5506,3 +5506,100 @@ class TestEmbeddedRestartButton:
         assert m and "Restart HA-MCP Server" in m.group(1), (
             f"embedded restart-notice copy missing; got {m.group(1) if m else None}"
         )
+
+
+class TestExtraYamlWriteKeysNesting:
+    """JSDOM coverage for the extra-YAML-write-keys text row nested under
+    enable_yaml_config_editing (#1887).
+
+    It comes from the advanced cache (section ``beta_yamlkeys``) but renders
+    among the YAML per-key toggles, so it shares their indent class and both
+    of their gates (beta master AND the parent toggle).
+    """
+
+    def _payloads(self, master_on: bool, yaml_on: bool) -> dict[str, dict]:
+        return {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": master_on,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        },
+                        "enable_yaml_config_editing": {
+                            "value": yaml_on,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_YAML_CONFIG_EDITING",
+                        },
+                    },
+                    "beta_sub_flags": ["enable_yaml_config_editing"],
+                },
+            },
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "extra_yaml_write_keys",
+                            "env_var": "HA_MCP_EXTRA_YAML_KEYS",
+                            "value": "alert2",
+                            "type": "str",
+                            "section": "beta_yamlkeys",
+                            "origin": "default",
+                            "editable": True,
+                        }
+                    ]
+                },
+            },
+        }
+
+    def _rows(self, dom: str) -> list[str]:
+        return re.findall(
+            r'<div[^>]*class="[^"]*yaml-packages-sub[^"]*"[^>]*>',
+            dom,
+        )
+
+    def test_row_rendered_as_text_input_when_both_gates_on(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payloads(master_on=True, yaml_on=True),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+
+        assert self._rows(result.dom), (
+            f"expected yaml-packages-sub row in DOM; tail: {result.dom[-2000:]}"
+        )
+        # A free-text box, not a toggle – the whole point of the setting.
+        assert 'name="adv:extra_yaml_write_keys"' in result.dom
+        for row in self._rows(result.dom):
+            assert "dimmed" not in row, f"unexpected dimmed with both gates on: {row}"
+
+    @pytest.mark.parametrize(
+        "master_on,yaml_on", [(False, True), (True, False), (False, False)]
+    )
+    def test_row_dimmed_when_either_gate_off(
+        self, settings_script: str, master_on: bool, yaml_on: bool
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payloads(master_on=master_on, yaml_on=yaml_on),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+
+        rows = self._rows(result.dom)
+        assert rows, "expected yaml-packages-sub row"
+        for row in rows:
+            assert "dimmed" in row, f"expected dimmed row: {row}"

@@ -203,6 +203,25 @@ class Settings(BaseSettings):
     )
     enable_yaml_packages_scene: bool = Field(False, alias="ENABLE_YAML_PACKAGES_SCENE")
 
+    # Operator-configured extra top-level keys ha_config_set_yaml may write,
+    # comma-separated, on top of the custom component's built-in allowlist
+    # (#1887). For YAML-first integrations that are valid on one install but
+    # not worth hardcoding globally. Additive only, and never a way past the
+    # component's YAML_KEY_DENYLIST: that floor is enforced component-side
+    # (the authoritative layer) and is deliberately not mirrored here, so
+    # there is one copy to keep correct. A denied key typed into this setting
+    # is simply ignored, with the component's explanation on first use.
+    # Nor does it lift the packages-only restriction on automation/script/
+    # scene: those keep reaching packages/*.yaml through their own per-key
+    # toggles and stay rejected in configuration.yaml.
+    # Empty (the default) keeps today's behaviour exactly.
+    # Registered in ADVANCED_SETTINGS_FIELDS (section ``beta_yamlkeys``), not
+    # FEATURE_FLAG_FIELDS, because it is a value rather than a toggle – the
+    # same placement the code-mode sub-settings use. Meaningful only when
+    # ``enable_yaml_config_editing`` is on; the UI nests it under that parent
+    # like the per-key toggles above.
+    extra_yaml_write_keys: str = Field("", alias="HA_MCP_EXTRA_YAML_KEYS")
+
     # Seed values for tool visibility (comma-separated tool names).
     # Used as initial config when no tool_config.json exists.
     # The web settings UI (/settings) is the primary interface for managing these.
@@ -621,6 +640,7 @@ AdvancedSection = Literal[
     "tools_surface",
     "sidecar",
     "beta_codemode",
+    "beta_yamlkeys",
     "developer",
 ]
 
@@ -894,6 +914,18 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
         "CODE_MODE_SAVED_TOOLS_PATH",
         str,
         "beta_codemode",
+        True,
+    ),
+    # Extra YAML write keys (issue #1887). Same shape as the code-mode
+    # sub-settings above: a non-bool value that belongs visually under a
+    # feature toggle rather than in the advanced panel, so it lives here
+    # with its own section and the features renderer nests it beneath
+    # "Enable YAML config editing".
+    AdvancedField(
+        "extra_yaml_write_keys",
+        "HA_MCP_EXTRA_YAML_KEYS",
+        str,
+        "beta_yamlkeys",
         True,
     ),
     # Developer mode (issue #1775). Lives in ADVANCED_SETTINGS_FIELDS —
@@ -1183,6 +1215,30 @@ def _apply_one_feature_flag_override(
             coerced,
             err,
         )
+
+
+def parse_extra_yaml_write_keys(settings: "Settings") -> list[str]:
+    """Parse ``extra_yaml_write_keys`` into a clean key list (#1887).
+
+    Whitespace and empty entries are dropped and the result is deduplicated
+    and sorted, so the service payload is deterministic and unaffected by how
+    the operator spaced the setting.
+
+    The component's ``YAML_KEY_DENYLIST`` is NOT applied here: that floor
+    lives component-side, in the layer that authorizes the write. Mirroring it
+    would mean a second copy to keep in lockstep for no gain: a denied key sent
+    on the wire is dropped there anyway.
+
+    Lives in this module rather than next to the YAML tool because the backup
+    restore path needs it too, and ``backup_manager`` importing a ``tools_*``
+    module would add an import edge that binds ``tools_yaml_config``'s
+    module-level names at restore time.
+    """
+    # Direct attribute access, matching ``_disabled_packages_keys``: a future
+    # rename must raise loudly rather than silently return an empty list,
+    # which would read as "the operator configured nothing".
+    raw = settings.extra_yaml_write_keys or ""
+    return sorted({segment.strip() for segment in raw.split(",") if segment.strip()})
 
 
 def _apply_beta_master_gate(settings: "Settings") -> None:
