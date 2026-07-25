@@ -467,11 +467,18 @@ class TestMainEntryPoint:
             patch.object(
                 main_module, "_run_with_graceful_shutdown", new_callable=AsyncMock
             ),
+            # main() ends in _force_exit → os._exit(), which would kill this
+            # pytest worker (issue #2027). Substitute a SystemExit so the
+            # in-process call still terminates the normal way.
+            patch.object(
+                main_module, "_force_exit", side_effect=SystemExit(0)
+            ) as mock_force_exit,
             pytest.raises(SystemExit),
         ):
             main_module.main()
 
         assert setup_called, "Signal handlers were not set up"
+        mock_force_exit.assert_called_once_with(0)
 
 
 class TestHTTPEntryPoints:

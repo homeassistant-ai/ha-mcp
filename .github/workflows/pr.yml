@@ -266,7 +266,10 @@ jobs:
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
       image: ghcr.io/astral-sh/uv:0.11.28-python3.13-trixie-slim
-    timeout-minutes: 5
+    # 8 (was 5, with ~1 min headroom): the issue #2027 regression tests
+    # spawn real subprocesses — including one full stdio server session —
+    # which costs tens of seconds on a slow runner.
+    timeout-minutes: 8
 
     steps:
     - name: Restore apt download cache
