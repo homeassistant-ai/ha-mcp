@@ -46,8 +46,15 @@ class _Clock:
         self.now += seconds
 
 
-def _run(probe: Any, *, timeout: float = 10.0) -> tuple[bool, _Clock]:
-    clock = _Clock()
+def _run(
+    probe: Any, *, timeout: float = 10.0, clock: _Clock | None = None
+) -> tuple[bool, _Clock]:
+    """Drive the helper with a stubbed probe on a faked clock.
+
+    Pass ``clock`` when the probe itself needs to advance time (e.g. to
+    simulate an attempt that consumes its whole budget).
+    """
+    clock = clock or _Clock()
     with (
         patch("tests.src.haos_runtime._probe_addon_ha_link", probe),
         patch("tests.src.haos_runtime.time", clock),
@@ -58,7 +65,7 @@ def _run(probe: Any, *, timeout: float = 10.0) -> tuple[bool, _Clock]:
 def test_returns_immediately_when_link_is_up() -> None:
     """A link that already works costs one probe and no sleep."""
     calls: list[str] = []
-    ready, clock = _run(lambda url: calls.append(url))
+    ready, clock = _run(lambda url, budget: calls.append(url))
     assert ready is True
     assert calls == [_URL]
     assert clock.now == 0.0
@@ -74,7 +81,7 @@ def test_retries_until_the_link_comes_up() -> None:
 
     attempts: list[int] = []
 
-    def probe(url: str) -> None:
+    def probe(url: str, budget: float) -> None:
         attempts.append(len(attempts))
         if len(attempts) < 3:
             # Shape of the observed failure: the tool call raises with the
@@ -95,7 +102,7 @@ def test_gives_up_at_the_deadline() -> None:
     """A link that never comes up returns False for the caller to report."""
     attempts: list[int] = []
 
-    def probe(url: str) -> None:
+    def probe(url: str, budget: float) -> None:
         attempts.append(len(attempts))
         raise OSError("connection refused")
 
@@ -106,6 +113,52 @@ def test_gives_up_at_the_deadline() -> None:
     assert clock.now >= 10.0
 
 
+def test_each_attempt_is_bounded_by_the_remaining_deadline() -> None:
+    """The probe is handed the time left, not an unbounded wait.
+
+    Without a per-attempt cap the call inherits FastMCP's Streamable HTTP
+    default (``httpx.Timeout(30.0, read=300.0)``), so one stalled attempt can
+    run 300s and blow through this helper's own budget.
+    """
+    budgets: list[float] = []
+
+    def probe(url: str, budget: float) -> None:
+        budgets.append(budget)
+        raise OSError("connection refused")
+
+    _, _clock = _run(probe, timeout=10.0)
+    assert budgets, "probe was never called"
+    # First attempt gets the whole budget, and each later one strictly less.
+    assert budgets[0] == pytest.approx(10.0)
+    assert budgets == sorted(budgets, reverse=True)
+    assert all(0 < b <= 10.0 for b in budgets), budgets
+
+
+def test_a_stalled_attempt_cannot_outlive_the_deadline() -> None:
+    """A probe that burns its whole budget still stops at the deadline.
+
+    Regression for the unbounded probe: the loop only consulted the deadline
+    between attempts, so an attempt that hung held the fixture (and its HAOS
+    diagnostics) well past the advertised timeout.
+    """
+    attempts: list[float] = []
+    clock = _Clock()
+
+    def stalling_probe(url: str, budget: float) -> None:
+        # What asyncio.wait_for does when the call never answers: consume the
+        # budget, then raise a TimeoutError (a retried transient class).
+        attempts.append(budget)
+        clock.sleep(budget)
+        raise TimeoutError("probe timed out")
+
+    ready, clock = _run(stalling_probe, timeout=10.0, clock=clock)
+    assert ready is False
+    # One stall eats the budget, so the helper returns at the deadline rather
+    # than at 300s per attempt.
+    assert clock.now == pytest.approx(10.0)
+    assert len(attempts) == 1
+
+
 def test_bugs_propagate_instead_of_being_retried() -> None:
     """A bug in the probe must fail loudly, not burn the whole budget.
 
@@ -113,7 +166,7 @@ def test_bugs_propagate_instead_of_being_retried() -> None:
     transient classes are retried.
     """
 
-    def probe(url: str) -> None:
+    def probe(url: str, budget: float) -> None:
         raise TypeError("probe called with the wrong shape")
 
     with pytest.raises(TypeError):

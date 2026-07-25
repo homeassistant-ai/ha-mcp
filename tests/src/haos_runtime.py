@@ -1408,8 +1408,18 @@ def _addon_link_transient_errors() -> tuple[type[BaseException], ...]:
     )
 
 
-def _probe_addon_ha_link(addon_mcp_url: str) -> None:
-    """Make one MCP call that needs Home Assistant; raise if it does not work."""
+def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
+    """Make one MCP call that needs Home Assistant; raise if it does not work.
+
+    ``budget`` bounds this single attempt. Without it the attempt inherits
+    FastMCP's Streamable HTTP default of ``httpx.Timeout(30.0, read=300.0)``
+    (``client/transports/http.py``), so a listener that accepts the connection
+    but stalls on initialize or the tool response holds the poll loop for up to
+    300s — far past the caller's own deadline, delaying the fixture failure and
+    its HAOS diagnostics. The timeout is applied at all three layers that can
+    stall independently (connect/initialize, the tool response, and the
+    surrounding coroutine) so no single one can outlive the budget.
+    """
     import asyncio
 
     from fastmcp import Client
@@ -1418,10 +1428,17 @@ def _probe_addon_ha_link(addon_mcp_url: str) -> None:
     async def _call() -> None:
         # Fresh client per attempt: the server is stateless, and a long-lived
         # session would not survive the addon restarting mid-poll.
-        async with Client(StreamableHttpTransport(url=addon_mcp_url)) as client:
-            await client.call_tool("ha_get_addon", {})
+        async with Client(
+            StreamableHttpTransport(url=addon_mcp_url),
+            timeout=budget,
+            init_timeout=budget,
+        ) as client:
+            await client.call_tool("ha_get_addon", {}, timeout=budget)
 
-    asyncio.run(_call())
+    async def _bounded() -> None:
+        await asyncio.wait_for(_call(), timeout=budget)
+
+    asyncio.run(_bounded())
 
 
 def wait_for_addon_ha_link_ready(
@@ -1441,13 +1458,19 @@ def wait_for_addon_ha_link_ready(
     Core WebSocket and the Supervisor API) and is the call that surfaced the
     race. Returns False on timeout so the caller can fail with context.
     Transient errors are retried; bugs propagate.
+
+    Each attempt is capped by the time left on the deadline, so ``timeout`` is
+    the real ceiling: a stalled attempt cannot push the total past it.
     """
     deadline = time.monotonic() + timeout
     transient = _addon_link_transient_errors()
     last_err: BaseException | None = None
-    while time.monotonic() < deadline:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            _probe_addon_ha_link(addon_mcp_url)
+            _probe_addon_ha_link(addon_mcp_url, remaining)
         except transient as e:
             last_err = e
             LOG.debug("Addon -> Home Assistant link not ready yet: %r", e)
@@ -1455,7 +1478,9 @@ def wait_for_addon_ha_link_ready(
             elapsed = int(time.monotonic() - (deadline - timeout))
             LOG.info("Addon -> Home Assistant link ready after ~%ds", elapsed)
             return True
-        time.sleep(_ADDON_HA_LINK_POLL_S)
+        # Never sleep past the deadline either, so the budget is exact rather
+        # than exact-plus-one-poll.
+        time.sleep(min(_ADDON_HA_LINK_POLL_S, max(0.0, deadline - time.monotonic())))
     LOG.error(
         "Addon -> Home Assistant link never came up within %.0fs (last_exc=%r)",
         timeout,
