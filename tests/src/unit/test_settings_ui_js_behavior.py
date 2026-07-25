@@ -5337,6 +5337,7 @@ _VISIBILITY_DOM = MIN_DOM.replace(
   <div id="visibility-load-error" role="alert" aria-live="assertive" style="display:none"></div>
   <span id="visibility-save-status" class="status" role="status" aria-live="polite"></span>
   <input id="visibility-enabled" type="checkbox" />
+  <input id="visibility-enforce" type="checkbox" />
   <input id="visibility-cat-diagnostic" type="checkbox" />
   <input id="visibility-cat-config" type="checkbox" />
   <input id="visibility-exclude-hidden" type="checkbox" />

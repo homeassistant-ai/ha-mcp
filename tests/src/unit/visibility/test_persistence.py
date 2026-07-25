@@ -22,6 +22,14 @@ def test_save_then_load_roundtrip_bumps_version(tmp_path):
     assert loaded.version == 2  # save bumps
 
 
+def test_save_then_load_preserves_enforce(tmp_path):
+    save_visibility_config(
+        tmp_path, VisibilityConfig(version=1, enabled=True, enforce=True)
+    )
+    loaded = load_visibility_config(tmp_path)
+    assert loaded.enforce is True
+
+
 def test_corrupt_json_raises_valueerror(tmp_path):
     (tmp_path / "entity_visibility.json").write_text("{ not json")
     with pytest.raises(ValueError):
