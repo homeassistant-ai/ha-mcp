@@ -90,7 +90,17 @@ jobs:
     steps:
       - name: Require E2E success unless skipped
         run: |
-          if [ "${{ needs.changes.outputs.run }}" != "true" ]; then
+          # Only a classifier that SUCCEEDED and said `false` out loud can
+          # authorize the skip. A non-success classifier leaves `run` empty, and
+          # passing on that would make a runner hiccup indistinguishable from a
+          # docs-only PR — the lanes above run in that case, so fall through and
+          # judge them on their results. Keep this branch equivalent to the lane
+          # `if:` predicates above; if they diverge, this gate demands success
+          # from a lane that never ran.
+          classifier_result="${{ needs.changes.result }}"
+          if [ "$classifier_result" != "success" ]; then
+            echo "::warning::change classifier did not succeed (result=$classifier_result); judging the lanes on their own results."
+          elif [ "${{ needs.changes.outputs.run }}" = "false" ]; then
             echo "Docs/website-only PR — E2E Validation skipped; gate passes."
             exit 0
           fi
@@ -104,7 +114,12 @@ jobs:
           # the update-path lane must all pass. Any one failing wedges the
           # required gate.
           if [ "$container_result" != "success" ] || [ "$embedded_result" != "success" ] || [ "$update_path_result" != "success" ]; then
-            echo "::error::E2E Validation did not succeed (container=$container_result, embedded=$embedded_result, update-path=$update_path_result)."
+            # `skipped` here is NOT the docs-only skip (that exited 0 above): the
+            # lanes never started, e.g. the run was cancelled.
+            case "$container_result$embedded_result$update_path_result" in
+              *skipped*) echo "::error::E2E Validation lanes did not start (results: container=$container_result, embedded=$embedded_result, update-path=$update_path_result) — the run may have been cancelled." ;;
+              *) echo "::error::E2E Validation did not succeed (container=$container_result, embedded=$embedded_result, update-path=$update_path_result)." ;;
+            esac
             exit 1
           fi
 
@@ -337,7 +352,11 @@ jobs:
     needs: changes
     # A skipped job reports Success to the required status check, so a
     # docs/website-only PR doesn't wedge the merge waiting on these lanes.
-    if: needs.changes.outputs.run == 'true'
+    # Skipping requires a classifier that succeeded and said `false` out loud;
+    # anything else (a failed classifier leaves `run` empty) runs this lane.
+    # Keep this predicate equivalent to the skip branch in e2e-validation-gate:
+    # if they diverge, the gate demands success from a lane that never ran.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
     runs-on: ${{ matrix.os }}
     # 20 (was 15): headroom for the in-process-server e2e test that runs on
     # THIS lane (workflows/embedded/test_embedded_server.py) - its first
@@ -438,7 +457,11 @@ jobs:
     needs: changes
     # A skipped job reports Success, so a docs/website-only PR doesn't wedge the
     # gate waiting on this lane (mirrors e2e-validation).
-    if: needs.changes.outputs.run == 'true'
+    # Skipping requires a classifier that succeeded and said `false` out loud;
+    # anything else (a failed classifier leaves `run` empty) runs this lane.
+    # Keep this predicate equivalent to the skip branch in e2e-validation-gate:
+    # if they diverge, the gate demands success from a lane that never ran.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -537,7 +560,11 @@ jobs:
     needs: changes
     # A skipped job reports Success, so a docs/website-only PR doesn't wedge the
     # gate waiting on this lane (mirrors e2e-validation).
-    if: needs.changes.outputs.run == 'true'
+    # Skipping requires a classifier that succeeded and said `false` out loud;
+    # anything else (a failed classifier leaves `run` empty) runs this lane.
+    # Keep this predicate equivalent to the skip branch in e2e-validation-gate:
+    # if they diverge, the gate demands success from a lane that never ran.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
     runs-on: ubuntu-latest
     # 30m: each of the two scenarios (component@stable and component@working-tree)
     # does a first bring-up that installs ha-mcp plus the full fastmcp dependency
