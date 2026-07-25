@@ -22,7 +22,10 @@ import pytest
 
 from tests.src.haos_runtime import (
     _ADDON_HA_LINK_POLL_S,
+    _ADDON_HA_LINK_PROBE_S,
     _addon_link_transient_errors,
+    _is_transient_link_error,
+    _probe_addon_ha_link,
     wait_for_addon_ha_link_ready,
 )
 
@@ -110,15 +113,17 @@ def test_gives_up_at_the_deadline() -> None:
     assert ready is False
     # timeout 10s / poll 3s: probes at t=0,3,6,9 then the deadline stops it.
     assert len(attempts) == 4
-    assert clock.now >= 10.0
+    # Exactly the budget: the final sleep is clamped to the deadline rather
+    # than overshooting to 12.0.
+    assert clock.now == pytest.approx(10.0)
 
 
 def test_each_attempt_is_bounded_by_the_remaining_deadline() -> None:
     """The probe is handed the time left, not an unbounded wait.
 
-    Without a per-attempt cap the call inherits FastMCP's Streamable HTTP
-    default (``httpx.Timeout(30.0, read=300.0)``), so one stalled attempt can
-    run 300s and blow through this helper's own budget.
+    Without a per-attempt bound the call inherits FastMCP's Streamable HTTP
+    read default and can outlive this helper's own budget — see
+    ``_probe_addon_ha_link`` for the default it would otherwise inherit.
     """
     budgets: list[float] = []
 
@@ -126,37 +131,64 @@ def test_each_attempt_is_bounded_by_the_remaining_deadline() -> None:
         budgets.append(budget)
         raise OSError("connection refused")
 
-    _, _clock = _run(probe, timeout=10.0)
-    assert budgets, "probe was never called"
-    # First attempt gets the whole budget, and each later one strictly less.
-    assert budgets[0] == pytest.approx(10.0)
-    assert budgets == sorted(budgets, reverse=True)
-    assert all(0 < b <= 10.0 for b in budgets), budgets
+    _run(probe, timeout=10.0)
+    # Deterministic with timeout=10 and poll=3: probes at t=0,3,6,9, each handed
+    # exactly the time then left. Asserting the sequence (not just "descending")
+    # is what distinguishes `remaining` from a fixed per-attempt constant.
+    assert budgets == [
+        pytest.approx(10.0),
+        pytest.approx(7.0),
+        pytest.approx(4.0),
+        pytest.approx(1.0),
+    ], budgets
 
 
-def test_a_stalled_attempt_cannot_outlive_the_deadline() -> None:
-    """A probe that burns its whole budget still stops at the deadline.
+def test_a_stalled_attempt_is_abandoned_and_retried() -> None:
+    """A stall costs one attempt, not the whole window.
 
-    Regression for the unbounded probe: the loop only consulted the deadline
-    between attempts, so an attempt that hung held the fixture (and its HAOS
-    diagnostics) well past the advertised timeout.
+    Regression for two shapes: the loop used to consult the deadline only
+    between attempts (so an unbounded stall ran past the advertised timeout),
+    and handing each attempt all the remaining time made the first stall
+    monopolize the budget with zero retries — turning the transient this
+    helper exists for into a hard setup failure.
     """
-    attempts: list[float] = []
+    budgets: list[float] = []
     clock = _Clock()
 
     def stalling_probe(url: str, budget: float) -> None:
         # What asyncio.wait_for does when the call never answers: consume the
         # budget, then raise a TimeoutError (a retried transient class).
-        attempts.append(budget)
+        budgets.append(budget)
         clock.sleep(budget)
         raise TimeoutError("probe timed out")
 
-    ready, clock = _run(stalling_probe, timeout=10.0, clock=clock)
+    ready, clock = _run(stalling_probe, timeout=100.0, clock=clock)
     assert ready is False
-    # One stall eats the budget, so the helper returns at the deadline rather
-    # than at 300s per attempt.
-    assert clock.now == pytest.approx(10.0)
-    assert len(attempts) == 1
+    # Each attempt capped at _ADDON_HA_LINK_PROBE_S, so the window is retried
+    # rather than spent on one call.
+    assert len(budgets) > 1
+    assert max(budgets) == pytest.approx(_ADDON_HA_LINK_PROBE_S)
+    assert clock.now == pytest.approx(100.0)
+
+
+def test_a_stall_that_clears_still_succeeds() -> None:
+    """A stall followed by a healthy answer returns True.
+
+    The point of capping each attempt: the retry after an abandoned stall is
+    what makes this a poll loop rather than a one-shot.
+    """
+    clock = _Clock()
+    calls: list[float] = []
+
+    def probe(url: str, budget: float) -> None:
+        calls.append(budget)
+        if len(calls) == 1:
+            clock.sleep(budget)
+            raise TimeoutError("first attempt stalled")
+
+    ready, clock = _run(probe, timeout=100.0, clock=clock)
+    assert ready is True
+    assert len(calls) == 2
 
 
 def test_bugs_propagate_instead_of_being_retried() -> None:
@@ -188,3 +220,119 @@ def test_transient_set_covers_the_canonical_polling_errors() -> None:
     assert not missing, f"drifted from the canonical polling set: {missing}"
     # The failure this gate exists for arrives as a ToolError.
     assert issubclass(ToolError, transient)
+
+
+def test_a_transient_exception_group_is_retried() -> None:
+    """Cancelling a stalled attempt can surface a group, not a bare error.
+
+    ``asyncio.wait_for`` cancels a live anyio task group, whose teardown groups
+    that cancellation with any child failure. A group carrying a ``BaseException``
+    leaf is not an ``Exception``, so before it was classified it escaped the poll
+    loop as a raw anyio traceback — losing the remaining retry budget and the
+    caller's diagnostics pointer, which is the very failure mode this helper
+    exists to prevent.
+    """
+    import asyncio
+
+    attempts: list[int] = []
+
+    def probe(url: str, budget: float) -> None:
+        attempts.append(len(attempts))
+        if len(attempts) < 2:
+            raise BaseExceptionGroup(
+                "teardown", [asyncio.CancelledError(), TimeoutError("stalled")]
+            )
+
+    ready, _clock = _run(probe)
+    assert ready is True
+    assert len(attempts) == 2
+
+
+def test_a_group_carrying_a_bug_propagates() -> None:
+    """A group is only transient when EVERY leaf is.
+
+    Otherwise a genuine bug that happened inside the SDK's task group would be
+    relabelled "not linked yet" and retried until the deadline.
+    """
+
+    def probe(url: str, budget: float) -> None:
+        raise BaseExceptionGroup(
+            "teardown", [TimeoutError("stalled"), TypeError("bug")]
+        )
+
+    with pytest.raises(BaseExceptionGroup):
+        _run(probe)
+
+
+def test_nested_group_carrying_a_bug_propagates() -> None:
+    """The all-leaves rule recurses into nested groups."""
+
+    def probe(url: str, budget: float) -> None:
+        raise BaseExceptionGroup(
+            "outer", [BaseExceptionGroup("inner", [TypeError("bug")])]
+        )
+
+    with pytest.raises(BaseExceptionGroup):
+        _run(probe)
+
+
+def test_transient_classifier_accepts_a_pure_cancellation_group() -> None:
+    """A group of only our own cancellations classifies as transient."""
+    import asyncio
+
+    assert _is_transient_link_error(
+        BaseExceptionGroup("teardown", [asyncio.CancelledError()])
+    )
+    assert not _is_transient_link_error(
+        BaseExceptionGroup("teardown", [KeyError("bug")])
+    )
+
+
+def test_probe_honors_its_budget_against_a_silent_listener() -> None:
+    """The real probe gives up on a socket that accepts and never answers.
+
+    Every other test stubs ``_probe_addon_ha_link`` out, so nothing else
+    executes the timeout wiring this module exists for: drop a ``timeout=``
+    kwarg or the ``asyncio.wait_for`` wrapper and they all still pass while a
+    stall silently reverts to FastMCP's ~300s read default. This binds a
+    loopback socket that completes the TCP handshake and then stays silent —
+    the exact shape the budget defends against — and asserts the probe raises
+    a classified transient promptly.
+    """
+    import socket
+    import threading
+    import time as real_time
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(8)
+    port = server.getsockname()[1]
+    stop = threading.Event()
+    held: list[socket.socket] = []
+
+    def _accept_and_stall() -> None:
+        server.settimeout(0.5)
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                continue
+            held.append(conn)  # keep it open, never reply
+
+    thread = threading.Thread(target=_accept_and_stall, daemon=True)
+    thread.start()
+    try:
+        started = real_time.monotonic()
+        with pytest.raises(_addon_link_transient_errors()) as excinfo:
+            _probe_addon_ha_link(f"http://127.0.0.1:{port}/mcp", 2.0)
+        elapsed = real_time.monotonic() - started
+        assert _is_transient_link_error(excinfo.value), excinfo.value
+        # Budget 2s; allow generous slack for FastMCP's shielded teardown.
+        assert elapsed < 30.0, f"probe overran its budget: {elapsed:.1f}s"
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+        for conn in held:
+            conn.close()
+        server.close()

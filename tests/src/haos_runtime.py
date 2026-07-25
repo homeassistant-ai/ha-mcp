@@ -1379,10 +1379,14 @@ def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
 # when something is genuinely wrong.
 _ADDON_HA_LINK_TIMEOUT_S = 180.0
 _ADDON_HA_LINK_POLL_S = 3.0
+# Ceiling for ONE attempt. Long enough for a healthy connect + initialize +
+# tool round trip on a loaded runner, short enough that a stalled attempt is
+# abandoned and retried inside the overall budget instead of monopolizing it.
+_ADDON_HA_LINK_PROBE_S = 30.0
 
 
-def _addon_link_transient_errors() -> tuple[type[BaseException], ...]:
-    """Return the errors that mean "not linked yet" rather than "broken".
+def _addon_link_transient_leaves() -> tuple[type[BaseException], ...]:
+    """Return the leaf errors that mean "not linked yet" rather than "broken".
 
     Mirrors the suite's canonical MCP-polling set
     (``e2e/utilities/wait_helpers._POLLING_TRANSIENT_ERRORS``) plus httpx
@@ -1393,6 +1397,7 @@ def _addon_link_transient_errors() -> tuple[type[BaseException], ...]:
     ``test_haos_addon_ha_link_wait`` pins that it stays a superset of the
     canonical tuple.
     """
+    import anyio
     import httpx
     from fastmcp.exceptions import ClientError, FastMCPError
     from mcp import McpError
@@ -1405,7 +1410,45 @@ def _addon_link_transient_errors() -> tuple[type[BaseException], ...]:
         OSError,
         TimeoutError,
         httpx.HTTPError,
+        # Cancelling a stalled attempt tears the streamable-HTTP memory
+        # streams down mid-read. These are plain Exceptions, not OSError.
+        anyio.ClosedResourceError,
+        anyio.BrokenResourceError,
+        anyio.EndOfStream,
     )
+
+
+def _addon_link_transient_errors() -> tuple[type[BaseException], ...]:
+    """Return the ``except`` target for one probe attempt.
+
+    Includes ``BaseExceptionGroup`` because bounding an attempt means
+    cancelling a live anyio task group, whose teardown groups our
+    ``CancelledError`` with any child failure — and a group carrying a
+    ``BaseException`` leaf is not an ``Exception``, so it would otherwise
+    escape the poll loop as a raw anyio traceback, losing both the retry
+    budget and the caller's diagnostics pointer. A caught group must still
+    pass :func:`_is_transient_link_error`, or a genuine bug inside the group
+    would be relabelled "not linked yet" (same rule as
+    ``custom_components/ha_mcp_tools/llm_api.py::_transport_errors``).
+    """
+    return (*_addon_link_transient_leaves(), BaseExceptionGroup)
+
+
+def _is_transient_link_error(err: BaseException) -> bool:
+    """Return True when every leaf of ``err`` is a transient link failure.
+
+    A group counts only when EVERY leaf (nested groups included) is
+    transient: a group carrying any other member is a real bug that must
+    propagate with its traceback instead of being retried until the deadline.
+    """
+    import asyncio
+
+    if isinstance(err, BaseExceptionGroup):
+        return all(_is_transient_link_error(exc) for exc in err.exceptions)
+    # CancelledError counts only as a group leaf — it is this module's own
+    # wait_for abandoning a stalled attempt. A *bare* CancelledError is not in
+    # the except target above, so an outside cancellation still propagates.
+    return isinstance(err, (*_addon_link_transient_leaves(), asyncio.CancelledError))
 
 
 def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
@@ -1413,30 +1456,48 @@ def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
 
     ``budget`` bounds this single attempt. Without it the attempt inherits
     FastMCP's Streamable HTTP default of ``httpx.Timeout(30.0, read=300.0)``
-    (``client/transports/http.py``), so a listener that accepts the connection
-    but stalls on initialize or the tool response holds the poll loop for up to
-    300s — far past the caller's own deadline, delaying the fixture failure and
-    its HAOS diagnostics. The timeout is applied at all three layers that can
-    stall independently (connect/initialize, the tool response, and the
-    surrounding coroutine) so no single one can outlive the budget.
+    (``client/transports/http.py`` — the one place this default is cited), so a
+    listener that accepts the connection but stalls on initialize or the tool
+    response holds the poll loop for up to 300s, far past the caller's own
+    deadline, delaying the fixture failure and its HAOS diagnostics.
+
+    FastMCP's own deadlines are set strictly tighter than the outer backstop.
+    Each starts its clock later than the one around it — ``init_timeout``
+    after session setup, the read timeout at request send — so with equal
+    values the backstop would always win the race and their phase-naming
+    errors ("Failed to initialize server session", the session read timeout)
+    could never fire, degrading every stall to a message-less ``TimeoutError``.
+    The raw TCP connect keeps httpx's own fixed connect timeout rather than
+    ``budget``; the outer coroutine bound is what covers a stall there.
     """
     import asyncio
 
     from fastmcp import Client
     from fastmcp.client.transports import StreamableHttpTransport
 
+    inner = max(budget * 0.8, budget - 2.0)
+
     async def _call() -> None:
         # Fresh client per attempt: the server is stateless, and a long-lived
         # session would not survive the addon restarting mid-poll.
         async with Client(
             StreamableHttpTransport(url=addon_mcp_url),
-            timeout=budget,
-            init_timeout=budget,
+            timeout=inner,
+            init_timeout=inner,
         ) as client:
-            await client.call_tool("ha_get_addon", {}, timeout=budget)
+            await client.call_tool("ha_get_addon", {}, timeout=inner)
 
     async def _bounded() -> None:
-        await asyncio.wait_for(_call(), timeout=budget)
+        try:
+            await asyncio.wait_for(_call(), timeout=budget)
+        except TimeoutError as exc:
+            # wait_for raises a bare TimeoutError(), whose repr carries nothing.
+            # Name the target so the loop's final report is actionable.
+            raise TimeoutError(
+                f"ha_get_addon at {addon_mcp_url} did not answer within "
+                f"{budget:.1f}s (fastmcp's own {inner:.1f}s deadlines did not "
+                f"fire, so the stall was not in initialize or the read)"
+            ) from exc
 
     asyncio.run(_bounded())
 
@@ -1459,27 +1520,39 @@ def wait_for_addon_ha_link_ready(
     race. Returns False on timeout so the caller can fail with context.
     Transient errors are retried; bugs propagate.
 
-    Each attempt is capped by the time left on the deadline, so ``timeout`` is
-    the real ceiling: a stalled attempt cannot push the total past it.
+    Each attempt is capped by ``_ADDON_HA_LINK_PROBE_S`` and by the time left
+    on the deadline, so a single stalled attempt is abandoned and retried
+    rather than consuming the whole window. ``timeout`` is the ceiling up to
+    FastMCP's disconnect timeout: tearing down a cancelled attempt runs
+    shielded cleanup scopes (``client_disconnect_timeout``, 5s default) that
+    cancellation cannot interrupt, so the total can overshoot by a few seconds.
     """
     deadline = time.monotonic() + timeout
     transient = _addon_link_transient_errors()
     last_err: BaseException | None = None
+    attempts = 0
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
+        attempts += 1
         try:
-            _probe_addon_ha_link(addon_mcp_url, remaining)
+            _probe_addon_ha_link(addon_mcp_url, min(remaining, _ADDON_HA_LINK_PROBE_S))
         except transient as e:
+            if not _is_transient_link_error(e):
+                raise
             last_err = e
-            LOG.debug("Addon -> Home Assistant link not ready yet: %r", e)
+            # The e2e harness logs at INFO, so a DEBUG-only cause would leave a
+            # failed link reported with no explanation at all. First cause at
+            # INFO, the repeats at DEBUG so a slow boot stays quiet.
+            log = LOG.info if attempts == 1 else LOG.debug
+            log("Addon -> Home Assistant link not ready yet: %r", e)
         else:
             elapsed = int(time.monotonic() - (deadline - timeout))
             LOG.info("Addon -> Home Assistant link ready after ~%ds", elapsed)
             return True
-        # Never sleep past the deadline either, so the budget is exact rather
-        # than exact-plus-one-poll.
+        # Never sleep past the deadline, so the loop does not add a whole
+        # extra poll interval on top of the budget.
         time.sleep(min(_ADDON_HA_LINK_POLL_S, max(0.0, deadline - time.monotonic())))
     LOG.error(
         "Addon -> Home Assistant link never came up within %.0fs (last_exc=%r)",
