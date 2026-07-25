@@ -1,13 +1,13 @@
 """Visibility enforce-mode middleware wiring (#2015).
 
 Mirrors ``test_server_readonly_wiring.py``: MagicMock stubs + unbound methods,
-plus a source-order pin on ``_initialize_server`` — FastMCP registration order
-IS the inbound execution order (first added = outermost), and the enforcement
-pair's placement is load-bearing: the inbound conceal/refuse gate must precede
-the read-only guard and PolicyMiddleware so a hidden entity_id never reaches
-the approval queue (or earns an approval-pending response that confirms
-existence), and the outbound scan must be registered last (innermost) so it
-sees raw tool output.
+plus a recorded-call-order pin on a stubbed ``_initialize_server`` run —
+FastMCP registration order IS the inbound execution order (first added =
+outermost), and the enforcement pair's placement is load-bearing: the inbound
+conceal/refuse gate must precede the read-only guard and PolicyMiddleware so a
+hidden entity_id never reaches the approval queue (or earns an
+approval-pending response that confirms existence), and the outbound scan must
+be registered last (innermost) so it sees raw tool output.
 """
 
 from __future__ import annotations
@@ -64,9 +64,8 @@ def test_initialize_order_inbound_before_policy_outbound_last():
     outbound = names.index("_apply_visibility_outbound_middleware")
     assert inbound < read_only < policy < outbound
 
-    # The outbound half must stay innermost: nothing that can register
-    # middleware may run after it.
+    # The outbound half must stay innermost: NOTHING may run after it — a
+    # bare emptiness assertion, so even a middleware-registering helper that
+    # doesn't follow the ``_apply_`` naming cannot slip in behind the scan.
     after = names[outbound + 1 :]
-    assert not [
-        n for n in after if n.startswith("_apply_") or n == "mcp.add_middleware"
-    ], f"middleware-installing calls after the outbound half: {after}"
+    assert not after, f"calls after the outbound half: {after}"
