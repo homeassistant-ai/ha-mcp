@@ -188,12 +188,59 @@ async def test_deep_search_dashboard_type(mcp_client):
         assert found, "Should find our specific test dashboard"
         logger.info(f"Dashboard search found {len(dashboards)} matching dashboard(s)")
 
+        # Issue #2008: the dashboard surface is legacy-only, so the request
+        # must be routed there silently — never bounced off the ha_mcp_tools
+        # component's search schema into a warning-laden fallback. Asserted
+        # here against the real component in the lanes that install it.
+        warnings = data.get("warnings", [])
+        assert not any("component search path failed" in w for w in warnings), (
+            f"dashboard search must not hit the component search command: {warnings}"
+        )
+
     finally:
         await mcp_client.call_tool(
             "ha_config_delete_dashboard",
             {"url_path": "deep-search-test-dash"},
         )
         logger.info("Cleaned up test dashboard")
+
+
+@pytest.mark.asyncio
+async def test_dashboard_search_config_less_dashboard_not_partial(mcp_client):
+    """A dashboard created without a config (``lovelace/config`` answers
+    ``config_not_found``) must not flag the dashboard search partial —
+    the false-``partial`` half of issue #2008, exercised against real HA."""
+    logger.info("Testing dashboard search with a config-less dashboard")
+
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_dashboard",
+        {"url_path": "no-config-dash-2008", "title": "No Config 2008"},
+    )
+    assert_mcp_success(create_result, "Create config-less dashboard")
+
+    try:
+        result = await mcp_client.call_tool(
+            "ha_search",
+            {
+                "query": "zzz_no_match_2008",
+                "search_types": ["dashboard"],
+                "limit": 5,
+            },
+        )
+        data = assert_mcp_success(result, "Dashboard search with config-less dashboard")
+
+        assert not data.get("partial"), (
+            f"a config-less dashboard must not flag partial: "
+            f"{data.get('partial_reason')!r}"
+        )
+        logger.info("Confirmed: config-less dashboard does not flag partial")
+
+    finally:
+        await mcp_client.call_tool(
+            "ha_config_delete_dashboard",
+            {"url_path": "no-config-dash-2008"},
+        )
+        logger.info("Cleaned up config-less test dashboard")
 
 
 @pytest.mark.asyncio

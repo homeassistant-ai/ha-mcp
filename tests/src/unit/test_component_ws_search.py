@@ -739,6 +739,7 @@ class TestInfo:
             "backup_prep",
             "registries",
             "dashboards",
+            "dashboards_doc_search",
             "services_list",
             "reference_data",
             "search_visibility",
@@ -762,7 +763,17 @@ class TestInfo:
         assert wsapi._do_info(FakeHass())["timezone"] is None
 
     def test_manifest_version_parity(self):
-        """The manifest version and COMPONENT_VERSION must not drift."""
+        """Manifest and COMPONENT_VERSION lockstep, plus the ONE literal pin.
+
+        The lockstep catches a bump that touches one file but not the other.
+        The literal is deliberate and lives ONLY here: it catches a wholesale
+        accidental downgrade (an old component tree copied over reverts BOTH
+        files together — lockstep alone would pass) and makes every version
+        change a conscious, review-visible test edit. Update the literal when
+        bumping; WHEN to bump is AGENTS.md's release-cycle rule ("Version
+        bumps ride the stable release cycle") — never narrate the current
+        stable/pending state in comments here, it rots on the next release.
+        """
         manifest = json.loads(
             (
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"

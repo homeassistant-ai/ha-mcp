@@ -357,6 +357,13 @@ CAPABILITIES: list[str] = [
     "backup_prep",
     "registries",
     "dashboards",
+    # A flag, not a standalone command: gates the additive whole-document
+    # search-result keys on ``ha_mcp_tools/dashboards`` mode=search
+    # (``document_matches`` + ``yaml_skipped`` + ``load_failed``, issue #2008).
+    # The server's ha_search dashboard bucket routes through the component only
+    # when this is advertised — an older component without the keys would
+    # silently narrow coverage to the card-scoped walk and hide load failures.
+    "dashboards_doc_search",
     "services_list",
     "reference_data",
     # A flag, not a standalone command: gates the optional ``visibility`` param
@@ -4086,6 +4093,15 @@ def _do_dashboards(
             "available": True,
             "matches": matches,
             "truncated": truncated,
+            # ``dashboards_doc_search`` additions (issue #2008): the whole-
+            # document per-dashboard verdicts + honesty counters the server's
+            # ha_search dashboard bucket needs. Additive — a pre-#2008 server
+            # ignores them.
+            "document_matches": _dashboard_document_matches(
+                prepped.get("docs") or [], query_lower
+            ),
+            "yaml_skipped": prepped.get("yaml_skipped", 0),
+            "load_failed": prepped.get("load_failed", 0),
         }
     return {"mode": "list", "available": True, "dashboards": prepped.get("rows") or []}
 
@@ -4108,7 +4124,11 @@ async def _dashboards_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str
     if mode == "get":
         prepped.update(await _dashboard_get_config(dashboards_map, msg.get("url_path")))
     elif mode == "search":
-        prepped["docs"] = await _dashboard_search_docs(dashboards_map)
+        (
+            prepped["docs"],
+            prepped["yaml_skipped"],
+            prepped["load_failed"],
+        ) = await _dashboard_search_docs(dashboards_map)
     else:
         prepped["rows"] = _dashboard_list_rows(dashboards_map)
     return {"prepped": prepped}
@@ -4198,15 +4218,42 @@ async def _dashboard_get_config(
 
 async def _dashboard_search_docs(
     dashboards_map: Mapping[Any, Any],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], int, int]:
     """Load every STORAGE dashboard's config for the ``search`` walk.
 
     Only storage dashboards are loaded — YAML bodies are never searched/emitted.
-    A per-dashboard load error is skipped (fail-soft) rather than failing the
-    whole search. Returns ``[{url_path, title, config}, ...]`` plain dicts.
+    Returns ``(docs, yaml_skipped, load_failed)``: ``docs`` are
+    ``[{url_path, title, registry_title, config}, ...]`` plain dicts —
+    ``title`` stays the config body's (the card-scoped ``matches`` records pin
+    byte parity with the server's legacy MODE 4 walk on it) while the additive
+    ``registry_title`` carries the list-row metadata title that
+    ``document_matches`` emits (what the legacy ha_search bucket records
+    carry); ``yaml_skipped`` counts
+    the YAML-mode entries this walk never reads, INCLUDING a default dashboard
+    forced to YAML (``lovelace: mode: yaml``), which has no ``list`` row for
+    the server to count — the server treats a non-zero count as its
+    fall-back-to-legacy signal, since the legacy walk DOES read YAML bodies
+    and coverage must not depend on which path served (issue #2008 review);
+    ``load_failed`` counts storage
+    dashboards whose config load raised or returned a non-dict — real gaps the
+    caller must surface as partial rather than fail-soft into a clean-looking
+    result. A ``ConfigNotFound`` load is a clean skip, not a failure: an
+    auto-generated (never taken control of) dashboard has no stored config to
+    scan. If core drift breaks the guarded ``ConfigNotFound`` import, those
+    loads degrade to ``load_failed`` — over-reported as partial, never silent.
     """
+    try:
+        from homeassistant.components.lovelace.const import ConfigNotFound
+    except Exception:  # pragma: no cover - defensive; core drift
+        ConfigNotFound = None
+
     docs: list[dict[str, Any]] = []
+    yaml_skipped = 0
+    load_failed = 0
     for url_path, dash in dashboards_map.items():
+        if _dashboard_mode(dash) == _LOVELACE_MODE_YAML:
+            yaml_skipped += 1
+            continue
         if _dashboard_mode(dash) != _LOVELACE_MODE_STORAGE:
             continue
         loader = getattr(dash, "async_load", None)
@@ -4214,25 +4261,81 @@ async def _dashboard_search_docs(
             continue
         try:
             config = await loader(False)
-        except Exception:  # skip an unreadable dashboard, keep going (fail-soft)
+        except Exception as err:
+            if ConfigNotFound is not None and isinstance(err, ConfigNotFound):
+                # Auto-generated dashboard: nothing stored, nothing to scan.
+                continue
+            load_failed += 1
             continue
         if not isinstance(config, dict):
+            load_failed += 1
             continue
+        meta = getattr(dash, "config", None)
+        registry_title = meta.get("title") if isinstance(meta, Mapping) else None
         title = config.get("title")
         docs.append(
             {
                 "url_path": url_path,
                 "title": str(title) if title is not None else None,
+                "registry_title": (
+                    str(registry_title) if registry_title is not None else None
+                ),
                 "config": config,
             }
         )
-    return docs
+    return docs, yaml_skipped, load_failed
 
 
 def _dashboard_mode(dash: Any) -> str | None:
     """A dashboard's ``mode`` (``storage``/``yaml``), guarded against core drift."""
     mode = getattr(dash, "mode", None)
     return str(mode) if isinstance(mode, str) else None
+
+
+def _dashboard_document_matches(
+    docs: list[dict[str, Any]], query_lower: str
+) -> list[dict[str, Any]]:
+    """Per-dashboard whole-document verdicts: ``[{url_path, title}, ...]``.
+
+    One entry per doc whose ENTIRE config contains ``query_lower`` — the
+    coverage the server's legacy ``_search_in_dict`` walk provides (view
+    titles, dashboard-level keys, every leaf), which the card-scoped
+    ``matches`` walk deliberately narrows to. ``title`` is the registry
+    metadata's (falling back to the body's) — what the legacy ha_search
+    bucket records carry. An empty query matches nothing. Bounded by the
+    dashboard count, so no cap/truncation applies.
+    """
+    if not query_lower:
+        return []
+    return [
+        {
+            "url_path": doc.get("url_path"),
+            "title": doc.get("registry_title") or doc.get("title"),
+        }
+        for doc in docs
+        if _doc_contains(doc.get("config"), query_lower)
+    ]
+
+
+def _doc_contains(data: Any, query_lower: str) -> bool:
+    """Case-insensitive substring test over keys and every leaf of a config.
+
+    Exact port of the server's ``_search_in_dict_exact`` (keys + string
+    leaves + ``str()`` of non-None scalars) so the component-served verdict
+    matches the legacy walk's, leaf for leaf.
+    """
+    if isinstance(data, dict):
+        return any(
+            query_lower in str(key).lower() or _doc_contains(value, query_lower)
+            for key, value in data.items()
+        )
+    if isinstance(data, list):
+        return any(_doc_contains(item, query_lower) for item in data)
+    if isinstance(data, str):
+        return query_lower in data.lower()
+    if data is not None:
+        return query_lower in str(data).lower()
+    return False
 
 
 def _search_dashboard_docs(

@@ -9,9 +9,14 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 from ...client.rest_client import HomeAssistantAPIError
+from ...errors import get_error_code, get_error_message
+from ..component_api import component_supports, get_component_caps
 from ..config_entry_flow import FLOW_HELPER_TYPES
 from ..helpers import exception_to_structured_error, safe_info, safe_progress
-from ..tools_config_dashboards import fetch_dashboards_list
+from ..tools_config_dashboards import (
+    _dashboards_via_component,
+    fetch_dashboards_list,
+)
 from ..tools_integrations import fetch_entry_options_with_status
 from ._config import (
     AUTOMATION_CONFIG_TIME_BUDGET,
@@ -53,6 +58,40 @@ async def _scrub_results_for_enforce(
     for category, items in results.items():
         if items:
             results[category] = scrub_records(items, enforce_regex)
+
+
+# The ``lovelace/config`` messages meaning "this dashboard has no stored
+# config" — bare (nested error shape) and as ``send_websocket_message``'s
+# flat envelope prefixes it. Mirrors ``dashboard_screenshot/paths.py``.
+_NO_STORED_CONFIG_MESSAGES = frozenset(
+    {"No config found.", "Command failed: No config found."}
+)
+
+
+def _is_no_stored_config(resp: dict[str, Any]) -> bool:
+    """True when a failed ``lovelace/config`` envelope means the dashboard
+    has no stored config — an auto-generated dashboard that was never taken
+    control of — which is a clean no-match for a config scan rather than a
+    backend failure (issue #2008).
+
+    HA reports the ``config_not_found`` code for two distinct causes
+    (``homeassistant/components/lovelace/websocket.py``, ``_handle_errors``):
+    no stored config ("No config found.") and an unresolvable url_path
+    ("Unknown config specified: ..."), e.g. a dashboard deleted between the
+    registry-list snapshot and this fetch. Only the former is a clean skip,
+    so the message is matched too; the latter stays a counted failure.
+
+    ``send_websocket_message`` normalizes command failures to a flat envelope
+    (code top-level as ``error_code``, message as the ``error`` string); the
+    nested ``error.code``/``error.message`` shape is accepted defensively via
+    the canonical :func:`get_error_code` / :func:`get_error_message`
+    extractors, matching ``dashboard_screenshot/paths.py``'s detection of the
+    same HA error.
+    """
+    code = resp.get("error_code") or get_error_code(resp)
+    if code != "config_not_found":
+        return False
+    return get_error_message(resp) in _NO_STORED_CONFIG_MESSAGES
 
 
 class DeepSearchMixin(SceneSearchMixin):
@@ -279,8 +318,11 @@ class DeepSearchMixin(SceneSearchMixin):
                 (
                     results["dashboards"],
                     dashboard_failed,
-                ) = await self._deep_search_dashboards(
-                    query_lower, exact_match, semaphore
+                ) = await self._search_dashboards_surface(
+                    query_lower,
+                    exact_match,
+                    semaphore,
+                    include_config=include_config,
                 )
                 phase_done += 1
                 await safe_progress(
@@ -896,6 +938,106 @@ class DeepSearchMixin(SceneSearchMixin):
         failed_type_count += flow_failed_count
         return results, failed_type_count
 
+    async def _search_dashboards_surface(
+        self,
+        query_lower: str,
+        exact_match: bool,
+        semaphore: asyncio.Semaphore,
+        *,
+        include_config: bool,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """The dashboard bucket: component-first, legacy fallback.
+
+        Returns ``(records, failed_count)``. The component's in-process
+        ``search`` frame (issue #2008) serves the exact-match, no-body shape
+        — the default ``ha_search`` call — mirroring the
+        ``ha_config_get_dashboard(mode="search")`` routing; fuzzy scoring and
+        ``include_config`` bodies are legacy-only (the component walk is
+        substring and its matches carry no bodies), as is every ``None``
+        fallback case of :meth:`_component_dashboard_search` — including a
+        YAML-bearing install, so component-vs-legacy never changes which
+        dashboards a search covers.
+        """
+        if exact_match and not include_config:
+            component = await self._component_dashboard_search(query_lower)
+            if component is not None:
+                return component
+        return await self._deep_search_dashboards(query_lower, exact_match, semaphore)
+
+    async def _component_dashboard_search(
+        self, query_lower: str
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        """The dashboard bucket via the component's in-process ``search`` frame.
+
+        Returns ``(records, failed_count)`` — one legacy-shaped record per
+        matching dashboard from the component's ``document_matches`` (a
+        whole-document substring verdict per storage dashboard, ported from
+        ``_search_in_dict`` leaf for leaf, so view titles and dashboard-level
+        keys match exactly as the legacy walk matches them); ``failed_count``
+        is the component's ``load_failed`` (storage dashboards whose config
+        load raised — surfaced as the same ``dashboard(s) not scanned``
+        partial the legacy scan reports). A config-less auto-generated
+        dashboard is skipped in-process (nothing to scan), consistent with
+        :func:`_is_no_stored_config`.
+
+        ``None`` ⇒ run the legacy per-dashboard walk instead: the component
+        lacks the ``dashboards_doc_search`` capability (older components
+        emit only the card-scoped ``matches``, which would silently narrow
+        coverage), any ``_dashboards_via_component`` fallback (capability
+        miss / command error / lovelace unavailable), an empty query, a
+        malformed ``document_matches`` — or a non-zero ``yaml_skipped``.
+        The component never reads YAML-mode dashboard bodies, but the legacy
+        walk this path replaces does (``lovelace/config`` loads them, and the
+        fuzzy / ``include_config`` routes still read the same resolved
+        configs), so serving the component result on a YAML-bearing install
+        would make the DEFAULT call shape permanently narrower and
+        permanently ``partial``. Falling back keeps coverage identical to
+        the pre-component behaviour; storage-only installs — where the
+        exclusion costs nothing — keep the single-frame win (review
+        follow-up on issue #2008).
+        """
+        if not query_lower:
+            return None
+        caps = await get_component_caps(self.client)
+        if not component_supports(caps, "dashboards_doc_search"):
+            return None
+        result = await _dashboards_via_component(
+            self.client, "search", query=query_lower
+        )
+        if result is None:
+            return None
+        document_matches = result.get("document_matches")
+        if not isinstance(document_matches, list):
+            return None
+        if int(result.get("yaml_skipped", 0) or 0) > 0:
+            return None
+        failed = int(result.get("load_failed", 0) or 0)
+
+        records: dict[str, dict[str, Any]] = {}
+        for match in document_matches:
+            if not isinstance(match, dict):
+                continue
+            raw_url_path = match.get("url_path")
+            url_path = raw_url_path or "default"
+            if url_path in records:
+                continue
+            # The default dashboard: the legacy walk always labels it
+            # ("default", "Default Dashboard") — a taken-control default
+            # may carry its own body title, but emitting it would change
+            # the record shape between the component and legacy paths.
+            title = (
+                "Default Dashboard"
+                if not raw_url_path
+                else (match.get("title") or url_path)
+            )
+            records[url_path] = {
+                "dashboard_url": url_path,
+                "dashboard_title": title,
+                "score": 100,
+                "match_in_config": True,
+            }
+        return list(records.values()), failed
+
     async def _search_one_dashboard(
         self,
         url_path: str,
@@ -912,6 +1054,15 @@ class DeepSearchMixin(SceneSearchMixin):
         distinct from a successful no-match. Surfacing it lets
         ``ha_search(search_types=["dashboard"])`` report ``partial`` instead
         of a complete-looking empty result.
+
+        The no-stored-config envelope (``config_not_found`` + "No config
+        found.", see :func:`_is_no_stored_config`) is the deliberate
+        exception: an auto-generated dashboard (strategy-backed, never taken
+        control of) has nothing to scan, so it reads as a clean no-match.
+        Counting it as failed made every dashboard search on a stock install
+        report ``partial`` (issue #2008). The code's other cause — "Unknown
+        config specified", a dashboard deleted since the registry-list
+        snapshot — stays a counted failure.
         """
         async with semaphore:
             try:
@@ -932,6 +1083,12 @@ class DeepSearchMixin(SceneSearchMixin):
                 # shape explicitly (``success is False``) so a missing-success
                 # raw response still falls through to the ``result`` fallback.
                 if isinstance(resp, dict) and resp.get("success") is False:
+                    if _is_no_stored_config(resp):
+                        logger.debug(
+                            f"Dashboard has no stored config ({url_path}); "
+                            "auto-generated — nothing to scan"
+                        )
+                        return [], False
                     logger.debug(
                         f"Dashboard config returned non-success ({url_path}): {resp!r}"
                     )

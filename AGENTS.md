@@ -674,6 +674,15 @@ fully validate a component change before merge.
     go straight to that minor, not an extra patch. Never go past the current
     pending version otherwise; per-revision bumps skip never-shipped numbers and
     desync the version from the release cycle.
+  - CI enforces the level-with-stable case twice: the PR-level **Component
+    Version Gate** fails a component change whose manifest version does not
+    strictly lead the mirror's released stable (equal = bump to open the
+    pending version; behind = a stale tree or bad merge resurrected an old
+    version), and the mirror sync's stable tag step fails loud
+    when an already-tagged version's component content has drifted (changes
+    merged onto a shipped version would otherwise strand with no installable
+    release — the gap is a PR opened while a version is pending that merges
+    only after that version goes stable, which re-runs no PR checks).
 - **When the change adds a service or argument the server depends on**, this PR
   must **open a fresh pending component version** (bump `manifest.json` +
   `COMPONENT_VERSION`) and raise `MIN_COMPONENT_VERSION` in

@@ -58,6 +58,26 @@ from .test_component_ws_search import (
 _REAL_VOL = _base._REAL_VOL
 
 
+class _StubConfigNotFound(Exception):
+    """Stand-in for core's ``lovelace.const.ConfigNotFound``.
+
+    ``_dashboard_search_docs`` imports it function-locally to classify a
+    config-less (auto-generated) dashboard as a clean skip; the stubbed
+    ``homeassistant.*`` env has no real module, so pin one with a real
+    exception class (mirrors the ``HomeAssistantError`` stub in
+    ``test_component_ws_search``). Explicitly replace any prior stub that
+    lacks the attribute so the class identity is stable for isinstance.
+    """
+
+
+_lovelace_const = sys.modules.get("homeassistant.components.lovelace.const")
+if _lovelace_const is None or not hasattr(_lovelace_const, "ConfigNotFound"):
+    sys.modules["homeassistant.components.lovelace.const"] = SimpleNamespace(
+        ConfigNotFound=_StubConfigNotFound
+    )
+ConfigNotFound = sys.modules["homeassistant.components.lovelace.const"].ConfigNotFound
+
+
 # =============================================================================
 # Lovelace fakes (LovelaceConfig stand-ins + the hass.data container)
 # =============================================================================
@@ -132,6 +152,7 @@ class TestCapabilityPresence:
     def test_new_capabilities_advertised(self):
         for cap in (
             "dashboards",
+            "dashboards_doc_search",
             "services_list",
             "reference_data",
             "search_visibility",
@@ -139,12 +160,13 @@ class TestCapabilityPresence:
         ):
             assert cap in wsapi.CAPABILITIES
 
-    def test_component_version(self):
-        # Pending 1.2.4 (1.2.3 is the released stable). Capabilities are
-        # advertised by name, never version-inferred, so new caps ride any
-        # pending version without a bump; this assertion just pins the
-        # declared version (the write caps shipped in 1.2.1).
-        assert wsapi.COMPONENT_VERSION == "1.2.4"
+    # NOTE: no version pin here. Capabilities are advertised by name, never
+    # version-inferred, and the single authoritative version pin (lockstep +
+    # literal, downgrade/conscious-ack guard) is test_manifest_version_parity —
+    # duplicating the literal here only doubled per-bump churn and bred
+    # release-cycle narration in comments that rotted as soon as the next
+    # stable shipped (a "Pending 1.2.3" claim outlived its truth by one
+    # release). Bump rules live in AGENTS.md.
 
 
 # =============================================================================
@@ -305,9 +327,10 @@ class TestDashboardsSearch:
     def test_search_matches_nested_card_and_section(self, patch_dashboards):
         patch_dashboards(self._dmap())
         # Nested camera card (inside vertical-stack) is attributed to itself.
-        cam = wsapi._search_dashboard_docs(
-            asyncio.run(wsapi._dashboard_search_docs(self._dmap())), "camera.front_door"
-        )[0]
+        docs, _yaml_skipped, _load_failed = asyncio.run(
+            wsapi._dashboard_search_docs(self._dmap())
+        )
+        cam = wsapi._search_dashboard_docs(docs, "camera.front_door")[0]
         assert cam
         cam_match = next(m for m in cam if m["matched_value"] == "camera.front_door")
         assert cam_match["card_type"] == "camera"
@@ -401,6 +424,96 @@ class TestDashboardsSearch:
         res = _run_dashboards(FakeHass(), {"mode": "search", "query": "light.e"})
         assert res["truncated"] is True
         assert len(res["matches"]) == wsapi._DASHBOARD_MATCH_CAP
+
+
+# =============================================================================
+# dashboards — search: dashboards_doc_search additions (issue #2008)
+# =============================================================================
+class TestDashboardsDocSearch:
+    """The additive whole-document keys the server's ha_search bucket needs:
+    ``document_matches`` (legacy ``_search_in_dict`` coverage — view titles
+    and dashboard-level keys included, not just cards), ``yaml_skipped``
+    (counted in-process over the FULL map, default dashboard included), and
+    ``load_failed`` (a load error is a reportable gap, not a silent skip —
+    while a ``ConfigNotFound`` auto-generated dashboard stays a clean skip)."""
+
+    def test_view_title_match_reaches_document_matches_only(self, patch_dashboards):
+        """The exact coverage the card-scoped ``matches`` walk misses: a query
+        living only in a view title. ``document_matches`` must report the
+        dashboard; ``matches`` stays empty — pinning why the server consumes
+        ``document_matches`` for the ha_search bucket."""
+        body = {"views": [{"title": "solar_overview_view", "cards": []}]}
+        patch_dashboards({"solar": _storage_dash("solar", "Solar", body=body)})
+        res = _run_dashboards(
+            FakeHass(), {"mode": "search", "query": "solar_overview_view"}
+        )
+        assert res["matches"] == []
+        assert res["document_matches"] == [{"url_path": "solar", "title": "Solar"}]
+        assert res["yaml_skipped"] == 0
+        assert res["load_failed"] == 0
+
+    def test_document_match_title_prefers_registry_metadata(self, patch_dashboards):
+        """The doc title is the registry metadata's (what list rows carry and
+        the legacy scan's records emit), not the config body's."""
+        body = {"title": "Body Title", "views": [{"cards": []}]}
+        patch_dashboards({"home": _storage_dash("home", "Registry Home", body=body)})
+        res = _run_dashboards(FakeHass(), {"mode": "search", "query": "body title"})
+        assert res["document_matches"] == [
+            {"url_path": "home", "title": "Registry Home"}
+        ]
+
+    def test_yaml_skipped_counts_default_dashboard(self, patch_dashboards):
+        """A default dashboard forced to YAML (``lovelace: mode: yaml``, map
+        key ``None``) has no list row for the server to count — the in-process
+        counter covers it (issue #2008 review)."""
+        patch_dashboards(
+            {
+                None: FakeDashboard(None, "yaml", body={"views": []}),
+                "yaml-dash": FakeDashboard("yaml-dash", "yaml", body={"views": []}),
+                "home": _storage_dash("home", "Home", body={"views": []}),
+            }
+        )
+        res = _run_dashboards(FakeHass(), {"mode": "search", "query": "anything"})
+        assert res["yaml_skipped"] == 2
+        assert res["load_failed"] == 0
+
+    def test_load_failure_counted_not_swallowed(self, patch_dashboards):
+        """A storage dashboard whose load raises is a reportable gap — the
+        old fail-soft skip made an unreadable dashboard look like a clean
+        no-match (issue #2008 review)."""
+        patch_dashboards(
+            {
+                "broken": FakeDashboard(
+                    "broken", "storage", load_error=RuntimeError("store corrupt")
+                ),
+                "home": _storage_dash("home", "Home", body={"views": []}),
+            }
+        )
+        res = _run_dashboards(FakeHass(), {"mode": "search", "query": "zzz"})
+        assert res["load_failed"] == 1
+
+    def test_non_dict_body_counted_as_load_failure(self, patch_dashboards):
+        patch_dashboards({"odd": FakeDashboard("odd", "storage", body="not-a-dict")})
+        res = _run_dashboards(FakeHass(), {"mode": "search", "query": "zzz"})
+        assert res["load_failed"] == 1
+
+    def test_config_not_found_is_clean_skip(self, patch_dashboards):
+        """An auto-generated dashboard (``ConfigNotFound`` on load) has nothing
+        to scan — neither matched nor counted as failed."""
+        patch_dashboards(
+            {
+                "auto": FakeDashboard("auto", "storage", load_error=ConfigNotFound()),
+                "home": _storage_dash("home", "Home", body={"views": []}),
+            }
+        )
+        res = _run_dashboards(FakeHass(), {"mode": "search", "query": "zzz"})
+        assert res["load_failed"] == 0
+        assert res["document_matches"] == []
+
+    def test_empty_query_document_matches_nothing(self, patch_dashboards):
+        patch_dashboards({"home": _storage_dash("home", "Home", body={"views": []})})
+        res = _run_dashboards(FakeHass(), {"mode": "search", "query": ""})
+        assert res["document_matches"] == []
 
 
 # =============================================================================

@@ -268,8 +268,28 @@ jobs:
           # aborts loud instead.
           existing=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
           if [ -n "$existing" ]; then
-            echo "mirror tag v${VER} exists"
-            exit 0
+            # Stranded-changes backstop (issue #2008 review follow-up): the
+            # idempotent skip is harmless ONLY when the already-tagged content
+            # matches the current snapshot (a hotfix without component
+            # changes). If master took component changes WITHOUT a version
+            # bump after v${VER} went stable — e.g. a PR opened while the
+            # version was still pending merged after the stable cut — a
+            # silent skip here strands them: no mirror release ever carries
+            # them, and v${VER}-dev.N pre-release tags sort BELOW the equal
+            # stable tag so even pre-release users never see them. Fail loud
+            # with the bump instruction instead. Tag-fetch failure keeps the
+            # old silent skip (a network blip must not fail the release) but
+            # says so.
+            if ! git -C /tmp/mirror fetch --quiet --depth=1 origin "refs/tags/v${VER}:refs/tags/v${VER}"; then
+              echo "::warning::mirror tag v${VER} exists but could not be fetched for the stranded-changes check - skipping the stable tag as before"
+              exit 0
+            fi
+            if git -C /tmp/mirror diff --quiet "v${VER}" HEAD -- custom_components; then
+              echo "mirror tag v${VER} exists and the component snapshot is identical - nothing new to release"
+              exit 0
+            fi
+            echo "::error::mirror tag v${VER} already exists but the current component snapshot DIFFERS from its content - master took component changes without a version bump after v${VER} went stable; skipping would strand them with no installable release. Bump manifest.json + const.py (and the parity-test literal) to open the next pending version per AGENTS.md 'Version bumps ride the stable release cycle', then let the next stable carry the stranded changes."
+            exit 1
           fi
           python3 scripts/build_mirror_release_notes.py \
             --component-version "$VER" \
