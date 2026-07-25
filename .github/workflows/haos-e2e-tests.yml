@@ -109,7 +109,12 @@ jobs:
     needs: changes
     # A skipped job reports Success to the required status check (unlike a
     # workflow-level path-skip, which never reports). See the `changes` job.
-    if: needs.changes.outputs.run == 'true'
+    # Skip ONLY on a classifier that succeeded and said docs-only: a classifier
+    # that did not succeed leaves `run` empty, and without the `result` clause
+    # below the implicit success() on `needs` would skip this suite and report
+    # Success — a runner hiccup in a 5-minute filter job would wave code
+    # through untested. `!cancelled()` keeps a real cancellation cancelling.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
     runs-on: ubuntu-22.04
     timeout-minutes: 45
 
