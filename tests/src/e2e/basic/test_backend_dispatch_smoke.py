@@ -86,7 +86,7 @@ _SKIP_CEILING_PER_LANE = {
     # marker-gated additions rather than runtime skips.
     "container": 72,  # was 71; +1 Puppet-management test (haos_only + inaddon_only)
     "haos": 46,  # was 45; +1 py3.14 invalidate_caches recovery e2e (container_only)
-    "haos_inaddon": 73,  # was 72; +1 py3.14 invalidate_caches recovery e2e (container_only)
+    "haos_inaddon": 74,  # was 73; +1 visibility enforce-mode e2e (external_only, #2015)
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
