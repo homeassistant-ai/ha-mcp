@@ -67,6 +67,7 @@ from haos_runtime import (
     stage_embedded_server_feature_flags_in_qcow2,
     stage_embedded_server_wheel_in_qcow2,
     trigger_dev_addon_update,
+    wait_for_addon_ha_link_ready,
     wait_for_addon_mcp_ready,
 )
 
@@ -1904,6 +1905,17 @@ def _bringup_haos_out_of_process_server(
             "violation. Downstream mcp_client fixture would fail "
             "with an obscure TypeError on transport construction."
         )
+        # The listener answering HTTP does not mean its Home Assistant link is
+        # up, so gate on that too — otherwise the session's first HA-backed
+        # tool call can land while the Supervisor proxy is still 502ing.
+        if not wait_for_addon_ha_link_ready(addon_mcp_url):
+            raise AssertionError(
+                "The dev addon's MCP listener answered HTTP but no Home "
+                "Assistant-backed tool call succeeded before the link "
+                "deadline. The addon reaches Core through the Supervisor "
+                "WebSocket proxy — see the Supervisor and HA Core logs in "
+                "the HAOS diagnostics artifact."
+            )
     elif haos_embedded:
         # Enable the baked-disabled in-process server entry ONCE for the
         # whole session (the per-test smoke module is skipped on this
