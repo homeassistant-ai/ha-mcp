@@ -148,6 +148,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "a clean add-on exit code; KeyboardInterrupt is handled by the clause "
         "above. Matches how the codebase suppresses other deliberate catches.",
     ),
+    (
+        "py/catch-base-exception",
+        "src/ha_mcp/__main__.py",
+        "BaseException",
+        "Intentional: the stdio exit routing must see BaseExceptions (e.g. the "
+        "re-raised CancelledError from the #1544 hard-stop path) so they leave "
+        "via _force_exit — reaching interpreter finalization with the SDK's "
+        "stdin reader parked is the issue #2027 SIGABRT. The exception is "
+        "logged before the forced exit.",
+    ),
     # NOTE: CodeQL emits the same generic message for every py/mixed-returns
     # finding, so this entry is PATH-WIDE for server.py (a future genuinely
     # mixed-returns function in this file would be suppressed too). Accepted:

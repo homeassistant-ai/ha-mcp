@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from ..utils.config_write_lock import config_write_guard
 from .approval_queue import ApprovalQueue
 from .model import Policy
 from .persistence import load_policy, save_policy
@@ -86,24 +87,29 @@ async def _put_config(
     # Optimistic concurrency: reject if the on-disk version moved
     # between this caller's GET and PUT. Returns the current policy
     # so the client can rebase if it wants to retry.
-    current = load_policy(data_dir)
-    if new_policy.version != current.version:
-        return JSONResponse(
-            {
-                "error": "policy version mismatch — reload before saving",
-                "current_version": current.version,
-                "current_policy": current.model_dump(mode="json"),
-            },
-            status_code=409,
-        )
-    save_policy(data_dir, new_policy)
-    # Drop the remember-cache only when rules actually changed.
-    # Editing just wait_seconds / approval_ttl_minutes shouldn't
-    # invalidate in-flight remembered approvals; only a rule change
-    # could make a previously-approved call now want a different
-    # outcome.
-    if current.rules != new_policy.rules:
-        queue.clear_remember_cache()
+    # Serialize the version-check + save against the developer tool
+    # (set_policy / set_tool) AND against other processes (the stdio
+    # sidecar runs this same handler in its own process) so a concurrent
+    # writer can't slip between the read and the write and lose an update.
+    async with config_write_guard():
+        current = load_policy(data_dir)
+        if new_policy.version != current.version:
+            return JSONResponse(
+                {
+                    "error": "policy version mismatch — reload before saving",
+                    "current_version": current.version,
+                    "current_policy": current.model_dump(mode="json"),
+                },
+                status_code=409,
+            )
+        save_policy(data_dir, new_policy)
+        # Drop the remember-cache only when rules actually changed.
+        # Editing just wait_seconds / approval_ttl_minutes shouldn't
+        # invalidate in-flight remembered approvals; only a rule change
+        # could make a previously-approved call now want a different
+        # outcome.
+        if current.rules != new_policy.rules:
+            queue.clear_remember_cache()
     return JSONResponse({"saved": True, "version": new_policy.version + 1})
 
 

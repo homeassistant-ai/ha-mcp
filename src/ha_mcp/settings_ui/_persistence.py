@@ -23,6 +23,7 @@ import contextlib
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -216,16 +217,22 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
     Raises OSError on filesystem failure — same surface as the previous
     ``path.write_text`` so caller try/except shapes don't need updating.
-    On failure, the ``.tmp`` file is cleaned up so a previous partial
-    write does not accumulate next to the real file.
+    On failure, the temp file is cleaned up so a partial write does not
+    accumulate next to the real file. The temp name is UNIQUE (``mkstemp``,
+    same pattern as ``policy.persistence.save_policy``) so two concurrent
+    writers to the same ``path`` can't collide on a shared ``.tmp`` and
+    corrupt each other's write.
     """
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
     try:
-        tmp.write_text(json.dumps(payload, indent=2))
-        os.replace(str(tmp), str(path))
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, indent=2))
+        os.replace(tmp_name, str(path))
     except OSError:
         with contextlib.suppress(FileNotFoundError, OSError):
-            tmp.unlink()
+            Path(tmp_name).unlink()
         raise
 
 

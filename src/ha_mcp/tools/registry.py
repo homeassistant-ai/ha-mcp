@@ -193,9 +193,15 @@ class ToolsRegistry:
             return
 
         # Build kwargs with all available dependencies (lazy access)
+        # ``server`` lets a register function reach the live server object
+        # (e.g. tools_dev needs server.approval_queue and the unfiltered
+        # tool registry to drive the settings-UI surfaces). Every
+        # register_*_tools takes **kwargs, so the extra key is ignored by
+        # the modules that don't need it.
         kwargs = {
             "smart_tools": self.smart_tools,
             "device_tools": self.device_tools,
+            "server": self.server,
         }
 
         # tools_*.py modules by convention, then the explicit modules (those
