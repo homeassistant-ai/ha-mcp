@@ -31,7 +31,7 @@ import stat  # noqa: E402
 import sys  # noqa: E402
 import threading  # noqa: E402
 from collections.abc import Coroutine  # noqa: E402
-from typing import TYPE_CHECKING, Any  # noqa: E402
+from typing import TYPE_CHECKING, Any, NoReturn  # noqa: E402
 
 from fastmcp.exceptions import ToolError  # noqa: E402
 from pydantic import ValidationError as PydanticValidationError  # noqa: E402
@@ -720,6 +720,29 @@ async def _run_with_graceful_shutdown() -> None:
     await _run_with_shutdown(_get_mcp().run_async(show_banner=_get_show_banner()))
 
 
+def _force_exit(code: int) -> NoReturn:
+    """Exit the stdio process without interpreter finalization (issue #2027).
+
+    The MCP SDK's stdio transport reads stdin through anyio's worker-thread
+    pool, so a daemon thread is parked in ``readline()`` holding the
+    ``BufferedReader`` lock whenever no message is in flight. If the process
+    exits while that read is pending — SIGTERM, or the client vanishing
+    mid-read — interpreter finalization tries to close stdin, cannot acquire
+    the lock, and CPython aborts: ``Fatal Python error: _enter_buffered_busy``
+    → SIGABRT (a crash dialog on macOS). The reader lives in the SDK, so the
+    entry point neutralizes it instead: flush what matters, then skip
+    finalization entirely. By this point ``_run_with_shutdown`` has already
+    run resource cleanup, and a stdio server persists nothing at exit.
+    """
+    logging.shutdown()
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:  # nothing actionable at exit
+            pass
+    os._exit(code)
+
+
 # CLI entry point (for pyproject.toml) - use FastMCP's built-in runner
 def main() -> None:
     """Run server via CLI using FastMCP's stdio transport."""
@@ -758,7 +781,18 @@ def main() -> None:
     # Best-effort: failure logs a warning but doesn't block MCP startup.
     _maybe_spawn_settings_sidecar()
 
-    _run_entrypoint(_run_with_graceful_shutdown(), "Server")
+    # Route the final exit through _force_exit: _run_entrypoint always leaves
+    # via sys.exit, and letting that SystemExit reach interpreter finalization
+    # aborts when the SDK's stdin reader thread still holds the stdin lock.
+    code = 0
+    try:
+        _run_entrypoint(_run_with_graceful_shutdown(), "Server")
+    except SystemExit as exc:
+        if isinstance(exc.code, int):
+            code = exc.code
+        elif exc.code is not None:
+            code = 1
+    _force_exit(code)
 
 
 def _maybe_spawn_settings_sidecar() -> None:
