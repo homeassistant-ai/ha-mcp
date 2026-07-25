@@ -451,8 +451,16 @@ least one active hide dimension. What it covers:
 What it deliberately **refuses** (their output cannot be text-scanned): sandbox
 code execution via `ha_manage_custom_tool` (`code` / `run_saved` — pure
 `list_saved` stays allowed) and screenshot/pixel output
-(`ha_get_dashboard_screenshot`, or `ha_config_get_dashboard` with
-`include_screenshot`).
+(`ha_get_dashboard_screenshot`, `ha_config_get_dashboard` with
+`include_screenshot`, or `ha_config_set_dashboard` with `return_screenshot`).
+
+One image surface is deliberately **exempt**: `ha_get_camera_image`. A camera
+the filter does not hide returns physical-world imagery — a photograph, not a
+rendering of Home Assistant entity data — so its frames are not gated (a hidden
+camera is concealed like any other entity). The residual case is a visible
+camera whose view happens to include a display showing a hidden entity's state;
+if a camera can see something sensitive, hide the camera too (denylist or its
+area).
 
 Enforce mode **fails closed**: if the entity registry (or the config file
 itself) cannot be loaded, the server falls back to the last good read from this

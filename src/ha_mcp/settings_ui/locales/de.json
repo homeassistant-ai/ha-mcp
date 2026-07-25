@@ -82,7 +82,7 @@
     "accessibility.colors.clear": "Benutzerdefinierte Farben löschen",
     "accessibility.reset": "Auf Standardwerte zurücksetzen",
     "visibility.intro": "Verstecke Entitäten mit geringem Wert (automatisch generierte Diagnose- oder Helfer-Entitäten oder eine explizite Liste) aus den Sammlungs-Lese-Tools <code>ha_search</code> und <code>ha_get_overview</code>, sodass Such- und Übersichtsergebnisse weniger überladen sind. Standardmäßig ausgeschaltet; Änderungen gelten beim nächsten Tool-Aufruf.",
-    "visibility.boundary": "Rauschreduzierung, keine Zugriffskontrolle: Eine versteckte Entität wird weiterhin durch ein direktes Lesen ihrer entity_id zurückgegeben und erscheint weiterhin in Automatisierungs-, Dashboard- und Template-Inhalten. Verlasse dich nicht darauf als Sicherheitsgrenze.",
+    "visibility.boundary": "Ohne den Erzwingungsmodus (unten) ist dies Rauschreduzierung, keine Zugriffskontrolle: Eine versteckte Entität wird weiterhin durch ein direktes Lesen ihrer entity_id zurückgegeben und erscheint weiterhin in Automatisierungs-, Dashboard- und Template-Inhalten. Verlasse dich nicht allein auf den Filter als Sicherheitsgrenze.",
     "visibility.enabled": "Entitäts-Sichtbarkeitsfilter aktivieren",
     "visibility.enforce.title": "Erzwingungsmodus",
     "visibility.enforce.help": "Erweitert den Filter vom Aufräumen von Suche und Übersicht auf jeden Werkzeug-Lesezugriff. Ein direkter Lesezugriff auf eine versteckte Entität liefert „nicht gefunden“, und ein Inhalts-Lesezugriff (Dashboard, Template, Automatisierung, Trace, Log oder Datei), der eine versteckte Entität offenlegen würde, wird verweigert. Bestmögliche Verschleierung gegen versehentliche Offenlegung, keine gehärtete Sicherheitsgrenze.",

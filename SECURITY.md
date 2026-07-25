@@ -107,11 +107,16 @@ strong barrier against an agent *incidentally* surfacing a hidden entity, not a
 cryptographic guarantee: enforcement is a text scan for the hidden entity_id, so a
 Jinja template or sandbox-adjacent computation that *derives* a hidden entity's
 state without ever naming its entity_id cannot be caught. The guaranteed property
-is that a hidden entity's data never flows to the client — existence concealment
+is that a hidden entity's data never flows to the client through a tool read —
+existence concealment
 is best-effort: the concealment error is a canonical not-found, and per-tool
 not-found shapes vary (details text, suggestions, bulk reads that normally
 partial-succeed), so a prober comparing error shapes may infer that an id is
-hidden rather than absent. Enforce mode is not a
+hidden rather than absent. The boundary covers Home Assistant entity data, not
+physical-world imagery: a camera the filter does not hide stays readable
+(`ha_get_camera_image`), and its frames could incidentally show a display that
+renders a hidden entity's state — hide the camera itself (denylist or its area)
+when its view is sensitive. Enforce mode is not a
 defense against an adversarial prompt author deliberately trying to exfiltrate a
 hidden entity's state, and (like the default filter) it is not a substitute for
 Home Assistant's own permission model — restrict what the configured token can

@@ -425,9 +425,10 @@
     cluttered. Off by default; changes apply on the next tool call.
   </p>
   <p class="a11y-contrast-warning" id="visibility-boundary-note" data-i18n="visibility.boundary">
-    Noise reduction, not access control: a hidden entity is still returned by a
-    direct read of its entity_id and still appears in automation, dashboard, and
-    template content. Do not rely on this as a security boundary.
+    Without enforce mode (below), this is noise reduction, not access control: a
+    hidden entity is still returned by a direct read of its entity_id and still
+    appears in automation, dashboard, and template content. Do not rely on the
+    filter alone as a security boundary.
   </p>
   <div id="visibility-load-error" class="visibility-error" role="alert" aria-live="assertive" style="display:none"></div>
 
