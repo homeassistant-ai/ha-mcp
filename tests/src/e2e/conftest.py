@@ -183,6 +183,11 @@ _EMBEDDED_READY_POLL_S = 5
 # _READY_TIMEOUT_S). pytest.ini's timeout_func_only exempts this session-fixture
 # wait from the 300s per-test timeout.
 _HAOS_EMBEDDED_BRINGUP_TIMEOUT = 600
+# Inaddon: budget for the addon's Home Assistant link after its own HTTP
+# listener answers. Core is usually accepting within a few seconds of the
+# listener, so this is only consumed when something is genuinely wrong.
+_ADDON_HA_LINK_TIMEOUT_S = 180.0
+_ADDON_HA_LINK_POLL_S = 3.0
 
 
 def _is_embedded_backend_selected() -> bool:
@@ -979,6 +984,50 @@ def _wait_for_embedded_webhook_ready(webhook_url: str, timeout: int) -> bool:
             # Bring-up still in flight (pip force-install, thread start): retry.
             pass
         time.sleep(_EMBEDDED_READY_POLL_S)
+    return False
+
+
+def _wait_for_addon_ha_link_ready(addon_mcp_url: str, timeout: float) -> bool:
+    """Poll the dev addon until a tool call that needs Home Assistant answers.
+
+    ``wait_for_addon_mcp_ready`` gates on the addon's own HTTP listener, which
+    is a different layer from the one tools actually depend on: the addon
+    reaches Core over the Supervisor WebSocket proxy, and that proxy answers
+    HTTP 502 for a beat after boot while Core comes up behind it. Gating only
+    on the listener leaves the session's first HA-backed tool call to race that
+    window and fail with ``CONNECTION_FAILED``, which reads as a product bug
+    rather than a setup that returned half-ready.
+
+    ``ha_get_addon`` is the probe because it needs both legs of that path (the
+    Core WebSocket and the Supervisor API) — the same call that surfaced the
+    race. Returns False on timeout so the caller can fail with context.
+    Transient errors follow the suite's canonical ``_POLLING_TRANSIENT_ERRORS``
+    discipline; bugs propagate.
+    """
+    import httpx
+    from fastmcp.client.transports import StreamableHttpTransport
+
+    from .utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
+
+    async def _probe() -> None:
+        # Fresh client per attempt: the server is stateless, and a long-lived
+        # session would not survive the addon restarting mid-poll.
+        async with Client(StreamableHttpTransport(url=addon_mcp_url)) as client:
+            await client.call_tool("ha_get_addon", {})
+
+    deadline = time.monotonic() + timeout
+    last_err: BaseException | None = None
+    while time.monotonic() < deadline:
+        try:
+            asyncio.run(_probe())
+            elapsed = int(time.monotonic() - (deadline - timeout))
+            logger.info("✅ Addon → Home Assistant link ready after ~%ds", elapsed)
+            return True
+        except (*_POLLING_TRANSIENT_ERRORS, httpx.HTTPError) as e:
+            last_err = e
+            logger.debug("Addon → Home Assistant link not ready yet: %r", e)
+        time.sleep(_ADDON_HA_LINK_POLL_S)
+    logger.error("Addon → Home Assistant link never came up (last error: %r)", last_err)
     return False
 
 
@@ -1904,6 +1953,19 @@ def _bringup_haos_out_of_process_server(
             "violation. Downstream mcp_client fixture would fail "
             "with an obscure TypeError on transport construction."
         )
+        # The listener answering HTTP does not mean its Home Assistant link is
+        # up, so gate on that too — otherwise the session's first HA-backed
+        # tool call can land while the Supervisor proxy is still 502ing.
+        if not _wait_for_addon_ha_link_ready(
+            addon_mcp_url, timeout=_ADDON_HA_LINK_TIMEOUT_S
+        ):
+            raise AssertionError(
+                "The dev addon's MCP listener answered HTTP but no Home "
+                "Assistant-backed tool call succeeded within "
+                f"{_ADDON_HA_LINK_TIMEOUT_S:.0f}s of it. The addon reaches "
+                "Core through the Supervisor WebSocket proxy — see the "
+                "Supervisor and HA Core logs in the HAOS diagnostics artifact."
+            )
     elif haos_embedded:
         # Enable the baked-disabled in-process server entry ONCE for the
         # whole session (the per-test smoke module is skipped on this
