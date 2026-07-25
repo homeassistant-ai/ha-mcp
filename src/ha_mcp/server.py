@@ -251,6 +251,15 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         self.mcp.add_middleware(LlmExposureMiddleware())
 
+        # Entity visibility enforce mode, INBOUND half (#2015) — always
+        # installed, consults the live config per request (no-op unless
+        # enforce is on with an active hide dimension). Must precede the
+        # read-only guard and PolicyMiddleware: a call naming a hidden
+        # entity is concealed as not-found BEFORE it can be stored verbatim
+        # in the approval queue (rendered in the settings UI) or answered
+        # with a read-only/approval response that would confirm existence.
+        self._apply_visibility_inbound_middleware()
+
         # Read Only Mode write blocker (discussion #1569) — always
         # installed, consults the live flag per call. Before
         # PolicyMiddleware so a write blocked by Read Only Mode never
@@ -268,6 +277,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # ENABLE_TOOL_SECURITY_POLICIES. Must come last so the middleware
         # wraps the final tool surface (including the search proxies).
         self._apply_tool_security_policies()
+
+        # Entity visibility enforce mode, OUTBOUND half (#2015) — added LAST
+        # so it is innermost: its result scan sees the raw tool output before
+        # any other middleware transforms it.
+        self._apply_visibility_outbound_middleware()
 
     def _get_skills_dir(self) -> Path | None:
         """Return the bundled skills directory if it exists.
@@ -1124,6 +1138,35 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             return await self.mcp.local_provider._list_tools()
 
         self.mcp.add_middleware(StrictBpsMiddleware(list_tools=_list_all_tools))
+
+    def _apply_visibility_inbound_middleware(self) -> None:
+        """Install the enforce-mode INBOUND (conceal/refuse) middleware (#2015).
+
+        Always installed — self-no-ops at call time (loads the visibility
+        config per request and passes through unless enforce is on with an
+        active hide dimension), so a settings-UI toggle applies live in
+        standalone-HTTP/embedded mode like ``read_only_mode``. It needs the HA
+        client to fetch the registry/states for the hidden-set computation;
+        inject the lazy client accessor so no eager connection is made at
+        startup. Ordering (before read-only/policy) is owned by the caller.
+        """
+        from .visibility.enforcement import VisibilityInboundEnforcement
+
+        self.mcp.add_middleware(
+            VisibilityInboundEnforcement(get_client=lambda: self.client)
+        )
+
+    def _apply_visibility_outbound_middleware(self) -> None:
+        """Install the enforce-mode OUTBOUND (result-scan) middleware (#2015).
+
+        Same always-installed/self-no-op contract as the inbound half; the
+        caller registers it last so it is innermost and scans raw tool output.
+        """
+        from .visibility.enforcement import VisibilityOutboundEnforcement
+
+        self.mcp.add_middleware(
+            VisibilityOutboundEnforcement(get_client=lambda: self.client)
+        )
 
     # Shared action-phrased keyword block for retrieval. Some MCP clients
     # (Claude Code, others) rank candidate tools by token-overlap between

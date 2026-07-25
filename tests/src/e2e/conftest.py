@@ -67,6 +67,7 @@ from haos_runtime import (
     stage_embedded_server_feature_flags_in_qcow2,
     stage_embedded_server_wheel_in_qcow2,
     trigger_dev_addon_update,
+    wait_for_addon_ha_link_ready,
     wait_for_addon_mcp_ready,
 )
 
@@ -132,12 +133,14 @@ _EMBEDDED_SERVER_CONFIG_SUBDIR = ".ha_mcp"
 # ha_mcp.config reads that override layer in a standalone deployment, and the
 # embedded server IS standalone (is_running_in_addon() is False in embedded mode,
 # so the file is honored rather than short-circuited by Supervisor). Keys are
-# ha_mcp.config Settings field names (config.FEATURE_FLAG_FIELDS), not env-var
-# names. READ_ONLY_MODE / ENABLE_TOOL_SECURITY_POLICIES are deliberately absent:
+# ha_mcp.config Settings field names, not env-var names: both
+# config.FEATURE_FLAG_FIELDS and, via _apply_advanced_overrides reading the
+# same feature_flags.json, config.ADVANCED_SETTINGS_FIELDS. READ_ONLY_MODE /
+# ENABLE_TOOL_SECURITY_POLICIES are deliberately absent:
 # the tests that need them build their own in-process server
 # (test_readonly_mode / test_approval_flow), so enabling them on the shared
 # embedded server would break the default-catalog tests.
-_EMBEDDED_FEATURE_FLAGS: dict[str, bool] = {
+_EMBEDDED_FEATURE_FLAGS: dict[str, bool | str] = {
     "enable_beta_features": True,
     "enable_yaml_config_editing": True,
     "enable_yaml_packages_automation": True,
@@ -149,6 +152,11 @@ _EMBEDDED_FEATURE_FLAGS: dict[str, bool] = {
     # backend pins ENABLE_STRICT_MANDATORY_BPS=false, so the embedded server's
     # keyless writes aren't hard-blocked.
     "enable_strict_mandatory_bps": False,
+    # Operator extra YAML write keys (#1887): an ADVANCED_SETTINGS_FIELDS
+    # value (str, not a bool flag) so the embedded/haos_embedded backends can
+    # exercise a successful non-built-in-key write. The container backend sets
+    # the HA_MCP_EXTRA_YAML_KEYS env var directly instead (below).
+    "extra_yaml_write_keys": "alert2",
 }
 # BACKUP_OVERRIDE_FIELDS (not FEATURE_FLAG_FIELDS) values for the embedded
 # server — a separate override file (backup_settings.json) from
@@ -1024,6 +1032,75 @@ def _seed_non_yaml_package_file(config_path: Path) -> None:
     )
 
 
+# scene_id / entity_id the YAML-package scene below lands at. HA slugifies the
+# ``name`` into the entity_id while the declared ``id`` becomes the registry
+# unique_id / storage key. They are deliberately DIFFERENT here so the e2e can
+# discriminate the registry-hit classification branch (see the helper below).
+E2E_YAML_PACKAGE_SCENE_ENTITY_ID = (
+    "e2e_yaml_scene_1971"  # HA slugifies the name to this
+)
+E2E_YAML_PACKAGE_SCENE_UID = (
+    "e2e_yaml_scene_1971_storage_uid"  # declared id / storage key
+)
+# Sibling scene declaring NO ``id``. HA core makes ``id`` optional and maps it
+# straight to the entity's unique_id (homeassistant/components/homeassistant/
+# scene.py: ``unique_id`` -> ``scene_config.id``), so this one gets no registry
+# entry at all while still living in the state machine under its name slug -
+# the registry-MISS arm of the same not-storage-scene case.
+E2E_YAML_PACKAGE_SCENE_IDLESS_ENTITY_ID = "e2e_yaml_scene_1971_idless"
+
+
+def _seed_yaml_package_scene(config_path: Path) -> None:
+    """Stage a YAML-package scene declaring an ``id`` pre-boot (#1971).
+
+    A scene defined in a YAML package with an ``id`` registers in the entity
+    registry (unique_id = that ``id``) yet has NO entry in the managed
+    ``scenes.yaml`` store, so ``config/scene/config/{id}`` 404s. That is the
+    exact registry-hit not-storage-scene case #1971 classifies as
+    CONFIG_NOT_FOUND. It is also the only arm of that case that can run
+    in-container (the Hue/vendor arm needs a real integration). No tool can
+    create it: scene writes go through the managed store, and a post-boot host
+    write to the bind-mounted config dir doesn't propagate in CI, so it is
+    staged here like the legacy backups above. The folder name matches the one
+    initial_test_state/configuration.yaml binds via ``!include_dir_named``.
+
+    The declared ``id`` is deliberately NOT the slug of ``name``: the caller
+    references the scene by its name-derived entity slug, which resolves in the
+    registry to this distinct ``id`` (registry_hit). So a regression that
+    dropped the registry-hit classification branch would fall through to the
+    state-machine check on the storage key ``id`` (which is NOT a real entity,
+    since the entity is the name slug), yielding the generic 404 and failing the
+    e2e. That makes the test pin the registry-hit path, not just the state-check
+    fallback.
+
+    A second scene in the same package declares NO ``id``. It therefore has no
+    registry entry at all (registry MISS) yet still exists in the state machine,
+    which is the other arm the classification has to cover: on the read path via
+    the state check, and on the no-hash write path so a plain ``set`` cannot
+    shadow-create over it either.
+
+    The filename must NOT start with an underscore: ``!include_dir_named`` uses
+    the file stem as the package name, and ``PACKAGES_CONFIG_SCHEMA`` validates
+    each package name with ``cv.slug``, which rejects a leading underscore
+    (slugify strips it, so ``value != slugify(value)`` raises). A ``_``-prefixed
+    name makes HA discard the whole package and the scene silently never loads.
+    """
+    packages_dir = config_path / "custom_packages"
+    packages_dir.mkdir(parents=True, exist_ok=True)
+    (packages_dir / "e2e_yaml_scene.yaml").write_text(
+        "scene:\n"
+        f"  - id: {E2E_YAML_PACKAGE_SCENE_UID}\n"
+        "    name: E2E YAML Scene 1971\n"
+        "    entities:\n"
+        "      light.bed_light:\n"
+        '        state: "on"\n'
+        "  - name: E2E YAML Scene 1971 Idless\n"
+        "    entities:\n"
+        "      light.bed_light:\n"
+        '        state: "on"\n'
+    )
+
+
 def _collect_manifest_requirements(config_path: Path) -> list[str]:
     """Aggregate ``requirements`` from every installed custom-component manifest.
 
@@ -1764,6 +1841,10 @@ def _haos_post_boot_setup(base_url: str, request) -> tuple[str, dict]:
     os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
     os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
     os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
+    # Operator extra YAML write keys (#1887): widen the allowlist with a
+    # single non-built-in key so the success-path write test has a key to
+    # exercise. Value mirrors _EMBEDDED_FEATURE_FLAGS["extra_yaml_write_keys"].
+    os.environ["HA_MCP_EXTRA_YAML_KEYS"] = "alert2"
     # Strict best-practices gate (#1779) defaults ON with its parent;
     # pin it OFF so the suite's keyless writes aren't hard-blocked. The
     # strict-gate e2e test builds its own server with the flag enabled.
@@ -1824,6 +1905,17 @@ def _bringup_haos_out_of_process_server(
             "violation. Downstream mcp_client fixture would fail "
             "with an obscure TypeError on transport construction."
         )
+        # The listener answering HTTP does not mean its Home Assistant link is
+        # up, so gate on that too — otherwise the session's first HA-backed
+        # tool call can land while the Supervisor proxy is still 502ing.
+        if not wait_for_addon_ha_link_ready(addon_mcp_url):
+            raise AssertionError(
+                "The dev addon's MCP listener answered HTTP but no Home "
+                "Assistant-backed tool call succeeded before the link "
+                "deadline. The addon reaches Core through the Supervisor "
+                "WebSocket proxy — see the Supervisor and HA Core logs in "
+                "the HAOS diagnostics artifact."
+            )
     elif haos_embedded:
         # Enable the baked-disabled in-process server entry ONCE for the
         # whole session (the per-test smoke module is skipped on this
@@ -2004,6 +2096,10 @@ def _prepare_testcontainer_config(
     # A non-YAML file in the bound packages folder for the glob warn-and-continue
     # e2e (#1788): same pre-boot reason, and no tool can write it there.
     _seed_non_yaml_package_file(config_path)
+
+    # A YAML-package scene with an ``id`` for the not-storage-scene e2e (#1971):
+    # registers in the registry yet 404s on the config API. Same pre-boot reason.
+    _seed_yaml_package_scene(config_path)
 
     # Shift the pre-baked recorder timestamps forward so the seeded rows
     # look "recent" to history queries with a 24h window. The recorder DB in
@@ -2425,6 +2521,10 @@ def ha_container_with_fresh_config(request):
         os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
         os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
         os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
+        # Operator extra YAML write keys (#1887): widen the allowlist with a
+        # single non-built-in key so the success-path write test has a key to
+        # exercise. Value mirrors _EMBEDDED_FEATURE_FLAGS["extra_yaml_write_keys"].
+        os.environ["HA_MCP_EXTRA_YAML_KEYS"] = "alert2"
         # Strict best-practices gate (#1779) defaults ON with its parent; pin it
         # OFF so the suite's keyless writes aren't hard-blocked. The strict-gate
         # e2e test builds its own server with the flag enabled.

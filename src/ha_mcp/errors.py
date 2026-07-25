@@ -116,6 +116,14 @@ class ErrorCode(StrEnum):
     # backup directory is unusable). Fail-closed: nothing was changed.
     BACKUP_CAPTURE_FAILED = "BACKUP_CAPTURE_FAILED"
 
+    # Entity visibility enforce mode (#2015). A read was refused because the
+    # opt-in visibility filter's enforce mode is active and the request would
+    # surface an entity the filter hides — either the tool's output references a
+    # hidden entity, or the tool's output cannot be scanned (screenshots, sandbox
+    # code). Direct reads of a hidden entity are concealed as ENTITY_NOT_FOUND
+    # instead; this code marks the refuse-on-contact case. No data was returned.
+    ENTITY_VISIBILITY_ENFORCED = "ENTITY_VISIBILITY_ENFORCED"
+
 
 # Default suggestions for common error codes
 DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {

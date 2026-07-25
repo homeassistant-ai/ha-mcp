@@ -1374,6 +1374,96 @@ def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
     )
 
 
+# Budget for the addon's Home Assistant link once its own listener answers.
+# Core is normally accepting within seconds of it, so this is only consumed
+# when something is genuinely wrong.
+_ADDON_HA_LINK_TIMEOUT_S = 180.0
+_ADDON_HA_LINK_POLL_S = 3.0
+
+
+def _addon_link_transient_errors() -> tuple[type[BaseException], ...]:
+    """Return the errors that mean "not linked yet" rather than "broken".
+
+    Mirrors the suite's canonical MCP-polling set
+    (``e2e/utilities/wait_helpers._POLLING_TRANSIENT_ERRORS``) plus httpx
+    transport errors — the same combination ``test_addon_debug_log_level``
+    uses for this exact target. Copied by value rather than imported because
+    this module is also imported bare (``from haos_runtime import ...``), so a
+    package-relative import of the e2e tree would not resolve;
+    ``test_haos_addon_ha_link_wait`` pins that it stays a superset of the
+    canonical tuple.
+    """
+    import httpx
+    from fastmcp.exceptions import ClientError, FastMCPError
+    from mcp import McpError
+
+    return (
+        McpError,
+        FastMCPError,
+        ClientError,
+        RuntimeError,
+        OSError,
+        TimeoutError,
+        httpx.HTTPError,
+    )
+
+
+def _probe_addon_ha_link(addon_mcp_url: str) -> None:
+    """Make one MCP call that needs Home Assistant; raise if it does not work."""
+    import asyncio
+
+    from fastmcp import Client
+    from fastmcp.client.transports import StreamableHttpTransport
+
+    async def _call() -> None:
+        # Fresh client per attempt: the server is stateless, and a long-lived
+        # session would not survive the addon restarting mid-poll.
+        async with Client(StreamableHttpTransport(url=addon_mcp_url)) as client:
+            await client.call_tool("ha_get_addon", {})
+
+    asyncio.run(_call())
+
+
+def wait_for_addon_ha_link_ready(
+    addon_mcp_url: str, *, timeout: float = _ADDON_HA_LINK_TIMEOUT_S
+) -> bool:
+    """Poll the addon until a tool call that needs Home Assistant answers.
+
+    ``wait_for_addon_mcp_ready`` gates on the addon's own HTTP listener, which
+    is a different layer from the one tools depend on: the addon reaches Core
+    over the Supervisor WebSocket proxy, and that proxy answers HTTP 502 for a
+    beat after boot while Core comes up behind it. Gating only on the listener
+    lets setup return half-ready, so the session's first HA-backed tool call
+    can land in that window and fail with ``CONNECTION_FAILED`` — which reads
+    as a product bug rather than a setup race.
+
+    ``ha_get_addon`` is the probe because it needs both legs of that path (the
+    Core WebSocket and the Supervisor API) and is the call that surfaced the
+    race. Returns False on timeout so the caller can fail with context.
+    Transient errors are retried; bugs propagate.
+    """
+    deadline = time.monotonic() + timeout
+    transient = _addon_link_transient_errors()
+    last_err: BaseException | None = None
+    while time.monotonic() < deadline:
+        try:
+            _probe_addon_ha_link(addon_mcp_url)
+        except transient as e:
+            last_err = e
+            LOG.debug("Addon -> Home Assistant link not ready yet: %r", e)
+        else:
+            elapsed = int(time.monotonic() - (deadline - timeout))
+            LOG.info("Addon -> Home Assistant link ready after ~%ds", elapsed)
+            return True
+        time.sleep(_ADDON_HA_LINK_POLL_S)
+    LOG.error(
+        "Addon -> Home Assistant link never came up within %.0fs (last_exc=%r)",
+        timeout,
+        last_err,
+    )
+    return False
+
+
 def _http(
     method: str,
     url: str,

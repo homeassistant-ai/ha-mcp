@@ -33,7 +33,9 @@ from .helpers import (
 from .tools_config_dashboards import fetch_dashboards_list
 from .tools_filesystem import (
     _assert_mcp_tools_available,
+    assert_extra_yaml_keys_supported,
     call_mcp_tools_service,
+    effective_extra_yaml_write_keys,
 )
 from .util_helpers import (
     attach_skill_content,
@@ -57,7 +59,7 @@ _LOVELACE_DASHBOARD_PREFIX = "lovelace.dashboards."
 # here, otherwise a key would silently be unreachable through the
 # wrapper. The parity invariant (keys == PACKAGES_ONLY_YAML_KEYS, and
 # every value is a real Settings field) is enforced by
-# test_yaml_config_tool.py::test_flag_map_matches_packages_only_keys.
+# test_yaml_dashboards.py::test_flag_map_matches_packages_only_keys.
 _YAML_PACKAGES_FLAG_BY_KEY = {
     "automation": "enable_yaml_packages_automation",
     "script": "enable_yaml_packages_script",
@@ -464,6 +466,9 @@ class YamlConfigTools:
             # Check if custom component is available
             await _assert_mcp_tools_available(self._client)
 
+            extra_keys = await effective_extra_yaml_write_keys(self._client, settings)
+            await assert_extra_yaml_keys_supported(self._client, extra_keys)
+
             # Build service data
             service_data: dict[str, Any] = {
                 "file": file,
@@ -472,6 +477,11 @@ class YamlConfigTools:
                 "disabled_packages_keys": disabled_keys,
                 "require_confirm": settings.enable_yaml_edit_confirm,
             }
+            # Only sent when the operator actually configured extra keys, so a
+            # component that predates the field keeps working unchanged for
+            # everyone else (its schema is strict and would reject the call).
+            if extra_keys:
+                service_data["extra_allowed_keys"] = extra_keys
             if content is not None:
                 service_data["content"] = content
             if confirm_token is not None:

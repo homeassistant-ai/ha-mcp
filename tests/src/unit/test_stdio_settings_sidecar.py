@@ -1268,6 +1268,18 @@ class TestVisibilityHandlers:
         assert got["deny_entity_ids"] == ["light.x"]
         assert got["version"] == 2
 
+    def test_put_persists_enforce_flag(self, tmp_data_dir: Path) -> None:
+        """The enforce flag (#2015) round-trips through the generic model."""
+        client = self._client()
+        resp = client.put(
+            "/api/visibility/config",
+            json={"version": 1, "enabled": True, "enforce": True},
+        )
+        assert resp.status_code == 200
+        got = client.get("/api/visibility/config").json()
+        assert got["enforce"] is True
+        assert got["enabled"] is True
+
     def test_put_stale_version_conflicts(self, tmp_data_dir: Path) -> None:
         client = self._client()
         client.put("/api/visibility/config", json={"version": 1, "enabled": True})
