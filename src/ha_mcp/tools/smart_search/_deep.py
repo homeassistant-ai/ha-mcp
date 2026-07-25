@@ -201,7 +201,6 @@ class DeepSearchMixin(SceneSearchMixin):
             script_failed_sample: str | None = None
             helper_failed = 0
             dashboard_failed = 0
-            dashboard_yaml_excluded = 0
 
             if "automation" in search_types:
                 (
@@ -295,7 +294,6 @@ class DeepSearchMixin(SceneSearchMixin):
                 (
                     results["dashboards"],
                     dashboard_failed,
-                    dashboard_yaml_excluded,
                 ) = await self._search_dashboards_surface(
                     query_lower,
                     exact_match,
@@ -330,7 +328,6 @@ class DeepSearchMixin(SceneSearchMixin):
                 script_failed_sample=script_failed_sample,
                 helper_failed=helper_failed,
                 dashboard_failed=dashboard_failed,
-                dashboard_yaml_excluded=dashboard_yaml_excluded,
             )
 
         except ToolError:
@@ -922,53 +919,56 @@ class DeepSearchMixin(SceneSearchMixin):
         semaphore: asyncio.Semaphore,
         *,
         include_config: bool,
-    ) -> tuple[list[dict[str, Any]], int, int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """The dashboard bucket: component-first, legacy fallback.
 
-        Returns ``(records, failed_count, yaml_excluded_count)``. The
-        component's in-process ``search`` frame (issue #2008) serves the
-        exact-match, no-body shape — the default ``ha_search`` call —
-        mirroring the ``ha_config_get_dashboard(mode="search")`` routing;
-        fuzzy scoring and ``include_config`` bodies are legacy-only (the
-        component walk is substring and its matches carry no bodies), as is
-        every ``None`` fallback case of
-        :meth:`_component_dashboard_search`.
+        Returns ``(records, failed_count)``. The component's in-process
+        ``search`` frame (issue #2008) serves the exact-match, no-body shape
+        — the default ``ha_search`` call — mirroring the
+        ``ha_config_get_dashboard(mode="search")`` routing; fuzzy scoring and
+        ``include_config`` bodies are legacy-only (the component walk is
+        substring and its matches carry no bodies), as is every ``None``
+        fallback case of :meth:`_component_dashboard_search` — including a
+        YAML-bearing install, so component-vs-legacy never changes which
+        dashboards a search covers.
         """
         if exact_match and not include_config:
             component = await self._component_dashboard_search(query_lower)
             if component is not None:
                 return component
-        records, failed = await self._deep_search_dashboards(
-            query_lower, exact_match, semaphore
-        )
-        return records, failed, 0
+        return await self._deep_search_dashboards(query_lower, exact_match, semaphore)
 
     async def _component_dashboard_search(
         self, query_lower: str
-    ) -> tuple[list[dict[str, Any]], int, int] | None:
+    ) -> tuple[list[dict[str, Any]], int] | None:
         """The dashboard bucket via the component's in-process ``search`` frame.
 
-        Returns ``(records, failed_count, yaml_excluded_count)`` — one
-        legacy-shaped record per matching dashboard from the component's
-        ``document_matches`` (a whole-document substring verdict per storage
-        dashboard, ported from ``_search_in_dict`` leaf for leaf, so view
-        titles and dashboard-level keys match exactly as the legacy walk
-        matches them); ``failed_count`` is the component's ``load_failed``
-        (storage dashboards whose config load raised — surfaced as the same
-        ``dashboard(s) not scanned`` partial the legacy scan reports) and
-        ``yaml_excluded_count`` its ``yaml_skipped`` (the YAML-mode entries
-        the component never scans because their bodies can carry resolved
-        ``!secret`` values — counted in-process over the full dashboards map,
-        default dashboard included). A config-less auto-generated dashboard
-        is skipped in-process (nothing to scan), consistent with
+        Returns ``(records, failed_count)`` — one legacy-shaped record per
+        matching dashboard from the component's ``document_matches`` (a
+        whole-document substring verdict per storage dashboard, ported from
+        ``_search_in_dict`` leaf for leaf, so view titles and dashboard-level
+        keys match exactly as the legacy walk matches them); ``failed_count``
+        is the component's ``load_failed`` (storage dashboards whose config
+        load raised — surfaced as the same ``dashboard(s) not scanned``
+        partial the legacy scan reports). A config-less auto-generated
+        dashboard is skipped in-process (nothing to scan), consistent with
         :func:`_is_no_stored_config`.
 
         ``None`` ⇒ run the legacy per-dashboard walk instead: the component
         lacks the ``dashboards_doc_search`` capability (older components
         emit only the card-scoped ``matches``, which would silently narrow
         coverage), any ``_dashboards_via_component`` fallback (capability
-        miss / command error / lovelace unavailable), an empty query, or a
-        malformed ``document_matches``.
+        miss / command error / lovelace unavailable), an empty query, a
+        malformed ``document_matches`` — or a non-zero ``yaml_skipped``.
+        The component never reads YAML-mode dashboard bodies, but the legacy
+        walk this path replaces does (``lovelace/config`` loads them, and the
+        fuzzy / ``include_config`` routes still read the same resolved
+        configs), so serving the component result on a YAML-bearing install
+        would make the DEFAULT call shape permanently narrower and
+        permanently ``partial``. Falling back keeps coverage identical to
+        the pre-component behaviour; storage-only installs — where the
+        exclusion costs nothing — keep the single-frame win (review
+        follow-up on issue #2008).
         """
         if not query_lower:
             return None
@@ -983,8 +983,9 @@ class DeepSearchMixin(SceneSearchMixin):
         document_matches = result.get("document_matches")
         if not isinstance(document_matches, list):
             return None
+        if int(result.get("yaml_skipped", 0) or 0) > 0:
+            return None
         failed = int(result.get("load_failed", 0) or 0)
-        yaml_excluded = int(result.get("yaml_skipped", 0) or 0)
 
         records: dict[str, dict[str, Any]] = {}
         for match in document_matches:
@@ -1009,7 +1010,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 "score": 100,
                 "match_in_config": True,
             }
-        return list(records.values()), failed, yaml_excluded
+        return list(records.values()), failed
 
     async def _search_one_dashboard(
         self,
@@ -1175,7 +1176,6 @@ class DeepSearchMixin(SceneSearchMixin):
         script_failed_sample: str | None = None,
         helper_failed: int = 0,
         dashboard_failed: int = 0,
-        dashboard_yaml_excluded: int = 0,
     ) -> dict[str, Any]:
         """Merge per-type results, sort by score, paginate, and assemble the response."""
         tagged_results: list[tuple[str, dict[str, Any]]] = []
@@ -1240,7 +1240,6 @@ class DeepSearchMixin(SceneSearchMixin):
             script_failed_sample=script_failed_sample,
             helper_failed=helper_failed,
             dashboard_failed=dashboard_failed,
-            dashboard_yaml_excluded=dashboard_yaml_excluded,
         )
         return response
 
@@ -1260,7 +1259,6 @@ class DeepSearchMixin(SceneSearchMixin):
         script_failed_sample: str | None = None,
         helper_failed: int = 0,
         dashboard_failed: int = 0,
-        dashboard_yaml_excluded: int = 0,
     ) -> None:
         """Set ``partial: True`` when the deep-search per-type fetch path lost
         data — either the Attempt-C wall-clock budget exhausted
@@ -1275,10 +1273,7 @@ class DeepSearchMixin(SceneSearchMixin):
         ``helper_failed`` / ``dashboard_failed`` cover the helper- and
         dashboard-list/config backends, whose per-unit ``except`` blocks
         would otherwise swallow a backend outage to an empty list with no
-        signal. ``dashboard_yaml_excluded`` is the component search path's
-        deliberate YAML-mode exclusion (bodies can carry resolved
-        ``!secret`` values) — not a failure, but still unscanned content
-        the caller must not mistake for an exhaustive answer.
+        signal.
 
         Mirrors ``_apply_scene_partial_flag`` 's "looks complete when it
         isn't" coverage onto the automation/script/helper/dashboard paths —
@@ -1399,14 +1394,6 @@ class DeepSearchMixin(SceneSearchMixin):
                 f"{dashboard_failed} dashboard(s) not scanned (config or list "
                 "fetch failed) — their match status is unknown; this result is "
                 "not exhaustive."
-            )
-        if dashboard_yaml_excluded:
-            reasons.append(
-                f"{dashboard_yaml_excluded} YAML-mode dashboard(s) not scanned "
-                "(YAML dashboard bodies can carry resolved !secret values, so "
-                "the in-process dashboard search reads storage dashboards "
-                "only) — their match status is unknown; this result is not "
-                "exhaustive."
             )
         if not reasons:
             return

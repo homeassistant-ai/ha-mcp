@@ -4229,9 +4229,12 @@ async def _dashboard_search_docs(
     ``registry_title`` carries the list-row metadata title that
     ``document_matches`` emits (what the legacy ha_search bucket records
     carry); ``yaml_skipped`` counts
-    the YAML-mode entries excluded by design, INCLUDING a default dashboard
-    forced to YAML (`` lovelace: mode: yaml``), which has no ``list`` row for
-    the server to count (issue #2008 review); ``load_failed`` counts storage
+    the YAML-mode entries this walk never reads, INCLUDING a default dashboard
+    forced to YAML (``lovelace: mode: yaml``), which has no ``list`` row for
+    the server to count — the server treats a non-zero count as its
+    fall-back-to-legacy signal, since the legacy walk DOES read YAML bodies
+    and coverage must not depend on which path served (issue #2008 review);
+    ``load_failed`` counts storage
     dashboards whose config load raised or returned a non-dict — real gaps the
     caller must surface as partial rather than fail-soft into a clean-looking
     result. A ``ConfigNotFound`` load is a clean skip, not a failure: an

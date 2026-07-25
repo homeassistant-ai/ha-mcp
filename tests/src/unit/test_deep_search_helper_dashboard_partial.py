@@ -369,12 +369,16 @@ class TestDashboardBucketViaComponent:
         assert by_url["default"]["dashboard_title"] == "Default Dashboard"
         assert not result.get("partial")
 
-    async def test_component_yaml_skipped_surfaces_partial(self) -> None:
-        """YAML-mode dashboards are excluded from the component's in-process
-        search by design (their bodies can carry resolved !secret values) —
-        the response must say so instead of looking exhaustive."""
+    async def test_component_yaml_skipped_falls_back_to_legacy(self) -> None:
+        """A YAML-bearing install stays entirely on the legacy walk: the
+        component never reads YAML dashboard bodies but the legacy walk does
+        (and the fuzzy / include_config routes still read the same resolved
+        configs), so serving the component result would make the DEFAULT call
+        shape narrower and permanently partial. ``yaml_skipped > 0`` ⇒
+        discard the frame and run the legacy walk — coverage identical to
+        the pre-component behaviour (Patch76 review)."""
         component_result = self._component_result([], yaml_skipped=1)
-        tools = self._tools_no_lovelace()
+        tools, client = self._tools_legacy_clean()
         caps_a, caps_b = self._caps_on()
 
         with (
@@ -389,9 +393,16 @@ class TestDashboardBucketViaComponent:
                 query="zzznomatch", search_types=["dashboard"], limit=10
             )
 
-        assert result["partial"] is True
-        assert "YAML-mode dashboard(s) not scanned" in result["partial_reason"]
-        assert re.search(r"\b1 YAML-mode dashboard\(s\)", result["partial_reason"])
+        assert result["dashboards"] == []
+        assert not result.get("partial"), (
+            f"the YAML exclusion must trigger legacy fallback, not partial; "
+            f"got {result.get('partial_reason')!r}"
+        )
+        # The legacy per-dashboard walk actually ran (YAML bodies included).
+        assert any(
+            c.args[0].get("type") == "lovelace/config"
+            for c in client.send_websocket_message.call_args_list
+        )
 
     async def test_component_load_failed_surfaces_partial(self) -> None:
         """The component's ``load_failed`` maps onto the same ``dashboard(s)

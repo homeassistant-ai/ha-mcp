@@ -1285,7 +1285,8 @@ async def fetch_dashboards_list(
     every fetch site rather than silently degrading.
 
     When the ``ha_mcp_tools`` component advertises the ``dashboards`` capability
-    the storage-only rows are served from one in-process ``list`` frame (the
+    the rows — YAML rows included, tagged with ``mode`` (see
+    ``_component_dashboard_rows``) — are served from one in-process ``list`` frame (the
     ``_resolve_dashboard`` / ``_lookup_existing_dashboards`` / list-mode callers
     all funnel here); otherwise the legacy ``lovelace/dashboards/list`` WS read
     runs unchanged.
