@@ -237,3 +237,96 @@ def test_list_param_rejects_json_string_of_object(
     ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
     with pytest.raises(ValidationError):
         TypeAdapter(ann).validate_python('{"entity_id": "light.kitchen"}')
+
+
+# ---------------------------------------------------------------------------
+# Dev-tool dict params (ha_dev_manage_settings policy / backup)
+#
+# These carry the same JSON_STRING_COERCION as the config-tool params, but
+# register_dev_tools no-ops unless developer mode is on, so the shared
+# parametrization above can never reach them. Enable the flag, reset the
+# cached settings singleton so registration sees it, and register in a
+# dedicated class.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def dev_mode_enabled(monkeypatch):
+    from ha_mcp.config import reset_global_settings
+
+    monkeypatch.setenv("HAMCP_ENABLE_DEV_MODE", "true")
+    reset_global_settings()
+    try:
+        yield
+    finally:
+        # Drop the flag *before* re-reading so later tests see dev mode off.
+        monkeypatch.delenv("HAMCP_ENABLE_DEV_MODE", raising=False)
+        reset_global_settings()
+
+
+_DEV_DICT_PARAMS = [
+    (
+        "ha_mcp.tools.tools_dev",
+        "register_dev_tools",
+        "ha_dev_manage_settings",
+        "policy",
+    ),
+    (
+        "ha_mcp.tools.tools_dev",
+        "register_dev_tools",
+        "ha_dev_manage_settings",
+        "backup",
+    ),
+]
+
+_DEV_DICT_SAMPLES: dict[tuple[str, str], dict[str, Any]] = {
+    ("ha_dev_manage_settings", "policy"): {
+        "wait_seconds": 30,
+        "approval_ttl_minutes": 5,
+        "rules": [],
+        "version": 0,
+    },
+    ("ha_dev_manage_settings", "backup"): {"enable_auto_backup": False},
+}
+
+
+class TestDevToolDictParamCoercion:
+    """The dev-mode set_policy/set_backup dict params round-trip a JSON string
+    just like the config-tool dict params — a stringified object is coerced,
+    a native dict passes through, and genuinely-malformed input still fails."""
+
+    @pytest.mark.parametrize(
+        ("module", "register_fn", "tool_name", "param_name"), _DEV_DICT_PARAMS
+    )
+    def test_dev_dict_param_coerces_json_string(
+        self, dev_mode_enabled, module, register_fn, tool_name, param_name
+    ):
+        sample = _DEV_DICT_SAMPLES[(tool_name, param_name)]
+        ann = _get_param_annotation(
+            _resolve(module, register_fn), tool_name, param_name
+        )
+        assert TypeAdapter(ann).validate_python(json.dumps(sample)) == sample
+
+    @pytest.mark.parametrize(
+        ("module", "register_fn", "tool_name", "param_name"), _DEV_DICT_PARAMS
+    )
+    def test_dev_dict_param_passes_native_dict_through(
+        self, dev_mode_enabled, module, register_fn, tool_name, param_name
+    ):
+        sample = _DEV_DICT_SAMPLES[(tool_name, param_name)]
+        ann = _get_param_annotation(
+            _resolve(module, register_fn), tool_name, param_name
+        )
+        assert TypeAdapter(ann).validate_python(sample) == sample
+
+    @pytest.mark.parametrize(
+        ("module", "register_fn", "tool_name", "param_name"), _DEV_DICT_PARAMS
+    )
+    def test_dev_dict_param_rejects_unparseable_string(
+        self, dev_mode_enabled, module, register_fn, tool_name, param_name
+    ):
+        ann = _get_param_annotation(
+            _resolve(module, register_fn), tool_name, param_name
+        )
+        with pytest.raises(ValidationError):
+            TypeAdapter(ann).validate_python("definitely not json {")

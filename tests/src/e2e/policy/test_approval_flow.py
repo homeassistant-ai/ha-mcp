@@ -197,6 +197,54 @@ async def _install_rule(handlers, rule: dict[str, Any]) -> None:
     assert put_resp.status_code == 200, put_resp.body
 
 
+async def _install_rules(handlers, rules: list[dict[str, Any]]) -> None:
+    current_resp = await handlers["policy_get_config"](_make_request())
+    current = json.loads(current_resp.body)
+    body = {
+        "wait_seconds": 5,
+        "approval_ttl_minutes": 5,
+        "rules": rules,
+        "version": current["version"],
+    }
+    put_resp = await handlers["policy_put_config"](_make_request(body))
+    assert put_resp.status_code == 200, put_resp.body
+
+
+@pytest.mark.asyncio
+async def test_any_of_multiple_conditions_gates(policy_enabled_mcp):
+    """Each policy condition is its own rule; a call matching ANY of them is
+    gated (OR across same-tool rules) — end-to-end proof of the ALL->ANY editor
+    change (PR #1993). A call matching the SECOND condition still blocks."""
+    client, server, handlers = policy_enabled_mcp
+    await _install_rules(
+        handlers,
+        [
+            {
+                "tool_name": "ha_call_service",
+                "when": [{"path": "args.domain", "op": "eq", "value": "lock"}],
+                "remember_minutes": 0,
+            },
+            {
+                "tool_name": "ha_call_service",
+                "when": [
+                    {"path": "args.domain", "op": "eq", "value": "alarm_control_panel"}
+                ],
+                "remember_minutes": 0,
+            },
+        ],
+    )
+    # Matches the SECOND condition only → still gated (OR, not AND).
+    await _expect_blocked(
+        client,
+        {
+            "domain": "alarm_control_panel",
+            "service": "alarm_disarm",
+            "entity_id": "alarm_control_panel.home",
+        },
+    )
+    assert server.approval_queue.list_pending()
+
+
 @pytest.mark.asyncio
 async def test_wildcard_path_gates_when_any_arg_matches(policy_enabled_mcp):
     """`args.*` fans out: blocks when ANY arg equals the gated value."""

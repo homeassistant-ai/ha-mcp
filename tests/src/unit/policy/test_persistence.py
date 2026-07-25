@@ -83,4 +83,6 @@ def test_serialized_shape_is_stable(tmp_path: Path):
         "approval_ttl_minutes",
         "rules",
         "version",
+        # ANY-match schema marker (PR #1993) — see migrate_policy_any_semantics.
+        "schema_version",
     }
