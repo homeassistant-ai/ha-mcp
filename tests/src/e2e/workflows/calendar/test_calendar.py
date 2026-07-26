@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from ...utilities.assertions import (
+    MCPAssertions,
     assert_mcp_success,
     extract_error_message,
     parse_mcp_result,
@@ -309,8 +310,12 @@ class TestCalendarEventLifecycle:
         def _match(data: dict) -> list[dict]:
             return [e for e in data.get("events", []) if e.get("summary") == summary]
 
-        create_data = await safe_call_tool(
-            mcp_client,
+        # The testcontainer seeds a writable local_calendar (preferred by
+        # _find_writable_calendar), so all-day creation must succeed here. Use
+        # the success-assertion helper so a failure fails CI loudly instead of
+        # slipping past the regression this test guards against.
+        mcp = MCPAssertions(mcp_client)
+        await mcp.call_tool_success(
             "ha_config_set_calendar_event",
             {
                 "entity_id": calendar_entity,
@@ -318,14 +323,6 @@ class TestCalendarEventLifecycle:
                 "start": start_date.isoformat(),
                 "end": end_date.isoformat(),
             },
-        )
-        # The testcontainer seeds a writable local_calendar (preferred by
-        # _find_writable_calendar), so all-day creation must succeed here.
-        # Skipping on failure would let the exact regression this test guards
-        # against slip through with CI still green.
-        assert create_data.get("success"), (
-            f"all-day event creation failed on writable calendar "
-            f"{calendar_entity}: {extract_error_message(create_data) or create_data}"
         )
 
         event_uid: str | None = None
