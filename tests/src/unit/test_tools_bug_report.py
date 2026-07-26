@@ -1550,10 +1550,6 @@ class TestDetectMcpTransport:
         monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp-web"])
         assert _detect_mcp_transport() == "http"
 
-    def test_sse_argv0(self, monkeypatch):
-        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp-sse"])
-        assert _detect_mcp_transport() == "sse"
-
     def test_argv0_wins_over_env(self, monkeypatch):
         # Real precedence test: argv0 ending in -web returns "http" early,
         # before the FASTMCP_TRANSPORT env check would otherwise force "stdio".

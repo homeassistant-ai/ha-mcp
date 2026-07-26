@@ -306,28 +306,21 @@ def _setup_standard_mode() -> None:
     _log_startup_version()
 
 
-def _http_run_kwargs(transport: str, host: str, port: int, path: str) -> dict[str, Any]:
-    """Build common run_async kwargs for HTTP-based transports.
+def _http_run_kwargs(host: str, port: int, path: str) -> dict[str, Any]:
+    """Build common run_async kwargs for the Streamable HTTP transport.
 
-    ``stateless_http`` is a Streamable-HTTP concept and is only valid for the
-    ``http``/``streamable-http`` transports. Passing it alongside
-    ``transport="sse"`` makes fastmcp's ``run_async`` raise
-    ``ValueError("SSE transport does not support stateless mode")``. Gating it to
-    non-SSE transports keeps SSE startup working. (Before this fix that raise was
-    also swallowed into a silent exit 0; ``_run_with_shutdown`` now surfaces a
-    self-terminating server task's exception instead.) See #1544.
+    Every HTTP entry point (``ha-mcp-web``, OAuth, OIDC) runs Streamable HTTP,
+    so ``stateless_http`` — a Streamable-HTTP-only concept — always applies.
     """
-    kwargs: dict[str, Any] = {
-        "transport": transport,
+    return {
+        "transport": "http",
         "host": host,
         "port": port,
         "path": path,
+        "stateless_http": True,
         "show_banner": _get_show_banner(),
         "uvicorn_config": {"log_config": _get_timestamped_uvicorn_log_config()},
     }
-    if transport != "sse":
-        kwargs["stateless_http"] = True
-    return kwargs
 
 
 def _create_server() -> "HomeAssistantSmartMCPServer":
@@ -458,14 +451,12 @@ class ProbeAccessLogFilter(logging.Filter):
       health check, reverse proxy, or a connector's SSE-style pre-flight) hit a
       POST-only Streamable HTTP endpoint. The raw access line is dropped and the
       landing handler logs one annotated "(NORMAL for most non-SSE connections)"
-      line in its place. Dropped only when ``drop_mcp_405`` is set — SSE callers
-      pass False, since there a GET answers 200 and a GET-405 is a genuine fault.
+      line in its place.
     """
 
-    def __init__(self, mcp_path: str, *, drop_mcp_405: bool = True) -> None:
+    def __init__(self, mcp_path: str) -> None:
         super().__init__()
         self._mcp_path = mcp_path.rstrip("/") or "/"
-        self._drop_mcp_405 = drop_mcp_405
 
     def filter(self, record: logging.LogRecord) -> bool:
         # uvicorn.access records carry structured args: (client, method, path,
@@ -483,12 +474,8 @@ class ProbeAccessLogFilter(logging.Filter):
             return False  # opt-in liveness probe (register_healthz) — pure noise
         # By-design probe 405 on the MCP path; the handler logs an annotated line
         # instead. This trusts that the landing route is the only GET/HEAD responder
-        # on the MCP path (true today). Kept in SSE mode (drop_mcp_405=False), where
-        # a GET answers 200 and a 405 is a real fault.
-        is_dropped_probe = (
-            status == 405 and path == self._mcp_path and self._drop_mcp_405
-        )
-        return not is_dropped_probe
+        # on the MCP path (true today).
+        return not (status == 405 and path == self._mcp_path)
 
 
 def _setup_logging(log_level_str: str, force: bool = False) -> None:
@@ -1048,12 +1035,12 @@ def _is_running_in_container() -> bool:
 def _warn_if_default_path_exposed(host: str, port: int, path: str) -> None:
     """Warn on a direct run that leaves the default path on a LAN bind.
 
-    Standard-mode HTTP/SSE authenticates by URL-path secrecy (see
+    Standard-mode HTTP authenticates by URL-path secrecy (see
     SECURITY.md → Threat Model). The default ``/mcp`` is not the
     high-entropy secret that model assumes once the bind leaves loopback.
 
-    Fires only for a direct ``ha-mcp-web`` / ``ha-mcp-sse`` start (uvx, pip,
-    source) that uses the default path on a non-loopback host. Operators
+    Fires only for a direct ``ha-mcp-web`` start (uvx, pip, source) that uses
+    the default path on a non-loopback host. Operators
     silence it the same way they harden — bind ``MCP_HOST=127.0.0.1`` or set
     a high-entropy ``MCP_SECRET_PATH``. Containers are skipped: an
     in-container ``0.0.0.0`` bind says nothing about real exposure, which is
@@ -1068,7 +1055,7 @@ def _warn_if_default_path_exposed(host: str, port: int, path: str) -> None:
         return
     logger.warning(
         "ha-mcp listening on %s:%s%s with default MCP_SECRET_PATH. "
-        "Standard-mode HTTP/SSE authenticates by URL-path secrecy and assumes "
+        "Standard-mode HTTP authenticates by URL-path secrecy and assumes "
         "a high-entropy MCP_SECRET_PATH for non-loopback binds "
         "(see SECURITY.md → Threat Model). "
         "Either bind loopback (MCP_HOST=127.0.0.1) or set MCP_SECRET_PATH "
@@ -1080,15 +1067,12 @@ def _warn_if_default_path_exposed(host: str, port: int, path: str) -> None:
 
 
 async def _run_http_with_graceful_shutdown(
-    transport: str,
     host: str,
     port: int,
     path: str,
 ) -> None:
     """Run HTTP server with graceful shutdown support."""
-    await _run_with_shutdown(
-        _get_mcp().run_async(**_http_run_kwargs(transport, host, port, path))
-    )
+    await _run_with_shutdown(_get_mcp().run_async(**_http_run_kwargs(host, port, path)))
 
 
 def _healthz_enabled() -> bool:
@@ -1137,8 +1121,6 @@ def _oidc_allowed_client_redirect_uris() -> list[str] | None:
 def register_browser_landing(
     mcp_instance: "FastMCP | _DeferredMCP",
     path: str,
-    *,
-    quiet_probe_log: bool = True,
 ) -> None:
     """Register the friendly browser landing page and tidy the uvicorn access log.
 
@@ -1152,24 +1134,16 @@ def register_browser_landing(
     Args:
         mcp_instance: The FastMCP server to register the route on.
         path: The MCP endpoint path (e.g. "/mcp" or a secret path).
-        quiet_probe_log: When True (default, for Streamable HTTP), drop the
-            by-design GET/HEAD-405 probe line on the MCP path from the uvicorn
-            access log (the handler logs an annotated replacement). Pass False
-            for SSE, where a GET answers 200 and a 405 is a genuine fault.
     """
     if not _register_landing_route(mcp_instance, path):
         # Already registered for this path — don't double-attach the log filter.
         return
 
-    # Tidy uvicorn's access log: always drop browser favicon 404s, and drop the
-    # raw by-design GET/HEAD-405 probe line on the MCP path (the landing handler
-    # logs an annotated replacement). The 405 drop is skipped for SSE
-    # (quiet_probe_log=False), where a GET answers 200 and a 405 is a real fault.
-    # Attach to uvicorn.access directly — it has propagate=False, so a root-logger
-    # filter would miss it.
-    logging.getLogger("uvicorn.access").addFilter(
-        ProbeAccessLogFilter(path, drop_mcp_405=quiet_probe_log)
-    )
+    # Tidy uvicorn's access log: drop browser favicon 404s and the raw by-design
+    # GET/HEAD-405 probe line on the MCP path (the landing handler logs an
+    # annotated replacement). Attach to uvicorn.access directly — it has
+    # propagate=False, so a root-logger filter would miss it.
+    logging.getLogger("uvicorn.access").addFilter(ProbeAccessLogFilter(path))
 
 
 def _log_settings_url(
@@ -1239,9 +1213,9 @@ _SETTINGS_FALSY = {"0", "false", "no", "off", ""}
 def _settings_ui_disabled() -> bool:
     """Return True when ``HA_MCP_DISABLE_SETTINGS_UI`` turns the settings UI off.
 
-    Honored by every long-lived HTTP transport (standard ``ha-mcp-web`` /
-    ``ha-mcp-sse`` as well as OAuth/OIDC) and, with matching semantics, by the
-    stdio sidecar. As a security kill switch it fails **closed**: any value that
+    Honored by every long-lived HTTP transport (standard ``ha-mcp-web`` as well
+    as OAuth/OIDC) and, with matching semantics, by the stdio sidecar. As a
+    security kill switch it fails **closed**: any value that
     is neither a recognized truthy nor falsy spelling disables the UI and warns
     (so the operator learns why it vanished), rather than leaving an
     unauthenticated surface up on a typo. Unset — or an explicit falsy value —
@@ -1373,11 +1347,10 @@ def _register_settings_ui_secret_path(
     )
 
 
-def _run_http_server(transport: str, default_port: int = 8086) -> None:
-    """Common runner for HTTP-based transports.
+def _run_http_server(default_port: int = 8086) -> None:
+    """Common runner for the standard-mode Streamable HTTP server.
 
     Args:
-        transport: Transport type (http or sse).
         default_port: Default port to use if MCP_PORT env var is not set.
     """
     from ha_mcp.settings_ui import register_settings_routes
@@ -1386,9 +1359,7 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
     # _get_mcp below, before the app is built) -- see transport_security.
     host, port, path = _get_http_runtime(default_port)
     _warn_if_default_path_exposed(host, port, path)
-    # SSE transport answers GET with 200 (the event stream), so a GET->405 there
-    # would be a real fault, not a benign probe — keep its access log intact.
-    register_browser_landing(_get_mcp(), path, quiet_probe_log=transport != "sse")
+    register_browser_landing(_get_mcp(), path)
     if _healthz_enabled():
         _register_healthz_route(_get_mcp())
     if _settings_ui_disabled():
@@ -1400,7 +1371,7 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
         _log_settings_url(host, port, path)
 
     _run_entrypoint(
-        _run_http_with_graceful_shutdown(transport, host, port, path),
+        _run_http_with_graceful_shutdown(host, port, path),
         "HTTP server",
     )
 
@@ -1418,23 +1389,7 @@ def main_web() -> None:
       settings UI at all
     """
     _setup_standard_mode()
-    _run_http_server("http", default_port=8086)
-
-
-def main_sse() -> None:
-    """Run server using Server-Sent Events transport for MCP clients.
-
-    Environment:
-    - HOMEASSISTANT_URL (required)
-    - HOMEASSISTANT_TOKEN (required)
-    - MCP_HOST (optional, default: "0.0.0.0"; set 127.0.0.1 to restrict to loopback)
-    - MCP_PORT (optional, default: 8087)
-    - MCP_SECRET_PATH (optional, default: "/mcp")
-    - HA_MCP_DISABLE_SETTINGS_UI (optional): set truthy to not serve the web
-      settings UI at all
-    """
-    _setup_standard_mode()
-    _run_http_server("sse", default_port=8087)
+    _run_http_server(default_port=8086)
 
 
 def main_oauth() -> None:
@@ -1568,9 +1523,7 @@ async def _run_oauth_server(
         f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}"
     )
 
-    await _run_with_shutdown(
-        mcp.run_async(**_http_run_kwargs("http", host, port, path))
-    )
+    await _run_with_shutdown(mcp.run_async(**_http_run_kwargs(host, port, path)))
 
 
 def main_oidc() -> None:
@@ -1763,7 +1716,7 @@ async def _run_oidc_server(
     logger.info(f"Starting OIDC-enabled MCP server at {base_url}{path}")
 
     await _run_with_shutdown(
-        mcp_instance.run_async(**_http_run_kwargs("http", host, port, path))
+        mcp_instance.run_async(**_http_run_kwargs(host, port, path))
     )
 
 
