@@ -837,10 +837,11 @@ async def test_absent_bracketed_literal_is_reported_not_implied():
 
     assert out["files_searched"] == 1
     assert out["count"] == 1
-    assert out["warnings"] == [
+    expected_warning = (
         "No file is literally named packages/svc[a].yaml; searched the 1 "
         "file(s) matching it as a pattern."
-    ]
+    )
+    assert out["warnings"] == [expected_warning]
     # The counterexample to counting unreadable files off the warnings list:
     # this warning comes from the resolver, and the one read succeeded.
     assert out["files_unreadable"] == 0
@@ -866,10 +867,11 @@ async def test_bracket_class_searches_its_siblings():
         "packages/svc1.yaml",
         "packages/svc2.yaml",
     ]
-    assert out["warnings"] == [
+    expected_warning = (
         "No file is literally named packages/svc[12].yaml; searched the 2 "
         "file(s) matching it as a pattern."
-    ]
+    )
+    assert out["warnings"] == [expected_warning]
 
 
 async def test_literal_lookup_failure_raises():
@@ -1007,9 +1009,12 @@ async def test_resolver_warning_and_read_warning_both_survive():
     assert out["count"] == 1
     assert out["files_searched"] == 2
     assert out["files_unreadable"] == 1
-    assert out["warnings"] == [
+    resolver_warning = (
         "No file is literally named packages/svc[ab].yaml; searched the 2 "
-        "file(s) matching it as a pattern.",
+        "file(s) matching it as a pattern."
+    )
+    assert out["warnings"] == [
+        resolver_warning,
         "packages/svca.yaml was not searched: connection reset.",
     ]
 
@@ -1033,10 +1038,11 @@ async def test_nothing_matches_either_reading_says_so_directly():
     assert out["files_searched"] == 0
     assert out["count"] == 0
     assert out["files_unreadable"] == 0
-    assert out["warnings"] == [
+    expected_warning = (
         "No file is literally named packages/svc[a].yaml, and nothing matched "
         "it as a pattern either."
-    ]
+    )
+    assert out["warnings"] == [expected_warning]
 
 
 async def test_mixed_pattern_keeps_its_literal_lookup_but_not_the_warning():
