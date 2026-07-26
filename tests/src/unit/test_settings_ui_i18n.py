@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -268,3 +269,60 @@ def test_allowlisted_inline_markup_loads(tmp_path: Path) -> None:
     )
     catalogs = load_catalogs(tmp_path)
     assert "note" in catalogs["en"]["messages"]
+
+
+def test_panel_link_to_unknown_tab_is_rejected(tmp_path: Path) -> None:
+    """A mistyped target passes the markup allowlist and then does nothing.
+
+    ``settings.js`` hands the value straight to ``activateTab``, which no-ops
+    on an id no panel declares — so the link silently stops working in that
+    one language while the visible text still reads correctly.
+    """
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"note": '<a href="#" data-panel-link="tools">Tools</a>'},
+    )
+    _write_catalog(
+        tmp_path,
+        "fr",
+        native_name="Français",
+        messages={"note": '<a href="#" data-panel-link="outils">Outils</a>'},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("settings.html does not declare")):
+        load_catalogs(tmp_path)
+
+
+def test_panel_link_must_target_the_same_tab_as_english(tmp_path: Path) -> None:
+    """Both ids are real, so only a cross-locale comparison catches this."""
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"note": '<a href="#" data-panel-link="tools">Tools</a>'},
+    )
+    _write_catalog(
+        tmp_path,
+        "de",
+        native_name="Deutsch",
+        messages={"note": '<a href="#" data-panel-link="backups">Backups</a>'},
+    )
+
+    with pytest.raises(ValueError, match="but English links to"):
+        load_catalogs(tmp_path)
+
+
+def test_shipped_catalogs_only_link_to_declared_panels() -> None:
+    """The real catalogs, not a fixture: this is what ships."""
+    from ha_mcp.settings_ui._i18n import CATALOGS, _known_panels
+
+    panels = _known_panels()
+    assert panels, "settings.html declares no data-panel ids"
+    for locale, catalog in CATALOGS.items():
+        for key, value in catalog["messages"].items():
+            for target in re.findall(r'data-panel-link="([a-z][a-z-]*)"', value):
+                assert target in panels, (
+                    f"{locale} message {key!r} links to unknown panel {target!r}"
+                )

@@ -113,6 +113,7 @@ def load_catalogs(directory: Path = LOCALES_DIR) -> dict[str, dict[str, Any]]:
         )
     _validate_placeholder_parity(catalogs)
     _validate_inline_markup(catalogs)
+    _validate_panel_links(catalogs)
     return catalogs
 
 
@@ -164,6 +165,52 @@ _TAG_LIKE_RE = re.compile(r"</?[a-zA-Z][^>]*>")
 _ALLOWED_TAGS_RE = re.compile(
     r'</?code>|</?strong>|</a>|<a href="#" data-panel-link="[a-z][a-z-]*">'
 )
+# The tab a cross-panel link switches to. The allowlist above only accepts the
+# tag *shape*, so "outils" or "backup" passes it and then silently does
+# nothing: settings.js hands the value to activateTab, which no-ops on an
+# unknown panel. Read the real ids out of the page rather than restating them.
+_PANEL_LINK_RE = re.compile(r'data-panel-link="([a-z][a-z-]*)"')
+_PANEL_ID_RE = re.compile(r'data-panel="([a-z][a-z-]*)"')
+_SETTINGS_HTML = Path(__file__).parent / "settings.html"
+
+
+def _known_panels() -> set[str]:
+    """Panel ids declared by the settings page itself."""
+    try:
+        markup = _SETTINGS_HTML.read_text(encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - packaging guard
+        raise ImportError(f"Unable to read {_SETTINGS_HTML}") from exc
+    return set(_PANEL_ID_RE.findall(markup))
+
+
+def _validate_panel_links(catalogs: dict[str, dict[str, Any]]) -> None:
+    """Reject cross-panel links that point at a tab which does not exist.
+
+    A mistyped target is invisible to every other check: the tag shape is
+    allowlisted, the string carries no placeholders, and the visible link text
+    still reads correctly. The link just stops working, in that one language.
+    """
+    panels = _known_panels()
+    english_messages = catalogs[DEFAULT_LOCALE]["messages"]
+    for locale, catalog in catalogs.items():
+        for key, value in catalog["messages"].items():
+            targets = _PANEL_LINK_RE.findall(value)
+            unknown = sorted(set(targets) - panels)
+            if unknown:
+                raise ValueError(
+                    f"Locale {locale} message {key!r} links to panel(s) "
+                    f"{unknown}, which settings.html does not declare; "
+                    f"known panels: {sorted(panels)}"
+                )
+            source = english_messages.get(key)
+            if source is None or locale == DEFAULT_LOCALE:
+                continue
+            source_targets = _PANEL_LINK_RE.findall(source)
+            if targets != source_targets:
+                raise ValueError(
+                    f"Locale {locale} message {key!r} links to {targets}, "
+                    f"but English links to {source_targets}"
+                )
 
 
 def _validate_inline_markup(catalogs: dict[str, dict[str, Any]]) -> None:
