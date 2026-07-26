@@ -725,8 +725,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "this webhook will be logged here."
         )
 
+    # Timeout for streamed MCP responses (matches the ha_mcp_tools custom
+    # component). Deliberately NO wall-clock ``total``: an MCP response stream
+    # is long-lived by design (the upcoming spec's ``subscriptions/listen``
+    # holds one open indefinitely), so a ``total`` bound would cut a *healthy*
+    # stream and force the client to re-subscribe. ``sock_read`` bounds a
+    # *dead* one instead — idle detection, not elapsed time. ``connect`` stays
+    # finite: it covers connection-POOL acquisition (not just the TCP connect
+    # ``sock_connect`` bounds), so a pool exhausted by long-lived streams fails
+    # a new request in 30 s instead of hanging it forever.
     session = aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=300, sock_connect=10, sock_read=300),
+        timeout=aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300),
     )
 
     try:

@@ -3,6 +3,29 @@
 <!-- version list -->
 
 
+## v2.1.0 (2026-07-26)
+
+### Features
+
+- Authorization responses from the add-on's own OAuth servers (the legacy
+  `/authorize` view and the none-mode auto-approve `/authorize` view) now carry
+  the RFC 9207 `iss` parameter naming the issuer that produced them, on both the
+  success redirect and the error redirects. The value is the same issuer the
+  add-on's RFC 8414 metadata document advertises — and the metadata documents
+  now declare `authorization_response_iss_parameter_supported` accordingly.
+  Clients that do not implement RFC 9207 ignore the extra query parameter, so
+  existing connectors are unaffected.
+
+### Bug Fixes
+
+- Drop the 5-minute wall-clock `total` timeout from the relay's HTTP client so a
+  long-lived MCP response stream (the upcoming spec's `subscriptions/listen`) is
+  no longer cut every 300 s, forcing the client to re-subscribe. The `sock_read`
+  idle timeout still bounds a dead stream, and a new finite `connect` bound
+  keeps connection-pool acquisition from hanging new requests when long-lived
+  streams occupy the pool.
+
+
 ## v2.0.5 (2026-07-20)
 
 ### Bug Fixes
