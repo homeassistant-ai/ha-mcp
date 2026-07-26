@@ -9,6 +9,18 @@ history from before the fork.
 -->
 
 
+## v2.0.5.dev3 (2026-07-26)
+
+### Bug Fixes
+
+- Drop the 5-minute wall-clock `total` timeout from the relay's HTTP client so a
+  long-lived MCP response stream (the upcoming spec's `subscriptions/listen`) is
+  no longer cut every 300 s, forcing the client to re-subscribe. The `sock_read`
+  idle timeout still bounds a dead stream, and a new finite `connect` bound
+  keeps connection-pool acquisition from hanging new requests when long-lived
+  streams occupy the pool.
+
+
 ## v2.0.5.dev2 (2026-07-25)
 
 ### Features
