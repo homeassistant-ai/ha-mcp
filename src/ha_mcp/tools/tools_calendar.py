@@ -289,6 +289,15 @@ class CalendarTools:
         error_str = str(error)
         if "404" in error_str or "not found" in error_str.lower():
             suggestions.insert(0, f"Calendar entity '{entity_id}' not found")
+        # Only reachable on the WebSocket (rrule) path, which preserves HA's
+        # humanized message. The REST service path loses it: a read-only
+        # calendar raises ServiceNotSupported, which HA's handler does not map
+        # (see homeassistant/helpers/http.py — only vol.Invalid, ServiceNotFound
+        # and Unauthorized are), so the client sees a bodyless status line. Do
+        # NOT broaden this to match that generic shape: it would promote
+        # "does not support event creation" onto every validation failure. The
+        # REST path keeps the read-only hint via the unconditional
+        # "Some calendar integrations may be read-only" suggestion above.
         if "not supported" in error_str.lower():
             suggestions.insert(0, "This calendar does not support event creation")
         # HA treats the all-day end date as exclusive and enforces
