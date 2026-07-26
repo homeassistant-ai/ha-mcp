@@ -16,7 +16,9 @@ back door.
 """
 
 import asyncio
+import glob
 import logging
+import posixpath
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
@@ -104,6 +106,20 @@ def _parse_error_result(
     return None, f"{target} was not searched: {parse_error}."
 
 
+def _read_exception_result(
+    target: str, error: BaseException, *, is_glob: bool
+) -> tuple[None, str]:
+    """Decide a read that blew up outright.
+
+    An expanded target degrades to a warning so one unreadable file cannot sink
+    the search; the explicitly named target re-raises, matching every other
+    failure class in :func:`_evaluate_read`.
+    """
+    if not is_glob:
+        raise error
+    return None, f"{target} was not searched: {error}."
+
+
 def _evaluate_read(
     response: Any,
     target: str,
@@ -129,10 +145,8 @@ def _evaluate_read(
       non-match, and the whole point of a glob search.
     * **match** — the key is there.
     """
-    # Only reachable under a glob: with a single target return_exceptions is
-    # False, so gather itself raised.
     if isinstance(response, BaseException):
-        return None, f"{target} was not searched: {response}."
+        return _read_exception_result(target, response, is_glob=is_glob)
 
     if not isinstance(response, dict):
         if is_glob:
@@ -160,18 +174,10 @@ def _evaluate_read(
     return match, None
 
 
-async def _resolve_target_files(client: Any, file: str) -> list[str]:
-    """Expand ``file`` into the concrete config-relative paths to read.
-
-    A plain path is returned as-is (the read itself reports a missing file). A
-    glob is expanded through the component's ``list_files``, which matches the
-    file name only — so ``packages/*.yaml`` covers one directory level, not a
-    nested tree.
-    """
-    if not _has_glob(file):
-        return [file]
-
-    directory, _, pattern = file.rpartition("/")
+async def _list_files_matching(
+    client: Any, file: str, directory: str, pattern: str
+) -> list[str]:
+    """Return the non-directory paths in ``directory`` matching ``pattern``."""
     unwrapped = _unwrap_or_raise(
         await call_mcp_tools_service(
             client,
@@ -190,6 +196,42 @@ async def _resolve_target_files(client: Any, file: str) -> list[str]:
         for entry in entries
         if isinstance(entry, dict) and entry.get("path") and not entry.get("is_dir")
     )
+
+
+async def _resolve_target_files(client: Any, file: str) -> list[str]:
+    """Expand ``file`` into the concrete config-relative paths to read.
+
+    A plain path is returned as-is (the read itself reports a missing file). A
+    glob is expanded through the component's ``list_files``, which matches the
+    file name only, so ``packages/*.yaml`` covers one directory level rather
+    than a nested tree. Only the name is inspected for metacharacters: the
+    component resolves the directory literally, so ``pack[a]ges/svc.yaml``
+    names one file and is read as one rather than expanded.
+
+    A bracketed name is ambiguous: ``packages/svc[a].yaml`` is both a valid
+    pattern and a valid filename, and a closed bracket class is the one
+    metacharacter form whose pattern cannot match its own name (``fnmatch``
+    reads ``[a]`` as the single character ``a``, while ``*`` and ``?`` do match
+    themselves). Such a name is therefore looked up twice, as the pattern and
+    as the escaped literal, and the results are merged: the pattern alone would
+    report ``files_searched: 0`` for a file that exists, and the literal alone
+    would drop the siblings a deliberate class like ``svc[12].yaml`` is meant
+    to find. Both lookups run because a sibling that satisfies the class would
+    otherwise mask the file the caller named exactly. Only bracketed names pay
+    the second round-trip. The component likewise treats package folder names
+    carrying metacharacters as literal names (#1854).
+    """
+    directory, _, pattern = file.rpartition("/")
+    if not _has_glob(pattern):
+        return [file]
+
+    matches = await _list_files_matching(client, file, directory, pattern)
+    if "[" in pattern:
+        literal = await _list_files_matching(
+            client, file, directory, glob.escape(pattern)
+        )
+        matches = sorted(set(matches) | set(literal))
+    return matches
 
 
 class YamlReadTools:
@@ -226,7 +268,9 @@ class YamlReadTools:
                     "Config-relative file to read. Accepts an fnmatch glob to "
                     "search several files at once — 'packages/*.yaml' matches one "
                     "directory level, not a nested tree. Use the glob to find "
-                    "which file defines a key."
+                    "which file defines a key. A name carrying a bracket class "
+                    "is read both ways, as the pattern and as that literal "
+                    "filename."
                 ),
             ),
         ] = "configuration.yaml",
@@ -273,15 +317,25 @@ class YamlReadTools:
         try:
             await _assert_mcp_tools_available(self._client)
 
-            is_glob = _has_glob(file)
             targets = await _resolve_target_files(self._client, file)
+            # Strictness is a property of each target, not of the request: the
+            # target that IS the requested path was named explicitly and keeps
+            # the strict contract (raise, don't degrade) even when expansion
+            # turned up siblings alongside it. Compared normalized, since the
+            # component reports what it walked rather than what was asked for.
+            requested = posixpath.normpath(file)
+            expanded = {
+                target: posixpath.normpath(target) != requested for target in targets
+            }
 
             extra: dict[str, Any] = {"include_parsed": True} if include_parsed else {}
             # The reads are independent, so fan them out rather than paying N
             # sequential round-trips to HA — a packages glob is routinely 10+
             # files. gather preserves order, so matches stay sorted by file.
-            # Under a glob a single read blowing up must not sink its siblings,
-            # so exceptions come back as values to be warned about below.
+            # An expanded target blowing up must not sink the search, so every
+            # exception comes back as a value; whether it degrades to a warning
+            # or is re-raised is then decided per target, like every other
+            # failure class.
             responses = await asyncio.gather(
                 *(
                     call_mcp_tools_service(
@@ -291,7 +345,7 @@ class YamlReadTools:
                     )
                     for target in targets
                 ),
-                return_exceptions=is_glob,
+                return_exceptions=True,
             )
 
             matches: list[dict[str, Any]] = []
@@ -301,7 +355,7 @@ class YamlReadTools:
                     response,
                     target,
                     yaml_path,
-                    is_glob=is_glob,
+                    is_glob=expanded[target],
                     include_content=include_content,
                     include_parsed=include_parsed,
                 )

@@ -1,5 +1,7 @@
 """Unit tests for the ha_config_get_yaml MCP tool wrapper (#1788)."""
 
+import fnmatch
+import posixpath
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -416,6 +418,204 @@ async def test_empty_glob_matches_nothing_without_raising():
     assert out["count"] == 0
     assert out["files_searched"] == 0
     assert "warnings" not in out
+
+
+def _bracket_dir(*names):
+    """A ``list_files`` mock over ``names``, matching the way the component does.
+
+    The component filters with ``fnmatch.fnmatch(item.name, pattern)``, which is
+    why a file called ``svc[a].yaml`` never appears in its own expansion.
+    """
+    recorded: list[str] = []
+
+    def list_files(payload):
+        recorded.append(payload["pattern"])
+        # The component normalizes the directory it walks and reports paths
+        # relative to the config dir, so ``./packages`` and ``packages`` are
+        # the same request and both answer with the normalized form.
+        assert posixpath.normpath(payload["path"]) == "packages"
+        return {
+            "success": True,
+            "files": [
+                {"path": f"packages/{n}", "is_dir": False}
+                for n in names
+                if fnmatch.fnmatch(n, payload["pattern"])
+            ],
+        }
+
+    return list_files, recorded
+
+
+async def test_bracketed_name_is_read_as_a_literal_file():
+    """A bracket class cannot match its own name, so the pattern pass alone
+    reports files_searched 0 for a file that is right there."""
+    list_files, patterns = _bracket_dir("svc[a].yaml")
+
+    fn, _ = await _make_tool(
+        {"list_files": list_files, "read_file": _read_ok("- name: probe\n")}
+    )
+
+    out = await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
+    assert out["files_searched"] == 1
+    assert [m["file"] for m in out["matches"]] == ["packages/svc[a].yaml"]
+    assert patterns == ["svc[a].yaml", "svc[[]a].yaml"]
+
+
+async def test_bracketed_name_is_not_masked_by_a_sibling():
+    """The sibling the class matches must not stand in for the exact name.
+
+    Both are legitimate readings of the same string, so both are searched -
+    stopping at the pattern hit would return a match from another file while
+    the file the caller named stayed closed.
+    """
+    list_files, patterns = _bracket_dir("svc[a].yaml", "svca.yaml")
+
+    fn, _ = await _make_tool(
+        {"list_files": list_files, "read_file": _read_ok("- name: probe\n")}
+    )
+
+    out = await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
+    assert out["files_searched"] == 2
+    assert [m["file"] for m in out["matches"]] == [
+        "packages/svc[a].yaml",
+        "packages/svca.yaml",
+    ]
+    assert patterns == ["svc[a].yaml", "svc[[]a].yaml"]
+
+
+async def test_bracketed_literal_keeps_the_single_target_error_contract():
+    """Resolving to exactly the requested file makes it a single explicit
+    target, so a parse failure raises instead of degrading to a warning - the
+    same contract a path without metacharacters gets."""
+    list_files, _ = _bracket_dir("svc[a].yaml")
+
+    fn, _ = await _make_tool(
+        {
+            "list_files": list_files,
+            "read_file": {
+                "success": True,
+                "path": "packages/svc[a].yaml",
+                "content": "...",
+                "subtree": None,
+                "parse_error": "not valid YAML at line 3, column 5",
+            },
+        }
+    )
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
+
+async def test_named_file_keeps_its_contract_when_a_sibling_tags_along():
+    """Strictness belongs to the target, not to the request.
+
+    The sibling arrives because the class matched it, and it must not turn the
+    explicitly named file's parse failure into a warning - otherwise whether a
+    broken file is diagnosed depends on what else happens to sit next to it.
+    """
+    list_files, _ = _bracket_dir("svc[a].yaml", "svca.yaml")
+
+    def read(payload):
+        if payload["path"] == "packages/svc[a].yaml":
+            return {
+                "success": True,
+                "path": payload["path"],
+                "content": "...",
+                "subtree": None,
+                "parse_error": "not valid YAML at line 3, column 5",
+            }
+        return _read_ok("- name: sibling\n")
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": read})
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
+
+async def test_equivalent_spelling_is_still_the_named_target():
+    """The component answers with the path it walked, so a caller-side spelling
+    like ``./packages/...`` would never compare equal as a raw string."""
+    list_files, _ = _bracket_dir("svc[a].yaml")
+
+    fn, _ = await _make_tool(
+        {
+            "list_files": list_files,
+            "read_file": {
+                "success": True,
+                "path": "packages/svc[a].yaml",
+                "content": "...",
+                "subtree": None,
+                "parse_error": "not valid YAML at line 3, column 5",
+            },
+        }
+    )
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="./packages/svc[a].yaml")
+
+
+async def test_bracketed_directory_with_a_plain_name_is_read_directly():
+    """Only the name is a pattern. The component resolves directories
+    literally, so a bracketed folder must not send the request through
+    expansion - which would answer a typo with a silent empty result instead of
+    'file not found'."""
+
+    def list_files(payload):
+        raise AssertionError(f"expansion must not run: {payload}")
+
+    read_paths: list[str] = []
+
+    def read(payload):
+        read_paths.append(payload["path"])
+        return _read_ok("- name: probe\n")
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": read})
+
+    out = await fn(yaml_path="rest", file="pack[a]ges/svc.yaml")
+
+    assert read_paths == ["pack[a]ges/svc.yaml"]
+    assert out["files_searched"] == 1
+
+
+async def test_single_match_glob_still_warns_when_its_read_blows_up():
+    """A glob is lenient however many files it happens to match.
+
+    The count is an accident of the directory, so a one-file expansion must
+    still degrade a failed read to a warning rather than aborting the search,
+    exactly as a two-file one does.
+    """
+    fn, _ = await _make_tool(
+        {
+            "list_files": {
+                "success": True,
+                "files": [{"path": "packages/only.yaml", "is_dir": False}],
+            },
+            "read_file": MagicMock(
+                side_effect=ConnectionResetError("connection reset")
+            ),
+        }
+    )
+
+    out = await fn(yaml_path="rest", file="packages/*.yaml")
+
+    assert out["success"] is True
+    assert out["files_searched"] == 1
+    assert out["warnings"] == ["packages/only.yaml was not searched: connection reset."]
+
+
+async def test_glob_without_brackets_is_resolved_in_one_call():
+    """The second lookup is scoped to bracketed names; ``*.yaml`` matching
+    nothing is a genuinely empty glob, not an ambiguous literal."""
+    list_files, patterns = _bracket_dir("lights.yaml")
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": _read_ok("x\n")})
+
+    out = await fn(yaml_path="alert2", file="packages/nothing*.yaml")
+
+    assert out["files_searched"] == 0
+    assert patterns == ["nothing*.yaml"]
 
 
 async def test_list_failure_raises_tool_error():
