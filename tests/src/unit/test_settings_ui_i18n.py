@@ -326,3 +326,49 @@ def test_shipped_catalogs_only_link_to_declared_panels() -> None:
                 assert target in panels, (
                     f"{locale} message {key!r} links to unknown panel {target!r}"
                 )
+
+
+def test_panel_links_may_be_reordered_by_a_translation(tmp_path: Path) -> None:
+    """Grammar reorders links; the targets are what must match, not the order.
+
+    ``load_catalogs`` runs at import, so rejecting a legitimately reordered
+    pair would stop the server from starting.
+    """
+    english = (
+        'See <a href="#" data-panel-link="tools">Tools</a> then '
+        '<a href="#" data-panel-link="backups">Backups</a>'
+    )
+    _write_catalog(tmp_path, "en", native_name="English", messages={"note": english})
+    _write_catalog(
+        tmp_path,
+        "fr",
+        native_name="Français",
+        messages={
+            "note": (
+                '<a href="#" data-panel-link="backups">Sauvegardes</a> puis '
+                '<a href="#" data-panel-link="tools">Outils</a>'
+            )
+        },
+    )
+
+    catalogs = load_catalogs(tmp_path)
+
+    assert "note" in catalogs["fr"]["messages"]
+
+
+def test_dropping_one_of_two_panel_links_is_rejected(tmp_path: Path) -> None:
+    """Order-independence must not become "any subset will do"."""
+    english = (
+        'See <a href="#" data-panel-link="tools">Tools</a> then '
+        '<a href="#" data-panel-link="backups">Backups</a>'
+    )
+    _write_catalog(tmp_path, "en", native_name="English", messages={"note": english})
+    _write_catalog(
+        tmp_path,
+        "fr",
+        native_name="Français",
+        messages={"note": '<a href="#" data-panel-link="tools">Outils</a>'},
+    )
+
+    with pytest.raises(ValueError, match="but English links to"):
+        load_catalogs(tmp_path)

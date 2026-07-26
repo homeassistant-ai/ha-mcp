@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -206,10 +207,14 @@ def _validate_panel_links(catalogs: dict[str, dict[str, Any]]) -> None:
             if source is None or locale == DEFAULT_LOCALE:
                 continue
             source_targets = _PANEL_LINK_RE.findall(source)
-            if targets != source_targets:
+            # Order-independent: a translation may reorder two links to suit
+            # its grammar and still point at the same tabs. Counter keeps the
+            # multiplicity check, so dropping one of a repeated pair fails.
+            if Counter(targets) != Counter(source_targets):
                 raise ValueError(
-                    f"Locale {locale} message {key!r} links to {targets}, "
-                    f"but English links to {source_targets}"
+                    f"Locale {locale} message {key!r} links to "
+                    f"{sorted(targets)}, but English links to "
+                    f"{sorted(source_targets)}"
                 )
 
 
