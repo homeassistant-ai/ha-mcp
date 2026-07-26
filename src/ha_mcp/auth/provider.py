@@ -16,6 +16,7 @@ import os
 import secrets
 import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -395,7 +396,9 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         params.append(("iss", self._issuer()))
         return urlunparse(parsed._replace(query=urlencode(params)))
 
-    def _wrap_authorize_with_iss(self, endpoint: Any) -> Any:
+    def _wrap_authorize_with_iss(
+        self, endpoint: "Callable[[Request], Awaitable[Response]]"
+    ) -> "Callable[[Request], Awaitable[Response]]":
         """Wrap the SDK's ``/authorize`` endpoint to stamp ``iss`` on its
         error redirects.
 
@@ -408,7 +411,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         """
 
         async def authorize_with_iss(request: Request) -> Response:
-            response = await endpoint(request)
+            response: Response = await endpoint(request)
             location = response.headers.get("location", "")
             if (
                 response.status_code in (302, 303, 307)
