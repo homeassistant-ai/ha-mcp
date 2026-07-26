@@ -2445,10 +2445,14 @@ def _wait_for_testcontainer_ready(
         **({"unloaded": entries_unloaded} if entries_unloaded else {}),
     )
 
-    # Follow-up gate, only when the trip-time snapshot caught a straggler:
-    # RUNNING does not imply every async_setup_entry finished (see
-    # _wait_for_entries_loaded). Skipped entirely on the common 12/12 path.
-    if entries_unloaded:
+    # Follow-up gate: RUNNING does not imply every async_setup_entry finished
+    # (see _wait_for_entries_loaded). Skipped only when the trip-time snapshot
+    # POSITIVELY confirmed all-loaded — a failed snapshot (snapshot_ok=False)
+    # says nothing about entry state, so it enters the gate too rather than
+    # preserving the race behind a transient HTTP/JSON hiccup (Codex review
+    # finding on #2040); the gate's own loop keeps polling through snapshot
+    # failures and stays bounded by its timeout.
+    if entries_unloaded or not snapshot_ok:
         _wait_for_entries_loaded(base_url, headers)
 
     _wait_for_testcontainer_sun(base_url, headers, container, SUN_WAIT)
