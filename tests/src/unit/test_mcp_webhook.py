@@ -322,6 +322,10 @@ class TestRelayClientTimeout:
     def test_idle_and_connect_bounds_still_set(self):
         assert mw._CLIENT_TIMEOUT.sock_read == 300
         assert mw._CLIENT_TIMEOUT.sock_connect == 10
+        # Pool-acquisition bound: with ``total`` gone, ``connect`` is what
+        # keeps a pool exhausted by long-lived streams from hanging new
+        # requests forever.
+        assert mw._CLIENT_TIMEOUT.connect == 30
 
 
 # ---------------------------------------------------------------------------

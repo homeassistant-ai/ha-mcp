@@ -33,9 +33,6 @@ WEBHOOK_PROXY_VARIANTS = {
         "oauth_marker": "/config/.mcp_proxy_oauth_restart_required",
         "sibling_base": "ha_mcp_webhook_proxy_dev",
         "mutex_id": "mcp_proxy_mutex",
-        # Wall-clock bound on the relay session. Dropped on dev so a long-lived
-        # MCP response stream is not cut every 300s; promote carries it across.
-        "relay_timeout_total": 300,
     },
     "dev": {
         "key": "dev",
@@ -49,9 +46,24 @@ WEBHOOK_PROXY_VARIANTS = {
         "oauth_marker": "/config/.mcp_proxy_dev_oauth_restart_required",
         "sibling_base": "ha_mcp_webhook_proxy",
         "mutex_id": "mcp_proxy_dev_mutex",
-        "relay_timeout_total": None,
     },
 }
+
+
+def _relay_total_unbounded() -> bool:
+    """Feature-detect whether the CURRENT flavor's relay session drops the
+    wall-clock ``total`` bound (long-lived MCP response streams). The marker is
+    the ``Deliberately NO wall-clock`` comment the dev change introduced next
+    to the relay ``ClientTimeout``; deriving the expectation from the staged
+    source (instead of a hard-coded variant value) means the stable flavor's
+    expectation flips automatically when the promote workflow copies the dev
+    tree across — a hard-coded ``300`` would fail every generated promotion PR."""
+    path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "__init__.py")
+    if not os.path.exists(path):
+        return False
+    with open(path, encoding="utf-8") as fh:
+        return "Deliberately NO wall-clock" in fh.read()
+
 
 # Rebound per-variant by the autouse `_webhook_proxy_variant` fixture below.
 PROXY_ADDON_DIR = WEBHOOK_PROXY_VARIANTS["stable"]["addon_dir"]
@@ -1473,12 +1485,22 @@ class TestRelaySessionTimeout:
 
     async def test_wall_clock_total_bound(self, mod, hass):
         timeout = await self._setup_timeout(mod, hass)
-        assert timeout.total == CURRENT["relay_timeout_total"]
+        if _relay_total_unbounded():
+            assert timeout.total is None
+        else:
+            # Pre-promote stable still carries the wall-clock cap; the
+            # source-derived predicate flips this branch off on promotion.
+            assert timeout.total == 300
 
     async def test_idle_and_connect_bounds_still_set(self, mod, hass):
         timeout = await self._setup_timeout(mod, hass)
         assert timeout.sock_read == 300
         assert timeout.sock_connect == 10
+        if _relay_total_unbounded():
+            # Pool-acquisition bound: with ``total`` gone, ``connect`` is what
+            # keeps a pool exhausted by long-lived streams from hanging new
+            # requests forever.
+            assert timeout.connect == 30
 
 
 class TestUnloadEntry:
