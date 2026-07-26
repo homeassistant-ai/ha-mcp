@@ -3151,7 +3151,7 @@ class TestAdvancedSettingsEndpoints:
     @pytest.mark.asyncio
     async def test_get_advanced_reports_is_stdio(self, monkeypatch):
         """is_stdio gates the sidecar-port section: True only for the stdio
-        sidecar (nothing HTTP-mounted), False for HTTP/SSE/OAuth/OIDC/addon —
+        sidecar (nothing HTTP-mounted), False for HTTP/OAuth/OIDC/addon —
         including the OAuth/OIDC dedicated-secret mount where the prefix is
         hidden but the UI is still HTTP-served (GHSA-mx64-982r-65vg)."""
         from ha_mcp.config import _reset_global_settings

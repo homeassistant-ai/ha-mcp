@@ -1569,6 +1569,13 @@ class TestDetectMcpTransport:
         monkeypatch.setenv("FASTMCP_TRANSPORT", "streamable-http")
         assert _detect_mcp_transport() == "http"
 
+    def test_env_sse_surfaces_as_sse(self, monkeypatch):
+        # ha-mcp ships no SSE entry point; this env hint is the sole remaining
+        # path to "sse" and marks an unsupported run shape worth surfacing.
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+        monkeypatch.setenv("FASTMCP_TRANSPORT", "sse")
+        assert _detect_mcp_transport() == "sse"
+
     def test_env_port_implies_http(self, monkeypatch):
         monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
         monkeypatch.setenv("MCP_HTTP_PORT", "8086")

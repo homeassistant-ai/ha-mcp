@@ -954,7 +954,7 @@ def main_dev() -> None:
 
 # HTTP entry point for web clients
 def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
-    """Return runtime configuration shared by HTTP transports.
+    """Return runtime configuration shared by the HTTP entry points.
 
     Args:
         default_port: Default port to use if MCP_PORT env var is not set.
@@ -1203,7 +1203,7 @@ def _log_settings_url(
 
 # Truthy / falsy env-var spellings for HA_MCP_DISABLE_SETTINGS_UI, matching the
 # parsing in stdio_settings_sidecar.py so the toggle behaves the same across
-# transports. A value in neither set is unrecognized: fail closed (disable) with
+# entry points. A value in neither set is unrecognized: fail closed (disable) with
 # a warning, since this is a security kill switch and failing open on a typo
 # would leave an unauthenticated surface up.
 _SETTINGS_TRUTHY = {"1", "true", "yes", "on"}

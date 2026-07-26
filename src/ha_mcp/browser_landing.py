@@ -150,7 +150,7 @@ def register_healthz(mcp_instance: CustomRouteServer) -> bool:
     """Register a GET ``/healthz`` liveness route answering 200 with JSON.
 
     Lets uptime monitors, blackbox probes, and load balancers confirm the HTTP
-    server is alive without knowing the MCP path. Standard-mode HTTP/SSE
+    server is alive without knowing the MCP path. Standard-mode HTTP
     authenticates by URL-path secrecy (SECURITY.md -> Threat Model), so this
     route is opt-in (``MCP_HEALTHZ`` env var, checked by the caller) and the
     response body deliberately does not echo the MCP path.
