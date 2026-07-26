@@ -85,6 +85,11 @@ manual fallback):
 4. Set `boot: auto`, drop `stage: experimental`, remove the `(Dev)` display-name
    suffixes.
 5. Bump stable's own `config.yaml` + `manifest.json` version (its independent line).
+6. When the promote PR merges, `webhook-proxy-post-promote.yml` auto-dispatches
+   `Webhook Proxy — Reset Dev from Stable`, which rebases the dev version line onto
+   the new stable (next stable patch + `.dev1`, per the Versioning rule above) and
+   opens its own draft PR. Right after a promote the trees are code-identical, so
+   that reset is effectively the version rebase alone.
 
 ## Testing
 `tests/addon/test_webhook_proxy.py` is parametrized over BOTH flavors — an autouse
