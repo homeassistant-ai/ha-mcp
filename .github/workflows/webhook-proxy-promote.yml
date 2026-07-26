@@ -59,7 +59,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add homeassistant-addon-webhook-proxy/
+          git add homeassistant-addon-webhook-proxy/ \
+            homeassistant-addon-webhook-proxy-dev/config.yaml \
+            homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/manifest.json
           git commit -m "chore(addon): promote webhook-proxy dev -> stable $NEW_VERSION"
           git push -u origin "$BRANCH"
           cat > "$RUNNER_TEMP/pr-body.md" <<EOF
@@ -68,6 +70,9 @@ jobs:
           It copied the dev add-on onto the stable add-on, reverse-renamed the
           \`mcp_proxy_dev\` identity back to \`mcp_proxy\`, restored the stable
           mutual-exclusion constants, and set the stable version to \`$NEW_VERSION\`.
+          It also rebased the dev flavor's version line onto the new stable
+          (next stable patch + \`.dev1\`), so no follow-up reset PR is needed
+          for the version alone.
 
           The transform syncs code + identity + version + \`DOCS.md\` (component
           token rename plus the flavor-banner swap; canonical banners live in
