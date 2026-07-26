@@ -256,7 +256,11 @@ class TestAddonStructure:
         assert "python" in first_line.lower(), "start.py shebang must reference python"
 
     @pytest.mark.parametrize(
-        "addon_dir", ["homeassistant-addon", "homeassistant-addon-dev"]
+        "addon_dir",
+        sorted(
+            str(path.parent.name)
+            for path in _REPO_ROOT.glob("homeassistant-addon*/config.yaml")
+        ),
     )
     def test_translations_cover_every_schema_key(self, addon_dir):
         """Every key declared in ``config.yaml``'s ``schema:`` must have a
@@ -268,6 +272,10 @@ class TestAddonStructure:
         localized ``name``/``description`` shows the same unlabelled toggle
         to that language's users, so lock the parity across every shipped
         locale.
+
+        Parametrized over the same ``homeassistant-addon*/config.yaml`` glob
+        as ``test_addon_names_are_backup_filename_safe`` below: hardcoding the
+        pair left both Webhook Proxy flavors with no such check at all.
         """
         with open(f"{addon_dir}/config.yaml", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)

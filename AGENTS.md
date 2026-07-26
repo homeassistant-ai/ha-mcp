@@ -730,6 +730,11 @@ each translation was written against, because key parity cannot see a string
 whose meaning changed: #1993 flipped a policy string from ALL-match to
 ANY-match and left the Chinese text asserting the opposite.
 
+The Webhook Proxy add-on and its bundled integration stay **English-only by
+decision** — not worth the upkeep. The test records that, so any other new
+catalog directory fails until it is either translated everywhere or listed as
+English-only alongside them.
+
 ## Home Assistant Add-on
 
 **Required files:**

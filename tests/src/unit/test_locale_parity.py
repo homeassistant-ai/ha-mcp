@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 
@@ -42,6 +43,57 @@ ADDON_DIRS = (
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
+GUARDED_SURFACES = {
+    "src/ha_mcp/settings_ui/locales",
+    "custom_components/ha_mcp_tools/translations",
+    "homeassistant-addon/translations",
+    "homeassistant-addon-dev/translations",
+}
+
+ENGLISH_ONLY_SURFACES = {
+    "homeassistant-addon-webhook-proxy/translations": (
+        "Webhook Proxy add-on: English-only by maintainer decision — the "
+        "translation upkeep is not worth it for this add-on, and its stable "
+        "flavor is promote-only anyway (see "
+        "homeassistant-addon-webhook-proxy/AGENTS.md)"
+    ),
+    "homeassistant-addon-webhook-proxy-dev/translations": (
+        "Webhook Proxy dev add-on: English-only, same decision as the stable "
+        "flavor above"
+    ),
+    "homeassistant-addon-webhook-proxy/mcp_proxy/translations": (
+        "Webhook Proxy's bundled integration: English-only, same decision"
+    ),
+    "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/translations": (
+        "Webhook Proxy dev's bundled integration: English-only, same decision"
+    ),
+}
+
+_UNSEARCHED_DIRS = {
+    ".git",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "local",
+    "node_modules",
+    "tests",
+    "worktree",
+}
+
+
+def _discover_translation_surfaces() -> set[str]:
+    """Every catalog directory in the tree, however it got there."""
+    found: set[str] = set()
+    for root, dirs, _files in os.walk(_REPO_ROOT):
+        dirs[:] = [name for name in dirs if name not in _UNSEARCHED_DIRS]
+        for name in dirs:
+            if name in {"translations", "locales"}:
+                found.add(str((Path(root) / name).relative_to(_REPO_ROOT)))
+    return found
+
 
 def _surfaces() -> dict[str, set[str]]:
     """Return locale codes per surface, keyed by the path pattern to fix."""
@@ -60,14 +112,25 @@ def _surfaces() -> dict[str, set[str]]:
     return surfaces
 
 
-def _flatten(value: dict, prefix: str = "") -> dict[str, str]:
+def _flatten(value: object, prefix: str = "") -> dict[str, str]:
+    """Flatten a catalog to ``dotted.key -> text``, lists included.
+
+    Every leaf is rendered as text so nothing can sit outside the baseline: a
+    non-string leaf that no rule reaches is exactly the silent gap these tests
+    exist to remove.
+    """
     flat: dict[str, str] = {}
-    for key, item in value.items():
-        path = f"{prefix}.{key}" if prefix else key
-        if isinstance(item, dict):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            path = f"{prefix}.{key}" if prefix else key
             flat.update(_flatten(item, path))
-        else:
-            flat[path] = item
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            flat.update(_flatten(item, f"{prefix}[{index}]"))
+    elif isinstance(value, str):
+        flat[prefix] = value
+    else:
+        flat[prefix] = json.dumps(value, sort_keys=True)
     return flat
 
 
@@ -106,7 +169,6 @@ def english_sources() -> dict[str, dict[str, str]]:
         surface: {
             key: hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
             for key, text in strings.items()
-            if isinstance(text, str)
         }
         for surface, strings in sources.items()
     }
@@ -134,6 +196,55 @@ def test_every_locale_ships_on_every_surface() -> None:
                 for code in codes
             )
         )
+    )
+
+
+def test_every_translation_surface_is_guarded_or_english_only() -> None:
+    """A new *surface* must not slip the net the way a new locale used to.
+
+    The parity check above only knows the four directories it is told about,
+    so adding ``homeassistant-addon-foo/translations/`` would otherwise go
+    unnoticed exactly as zh-Hans did.
+    """
+    discovered = _discover_translation_surfaces()
+    accounted = GUARDED_SURFACES | set(ENGLISH_ONLY_SURFACES)
+
+    unaccounted = sorted(discovered - accounted)
+    assert not unaccounted, (
+        f"new translation surface(s) {unaccounted}: either add them to "
+        "GUARDED_SURFACES and ship every locale there, or record them in "
+        "ENGLISH_ONLY_SURFACES with the reason they stay English"
+    )
+
+    vanished = sorted(accounted - discovered)
+    assert not vanished, (
+        f"{vanished} no longer exist(s) — drop them from GUARDED_SURFACES / "
+        "ENGLISH_ONLY_SURFACES so the lists keep meaning something"
+    )
+
+
+def test_english_only_surfaces_have_not_gained_a_locale() -> None:
+    """Catch a locale landing where nobody signed up to maintain it.
+
+    These surfaces are English-only on purpose. A stray catalog here would
+    otherwise rot unnoticed: none of the parity, placeholder, or drift checks
+    look at them.
+    """
+    strays = {
+        surface: sorted(
+            path.name
+            for path in (_REPO_ROOT / surface).iterdir()
+            if path.suffix in {".json", ".yaml"} and path.stem != "en"
+        )
+        for surface in ENGLISH_ONLY_SURFACES
+    }
+    found = {surface: names for surface, names in strays.items() if names}
+
+    assert not found, (
+        f"non-English catalog(s) on an English-only surface: {found}. Either "
+        "delete them, or move the surface into GUARDED_SURFACES and translate "
+        "it everywhere — reasons: "
+        + "; ".join(f"{surface}: {ENGLISH_ONLY_SURFACES[surface]}" for surface in found)
     )
 
 
