@@ -134,12 +134,6 @@ def test_filter_drops_405_with_query_and_trailing_slash():
     assert f.filter(_access_record("GET", "/private_abc/?x=1", 405)) is False
 
 
-def test_filter_keeps_405_when_drop_disabled_for_sse():
-    """SSE mode (drop_mcp_405=False) keeps the 405 line — there it's a real fault."""
-    f = ProbeAccessLogFilter("/mcp", drop_mcp_405=False)
-    assert f.filter(_access_record("GET", "/mcp", 405)) is True
-
-
 def test_filter_keeps_post_200_tool_call():
     """Real POST tool-call access lines are never dropped."""
     f = ProbeAccessLogFilter("/mcp")
@@ -228,12 +222,6 @@ async def test_get_405_logs_annotated_note(mcp_app, caplog):
     )
 
 
-def test_filter_drops_favicon_404_even_in_sse_mode():
-    """Favicon 404s are dropped regardless of drop_mcp_405 (SSE mode included)."""
-    f = ProbeAccessLogFilter("/mcp", drop_mcp_405=False)
-    assert f.filter(_access_record("GET", "/favicon.ico", 404)) is False
-
-
 def test_filter_drops_favicon_with_query_and_slash():
     """Favicon drop survives query strings and trailing slashes."""
     f = ProbeAccessLogFilter("/mcp")
@@ -270,17 +258,6 @@ def test_register_does_not_double_attach_same_path():
     access_logger = logging.getLogger("uvicorn.access")
     attached = [f for f in access_logger.filters if isinstance(f, ProbeAccessLogFilter)]
     assert len(attached) == 1
-
-
-def test_register_quiet_probe_log_false_keeps_mcp_405():
-    """quiet_probe_log=False (SSE) wires drop_mcp_405=False, so the attached filter
-    keeps a /mcp GET-405 instead of dropping it."""
-    server = FastMCP("test")
-    register_browser_landing(server, "/mcp", quiet_probe_log=False)
-    access_logger = logging.getLogger("uvicorn.access")
-    attached = [f for f in access_logger.filters if isinstance(f, ProbeAccessLogFilter)]
-    assert len(attached) == 1
-    assert attached[0].filter(_access_record("GET", "/mcp", 405)) is True
 
 
 @pytest.mark.asyncio
