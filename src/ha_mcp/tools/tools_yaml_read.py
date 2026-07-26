@@ -18,7 +18,6 @@ back door.
 import asyncio
 import glob
 import logging
-import posixpath
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
@@ -85,16 +84,18 @@ def _failure_text(payload: dict[str, Any]) -> str:
 
 
 def _parse_error_result(
-    target: str, yaml_path: str, parse_error: str, *, is_glob: bool
+    target: str, yaml_path: str, parse_error: str, *, expanded: bool
 ) -> tuple[None, str]:
-    """Decide a file the component could not parse: raise for a single target.
+    """Decide a file the component could not parse: raise for a named target.
 
-    A single explicit target has no siblings to salvage, so a parse failure
-    raises rather than soft-degrading to a warning that reads as "key absent".
-    Under a glob it stays a per-file warning so one broken file does not sink
-    the whole search.
+    The explicitly named target raises rather than soft-degrading to a warning
+    that reads as "key absent" – it raises even when expansion turned up
+    siblings alongside it, discarding their results, because a named file that
+    cannot be parsed is the caller's question, not a stray unreadable neighbour.
+    An expanded target stays a per-file warning so one broken file does not
+    sink the whole search.
     """
-    if not is_glob:
+    if not expanded:
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONFIG_INVALID,
@@ -107,7 +108,7 @@ def _parse_error_result(
 
 
 def _read_exception_result(
-    target: str, error: BaseException, *, is_glob: bool
+    target: str, error: BaseException, *, expanded: bool
 ) -> tuple[None, str]:
     """Decide a read that blew up outright.
 
@@ -115,7 +116,7 @@ def _read_exception_result(
     the search; the explicitly named target re-raises, matching every other
     failure class in :func:`_evaluate_read`.
     """
-    if not is_glob:
+    if not expanded:
         raise error
     return None, f"{target} was not searched: {error}."
 
@@ -125,7 +126,7 @@ def _evaluate_read(
     target: str,
     yaml_path: str,
     *,
-    is_glob: bool,
+    expanded: bool,
     include_content: bool,
     include_parsed: bool,
 ) -> tuple[dict[str, Any] | None, str | None]:
@@ -139,29 +140,31 @@ def _evaluate_read(
       a README the component refuses to read, and a permission-denied or
       non-UTF-8 ``.yaml`` lands here too. A syntactically broken file is the
       same class — reporting it as "key absent" would claim a file was
-      inspected when it never was. A single explicit target has no siblings
-      to salvage, so it raises instead.
+      inspected when it never was. The explicitly named target raises
+      instead, even when expansion turned up siblings alongside it.
     * **neither** — the file parsed and simply has no such key. The real
       non-match, and the whole point of a glob search.
     * **match** — the key is there.
     """
     if isinstance(response, BaseException):
-        return _read_exception_result(target, response, is_glob=is_glob)
+        return _read_exception_result(target, response, expanded=expanded)
 
     if not isinstance(response, dict):
-        if is_glob:
+        if expanded:
             return None, f"{target} was not searched: unexpected read_file response."
         _call_failed("read_file", {"file": target, "yaml_path": yaml_path})
     unwrapped = unwrap_service_response(response)
 
     if not unwrapped.get("success", True):
-        if not is_glob:
+        if not expanded:
             raise_tool_error(unwrapped)
         return None, f"{target} was not searched: {_failure_text(unwrapped)}."
 
     parse_error = unwrapped.get("parse_error")
     if parse_error:
-        return _parse_error_result(target, yaml_path, str(parse_error), is_glob=is_glob)
+        return _parse_error_result(
+            target, yaml_path, str(parse_error), expanded=expanded
+        )
 
     if unwrapped.get("subtree") is None:
         return None, None
@@ -198,8 +201,17 @@ async def _list_files_matching(
     )
 
 
-async def _resolve_target_files(client: Any, file: str) -> list[str]:
-    """Expand ``file`` into the concrete config-relative paths to read.
+async def _resolve_target_files(client: Any, file: str) -> list[tuple[str, bool]]:
+    """Expand ``file`` into ``(path, expanded)`` pairs to read.
+
+    ``expanded`` records where the path came from, and it is decided here
+    because only here is it known: a path produced by the pattern lookup is an
+    expansion, while the requested path itself and anything the escaped-literal
+    lookup returns were named explicitly. Recovering that downstream by
+    comparing the path against the requested string would be wrong for ``*``
+    and ``?``, which match their own literal names – a file genuinely called
+    ``*.yaml`` would then be mistaken for the name the caller typed and its
+    read failure would sink the whole search.
 
     A plain path is returned as-is (the read itself reports a missing file). A
     glob is expanded through the component's ``list_files``, which matches the
@@ -223,15 +235,16 @@ async def _resolve_target_files(client: Any, file: str) -> list[str]:
     """
     directory, _, pattern = file.rpartition("/")
     if not _has_glob(pattern):
-        return [file]
+        return [(file, False)]
 
     matches = await _list_files_matching(client, file, directory, pattern)
+    named: set[str] = set()
     if "[" in pattern:
-        literal = await _list_files_matching(
-            client, file, directory, glob.escape(pattern)
+        named = set(
+            await _list_files_matching(client, file, directory, glob.escape(pattern))
         )
-        matches = sorted(set(matches) | set(literal))
-    return matches
+        matches = sorted(set(matches) | named)
+    return [(target, target not in named) for target in matches]
 
 
 class YamlReadTools:
@@ -317,16 +330,9 @@ class YamlReadTools:
         try:
             await _assert_mcp_tools_available(self._client)
 
+            # Strictness is a property of each target, not of the request, so
+            # the resolver reports which targets were named rather than expanded.
             targets = await _resolve_target_files(self._client, file)
-            # Strictness is a property of each target, not of the request: the
-            # target that IS the requested path was named explicitly and keeps
-            # the strict contract (raise, don't degrade) even when expansion
-            # turned up siblings alongside it. Compared normalized, since the
-            # component reports what it walked rather than what was asked for.
-            requested = posixpath.normpath(file)
-            expanded = {
-                target: posixpath.normpath(target) != requested for target in targets
-            }
 
             extra: dict[str, Any] = {"include_parsed": True} if include_parsed else {}
             # The reads are independent, so fan them out rather than paying N
@@ -343,19 +349,19 @@ class YamlReadTools:
                         "read_file",
                         {"path": target, "yaml_path": yaml_path, **extra},
                     )
-                    for target in targets
+                    for target, _ in targets
                 ),
                 return_exceptions=True,
             )
 
             matches: list[dict[str, Any]] = []
             warnings: list[str] = []
-            for target, response in zip(targets, responses, strict=True):
+            for (target, expanded), response in zip(targets, responses, strict=True):
                 match, warning = _evaluate_read(
                     response,
                     target,
                     yaml_path,
-                    is_glob=expanded[target],
+                    expanded=expanded,
                     include_content=include_content,
                     include_parsed=include_parsed,
                 )

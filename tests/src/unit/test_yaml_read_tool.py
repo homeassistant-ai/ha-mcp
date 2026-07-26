@@ -534,9 +534,46 @@ async def test_named_file_keeps_its_contract_when_a_sibling_tags_along():
         await fn(yaml_path="rest", file="packages/svc[a].yaml")
 
 
+async def test_file_named_like_the_glob_is_still_an_expansion():
+    """A pattern is not a name, even when a file happens to be called that.
+
+    ``*`` and ``?`` match their own literal names, so a file genuinely called
+    ``*.yaml`` comes back out of its own expansion. Nobody named it, so its
+    read failure stays a warning. Deciding provenance by comparing the target
+    against the requested string instead would read it as the named file and
+    let one unreadable oddity discard every match already found.
+    """
+
+    def list_files(payload):
+        return {
+            "success": True,
+            "files": [
+                {"path": f"packages/{n}", "is_dir": False}
+                for n in ("*.yaml", "a.yaml", "b.yaml")
+                if fnmatch.fnmatch(n, payload["pattern"])
+            ],
+        }
+
+    def read(payload):
+        if payload["path"] == "packages/*.yaml":
+            return {"success": False, "error": "Path not allowed: packages/*.yaml"}
+        return _read_ok("- name: found\n")
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": read})
+
+    out = await fn(yaml_path="found", file="packages/*.yaml")
+
+    assert out["count"] == 2
+    assert out["files_searched"] == 3
+    assert out["warnings"] == [
+        "packages/*.yaml was not searched: Path not allowed: packages/*.yaml."
+    ]
+
+
 async def test_equivalent_spelling_is_still_the_named_target():
-    """The component answers with the path it walked, so a caller-side spelling
-    like ``./packages/...`` would never compare equal as a raw string."""
+    """The literal lookup reports the path the component walked, so an
+    equivalent caller-side spelling like ``./packages/...`` still resolves to
+    the same named target."""
     list_files, _ = _bracket_dir("svc[a].yaml")
 
     fn, _ = await _make_tool(
