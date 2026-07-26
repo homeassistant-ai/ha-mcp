@@ -913,6 +913,9 @@ class DeepSearchMixin(SceneSearchMixin):
             return_exceptions=True,
         )
         for result in type_results:
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                # Never swallow cancellation/shutdown into a failed-type count.
+                raise result
             if isinstance(result, tuple):
                 type_matches, type_failed = result
                 results.extend(type_matches)
@@ -1166,6 +1169,11 @@ class DeepSearchMixin(SceneSearchMixin):
             results: list[dict[str, Any]] = []
             failed_count = 1 if list_failed else 0
             for dash_result in dash_results:
+                if isinstance(dash_result, BaseException) and not isinstance(
+                    dash_result, Exception
+                ):
+                    # Never swallow cancellation/shutdown into a failure count.
+                    raise dash_result
                 if isinstance(dash_result, tuple):
                     dash_matches, dash_failed = dash_result
                     results.extend(dash_matches)
@@ -1491,6 +1499,9 @@ class DeepSearchMixin(SceneSearchMixin):
         out: list[dict[str, Any]] = []
         probe_failures = 0
         for item in scored:
+            if isinstance(item, BaseException) and not isinstance(item, Exception):
+                # Never swallow cancellation/shutdown into a probe-failure log.
+                raise item
             if isinstance(item, tuple):
                 result, probe_failed = item
                 if result is not None:

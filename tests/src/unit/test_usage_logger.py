@@ -1,5 +1,6 @@
 """Unit tests for the usage logger with ring buffer."""
 
+import asyncio
 import tempfile
 import threading
 import time
@@ -249,6 +250,40 @@ class TestUsageLoggerGlobalFunctions:
         )
         assert our_entry is not None
         assert our_entry["success"] is True
+
+
+class TestLogToolUsageDecorator:
+    """Tests for the @log_tool_usage decorator in ha_mcp.tools.helpers."""
+
+    @pytest.fixture(autouse=True)
+    def reset_global_logger(self):
+        shutdown_usage_logger()
+        yield
+        shutdown_usage_logger()
+
+    async def test_cancelled_call_is_not_logged_as_success(self):
+        """A cancelled tool call never completed, so recording it as a success
+        would make the usage log claim a result that was never produced.
+
+        ``CancelledError`` skips ``except Exception``, so the decorator's
+        handler must catch ``BaseException`` for the ``finally`` log to carry
+        ``success: False``; ``str()`` is empty on a bare ``CancelledError``, so
+        the class name stands in as the error message.
+        """
+        from ha_mcp.tools.helpers import log_tool_usage
+
+        @log_tool_usage
+        async def ha_cancelled_tool():
+            raise asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await ha_cancelled_tool()
+
+        entry = next(
+            e for e in get_recent_logs(5) if e["tool_name"] == "ha_cancelled_tool"
+        )
+        assert entry["success"] is False
+        assert entry["error_message"] == "CancelledError"
 
 
 class TestParameterRedaction:
