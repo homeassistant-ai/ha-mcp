@@ -198,6 +198,13 @@ asyncio_mode = "auto"
 
 [dependency-groups]
 dev = [
+    # Real aiohttp so tests can pin the ClientTimeout defaults the custom
+    # component's relay and the webhook-proxy addon rely on (both are stubbed
+    # in unit tests; nothing else would catch stub drift). NOT a runtime
+    # dependency — src/ never imports aiohttp; HA core provides it in-process.
+    # Floor = the aiohttp HA core 2026.6 pins (2026.7 pins 3.14.1, 2026.8.dev
+    # pins 3.14.3), so the version tested here is one a supported HA runs.
+    "aiohttp>=3.13.5",
     "build>=1.2.2",
     "docker>=7.1.0",
     "httpx2>=2.4.0",

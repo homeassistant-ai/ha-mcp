@@ -7,8 +7,8 @@ Since issue #1813 that WS command routes through the shared pooled client
 
 These tests pin the transport routing: ``rrule`` present → pooled WS command
 carrying an RFC 5545 event payload (``dtstart``/``dtend`` keys); ``rrule``
-absent → the pre-existing REST service call (``start_date_time``/
-``end_date_time`` keys), unchanged.
+absent → the REST service call. Datetime values use ``start_date_time``/
+``end_date_time`` while date-only values use ``start_date``/``end_date``.
 
 They also cover the rrule-branch failure path: a failed WS command comes back
 from the pooled client as ``{"success": False, ...}`` and is re-raised so the
@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools import tools_calendar
 from ha_mcp.tools.tools_calendar import CalendarTools
 
@@ -150,6 +150,50 @@ async def test_no_rrule_keeps_rest_service_path():
 
 
 @pytest.mark.asyncio
+async def test_no_rrule_date_only_values_create_all_day_event():
+    """Date-only values must use HA's all-day service fields."""
+    client = _make_mock_client()
+
+    tools = CalendarTools(client)
+    await tools.ha_config_set_calendar_event(
+        entity_id="calendar.test",
+        summary="School holidays",
+        start="2026-07-04",
+        end="2026-08-10",
+    )
+
+    client.call_service.assert_awaited_once_with(
+        "calendar",
+        "create_event",
+        {
+            "entity_id": "calendar.test",
+            "summary": "School holidays",
+            "start_date": "2026-07-04",
+            "end_date": "2026-08-10",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_rrule_rejects_mixed_date_and_datetime_values():
+    """Mixed all-day and timed boundaries are ambiguous and invalid."""
+    client = _make_mock_client()
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Mixed event",
+            start="2026-07-04",
+            end="2026-07-04T12:00:00",
+        )
+
+    error = _structured_error(exc_info.value)["error"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    client.call_service.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_no_rrule_forwards_explicit_empty_string_fields_to_rest_call():
     """Same "" vs None distinction on the non-rrule REST service path."""
     client = _make_mock_client()
@@ -220,7 +264,9 @@ async def test_non_rrule_failure_omits_rrule_suggestion():
     """The RRULE-syntax hint must not appear when no rrule was supplied."""
     client = _make_mock_client()
     client.call_service = AsyncMock(
-        side_effect=HomeAssistantCommandError("Command failed: backend boom")
+        side_effect=HomeAssistantAPIError(
+            "API error: 500 - 500: Internal Server Error", status_code=500
+        )
     )
 
     tools = CalendarTools(client)
@@ -235,6 +281,86 @@ async def test_non_rrule_failure_omits_rrule_suggestion():
     suggestions = _structured_error(exc_info.value)["error"]["suggestions"]
     assert all(not s.startswith("Check RRULE syntax") for s in suggestions)
     client.send_websocket_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_all_day_zero_duration_failure_prepends_exclusive_end_suggestion():
+    """An all-day range with end <= start surfaces the exclusive-end hint first.
+
+    The hint is keyed on the supplied boundaries, not on HA's error text: the
+    REST service path raises a bare ``HTTPBadRequest``, so voluptuous'
+    "Expected minimum event duration" message never reaches the client.
+    """
+    client = _make_mock_client()
+    client.call_service = AsyncMock(
+        side_effect=HomeAssistantAPIError(
+            "API error: 400 - 400: Bad Request", status_code=400
+        )
+    )
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Single day off",
+            start="2026-07-04",
+            end="2026-07-04",
+        )
+
+    suggestions = _structured_error(exc_info.value)["error"]["suggestions"]
+    assert suggestions[0].startswith("For an all-day event the end date is exclusive")
+
+
+@pytest.mark.asyncio
+async def test_all_day_valid_range_failure_omits_exclusive_end_suggestion():
+    """The exclusive-end hint must not appear when the all-day range is valid."""
+    client = _make_mock_client()
+    client.call_service = AsyncMock(
+        side_effect=HomeAssistantAPIError(
+            "API error: 400 - 400: Bad Request", status_code=400
+        )
+    )
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Vacation",
+            start="2026-07-04",
+            end="2026-07-11",
+        )
+
+    suggestions = _structured_error(exc_info.value)["error"]["suggestions"]
+    assert all(
+        not s.startswith("For an all-day event the end date is exclusive")
+        for s in suggestions
+    )
+
+
+@pytest.mark.asyncio
+async def test_timed_event_too_close_boundaries_omits_exclusive_end_suggestion():
+    """Timed events hit the same min-duration rule but need a later time, not +1 day."""
+    client = _make_mock_client()
+    client.call_service = AsyncMock(
+        side_effect=HomeAssistantAPIError(
+            "API error: 400 - 400: Bad Request", status_code=400
+        )
+    )
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Instant meeting",
+            start="2026-06-15T10:00:00",
+            end="2026-06-15T10:00:00",
+        )
+
+    suggestions = _structured_error(exc_info.value)["error"]["suggestions"]
+    assert all(
+        not s.startswith("For an all-day event the end date is exclusive")
+        for s in suggestions
+    )
 
 
 @pytest.mark.asyncio

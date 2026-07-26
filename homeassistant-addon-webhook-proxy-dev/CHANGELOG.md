@@ -9,6 +9,13 @@ history from before the fork.
 -->
 
 
+## v2.1.1.dev1 (2026-07-26)
+
+Version line rebased onto the 2.1.0 stable base (no code changes — dev and
+stable are identical as of the 2.1.0 promotion). Future promotions carry this
+rebase inside the promote PR itself (`rebase_dev_version`).
+
+
 ## v2.0.5.dev3 (2026-07-26)
 
 ### Bug Fixes

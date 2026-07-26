@@ -86,13 +86,21 @@ def test_bump_stable_tuple_math():
 # ---------------------------------------------------------------------------
 # Reset: dev version must ALWAYS strictly increase
 # ---------------------------------------------------------------------------
-def test_reset_bumps_dev_counter_when_bases_equal():
-    assert sync.reset_version("1.2.3.dev1", "1.2.3") == "1.2.3.dev2"
+def test_reset_moves_to_next_stable_patch_with_fresh_counter():
+    # AGENTS.md's rule: dev base = the NEXT stable patch, so the dev channel
+    # sorts AHEAD of the stable it will promote into (PEP 440 puts
+    # 1.2.3.devN BEHIND 1.2.3). Counter restarts on the base jump.
+    assert sync.reset_version("1.2.3.dev1", "1.2.3") == "1.2.4.dev1"
 
 
-def test_reset_takes_stable_base_when_stable_is_ahead():
-    # stable ahead of dev's base -> base climbs, counter still advances
-    assert sync.reset_version("1.0.0.dev3", "1.5.0") == "1.5.0.dev4"
+def test_reset_takes_next_patch_above_stable_when_stable_is_ahead():
+    # stable ahead of dev's base -> base climbs past it, counter restarts
+    assert sync.reset_version("1.0.0.dev3", "1.5.0") == "1.5.1.dev1"
+
+
+def test_reset_advances_counter_when_dev_base_already_next_patch():
+    # dev already sits on the next stable patch -> same base, counter advances
+    assert sync.reset_version("1.2.4.dev2", "1.2.3") == "1.2.4.dev3"
 
 
 def test_reset_still_increases_when_stable_base_is_behind_dev():
@@ -119,6 +127,43 @@ def test_reset_monotonic_across_a_range_of_pairs():
         assert _version_key(new) > _version_key(current_dev), (
             f"reset({current_dev}, {current_stable}) = {new} did not increase"
         )
+        # The doc invariant the old max-base rule silently violated: the new
+        # dev version must sort AHEAD of the stable it will promote into
+        # (_version_key models PEP 440's devN-before-release ordering).
+        assert _version_key(new) > _version_key(current_stable), (
+            f"reset({current_dev}, {current_stable}) = {new} sorts behind stable"
+        )
+
+
+def test_rebase_dev_version_writes_both_files_in_place(tmp_path):
+    """The promote transform's in-PR dev version rebase: only the two
+    version-bearing dev files change, onto the next-stable-patch line."""
+    stable_cfg = (
+        'name: "x"\ndescription: "y"\nversion: "2.1.0"\n'
+        'slug: "s"\nurl: "u"\narch:\n  - amd64\nboot: auto\n'
+    )
+    dev_dir = tmp_path / sync.DEV.addon_dir
+    (dev_dir / sync.DEV.component).mkdir(parents=True)
+    (dev_dir / "config.yaml").write_text(
+        sync.transform_config_yaml(stable_cfg, sync.DEV, "2.0.5.dev3"),
+        encoding="utf-8",
+    )
+    manifest = dev_dir / sync.DEV.component / "manifest.json"
+    manifest.write_text(
+        '{\n  "domain": "mcp_proxy_dev",\n  "name": "n",\n'
+        '  "version": "2.0.5.dev3"\n}\n',
+        encoding="utf-8",
+    )
+
+    new_dev = sync.rebase_dev_version("2.1.0", root=tmp_path)
+
+    assert new_dev == "2.1.1.dev1"
+    cfg_text = (dev_dir / "config.yaml").read_text(encoding="utf-8")
+    assert 'version: "2.1.1.dev1"' in cfg_text
+    # Idempotent identity rewrite: still exactly one stage line, dev-shaped.
+    assert cfg_text.split("\n").count("stage: experimental") == 1
+    assert '"version": "2.1.1.dev1"' in manifest.read_text(encoding="utf-8")
+    assert _version_key(new_dev) > _version_key("2.1.0")
 
 
 # ---------------------------------------------------------------------------

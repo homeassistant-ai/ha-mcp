@@ -4,6 +4,7 @@ These tests focus on the pure Python utility functions that don't require
 Home Assistant dependencies.
 """
 
+import glob
 import json
 import os
 import shutil
@@ -547,6 +548,23 @@ class TestListFilesSync:
 
         names = sorted(f["name"] for f in result["files"])
         assert names == ["a.yaml", "b.yaml"]
+
+    def test_bracketed_name_is_absent_from_its_own_expansion(self, tmp_path):
+        """The premise ha_config_get_yaml's double lookup rests on.
+
+        A bracket class never matches the literal name it is written as, so a
+        file called ``svc[a].yaml`` is invisible to its own name used as a
+        pattern; the escaped form finds it. Asserted here against the real
+        filter rather than against a replica in the caller's tests.
+        """
+        (tmp_path / "svc[a].yaml").write_text("a")
+        (tmp_path / "svca.yaml").write_text("b")
+
+        as_pattern = _list_files_sync(tmp_path, tmp_path, "svc[a].yaml")
+        as_literal = _list_files_sync(tmp_path, tmp_path, glob.escape("svc[a].yaml"))
+
+        assert [f["name"] for f in as_pattern["files"]] == ["svca.yaml"]
+        assert [f["name"] for f in as_literal["files"]] == ["svc[a].yaml"]
 
 
 class TestReadFileSync:

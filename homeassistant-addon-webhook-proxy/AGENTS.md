@@ -85,6 +85,12 @@ manual fallback):
 4. Set `boot: auto`, drop `stage: experimental`, remove the `(Dev)` display-name
    suffixes.
 5. Bump stable's own `config.yaml` + `manifest.json` version (its independent line).
+6. Rebase the dev flavor's version line onto the new stable in the SAME promote PR
+   (next stable patch + `.dev1`, per the Versioning rule above — the transform's
+   `rebase_dev_version` does this; only dev `config.yaml` + `manifest.json` change).
+   Right after a promote the trees are code-identical, so no separate reset PR is
+   needed; `Reset Dev from Stable` remains a manual tool for the stable-hotfix
+   backport case.
 
 ## Testing
 `tests/addon/test_webhook_proxy.py` is parametrized over BOTH flavors — an autouse

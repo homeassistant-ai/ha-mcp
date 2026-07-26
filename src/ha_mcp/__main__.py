@@ -478,14 +478,36 @@ class ProbeAccessLogFilter(logging.Filter):
         return not (status == 405 and path == self._mcp_path)
 
 
-def _setup_logging(log_level_str: str, force: bool = False) -> None:
-    """Configure root logger with consistent timestamp format."""
-    logging.basicConfig(
-        level=getattr(logging, log_level_str),
-        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
-        datefmt=_LOG_DATE_FORMAT,
-        force=force,
-    )
+def _setup_logging(log_level_str: str, force: bool = True) -> None:
+    """Configure root logger with consistent timestamp format.
+
+    ``force`` defaults to True so the reconfiguration is deterministic: with
+    ANY root handler present, ``basicConfig`` is a silent no-op — neither the
+    console handler nor the level is applied. Since
+    ``preserve_startup_collector`` detaches the collector before
+    ``basicConfig`` runs, the default guards against FOREIGN root handlers —
+    a test runner's or a dependency's. At the two call sites that use the
+    default (``main`` and ``_setup_standard_mode``) the only root handler
+    attached anywhere in ``src/`` is the collector, which the wrapper detaches
+    first — so today the default is defensive rather than load-bearing. The
+    OAuth/OIDC entry points pass ``force=True`` explicitly and never exercise
+    the default.
+
+    The historical standard-mode bug was ``usage_logger``'s
+    ``StartupLogCollector`` (attached to root at import time) triggering that
+    same no-op; the wrapper now detaches it for the duration — keeping it out
+    of the sweep ``force`` performs (which removes *and closes* every root
+    handler) so ``ha_report_issue`` keeps its startup diagnostics.
+    """
+    from ha_mcp.utils.usage_logger import preserve_startup_collector
+
+    with preserve_startup_collector():
+        logging.basicConfig(
+            level=getattr(logging, log_level_str),
+            format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+            datefmt=_LOG_DATE_FORMAT,
+            force=force,
+        )
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
     )
