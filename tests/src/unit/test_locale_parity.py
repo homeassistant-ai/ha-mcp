@@ -86,13 +86,25 @@ def _discover_translation_surfaces() -> set[str]:
     ``locales/`` directory they were right to have. Tracked content is the
     thing this rule is actually about.
     """
-    tracked = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.split("\0")
+    try:
+        completed = subprocess.run(
+            # The unit-test job runs in a container against a checkout owned by
+            # another uid, and actions/checkout's safe.directory lands in a temp
+            # HOME that container jobs don't see (same reason pr.yml sets it by
+            # hand for the mirror job). Without this, git refuses the repo as
+            # dubious ownership and the check dies with an empty stderr.
+            ["git", "-c", "safe.directory=*", "ls-files", "-z"],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:  # pragma: no cover
+        stderr = getattr(exc, "stderr", "") or ""
+        raise AssertionError(
+            f"cannot list tracked files to find translation surfaces: {exc} {stderr}"
+        ) from exc
+    tracked = completed.stdout.split("\0")
     return {
         str(parent)
         for path in tracked
