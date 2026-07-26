@@ -709,6 +709,32 @@ fully validate a component change before merge.
 - **Live-test on the dev server immediately after merge**, before the next
   stable cut. The component path cannot be fully exercised by CI pre-merge.
 
+## Translations
+
+A language ships on all four surfaces or not at all —
+`tests/src/unit/test_locale_parity.py` enforces it. One Home Assistant language
+code (`de`, `ru`, `zh-Hans`) names every file:
+`src/ha_mcp/settings_ui/locales/<code>.json`,
+`custom_components/ha_mcp_tools/translations/<code>.json`, and
+`homeassistant-addon{,-dev}/translations/<code>.yaml`.
+
+Settings UI catalogs are auto-discovered (no registration) and may omit keys —
+English is the per-key fallback. Component catalogs need every `strings.json`
+key with identical `{placeholders}`. Add-on catalogs need `name` +
+`description` for every `schema:` key of *that* flavor's `config.yaml`; the two
+flavors differ.
+
+**Changing an English string means updating every locale that carries it**,
+then `python scripts/update_locale_baseline.py`. The baseline pins the English
+each translation was written against, because key parity cannot see a string
+whose meaning changed: #1993 flipped a policy string from ALL-match to
+ANY-match and left the Chinese text asserting the opposite.
+
+The Webhook Proxy add-on and its bundled integration stay **English-only by
+decision** — not worth the upkeep. The test records that, so any other new
+catalog directory fails until it is either translated everywhere or listed as
+English-only alongside them.
+
 ## Home Assistant Add-on
 
 **Required files:**
