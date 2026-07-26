@@ -156,17 +156,24 @@ def promote_version(current_stable: str, bump: str) -> str:
 
 
 def reset_version(current_dev: str, current_stable: str) -> str:
-    """Next dev version, guaranteed to strictly increase.
+    """Next dev version, strictly increasing AND sorting ahead of stable.
 
-    ``new_base = max(stable_base, dev_base)`` and the ``devN`` counter always
-    advances by one. Because the base never decreases and the counter always
-    rises, the result strictly increases even when stable's base is *behind*
-    the current dev base (the code goes backward; the version still climbs).
+    ``new_base = max(next_stable_patch, dev_base)``: AGENTS.md's rule is that
+    the dev base is the NEXT stable patch (stable ``2.0.2`` → ``2.0.3.devN``)
+    so dev always sorts ahead of the stable it will promote into — under
+    PEP 440 a ``X.Y.Z.devN`` pre-release sorts BEHIND ``X.Y.Z``, so basing
+    dev on stable's own base advertised the dev channel as older than the
+    stable carrying the same code. A dev base already further ahead (an
+    escalated line in progress) is kept. The ``devN`` counter restarts at 1
+    on a base jump and advances by one otherwise, so the result strictly
+    increases either way.
     """
     dev_base, dev_n = parse_dev_version(current_dev)
     stable_base = parse_stable_version(current_stable)
-    new_base = max(stable_base, dev_base)
-    return "{}.{}.{}.dev{}".format(*new_base, dev_n + 1)
+    next_patch = (stable_base[0], stable_base[1], stable_base[2] + 1)
+    new_base = max(next_patch, dev_base)
+    new_n = dev_n + 1 if new_base == dev_base else 1
+    return "{}.{}.{}.dev{}".format(*new_base, new_n)
 
 
 # ---------------------------------------------------------------------------
