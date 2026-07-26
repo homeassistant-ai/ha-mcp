@@ -457,3 +457,13 @@ class TestFullFlow:
         )
         assert token_resp.status == 200
         assert token_resp.json_body["access_token"]
+
+
+class TestRfc9207MetadataAdvertisement:
+    """RFC 9207 §3: the none-mode document advertises response issuer support."""
+
+    def test_none_mode_document_advertises_iss_support(self):
+        from custom_components.ha_mcp_tools import mcp_webhook
+
+        doc = mcp_webhook._none_mode_authorization_server_document("https://ha.example")
+        assert doc["authorization_response_iss_parameter_supported"] is True

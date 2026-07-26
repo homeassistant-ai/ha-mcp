@@ -751,6 +751,10 @@ class AuthorizationServerMetadataView(HomeAssistantView):
         return web.json_response(
             {
                 "issuer": as_url,
+                # RFC 9207 §3: authorization responses carry ``iss`` (the
+                # AuthorizeView redirects); omission reads as "not supported"
+                # to discovery clients.
+                "authorization_response_iss_parameter_supported": True,
                 "authorization_endpoint": f"{base}{AUTHORIZE_PATH}",
                 "token_endpoint": f"{base}{TOKEN_PATH}",
                 "response_types_supported": ["code"],

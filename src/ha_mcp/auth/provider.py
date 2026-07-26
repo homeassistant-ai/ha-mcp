@@ -18,7 +18,7 @@ import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from fastmcp.server.auth.auth import (
     AccessToken,  # FastMCP version has claims field
@@ -379,6 +379,47 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         """
         return str(AnyHttpUrl(str(self.base_url).rstrip("/")))
 
+    def _ensure_single_iss(self, url: str) -> str:
+        """Return ``url`` carrying the RFC 9207 ``iss`` parameter exactly once.
+
+        A registered redirect URI may itself carry an ``iss`` query parameter;
+        blindly appending ours would produce an ambiguous double-``iss``
+        response — and common parsers take the FIRST value, which is precisely
+        the issuer mix-up RFC 9207 exists to prevent. Any pre-existing ``iss``
+        is dropped so the one this server stamps is authoritative.
+        """
+        parsed = urlparse(url)
+        params = [
+            (k, v) for k, vs in parse_qs(parsed.query).items() for v in vs if k != "iss"
+        ]
+        params.append(("iss", self._issuer()))
+        return urlunparse(parsed._replace(query=urlencode(params)))
+
+    def _wrap_authorize_with_iss(self, endpoint: Any) -> Any:
+        """Wrap the SDK's ``/authorize`` endpoint to stamp ``iss`` on its
+        error redirects.
+
+        The SDK's ``AuthorizationHandler`` builds OAuth error authorization
+        responses (invalid scope, ``authorize()`` raising after redirect-URI
+        validation) itself, without the RFC 9207 ``iss`` parameter — only our
+        consent-form success path carries it otherwise. Success on this route
+        is a same-origin redirect to the consent form (no ``error``), which is
+        not an authorization response and stays untouched.
+        """
+
+        async def authorize_with_iss(request: Request) -> Response:
+            response = await endpoint(request)
+            location = response.headers.get("location", "")
+            if (
+                response.status_code in (302, 303, 307)
+                and location
+                and "error" in parse_qs(urlparse(location).query)
+            ):
+                response.headers["location"] = self._ensure_single_iss(location)
+            return response
+
+        return authorize_with_iss
+
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         """
         Get OAuth routes including custom consent form routes.
@@ -417,6 +458,11 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             # Add response_modes_supported (required by some OAuth clients)
             metadata_dict["response_modes_supported"] = ["query"]
 
+            # RFC 9207 §3: advertise that authorization responses carry the
+            # ``iss`` parameter — omission means "not supported" to
+            # discovery-driven clients even though redirects now include it.
+            metadata_dict["authorization_response_iss_parameter_supported"] = True
+
             # Add "none" auth method for public clients with PKCE (used by Claude.ai)
             if "token_endpoint_auth_methods_supported" in metadata_dict:
                 if "none" not in metadata_dict["token_endpoint_auth_methods_supported"]:
@@ -452,6 +498,16 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                             enhanced_metadata_handler, ["GET", "OPTIONS"]
                         ),
                         methods=["GET", "OPTIONS"],
+                    )
+                )
+            elif isinstance(route, Route) and route.path == "/authorize":
+                # RFC 9207: the SDK handler's own error redirects must carry
+                # ``iss`` too — see _wrap_authorize_with_iss.
+                enhanced_routes.append(
+                    Route(
+                        path=route.path,
+                        endpoint=self._wrap_authorize_with_iss(route.endpoint),
+                        methods=list(route.methods or []),
                     )
                 )
             else:
@@ -706,12 +762,16 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         # Redirect back to client with auth code. RFC 9207: the authorization
         # response carries the issuer that produced it, so a client registered
         # with several authorization servers cannot be fed a code minted by a
-        # different one.
-        redirect_uri = construct_redirect_uri(
-            pending["redirect_uri"],
-            code=auth_code_value,
-            state=pending.get("state"),
-            iss=self._issuer(),
+        # different one. _ensure_single_iss (rather than an ``iss=`` kwarg
+        # here) collapses any ``iss`` baked into the registered redirect URI —
+        # construct_redirect_uri appends blindly, and a double ``iss`` is
+        # ambiguous to strict clients.
+        redirect_uri = self._ensure_single_iss(
+            construct_redirect_uri(
+                pending["redirect_uri"],
+                code=auth_code_value,
+                state=pending.get("state"),
+            )
         )
 
         logger.info(f"Authorization successful for client {client_id}")

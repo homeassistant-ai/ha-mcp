@@ -108,6 +108,9 @@ async def test_metadata_endpoint_serves_enhanced_metadata(oauth_app, discovery_p
     assert "none" in data["token_endpoint_auth_methods_supported"], (
         "public-client PKCE 'none' auth method missing — handler was not applied"
     )
+    # RFC 9207 §3: redirects carry ``iss``, so the document must advertise it —
+    # omission reads as "not supported" to discovery-driven clients.
+    assert data["authorization_response_iss_parameter_supported"] is True
 
 
 @pytest.mark.asyncio

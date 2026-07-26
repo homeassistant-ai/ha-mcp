@@ -1133,3 +1133,13 @@ class TestEnsureLegacyOAuthSecrets:
         assert data[DATA_OAUTH_CLIENT_ID] == "already-set"
         assert data[DATA_OAUTH_SIGNING_KEY] == "ee" * 32  # unchanged
         assert options[OPT_OAUTH_CLIENT_ID] == ""
+
+
+class TestRfc9207MetadataAdvertisement:
+    """RFC 9207 §3: the legacy document advertises response issuer support."""
+
+    def test_legacy_document_advertises_iss_support(self):
+        from custom_components.ha_mcp_tools import mcp_webhook
+
+        doc = mcp_webhook._legacy_authorization_server_document("https://ha.example")
+        assert doc["authorization_response_iss_parameter_supported"] is True

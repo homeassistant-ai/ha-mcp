@@ -408,11 +408,15 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         and p.get("entries_loaded", 0) < p.get("entries_total", 0)
     ]
     if drift_samples:
+        culprits = sorted(
+            {p.get("unloaded") for p in drift_samples if p.get("unloaded")}
+        )
         terminalreporter.write_line(
             f"⚠️ [READINESS_GATE_DRIFT] {len(drift_samples)} core_state sample(s) "
             f"with entries_loaded < entries_total — a slow integration "
             f"finished async_setup_entry after CoreState.RUNNING; "
             f"follow-up gate justified."
+            + (f" Not loaded: {'; '.join(culprits)}" if culprits else "")
         )
 
 
@@ -1179,9 +1183,14 @@ def _snapshot_config_entries(
     headers: dict[str, str],
     *,
     timeout: float = 5.0,
-) -> tuple[int, int, bool]:
-    """Return ``(loaded_count, total_count, snapshot_ok)`` from
+) -> tuple[int, int, bool, str]:
+    """Return ``(loaded_count, total_count, snapshot_ok, unloaded)`` from
     ``/api/config/config_entries/entry``.
+
+    ``unloaded`` names the entries that are NOT ``state == "loaded"`` as a
+    comma-joined ``domain:state`` string (capped at 5), so a drift sample
+    identifies the culprit directly — count-only telemetry left the
+    2033-arm ``11/12`` incidents unattributable without container logs.
 
     Used by ``_wait_for_core_state_running`` to capture the entry-state
     snapshot at the trip moment (and on timeout) so post-merge data can
@@ -1205,33 +1214,40 @@ def _snapshot_config_entries(
         )
         if resp.status_code != 200:
             logger.debug(f"snapshot_config_entries: HTTP {resp.status_code}")
-            return 0, 0, False
+            return 0, 0, False, ""
         entries = resp.json()
         if not isinstance(entries, list):
             logger.debug(
                 f"snapshot_config_entries: unexpected body type {type(entries).__name__}"
             )
-            return 0, 0, False
+            return 0, 0, False, ""
         total = len(entries)
         loaded = sum(
             1 for e in entries if isinstance(e, dict) and e.get("state") == "loaded"
         )
-        return loaded, total, True
+        unloaded = ",".join(
+            f"{e.get('domain', '?')}:{e.get('state', '?')}"
+            for e in entries
+            if isinstance(e, dict) and e.get("state") != "loaded"
+        )[:200]
+        return loaded, total, True, unloaded
     except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
         logger.debug(f"snapshot_config_entries: {type(exc).__name__}: {exc}")
-        return 0, 0, False
+        return 0, 0, False, ""
 
 
 def _wait_for_core_state_running(
     base_url: str,
     headers: dict[str, str],
     timeout: int,
-) -> tuple[bool, float, str, int, int, bool]:
+) -> tuple[bool, float, str, int, int, bool, str]:
     """Poll ``/api/core/state`` until ``state == "RUNNING"``.
 
     Returns ``(success, elapsed_s, last_state, entries_loaded,
-    entries_total, snapshot_ok)``. ``snapshot_ok=False`` flags that the
-    entries fields are sentinel zeros rather than real data.
+    entries_total, snapshot_ok, entries_unloaded)``. ``snapshot_ok=False``
+    flags that the entries fields are sentinel zeros rather than real
+    data; ``entries_unloaded`` names the not-loaded entries as
+    ``domain:state`` pairs (empty when all loaded).
 
     HA Core's ``APICoreStateView`` (``homeassistant/components/api/__init__.py``)
     is the documented Supervisor-facing readiness endpoint: it reports the
@@ -1278,12 +1294,13 @@ def _wait_for_core_state_running(
                 last_state = state_value
                 if state_value == "RUNNING":
                     elapsed = time.monotonic() - start_time
-                    entries_loaded, entries_total, snapshot_ok = (
+                    entries_loaded, entries_total, snapshot_ok, entries_unloaded = (
                         _snapshot_config_entries(base_url, headers)
                     )
                     logger.info(
                         f"🏃 CoreState.RUNNING after {elapsed:.1f}s "
                         f"(entries loaded: {entries_loaded}/{entries_total}"
+                        f"{f', not loaded: {entries_unloaded}' if entries_unloaded else ''}"
                         f"{'' if snapshot_ok else ', snapshot unavailable'})"
                     )
                     return (
@@ -1293,6 +1310,7 @@ def _wait_for_core_state_running(
                         entries_loaded,
                         entries_total,
                         snapshot_ok,
+                        entries_unloaded,
                     )
             else:
                 # Surface HTTP status as a fallback ``last_state`` so a
@@ -1308,8 +1326,8 @@ def _wait_for_core_state_running(
     # Final snapshot for the failure-diagnostics path — HA is known-bad
     # by this point, so use a tight 2s timeout rather than the default 5s
     # to keep teardown responsive.
-    entries_loaded, entries_total, snapshot_ok = _snapshot_config_entries(
-        base_url, headers, timeout=2.0
+    entries_loaded, entries_total, snapshot_ok, entries_unloaded = (
+        _snapshot_config_entries(base_url, headers, timeout=2.0)
     )
     return (
         False,
@@ -1318,6 +1336,7 @@ def _wait_for_core_state_running(
         entries_loaded,
         entries_total,
         snapshot_ok,
+        entries_unloaded,
     )
 
 
@@ -2338,6 +2357,7 @@ def _wait_for_testcontainer_ready(
         entries_loaded,
         entries_total,
         snapshot_ok,
+        entries_unloaded,
     ) = _wait_for_core_state_running(base_url, headers, CORE_STATE_TIMEOUT)
     if not core_state_ok:
         _dump_ha_readiness_diagnostics(
@@ -2359,6 +2379,9 @@ def _wait_for_testcontainer_ready(
         entries_loaded=entries_loaded,
         entries_total=entries_total,
         snapshot_ok=snapshot_ok,
+        # Only stamped when something is actually unloaded, so the common
+        # all-loaded line stays compact.
+        **({"unloaded": entries_unloaded} if entries_unloaded else {}),
     )
 
     _wait_for_testcontainer_sun(base_url, headers, container, SUN_WAIT)

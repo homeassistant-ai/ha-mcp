@@ -3255,6 +3255,10 @@ class TestAuthorizationServerView:
         assert "S256" in body["code_challenge_methods_supported"]
         assert "client_secret_basic" in body["token_endpoint_auth_methods_supported"]
         assert "client_secret_post" in body["token_endpoint_auth_methods_supported"]
+        # RFC 9207 §3 advertisement — gated like the redirect assertions: the
+        # stable flavor skips until promoted.
+        if _rfc9207_iss_supported():
+            assert body["authorization_response_iss_parameter_supported"] is True
 
 
 class TestWellKnownMetadataViews:
@@ -6018,6 +6022,10 @@ class TestNoneAutoApproveMode:
         assert doc["response_types_supported"] == ["code"]
         assert doc["grant_types_supported"] == ["authorization_code"]
         assert doc["code_challenge_methods_supported"] == ["S256"]
+        # RFC 9207 §3 advertisement — gated like the redirect assertions: the
+        # stable flavor skips until promoted.
+        if _rfc9207_iss_supported():
+            assert doc["authorization_response_iss_parameter_supported"] is True
         # The two fields HA core's root doc lacks — the whole reason for #1969.
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
         assert doc["client_id_metadata_document_supported"] is True

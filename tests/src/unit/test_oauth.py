@@ -1807,3 +1807,52 @@ class TestRunOAuthServerSettingsUI:
         paths = [c.args[0] for c in mock_mcp.custom_route.call_args_list]
 
         assert not any("settings" in p for p in paths)
+
+
+class TestRfc9207ResponseHygiene:
+    """RFC 9207 hardening beyond the consent-path ``iss`` stamp: the SDK
+    handler's own error redirects carry ``iss`` too, and a redirect URI with a
+    baked-in ``iss`` cannot produce an ambiguous double-``iss`` response."""
+
+    @pytest.fixture
+    def provider(self):
+        return HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+
+    def test_ensure_single_iss_collapses_preexisting_iss(self, provider):
+        url = provider._ensure_single_iss(
+            "https://client.example/cb?iss=evil&code=abc&state=s"
+        )
+        params = parse_qs(urlparse(url).query)
+        assert params["iss"] == [provider._issuer()]
+        assert params["code"] == ["abc"]
+        assert params["state"] == ["s"]
+
+    @pytest.mark.asyncio
+    async def test_authorize_wrap_stamps_iss_on_error_redirect(self, provider):
+        from starlette.responses import RedirectResponse
+
+        async def sdk_endpoint(request):
+            return RedirectResponse(
+                "https://client.example/cb?error=invalid_scope&state=s",
+                status_code=302,
+            )
+
+        wrapped = provider._wrap_authorize_with_iss(sdk_endpoint)
+        response = await wrapped(MagicMock())
+        params = parse_qs(urlparse(response.headers["location"]).query)
+        assert params["iss"] == [provider._issuer()]
+        assert params["error"] == ["invalid_scope"]
+        assert params["state"] == ["s"]
+
+    @pytest.mark.asyncio
+    async def test_authorize_wrap_leaves_consent_redirect_untouched(self, provider):
+        from starlette.responses import RedirectResponse
+
+        consent_url = "http://localhost:8086/consent?txn_id=t1"
+
+        async def sdk_endpoint(request):
+            return RedirectResponse(consent_url, status_code=302)
+
+        wrapped = provider._wrap_authorize_with_iss(sdk_endpoint)
+        response = await wrapped(MagicMock())
+        assert response.headers["location"] == consent_url

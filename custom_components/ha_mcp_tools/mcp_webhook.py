@@ -313,6 +313,9 @@ def _legacy_authorization_server_document(base: str) -> dict[str, Any]:
     ``/authorize`` + ``/token`` views (see :mod:`oauth_legacy`)."""
     return {
         "issuer": oauth_issuer(base),
+        # RFC 9207 §3: authorization responses carry ``iss`` (oauth_legacy's
+        # redirects); omission reads as "not supported" to discovery clients.
+        "authorization_response_iss_parameter_supported": True,
         "authorization_endpoint": f"{base}{AUTHORIZE_PATH}",
         "token_endpoint": f"{base}{TOKEN_PATH}",
         "response_types_supported": ["code"],
@@ -341,6 +344,9 @@ def _none_mode_authorization_server_document(base: str) -> dict[str, Any]:
     """
     return {
         "issuer": oauth_issuer(base),
+        # RFC 9207 §3: authorization responses carry ``iss`` (the auto-approve
+        # redirects); omission reads as "not supported" to discovery clients.
+        "authorization_response_iss_parameter_supported": True,
         "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
         "token_endpoint": f"{base}{OAUTH_BASE}/token",
         "response_types_supported": ["code"],
