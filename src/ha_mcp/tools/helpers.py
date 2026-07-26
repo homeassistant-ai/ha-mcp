@@ -526,9 +526,12 @@ def log_tool_usage(func: Any) -> Any:
             elif hasattr(result, "__len__"):
                 response_size = len(str(result).encode("utf-8"))
             return result
-        except Exception as e:
+        except BaseException as e:
+            # BaseException, not Exception: a cancelled tool call must not be
+            # recorded as a success. str() is empty on a bare CancelledError,
+            # so the class name stands in.
             success = False
-            error_message = str(e)
+            error_message = str(e) or type(e).__name__
             raise
         finally:
             execution_time_ms = (time.time() - start_time) * 1000
