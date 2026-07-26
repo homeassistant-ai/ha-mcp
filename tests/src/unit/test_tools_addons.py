@@ -3768,6 +3768,91 @@ class TestSupervisorApiCallTimeout:
         assert "timeout" not in message
 
 
+class TestSupervisorJobGroupCollisionRetry:
+    """Supervisor serialises jobs per add-on job group.
+
+    A state-changing call lands on "Another job is running for job group
+    addon_<slug>" whenever a still-settling job holds that group. The holder
+    clears within seconds, so the call is retried inside one bounded window
+    instead of surfacing a failure the caller can do nothing with. Every other
+    failure must still raise on the first attempt.
+    """
+
+    @staticmethod
+    def _collision(slug: str = "a0d7b954_appdaemon") -> dict:
+        return {
+            "success": False,
+            "error": f"Another job is running for job group addon_{slug}",
+        }
+
+    @pytest.mark.asyncio
+    async def test_job_group_collision_is_retried_until_it_clears(self):
+        """The transient collision is retried and the eventual success returned."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            side_effect=[
+                self._collision(),
+                self._collision(),
+                {"success": True, "result": {"state": "stopped"}},
+            ]
+        )
+
+        with patch("ha_mcp.tools.tools_addons.asyncio.sleep", new=AsyncMock()):
+            result = await _supervisor_api_call(
+                client, "/addons/a0d7b954_appdaemon/stop", method="POST"
+            )
+
+        assert result == {"success": True, "result": {"state": "stopped"}}
+        assert client.send_websocket_message.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_other_failures_raise_on_first_attempt(self):
+        """A non-collision failure must not be retried — it would mask the error."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "Addon is not installed"}
+        )
+
+        with (
+            patch("ha_mcp.tools.tools_addons.asyncio.sleep", new=AsyncMock()),
+            pytest.raises(ToolError),
+        ):
+            await _supervisor_api_call(
+                client, "/addons/a0d7b954_appdaemon/stop", method="POST"
+            )
+
+        assert client.send_websocket_message.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_window_is_bounded(self):
+        """A group that never clears gives up rather than retrying forever."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(return_value=self._collision())
+
+        # Advance the clock past the window on each poll so the bound is hit
+        # deterministically, without sleeping in the test.
+        ticks = iter([0.0] + [float(i) * 20.0 for i in range(1, 40)])
+        with (
+            patch("ha_mcp.tools.tools_addons.asyncio.sleep", new=AsyncMock()),
+            patch(
+                "ha_mcp.tools.tools_addons.time.monotonic",
+                side_effect=lambda: next(ticks),
+            ),
+            pytest.raises(ToolError),
+        ):
+            await _supervisor_api_call(
+                client, "/addons/a0d7b954_appdaemon/stop", method="POST"
+            )
+
+        assert client.send_websocket_message.await_count < 10
+
+
 class TestManageAddonActionMode:
     """Lifecycle (action) mode: install/start/stop/etc. via Supervisor."""
 

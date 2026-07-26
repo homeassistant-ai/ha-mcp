@@ -210,6 +210,15 @@ def _merge_options(base: dict, override: dict) -> dict:
     return merged
 
 
+# Substring of Supervisor's per-job-group rejection ("Another job is running
+# for job group addon_<slug>"), matched case-insensitively, plus the bounded
+# wall-clock window and backoff used to ride it out. See _supervisor_api_call.
+_JOB_COLLISION_MARKER = "another job is running"
+_JOB_COLLISION_RETRY_WINDOW = 60.0
+_JOB_COLLISION_RETRY_INITIAL_DELAY = 1.0
+_JOB_COLLISION_RETRY_MAX_DELAY = 5.0
+
+
 async def _supervisor_api_call(
     client: HomeAssistantClient,
     endpoint: str,
@@ -252,16 +261,43 @@ async def _supervisor_api_call(
         # ``{"success": False, "error": ...}``; re-raise it as the same
         # ``HomeAssistantCommandError`` the dedicated send_command used to raise
         # so the classifier below maps schema/not-found/etc. identically.
-        result = await client.send_websocket_message(
-            {"type": "supervisor/api", "_wait_timeout": wait_timeout, **kwargs}
-        )
-
-        if not result.get("success"):
-            raise HomeAssistantCommandError(
-                str(result.get("error", f"Supervisor API call failed: {endpoint}"))
+        #
+        # Supervisor serialises jobs per add-on job group, so a state-changing
+        # call is rejected outright with "Another job is running for job group
+        # addon_<slug>" whenever a still-settling job (a watchdog restart, a
+        # prior start/stop, a store reload) still holds that group. The holder
+        # clears within seconds and the caller can do nothing useful with the
+        # failure, so retry inside one bounded wall-clock window rather than
+        # surfacing it. The window is total, not per-attempt, so a persistently
+        # blocked group cannot stretch this into N * timeout. Matched as a
+        # case-insensitive substring on Supervisor's own error text; every
+        # other failure raises on the first attempt, so this never masks a
+        # real error.
+        deadline = time.monotonic() + _JOB_COLLISION_RETRY_WINDOW
+        delay = _JOB_COLLISION_RETRY_INITIAL_DELAY
+        while True:
+            result = await client.send_websocket_message(
+                {"type": "supervisor/api", "_wait_timeout": wait_timeout, **kwargs}
             )
 
-        return {"success": True, "result": result.get("result", {})}
+            if result.get("success"):
+                return {"success": True, "result": result.get("result", {})}
+
+            error_text = str(
+                result.get("error", f"Supervisor API call failed: {endpoint}")
+            )
+            remaining = deadline - time.monotonic()
+            if _JOB_COLLISION_MARKER not in error_text.lower() or remaining <= 0:
+                raise HomeAssistantCommandError(error_text)
+
+            logger.info(
+                "Supervisor job-group collision on %s; retrying in %.1fs (%s)",
+                endpoint,
+                delay,
+                error_text,
+            )
+            await asyncio.sleep(min(delay, remaining))
+            delay = min(delay * 2, _JOB_COLLISION_RETRY_MAX_DELAY)
 
     except ToolError:
         raise
