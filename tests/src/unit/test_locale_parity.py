@@ -20,11 +20,13 @@ so their key and placeholder parity is checked here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -79,6 +81,35 @@ def _translated_component_locales() -> list[str]:
     return sorted(
         path.stem for path in COMPONENT_TRANSLATIONS.glob("*.json") if path.stem != "en"
     )
+
+
+BASELINE_PATH = Path(__file__).with_name("locale_source_baseline.json")
+
+
+def english_sources() -> dict[str, dict[str, str]]:
+    """Hash every English string a translation is written against, per surface.
+
+    Imported by ``scripts/update_locale_baseline.py`` so the baseline and the
+    check that reads it can never disagree about what is hashed.
+    """
+    sources = {
+        "src/ha_mcp/settings_ui/locales": _flatten(
+            json.loads((SETTINGS_LOCALES / "en.json").read_text("utf-8"))
+        ),
+        "custom_components/ha_mcp_tools/translations": _component_catalog("en"),
+    }
+    for addon_dir in ADDON_DIRS:
+        sources[f"{addon_dir.name}/translations"] = _flatten(
+            yaml.safe_load((addon_dir / "translations" / "en.yaml").read_text("utf-8"))
+        )
+    return {
+        surface: {
+            key: hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+            for key, text in strings.items()
+            if isinstance(text, str)
+        }
+        for surface, strings in sources.items()
+    }
 
 
 def test_every_locale_ships_on_every_surface() -> None:
@@ -181,6 +212,52 @@ def test_component_catalog_keeps_english_placeholders(locale: str) -> None:
     assert not mismatched, (
         f"custom_components/ha_mcp_tools/translations/{locale}.json changes the "
         f"placeholder set of (key: english, translated) {mismatched}"
+    )
+
+
+def test_translations_are_checked_against_current_english() -> None:
+    """Catch the drift key parity cannot see: same key, changed meaning.
+
+    #1993 rewrote a policy string from ALL-match to ANY-match. The key stayed,
+    the placeholder set stayed empty, and every existing check passed while the
+    Chinese text told users the opposite of what the server enforces. The
+    baseline pins the English each translation was written against, so moving
+    an English string fails here until the locales are revisited.
+    """
+    baseline = json.loads(BASELINE_PATH.read_text("utf-8"))
+    current = english_sources()
+
+    changed: list[str] = []
+    unrecorded: list[str] = []
+    for surface, hashes in current.items():
+        recorded = baseline.get(surface, {})
+        changed += [
+            f"{surface}: {key}"
+            for key, digest in hashes.items()
+            if key in recorded and recorded[key] != digest
+        ]
+        unrecorded += [f"{surface}: {key}" for key in hashes if key not in recorded]
+    dropped = [
+        f"{surface}: {key}"
+        for surface, hashes in baseline.items()
+        for key in hashes
+        if key not in current.get(surface, {})
+    ]
+
+    detail = "; ".join(
+        f"{label} {sorted(items)[:10]}{'...' if len(items) > 10 else ''}"
+        for label, items in (
+            ("english text changed for", changed),
+            ("new english strings", unrecorded),
+            ("english strings removed", dropped),
+        )
+        if items
+    )
+    assert not detail, (
+        "the English source moved out from under the translations. Update "
+        "every locale carrying the changed keys (or confirm the existing "
+        "wording still reads correctly), then run "
+        f"`python scripts/update_locale_baseline.py`. {detail}"
     )
 
 

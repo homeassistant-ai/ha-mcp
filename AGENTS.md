@@ -724,10 +724,11 @@ key with identical `{placeholders}`. Add-on catalogs need `name` +
 `description` for every `schema:` key of *that* flavor's `config.yaml`; the two
 flavors differ.
 
-**Changing an English string means updating every locale that carries it** (or
-deleting the stale translation): #1993 flipped a policy string from ALL-match
-to ANY-match and left the Chinese text asserting the opposite — no key-parity
-test catches that.
+**Changing an English string means updating every locale that carries it**,
+then `python scripts/update_locale_baseline.py`. The baseline pins the English
+each translation was written against, because key parity cannot see a string
+whose meaning changed: #1993 flipped a policy string from ALL-match to
+ANY-match and left the Chinese text asserting the opposite.
 
 ## Home Assistant Add-on
 
