@@ -307,6 +307,24 @@ class TestForwardingHandler:
 
 
 # ---------------------------------------------------------------------------
+# Relay client timeout
+# ---------------------------------------------------------------------------
+
+
+class TestRelayClientTimeout:
+    """An MCP response stream may stay open indefinitely (the upcoming spec's
+    ``subscriptions/listen``), so the relay session must be bounded by read
+    idleness, never by elapsed wall-clock time."""
+
+    def test_no_wall_clock_total_bound(self):
+        assert mw._CLIENT_TIMEOUT.total is None
+
+    def test_idle_and_connect_bounds_still_set(self):
+        assert mw._CLIENT_TIMEOUT.sock_read == 300
+        assert mw._CLIENT_TIMEOUT.sock_connect == 10
+
+
+# ---------------------------------------------------------------------------
 # Auth gate — ha_auth posture
 # ---------------------------------------------------------------------------
 

@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import types
+from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,6 +33,9 @@ WEBHOOK_PROXY_VARIANTS = {
         "oauth_marker": "/config/.mcp_proxy_oauth_restart_required",
         "sibling_base": "ha_mcp_webhook_proxy_dev",
         "mutex_id": "mcp_proxy_mutex",
+        # Wall-clock bound on the relay session. Dropped on dev so a long-lived
+        # MCP response stream is not cut every 300s; promote carries it across.
+        "relay_timeout_total": 300,
     },
     "dev": {
         "key": "dev",
@@ -45,6 +49,7 @@ WEBHOOK_PROXY_VARIANTS = {
         "oauth_marker": "/config/.mcp_proxy_dev_oauth_restart_required",
         "sibling_base": "ha_mcp_webhook_proxy",
         "mutex_id": "mcp_proxy_dev_mutex",
+        "relay_timeout_total": None,
     },
 }
 
@@ -93,6 +98,22 @@ class _FakeConfigEntryError(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class _FakeClientTimeout:
+    """Field-faithful stand-in for ``aiohttp.ClientTimeout``.
+
+    Mirrors aiohttp's own defaults — every bound is ``None`` unless passed — so
+    tests can assert on the timeout object the relay session is built with,
+    including the bounds it deliberately leaves unset.
+    """
+
+    total: float | None = None
+    connect: float | None = None
+    sock_read: float | None = None
+    sock_connect: float | None = None
+    ceil_threshold: float = 5
+
+
 def _install_runtime_stubs():
     """Inject homeassistant.* and aiohttp stubs into sys.modules.
 
@@ -119,7 +140,7 @@ def _install_runtime_stubs():
 
     aiohttp_mod = types.ModuleType("aiohttp")
     aiohttp_mod.ClientSession = MagicMock(name="ClientSession")
-    aiohttp_mod.ClientTimeout = MagicMock(name="ClientTimeout")
+    aiohttp_mod.ClientTimeout = _FakeClientTimeout
     aiohttp_mod.ClientError = type("ClientError", (Exception,), {})
     aiohttp_web = types.ModuleType("aiohttp.web")
     aiohttp_web.Request = MagicMock
@@ -1412,6 +1433,52 @@ class TestSetupEntrySurfaceFailures:
 
         assert result is True
         assert mod.DOMAIN not in hass.data
+
+
+class TestRelaySessionTimeout:
+    """An MCP response stream may stay open indefinitely (the upcoming spec's
+    ``subscriptions/listen``), so the relay session is bounded by read idleness
+    rather than elapsed wall-clock time — a ``total`` bound would cut a healthy
+    stream and force the client to re-subscribe."""
+
+    @pytest.fixture
+    def mod(self):
+        return _import_mcp_proxy()
+
+    @pytest.fixture
+    def hass(self):
+        h = MagicMock()
+        h.data = {}
+
+        async def run_executor(func, *args):
+            return func(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=run_executor)
+        return h
+
+    async def _setup_timeout(self, mod, hass):
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(
+                mod.aiohttp, "ClientSession", return_value=MagicMock()
+            ) as mock_session,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+        return mock_session.call_args.kwargs["timeout"]
+
+    async def test_wall_clock_total_bound(self, mod, hass):
+        timeout = await self._setup_timeout(mod, hass)
+        assert timeout.total == CURRENT["relay_timeout_total"]
+
+    async def test_idle_and_connect_bounds_still_set(self, mod, hass):
+        timeout = await self._setup_timeout(mod, hass)
+        assert timeout.sock_read == 300
+        assert timeout.sock_connect == 10
 
 
 class TestUnloadEntry:
