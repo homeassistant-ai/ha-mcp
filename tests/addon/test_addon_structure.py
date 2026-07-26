@@ -18,6 +18,13 @@ except ImportError:
 ADDON_DIR = "homeassistant-addon"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Resolved once at import: pytest parametrizes at collection time, so an empty
+# list would collect zero cases and report as skipped rather than failed.
+# test_addon_config_glob_is_not_empty below is what keeps that honest.
+_ADDON_DIRS = sorted(
+    path.parent.name for path in _REPO_ROOT.glob("homeassistant-addon*/config.yaml")
+)
+
 
 class TestAddonStructure:
     """Verify add-on meets Home Assistant requirements."""
@@ -255,13 +262,19 @@ class TestAddonStructure:
         assert first_line.startswith("#!"), "start.py missing shebang"
         assert "python" in first_line.lower(), "start.py shebang must reference python"
 
-    @pytest.mark.parametrize(
-        "addon_dir",
-        sorted(
-            str(path.parent.name)
-            for path in _REPO_ROOT.glob("homeassistant-addon*/config.yaml")
-        ),
-    )
+    def test_addon_config_glob_is_not_empty(self):
+        """``test_translations_cover_every_schema_key`` is parametrized over
+        this glob at collection time. An empty glob collects zero cases and
+        pytest reports it as skipped, which reads as green — so assert the
+        glob found something, the way the in-body glob in
+        ``test_addon_names_are_backup_filename_safe`` does.
+        """
+        assert _ADDON_DIRS, (
+            "no homeassistant-addon*/config.yaml found — the schema-key "
+            "translation check would silently collect zero cases"
+        )
+
+    @pytest.mark.parametrize("addon_dir", _ADDON_DIRS)
     def test_translations_cover_every_schema_key(self, addon_dir):
         """Every key declared in ``config.yaml``'s ``schema:`` must have a
         matching ``configuration.<key>`` entry — with both ``name`` and

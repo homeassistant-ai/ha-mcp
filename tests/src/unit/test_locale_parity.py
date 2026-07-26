@@ -22,9 +22,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-from pathlib import Path
+import subprocess
+from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
@@ -69,30 +69,37 @@ ENGLISH_ONLY_SURFACES = {
     ),
 }
 
-_UNSEARCHED_DIRS = {
-    ".git",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "local",
-    "node_modules",
-    "tests",
-    "worktree",
+VENDORED_SURFACES = {
+    "tests/initial_test_state/custom_components/hacs/translations": (
+        "third-party HACS integration, vendored to seed the e2e container — "
+        "upstream's catalogs, not ours to translate"
+    ),
 }
 
 
 def _discover_translation_surfaces() -> set[str]:
-    """Every catalog directory in the tree, however it got there."""
-    found: set[str] = set()
-    for root, dirs, _files in os.walk(_REPO_ROOT):
-        dirs[:] = [name for name in dirs if name not in _UNSEARCHED_DIRS]
-        for name in dirs:
-            if name in {"translations", "locales"}:
-                found.add(str((Path(root) / name).relative_to(_REPO_ROOT)))
-    return found
+    """Every catalog directory git tracks.
+
+    Deliberately not a filesystem walk: that reads whatever the working tree
+    happens to contain, so a contributor whose virtualenv lives in ``venv/``
+    rather than ``.venv/`` gets a red test naming a vendored package's
+    ``locales/`` directory they were right to have. Tracked content is the
+    thing this rule is actually about.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split("\0")
+    return {
+        str(parent)
+        for path in tracked
+        if path
+        for parent in [PurePosixPath(path).parent]
+        if parent.name in {"translations", "locales"}
+    }
 
 
 def _surfaces() -> dict[str, set[str]]:
@@ -207,19 +214,21 @@ def test_every_translation_surface_is_guarded_or_english_only() -> None:
     unnoticed exactly as zh-Hans did.
     """
     discovered = _discover_translation_surfaces()
-    accounted = GUARDED_SURFACES | set(ENGLISH_ONLY_SURFACES)
+    accounted = GUARDED_SURFACES | set(ENGLISH_ONLY_SURFACES) | set(VENDORED_SURFACES)
 
     unaccounted = sorted(discovered - accounted)
     assert not unaccounted, (
-        f"new translation surface(s) {unaccounted}: either add them to "
+        f"new translation surface(s) {unaccounted}: add them to "
         "GUARDED_SURFACES and ship every locale there, or record them in "
-        "ENGLISH_ONLY_SURFACES with the reason they stay English"
+        "ENGLISH_ONLY_SURFACES / VENDORED_SURFACES with the reason they are "
+        "exempt"
     )
 
     vanished = sorted(accounted - discovered)
     assert not vanished, (
         f"{vanished} no longer exist(s) — drop them from GUARDED_SURFACES / "
-        "ENGLISH_ONLY_SURFACES so the lists keep meaning something"
+        "ENGLISH_ONLY_SURFACES / VENDORED_SURFACES so the lists keep meaning "
+        "something"
     )
 
 
