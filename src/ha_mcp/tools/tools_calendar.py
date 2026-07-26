@@ -262,7 +262,7 @@ class CalendarTools:
             return False
 
     def _build_set_calendar_event_error_suggestions(
-        self, entity_id: str, rrule: str | None, error: Exception
+        self, entity_id: str, rrule: str | None, error: Exception, date_only: bool
     ) -> list[str]:
         """Build suggestions for a failed ha_config_set_calendar_event call."""
         if isinstance(error, HomeAssistantConnectionError):
@@ -293,8 +293,10 @@ class CalendarTools:
             suggestions.insert(0, "This calendar does not support event creation")
         # HA enforces MIN_NEW_EVENT_DURATION (1 second): for all-day events the
         # end date is exclusive, so start == end has zero duration and is
-        # rejected. Steer the agent to bump the end date by a day.
-        if "duration" in error_str.lower():
+        # rejected. Steer the agent to bump the end date by a day. Gate on
+        # date-only input — the same min-duration error fires for timed events
+        # with too-close boundaries, where the fix is a later time, not +1 day.
+        if date_only and "duration" in error_str.lower():
             suggestions.insert(
                 0,
                 "For an all-day event the end date is exclusive — set end to "
@@ -373,15 +375,6 @@ class CalendarTools:
         **When NOT to use:**
         - To retrieve calendar events, use ``ha_config_get_calendar_events``.
         - To delete an event, use ``ha_config_remove_calendar_event``.
-
-        **Parameters:**
-        - entity_id: Calendar entity ID (e.g., 'calendar.family')
-        - summary: Event title/summary
-        - start: Event start date or datetime in ISO format
-        - end: Event end date or datetime in ISO format
-        - description: Optional event description
-        - location: Optional event location
-        - rrule: Optional RFC 5545 recurrence rule (creates a recurring series)
 
         **Example Usage:**
         ```python
@@ -489,7 +482,10 @@ class CalendarTools:
             logger.error(f"Failed to create calendar event in {entity_id}: {error}")
 
             suggestions = self._build_set_calendar_event_error_suggestions(
-                entity_id, rrule, error
+                entity_id,
+                rrule,
+                error,
+                self._is_date_only(start) and self._is_date_only(end),
             )
 
             exception_to_structured_error(

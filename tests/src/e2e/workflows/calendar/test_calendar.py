@@ -319,11 +319,14 @@ class TestCalendarEventLifecycle:
                 "end": end_date.isoformat(),
             },
         )
-        if not create_data.get("success"):
-            pytest.skip(
-                f"Calendar {calendar_entity} does not support event creation: "
-                f"{extract_error_message(create_data) or 'Unknown'}"
-            )
+        # The testcontainer seeds a writable local_calendar (preferred by
+        # _find_writable_calendar), so all-day creation must succeed here.
+        # Skipping on failure would let the exact regression this test guards
+        # against slip through with CI still green.
+        assert create_data.get("success"), (
+            f"all-day event creation failed on writable calendar "
+            f"{calendar_entity}: {extract_error_message(create_data) or create_data}"
+        )
 
         event_uid: str | None = None
         try:
