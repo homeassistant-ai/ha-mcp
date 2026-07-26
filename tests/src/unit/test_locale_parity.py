@@ -4,8 +4,8 @@ A language reaches users through four independent catalogs: the web settings
 UI, the custom component's config/options flow, and the two add-on flavors.
 Nothing links them, so a locale can be added to one surface and silently miss
 the rest — Simplified Chinese shipped for the settings UI in #1992 and left
-Chinese users an English config flow and English add-on options for a week,
-and the same half-install was proposed again for French in #2038.
+Chinese users an English config flow and English add-on options, and the same
+half-install was proposed again for French in #2038.
 
 This test makes "a locale ships everywhere or not at all" structural: add a
 catalog to one surface without the other three and CI goes red, naming the
@@ -95,13 +95,51 @@ def test_every_locale_ships_on_every_surface() -> None:
     }
 
     assert not gaps, (
-        "every language must ship on all four translated surfaces, using the "
-        "same Home Assistant language code (de, ru, zh-Hans) in each filename. "
-        "Missing: "
-        + "; ".join(
-            f"{pattern} for {', '.join(codes)}"
-            for pattern, codes in sorted(gaps.items())
+        "every language must ship on all four translated surfaces. Create: "
+        + ", ".join(
+            sorted(
+                pattern.replace("<code>", code)
+                for pattern, codes in gaps.items()
+                for code in codes
+            )
         )
+    )
+
+
+def test_locale_codes_use_one_spelling_across_surfaces() -> None:
+    """Only the settings UI is case-insensitive about the language code.
+
+    ``_i18n.normalize_locale`` lowercases catalog stems, but Home Assistant
+    loads ``translations/<code>.json`` and Supervisor keys add-on catalogs by
+    the literal filename stem — so a ``zh-hans.yaml`` typo still renders in the
+    settings UI while being invisible to both of those. Left to
+    ``test_every_locale_ships_on_every_surface`` alone it also reads as two
+    unrelated languages, each missing everywhere else, which points nowhere
+    near the actual mistake.
+    """
+    spellings: dict[str, dict[str, list[str]]] = {}
+    for pattern, codes in _surfaces().items():
+        for code in codes:
+            spellings.setdefault(code.lower(), {}).setdefault(code, []).append(pattern)
+
+    conflicts = {
+        lowered: {code: sorted(patterns) for code, patterns in variants.items()}
+        for lowered, variants in spellings.items()
+        if len(variants) > 1
+    }
+
+    assert not conflicts, (
+        "a language must use one exact filename spelling on every surface — "
+        f"Home Assistant and Supervisor match on the literal stem: {conflicts}"
+    )
+
+
+def test_component_translation_locales_are_discovered() -> None:
+    """The two parametrized tests below collect nothing on an empty glob."""
+    assert _translated_component_locales(), (
+        "no translated catalogs found in "
+        "custom_components/ha_mcp_tools/translations/ — the per-locale checks "
+        "below would pass by collecting zero cases"
     )
 
 
@@ -125,7 +163,7 @@ def test_component_catalog_matches_english_keys(locale: str) -> None:
 
 @pytest.mark.parametrize("locale", _translated_component_locales())
 def test_component_catalog_keeps_english_placeholders(locale: str) -> None:
-    """A dropped or renamed ``{placeholder}`` renders as literal text in HA."""
+    """A dropped or renamed ``{placeholder}`` loses the value HA substitutes."""
     english = _component_catalog("en")
     translated = _component_catalog(locale)
 
