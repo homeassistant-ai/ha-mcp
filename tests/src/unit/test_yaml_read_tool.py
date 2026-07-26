@@ -1,5 +1,6 @@
 """Unit tests for the ha_config_get_yaml MCP tool wrapper (#1788)."""
 
+import asyncio
 import fnmatch
 import posixpath
 from unittest.mock import AsyncMock, MagicMock
@@ -392,7 +393,7 @@ async def test_glob_malformed_response_warns_instead_of_aborting():
 
 
 async def test_single_file_malformed_response_still_raises():
-    """With one target there is nothing to salvage, so it stays an error."""
+    """A named target has no expansion to salvage, so it stays an error."""
     fn, _ = await _make_tool({"read_file": _Raw("not a dict at all")})
 
     with pytest.raises(ToolError):
@@ -459,7 +460,9 @@ async def test_bracketed_name_is_read_as_a_literal_file():
 
     assert out["files_searched"] == 1
     assert [m["file"] for m in out["matches"]] == ["packages/svc[a].yaml"]
-    assert patterns == ["svc[a].yaml", "svc[[]a].yaml"]
+    # Sorted: the two lookups are gathered, so their arrival order is a
+    # scheduling detail and asserting it would be a latent flake.
+    assert sorted(patterns) == ["svc[[]a].yaml", "svc[a].yaml"]
 
 
 async def test_bracketed_name_is_not_masked_by_a_sibling():
@@ -482,7 +485,9 @@ async def test_bracketed_name_is_not_masked_by_a_sibling():
         "packages/svc[a].yaml",
         "packages/svca.yaml",
     ]
-    assert patterns == ["svc[a].yaml", "svc[[]a].yaml"]
+    # Sorted: the two lookups are gathered, so their arrival order is a
+    # scheduling detail and asserting it would be a latent flake.
+    assert sorted(patterns) == ["svc[[]a].yaml", "svc[a].yaml"]
 
 
 async def test_bracketed_literal_keeps_the_single_target_error_contract():
@@ -597,7 +602,7 @@ async def test_bracketed_directory_with_a_plain_name_is_read_directly():
     """Only the name is a pattern. The component resolves directories
     literally, so a bracketed folder must not send the request through
     expansion - which would answer a typo with a silent empty result instead of
-    'file not found'."""
+    the component's "File does not exist"."""
 
     def list_files(payload):
         raise AssertionError(f"expansion must not run: {payload}")
@@ -761,13 +766,13 @@ async def test_root_level_glob_lists_config_root():
 
 
 async def test_named_file_read_exception_raises_instead_of_warning():
-    """The strict half of the exception path, which nothing else reaches.
+    """The strict half of the exception path, in its simplest shape.
 
-    Every other strict-target test raises through a different door (parse
-    error, ``success: False``, non-dict). Since ``return_exceptions`` is
-    unconditional, a named target whose read blows up now reaches an explicit
-    re-raise, and without this test dropping that re-raise would hand the
-    caller ``success: true, count: 0`` for a file that was never opened.
+    Since ``return_exceptions`` is unconditional, a named target whose read
+    blows up reaches an explicit re-raise rather than aborting the gather.
+    Dropping that re-raise would hand the caller ``success: true, count: 0``
+    for a file that was never opened; the mixed case below covers the same
+    door with an expanded sibling alongside.
     """
     fn, _ = await _make_tool(
         {"read_file": MagicMock(side_effect=ConnectionResetError("connection reset"))}
@@ -836,6 +841,9 @@ async def test_absent_bracketed_literal_is_reported_not_implied():
         "No file is literally named packages/svc[a].yaml; searched the 1 "
         "file(s) matching it as a pattern."
     ]
+    # The counterexample to counting unreadable files off the warnings list:
+    # this warning comes from the resolver, and the one read succeeded.
+    assert out["files_unreadable"] == 0
 
 
 async def test_bracket_class_searches_its_siblings():
@@ -865,9 +873,9 @@ async def test_bracket_class_searches_its_siblings():
 
 
 async def test_literal_lookup_failure_raises():
-    """Both lookups walk the same directory, so a listing failure on the second
-    is a broken request, not one unreadable file - it raises rather than
-    silently returning only what the pattern pass found."""
+    """Both lookups walk the same directory, so a listing failure on the
+    literal one is a broken request, not one unreadable file - it raises rather
+    than silently returning only what the pattern pass found."""
 
     def list_files(payload):
         if payload["pattern"] == "svc[[]a].yaml":
@@ -897,5 +905,174 @@ async def test_unclosed_bracket_resolves_to_one_target():
 
     assert out["files_searched"] == 1
     assert [m["file"] for m in out["matches"]] == ["packages/svc[a.yaml"]
-    assert patterns == ["svc[a.yaml", "svc[[]a.yaml"]
+    assert sorted(patterns) == ["svc[[]a.yaml", "svc[a.yaml"]
     assert "warnings" not in out
+
+
+async def test_unclosed_bracket_read_failure_raises():
+    """An unclosed bracket names a file, so its failed read is not a warning.
+
+    Both lookups return it - it is literal to ``fnmatch``, so it matches its
+    own name - and provenance has to come from the literal one. Reading it off
+    the pattern lookup instead would make this file expanded, degrade the
+    failure to a warning, and answer ``success: true, count: 0`` for the file
+    the caller named exactly.
+    """
+    list_files, _ = _bracket_dir("svc[a.yaml")
+
+    fn, _ = await _make_tool(
+        {
+            "list_files": list_files,
+            "read_file": MagicMock(
+                side_effect=ConnectionResetError("connection reset")
+            ),
+        }
+    )
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="packages/svc[a.yaml")
+
+
+async def test_cancellation_propagates_even_on_an_expanded_target():
+    """Leniency covers unreadable files, not a cancelled search.
+
+    ``CancelledError`` is not one file being unreadable: absorbing it into a
+    warning beside ``success: true`` would report a search that was called off
+    as one that ran and found nothing. It propagates whatever the target's
+    provenance, which is what every other per-item fan-out in the codebase
+    does.
+    """
+    fn, _ = await _make_tool(
+        {
+            "list_files": {
+                "success": True,
+                "files": [{"path": "packages/only.yaml", "is_dir": False}],
+            },
+            "read_file": MagicMock(side_effect=asyncio.CancelledError()),
+        }
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await fn(yaml_path="rest", file="packages/*.yaml")
+
+
+async def test_files_unreadable_counts_the_reads_that_failed():
+    """The summary fields must not read as a completed search.
+
+    ``count: 0`` beside ``files_searched: 3`` is the affirmative "I looked"
+    this tool exists to stop making, so the count of files that could not be
+    opened travels with them rather than only in prose.
+    """
+    fn, _ = await _make_tool(
+        {
+            "list_files": {
+                "success": True,
+                "files": [
+                    {"path": f"packages/{name}.yaml", "is_dir": False}
+                    for name in ("a", "b", "c")
+                ],
+            },
+            "read_file": MagicMock(
+                side_effect=ConnectionResetError("connection reset")
+            ),
+        }
+    )
+
+    out = await fn(yaml_path="rest", file="packages/*.yaml")
+
+    assert out["count"] == 0
+    assert out["files_searched"] == 3
+    assert out["files_unreadable"] == 3
+    assert len(out["warnings"]) == 3
+
+
+async def test_resolver_warning_and_read_warning_both_survive():
+    """The two warning sources are independent and both reach the caller.
+
+    The resolver's "nothing is literally named that" and a per-file read
+    failure describe different things, so one must not stand in for the other -
+    and only the read counts as an unreadable file.
+    """
+    list_files, _ = _bracket_dir("svca.yaml", "svcb.yaml")
+
+    def read(payload):
+        if payload["path"] == "packages/svca.yaml":
+            raise ConnectionResetError("connection reset")
+        return _read_ok("- name: sibling\n")
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": read})
+
+    out = await fn(yaml_path="rest", file="packages/svc[ab].yaml")
+
+    assert out["count"] == 1
+    assert out["files_searched"] == 2
+    assert out["files_unreadable"] == 1
+    assert out["warnings"] == [
+        "No file is literally named packages/svc[ab].yaml; searched the 2 "
+        "file(s) matching it as a pattern.",
+        "packages/svca.yaml was not searched: connection reset.",
+    ]
+
+
+async def test_nothing_matches_either_reading_says_so_directly():
+    """Neither reading found anything, and the warning says that plainly.
+
+    Reporting "searched the 0 file(s) matching it as a pattern" describes a
+    search that did not happen. The result stays a success because a bracketed
+    name is a glob spelling too, and an empty glob is not an error here - but
+    silence would make a typo'd bracketed name look like a key that is simply
+    not defined.
+    """
+    list_files, _ = _bracket_dir("other.yaml")
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": _read_ok("x\n")})
+
+    out = await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
+    assert out["success"] is True
+    assert out["files_searched"] == 0
+    assert out["count"] == 0
+    assert out["files_unreadable"] == 0
+    assert out["warnings"] == [
+        "No file is literally named packages/svc[a].yaml, and nothing matched "
+        "it as a pattern either."
+    ]
+
+
+async def test_mixed_pattern_keeps_its_literal_lookup_but_not_the_warning():
+    """``*`` alongside the bracket is pattern syntax, so nothing was named.
+
+    A caller writing ``[ab]*.yaml`` is not naming a file, and telling them no
+    file is called that would hang a ``warnings`` key on an ordinary,
+    completely successful glob. The literal lookup still runs, because a file
+    can genuinely carry that name.
+    """
+    list_files, patterns = _bracket_dir("a1.yaml", "b1.yaml")
+
+    fn, _ = await _make_tool(
+        {"list_files": list_files, "read_file": _read_ok("- name: probe\n")}
+    )
+
+    out = await fn(yaml_path="rest", file="packages/[ab]*.yaml")
+
+    assert out["files_searched"] == 2
+    assert "warnings" not in out
+    assert sorted(patterns) == ["[[]ab][*].yaml", "[ab]*.yaml"]
+
+
+async def test_both_lookups_failing_raises():
+    """The realistic component failure is path-based and hits both lookups.
+
+    Whichever of the two concurrent calls reports first, the request is broken
+    in the same way, so it raises rather than returning a half-resolved
+    expansion.
+    """
+    fn, _ = await _make_tool(
+        {
+            "list_files": {"success": False, "error": "Path not allowed.", "files": []},
+            "read_file": _read_ok("x\n"),
+        }
+    )
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="packages/svc[a].yaml")

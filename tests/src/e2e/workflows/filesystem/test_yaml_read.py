@@ -387,6 +387,10 @@ class TestYamlReadGlobDiscovery:
         assert data["files_searched"] == 1
         assert data["matches"][0]["file"] == target
         assert "e2e_bracket_probe" in data["matches"][0]["content"]
+        # The other half, on the real instance: the literal lookup found the
+        # file, so nothing degraded and no warning was manufactured.
+        assert data["files_unreadable"] == 0
+        assert "warnings" not in data
 
     async def test_glob_returns_every_defining_file(
         self, mcp_client, yaml_editing_enabled

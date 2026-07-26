@@ -16,8 +16,8 @@ back door.
 """
 
 import asyncio
-import glob
 import logging
+import re
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
@@ -43,6 +43,17 @@ logger = logging.getLogger(__name__)
 # fnmatch metacharacters. Matching itself happens component-side (list_files
 # fnmatches on the file name); this only decides single-file vs. glob.
 _GLOB_METACHARS = ("*", "?", "[")
+
+# The metacharacters that match their own literal names, and so are pattern
+# syntax rather than a plausible spelling of a file name the caller means
+# exactly. A bracket class is the ambiguous one and is deliberately absent.
+_PATTERN_ONLY_METACHARS = ("*", "?")
+
+# Wraps each metacharacter in a bracket class so fnmatch reads it literally.
+# Deliberately not glob.escape: that splits a drive letter off first, which is
+# ntpath on a Windows-hosted server - the one host-dependent step in a path
+# that is otherwise POSIX and config-relative.
+_METACHAR_RE = re.compile(r"([*?\[])")
 
 
 def _has_glob(name: str) -> bool:
@@ -121,11 +132,17 @@ def _read_exception_result(
     the search; the explicitly named target re-raises, matching every other
     failure class in :func:`_evaluate_read`.
 
-    ``str()`` is empty on a bare ``TimeoutError()`` or ``CancelledError()``, so
-    the class name stands in - a warning reading "was not searched: ." names no
-    reason at all.
+    Anything that is not an ``Exception`` propagates whatever the target's
+    provenance. Cancellation and shutdown are not one file being unreadable,
+    and absorbing them into a warning next to ``success: true`` would report a
+    search that was called off as one that ran and found nothing. The codebase
+    draws the same line wherever it fans out per item (``tools_entities``,
+    ``tools_search``, ``smart_search``).
+
+    ``str()`` is empty on a bare ``TimeoutError()``, so the class name stands
+    in - a warning reading "was not searched: ." names no reason at all.
     """
-    if not is_expanded:
+    if not is_expanded or not isinstance(error, Exception):
         raise error
     return None, f"{target} was not searched: {str(error) or type(error).__name__}."
 
@@ -143,9 +160,9 @@ def _evaluate_read(
 
     Three outcomes, in the order they are decided:
 
-    * **warning** — the file could not be searched at all. Under a glob that
+    * **warning** — the file could not be searched at all. An expanded target
       must not sink the whole search and discard the matches already found:
-      the glob is not restricted to ``*.yaml``, so ``packages/*`` can turn up
+      expansion is not restricted to ``*.yaml``, so ``packages/*`` can turn up
       a README the component refuses to read, and a permission-denied or
       non-UTF-8 ``.yaml`` lands here too. A syntactically broken file is the
       same class — reporting it as "key absent" would claim a file was
@@ -210,6 +227,36 @@ async def _list_files_matching(
     )
 
 
+def _absent_literal_warnings(
+    file: str, pattern: str, *, literal_found: bool, target_count: int
+) -> list[str]:
+    """Say so when nothing is literally named the way a bracketed request was.
+
+    Silence is what the caller reads as "your file was searched": the siblings
+    the class matched arrive as ``files_searched`` with nothing marking the
+    named file as never opened.
+
+    Two cases stay silent. A literal that was found needs no warning, and
+    neither does a name also carrying ``*`` or ``?`` - that is pattern syntax,
+    so a missing file of exactly that name is no thwarted expectation. The
+    literal lookup still runs for those names, because a file can genuinely be
+    called ``[ab]*.yaml``; only the complaint is dropped.
+    """
+    if literal_found or any(char in pattern for char in _PATTERN_ONLY_METACHARS):
+        return []
+    if not target_count:
+        # Phrased for the degenerate case rather than reporting "the 0 file(s)
+        # matching it as a pattern", which reads as a search that happened.
+        return [
+            f"No file is literally named {file}, and nothing matched it as a "
+            f"pattern either."
+        ]
+    return [
+        f"No file is literally named {file}; searched the {target_count} "
+        f"file(s) matching it as a pattern."
+    ]
+
+
 async def _resolve_target_files(
     client: Any, file: str
 ) -> tuple[list[tuple[str, bool]], list[str]]:
@@ -241,8 +288,9 @@ async def _resolve_target_files(
     would drop the siblings a deliberate class like ``svc[12].yaml`` is meant
     to find. Both lookups run because a sibling that satisfies the class would
     otherwise mask the file the caller named exactly. Only bracketed names pay
-    the second round-trip. The component likewise treats package folder names
-    carrying metacharacters as literal names (#1854).
+    the second lookup, and it is issued concurrently with the first rather than
+    after it. The component likewise treats package folder names carrying
+    metacharacters as literal names (#1854).
 
     The guard is any bracket, not a closed class: an unclosed or empty bracket
     is literal to ``fnmatch`` and so matches its own name, which means both
@@ -253,7 +301,8 @@ async def _resolve_target_files(
 
     When the literal lookup comes back empty the caller named a file that does
     not exist, and the pattern's siblings would otherwise be reported as if the
-    named file had been searched; a warning says so.
+    named file had been searched; :func:`_absent_literal_warnings` decides what
+    to say about that.
     """
     directory, _, pattern = file.rpartition("/")
     if not _has_glob(pattern):
@@ -267,17 +316,14 @@ async def _resolve_target_files(
     # two sequential round-trips; the reads below fan out for the same reason.
     matched, literal = await asyncio.gather(
         _list_files_matching(client, file, directory, pattern),
-        _list_files_matching(client, file, directory, glob.escape(pattern)),
+        _list_files_matching(
+            client, file, directory, _METACHAR_RE.sub(r"[\1]", pattern)
+        ),
     )
     named = set(literal)
     targets = sorted(set(matched) | named)
-    warnings = (
-        []
-        if named
-        else [
-            f"No file is literally named {file}; searched the {len(targets)} "
-            f"file(s) matching it as a pattern."
-        ]
+    warnings = _absent_literal_warnings(
+        file, pattern, literal_found=bool(named), target_count=len(targets)
     )
     return [(target, target not in named) for target in targets], warnings
 
@@ -316,9 +362,7 @@ class YamlReadTools:
                     "Config-relative file to read. Accepts an fnmatch glob to "
                     "search several files at once — 'packages/*.yaml' matches one "
                     "directory level, not a nested tree. Use the glob to find "
-                    "which file defines a key. A name carrying a bracket class "
-                    "is read both ways, as the pattern and as that literal "
-                    "filename."
+                    "which file defines a key."
                 ),
             ),
         ] = "configuration.yaml",
@@ -391,6 +435,7 @@ class YamlReadTools:
 
             matches: list[dict[str, Any]] = []
             warnings: list[str] = list(resolve_warnings)
+            files_unreadable = 0
             for (target, is_expanded), response in zip(targets, responses, strict=True):
                 match, warning = _evaluate_read(
                     response,
@@ -402,6 +447,7 @@ class YamlReadTools:
                 )
                 if warning:
                     warnings.append(warning)
+                    files_unreadable += 1
                 elif match:
                     matches.append(match)
 
@@ -413,6 +459,10 @@ class YamlReadTools:
                 # Separates "the glob matched no files" from "no file defines
                 # the key" — same empty matches[], different fix.
                 "files_searched": len(targets),
+                # Keeps `count: 0` beside a non-zero files_searched from reading
+                # as "searched them, found nothing". Counted in the loop, not as
+                # len(warnings): those also carry resolver-level entries.
+                "files_unreadable": files_unreadable,
             }
             if warnings:
                 result["warnings"] = warnings
