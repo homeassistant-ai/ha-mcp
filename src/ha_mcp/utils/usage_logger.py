@@ -7,6 +7,8 @@ import logging
 import threading
 import time
 from collections import deque
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,6 +94,30 @@ def get_startup_logs() -> list[dict[str, Any]]:
     if _startup_collector is None:
         return []
     return _startup_collector.get_logs()
+
+
+@contextmanager
+def preserve_startup_collector() -> Iterator[None]:
+    """Keep the startup collector attached across a logging reconfiguration.
+
+    ``logging.basicConfig(force=True)`` removes *and closes* every handler on
+    the root logger. The collector is attached there at import time and is the
+    source of ``ha_report_issue``'s startup diagnostics, so it is detached for
+    the duration of the block — leaving nothing for the sweep to close — and
+    re-attached afterwards.
+    """
+    collector = _startup_collector
+    root = logging.getLogger()
+    if collector is None or collector not in root.handlers:
+        yield
+        return
+
+    root.removeHandler(collector)
+    try:
+        yield
+    finally:
+        if collector not in root.handlers:
+            root.addHandler(collector)
 
 
 # Parameter keys whose values are masked before a tool call is recorded to the
