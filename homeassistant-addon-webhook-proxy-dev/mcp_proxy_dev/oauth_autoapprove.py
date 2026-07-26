@@ -95,6 +95,17 @@ _AUTOAPPROVE_REDIRECT_ALLOWLIST = frozenset(
 )
 
 
+def _issuer(base: str) -> str:
+    """Issuer identifier none-mode auto-approve advertises under ``base``.
+
+    Single source for the document's ``issuer`` below, the provider's
+    ``authorization_server_url``, and the RFC 9207 ``iss`` authorization-response
+    parameter — RFC 9207 §2 requires the redirect's ``iss`` to equal the
+    advertised issuer exactly.
+    """
+    return f"{base}{OAUTH_BASE}"
+
+
 def authorization_server_document(base: str) -> dict:
     """RFC 8414 authorization-server metadata for none-mode auto-approve.
 
@@ -109,7 +120,7 @@ def authorization_server_document(base: str) -> dict:
     so only ``authorization_code`` is advertised.
     """
     return {
-        "issuer": f"{base}{OAUTH_BASE}",
+        "issuer": _issuer(base),
         "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
         "token_endpoint": f"{base}{OAUTH_BASE}/token",
         "response_types_supported": ["code"],
@@ -193,7 +204,7 @@ class AutoApproveProvider:
         return f"{base_url}/api/webhook/{self._webhook_id}"
 
     def authorization_server_url(self, base_url: str) -> str:
-        return f"{base_url}{OAUTH_BASE}"
+        return _issuer(base_url)
 
     def base_url_for(self, request: web.Request) -> str:
         return _build_base_url(request, self._public_base_url)
@@ -291,14 +302,19 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         if not _is_valid_autoapprove_redirect(redirect_uri):
             return _json_error("invalid_request", 400, "invalid redirect_uri")
 
+        # RFC 9207: every authorization response — success or error — names the
+        # issuer that produced it, so a client registered with several
+        # authorization servers cannot be fed a response minted by another one.
+        iss = _issuer(provider.base_url_for(request))
+
         code = provider.issue_code(redirect_uri, code_challenge)
         if code is None:
             # Pending-code store at capacity (abuse guard) — surface per
             # RFC 6749 §4.1.2.1 instead of a silent failure.
             return _redirect_with(
-                redirect_uri, error="temporarily_unavailable", state=state
+                redirect_uri, error="temporarily_unavailable", state=state, iss=iss
             )
-        redirect_params = {"code": code}
+        redirect_params = {"code": code, "iss": iss}
         if state:
             redirect_params["state"] = state
         return _redirect_with(redirect_uri, **redirect_params)

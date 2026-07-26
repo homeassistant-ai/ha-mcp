@@ -306,6 +306,20 @@ def _none_autoapprove_supported() -> bool:
     )
 
 
+def _rfc9207_iss_supported() -> bool:
+    """Feature-detect whether the CURRENT flavor stamps the RFC 9207 ``iss``
+    parameter on its authorization responses. Both of the add-on's own OAuth
+    servers gained it in one dev change, whose marker is the single-source
+    ``_issuer`` helper that change introduced in ``oauth_autoapprove.py``; the
+    stable flavor skips these assertions until it is promoted — same
+    lockstep-with-code approach as `_ha_auth_supported`."""
+    path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "oauth_autoapprove.py")
+    if not os.path.exists(path):
+        return False
+    with open(path, encoding="utf-8") as fh:
+        return "def _issuer(" in fh.read()
+
+
 def _import_none_autoapprove_stack():
     """Import the integration wired so none-mode auto-approve resolves.
 
@@ -3621,6 +3635,37 @@ class TestAuthorizeViewPost:
         assert "code=" in loc
         assert "state=abc123" in loc
 
+    @pytest.mark.parametrize(
+        "action,expected", [("approve", "code"), ("deny", "error")]
+    )
+    async def test_redirects_carry_the_advertised_rfc9207_iss(
+        self, tmp_path, action, expected
+    ):
+        """RFC 9207 §2: success AND error authorization responses name the
+        issuer that produced them, using the exact identifier the add-on's
+        RFC 8414 metadata document advertises (`authorization_server_url`)."""
+        if not _rfc9207_iss_supported():
+            pytest.skip("RFC 9207 `iss` rides the dev flavor until promote")
+        from urllib.parse import parse_qs, urlparse
+
+        oauth, provider = _provider_for_view_tests(
+            tmp_path, public_base_url="https://legit.example"
+        )
+        view = oauth.AuthorizeView(provider)
+        # Pinned base URL, so the issuer does not depend on request headers.
+        advertised = provider.authorization_server_url("https://legit.example")
+        assert advertised == f"https://legit.example{CURRENT['oauth_base']}"
+
+        request = _make_view_request(
+            method="POST", post_data=self._good_form(action=action)
+        )
+        resp = await view.post(request)
+
+        assert resp.status == 302
+        params = parse_qs(urlparse(resp.headers["Location"]).query)
+        assert expected in params
+        assert params["iss"] == [advertised]
+
     async def test_post_re_validates_hidden_client_id(self, setup):
         """POST must not trust hidden form fields — re-validate them."""
         oauth, provider, view = setup
@@ -6109,6 +6154,46 @@ class TestNoneAutoApproveMode:
         assert q["state"][0] == "st-1"
         # The issued code is real: it consumes with the matching verifier.
         assert provider.consume_code(q["code"][0], self.CLAUDE_REDIRECT, verifier)
+
+    @pytest.mark.parametrize("at_capacity,expected", [(False, "code"), (True, "error")])
+    async def test_authorize_redirects_carry_the_advertised_rfc9207_iss(
+        self, at_capacity, expected
+    ):
+        """RFC 9207 §2: success AND error authorization responses name the
+        issuer that produced them, byte-identical to the ``issuer`` the
+        none-mode metadata document advertises for the same request."""
+        if not _rfc9207_iss_supported():
+            pytest.skip("RFC 9207 `iss` rides the dev flavor until promote")
+        from urllib.parse import parse_qs, urlparse
+
+        _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        hass, provider = self._none_live_hass(oauth, autoapprove)
+        if at_capacity:
+            # Store at cap → the temporarily_unavailable error redirect.
+            provider.issue_code = lambda *a, **k: None
+        view = autoapprove.AutoApproveAuthorizeView(hass)
+        _v, challenge = self._pkce_pair()
+        request = _make_view_request(
+            headers={"Host": "ha.example.com"},
+            query={
+                "response_type": "code",
+                "client_id": "https://claude.ai/whatever",
+                "redirect_uri": self.CLAUDE_REDIRECT,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": "st-1",
+            },
+        )
+        with patch.object(autoapprove.web, "Response") as resp:
+            await view.get(request)
+
+        advertised = autoapprove.authorization_server_document(
+            provider.base_url_for(request)
+        )["issuer"]
+        assert advertised == f"https://ha.example.com{CURRENT['oauth_base']}"
+        q = parse_qs(urlparse(resp.call_args.kwargs["headers"]["Location"]).query)
+        assert expected in q
+        assert q["iss"] == [advertised]
 
     async def test_authorize_rejects_non_allowlisted_redirect_with_400(self):
         _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()

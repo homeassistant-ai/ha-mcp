@@ -51,10 +51,13 @@ import custom_components.ha_mcp_tools.oauth_autoapprove as aa  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK,
     DOMAIN,
+    OAUTH_BASE,
 )
 
 CLAUDE_CLIENT_ID = "https://claude.ai/api/mcp/client_metadata"
 CLAUDE_REDIRECT = "https://claude.ai/api/mcp/auth_callback"
+HOST = "ha.example.com"
+EXPECTED_ISSUER = f"https://{HOST}{OAUTH_BASE}"
 
 
 def _pkce_pair() -> tuple[str, str]:
@@ -89,6 +92,10 @@ def _live_hass(provider: aa.AutoApproveProvider | None = None) -> MagicMock:
 def _get_request(query: dict[str, str]) -> MagicMock:
     request = MagicMock(name="Request")
     request.query = query
+    # Host/scheme are what ``mcp_webhook._build_base_url`` reads to derive the
+    # RFC 9207 ``iss`` this server stamps on its authorization responses.
+    request.headers = {"Host": HOST}
+    request.scheme = "https"
     return request
 
 
@@ -209,8 +216,28 @@ class TestAuthorizeView:
         base, params = _parse_location(resp.headers["Location"])
         assert base == CLAUDE_REDIRECT
         assert params["state"] == "st-1"
+        # RFC 9207 §2: the success response names the issuer that minted it.
+        assert params["iss"] == EXPECTED_ISSUER
         # The issued code is real: it consumes with the matching verifier.
         assert provider.consume_code(params["code"], CLAUDE_REDIRECT, verifier) is True
+
+    async def test_iss_equals_the_advertised_none_mode_issuer(self):
+        """The redirect's ``iss`` is byte-identical to the ``issuer`` the
+        none-mode discovery document advertises for the same request — RFC 9207
+        §2 rejects anything else, and the two are built in different modules."""
+        from custom_components.ha_mcp_tools import mcp_webhook
+
+        hass = _live_hass()
+        view = aa.AutoApproveAuthorizeView(hass)
+        request = _get_request(_authorize_query())
+        resp = await view.get(request)
+
+        advertised = mcp_webhook._none_mode_authorization_server_document(
+            mcp_webhook._build_base_url(request)
+        )["issuer"]
+        assert advertised == EXPECTED_ISSUER
+        _, params = _parse_location(resp.headers["Location"])
+        assert params["iss"] == advertised
 
     async def test_allowlisted_claude_redirect_is_approved(self):
         hass = _live_hass()
@@ -261,6 +288,8 @@ class TestAuthorizeView:
         _, params = _parse_location(resp.headers["Location"])
         assert params["error"] == "temporarily_unavailable"
         assert params["state"] == "st-1"
+        # RFC 9207 §2 covers error responses too, not just the success redirect.
+        assert params["iss"] == EXPECTED_ISSUER
 
 
 # ---------------------------------------------------------------------------

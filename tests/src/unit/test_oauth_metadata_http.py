@@ -18,6 +18,10 @@ under Starlette's first-match-wins routing, would not change the served body) is
 also caught.
 """
 
+import time
+from unittest.mock import AsyncMock, MagicMock
+from urllib.parse import parse_qs, urlparse
+
 import httpx
 import pytest
 from fastmcp import FastMCP
@@ -69,7 +73,11 @@ def oauth_app(tmp_path, monkeypatch):
 
     server = FastMCP("test")
     server.auth = HomeAssistantOAuthProvider(base_url=BASE_URL)
-    return server.http_app(path="/mcp", stateless_http=True)
+    app = server.http_app(path="/mcp", stateless_http=True)
+    # Expose the provider that served the document so a test can cross-check it
+    # against what that same instance puts on an authorization response.
+    app.state.ha_mcp_oauth_provider = server.auth
+    return app
 
 
 @pytest.mark.asyncio
@@ -130,6 +138,45 @@ async def test_discovery_endpoints_serve_identical_metadata(oauth_app):
         assert body == canonical, (
             f"{path} metadata diverged from the canonical document"
         )
+
+
+@pytest.mark.asyncio
+async def test_authorization_redirect_iss_matches_served_issuer(oauth_app):
+    """RFC 9207 §2: the ``iss`` on an authorization response equals the issuer
+    the metadata document advertises, byte for byte.
+
+    Cross-checks both ends against each other — the document is read back over
+    HTTP and the redirect comes from the same provider instance that served it —
+    so a change to either side that drifts them apart fails here. The two are
+    easy to drift because pydantic's ``AnyHttpUrl`` normalisation restores a
+    trailing slash that ``base_url`` alone does not carry.
+    """
+    provider = oauth_app.state.ha_mcp_oauth_provider
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=oauth_app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/.well-known/oauth-authorization-server")
+    assert resp.status_code == 200
+    served_issuer = resp.json()["issuer"]
+
+    txn_id = "iss-parity-txn"
+    provider.pending_authorizations[txn_id] = {
+        "client_id": "test-client",
+        "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+        "state": "st-1",
+        "scopes": ["homeassistant"],
+        "code_challenge": "X" * 43,
+        "created_at": time.time(),
+    }
+    request = MagicMock()
+    request.form = AsyncMock(return_value={"txn_id": txn_id, "ha_token": "llat"})
+    redirect = await provider._consent_post(request)
+
+    params = parse_qs(urlparse(redirect.headers["location"]).query)
+    assert params["iss"] == [served_issuer]
+    # Non-vacuous: pin the normalised form, so a hand-built `iss` that dropped
+    # the trailing slash would fail even if both sides were changed together.
+    assert served_issuer == f"{BASE_URL}/"
 
 
 def _iter_route_paths(routes):

@@ -370,6 +370,15 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             logger.debug(f"Failed to decode token: {e}")
             return None
 
+    def _issuer(self) -> str:
+        """The issuer identifier this authorization server advertises.
+
+        Single source for the ``issuer`` field of the metadata document served
+        below and for the RFC 9207 ``iss`` authorization-response parameter,
+        which RFC 9207 §2 requires to equal the advertised issuer exactly.
+        """
+        return str(AnyHttpUrl(str(self.base_url).rstrip("/")))
+
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         """
         Get OAuth routes including custom consent form routes.
@@ -391,12 +400,9 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             """Enhanced OAuth metadata handler with Claude.ai compatibility."""
             from mcp.server.auth.routes import build_metadata
 
-            # Get base URL
-            base = str(self.base_url).rstrip("/")
-
             # Get base metadata from MCP SDK
             metadata = build_metadata(
-                issuer_url=AnyHttpUrl(base),
+                issuer_url=AnyHttpUrl(self._issuer()),
                 service_documentation_url=AnyHttpUrl(
                     "https://github.com/homeassistant-ai/ha-mcp"
                 ),
@@ -697,11 +703,15 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         # Clean up pending authorization
         del self.pending_authorizations[str(txn_id)]
 
-        # Redirect back to client with auth code
+        # Redirect back to client with auth code. RFC 9207: the authorization
+        # response carries the issuer that produced it, so a client registered
+        # with several authorization servers cannot be fed a code minted by a
+        # different one.
         redirect_uri = construct_redirect_uri(
             pending["redirect_uri"],
             code=auth_code_value,
             state=pending.get("state"),
+            iss=self._issuer(),
         )
 
         logger.info(f"Authorization successful for client {client_id}")

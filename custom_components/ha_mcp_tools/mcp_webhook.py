@@ -291,11 +291,28 @@ def _protected_resource_document(webhook_id: str, base: str) -> dict[str, Any]:
     }
 
 
+def oauth_issuer(base: str) -> str:
+    """Issuer identifier this component's OWN authorization servers advertise.
+
+    Single source for the ``issuer`` field of the legacy and none-mode documents
+    below and for the RFC 9207 ``iss`` authorization-response parameter that
+    :mod:`oauth_legacy` / :mod:`oauth_autoapprove` put on their redirects — RFC
+    9207 §2 requires the redirect's ``iss`` to equal the advertised issuer
+    exactly.
+    """
+    return f"{base}{OAUTH_BASE}"
+
+
+def issuer_for_request(request: web.Request) -> str:
+    """:func:`oauth_issuer` for the public base URL ``request`` resolves to."""
+    return oauth_issuer(_build_base_url(request))
+
+
 def _legacy_authorization_server_document(base: str) -> dict[str, Any]:
     """RFC 8414 authorization-server metadata for legacy mode's own root
     ``/authorize`` + ``/token`` views (see :mod:`oauth_legacy`)."""
     return {
-        "issuer": f"{base}{OAUTH_BASE}",
+        "issuer": oauth_issuer(base),
         "authorization_endpoint": f"{base}{AUTHORIZE_PATH}",
         "token_endpoint": f"{base}{TOKEN_PATH}",
         "response_types_supported": ["code"],
@@ -323,7 +340,7 @@ def _none_mode_authorization_server_document(base: str) -> dict[str, Any]:
     ``authorization_code`` is advertised.
     """
     return {
-        "issuer": f"{base}{OAUTH_BASE}",
+        "issuer": oauth_issuer(base),
         "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
         "token_endpoint": f"{base}{OAUTH_BASE}/token",
         "response_types_supported": ["code"],

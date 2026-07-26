@@ -9,6 +9,19 @@ history from before the fork.
 -->
 
 
+## v2.0.5.dev2 (2026-07-25)
+
+### Features
+
+- Authorization responses from the add-on's own OAuth servers (the legacy
+  `/authorize` view and the none-mode auto-approve `/authorize` view) now carry
+  the RFC 9207 `iss` parameter naming the issuer that produced them, on both the
+  success redirect and the error redirects. The value is the same issuer the
+  add-on's RFC 8414 metadata document advertises. Clients that do not implement
+  RFC 9207 ignore the extra query parameter, so existing connectors are
+  unaffected.
+
+
 ## v2.0.5.dev1 (2026-07-20)
 
 ### Bug Fixes

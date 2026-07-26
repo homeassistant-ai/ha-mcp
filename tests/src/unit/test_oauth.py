@@ -4,6 +4,7 @@ import json
 import stat
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -636,8 +637,13 @@ class TestOAuthRoutes:
 
         # Should redirect with auth code
         assert response.status_code == 303
-        assert "code=" in response.headers["location"]
-        assert "state=test-state" in response.headers["location"]
+        params = parse_qs(urlparse(response.headers["location"]).query)
+        assert params["code"]
+        assert params["state"] == ["test-state"]
+        # RFC 9207 §2: the authorization response names the issuer that minted
+        # the code, using the identifier the metadata document advertises.
+        assert params["iss"] == [provider._issuer()]
+        assert provider._issuer() == "http://localhost:8086/"
 
     @pytest.mark.asyncio
     async def test_consent_post_missing_token(self, provider, mock_request):

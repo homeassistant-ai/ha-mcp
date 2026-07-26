@@ -935,8 +935,18 @@ class AuthorizeView(HomeAssistantView):
         if err is not None:
             return err
 
+        # RFC 9207: every authorization response — success or error — names the
+        # issuer that produced it, so a client registered with several
+        # authorization servers cannot be fed a response minted by another one.
+        # Resolved through the ACTIVE mode's provider, exactly as
+        # AuthorizationServerMetadataView builds the `issuer` this must match.
+        provider = _active_provider(self._provider)
+        iss = provider.authorization_server_url(provider.base_url_for(request))
+
         if action == "deny":
-            return self._redirect_with(redirect_uri, error="access_denied", state=state)
+            return self._redirect_with(
+                redirect_uri, error="access_denied", state=state, iss=iss
+            )
         if action != "approve":
             return _text_error(400, "invalid action")
 
@@ -945,9 +955,9 @@ class AuthorizeView(HomeAssistantView):
             # Pending-code store at cap → signal back to the client per
             # RFC 6749 §4.1.2.1 instead of silently failing.
             return self._redirect_with(
-                redirect_uri, error="temporarily_unavailable", state=state
+                redirect_uri, error="temporarily_unavailable", state=state, iss=iss
             )
-        return self._redirect_with(redirect_uri, code=code, state=state)
+        return self._redirect_with(redirect_uri, code=code, state=state, iss=iss)
 
     def _validate_authorize_params(
         self,
