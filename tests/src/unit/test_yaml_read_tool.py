@@ -962,8 +962,10 @@ async def test_files_unreadable_counts_the_reads_that_failed():
     """The summary fields must not read as a completed search.
 
     ``count: 0`` beside ``files_searched: 3`` is the affirmative "I looked"
-    this tool exists to stop making, so the count of files that could not be
-    opened travels with them rather than only in prose.
+    this tool exists to stop making, so the count of files that were not
+    searched travels with them rather than only in prose. Not searched is the
+    wider class the warnings already name: a file that was opened and read but
+    would not parse counts here too, because its key was never inspected.
     """
     fn, _ = await _make_tool(
         {
@@ -985,7 +987,13 @@ async def test_files_unreadable_counts_the_reads_that_failed():
     assert out["count"] == 0
     assert out["files_searched"] == 3
     assert out["files_unreadable"] == 3
-    assert len(out["warnings"]) == 3
+    # Contents, not just the length: three copies of one file's warning would
+    # satisfy a count while describing a different failure.
+    assert out["warnings"] == [
+        "packages/a.yaml was not searched: connection reset.",
+        "packages/b.yaml was not searched: connection reset.",
+        "packages/c.yaml was not searched: connection reset.",
+    ]
 
 
 async def test_resolver_warning_and_read_warning_both_survive():
@@ -1064,6 +1072,35 @@ async def test_mixed_pattern_keeps_its_literal_lookup_but_not_the_warning():
     assert out["files_searched"] == 2
     assert "warnings" not in out
     assert sorted(patterns) == ["[[]ab][*].yaml", "[ab]*.yaml"]
+
+
+async def test_mixed_pattern_literal_hit_is_still_an_expansion():
+    """Under a pattern, even an exact hit is an expansion match.
+
+    The caller wrote ``*``, so nothing was named - and a file that happens to
+    be called ``[ab]*.yaml`` must not become the strict target, or one failed
+    read of it would discard the matches the pattern half already found. Same
+    shape the resolver removed for ``*.yaml``, reachable through the literal
+    lookup instead, so one predicate has to drive both halves.
+    """
+    list_files, _ = _bracket_dir("[ab]*.yaml", "a1.yaml")
+
+    def read(payload):
+        if payload["path"] == "packages/[ab]*.yaml":
+            raise ConnectionResetError("connection reset")
+        return _read_ok("- name: probe\n")
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": read})
+
+    out = await fn(yaml_path="rest", file="packages/[ab]*.yaml")
+
+    assert out["count"] == 1
+    assert out["matches"][0]["file"] == "packages/a1.yaml"
+    assert out["files_searched"] == 2
+    assert out["files_unreadable"] == 1
+    assert out["warnings"] == [
+        "packages/[ab]*.yaml was not searched: connection reset."
+    ]
 
 
 async def test_both_lookups_failing_raises():

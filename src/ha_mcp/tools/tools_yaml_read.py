@@ -50,9 +50,11 @@ _GLOB_METACHARS = ("*", "?", "[")
 _PATTERN_ONLY_METACHARS = ("*", "?")
 
 # Wraps each metacharacter in a bracket class so fnmatch reads it literally.
-# Deliberately not glob.escape: that splits a drive letter off first, which is
-# ntpath on a Windows-hosted server - the one host-dependent step in a path
-# that is otherwise POSIX and config-relative.
+# Deliberately not glob.escape: it splits a drive off first and returns that
+# part UNESCAPED, and the split is ntpath on a Windows-hosted server - where a
+# name like \\weird[a].yaml is taken for a drive in its entirety and comes back
+# with its bracket intact. The one host-dependent step in a path that is
+# otherwise POSIX and config-relative.
 _METACHAR_RE = re.compile(r"([*?\[])")
 
 
@@ -64,6 +66,24 @@ def _has_glob(name: str) -> bool:
     folder's name and is not a pattern.
     """
     return any(char in name for char in _GLOB_METACHARS)
+
+
+def _names_a_file(pattern: str) -> bool:
+    """True if the request can be read as naming one file rather than a class.
+
+    ``*`` and ``?`` are pattern syntax: they match their own literal names, so
+    a caller who wrote one wrote a pattern. A bracket class alone is ambiguous,
+    since such a name is legal on the filesystem and cannot match itself.
+
+    One predicate for two decisions that must not diverge - whether a path the
+    literal lookup returned counts as explicitly named, and whether the absence
+    of such a path is worth a warning. Honouring it in the warning alone would
+    leave a file genuinely called ``[ab]*.yaml`` strict, so one failed read of
+    it would discard every match the pattern half had already found: the shape
+    removed for ``*.yaml`` when provenance moved into the resolver, reachable
+    again through the other lookup.
+    """
+    return not any(char in pattern for char in _PATTERN_ONLY_METACHARS)
 
 
 def _call_failed(service: str, context: dict[str, Any]) -> None:
@@ -129,15 +149,18 @@ def _read_exception_result(
     """Decide a read that blew up outright.
 
     An expanded target degrades to a warning so one unreadable file cannot sink
-    the search; the explicitly named target re-raises, matching every other
-    failure class in :func:`_evaluate_read`.
+    the search; the explicitly named target raises, as it does for every other
+    failure class in :func:`_evaluate_read`. The error is re-raised as it came
+    rather than wrapped, so the tool's own handler classifies it by type - the
+    other classes have no live exception to preserve and build a structured
+    :class:`ToolError` instead.
 
     Anything that is not an ``Exception`` propagates whatever the target's
-    provenance. Cancellation and shutdown are not one file being unreadable,
+    provenance - this is the one failure class here that raises for an expanded
+    target too. Cancellation and shutdown are not one file being unreadable,
     and absorbing them into a warning next to ``success: true`` would report a
-    search that was called off as one that ran and found nothing. The codebase
-    draws the same line wherever it fans out per item (``tools_entities``,
-    ``tools_search``, ``smart_search``).
+    search that was called off as one that ran and found nothing. The per-item
+    fan-outs in ``tools_entities`` and ``tools_search`` draw the same line.
 
     ``str()`` is empty on a bare ``TimeoutError()``, so the class name stands
     in - a warning reading "was not searched: ." names no reason at all.
@@ -237,12 +260,12 @@ def _absent_literal_warnings(
     named file as never opened.
 
     Two cases stay silent. A literal that was found needs no warning, and
-    neither does a name also carrying ``*`` or ``?`` - that is pattern syntax,
-    so a missing file of exactly that name is no thwarted expectation. The
-    literal lookup still runs for those names, because a file can genuinely be
-    called ``[ab]*.yaml``; only the complaint is dropped.
+    neither does a request that :func:`_names_a_file` rejects - nobody named a
+    file, so nothing is missing. The literal lookup still runs for those, since
+    its results are merged as ordinary expansion matches; only the complaint is
+    dropped.
     """
-    if literal_found or any(char in pattern for char in _PATTERN_ONLY_METACHARS):
+    if literal_found or not _names_a_file(pattern):
         return []
     if not target_count:
         # Phrased for the degenerate case rather than reporting "the 0 file(s)
@@ -264,12 +287,13 @@ async def _resolve_target_files(
 
     ``is_expanded`` records where the path came from, and it is decided here
     because only here is it known: a path produced by the pattern lookup is an
-    expansion, while the requested path itself and anything the escaped-literal
-    lookup returns were named explicitly. Recovering that downstream by
-    comparing the path against the requested string would be wrong for ``*``
-    and ``?``, which match their own literal names - a file genuinely called
-    ``*.yaml`` would then be mistaken for the name the caller typed and its
-    read failure would sink the whole search.
+    expansion, while the requested path itself, and what the escaped-literal
+    lookup returns for a request :func:`_names_a_file` accepts, were named
+    explicitly. Recovering that downstream by comparing the path against the
+    requested string would be wrong for ``*`` and ``?``, which match their own
+    literal names - a file genuinely called ``*.yaml`` would then be mistaken
+    for the name the caller typed and its read failure would sink the whole
+    search.
 
     A plain path is returned as-is (the read itself reports a missing file). A
     glob is expanded through the component's ``list_files``, which matches the
@@ -320,8 +344,13 @@ async def _resolve_target_files(
             client, file, directory, _METACHAR_RE.sub(r"[\1]", pattern)
         ),
     )
-    named = set(literal)
-    targets = sorted(set(matched) | named)
+    # Both lookups always contribute targets; only whether a literal hit counts
+    # as *named* depends on the request. Under a pattern it is merged as an
+    # ordinary expansion match, so nobody named it and a bad read stays a
+    # warning.
+    literal_paths = set(literal)
+    named = literal_paths if _names_a_file(pattern) else set()
+    targets = sorted(set(matched) | literal_paths)
     warnings = _absent_literal_warnings(
         file, pattern, literal_found=bool(named), target_count=len(targets)
     )
