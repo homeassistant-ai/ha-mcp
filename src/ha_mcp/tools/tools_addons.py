@@ -210,6 +210,19 @@ def _merge_options(base: dict, override: dict) -> dict:
     return merged
 
 
+# Supervisor's per-job-group rejection, matched case-insensitively, plus the
+# bounded window and backoff used to ride it out. See _supervisor_api_call.
+# The "for job group" tail is load-bearing: JobGroup.acquire raises
+# "Another job is running for job group <name>" for the transient per-add-on
+# collision, while the job-level JobConcurrency.REJECT path raises a bare
+# "Another job is running" for long operations (OS update, data-disk wipe)
+# that must NOT be retried on this schedule.
+_JOB_COLLISION_MARKER = "another job is running for job group"
+_JOB_COLLISION_RETRY_WINDOW = 60.0
+_JOB_COLLISION_RETRY_INITIAL_DELAY = 1.0
+_JOB_COLLISION_RETRY_MAX_DELAY = 5.0
+
+
 async def _supervisor_api_call(
     client: HomeAssistantClient,
     endpoint: str,
@@ -228,8 +241,13 @@ async def _supervisor_api_call(
         data: Optional request body data
         timeout: Optional timeout override
 
+    A transient Supervisor job-group collision is retried with backoff, so a
+    contended add-on endpoint can block for up to
+    ``_JOB_COLLISION_RETRY_WINDOW`` before returning or raising.
+
     Returns:
-        The "result" field from a successful response, or an error dict.
+        ``{"success": True, "result": ...}``. Every failure raises — this
+        never returns an error dict.
     """
     try:
         kwargs: dict[str, Any] = {"endpoint": endpoint, "method": method}
@@ -252,16 +270,78 @@ async def _supervisor_api_call(
         # ``{"success": False, "error": ...}``; re-raise it as the same
         # ``HomeAssistantCommandError`` the dedicated send_command used to raise
         # so the classifier below maps schema/not-found/etc. identically.
-        result = await client.send_websocket_message(
-            {"type": "supervisor/api", "_wait_timeout": wait_timeout, **kwargs}
-        )
-
-        if not result.get("success"):
-            raise HomeAssistantCommandError(
-                str(result.get("error", f"Supervisor API call failed: {endpoint}"))
+        #
+        # Supervisor serialises jobs per add-on job group and rejects a
+        # state-changing call outright while a still-settling job (a watchdog
+        # restart, a prior start/stop, a store reload) holds that group. The
+        # rejection happens before the job body runs, so nothing was applied
+        # and retrying cannot double-execute. The holder clears within seconds
+        # and the caller can do nothing useful with the failure, so ride it out
+        # inside one bounded window. The window is total rather than
+        # per-attempt, so a wedged group gives up once the window elapses
+        # instead of after some fixed retry count. Any other failure raises
+        # immediately, without retrying.
+        deadline = time.monotonic() + _JOB_COLLISION_RETRY_WINDOW
+        delay = _JOB_COLLISION_RETRY_INITIAL_DELAY
+        attempts = 0
+        while True:
+            attempts += 1
+            result = await client.send_websocket_message(
+                {"type": "supervisor/api", "_wait_timeout": wait_timeout, **kwargs}
             )
 
-        return {"success": True, "result": result.get("result", {})}
+            if result.get("success"):
+                return {"success": True, "result": result.get("result", {})}
+
+            error_text = str(
+                result.get("error", f"Supervisor API call failed: {endpoint}")
+            )
+            if _JOB_COLLISION_MARKER not in error_text.lower():
+                raise HomeAssistantCommandError(error_text)
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                # A group still held after the whole window is wedged, not
+                # settling. Raise a ToolError here (the guard below re-raises
+                # it untouched) so the caller gets guidance about the stuck
+                # job instead of the generic connectivity suggestion the
+                # exception handler attaches to every other failure.
+                waited = _JOB_COLLISION_RETRY_WINDOW - remaining
+                logger.warning(
+                    "Supervisor job group still busy on %s after %.0fs "
+                    "(%d attempts); giving up: %s",
+                    endpoint,
+                    waited,
+                    attempts,
+                    error_text,
+                )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        error_text,
+                        context={
+                            "endpoint": endpoint,
+                            "attempts": attempts,
+                            "waited_seconds": round(waited, 1),
+                        },
+                        suggestions=[
+                            "Another job has held this add-on's job group for "
+                            f"over {_JOB_COLLISION_RETRY_WINDOW:.0f}s — check "
+                            "Supervisor logs for a stuck or long-running job",
+                            "Retry once the in-flight add-on operation "
+                            "(install, update, restart or backup) finishes",
+                        ],
+                    )
+                )
+
+            logger.info(
+                "Supervisor job-group collision on %s; retrying in %.1fs (%s)",
+                endpoint,
+                delay,
+                error_text,
+            )
+            await asyncio.sleep(min(delay, remaining))
+            delay = min(delay * 2, _JOB_COLLISION_RETRY_MAX_DELAY)
 
     except ToolError:
         raise
