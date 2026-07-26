@@ -50,10 +50,6 @@ _CACHE_TTL_SECONDS = 30.0
 _cache: dict[str, tuple[float, list[str]]] = {}
 
 
-def value_source_for(tool_name: str, arg_path: str) -> str | None:
-    return VALUE_SOURCE_REGISTRY.get((tool_name, arg_path))
-
-
 def all_value_sources_for(tool_name: str) -> dict[str, str]:
     """Return {arg_path: value_source} for one tool — used by the UI to
     decide which paths render as dropdowns vs free-text."""

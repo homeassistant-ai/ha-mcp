@@ -273,21 +273,6 @@ class OperationManager:
 
         return True
 
-    def cancel_operation(self, operation_id: str) -> bool:
-        """Cancel a pending operation.
-
-        Args:
-            operation_id: Operation ID to cancel
-
-        Returns:
-            True if operation was found and cancelled
-        """
-        return self.update_operation_status(
-            operation_id,
-            OperationStatus.CANCELLED,
-            error_message="Operation cancelled by user",
-        )
-
     def get_operations_summary(self) -> dict[str, Any]:
         """Get summary of all operations.
 
@@ -458,13 +443,3 @@ def update_pending_operations(entity_id: str, new_state: dict[str, Any]) -> list
     """Update pending operations based on state change."""
     manager = get_operation_manager()
     return manager.process_state_change(entity_id, new_state)
-
-
-def get_pending_operations() -> dict[str, DeviceOperation]:
-    """Get all pending operations."""
-    manager = get_operation_manager()
-    return {
-        op_id: op
-        for op_id, op in manager.operations.items()
-        if op.status == OperationStatus.PENDING and not op.is_expired
-    }

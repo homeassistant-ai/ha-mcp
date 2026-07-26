@@ -412,28 +412,6 @@ class HomeAssistantClient:
         logger.debug(f"Fetching state for entity: {entity_id}")
         return await self._request("GET", f"/states/{entity_id}")
 
-    async def set_entity_state(
-        self, entity_id: str, state: str, attributes: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """
-        Set entity state.
-
-        Args:
-            entity_id: Entity ID
-            state: New state value
-            attributes: Optional attributes dictionary
-
-        Returns:
-            Updated entity state
-        """
-        logger.debug(f"Setting state for entity {entity_id} to {state}")
-
-        payload: dict[str, Any] = {"state": state}
-        if attributes:
-            payload["attributes"] = attributes
-
-        return await self._request("POST", f"/states/{entity_id}", json=payload)
-
     async def call_service(
         self,
         domain: str,
@@ -489,41 +467,6 @@ class HomeAssistantClient:
         """Get all available services."""
         logger.debug("Fetching available services")
         return await self._request("GET", "/services")
-
-    async def get_history(
-        self,
-        entity_id: str | None = None,
-        start_time: str | None = None,
-        end_time: str | None = None,
-    ) -> list[list[dict[str, Any]]]:
-        """
-        Get historical data.
-
-        Args:
-            entity_id: Optional entity ID to filter
-            start_time: Optional start time (ISO format)
-            end_time: Optional end time (ISO format)
-
-        Returns:
-            Historical data
-        """
-        logger.debug(f"Fetching history for entity: {entity_id}")
-
-        params = {}
-        if start_time:
-            params["start_time"] = start_time
-        if end_time:
-            params["end_time"] = end_time
-
-        endpoint = "/history/period"
-        if entity_id:
-            endpoint += f"/{entity_id}"
-
-        result = await self._request("GET", endpoint, params=params)
-        if isinstance(result, list):
-            return result
-        else:
-            return []
 
     async def get_logbook(
         self,
@@ -961,15 +904,6 @@ class HomeAssistantClient:
             # setup/teardown handlers" applies (connection probe is the analog).
             logger.error(f"Failed to connect to Home Assistant: {e}")
             return False, str(e)
-
-    async def get_system_health(self) -> dict[str, Any]:
-        """Get system health information."""
-        logger.debug("Fetching system health")
-        try:
-            return await self._request("GET", "/system_health/info")
-        except HomeAssistantAPIError:
-            # System health might not be available in all HA instances
-            return {"status": "unknown", "message": "System health not available"}
 
     # Automation Configuration Management
 
@@ -2097,14 +2031,3 @@ class HomeAssistantClient:
                     status_code=405,
                 ) from e
             raise
-
-
-async def create_client() -> HomeAssistantClient:
-    """Create and return a new Home Assistant client."""
-    return HomeAssistantClient()
-
-
-async def test_connection_with_config() -> tuple[bool, str | None]:
-    """Test connection using configuration settings."""
-    async with HomeAssistantClient() as client:
-        return await client.test_connection()

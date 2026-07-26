@@ -274,34 +274,6 @@ class WebSocketListenerService:
             "operation_summary": self.operation_manager.get_operations_summary(),
         }
 
-    async def force_reconnect(self) -> bool:
-        """Force a WebSocket reconnection.
-
-        Returns:
-            True if reconnection successful
-        """
-        try:
-            if self.websocket_client:
-                self.websocket_client.remove_event_handler(
-                    "state_changed", self._handle_state_change
-                )
-
-            self.websocket_client = await get_websocket_client()
-            await self.websocket_client.subscribe_events("state_changed")
-            self.websocket_client.add_event_handler(
-                "state_changed", self._handle_state_change
-            )
-
-            logger.info("Forced WebSocket reconnection successful")
-            return True
-
-        except Exception as e:
-            logger.error(f"Forced reconnection failed: {e}")
-            connection_errors = self.stats["connection_errors"]
-            if isinstance(connection_errors, int):
-                self.stats["connection_errors"] = connection_errors + 1
-            return False
-
 
 # Global listener service instance
 _listener_service: WebSocketListenerService | None = None
@@ -353,40 +325,3 @@ async def stop_websocket_listener() -> None:
     if _listener_service:
         await _listener_service.stop()
         _listener_service = None
-
-
-async def get_listener_status() -> dict[str, Any]:
-    """Get WebSocket listener service status."""
-    service = await get_listener_service()
-    return service.get_status()
-
-
-class WebSocketContextManager:
-    """Context manager for WebSocket listener lifecycle."""
-
-    def __init__(self) -> None:
-        self.service: WebSocketListenerService | None = None
-
-    async def __aenter__(self) -> WebSocketListenerService:
-        """Start WebSocket listener."""
-        service = await get_listener_service()
-        success = await service.start()
-        if not success:
-            raise Exception("Failed to start WebSocket listener")
-        self.service = service
-        return service
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Stop WebSocket listener."""
-        if self.service:
-            await self.service.stop()
-
-
-def websocket_listener_context() -> WebSocketContextManager:
-    """Create a WebSocket listener context manager."""
-    return WebSocketContextManager()

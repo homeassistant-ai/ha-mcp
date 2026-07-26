@@ -168,54 +168,6 @@ async def _get_dashboard_config_internal(
     return cast(dict[str, Any], config), compute_config_hash(config)
 
 
-async def _verify_config_unchanged(
-    client: Any,
-    url_path: str,
-    original_hash: str,
-) -> dict[str, Any]:
-    """
-    Verify dashboard config hasn't changed since original read.
-
-    Returns dict with:
-    - success: bool (True if config unchanged)
-    - error: str (if config changed)
-    - suggestions: list[str] (if config changed)
-    """
-    # Re-fetch current config. The component ``get`` reads the same in-memory
-    # object core serves (freshness-safe, audit-verified — the optimistic-lock
-    # re-read must not lag a concurrent save); ``None`` (component unavailable /
-    # YAML body / not found) falls back to the unchanged legacy re-fetch.
-    current_config: Any = await _component_dashboard_config(client, url_path or None)
-    if current_config is None:
-        get_data: dict[str, Any] = {"type": "lovelace/config"}
-        if url_path:
-            get_data["url_path"] = url_path
-
-        result = await client.send_websocket_message(get_data)
-        current_config = (
-            result.get("result", result) if isinstance(result, dict) else result
-        )
-
-    if not isinstance(current_config, dict):
-        return {"success": True}  # Can't verify, proceed anyway
-
-    current_hash = compute_config_hash(current_config)
-
-    if current_hash != original_hash:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Dashboard modified since last read (conflict)",
-                suggestions=[
-                    "Re-read dashboard with ha_config_get_dashboard",
-                    "Then retry the operation with fresh data",
-                ],
-            )
-        )
-
-    return {"success": True}
-
-
 def _badge_matches(badge: Any, entity_id: str) -> bool:
     """Check if a badge matches the entity_id search criteria.
 
@@ -2485,9 +2437,9 @@ class DashboardConfigTools:
         ``force_reload`` bypasses the component fast path entirely: the component
         ``get`` carries no force semantic, so a forced read must go straight to the
         legacy ``lovelace/config`` request below (which threads ``force=True``) to
-        actually bust HA's Lovelace cache. (The optimistic-lock re-read in
-        ``_verify_config_unchanged`` deliberately keeps the no-force component read
-        — it wants the same in-memory object core serves.)
+        actually bust HA's Lovelace cache. The optimistic-lock re-read in
+        ``_fetch_and_verify_dashboard_hash`` deliberately keeps the no-force
+        component read because it needs the same in-memory object that Core serves.
         """
         component_url_path = (
             None if (not url_path or url_path == "default") else url_path

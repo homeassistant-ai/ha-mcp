@@ -110,7 +110,7 @@ Look at changes in these files first:
 | Changed File | Impact |
 |-------------|--------|
 | `src/ha_mcp/tools/tools_*.py` | Tool behavior changes |
-| `src/ha_mcp/tools/smart_search.py` | Entity search behavior |
+| `src/ha_mcp/tools/smart_search/` | Entity search behavior |
 | `src/ha_mcp/tools/device_control.py` | Device control behavior |
 | `src/ha_mcp/client/rest_client.py` | API interaction changes |
 | `src/ha_mcp/errors.py` | Error message changes |
@@ -146,7 +146,7 @@ Document the regression finding:
 when the automation alias contains spaces, breaking the agent's retry logic.
 
 **Changed files:**
-- `src/ha_mcp/tools/tools_config_automation.py` (lines 45-60)
+- `src/ha_mcp/tools/tools_config_automations.py` (lines 45-60)
 
 **Suggested fix:** Update error message format to preserve backward compatibility.
 ```

@@ -138,7 +138,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 (it never fetches the registry on its own — see
                 ``_deep_search_helpers``). The orchestrator only hands one down
                 when both the entity and config-body branches run, so direct
-                ``deep_search``/``ha_deep_search`` callers get ``None`` here.
+                direct ``deep_search`` callers get ``None`` here.
 
         Returns:
             Dictionary with search results grouped by type
@@ -881,7 +881,7 @@ class DeepSearchMixin(SceneSearchMixin):
         here — this path adds no request) to map each input_* helper's storage
         ``unique_id`` to its CURRENT entity_id + name so a UI rename doesn't
         hide the helper from a search for its new name (#1794). ``None`` on the
-        direct ``deep_search``/``ha_deep_search`` path yields an empty map and
+        direct ``deep_search`` path yields an empty map and
         storage-name-only matching.
         """
         helper_types = [

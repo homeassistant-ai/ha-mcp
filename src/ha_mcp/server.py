@@ -20,7 +20,6 @@ from pydantic import Field
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
-from .tools.enhanced import EnhancedToolsMixin
 from .tools.helpers import raise_tool_error
 from .tools.util_helpers import strip_internal_fields
 from .transforms import DEFAULT_PINNED_TOOLS
@@ -77,7 +76,7 @@ SERVER_ICONS = [
 ]
 
 
-class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
+class HomeAssistantSmartMCPServer:
     """Home Assistant MCP Server with smart tools and fuzzy search.
 
     Uses lazy initialization to improve startup time:
@@ -195,9 +194,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         """Initialize all server components."""
         # Register tools
         self.tools_registry.register_all_tools()
-
-        # Register enhanced tools for first/second interaction success
-        self.register_enhanced_tools()
 
         # Register bundled skills as MCP resources
         self._register_skills()
@@ -1789,7 +1785,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         )
         return response
 
-    # Helper methods required by EnhancedToolsMixin
+    # Public bridges to the underlying client and smart-search services.
 
     async def smart_entity_search(
         self, query: str, domain_filter: str | None = None, limit: int = 10

@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     entity_search_limit: int = Field(20, alias="ENTITY_SEARCH_LIMIT")
 
     # Smart-search config-fetch time budgets (seconds). Bound how long
-    # ha_search / ha_deep_search spends fetching automation/script/scene
+    # ha_search spends fetching automation/script/scene
     # definitions during the per-id fallback before reporting a partial
     # result. Surfaced in the Advanced settings panel (issue #1538) so
     # add-on users — who cannot set raw env vars — can tune them. Consumed
@@ -466,11 +466,6 @@ class Settings(BaseSettings):
             return int(val)
         return val
 
-    @property
-    def env_file_name(self) -> str:
-        """Get the current environment file name."""
-        return os.getenv("HAMCP_ENV_FILE", ".env")
-
     @field_validator("homeassistant_url")
     @classmethod
     def validate_homeassistant_url(cls, v: str) -> str:
@@ -578,28 +573,6 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get application settings."""
     return Settings()  # type: ignore[call-arg]
-
-
-def validate_settings() -> tuple[bool, str | None]:
-    """
-    Validate settings and return (is_valid, error_message).
-
-    Returns:
-        tuple: (True, None) if valid, (False, error_message) if invalid
-    """
-    try:
-        settings = get_settings()
-
-        # Additional validation
-        if not settings.homeassistant_url:
-            return False, "Home Assistant URL is required"
-
-        if not settings.homeassistant_token:
-            return False, "Home Assistant token is required"
-
-        return True, None
-    except Exception as e:
-        return False, str(e)
 
 
 # Runtime-editable feature flags surfaced in the /settings web UI

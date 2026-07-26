@@ -337,7 +337,7 @@ If your model can't see the tools or your Home Assistant, it may be getting hand
 
 ### Enable search-based discovery
 
-Set ENABLE_TOOL_SEARCH=true (or toggle the option in the HA add-on). The full catalog is replaced in the tool list with four entry points plus a small set of always-visible "pinned" tools (ha_search_entities, ha_get_overview, ha_restart, etc.). All tools remain callable directly by name once discovered:
+Set ENABLE_TOOL_SEARCH=true (or toggle the option in the HA add-on). The full catalog is replaced in the tool list with four entry points plus a small set of always-visible "pinned" tools (ha_search, ha_get_overview, ha_report_issue, etc.). All tools remain callable directly by name once discovered:
 
 | Tool | Purpose |
 |------|---------|
