@@ -481,15 +481,19 @@ class ProbeAccessLogFilter(logging.Filter):
 def _setup_logging(log_level_str: str, force: bool = True) -> None:
     """Configure root logger with consistent timestamp format.
 
-    ``force`` defaults to True because ``usage_logger`` attaches its
-    ``StartupLogCollector`` to the root logger at import time: with a root
-    handler already present, ``basicConfig`` does nothing at all — neither the
-    console handler nor the level is applied — leaving the root logger at
-    WARNING with no stderr output, so INFO lines never surface.
+    ``force`` defaults to True so the reconfiguration is deterministic: with
+    ANY root handler present, ``basicConfig`` is a silent no-op — neither the
+    console handler nor the level is applied. Since
+    ``preserve_startup_collector`` detaches the collector before
+    ``basicConfig`` runs, the default guards against FOREIGN root handlers —
+    pytest's, a library's, or this function's own console handler on a repeat
+    call (the OAuth/OIDC entry points reconfigure after settings load).
 
-    ``preserve_startup_collector`` keeps the collector out of the sweep
-    ``force`` performs (which removes *and closes* every root handler), so
-    ``ha_report_issue`` still gets its startup diagnostics.
+    The historical standard-mode bug was ``usage_logger``'s
+    ``StartupLogCollector`` (attached to root at import time) triggering that
+    same no-op; the wrapper now detaches it for the duration — keeping it out
+    of the sweep ``force`` performs (which removes *and closes* every root
+    handler) so ``ha_report_issue`` keeps its startup diagnostics.
     """
     from ha_mcp.utils.usage_logger import preserve_startup_collector
 

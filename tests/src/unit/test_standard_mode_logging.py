@@ -161,6 +161,35 @@ class TestStandardModeConsoleLogging:
                 for entry in usage_logger.get_startup_logs()
             )
 
+    def test_force_reconfigures_past_a_foreign_root_handler(self):
+        """Pins the ``force=True`` default itself (Patch76's #2039 review).
+
+        The wrapper detaches only the COLLECTOR, so a foreign root handler —
+        pytest's, a library's, or this function's own console handler on a
+        repeat call — is what the default actually guards: with one present,
+        ``force=False`` makes ``basicConfig`` a silent no-op again (no console
+        handler, root stays WARNING). The collector-only cases above stay
+        green on a default flip; this one goes red.
+        """
+        with _standard_mode_logging_state() as (collector, stderr_buffer):
+            foreign = logging.NullHandler()
+            logging.getLogger().addHandler(foreign)
+
+            ha_main._setup_logging("INFO")
+
+            console = _console_handlers()
+            assert len(console) == 1, (
+                "with a foreign root handler present, only force=True "
+                "installs the console handler"
+            )
+            assert console[0].stream is stderr_buffer
+            assert logging.getLogger().level == logging.INFO
+            # The force sweep removed the foreign handler; the collector was
+            # shielded by the wrapper and stays live.
+            assert foreign not in logging.getLogger().handlers
+            assert collector in logging.getLogger().handlers
+            assert not getattr(collector, "_closed", False)
+
     def test_setup_standard_mode_logs_startup_version_to_stderr(self, monkeypatch):
         """End-to-end for the ``ha-mcp-web`` lane: a real INFO line comes out."""
         import ha_mcp.config
