@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools import tools_calendar
 from ha_mcp.tools.tools_calendar import CalendarTools
 
@@ -264,7 +264,9 @@ async def test_non_rrule_failure_omits_rrule_suggestion():
     """The RRULE-syntax hint must not appear when no rrule was supplied."""
     client = _make_mock_client()
     client.call_service = AsyncMock(
-        side_effect=HomeAssistantCommandError("Command failed: backend boom")
+        side_effect=HomeAssistantAPIError(
+            "API error: 500 - 500: Internal Server Error", status_code=500
+        )
     )
 
     tools = CalendarTools(client)
@@ -291,7 +293,9 @@ async def test_all_day_zero_duration_failure_prepends_exclusive_end_suggestion()
     """
     client = _make_mock_client()
     client.call_service = AsyncMock(
-        side_effect=HomeAssistantCommandError("API error: 400 - 400: Bad Request")
+        side_effect=HomeAssistantAPIError(
+            "API error: 400 - 400: Bad Request", status_code=400
+        )
     )
 
     tools = CalendarTools(client)
@@ -312,7 +316,9 @@ async def test_all_day_valid_range_failure_omits_exclusive_end_suggestion():
     """The exclusive-end hint must not appear when the all-day range is valid."""
     client = _make_mock_client()
     client.call_service = AsyncMock(
-        side_effect=HomeAssistantCommandError("API error: 400 - 400: Bad Request")
+        side_effect=HomeAssistantAPIError(
+            "API error: 400 - 400: Bad Request", status_code=400
+        )
     )
 
     tools = CalendarTools(client)
@@ -336,7 +342,9 @@ async def test_timed_event_too_close_boundaries_omits_exclusive_end_suggestion()
     """Timed events hit the same min-duration rule but need a later time, not +1 day."""
     client = _make_mock_client()
     client.call_service = AsyncMock(
-        side_effect=HomeAssistantCommandError("API error: 400 - 400: Bad Request")
+        side_effect=HomeAssistantAPIError(
+            "API error: 400 - 400: Bad Request", status_code=400
+        )
     )
 
     tools = CalendarTools(client)
