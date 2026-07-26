@@ -415,6 +415,31 @@ def _ruff_format(paths: list[Path], root: Path) -> None:
     )
 
 
+def rebase_dev_version(new_stable: str, root: Path = REPO_ROOT) -> str:
+    """Rewrite the dev flavor's version files onto ``new_stable``'s line.
+
+    Called by the promote transform so the promote PR itself carries the dev
+    version rebase (next stable patch + ``.dev1`` — see ``reset_version``)
+    instead of a follow-up reset PR existing only for the version line. Only
+    the two version-bearing files are touched; the dev code is left alone
+    (right after a promote it is identical to stable anyway). Reuses the
+    identity writers, which are idempotent on the dev tree's own identity.
+    """
+    dev_dir = root / DEV.addon_dir
+    new_dev = reset_version(_read_config_version(dev_dir / "config.yaml"), new_stable)
+    config_yaml = dev_dir / "config.yaml"
+    config_yaml.write_text(
+        transform_config_yaml(config_yaml.read_text(encoding="utf-8"), DEV, new_dev),
+        encoding="utf-8",
+    )
+    manifest = dev_dir / DEV.component / "manifest.json"
+    manifest.write_text(
+        apply_manifest(manifest.read_text(encoding="utf-8"), DEV, new_dev),
+        encoding="utf-8",
+    )
+    return new_dev
+
+
 def sync(direction: str, bump: str | None = None, root: Path = REPO_ROOT) -> str:
     """Apply the promote/reset transform in place. Returns the new version."""
     if direction == "promote":
@@ -515,6 +540,13 @@ def sync(direction: str, bump: str | None = None, root: Path = REPO_ROOT) -> str
 
     # Re-wrap .py lines whose length crossed 88 cols due to the token swap.
     _ruff_format([start_py, *sorted(dst_comp.rglob("*.py"))], root)
+
+    if direction == "promote":
+        # The promote PR itself carries the dev version-line rebase — see
+        # rebase_dev_version. Stdout stays the stable version (the promote
+        # workflow captures it); the dev version is visible in the diff.
+        rebase_dev_version(version, root)
+
     return version
 
 
