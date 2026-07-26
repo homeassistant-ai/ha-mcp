@@ -232,12 +232,16 @@ class CalendarTools:
         location: str | None,
     ) -> Any:
         """Create a one-off calendar event via the calendar.create_event service."""
+        start_is_date = self._is_date_only(start)
+
         service_data: dict[str, Any] = {
             "entity_id": entity_id,
             "summary": summary,
-            "start_date_time": start,
-            "end_date_time": end,
         }
+        if start_is_date:
+            service_data.update({"start_date": start, "end_date": end})
+        else:
+            service_data.update({"start_date_time": start, "end_date_time": end})
 
         if description is not None:
             service_data["description"] = description
@@ -246,8 +250,19 @@ class CalendarTools:
 
         return await self._client.call_service("calendar", "create_event", service_data)
 
+    @staticmethod
+    def _is_date_only(value: str) -> bool:
+        """Return whether value is a valid date in strict YYYY-MM-DD form."""
+        try:
+            return (
+                len(value) == 10
+                and datetime.strptime(value, "%Y-%m-%d").date().isoformat() == value
+            )
+        except ValueError:
+            return False
+
     def _build_set_calendar_event_error_suggestions(
-        self, entity_id: str, rrule: str | None, error: Exception
+        self, entity_id: str, rrule: str | None, error: Exception, start: str, end: str
     ) -> list[str]:
         """Build suggestions for a failed ha_config_set_calendar_event call."""
         if isinstance(error, HomeAssistantConnectionError):
@@ -274,8 +289,32 @@ class CalendarTools:
         error_str = str(error)
         if "404" in error_str or "not found" in error_str.lower():
             suggestions.insert(0, f"Calendar entity '{entity_id}' not found")
+        # Only reachable on the WebSocket (rrule) path, which preserves HA's
+        # humanized message. The REST service path loses it: a read-only
+        # calendar raises ServiceNotSupported, which HA's handler does not map
+        # (see homeassistant/helpers/http.py — only vol.Invalid, ServiceNotFound
+        # and Unauthorized are), so the client sees a bodyless status line. Do
+        # NOT broaden this to match that generic shape: it would promote
+        # "does not support event creation" onto every validation failure. The
+        # REST path keeps the read-only hint via the unconditional
+        # "Some calendar integrations may be read-only" suggestion above.
         if "not supported" in error_str.lower():
             suggestions.insert(0, "This calendar does not support event creation")
+        # HA treats the all-day end date as exclusive and enforces
+        # MIN_NEW_EVENT_DURATION (1 second), so an all-day range with
+        # end <= start is rejected. Key this on the boundaries we already hold
+        # rather than on HA's wording: the REST service path raises a bare
+        # HTTPBadRequest, so voluptuous' "Expected minimum event duration"
+        # text never reaches the client (only the WebSocket rrule path keeps
+        # it). Strict YYYY-MM-DD sorts lexicographically, so comparing the
+        # strings is an exact date comparison here.
+        if self._is_date_only(start) and self._is_date_only(end) and end <= start:
+            suggestions.insert(
+                0,
+                "For an all-day event the end date is exclusive — set end to "
+                "start + 1 day (a single-day all-day event cannot have "
+                "start == end)",
+            )
 
         return suggestions
 
@@ -305,8 +344,19 @@ class CalendarTools:
             str, Field(description="Calendar entity ID (e.g., 'calendar.family')")
         ],
         summary: Annotated[str, Field(description="Event title/summary")],
-        start: Annotated[str, Field(description="Event start datetime in ISO format")],
-        end: Annotated[str, Field(description="Event end datetime in ISO format")],
+        start: Annotated[
+            str, Field(description="Event start date or datetime in ISO format")
+        ],
+        end: Annotated[
+            str,
+            Field(
+                description=(
+                    "Event end date or datetime in ISO format. For all-day "
+                    "events (date-only) the end date is exclusive; a "
+                    "single-day all-day event needs end = start + 1 day."
+                )
+            ),
+        ],
         description: Annotated[
             str | None,
             Field(description="Optional event description", default=None),
@@ -334,14 +384,9 @@ class CalendarTools:
         when ``rrule`` is provided (the REST service schema does not accept
         recurrence rules).
 
-        **Parameters:**
-        - entity_id: Calendar entity ID (e.g., 'calendar.family')
-        - summary: Event title/summary
-        - start: Event start datetime in ISO format
-        - end: Event end datetime in ISO format
-        - description: Optional event description
-        - location: Optional event location
-        - rrule: Optional RFC 5545 recurrence rule (creates a recurring series)
+        **When NOT to use:**
+        - To retrieve calendar events, use ``ha_config_get_calendar_events``.
+        - To delete an event, use ``ha_config_remove_calendar_event``.
 
         **Example Usage:**
         ```python
@@ -361,9 +406,25 @@ class CalendarTools:
             end="2024-01-15T11:00:00",
             rrule="FREQ=WEEKLY;BYDAY=MO;COUNT=10"
         )
+
+        # Create an all-day event (date-only, no time component). The end
+        # date is EXCLUSIVE, so this spans 2026-07-04 through 2026-07-10.
+        result = ha_config_set_calendar_event(
+            "calendar.family",
+            summary="Vacation",
+            start="2026-07-04",
+            end="2026-07-11"
+        )
         ```
 
         **Note:**
+        Passing date-only values (``YYYY-MM-DD``) for both ``start`` and
+        ``end`` creates an all-day event; passing full ISO datetimes creates
+        a timed event. The two forms cannot be mixed — a date-only ``start``
+        with a datetime ``end`` (or vice versa) is rejected. Because the
+        all-day ``end`` date is exclusive, a single-day all-day event must
+        set ``end`` to ``start + 1 day``.
+
         Not every calendar integration supports event creation; recurring
         events additionally require the integration to support recurrence
         (the built-in Local Calendar does).
@@ -382,6 +443,23 @@ class CalendarTools:
                         suggestions=[
                             "Use ha_search(query='calendar', domain_filter='calendar') to find calendar entities",
                             "Calendar entity IDs start with 'calendar.' prefix",
+                        ],
+                    )
+                )
+
+            # Reject mixed date/datetime up front so both the simple and the
+            # recurring (rrule) paths give the same clear validation error —
+            # the rrule branch does not route through
+            # ``_create_simple_calendar_event`` where this used to live.
+            if self._is_date_only(start) != self._is_date_only(end):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Calendar event start and end must both be dates or both be datetimes",
+                        context={"start": start, "end": end},
+                        suggestions=[
+                            "Use YYYY-MM-DD for both values to create an all-day event",
+                            "Use ISO 8601 datetimes for both values to create a timed event",
                         ],
                     )
                 )
@@ -416,7 +494,7 @@ class CalendarTools:
             logger.error(f"Failed to create calendar event in {entity_id}: {error}")
 
             suggestions = self._build_set_calendar_event_error_suggestions(
-                entity_id, rrule, error
+                entity_id, rrule, error, start, end
             )
 
             exception_to_structured_error(
