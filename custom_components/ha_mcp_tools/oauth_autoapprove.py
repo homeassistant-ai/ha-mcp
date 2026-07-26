@@ -59,6 +59,7 @@ from .oauth_legacy import (
     ACCESS_TOKEN_TTL,
     PKCECodeStore,
     _is_valid_redirect_uri,
+    _issuer_for,
 )
 
 if TYPE_CHECKING:
@@ -238,14 +239,19 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         if not _is_valid_autoapprove_redirect(redirect_uri):
             return _json_error("invalid_request", 400, "invalid redirect_uri")
 
+        # RFC 9207: every authorization response — success or error — names the
+        # issuer that produced it, so a client registered with several
+        # authorization servers cannot be fed a response minted by another one.
+        iss = _issuer_for(request)
+
         code = provider.issue_code(redirect_uri, code_challenge)
         if code is None:
             # Pending-code store at capacity (abuse guard) — surface per
             # RFC 6749 §4.1.2.1 instead of a silent failure.
             return _redirect_with(
-                redirect_uri, error="temporarily_unavailable", state=state
+                redirect_uri, error="temporarily_unavailable", state=state, iss=iss
             )
-        redirect_params = {"code": code}
+        redirect_params = {"code": code, "iss": iss}
         if state:
             redirect_params["state"] = state
         return _redirect_with(redirect_uri, **redirect_params)

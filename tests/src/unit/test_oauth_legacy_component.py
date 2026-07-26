@@ -59,6 +59,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
     DATA_OAUTH_SIGNING_KEY,
+    OAUTH_BASE,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
     OPT_OAUTH_REGENERATE,
@@ -68,6 +69,8 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
 CLIENT_ID = "test-client-id"
 CLIENT_SECRET = "test-client-secret"
 REDIRECT_URI = "https://client.example.com/cb"
+HOST = "ha.example.com"
+EXPECTED_ISSUER = f"https://{HOST}{OAUTH_BASE}"
 
 
 def _make_provider(
@@ -114,6 +117,28 @@ def _make_get_request(query: dict[str, str]) -> MagicMock:
     request = MagicMock(name="Request")
     request.query = query
     return request
+
+
+def _make_post_request(form: dict[str, str]) -> MagicMock:
+    """A POST /authorize request carrying the Host header that
+    ``mcp_webhook._build_base_url`` reads to derive the RFC 9207 ``iss``."""
+    request = MagicMock(name="Request")
+    request.headers = {"Host": HOST}
+    request.scheme = "https"
+    request.post = AsyncMock(return_value=form)
+    return request
+
+
+def _approve_form(challenge: str, **overrides: str) -> dict[str, str]:
+    form = {
+        "action": "approve",
+        "client_id": CLIENT_ID,
+        "redirect_uri": REDIRECT_URI,
+        "state": "xyz",
+        "code_challenge": challenge,
+    }
+    form.update(overrides)
+    return form
 
 
 def _extract_query_param(url: str, key: str) -> str:
@@ -548,21 +573,14 @@ class TestAuthorizeViewPost:
         provider = _make_provider()
         view = oauth_legacy.AuthorizeView(provider)
         verifier, challenge = _pkce_pair()
-        request = MagicMock()
-        request.post = AsyncMock(
-            return_value={
-                "action": "approve",
-                "client_id": CLIENT_ID,
-                "redirect_uri": REDIRECT_URI,
-                "state": "xyz",
-                "code_challenge": challenge,
-            }
-        )
+        request = _make_post_request(_approve_form(challenge))
         response = await view.post(request)
         assert response.status == 302
         location = response.headers["Location"]
         assert location.startswith(f"{REDIRECT_URI}?")
         assert _extract_query_param(location, "state") == "xyz"
+        # RFC 9207 §2: the success response names the issuer that minted it.
+        assert _extract_query_param(location, "iss") == EXPECTED_ISSUER
         code = _extract_query_param(location, "code")
         assert provider.consume_code(code, REDIRECT_URI, verifier) is True
 
@@ -570,20 +588,31 @@ class TestAuthorizeViewPost:
         provider = _make_provider()
         view = oauth_legacy.AuthorizeView(provider)
         _, challenge = _pkce_pair()
-        request = MagicMock()
-        request.post = AsyncMock(
-            return_value={
-                "action": "deny",
-                "client_id": CLIENT_ID,
-                "redirect_uri": REDIRECT_URI,
-                "state": "xyz",
-                "code_challenge": challenge,
-            }
-        )
+        request = _make_post_request(_approve_form(challenge, action="deny"))
         response = await view.post(request)
         assert response.status == 302
         location = response.headers["Location"]
         assert _extract_query_param(location, "error") == "access_denied"
+        # RFC 9207 §2 covers error responses too, not just the success redirect.
+        assert _extract_query_param(location, "iss") == EXPECTED_ISSUER
+
+    async def test_iss_equals_the_advertised_legacy_issuer(self):
+        """The redirect's ``iss`` is byte-identical to the ``issuer`` the legacy
+        discovery document advertises for the same request — RFC 9207 §2 rejects
+        anything else, and the two are built in different modules."""
+        from custom_components.ha_mcp_tools import mcp_webhook
+
+        provider = _make_provider()
+        view = oauth_legacy.AuthorizeView(provider)
+        _, challenge = _pkce_pair()
+        request = _make_post_request(_approve_form(challenge))
+        response = await view.post(request)
+
+        advertised = mcp_webhook._legacy_authorization_server_document(
+            mcp_webhook._build_base_url(request)
+        )["issuer"]
+        assert advertised == EXPECTED_ISSUER
+        assert _extract_query_param(response.headers["Location"], "iss") == advertised
 
     async def test_inactive_provider_returns_404(self):
         provider = _make_provider(active=False)
@@ -599,15 +628,10 @@ class TestAuthorizeViewPost:
         provider = _make_provider()
         view = oauth_legacy.AuthorizeView(provider)
         _, challenge = _pkce_pair()
-        request = MagicMock()
-        request.post = AsyncMock(
-            return_value={
-                "action": "approve",
-                "client_id": CLIENT_ID,
-                "redirect_uri": "https://client.example.com:999999/cb",
-                "state": "xyz",
-                "code_challenge": challenge,
-            }
+        request = _make_post_request(
+            _approve_form(
+                challenge, redirect_uri="https://client.example.com:999999/cb"
+            )
         )
         response = await view.post(request)
         assert response.status == 400
@@ -616,16 +640,7 @@ class TestAuthorizeViewPost:
         provider = _make_provider()
         view = oauth_legacy.AuthorizeView(provider)
         _, challenge = _pkce_pair()
-        request = MagicMock()
-        request.post = AsyncMock(
-            return_value={
-                "action": "bogus",
-                "client_id": CLIENT_ID,
-                "redirect_uri": REDIRECT_URI,
-                "state": "xyz",
-                "code_challenge": challenge,
-            }
-        )
+        request = _make_post_request(_approve_form(challenge, action="bogus"))
         response = await view.post(request)
         assert response.status == 400
 
@@ -637,21 +652,13 @@ class TestAuthorizeViewPost:
         for _ in range(oauth_legacy.MAX_PENDING_CODES):
             provider.issue_code(REDIRECT_URI, challenge)
         view = oauth_legacy.AuthorizeView(provider)
-        request = MagicMock()
-        request.post = AsyncMock(
-            return_value={
-                "action": "approve",
-                "client_id": CLIENT_ID,
-                "redirect_uri": REDIRECT_URI,
-                "state": "xyz",
-                "code_challenge": challenge,
-            }
-        )
+        request = _make_post_request(_approve_form(challenge))
         response = await view.post(request)
         assert response.status == 302
         location = response.headers["Location"]
         assert _extract_query_param(location, "error") == "temporarily_unavailable"
         assert _extract_query_param(location, "state") == "xyz"
+        assert _extract_query_param(location, "iss") == EXPECTED_ISSUER
 
 
 # ---------------------------------------------------------------------------
@@ -1126,3 +1133,13 @@ class TestEnsureLegacyOAuthSecrets:
         assert data[DATA_OAUTH_CLIENT_ID] == "already-set"
         assert data[DATA_OAUTH_SIGNING_KEY] == "ee" * 32  # unchanged
         assert options[OPT_OAUTH_CLIENT_ID] == ""
+
+
+class TestRfc9207MetadataAdvertisement:
+    """RFC 9207 §3: the legacy document advertises response issuer support."""
+
+    def test_legacy_document_advertises_iss_support(self):
+        from custom_components.ha_mcp_tools import mcp_webhook
+
+        doc = mcp_webhook._legacy_authorization_server_document("https://ha.example")
+        assert doc["authorization_response_iss_parameter_supported"] is True

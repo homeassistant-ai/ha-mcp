@@ -292,6 +292,19 @@ def _live_auth_mode(hass: HomeAssistant) -> str | None:
     return active_auth_mode(hass)
 
 
+def _issuer_for(request: web.Request) -> str:
+    """The issuer identifier this mode advertises for ``request``.
+
+    RFC 9207 §2 requires the ``iss`` authorization-response parameter to equal
+    the advertised ``issuer`` exactly, so it comes from the same helper that
+    fills the discovery document's field. Deferred import for the module-cycle
+    reason documented on :func:`_live_auth_mode`.
+    """
+    from .mcp_webhook import issuer_for_request
+
+    return issuer_for_request(request)
+
+
 # ---------------------------------------------------------------------------
 # Small helpers (ported from the add-on's oauth.py)
 # ---------------------------------------------------------------------------
@@ -713,8 +726,15 @@ class AuthorizeView(HomeAssistantView):
         if err is not None:
             return err
 
+        # RFC 9207: every authorization response — success or error — names the
+        # issuer that produced it, so a client registered with several
+        # authorization servers cannot be fed a response minted by another one.
+        iss = _issuer_for(request)
+
         if action == "deny":
-            return self._redirect_with(redirect_uri, error="access_denied", state=state)
+            return self._redirect_with(
+                redirect_uri, error="access_denied", state=state, iss=iss
+            )
         if action != "approve":
             return _text_error(400, "invalid action")
 
@@ -723,9 +743,9 @@ class AuthorizeView(HomeAssistantView):
             # Pending-code store at cap → signal back per RFC 6749 §4.1.2.1
             # instead of silently failing.
             return self._redirect_with(
-                redirect_uri, error="temporarily_unavailable", state=state
+                redirect_uri, error="temporarily_unavailable", state=state, iss=iss
             )
-        return self._redirect_with(redirect_uri, code=code, state=state)
+        return self._redirect_with(redirect_uri, code=code, state=state, iss=iss)
 
     def _validate_authorize_params(
         self,
