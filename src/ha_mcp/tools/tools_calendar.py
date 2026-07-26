@@ -262,7 +262,7 @@ class CalendarTools:
             return False
 
     def _build_set_calendar_event_error_suggestions(
-        self, entity_id: str, rrule: str | None, error: Exception, date_only: bool
+        self, entity_id: str, rrule: str | None, error: Exception, start: str, end: str
     ) -> list[str]:
         """Build suggestions for a failed ha_config_set_calendar_event call."""
         if isinstance(error, HomeAssistantConnectionError):
@@ -291,12 +291,15 @@ class CalendarTools:
             suggestions.insert(0, f"Calendar entity '{entity_id}' not found")
         if "not supported" in error_str.lower():
             suggestions.insert(0, "This calendar does not support event creation")
-        # HA enforces MIN_NEW_EVENT_DURATION (1 second): for all-day events the
-        # end date is exclusive, so start == end has zero duration and is
-        # rejected. Steer the agent to bump the end date by a day. Gate on
-        # date-only input — the same min-duration error fires for timed events
-        # with too-close boundaries, where the fix is a later time, not +1 day.
-        if date_only and "duration" in error_str.lower():
+        # HA treats the all-day end date as exclusive and enforces
+        # MIN_NEW_EVENT_DURATION (1 second), so an all-day range with
+        # end <= start is rejected. Key this on the boundaries we already hold
+        # rather than on HA's wording: the REST service path raises a bare
+        # HTTPBadRequest, so voluptuous' "Expected minimum event duration"
+        # text never reaches the client (only the WebSocket rrule path keeps
+        # it). Strict YYYY-MM-DD sorts lexicographically, so comparing the
+        # strings is an exact date comparison here.
+        if self._is_date_only(start) and self._is_date_only(end) and end <= start:
             suggestions.insert(
                 0,
                 "For an all-day event the end date is exclusive — set end to "
@@ -482,10 +485,7 @@ class CalendarTools:
             logger.error(f"Failed to create calendar event in {entity_id}: {error}")
 
             suggestions = self._build_set_calendar_event_error_suggestions(
-                entity_id,
-                rrule,
-                error,
-                self._is_date_only(start) and self._is_date_only(end),
+                entity_id, rrule, error, start, end
             )
 
             exception_to_structured_error(

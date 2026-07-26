@@ -282,6 +282,80 @@ async def test_non_rrule_failure_omits_rrule_suggestion():
 
 
 @pytest.mark.asyncio
+async def test_all_day_zero_duration_failure_prepends_exclusive_end_suggestion():
+    """An all-day range with end <= start surfaces the exclusive-end hint first.
+
+    The hint is keyed on the supplied boundaries, not on HA's error text: the
+    REST service path raises a bare ``HTTPBadRequest``, so voluptuous'
+    "Expected minimum event duration" message never reaches the client.
+    """
+    client = _make_mock_client()
+    client.call_service = AsyncMock(
+        side_effect=HomeAssistantCommandError("API error: 400 - 400: Bad Request")
+    )
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Single day off",
+            start="2026-07-04",
+            end="2026-07-04",
+        )
+
+    suggestions = _structured_error(exc_info.value)["error"]["suggestions"]
+    assert suggestions[0].startswith("For an all-day event the end date is exclusive")
+
+
+@pytest.mark.asyncio
+async def test_all_day_valid_range_failure_omits_exclusive_end_suggestion():
+    """The exclusive-end hint must not appear when the all-day range is valid."""
+    client = _make_mock_client()
+    client.call_service = AsyncMock(
+        side_effect=HomeAssistantCommandError("API error: 400 - 400: Bad Request")
+    )
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Vacation",
+            start="2026-07-04",
+            end="2026-07-11",
+        )
+
+    suggestions = _structured_error(exc_info.value)["error"]["suggestions"]
+    assert all(
+        not s.startswith("For an all-day event the end date is exclusive")
+        for s in suggestions
+    )
+
+
+@pytest.mark.asyncio
+async def test_timed_event_too_close_boundaries_omits_exclusive_end_suggestion():
+    """Timed events hit the same min-duration rule but need a later time, not +1 day."""
+    client = _make_mock_client()
+    client.call_service = AsyncMock(
+        side_effect=HomeAssistantCommandError("API error: 400 - 400: Bad Request")
+    )
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Instant meeting",
+            start="2026-06-15T10:00:00",
+            end="2026-06-15T10:00:00",
+        )
+
+    suggestions = _structured_error(exc_info.value)["error"]["suggestions"]
+    assert all(
+        not s.startswith("For an all-day event the end date is exclusive")
+        for s in suggestions
+    )
+
+
+@pytest.mark.asyncio
 async def test_rrule_transport_failure_maps_to_connection_error():
     """A connection-shaped pooled-WS failure surfaces as CONNECTION_FAILED with
     connectivity guidance — not rrule/calendar suggestions (issue #1832 review)."""
