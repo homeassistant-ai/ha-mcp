@@ -357,6 +357,37 @@ class TestYamlReadGlobDiscovery:
         # file + yaml_path address the same fragment for ha_config_set_yaml.
         assert match["yaml_path"] == "command_line"
 
+    async def test_bracketed_filename_is_read_by_its_exact_name(
+        self, mcp_client, yaml_editing_enabled
+    ):
+        """The behavioural half of the unit coverage, on a real instance.
+
+        The unit tests resolve against a replica of the component's matcher;
+        this seeds a file whose name carries a bracket class and reads it back
+        by that exact name, so the two halves are pinned against the same
+        behaviour rather than against each other.
+        """
+        target = f"{PACKAGES_DIR}/_e2e_bracket[a].yaml"
+        async with MCPAssertions(mcp_client) as mcp:
+            await _set_yaml_confirmed(
+                mcp,
+                {
+                    "yaml_path": "shell_command",
+                    "action": "add",
+                    "file": target,
+                    "content": "e2e_bracket_probe: echo 1\n",
+                },
+            )
+
+            data = await mcp.call_tool_success(
+                TOOL_NAME, {"yaml_path": "shell_command", "file": target}
+            )
+
+        assert data["count"] == 1
+        assert data["files_searched"] == 1
+        assert data["matches"][0]["file"] == target
+        assert "e2e_bracket_probe" in data["matches"][0]["content"]
+
     async def test_glob_returns_every_defining_file(
         self, mcp_client, yaml_editing_enabled
     ):

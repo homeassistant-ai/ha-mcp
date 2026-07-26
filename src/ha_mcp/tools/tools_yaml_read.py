@@ -45,9 +45,14 @@ logger = logging.getLogger(__name__)
 _GLOB_METACHARS = ("*", "?", "[")
 
 
-def _has_glob(file: str) -> bool:
-    """True if ``file`` carries an fnmatch wildcard and must be expanded."""
-    return any(char in file for char in _GLOB_METACHARS)
+def _has_glob(name: str) -> bool:
+    """True if ``name`` carries an fnmatch wildcard and must be expanded.
+
+    Takes the file name rather than the whole path: the component resolves
+    directories literally, so a metacharacter in a folder name belongs to that
+    folder's name and is not a pattern.
+    """
+    return any(char in name for char in _GLOB_METACHARS)
 
 
 def _call_failed(service: str, context: dict[str, Any]) -> None:
@@ -84,18 +89,18 @@ def _failure_text(payload: dict[str, Any]) -> str:
 
 
 def _parse_error_result(
-    target: str, yaml_path: str, parse_error: str, *, expanded: bool
+    target: str, yaml_path: str, parse_error: str, *, is_expanded: bool
 ) -> tuple[None, str]:
     """Decide a file the component could not parse: raise for a named target.
 
     The explicitly named target raises rather than soft-degrading to a warning
-    that reads as "key absent" – it raises even when expansion turned up
+    that reads as "key absent" - it raises even when expansion turned up
     siblings alongside it, discarding their results, because a named file that
     cannot be parsed is the caller's question, not a stray unreadable neighbour.
     An expanded target stays a per-file warning so one broken file does not
     sink the whole search.
     """
-    if not expanded:
+    if not is_expanded:
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONFIG_INVALID,
@@ -108,17 +113,21 @@ def _parse_error_result(
 
 
 def _read_exception_result(
-    target: str, error: BaseException, *, expanded: bool
+    target: str, error: BaseException, *, is_expanded: bool
 ) -> tuple[None, str]:
     """Decide a read that blew up outright.
 
     An expanded target degrades to a warning so one unreadable file cannot sink
     the search; the explicitly named target re-raises, matching every other
     failure class in :func:`_evaluate_read`.
+
+    ``str()`` is empty on a bare ``TimeoutError()`` or ``CancelledError()``, so
+    the class name stands in - a warning reading "was not searched: ." names no
+    reason at all.
     """
-    if not expanded:
+    if not is_expanded:
         raise error
-    return None, f"{target} was not searched: {error}."
+    return None, f"{target} was not searched: {str(error) or type(error).__name__}."
 
 
 def _evaluate_read(
@@ -126,7 +135,7 @@ def _evaluate_read(
     target: str,
     yaml_path: str,
     *,
-    expanded: bool,
+    is_expanded: bool,
     include_content: bool,
     include_parsed: bool,
 ) -> tuple[dict[str, Any] | None, str | None]:
@@ -147,23 +156,23 @@ def _evaluate_read(
     * **match** — the key is there.
     """
     if isinstance(response, BaseException):
-        return _read_exception_result(target, response, expanded=expanded)
+        return _read_exception_result(target, response, is_expanded=is_expanded)
 
     if not isinstance(response, dict):
-        if expanded:
+        if is_expanded:
             return None, f"{target} was not searched: unexpected read_file response."
         _call_failed("read_file", {"file": target, "yaml_path": yaml_path})
     unwrapped = unwrap_service_response(response)
 
     if not unwrapped.get("success", True):
-        if not expanded:
+        if not is_expanded:
             raise_tool_error(unwrapped)
         return None, f"{target} was not searched: {_failure_text(unwrapped)}."
 
     parse_error = unwrapped.get("parse_error")
     if parse_error:
         return _parse_error_result(
-            target, yaml_path, str(parse_error), expanded=expanded
+            target, yaml_path, str(parse_error), is_expanded=is_expanded
         )
 
     if unwrapped.get("subtree") is None:
@@ -201,15 +210,17 @@ async def _list_files_matching(
     )
 
 
-async def _resolve_target_files(client: Any, file: str) -> list[tuple[str, bool]]:
-    """Expand ``file`` into ``(path, expanded)`` pairs to read.
+async def _resolve_target_files(
+    client: Any, file: str
+) -> tuple[list[tuple[str, bool]], list[str]]:
+    """Expand ``file`` into ``(path, is_expanded)`` pairs plus any warnings.
 
-    ``expanded`` records where the path came from, and it is decided here
+    ``is_expanded`` records where the path came from, and it is decided here
     because only here is it known: a path produced by the pattern lookup is an
     expansion, while the requested path itself and anything the escaped-literal
     lookup returns were named explicitly. Recovering that downstream by
     comparing the path against the requested string would be wrong for ``*``
-    and ``?``, which match their own literal names – a file genuinely called
+    and ``?``, which match their own literal names - a file genuinely called
     ``*.yaml`` would then be mistaken for the name the caller typed and its
     read failure would sink the whole search.
 
@@ -232,19 +243,43 @@ async def _resolve_target_files(client: Any, file: str) -> list[tuple[str, bool]
     otherwise mask the file the caller named exactly. Only bracketed names pay
     the second round-trip. The component likewise treats package folder names
     carrying metacharacters as literal names (#1854).
+
+    The guard is any bracket, not a closed class: an unclosed or empty bracket
+    is literal to ``fnmatch`` and so matches its own name, which means both
+    lookups return it and the deduplication below is what keeps it a single
+    target. A listing failure on either lookup raises rather than degrading -
+    the directory is the same one in both calls, so a failure there is a broken
+    request, not one unreadable file among several.
+
+    When the literal lookup comes back empty the caller named a file that does
+    not exist, and the pattern's siblings would otherwise be reported as if the
+    named file had been searched; a warning says so.
     """
     directory, _, pattern = file.rpartition("/")
     if not _has_glob(pattern):
-        return [(file, False)]
+        return [(file, False)], []
 
-    matches = await _list_files_matching(client, file, directory, pattern)
-    named: set[str] = set()
-    if "[" in pattern:
-        named = set(
-            await _list_files_matching(client, file, directory, glob.escape(pattern))
-        )
-        matches = sorted(set(matches) | named)
-    return [(target, target not in named) for target in matches]
+    if "[" not in pattern:
+        matched = await _list_files_matching(client, file, directory, pattern)
+        return [(target, True) for target in matched], []
+
+    # The two lookups are independent, so run them together rather than paying
+    # two sequential round-trips; the reads below fan out for the same reason.
+    matched, literal = await asyncio.gather(
+        _list_files_matching(client, file, directory, pattern),
+        _list_files_matching(client, file, directory, glob.escape(pattern)),
+    )
+    named = set(literal)
+    targets = sorted(set(matched) | named)
+    warnings = (
+        []
+        if named
+        else [
+            f"No file is literally named {file}; searched the {len(targets)} "
+            f"file(s) matching it as a pattern."
+        ]
+    )
+    return [(target, target not in named) for target in targets], warnings
 
 
 class YamlReadTools:
@@ -332,7 +367,7 @@ class YamlReadTools:
 
             # Strictness is a property of each target, not of the request, so
             # the resolver reports which targets were named rather than expanded.
-            targets = await _resolve_target_files(self._client, file)
+            targets, resolve_warnings = await _resolve_target_files(self._client, file)
 
             extra: dict[str, Any] = {"include_parsed": True} if include_parsed else {}
             # The reads are independent, so fan them out rather than paying N
@@ -355,13 +390,13 @@ class YamlReadTools:
             )
 
             matches: list[dict[str, Any]] = []
-            warnings: list[str] = []
-            for (target, expanded), response in zip(targets, responses, strict=True):
+            warnings: list[str] = list(resolve_warnings)
+            for (target, is_expanded), response in zip(targets, responses, strict=True):
                 match, warning = _evaluate_read(
                     response,
                     target,
                     yaml_path,
-                    expanded=expanded,
+                    is_expanded=is_expanded,
                     include_content=include_content,
                     include_parsed=include_parsed,
                 )

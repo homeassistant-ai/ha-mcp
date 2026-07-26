@@ -283,7 +283,7 @@ async def test_include_parsed_not_sent_by_default():
 
 
 async def test_read_failure_raises_tool_error():
-    """A single explicit target has no siblings to salvage, so it still raises."""
+    """A named target raises, whether or not anything else was resolved."""
     fn, _ = await _make_tool(
         {"read_file": {"success": False, "error": "File does not exist: nope.yaml"}}
     )
@@ -486,9 +486,9 @@ async def test_bracketed_name_is_not_masked_by_a_sibling():
 
 
 async def test_bracketed_literal_keeps_the_single_target_error_contract():
-    """Resolving to exactly the requested file makes it a single explicit
-    target, so a parse failure raises instead of degrading to a warning - the
-    same contract a path without metacharacters gets."""
+    """The literal lookup returns the requested file, so it is a named target
+    and a parse failure raises instead of degrading to a warning - the same
+    contract a path without metacharacters gets."""
     list_files, _ = _bracket_dir("svc[a].yaml")
 
     fn, _ = await _make_tool(
@@ -617,11 +617,12 @@ async def test_bracketed_directory_with_a_plain_name_is_read_directly():
 
 
 async def test_single_match_glob_still_warns_when_its_read_blows_up():
-    """A glob is lenient however many files it happens to match.
+    """An expanded target is lenient however few of them there are.
 
     The count is an accident of the directory, so a one-file expansion must
     still degrade a failed read to a warning rather than aborting the search,
-    exactly as a two-file one does.
+    exactly as a two-file one does. Leniency follows from the target having
+    come out of an expansion, not from how many did.
     """
     fn, _ = await _make_tool(
         {
@@ -708,7 +709,7 @@ async def test_parse_error_warns_instead_of_reading_as_a_non_match():
 
 
 async def test_single_file_parse_error_raises_instead_of_reporting_no_match():
-    """A single explicit target that will not parse has no siblings to salvage.
+    """A named target that will not parse raises rather than degrading.
 
     Soft-degrading to a warning would make a real parse failure indistinguishable
     from "key absent" at the success/count level, so it raises instead.
@@ -757,3 +758,144 @@ async def test_root_level_glob_lists_config_root():
     with pytest.raises(ToolError):
         await fn(yaml_path="rest", file="*.yaml")
     assert seen["path"] == "."
+
+
+async def test_named_file_read_exception_raises_instead_of_warning():
+    """The strict half of the exception path, which nothing else reaches.
+
+    Every other strict-target test raises through a different door (parse
+    error, ``success: False``, non-dict). Since ``return_exceptions`` is
+    unconditional, a named target whose read blows up now reaches an explicit
+    re-raise, and without this test dropping that re-raise would hand the
+    caller ``success: true, count: 0`` for a file that was never opened.
+    """
+    fn, _ = await _make_tool(
+        {"read_file": MagicMock(side_effect=ConnectionResetError("connection reset"))}
+    )
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="configuration.yaml")
+
+
+async def test_named_bracketed_target_read_exception_raises_despite_sibling():
+    """A tagging-along sibling does not soften the named file's contract.
+
+    The mixed case: the class turns up a sibling that reads fine while the file
+    the caller actually named blows up. Reporting the sibling's result with a
+    warning would answer a question nobody asked.
+    """
+    list_files, _ = _bracket_dir("svc[a].yaml", "svca.yaml")
+
+    def read(payload):
+        if payload["path"] == "packages/svc[a].yaml":
+            raise ConnectionResetError("connection reset")
+        return _read_ok("- name: sibling\n")
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": read})
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
+
+async def test_message_less_read_exception_still_names_a_reason():
+    """``str()`` is empty on a bare ``TimeoutError()``, so the class name stands
+    in - otherwise the warning reads "was not searched: ." and names nothing."""
+    fn, _ = await _make_tool(
+        {
+            "list_files": {
+                "success": True,
+                "files": [{"path": "packages/only.yaml", "is_dir": False}],
+            },
+            "read_file": MagicMock(side_effect=TimeoutError()),
+        }
+    )
+
+    out = await fn(yaml_path="rest", file="packages/*.yaml")
+
+    assert out["warnings"] == ["packages/only.yaml was not searched: TimeoutError."]
+
+
+async def test_absent_bracketed_literal_is_reported_not_implied():
+    """The named file does not exist, only a sibling the class matches.
+
+    Without a word about it the caller reads ``files_searched: 1`` as "your
+    file was searched and has no such key" - the same affirmative "I looked"
+    this PR removes, wearing a different coat.
+    """
+    list_files, _ = _bracket_dir("svca.yaml")
+
+    fn, _ = await _make_tool(
+        {"list_files": list_files, "read_file": _read_ok("- name: sibling\n")}
+    )
+
+    out = await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
+    assert out["files_searched"] == 1
+    assert out["count"] == 1
+    assert out["warnings"] == [
+        "No file is literally named packages/svc[a].yaml; searched the 1 "
+        "file(s) matching it as a pattern."
+    ]
+
+
+async def test_bracket_class_searches_its_siblings():
+    """The motivating case for keeping the pattern pass at all.
+
+    ``svc[12].yaml`` is written as a class on purpose and no such file exists;
+    both members must be searched, and the caller is told the literal was not
+    among them.
+    """
+    list_files, _ = _bracket_dir("svc1.yaml", "svc2.yaml")
+
+    fn, _ = await _make_tool(
+        {"list_files": list_files, "read_file": _read_ok("- name: member\n")}
+    )
+
+    out = await fn(yaml_path="rest", file="packages/svc[12].yaml")
+
+    assert out["files_searched"] == 2
+    assert [m["file"] for m in out["matches"]] == [
+        "packages/svc1.yaml",
+        "packages/svc2.yaml",
+    ]
+    assert out["warnings"] == [
+        "No file is literally named packages/svc[12].yaml; searched the 2 "
+        "file(s) matching it as a pattern."
+    ]
+
+
+async def test_literal_lookup_failure_raises():
+    """Both lookups walk the same directory, so a listing failure on the second
+    is a broken request, not one unreadable file - it raises rather than
+    silently returning only what the pattern pass found."""
+
+    def list_files(payload):
+        if payload["pattern"] == "svc[[]a].yaml":
+            return {"success": False, "error": "Path not allowed.", "files": []}
+        return {
+            "success": True,
+            "files": [{"path": "packages/svca.yaml", "is_dir": False}],
+        }
+
+    fn, _ = await _make_tool({"list_files": list_files, "read_file": _read_ok("x\n")})
+
+    with pytest.raises(ToolError):
+        await fn(yaml_path="rest", file="packages/svc[a].yaml")
+
+
+async def test_unclosed_bracket_resolves_to_one_target():
+    """An unclosed bracket is literal to ``fnmatch``, so it matches its own
+    name and both lookups return it. The merge is what keeps that a single
+    target rather than reading the same file twice."""
+    list_files, patterns = _bracket_dir("svc[a.yaml")
+
+    fn, _ = await _make_tool(
+        {"list_files": list_files, "read_file": _read_ok("- name: probe\n")}
+    )
+
+    out = await fn(yaml_path="rest", file="packages/svc[a.yaml")
+
+    assert out["files_searched"] == 1
+    assert [m["file"] for m in out["matches"]] == ["packages/svc[a.yaml"]
+    assert patterns == ["svc[a.yaml", "svc[[]a.yaml"]
+    assert "warnings" not in out
