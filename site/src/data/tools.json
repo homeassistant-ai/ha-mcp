@@ -567,7 +567,7 @@
   {
     "name": "ha_config_set_calendar_event",
     "title": "Create or Update Calendar Event",
-    "description": "Create a new event in a calendar.\n\nCreates a one-off event via the calendar.create_event service, or a\nrecurring series via the WebSocket ``calendar/event/create`` command\nwhen ``rrule`` is provided (the REST service schema does not accept\nrecurrence rules).\n\n**Parameters:**\n- entity_id: Calendar entity ID (e.g., 'calendar.family')\n- summary: Event title/summary\n- start: Event start datetime in ISO format\n- end: Event end datetime in ISO format\n- description: Optional event description\n- location: Optional event location\n- rrule: Optional RFC 5545 recurrence rule (creates a recurring series)\n\n**Example Usage:**\n```python\n# Create a simple event\nresult = ha_config_set_calendar_event(\n    \"calendar.family\",\n    summary=\"Doctor appointment\",\n    start=\"2024-01-15T14:00:00\",\n    end=\"2024-01-15T15:00:00\"\n)\n\n# Create a recurring event (every Monday, 10 occurrences)\nresult = ha_config_set_calendar_event(\n    \"calendar.work\",\n    summary=\"Team meeting\",\n    start=\"2024-01-15T10:00:00\",\n    end=\"2024-01-15T11:00:00\",\n    rrule=\"FREQ=WEEKLY;BYDAY=MO;COUNT=10\"\n)\n```\n\n**Note:**\nNot every calendar integration supports event creation; recurring\nevents additionally require the integration to support recurrence\n(the built-in Local Calendar does).\n\n**Returns:**\n- Success status and event details",
+    "description": "Create a new event in a calendar.\n\nCreates a one-off event via the calendar.create_event service, or a\nrecurring series via the WebSocket ``calendar/event/create`` command\nwhen ``rrule`` is provided (the REST service schema does not accept\nrecurrence rules).\n\n**When NOT to use:**\n- To retrieve calendar events, use ``ha_config_get_calendar_events``.\n- To delete an event, use ``ha_config_remove_calendar_event``.\n\n**Example Usage:**\n```python\n# Create a simple event\nresult = ha_config_set_calendar_event(\n    \"calendar.family\",\n    summary=\"Doctor appointment\",\n    start=\"2024-01-15T14:00:00\",\n    end=\"2024-01-15T15:00:00\"\n)\n\n# Create a recurring event (every Monday, 10 occurrences)\nresult = ha_config_set_calendar_event(\n    \"calendar.work\",\n    summary=\"Team meeting\",\n    start=\"2024-01-15T10:00:00\",\n    end=\"2024-01-15T11:00:00\",\n    rrule=\"FREQ=WEEKLY;BYDAY=MO;COUNT=10\"\n)\n\n# Create an all-day event (date-only, no time component). The end\n# date is EXCLUSIVE, so this spans 2026-07-04 through 2026-07-10.\nresult = ha_config_set_calendar_event(\n    \"calendar.family\",\n    summary=\"Vacation\",\n    start=\"2026-07-04\",\n    end=\"2026-07-11\"\n)\n```\n\n**Note:**\nPassing date-only values (``YYYY-MM-DD``) for both ``start`` and\n``end`` creates an all-day event; passing full ISO datetimes creates\na timed event. The two forms cannot be mixed — a date-only ``start``\nwith a datetime ``end`` (or vice versa) is rejected. Because the\nall-day ``end`` date is exclusive, a single-day all-day event must\nset ``end`` to ``start + 1 day``.\n\nNot every calendar integration supports event creation; recurring\nevents additionally require the integration to support recurrence\n(the built-in Local Calendar does).\n\n**Returns:**\n- Success status and event details",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -577,10 +577,10 @@
           "type": "Annotated[str, Field(description='Event title/summary')]"
         },
         "start": {
-          "type": "Annotated[str, Field(description='Event start datetime in ISO format')]"
+          "type": "Annotated[str, Field(description='Event start date or datetime in ISO format')]"
         },
         "end": {
-          "type": "Annotated[str, Field(description='Event end datetime in ISO format')]"
+          "type": "Annotated[str, Field(description='Event end date or datetime in ISO format. For all-day events (date-only) the end date is exclusive; a single-day all-day event needs end = start + 1 day.')]"
         },
         "description": {
           "type": "Annotated[str | None, Field(description='Optional event description', default=None)]",
