@@ -486,8 +486,12 @@ def _setup_logging(log_level_str: str, force: bool = True) -> None:
     console handler nor the level is applied. Since
     ``preserve_startup_collector`` detaches the collector before
     ``basicConfig`` runs, the default guards against FOREIGN root handlers —
-    pytest's, a library's, or this function's own console handler on a repeat
-    call (the OAuth/OIDC entry points reconfigure after settings load).
+    a test runner's or a dependency's. At the two call sites that use the
+    default (``main`` and ``_setup_standard_mode``) the only root handler
+    attached anywhere in ``src/`` is the collector, which the wrapper detaches
+    first — so today the default is defensive rather than load-bearing. The
+    OAuth/OIDC entry points pass ``force=True`` explicitly and never exercise
+    the default.
 
     The historical standard-mode bug was ``usage_logger``'s
     ``StartupLogCollector`` (attached to root at import time) triggering that
