@@ -227,6 +227,16 @@ def test_zh_hans_catalog_loads_and_is_registered() -> None:
     assert CATALOGS["zh-hans"]["tools"]
 
 
+def test_fr_catalog_loads_and_is_registered() -> None:
+    from ha_mcp.settings_ui._i18n import CATALOGS
+
+    assert "fr" in CATALOGS
+    assert CATALOGS["fr"]["meta"]["native_name"] == "Français"
+    assert CATALOGS["fr"]["meta"]["dir"] == "ltr"
+    assert CATALOGS["fr"]["tool_groups"]
+    assert CATALOGS["fr"]["tools"]
+
+
 def test_disallowed_inline_markup_is_rejected(tmp_path: Path) -> None:
     _write_catalog(
         tmp_path,
