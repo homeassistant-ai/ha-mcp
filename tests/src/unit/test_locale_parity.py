@@ -85,14 +85,20 @@ def _discover_translation_surfaces() -> set[str]:
     rather than ``.venv/`` gets a red test naming a vendored package's
     ``locales/`` directory they were right to have. Tracked content is the
     thing this rule is actually about.
+
+    Known limit: ``git ls-files`` in the superproject does not descend into
+    ``src/ha_mcp/resources/skills-vendor``, so a catalog added inside that
+    submodule is invisible here. The exemption lists cannot cover it by
+    convention either — nothing would surface it to be recorded.
     """
     try:
         completed = subprocess.run(
             # The unit-test job runs in a container against a checkout owned by
             # another uid, and actions/checkout's safe.directory lands in a temp
-            # HOME that container jobs don't see (same reason pr.yml sets it by
-            # hand for the mirror job). Without this, git refuses the repo as
-            # dubious ownership and the check dies with an empty stderr.
+            # HOME that container jobs don't see — the Ruff Lint job's "Run ruff
+            # format check on changed Python files" step re-adds it by hand for
+            # the same reason. Without this, git refuses the repo as dubious
+            # ownership and the check dies with an empty stderr.
             ["git", "-c", "safe.directory=*", "ls-files", "-z"],
             cwd=_REPO_ROOT,
             capture_output=True,
