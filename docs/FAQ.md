@@ -46,6 +46,15 @@ The demo environment resets weekly. Your changes won't persist.
 
 ## Troubleshooting
 
+### `ha-mcp-sse` is gone / my SSE config stopped connecting
+
+The legacy `ha-mcp-sse` entry point (deprecated HTTP+SSE transport on port 8087)
+was removed — the MCP specification deprecated the HTTP+SSE transport. Switch to
+`ha-mcp-web`, which serves Streamable HTTP at `/mcp` on port 8086, and change any
+SSE-style client config accordingly (Gemini CLI users: use the `httpUrl` key, not
+`url`). An SSE / `--transport sse` client config pointed at `ha-mcp-web` returns
+`405` and won't connect.
+
 ### OAuth stopped working after upgrading to v7.0.0
 
 v7.0.0 removed the Home Assistant URL field from the OAuth consent form to fix security vulnerabilities (SSRF and XSS). Set `HOMEASSISTANT_URL` as a server-side environment variable before starting ha-mcp. See the [OAuth migration guide](OAUTH.md#migrating-from-v6x) for instructions.

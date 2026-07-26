@@ -478,14 +478,28 @@ class ProbeAccessLogFilter(logging.Filter):
         return not (status == 405 and path == self._mcp_path)
 
 
-def _setup_logging(log_level_str: str, force: bool = False) -> None:
-    """Configure root logger with consistent timestamp format."""
-    logging.basicConfig(
-        level=getattr(logging, log_level_str),
-        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
-        datefmt=_LOG_DATE_FORMAT,
-        force=force,
-    )
+def _setup_logging(log_level_str: str, force: bool = True) -> None:
+    """Configure root logger with consistent timestamp format.
+
+    ``force`` defaults to True because ``usage_logger`` attaches its
+    ``StartupLogCollector`` to the root logger at import time: with a root
+    handler already present, ``basicConfig`` does nothing at all — neither the
+    console handler nor the level is applied — leaving the root logger at
+    WARNING with no stderr output, so INFO lines never surface.
+
+    ``preserve_startup_collector`` keeps the collector out of the sweep
+    ``force`` performs (which removes *and closes* every root handler), so
+    ``ha_report_issue`` still gets its startup diagnostics.
+    """
+    from ha_mcp.utils.usage_logger import preserve_startup_collector
+
+    with preserve_startup_collector():
+        logging.basicConfig(
+            level=getattr(logging, log_level_str),
+            format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+            datefmt=_LOG_DATE_FORMAT,
+            force=force,
+        )
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
     )
