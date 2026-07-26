@@ -399,10 +399,26 @@ def _make_fake_web() -> SimpleNamespace:
     )
 
 
+@dataclass(frozen=True)
+class ClientTimeout:
+    """Field-faithful stand-in for ``aiohttp.ClientTimeout``.
+
+    Mirrors aiohttp's own defaults — every bound is ``None`` unless passed — so
+    tests can assert on the timeout object the relay session is built with,
+    including the bounds it deliberately leaves unset.
+    """
+
+    total: float | None = None
+    connect: float | None = None
+    sock_read: float | None = None
+    sock_connect: float | None = None
+    ceil_threshold: float = 5
+
+
 def _make_fake_aiohttp() -> ModuleType:
     mod = ModuleType("aiohttp")
     mod.ClientError = ClientError  # type: ignore[attr-defined]
-    mod.ClientTimeout = MagicMock(name="ClientTimeout")  # type: ignore[attr-defined]
+    mod.ClientTimeout = ClientTimeout  # type: ignore[attr-defined]
     mod.ClientSession = MagicMock(name="ClientSession")  # type: ignore[attr-defined]
     mod.web = _make_fake_web()  # type: ignore[attr-defined]
     return mod

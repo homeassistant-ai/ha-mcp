@@ -100,8 +100,15 @@ _STRIPPED_REQUEST_HEADERS = frozenset(
 # instead of a mislabeled JSON blob. ``text/html`` and friends stay coerced.
 _ALLOWED_CONTENT_TYPES = ("application/json", "text/event-stream", "text/plain")
 
-# Long timeout for streamed MCP responses (matches mcp_proxy).
-_CLIENT_TIMEOUT = aiohttp.ClientTimeout(total=300, sock_connect=10, sock_read=300)
+# Timeout for streamed MCP responses (matches mcp_proxy). Deliberately NO
+# wall-clock ``total``: an MCP response stream is long-lived by design (the
+# upcoming spec's ``subscriptions/listen`` holds one open indefinitely), so a
+# ``total`` bound would cut a *healthy* stream and force the client to
+# re-subscribe. ``sock_read`` bounds a *dead* one instead — idle detection, not
+# elapsed time. ``connect`` stays finite: it covers connection-POOL acquisition
+# (not just the TCP connect ``sock_connect`` bounds), so a pool exhausted by
+# long-lived streams fails a new request in 30 s instead of hanging it forever.
+_CLIENT_TIMEOUT = aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300)
 
 # TOP-LEVEL hass.data flag recording that the ha_auth discovery views are bound
 # for this HA session. Deliberately NOT under DOMAIN so it survives

@@ -136,7 +136,7 @@ async def test_helper_allows_cross_origin_and_non_loopback(monkeypatch):
 
 
 def test_create_server_disables_guard(monkeypatch):
-    """_create_server -- the chokepoint for ha-mcp-web/sse, the add-on, and the
+    """_create_server -- the chokepoint for ha-mcp-web, the add-on, and the
     ``fastmcp run fastmcp-http.json`` container path -- calls the guard-disable
     before building the server."""
     import ha_mcp.__main__ as main_module

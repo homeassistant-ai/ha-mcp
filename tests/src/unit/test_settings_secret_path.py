@@ -38,7 +38,7 @@ def _reset_settings_globals():
 
 class TestSettingsUiDisabled:
     """The kill switch is honored uniformly across HTTP transports (standard
-    ha-mcp-web/ha-mcp-sse, OAuth, OIDC) via this shared predicate."""
+    ha-mcp-web, OAuth, OIDC) via this shared predicate."""
 
     @pytest.mark.parametrize("val", ["1", "true", "TRUE", "yes", "on", " on "])
     def test_truthy_disables(self, monkeypatch, val):

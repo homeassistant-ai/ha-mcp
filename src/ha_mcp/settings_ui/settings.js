@@ -3619,7 +3619,7 @@ async function loadAdvancedSettings() {
 
 function applySidecarAvailability(isStdio) {
   // The sidecar-port setting only applies when this settings page is served
-  // by the stdio settings-UI sidecar. In HTTP/SSE/OAuth/addon deployments
+  // by the stdio settings-UI sidecar. In HTTP/OAuth/addon deployments
   // there is no sidecar, so dim + disable the section and explain why, rather
   // than letting a user save a value that does nothing.
   // Remove any note from a prior load first, so the <h2> title is once again

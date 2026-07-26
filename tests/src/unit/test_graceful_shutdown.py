@@ -559,17 +559,17 @@ class TestShutdownWatchdog:
 
 
 class TestHTTPEntryPoints:
-    """Tests for HTTP entry points (main_web, main_sse)."""
+    """Tests for the HTTP entry point (main_web)."""
 
-    def test_main_web_uses_http_transport(self):
-        """main_web should use http transport."""
+    def test_main_web_runs_http_server_on_default_port(self):
+        """main_web should start the HTTP server on port 8086."""
         import ha_mcp.__main__ as main_module
 
-        transport_used = None
+        port_used = None
 
-        def mock_run_http(transport, default_port=8086):
-            nonlocal transport_used
-            transport_used = transport
+        def mock_run_http(default_port=8086):
+            nonlocal port_used
+            port_used = default_port
             raise SystemExit(0)
 
         # Reset global state
@@ -590,38 +590,7 @@ class TestHTTPEntryPoints:
         ):
             main_module.main_web()
 
-        assert transport_used == "http"
-
-    def test_main_sse_uses_sse_transport(self):
-        """main_sse should use sse transport."""
-        import ha_mcp.__main__ as main_module
-
-        transport_used = None
-
-        def mock_run_http(transport, default_port=8087):
-            nonlocal transport_used
-            transport_used = transport
-            raise SystemExit(0)
-
-        # Reset global state
-        main_module._shutdown_in_progress = False
-        main_module._shutdown_event = None
-
-        # Provide credentials to pass validation
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "HOMEASSISTANT_URL": "http://test.local:8123",
-                    "HOMEASSISTANT_TOKEN": "test_token",
-                },
-            ),
-            patch.object(main_module, "_run_http_server", side_effect=mock_run_http),
-            pytest.raises(SystemExit),
-        ):
-            main_module.main_sse()
-
-        assert transport_used == "sse"
+        assert port_used == 8086
 
     def test_http_runtime_uses_env_vars(self):
         """HTTP runtime should read host, port, and path from environment."""
@@ -671,10 +640,10 @@ class TestHTTPEntryPoints:
         assert exc_info.value.code == 1
 
     def test_run_http_server_invokes_path_warning(self, monkeypatch):
-        """HTTP/SSE startup must invoke _warn_if_default_path_exposed, so a
+        """HTTP startup must invoke _warn_if_default_path_exposed, so a
         future refactor that moves, reorders, or accidentally drops the
         call still fails CI. OAuth startup does not run this path, so the
-        warning stays scoped to the standard-mode HTTP entrypoints."""
+        warning stays scoped to the standard-mode HTTP entrypoint."""
         import ha_mcp.__main__ as main_module
 
         called_with: list[tuple[str, int, str]] = []
@@ -709,6 +678,6 @@ class TestHTTPEntryPoints:
         )
         monkeypatch.setattr(main_module, "_run_entrypoint", lambda *a, **kw: None)
 
-        main_module._run_http_server("http", default_port=8086)
+        main_module._run_http_server(default_port=8086)
 
         assert called_with == [("0.0.0.0", 8086, "/mcp")]

@@ -166,7 +166,7 @@ async def _get_advanced_settings(
         )
     ]
     # is_stdio: the sidecar-port field only applies when this settings page
-    # is served by the stdio settings-UI sidecar. In HTTP/SSE/OAuth/addon
+    # is served by the stdio settings-UI sidecar. In HTTP/OAuth/addon
     # deployments there is no sidecar, so the UI greys the section.
     return JSONResponse(
         {

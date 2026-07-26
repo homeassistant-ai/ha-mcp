@@ -343,15 +343,17 @@ def _detect_mcp_transport() -> str:
     transport perfectly from a tool call, so we look at the entrypoint name
     and well-known env hints. The result is informational — the bug template
     surfaces it as an auto-detect that the agent or user can override.
+
+    ha-mcp ships no SSE entry point, so ``sse`` only appears when an operator
+    drives fastmcp's own deprecated SSE transport via ``FASTMCP_TRANSPORT`` —
+    worth surfacing in a report, since that run shape is unsupported.
     """
-    # Entry-point script name (e.g. ``ha-mcp-web`` for HTTP, ``ha-mcp-sse``
-    # for SSE; pyproject.toml's [project.scripts] is the source of truth).
+    # Entry-point script name (e.g. ``ha-mcp-web`` for HTTP;
+    # pyproject.toml's [project.scripts] is the source of truth).
     argv0 = (sys.argv[0] if sys.argv else "").lower()
     basename = os.path.basename(argv0)
     if basename.endswith("-web"):
         return "http"
-    if basename.endswith("-sse"):
-        return "sse"
 
     # Env hints set by HTTP wrappers / supervisors. ``streamable-http`` is the
     # documented FastMCP variant; collapse it to ``http`` since the

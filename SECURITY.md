@@ -34,8 +34,8 @@ Consequences:
 
 ### Local network is the trusted zone for standard mode
 
-The HTTP entrypoints (`ha-mcp-web`, `ha-mcp-sse`) authenticate by URL-path
-secrecy and are designed for loopback HTTP or LAN HTTP with a high-entropy
+The HTTP entrypoint (`ha-mcp-web`) authenticates by URL-path
+secrecy and is designed for loopback HTTP or LAN HTTP with a high-entropy
 `MCP_SECRET_PATH`. Any peer that can reach the configured path is treated as
 trusted — securing the local network is outside ha-mcp's scope.
 
@@ -79,7 +79,7 @@ Operators who front ha-mcp differently can re-enable the guard by setting
 
 ### Standard mode is single-tenant
 
-The secret-URL model (`ha-mcp-web`, `ha-mcp-sse`) assumes a single operator.
+The secret-URL model (`ha-mcp-web`) assumes a single operator.
 All MCP clients that share the same `MCP_SECRET_PATH` get identical access —
 there is no per-client authorization or isolation. Reports that assume "client A
 shouldn't be able to see client B's data" don't apply to standard mode; that
