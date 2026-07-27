@@ -142,7 +142,7 @@
     },
     "common": {
         "connect_direct_access": "Acceso directo desde la máquina de Home Assistant: {url}",
-        "connect_local_lan": "Local/LAN (cuando el acceso desde la red es 0.0.0.0): {url}",
+        "connect_local_lan": "Local/LAN (cuando el acceso desde la red es «Local network»): {url}",
         "connect_remote_url": "URL de conexión remota: {url}",
         "connect_urls_label": "URL de conexión:",
         "connect_urls_pending": "Las URL de conexión aparecen aquí (y en el registro de Home Assistant) una vez que el servidor se ha iniciado.",

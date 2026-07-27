@@ -142,7 +142,7 @@
     },
     "common": {
         "connect_direct_access": "从 Home Assistant 所在主机直接访问：{url}",
-        "connect_local_lan": "本地/局域网（当网络访问为 0.0.0.0 时）：{url}",
+        "connect_local_lan": "本地/局域网（当网络访问为“Local network”时）：{url}",
         "connect_remote_url": "远程连接 URL：{url}",
         "connect_urls_label": "连接 URL：",
         "connect_urls_pending": "服务器启动后，连接 URL 将显示在此处（以及 Home Assistant 日志中）。",

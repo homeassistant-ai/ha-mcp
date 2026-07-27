@@ -142,7 +142,7 @@
     },
     "common": {
         "connect_direct_access": "Прямой доступ с компьютера Home Assistant: {url}",
-        "connect_local_lan": "Локально/LAN (когда сетевой доступ — 0.0.0.0): {url}",
+        "connect_local_lan": "Локально/LAN (когда сетевой доступ — «Local network»): {url}",
         "connect_remote_url": "URL-адрес удалённого подключения: {url}",
         "connect_urls_label": "URL-адреса подключения:",
         "connect_urls_pending": "URL-адреса подключения появятся здесь (и в журнале Home Assistant) после запуска сервера.",
