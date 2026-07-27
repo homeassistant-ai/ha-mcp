@@ -238,6 +238,16 @@ def test_fr_catalog_loads_and_is_registered() -> None:
     assert CATALOGS["fr"]["tools"]
 
 
+def test_es_catalog_loads_and_is_registered() -> None:
+    from ha_mcp.settings_ui._i18n import CATALOGS
+
+    assert "es" in CATALOGS
+    assert CATALOGS["es"]["meta"]["native_name"] == "Español"
+    assert CATALOGS["es"]["meta"]["dir"] == "ltr"
+    assert CATALOGS["es"]["tool_groups"]
+    assert CATALOGS["es"]["tools"]
+
+
 def test_disallowed_inline_markup_is_rejected(tmp_path: Path) -> None:
     _write_catalog(
         tmp_path,
