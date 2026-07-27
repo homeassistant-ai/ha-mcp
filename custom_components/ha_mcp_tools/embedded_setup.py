@@ -727,6 +727,10 @@ async def _async_update_held_by_component(
 
     try:
         integration = await async_get_integration(hass, DOMAIN)
+        if integration.version is None:
+            # None rather than an exception; "None" would then reach
+            # AwesomeVersion and compare as an ordinary string.
+            raise ValueError("the manifest carries no version")
         running = str(integration.version)
     except Exception:
         # Same wide loader surface as _async_check_component_compat: advisory
@@ -884,6 +888,10 @@ async def _async_check_component_compat(
 
     try:
         integration = await async_get_integration(hass, DOMAIN)
+        if integration.version is None:
+            # None rather than an exception; "None" would then reach
+            # AwesomeVersion and compare as an ordinary string.
+            raise ValueError("the manifest carries no version")
         own = str(integration.version)
     except Exception:
         # The loader legitimately raises a wide, varied surface

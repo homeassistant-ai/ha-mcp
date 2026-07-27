@@ -3091,6 +3091,10 @@ def _build_get_caller_token_handler(
         # uses everywhere else.
         try:
             integration = await async_get_integration(hass, DOMAIN)
+            if integration.version is None:
+                # Reads as None rather than raising; an unreadable version and
+                # an absent one deserve the same answer.
+                raise ValueError("the manifest carries no version")
             version = str(integration.version)
         except Exception as exc:  # pragma: no cover — manifest sanity
             _LOGGER.warning(
@@ -3574,10 +3578,17 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     component_version = COMPONENT_VERSION
     try:
         integration = await async_get_integration(hass, DOMAIN)
+        if integration.version is None:
+            # A manifest without a version reads as None rather than raising,
+            # and ``str()`` would put the literal "None" on the device.
+            raise ValueError("the manifest carries no version")
         component_version = str(integration.version)
     except Exception as err:
         _LOGGER.debug(
-            "Could not read the component version for the tools device: %s", err
+            "Could not read the component version for the tools device, using "
+            "the compiled-in %s: %s",
+            COMPONENT_VERSION,
+            err,
         )
     dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id,
