@@ -36,6 +36,17 @@ updates:
     commit-message:
       prefix: "deps"
       include: "scope"
+    ignore:
+      # Held at the pin in pyproject.toml. pydantic-monty 0.0.19 replaced the
+      # single-shot `Monty(code, ...)` + `run_async(external_functions=...)`
+      # API with a subprocess worker pool (`AsyncMonty` -> `checkout()` ->
+      # `feed_run(external_lookup=...)`), which breaks every code path in
+      # src/ha_mcp/tools/tools_code.py. FastMCP's own code-mode extra still
+      # pins ==0.0.17 for the same reason, so nothing in the ecosystem is
+      # pulling us forward. Monty is 0.0.x, so every release is a patch by
+      # semver and there is no narrower update-type that holds the line.
+      # Drop this entry when tools_code.py is ported to the pool API.
+      - dependency-name: "pydantic-monty"
     groups:
       # Group dev dependencies together
       dev-dependencies:
