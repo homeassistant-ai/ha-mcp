@@ -447,17 +447,35 @@ def test_only_tab_buttons_declare_panels(tmp_path: Path) -> None:
         load_catalogs(tmp_path, settings_html)
 
 
-def test_shipped_catalogs_only_link_to_declared_panels() -> None:
-    """The real catalogs against the real page: this is what ships."""
-    from ha_mcp.settings_ui._i18n import CATALOGS, _known_panels
+def test_english_message_with_unknown_panel_target_is_rejected(tmp_path: Path) -> None:
+    """The source catalog is checked too, not just the translations.
 
-    panels = _known_panels()
-    assert panels, "settings.html declares no tab buttons"
-    for locale, catalog in CATALOGS.items():
-        for key, value in catalog["messages"].items():
-            for target in re.findall(
-                r'<a href="#" data-panel-link="([a-z][a-z-]*)">', value
-            ):
-                assert target in panels, (
-                    f"{locale} message {key!r} links to unknown panel {target!r}"
-                )
+    The cross-locale comparison skips English by definition, so only the
+    known-panel check covers it. Nothing else would notice a dead link written
+    into ``en.json`` itself.
+    """
+    settings_html = _write_settings_html(tmp_path, "alpha")
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"note": '<a href="#" data-panel-link="bogus">Bogus</a>'},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("settings.html does not declare")):
+        load_catalogs(tmp_path, settings_html)
+
+
+def test_panel_link_in_a_locale_only_key_is_still_checked(tmp_path: Path) -> None:
+    """A key English does not have skips the comparison, not the panel check."""
+    settings_html = _write_settings_html(tmp_path, "alpha")
+    _write_catalog(tmp_path, "en", native_name="English", messages={"other": "hi"})
+    _write_catalog(
+        tmp_path,
+        "fr",
+        native_name="Français",
+        messages={"extra": '<a href="#" data-panel-link="bogus">Bogus</a>'},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("settings.html does not declare")):
+        load_catalogs(tmp_path, settings_html)

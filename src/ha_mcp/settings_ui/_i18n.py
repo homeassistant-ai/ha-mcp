@@ -217,6 +217,11 @@ def _validate_panel_links(
     A mistyped target is invisible to every other check: the tag shape is
     allowlisted, the string carries no placeholders, and the visible link text
     still reads correctly. The link just stops working, in that one language.
+
+    Scoped to ``messages`` for the same reason ``_validate_inline_markup`` is:
+    only those render through ``tHtml``, which restores the anchor. Tool names
+    and group labels go through ``escapeHtml``, so a link written there shows
+    as visible garbled markup rather than a dead link — wrong, but not silent.
     """
     panels = _known_panels(settings_html)
     english_messages = catalogs[DEFAULT_LOCALE]["messages"]
