@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -238,9 +239,9 @@ def test_shipped_catalog_loads_and_is_registered(locale: str) -> None:
         f"{locale}.json needs a non-empty meta.native_name — the language "
         "picker renders it as the option label"
     )
-    assert catalog["meta"]["dir"] in {"ltr", "rtl"}, (
-        f"{locale}.json meta.dir is {catalog['meta']['dir']!r}; the rendered "
-        "<html dir> attribute only accepts 'ltr' or 'rtl'"
+    assert catalog["meta"].get("dir") in {"ltr", "rtl"}, (
+        f"{locale}.json meta.dir is {catalog['meta'].get('dir')!r}; the "
+        "rendered <html dir> attribute only accepts 'ltr' or 'rtl'"
     )
     assert catalog["tool_groups"], (
         f"{locale}.json has an empty tool_groups — the tools tab would fall "
@@ -249,6 +250,34 @@ def test_shipped_catalog_loads_and_is_registered(locale: str) -> None:
     assert catalog["tools"], (
         f"{locale}.json has an empty tools section — every tool title and "
         "description would fall back to English for this language"
+    )
+
+
+def test_native_names_name_their_own_language() -> None:
+    """One rule per locale cannot pin the name each locale must carry.
+
+    Collapsing the four hand-written tests dropped every specific
+    ``native_name`` assertion, so ``es.json`` shipping ``"Deutsch"`` — or
+    English's own name — is green today: the picker then offers the same label
+    twice, and the label does not name the language it selects. Comparing the
+    catalogs to each other pins that without hardcoding six literals here.
+    """
+    english = CATALOGS["en"]["meta"]["native_name"]
+    names = {
+        locale: CATALOGS[locale]["meta"]["native_name"] for locale in _shipped_locales()
+    }
+
+    borrowed = sorted(locale for locale, name in names.items() if name == english)
+    assert not borrowed, (
+        f"{borrowed} carry English's own native_name {english!r} — the "
+        "language picker would offer it twice and select the wrong catalog"
+    )
+
+    counts = Counter(names.values())
+    shared = sorted(name for name, count in counts.items() if count > 1)
+    assert not shared, (
+        f"native_name {shared} is used by more than one catalog ({names}) — "
+        "each option label in the language picker must name its own language"
     )
 
 

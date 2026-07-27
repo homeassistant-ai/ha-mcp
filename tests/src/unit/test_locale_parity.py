@@ -24,18 +24,24 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
+from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
 import yaml
 
-from ha_mcp.settings_ui._tools_meta import SECONDARY_TAGS
+from ha_mcp.settings_ui._tools_meta import primary_tag
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# The tool set comes from the same static AST parse that generates the docs,
+# not from its committed output — see ``_renderable_groups_and_tools``.
+sys.path.insert(0, str(_REPO_ROOT / "scripts"))
+import extract_tools  # noqa: E402
+
 SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
-SITE_TOOLS_JSON = _REPO_ROOT / "site" / "src" / "data" / "tools.json"
 AGENTS_MD = _REPO_ROOT / "AGENTS.md"
 COMPONENT_TRANSLATIONS = (
     _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "translations"
@@ -429,23 +435,27 @@ def _non_english_settings_locales() -> list[str]:
     )
 
 
-def _renderable_groups_and_tools() -> tuple[set[str], set[str]]:
+@cache
+def _renderable_groups_and_tools() -> tuple[frozenset[str], frozenset[str]]:
     """The group headings and tool names the settings UI can actually show.
 
     ``en.json`` leaves ``tool_groups``/``tools`` empty — English for those
-    comes from the tool definitions at runtime — so the shipped tool catalog
-    is the only cross-check a translated catalog has. The group set is
-    derived with ``_tools_meta``'s own primary-tag rule (imported, not
-    copied) so the two cannot drift apart.
+    comes from the tool definitions at runtime — so the tool set is the only
+    cross-check a translated catalog has. Group headings come from
+    ``_tools_meta``'s own ``primary_tag`` (imported, not copied) so the rule
+    and its consumers cannot drift apart.
+
+    The tools are parsed out of their sources rather than read from the
+    committed ``site/src/data/tools.json``: that file is regenerated only
+    *after* merge, by ``sync-tool-docs.yml`` on a ``[skip ci]`` commit. Reading
+    it would let the PR that adds a tool stay green and then turn every
+    subsequent PR red across all five locales, landing the failure on whoever
+    opens the next one. Parsing the sources puts it on the PR that owes the
+    translations.
     """
-    tools = json.loads(SITE_TOOLS_JSON.read_text("utf-8"))
-    groups: set[str] = set()
-    names: set[str] = set()
-    for tool in tools:
-        names.add(tool["name"])
-        tags = sorted(tool.get("tags") or [])
-        primary = [tag for tag in tags if tag not in SECONDARY_TAGS]
-        groups.add(primary[0] if primary else (tags[0] if tags else "Other"))
+    tools = extract_tools.extract_tools()
+    groups = frozenset(primary_tag(tool["tags"]) for tool in tools)
+    names = frozenset(str(tool["name"]) for tool in tools)
     return groups, names
 
 
@@ -468,10 +478,10 @@ def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
     a new tag that sorts first for an existing tool, leaves *every* locale
     showing English for it with no test going red.
 
-    ``site/src/data/tools.json`` is regenerated on master by
-    ``sync-tool-docs.yml``, so a PR that adds a tool goes red here only once
-    that sync lands. That is the intended moment: the catalogs are what has
-    to catch up, and this names which locale and which key.
+    The tool set is parsed from the sources, so the PR that adds a tool is the
+    one that goes red — see ``_renderable_groups_and_tools`` for why reading
+    the committed ``tools.json`` instead would move that failure onto the next
+    PR to open.
     """
     groups, tool_names = _renderable_groups_and_tools()
     catalog = _settings_catalog(locale)
@@ -502,10 +512,49 @@ def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
 
 
 # A catalog wholesale-copied from English passes key parity, placeholder
-# parity and the markup allowlist — every existing check. Real catalogs sit
-# far under this: the highest among the shipped locales is 9 of 419 messages
-# (2.2%), all of them words that genuinely read the same in that language.
+# parity and the markup allowlist — every existing check. All four surfaces
+# get a ceiling: leaving one of them out accepts a wholesale-English catalog
+# there.
+#
+# The ceilings differ because what legitimately repeats differs. The settings
+# UI messages sit far under theirs: the highest among the shipped locales is 9
+# of 419 (2.1%), all words that genuinely read the same in that language. The
+# component catalogs are short and carry the product names as keys of their
+# own, so ``de``'s 7 of 93 (7.5%) — six product names plus ``Update`` — is
+# correct and the ceiling has to clear it. Both add-on flavors translate
+# everything today (0%).
 _MAX_ENGLISH_IDENTICAL_SHARE = 0.05
+_MAX_COMPONENT_IDENTICAL_SHARE = 0.15
+
+
+def _untranslated_keys(
+    english: dict[str, str], translated: dict[str, str]
+) -> list[str]:
+    """The English keys ``translated`` does not translate.
+
+    A missing key counts as untranslated: English is the per-key fallback, so
+    an omitted key renders exactly like a copied one. Counting only the keys a
+    catalog carries let ``messages: {}`` score 0% and a 20-key all-English stub
+    score 4.8% — both under any sane ceiling, and since omission is legal
+    everywhere else, nothing else caught them.
+    """
+    return sorted(
+        key for key, text in english.items() if translated.get(key, text) == text
+    )
+
+
+def _assert_not_a_copy(
+    label: str, english: dict[str, str], translated: dict[str, str], ceiling: float
+) -> None:
+    untranslated = _untranslated_keys(english, translated)
+    share = len(untranslated) / len(english)
+
+    assert share <= ceiling, (
+        f"{label} leaves {len(untranslated)} of {len(english)} strings "
+        f"({share:.1%}) untranslated — byte-identical to English or missing "
+        f"outright — over the {ceiling:.0%} ceiling. This reads as a partly "
+        f"untranslated catalog. Untranslated keys: {untranslated[:20]}"
+    )
 
 
 @pytest.mark.parametrize("locale", _non_english_settings_locales())
@@ -516,19 +565,59 @@ def test_settings_catalog_is_not_a_copy_of_english(locale: str) -> None:
     and product names read the same in several languages — so this is a
     share, not a ban.
     """
-    english = _settings_catalog("en")["messages"]
-    messages = _settings_catalog(locale)["messages"]
-
-    identical = sorted(
-        key for key, text in messages.items() if key in english and text == english[key]
+    _assert_not_a_copy(
+        f"src/ha_mcp/settings_ui/locales/{locale}.json (messages)",
+        _settings_catalog("en")["messages"],
+        _settings_catalog(locale)["messages"],
+        _MAX_ENGLISH_IDENTICAL_SHARE,
     )
-    share = len(identical) / len(english)
 
-    assert share <= _MAX_ENGLISH_IDENTICAL_SHARE, (
-        f"src/ha_mcp/settings_ui/locales/{locale}.json leaves {len(identical)} "
-        f"of {len(english)} messages ({share:.1%}) byte-identical to English, "
-        f"over the {_MAX_ENGLISH_IDENTICAL_SHARE:.0%} ceiling — this reads as "
-        f"a partly untranslated catalog. Untranslated keys: {identical[:20]}"
+
+@pytest.mark.parametrize("locale", _translated_component_locales())
+def test_component_catalog_is_not_a_copy_of_english(locale: str) -> None:
+    """Key parity says every key is present, not that any was translated."""
+    _assert_not_a_copy(
+        f"custom_components/ha_mcp_tools/translations/{locale}.json",
+        _component_catalog("en"),
+        _component_catalog(locale),
+        _MAX_COMPONENT_IDENTICAL_SHARE,
+    )
+
+
+def _addon_catalog(addon_dir: Path, locale: str) -> dict[str, str]:
+    return _flatten(
+        yaml.safe_load(
+            (addon_dir / "translations" / f"{locale}.yaml").read_text("utf-8")
+        )
+    )
+
+
+def _addon_locale_cases() -> list[tuple[Path, str]]:
+    """Every (add-on flavor, locale) pair that ships a catalog."""
+    return [
+        (addon_dir, path.stem)
+        for addon_dir in ADDON_DIRS
+        for path in sorted((addon_dir / "translations").glob("*.yaml"))
+        if path.stem != "en"
+    ]
+
+
+def test_addon_locale_cases_are_discovered() -> None:
+    """The parametrized check below collects nothing on an empty glob."""
+    assert _addon_locale_cases(), (
+        "no translated add-on catalogs found — the per-flavor check below "
+        "would pass by collecting zero cases"
+    )
+
+
+@pytest.mark.parametrize(("addon_dir", "locale"), _addon_locale_cases())
+def test_addon_catalog_is_not_a_copy_of_english(addon_dir: Path, locale: str) -> None:
+    """The two flavors carry different schemas, so each needs its own check."""
+    _assert_not_a_copy(
+        f"{addon_dir.name}/translations/{locale}.yaml",
+        _addon_catalog(addon_dir, "en"),
+        _addon_catalog(addon_dir, locale),
+        _MAX_ENGLISH_IDENTICAL_SHARE,
     )
 
 

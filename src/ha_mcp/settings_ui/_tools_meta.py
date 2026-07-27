@@ -15,6 +15,7 @@ families and ``__init__`` can depend on it without cycles.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, NamedTuple, NotRequired, TypedDict
 
 from ..transforms import categorize_capability
@@ -52,10 +53,26 @@ _VALID_STATES = frozenset({"enabled", "disabled", "pinned"})
 
 # Groups not considered "primary" when choosing a tool's canonical group —
 # these are cross-cutting tags (e.g. Z-Wave, Zigbee) that should not
-# override the tool's real domain group. Module-level so the locale check
-# in tests/src/unit/test_locale_parity.py derives the set of reachable
-# group names from this rule rather than from a copy that can drift.
+# override the tool's real domain group.
 SECONDARY_TAGS = frozenset({"Z-Wave", "Zigbee"})
+
+
+def primary_tag(tags: Iterable[str]) -> str:
+    """Return the group heading the settings UI files a tool under.
+
+    The first tag that is not cross-cutting wins, in sorted order; a tool
+    tagged only with cross-cutting tags falls back to its first tag, and an
+    untagged tool to ``Other``. Exported so the locale check in
+    tests/src/unit/test_locale_parity.py derives the set of reachable group
+    names from this rule itself — a copy of the rule drifts even when the
+    set it reads cannot.
+    """
+    ordered = sorted(tags)
+    primary = [tag for tag in ordered if tag not in SECONDARY_TAGS]
+    if primary:
+        return primary[0]
+    return ordered[0] if ordered else "Other"
+
 
 # Tools that are always enabled regardless of saved config — the server
 # strips them out of any disable list before applying. Four of these
@@ -250,8 +267,7 @@ async def _get_tool_metadata(
     registered = await server.mcp.local_provider._list_tools()
     for tool in registered:
         tags = sorted(tool.tags) if tool.tags else []
-        primary_tags = [t for t in tags if t not in SECONDARY_TAGS]
-        primary = primary_tags[0] if primary_tags else (tags[0] if tags else "Other")
+        primary = primary_tag(tags)
         read_only = bool(
             tool.annotations and getattr(tool.annotations, "readOnlyHint", None)
         )
