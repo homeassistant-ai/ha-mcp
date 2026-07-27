@@ -286,17 +286,24 @@ class TestAddonStructure:
         to that language's users, so lock the parity across every shipped
         locale.
 
+        Checked in both directions. An option removed from ``schema:``
+        leaves its ``configuration.<key>`` entry behind in every locale,
+        where it is dead weight that reads as a supported option and gets
+        dutifully re-translated for the next language — the one-directional
+        version of this check could not see it.
+
         Parametrized over the same ``homeassistant-addon*/config.yaml`` glob
         as ``test_addon_names_are_backup_filename_safe`` below: hardcoding the
         pair left both Webhook Proxy flavors with no such check at all.
         """
         with open(f"{addon_dir}/config.yaml", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
-        schema_keys = set(cfg.get("schema", {}).keys())
+        declared_keys = set(cfg.get("schema", {}).keys())
         # ``secret_path`` is intentionally undocumented in user-facing
         # translations (it's an advanced/hidden override the wizard
-        # handles, not a user-set option).
-        schema_keys.discard("secret_path")
+        # handles, not a user-set option). It stays in ``declared_keys``
+        # so a catalog that documents it anyway is not called an orphan.
+        schema_keys = declared_keys - {"secret_path"}
 
         translation_files = sorted(Path(addon_dir, "translations").glob("*.yaml"))
         assert translation_files, f"{addon_dir}/translations has no *.yaml files"
@@ -304,6 +311,12 @@ class TestAddonStructure:
             with open(tf, encoding="utf-8") as f:
                 translations = yaml.safe_load(f)
             configuration = translations.get("configuration", {})
+            orphaned = sorted(set(configuration) - declared_keys)
+            assert not orphaned, (
+                f"{tf} documents `configuration` key(s) that {addon_dir}/"
+                f"config.yaml no longer declares in `schema:`: {orphaned}. "
+                "Supervisor renders nothing for them — delete the entries."
+            )
             for key in sorted(schema_keys):
                 entry = configuration.get(key)
                 assert entry is not None, (

@@ -50,6 +50,13 @@ class ToolStub(TypedDict):
 
 _VALID_STATES = frozenset({"enabled", "disabled", "pinned"})
 
+# Groups not considered "primary" when choosing a tool's canonical group —
+# these are cross-cutting tags (e.g. Z-Wave, Zigbee) that should not
+# override the tool's real domain group. Module-level so the locale check
+# in tests/src/unit/test_locale_parity.py derives the set of reachable
+# group names from this rule rather than from a copy that can drift.
+SECONDARY_TAGS = frozenset({"Z-Wave", "Zigbee"})
+
 # Tools that are always enabled regardless of saved config — the server
 # strips them out of any disable list before applying. Four of these
 # overlap with DEFAULT_PINNED_TOOLS in transforms/categorized_search.py
@@ -239,15 +246,11 @@ async def _get_tool_metadata(
     list as of v3.2.0.
     """
     tools: list[dict[str, Any]] = []
-    # Groups not considered "primary" when choosing a tool's canonical group —
-    # these are cross-cutting tags (e.g. Z-Wave, Zigbee) that should not
-    # override the tool's real domain group.
-    secondary_tags = {"Z-Wave", "Zigbee"}
 
     registered = await server.mcp.local_provider._list_tools()
     for tool in registered:
         tags = sorted(tool.tags) if tool.tags else []
-        primary_tags = [t for t in tags if t not in secondary_tags]
+        primary_tags = [t for t in tags if t not in SECONDARY_TAGS]
         primary = primary_tags[0] if primary_tags else (tags[0] if tags else "Other")
         read_only = bool(
             tool.annotations and getattr(tool.annotations, "readOnlyHint", None)

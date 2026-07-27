@@ -11,12 +11,18 @@ from starlette.requests import Request
 
 from ha_mcp.settings_ui import _render_settings_html
 from ha_mcp.settings_ui._i18n import (
+    CATALOGS,
     build_payload,
     load_catalogs,
     normalize_locale,
     select_locale,
     serialize_payload,
 )
+
+
+def _shipped_locales() -> list[str]:
+    """Registered catalog codes except English, which has no translations."""
+    return sorted(code for code in CATALOGS if code != "en")
 
 
 def _write_catalog(
@@ -209,43 +215,41 @@ def test_render_cookie_overrides_home_assistant_and_browser_language() -> None:
     assert '<html lang="ru" dir="ltr">' in html
 
 
-def test_de_catalog_loads_and_is_registered() -> None:
-    from ha_mcp.settings_ui._i18n import CATALOGS
-
-    assert "de" in CATALOGS
-    assert CATALOGS["de"]["meta"]["native_name"] == "Deutsch"
-    assert CATALOGS["de"]["meta"]["dir"] == "ltr"
-
-
-def test_zh_hans_catalog_loads_and_is_registered() -> None:
-    from ha_mcp.settings_ui._i18n import CATALOGS
-
-    assert "zh-hans" in CATALOGS
-    assert CATALOGS["zh-hans"]["meta"]["native_name"] == "简体中文"
-    assert CATALOGS["zh-hans"]["meta"]["dir"] == "ltr"
-    # 工具分组与工具 UI 翻译须已填充，避免空翻译漏过 CI
-    assert CATALOGS["zh-hans"]["tool_groups"]
-    assert CATALOGS["zh-hans"]["tools"]
+def test_shipped_locales_are_discovered() -> None:
+    """The parametrized check below collects nothing on an empty registry."""
+    assert _shipped_locales(), (
+        "no non-English catalogs registered in ha_mcp.settings_ui._i18n.CATALOGS "
+        "— the per-locale check below would pass by collecting zero cases"
+    )
 
 
-def test_fr_catalog_loads_and_is_registered() -> None:
-    from ha_mcp.settings_ui._i18n import CATALOGS
+@pytest.mark.parametrize("locale", _shipped_locales())
+def test_shipped_catalog_loads_and_is_registered(locale: str) -> None:
+    """One rule for every locale, rather than a copy per language.
 
-    assert "fr" in CATALOGS
-    assert CATALOGS["fr"]["meta"]["native_name"] == "Français"
-    assert CATALOGS["fr"]["meta"]["dir"] == "ltr"
-    assert CATALOGS["fr"]["tool_groups"]
-    assert CATALOGS["fr"]["tools"]
+    The four hand-written copies this replaces had already drifted: ``ru``
+    had no test at all and ``de`` asserted neither ``tool_groups`` nor
+    ``tools``, so a catalog could ship those two sections empty and stay
+    green — the half-install ``test_locale_parity`` exists to prevent.
+    """
+    catalog = CATALOGS[locale]
 
-
-def test_es_catalog_loads_and_is_registered() -> None:
-    from ha_mcp.settings_ui._i18n import CATALOGS
-
-    assert "es" in CATALOGS
-    assert CATALOGS["es"]["meta"]["native_name"] == "Español"
-    assert CATALOGS["es"]["meta"]["dir"] == "ltr"
-    assert CATALOGS["es"]["tool_groups"]
-    assert CATALOGS["es"]["tools"]
+    assert catalog["meta"]["native_name"], (
+        f"{locale}.json needs a non-empty meta.native_name — the language "
+        "picker renders it as the option label"
+    )
+    assert catalog["meta"]["dir"] in {"ltr", "rtl"}, (
+        f"{locale}.json meta.dir is {catalog['meta']['dir']!r}; the rendered "
+        "<html dir> attribute only accepts 'ltr' or 'rtl'"
+    )
+    assert catalog["tool_groups"], (
+        f"{locale}.json has an empty tool_groups — the tools tab would fall "
+        "back to English group headings for this language"
+    )
+    assert catalog["tools"], (
+        f"{locale}.json has an empty tools section — every tool title and "
+        "description would fall back to English for this language"
+    )
 
 
 def test_disallowed_inline_markup_is_rejected(tmp_path: Path) -> None:

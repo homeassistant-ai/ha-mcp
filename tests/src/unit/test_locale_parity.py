@@ -25,13 +25,18 @@ import json
 import re
 import subprocess
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import pytest
 import yaml
 
+from ha_mcp.settings_ui._tools_meta import SECONDARY_TAGS
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
+SITE_TOOLS_JSON = _REPO_ROOT / "site" / "src" / "data" / "tools.json"
+AGENTS_MD = _REPO_ROOT / "AGENTS.md"
 COMPONENT_TRANSLATIONS = (
     _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "translations"
 )
@@ -406,4 +411,148 @@ def test_component_english_catalog_mirrors_strings_json() -> None:
     ), (
         "custom_components/ha_mcp_tools/strings.json and translations/en.json "
         "have drifted — every translated catalog is keyed against en.json"
+    )
+
+
+def _settings_catalog(locale: str) -> dict[str, Any]:
+    """The raw catalog: ``tools`` nests a dict per tool, the rest is flat."""
+    catalog: dict[str, Any] = json.loads(
+        (SETTINGS_LOCALES / f"{locale}.json").read_text("utf-8")
+    )
+    return catalog
+
+
+def _non_english_settings_locales() -> list[str]:
+    """Settings UI catalog codes except ``en``, which carries no overrides."""
+    return sorted(
+        path.stem for path in SETTINGS_LOCALES.glob("*.json") if path.stem != "en"
+    )
+
+
+def _renderable_groups_and_tools() -> tuple[set[str], set[str]]:
+    """The group headings and tool names the settings UI can actually show.
+
+    ``en.json`` leaves ``tool_groups``/``tools`` empty — English for those
+    comes from the tool definitions at runtime — so the shipped tool catalog
+    is the only cross-check a translated catalog has. The group set is
+    derived with ``_tools_meta``'s own primary-tag rule (imported, not
+    copied) so the two cannot drift apart.
+    """
+    tools = json.loads(SITE_TOOLS_JSON.read_text("utf-8"))
+    groups: set[str] = set()
+    names: set[str] = set()
+    for tool in tools:
+        names.add(tool["name"])
+        tags = sorted(tool.get("tags") or [])
+        primary = [tag for tag in tags if tag not in SECONDARY_TAGS]
+        groups.add(primary[0] if primary else (tags[0] if tags else "Other"))
+    return groups, names
+
+
+def test_settings_ui_locales_are_discovered() -> None:
+    """The parametrized checks below collect nothing on an empty glob."""
+    assert _non_english_settings_locales(), (
+        "no translated catalogs found in src/ha_mcp/settings_ui/locales/ — the "
+        "per-locale checks below would pass by collecting zero cases"
+    )
+
+
+@pytest.mark.parametrize("locale", _non_english_settings_locales())
+def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
+    """Both sections are keyed off the tool catalog, and nothing checked it.
+
+    ``settings.js`` resolves a group heading by ``primary_tag`` and falls
+    back to English on any key it does not find, so a stale or misspelled
+    entry is invisible: ``build_payload`` happily ships it and nothing reads
+    it. The reverse direction is the one that actually bites — a new tool, or
+    a new tag that sorts first for an existing tool, leaves *every* locale
+    showing English for it with no test going red.
+
+    ``site/src/data/tools.json`` is regenerated on master by
+    ``sync-tool-docs.yml``, so a PR that adds a tool goes red here only once
+    that sync lands. That is the intended moment: the catalogs are what has
+    to catch up, and this names which locale and which key.
+    """
+    groups, tool_names = _renderable_groups_and_tools()
+    catalog = _settings_catalog(locale)
+
+    catalog_groups = set(catalog.get("tool_groups", {}))
+    catalog_tools = set(catalog.get("tools", {}))
+
+    assert not catalog_groups - groups, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json translates tool_groups "
+        f"key(s) no tool can render: {sorted(catalog_groups - groups)}. The "
+        "settings UI only looks up a group by a tool's primary tag — delete "
+        "them."
+    )
+    assert not groups - catalog_groups, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json is missing tool_groups "
+        f"key(s): {sorted(groups - catalog_groups)}. Those headings render in "
+        "English for this language."
+    )
+    assert not catalog_tools - tool_names, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json translates tool(s) that "
+        f"do not exist: {sorted(catalog_tools - tool_names)}"
+    )
+    assert not tool_names - catalog_tools, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json is missing tool(s): "
+        f"{sorted(tool_names - catalog_tools)}. Their title and description "
+        "render in English for this language."
+    )
+
+
+# A catalog wholesale-copied from English passes key parity, placeholder
+# parity and the markup allowlist — every existing check. Real catalogs sit
+# far under this: the highest among the shipped locales is 9 of 419 messages
+# (2.2%), all of them words that genuinely read the same in that language.
+_MAX_ENGLISH_IDENTICAL_SHARE = 0.05
+
+
+@pytest.mark.parametrize("locale", _non_english_settings_locales())
+def test_settings_catalog_is_not_a_copy_of_english(locale: str) -> None:
+    """A stub catalog has to fail somewhere, and this is the only place.
+
+    Deliberately identical strings are normal — ``Total``, ``{count} min``
+    and product names read the same in several languages — so this is a
+    share, not a ban.
+    """
+    english = _settings_catalog("en")["messages"]
+    messages = _settings_catalog(locale)["messages"]
+
+    identical = sorted(
+        key for key, text in messages.items() if key in english and text == english[key]
+    )
+    share = len(identical) / len(english)
+
+    assert share <= _MAX_ENGLISH_IDENTICAL_SHARE, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json leaves {len(identical)} "
+        f"of {len(english)} messages ({share:.1%}) byte-identical to English, "
+        f"over the {_MAX_ENGLISH_IDENTICAL_SHARE:.0%} ceiling — this reads as "
+        f"a partly untranslated catalog. Untranslated keys: {identical[:20]}"
+    )
+
+
+def test_agents_md_lists_every_shipped_locale() -> None:
+    """The documented list went stale the moment ``fr`` landed.
+
+    It is the one place a contributor looks up which languages exist, and
+    nothing tied it to the catalogs it describes.
+    """
+    marker = "names every file:"
+    lines = [
+        line for line in AGENTS_MD.read_text("utf-8").splitlines() if marker in line
+    ]
+    assert len(lines) == 1, (
+        f"expected exactly one AGENTS.md line containing {marker!r} to carry "
+        f"the locale list, found {len(lines)} — update this test alongside the "
+        "section it guards"
+    )
+
+    documented = set(re.findall(r"`([A-Za-z-]+)`", lines[0]))
+    shipped = set(_non_english_settings_locales())
+
+    assert documented == shipped, (
+        "AGENTS.md § Translations lists "
+        f"{sorted(documented)} but the shipped catalogs are {sorted(shipped)}. "
+        "Update the line so the documented set matches what ships."
     )
