@@ -1060,3 +1060,150 @@ class TestServerOptionsFlow:
         assert hint.startswith("Remote access via webhook is disabled")
         assert "http://127.0.0.1:9584/private_x" in hint  # DEFAULT_SERVER_PORT
         assert "/api/webhook/" not in hint
+
+
+class TestOptionsFormTranslations:
+    """The runtime-assembled prose follows the configured language.
+
+    The sentences in the options form depend on runtime state, so they are
+    built in Python rather than written into a step description. Before this,
+    that meant English paragraphs sitting inside an otherwise translated
+    form for every non-English user.
+    """
+
+    PREFIX = f"component.{const.DOMAIN}.common."
+
+    def _flow_with_language(self, language, **kwargs):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"}, **kwargs)
+        flow.hass.config.language = language
+        flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
+        flow.hass.config_entries.async_entries = MagicMock(return_value=[])
+        return flow
+
+    def _catalog(self, **overrides):
+        return {f"{self.PREFIX}{key}": value for key, value in overrides.items()}
+
+    def test_form_prose_uses_the_catalog_for_the_configured_language(self, monkeypatch):
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(
+                return_value=self._catalog(
+                    panel_hint="Öffne das Panel.",
+                    version_line=(
+                        "Komponente {component_version} - "
+                        "Server ha-mcp {server_version} ({channel}-Kanal)"
+                    ),
+                    tools_module_not_installed="Modul: Nicht installiert",
+                )
+            ),
+        )
+        flow = self._flow_with_language("de")
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        # The trailing space that spaces the sentence from the surrounding
+        # prose is added by the caller, not carried in the catalog.
+        assert placeholders["panel_hint"] == "Öffne das Panel. "
+        assert placeholders["versions"].startswith(
+            "Komponente 1.2.4 - Server ha-mcp 7.14.1 (stable-Kanal)"
+        )
+        assert "Modul: Nicht installiert" in placeholders["versions"]
+
+    def test_untranslated_keys_keep_their_english_source(self, monkeypatch):
+        """A partial catalog must not blank the keys it does not carry."""
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(return_value=self._catalog(panel_hint="Öffne das Panel.")),
+        )
+        flow = self._flow_with_language("de")
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        assert placeholders["panel_hint"] == "Öffne das Panel. "
+        assert placeholders["versions"].startswith(
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+        )
+
+    def test_failing_lookup_degrades_to_english(self, monkeypatch):
+        """Translations are additive; a broken catalog must not break the form."""
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(side_effect=RuntimeError("boom")),
+        )
+        flow = self._flow_with_language("de")
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
+        assert placeholders["versions"].startswith("Component 1.2.4")
+
+    def test_unreadable_language_skips_the_lookup(self, monkeypatch):
+        """No language to ask for means English, not a lookup with a bad key."""
+        seam = AsyncMock(return_value={})
+        monkeypatch.setattr(cf, "_fetch_common_translations", seam)
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        flow = self._flow_with_language(object())
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        seam.assert_not_awaited()
+        assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
+
+    def test_malformed_version_line_falls_back_to_the_english_template(
+        self, monkeypatch
+    ):
+        """A catalog is data — an unusable brace must not take the form down."""
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(return_value=self._catalog(version_line="Komponente {nope} {")),
+        )
+        flow = self._flow_with_language("de")
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        assert placeholders["versions"].startswith(
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+        )

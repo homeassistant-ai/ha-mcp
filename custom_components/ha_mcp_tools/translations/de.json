@@ -139,5 +139,14 @@
                 "name": "Update"
             }
         }
+    },
+    "common": {
+        "panel_hint": "Öffne das [HA-MCP Einstellungs-Panel](/ha-mcp) für Tool-Verwaltung und Servereinstellungen.",
+        "tools_module_installed": "Beta-/Erweitert-Modul für Datei- & YAML-Tools (optional): Installiert",
+        "tools_module_not_installed": "Beta-/Erweitert-Modul für Datei- & YAML-Tools (optional): Nicht installiert — klicke auf \"Eintrag hinzufügen\" auf der Seite dieser Integration und wähle \"HA-MCP File & YAML Tools\"",
+        "tools_module_not_loaded": "Beta-/Erweitert-Modul für Datei- & YAML-Tools (optional): Installiert, aber nicht geladen — aktiviere oder lade den Eintrag \"HA-MCP File & YAML Tools\" auf der Seite dieser Integration neu",
+        "version_line": "Komponente {component_version} - Server ha-mcp {server_version} ({channel}-Kanal)",
+        "version_not_installed": "noch nicht installiert",
+        "version_unknown": "unbekannt"
     }
 }

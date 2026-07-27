@@ -139,5 +139,14 @@
                 "name": "更新"
             }
         }
+    },
+    "common": {
+        "panel_hint": "打开 [HA-MCP 设置面板](/ha-mcp) 以管理工具和服务器设置。",
+        "tools_module_installed": "Beta/高级文件与 YAML 工具模块（可选）：已安装",
+        "tools_module_not_installed": "Beta/高级文件与 YAML 工具模块（可选）：未安装——请在此集成页面上点击“添加条目”并选择“HA-MCP File & YAML Tools”",
+        "tools_module_not_loaded": "Beta/高级文件与 YAML 工具模块（可选）：已安装但未加载——请在此集成页面上启用或重新加载“HA-MCP File & YAML Tools”条目",
+        "version_line": "组件 {component_version} - 服务器 ha-mcp {server_version}（{channel} 通道）",
+        "version_not_installed": "尚未安装",
+        "version_unknown": "未知"
     }
 }

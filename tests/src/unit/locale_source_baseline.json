@@ -1,5 +1,12 @@
 {
   "custom_components/ha_mcp_tools/translations": {
+    "common.panel_hint": "fdcb6d2daa2d9ab5",
+    "common.tools_module_installed": "9ca7b8b17369ea08",
+    "common.tools_module_not_installed": "6fc70ef45358fa9d",
+    "common.tools_module_not_loaded": "3c302c07bd7492bd",
+    "common.version_line": "3136e9f19cdcb27d",
+    "common.version_not_installed": "c4e1e1ca5dd8eb34",
+    "common.version_unknown": "b23a6a8439c0dde5",
     "config.abort.already_configured": "fd93a90da118e5cf",
     "config.abort.unsupported_home_assistant": "985bc116bd1975d9",
     "config.step.server.description": "075bd3f77326df81",

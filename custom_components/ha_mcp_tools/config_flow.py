@@ -107,6 +107,82 @@ _SERVER_UNIQUE_ID = f"{DOMAIN}-server"
 _LOGGER = logging.getLogger(__name__)
 
 
+# The options form's prose is assembled here rather than in strings.json,
+# because which sentences appear depends on runtime state. Keeping the text
+# itself in the ``common`` catalog means the assembled paragraphs follow the
+# user's language instead of being English inside an otherwise translated
+# form. These are the English source strings and the fallback: if the
+# language is unreadable or the catalog cannot be loaded, the form still
+# renders, in English, exactly as it did before.
+_COMMON_FALLBACKS: dict[str, str] = {
+    "panel_hint": (
+        "Open the [HA-MCP settings panel](/ha-mcp) for tool management and "
+        "server settings."
+    ),
+    "version_line": (
+        "Component {component_version} - "
+        "Server ha-mcp {server_version} ({channel} channel)"
+    ),
+    "version_unknown": "unknown",
+    "version_not_installed": "not installed yet",
+    "tools_module_installed": (
+        "Beta/advanced file & YAML tools module (optional): Installed"
+    ),
+    "tools_module_not_loaded": (
+        "Beta/advanced file & YAML tools module (optional): Installed "
+        'but not loaded — enable or reload the "HA-MCP File & YAML '
+        "Tools\" entry on this integration's page"
+    ),
+    "tools_module_not_installed": (
+        "Beta/advanced file & YAML tools module (optional): Not installed — "
+        'press "Add entry" on this integration\'s page and choose '
+        '"HA-MCP File & YAML Tools" to add it'
+    ),
+}
+
+
+async def _fetch_common_translations(
+    hass: HomeAssistant, language: str
+) -> dict[str, str]:
+    """core ``async_get_translations(hass, language, "common")``; test seam.
+
+    Mirrors the seam in ``websocket_api`` so the lookup can be replaced in
+    tests without reaching into Home Assistant's translation machinery.
+    """
+    from homeassistant.helpers.translation import async_get_translations
+
+    result = await async_get_translations(hass, language, "common", {DOMAIN})
+    return result if isinstance(result, dict) else {}
+
+
+async def _common_strings(hass: HomeAssistant | None) -> dict[str, str]:
+    """Return the ``common`` catalog for the configured language.
+
+    Failure-proof like the hints it feeds: an unreadable language or a
+    failing lookup degrades to the English source strings rather than
+    breaking the options form.
+    """
+    strings = dict(_COMMON_FALLBACKS)
+    language = getattr(getattr(hass, "config", None), "language", None)
+    if hass is None or not isinstance(language, str):
+        return strings
+    try:
+        loaded = await _fetch_common_translations(hass, language)
+    except Exception as err:
+        _LOGGER.debug("Could not load the options-form translations: %s", err)
+        return strings
+
+    prefix = f"component.{DOMAIN}.common."
+    strings.update(
+        {
+            key.removeprefix(prefix): value
+            for key, value in loaded.items()
+            if key.startswith(prefix) and isinstance(value, str) and value
+        }
+    )
+    return strings
+
+
 def _legacy_credentials_active(
     hass: HomeAssistant, client_id: str, client_secret: str, signing_key: str
 ) -> bool:
@@ -478,17 +554,17 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         # the unsaved form state) when the panel is off so the link cannot point
         # at a route that 404s. The trailing space keeps the surrounding prose
         # spaced correctly whether the sentence is present or empty.
+        common = await _common_strings(getattr(self, "hass", None))
         panel_hint = (
-            "Open the [HA-MCP settings panel](/ha-mcp) for tool management and "
-            "server settings. "
+            f"{common['panel_hint']} "
             if bool(opts.get(OPT_ENABLE_SIDEBAR_PANEL, True))
             else ""
         )
         # The tools-module status renders as its own paragraph directly under
         # the version line, sharing the {versions} placeholder so every
         # translation shows it without a strings change.
-        versions = await self._versions_hint()
-        tools_hint = self._tools_module_hint()
+        versions = await self._versions_hint(common)
+        tools_hint = self._tools_module_hint(common)
         if tools_hint:
             versions = f"{versions}\n\n{tools_hint}"
         return self.async_show_form(
@@ -543,7 +619,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             cleaned.pop(OPT_SERVER_URL, None)
         return cleaned
 
-    async def _versions_hint(self) -> str:
+    async def _versions_hint(self, common: dict[str, str]) -> str:
         """Return a one-line component + server version summary for the form.
 
         Reads the component version from the integration manifest and the
@@ -555,7 +631,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         opts = self.config_entry.options
         channel = str(opts.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
 
-        component_version = "unknown"
+        component_version = common["version_unknown"]
         hass = getattr(self, "hass", None)
         if hass is not None:
             try:
@@ -574,17 +650,26 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 if hass is not None
                 else _installed_server_version()
             )
-            server_version = raw_version or "not installed yet"
+            server_version = raw_version or common["version_not_installed"]
         except Exception as err:
             _LOGGER.debug("Could not read server version for the options hint: %s", err)
-            server_version = "not installed yet"
+            server_version = common["version_not_installed"]
 
-        return (
-            f"Component {component_version} - "
-            f"Server ha-mcp {server_version} ({channel} channel)"
-        )
+        # Placeholder parity is asserted in tests/src/unit/test_locale_parity.py,
+        # but a catalog is data: a malformed brace would otherwise take the
+        # whole options form down, so fall back to the English source line.
+        for template in (common["version_line"], _COMMON_FALLBACKS["version_line"]):
+            try:
+                return template.format(
+                    component_version=component_version,
+                    server_version=server_version,
+                    channel=channel,
+                )
+            except (KeyError, IndexError, ValueError):
+                _LOGGER.debug("Unusable version_line translation: %r", template)
+        return ""
 
-    def _tools_module_hint(self) -> str | None:
+    def _tools_module_hint(self, common: dict[str, str]) -> str | None:
         """Return the File & YAML tools entry status line, or None if unreadable.
 
         Shown directly under the version line (#1996): users routinely add the
@@ -613,18 +698,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             _LOGGER.debug("Could not read the tools-entry state for the hint: %s", err)
             return None
         if loaded:
-            return "Beta/advanced file & YAML tools module (optional): Installed"
+            return common["tools_module_installed"]
         if tools_entries:
-            return (
-                "Beta/advanced file & YAML tools module (optional): Installed "
-                'but not loaded — enable or reload the "HA-MCP File & YAML '
-                "Tools\" entry on this integration's page"
-            )
-        return (
-            "Beta/advanced file & YAML tools module (optional): Not installed — "
-            'press "Add entry" on this integration\'s page and choose '
-            '"HA-MCP File & YAML Tools" to add it'
-        )
+            return common["tools_module_not_loaded"]
+        return common["tools_module_not_installed"]
 
     async def _connect_url_hint(self) -> str:
         """Return the connect URLs for the options form.

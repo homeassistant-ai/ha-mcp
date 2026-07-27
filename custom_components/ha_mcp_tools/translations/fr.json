@@ -139,5 +139,14 @@
                 "name": "Mise à jour"
             }
         }
+    },
+    "common": {
+        "panel_hint": "Ouvrez le [panneau de réglages HA-MCP](/ha-mcp) pour la gestion des outils et les réglages du serveur.",
+        "tools_module_installed": "Module bêta/avancé d'outils fichiers & YAML (facultatif) : Installé",
+        "tools_module_not_installed": "Module bêta/avancé d'outils fichiers & YAML (facultatif) : Non installé — appuyez sur « Ajouter une entrée » sur la page de cette intégration et choisissez « HA-MCP File & YAML Tools »",
+        "tools_module_not_loaded": "Module bêta/avancé d'outils fichiers & YAML (facultatif) : Installé mais non chargé — activez ou rechargez l'entrée « HA-MCP File & YAML Tools » sur la page de cette intégration",
+        "version_line": "Composant {component_version} - Serveur ha-mcp {server_version} (canal {channel})",
+        "version_not_installed": "pas encore installé",
+        "version_unknown": "inconnue"
     }
 }
