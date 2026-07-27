@@ -265,12 +265,13 @@ def update_docs(tools: list[dict], *, content: str | None = None) -> str:
     """
     docs = content if content is not None else DOCS_PATH.read_text(encoding="utf-8")
     if DOCS_START_MARKER not in docs or DOCS_END_MARKER not in docs:
-        print(
-            f"ERROR: {DOCS_PATH} is missing sync markers.\n"
-            f"  Add {DOCS_START_MARKER!r} and {DOCS_END_MARKER!r} to the file first.",
-            file=sys.stderr,
+        # Raised rather than ``sys.exit``: the same reason the duplicate-name
+        # check raises — a library function that exits gives its caller a bare
+        # SystemExit to report instead of a named failure.
+        raise ValueError(
+            f"{DOCS_PATH} is missing sync markers. Add "
+            f"{DOCS_START_MARKER!r} and {DOCS_END_MARKER!r} to the file first."
         )
-        sys.exit(1)
     new_section = generate_docs_section(tools)
     pattern = re.compile(
         rf"{re.escape(DOCS_START_MARKER)}.*?{re.escape(DOCS_END_MARKER)}",
@@ -345,11 +346,18 @@ def update_readme(tools: list[dict], *, content: str | None = None) -> str:
         if old_pattern.search(readme):
             readme = old_pattern.sub(new_block, readme)
         else:
-            print(
-                "WARNING: Could not find tool table markers in README.md",
-                file=sys.stderr,
+            # Not a warning: returning the content unchanged made ``--check``
+            # report "All files in sync" on the very failure it had just
+            # printed, because an unchanged return compares equal to the file
+            # it came from. Losing the markers means the table can no longer be
+            # regenerated at all, which is the loudest thing this script has to
+            # say.
+            raise ValueError(
+                f"{README_PATH.name} is missing the tool-table markers "
+                f"({README_START_MARKER!r} / {README_END_MARKER!r}) and no "
+                "legacy Complete Tool List block was found; restore them so "
+                "the table can be regenerated"
             )
-            return readme
 
     readme = re.sub(r"tools-[^-]+-blue", f"tools-{count}-blue", readme)
     return readme
@@ -381,20 +389,14 @@ def check_sync(tools: list[dict]) -> bool:
     return in_sync
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Extract MCP tool metadata (AST-based, no runtime deps)"
-    )
-    parser.add_argument(
-        "--check", action="store_true", help="CI mode: check sync without writing"
-    )
-    args = parser.parse_args()
+def _extract_and_apply(args: argparse.Namespace) -> None:
+    """Run the extraction and either check or write the generated files.
 
-    try:
-        tools = extract_tools()
-    except ValueError as err:
-        print(f"ERROR: {err}", file=sys.stderr)
-        sys.exit(1)
+    Split out so ``main`` can turn every ``ValueError`` this raises — a
+    duplicate tool name, a file whose sync markers are gone — into one named
+    exit-1 rather than a traceback.
+    """
+    tools = extract_tools()
     cat_count = len({t["tags"][0] for t in tools if t["tags"]})
     print(f"Extracted {len(tools)} tools across {cat_count} categories")
 
@@ -417,6 +419,22 @@ def main() -> None:
 
         DOCS_PATH.write_text(update_docs(tools), encoding="utf-8")
         print(f"Updated {DOCS_PATH.relative_to(REPO_ROOT)}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Extract MCP tool metadata (AST-based, no runtime deps)"
+    )
+    parser.add_argument(
+        "--check", action="store_true", help="CI mode: check sync without writing"
+    )
+    args = parser.parse_args()
+
+    try:
+        _extract_and_apply(args)
+    except ValueError as err:
+        print(f"ERROR: {err}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

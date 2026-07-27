@@ -6,11 +6,20 @@ sync-tool-docs.yml workflow rather than a PR-time unit test, because
 PRs that pass CI can go stale when other tool PRs merge first.
 """
 
+import ast
 import json
 import re
+import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
+
+# The generator is a script, not a package module — same import route the
+# locale-parity checks use.
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import extract_tools  # noqa: E402
 
 
 class TestToolDocsSync:
@@ -105,3 +114,71 @@ class TestToolDocsSync:
                 f"Tool count {expected!r} is stale in DOCS.md. "
                 "Run 'python scripts/extract_tools.py' to regenerate."
             )
+
+
+class TestExtractToolsScriptRobustness:
+    """Structural guards on scripts/extract_tools.py itself.
+
+    Two review rounds fixed the same missing-``encoding`` defect in this file,
+    one of them on the destructive write. Every call is correct today and
+    nothing kept the next one honest, so the rule is asserted over the source
+    rather than re-checked by hand.
+    """
+
+    SCRIPT = REPO_ROOT / "scripts" / "extract_tools.py"
+
+    def test_every_file_read_and_write_declares_an_encoding(self) -> None:
+        """No ``read_text``/``write_text``/``open`` may inherit the locale.
+
+        Without ``encoding``, Python uses the platform default, so the script
+        reads and writes the tool catalogs — which carry non-ASCII by design
+        (``generate_tools_json`` emits ``ensure_ascii=False``) — in whatever
+        the runner's locale happens to be.
+        """
+        tree = ast.parse(self.SCRIPT.read_text(encoding="utf-8"))
+        checked = 0
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = (
+                func.attr
+                if isinstance(func, ast.Attribute)
+                else getattr(func, "id", None)
+            )
+            if name not in {"read_text", "write_text", "open"}:
+                continue
+            checked += 1
+            if not any(kw.arg == "encoding" for kw in node.keywords):
+                offenders.append(f"{name}() at line {node.lineno}")
+
+        # Count parity: a parse that stopped finding calls would otherwise
+        # report "no offenders" and read as a pass.
+        assert checked >= 9, (
+            f"only {checked} file-IO calls found in {self.SCRIPT.name} — the "
+            "check below would pass by inspecting almost nothing"
+        )
+        assert not offenders, (
+            f"{self.SCRIPT.name} has {len(offenders)} file-IO call(s) without "
+            f"an explicit encoding: {offenders}. Pass encoding='utf-8'."
+        )
+
+    def test_lost_readme_markers_fail_instead_of_reporting_in_sync(self) -> None:
+        """A README whose markers are gone must not compare equal to itself.
+
+        Returning the content unchanged made ``--check`` print "All files in
+        sync" right after printing the warning that it could not find the
+        markers — the verification path passing on its own failure.
+        """
+        with pytest.raises(ValueError, match="tool-table markers"):
+            extract_tools.update_readme([], content="# README\n\nNo markers here.\n")
+
+    def test_lost_docs_markers_raise_rather_than_exit(self) -> None:
+        """The sibling failure, reported the same way.
+
+        A library function that calls ``sys.exit`` hands its caller a bare
+        SystemExit to report instead of a named cause.
+        """
+        with pytest.raises(ValueError, match="sync markers"):
+            extract_tools.update_docs([], content="# DOCS\n\nNo markers here.\n")
