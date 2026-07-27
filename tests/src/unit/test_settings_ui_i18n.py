@@ -168,6 +168,48 @@ def test_tool_placeholder_mismatch_is_rejected(tmp_path: Path) -> None:
         load_catalogs(tmp_path)
 
 
+def test_unknown_text_direction_is_rejected(tmp_path: Path) -> None:
+    """``meta.dir`` reaches the rendered ``<html dir>`` attribute verbatim.
+
+    This is the guard that makes a bad direction impossible, and it had no
+    test: the registered-catalog check downstream can only ever see ``ltr`` or
+    ``rtl`` because loading raises here first, and a missing key defaults
+    rather than failing.
+    """
+    (tmp_path / "en.json").write_text(
+        json.dumps(
+            {
+                "meta": {"native_name": "English", "dir": "sideways"},
+                "messages": {},
+                "tool_groups": {},
+                "tools": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=re.escape("meta.dir must be ltr or rtl")):
+        load_catalogs(tmp_path)
+
+
+def test_catalog_without_a_native_name_is_rejected(tmp_path: Path) -> None:
+    """The language picker has no label to render without it."""
+    (tmp_path / "en.json").write_text(
+        json.dumps(
+            {
+                "meta": {"native_name": "   "},
+                "messages": {},
+                "tool_groups": {},
+                "tools": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=re.escape("needs meta.native_name")):
+        load_catalogs(tmp_path)
+
+
 def test_inline_payload_escapes_script_breakout() -> None:
     serialized = serialize_payload({"messages": {"unsafe": "</script><b>&"}})
 
