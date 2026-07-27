@@ -32,7 +32,7 @@ from typing import Any
 import pytest
 import yaml
 
-from ha_mcp.settings_ui._tools_meta import primary_tag
+from ha_mcp.settings_ui._tools_meta import FEATURE_GATED_TOOLS, primary_tag
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -420,6 +420,40 @@ def test_component_english_catalog_mirrors_strings_json() -> None:
     )
 
 
+def test_connect_local_lan_quotes_the_bind_host_option() -> None:
+    """The sentence names an on-screen option, so it has to name that option.
+
+    ``connect_local_lan`` tells the reader which dropdown entry produces this
+    URL, and every catalog quotes the label untranslated for that reason —
+    the reader matches it against the form. Renaming the option in
+    ``config_flow.py`` would leave six catalogs quoting a label that no longer
+    exists, silently, which is the drift class the ceilings test closed for
+    percentages and this one closes for a literal.
+    """
+    source = (COMPONENT_STRINGS.parent / "config_flow.py").read_text("utf-8")
+    match = re.search(r'value=BIND_HOST_ALL,\s*label="([^"]+)"', source)
+    assert match, (
+        "could not find the BIND_HOST_ALL option label in config_flow.py — "
+        "the selector was restructured, so update this test with it"
+    )
+    label = match.group(1)
+
+    quoted = "Local network"
+    assert label.startswith(quoted), (
+        f"the bind-host dropdown now reads {label!r}, which no longer starts "
+        f"with the {quoted!r} the catalogs quote — rename it in every "
+        "common.connect_local_lan string, then here"
+    )
+
+    for locale in ["en", *_translated_component_locales()]:
+        value = _component_catalog(locale)["common.connect_local_lan"]
+        assert quoted in value, (
+            f"custom_components/ha_mcp_tools/translations/{locale}.json "
+            f"common.connect_local_lan is {value!r}, which does not quote the "
+            f"{quoted!r} option the reader has to find on the form"
+        )
+
+
 def _settings_catalog(locale: str) -> dict[str, Any]:
     """The raw catalog: ``tools`` nests a dict per tool, the rest is flat."""
     catalog: dict[str, Any] = json.loads(
@@ -466,11 +500,20 @@ def _renderable_groups_and_tools() -> tuple[frozenset[str], frozenset[str]]:
 
 
 @cache
-def _english_tool_texts() -> dict[str, str]:
+def _english_tool_texts(*, as_rendered: bool = True) -> dict[str, str]:
     """English tool titles and descriptions, keyed like a flat catalog.
 
     The settings UI catalogs translate the title and the description's first
     line, so that is what a translated value is compared against.
+
+    A feature-gated tool has two English renderings, and which one a
+    translator is looking at depends on a setting. With its flag off — the
+    default — the tool never registers, so the UI shows the hand-written
+    ``FEATURE_GATED_TOOLS`` stub; with the flag on it shows the parsed
+    docstring. Five of the seven differ (``ha_config_set_yaml`` reads "Set
+    YAML Config" as a stub and "Raw YAML Config Edit" parsed), so checking
+    only one of them lets a paste of the other through. ``as_rendered``
+    selects which set this call returns; the paste check consults both.
     """
     texts: dict[str, str] = {}
     # Same discovery guard as the group/name helper: without it a shrunken
@@ -478,6 +521,11 @@ def _english_tool_texts() -> dict[str, str]:
     _renderable_groups_and_tools()
     for tool in extract_tools.extract_tools():
         name = str(tool["name"])
+        stub = FEATURE_GATED_TOOLS.get(name) if as_rendered else None
+        if stub is not None:
+            texts[f"{name}.title"] = stub["title"]
+            texts[f"{name}.description"] = stub["description"]
+            continue
         texts[f"{name}.title"] = str(tool.get("title") or "")
         texts[f"{name}.description"] = str(tool.get("description") or "").split("\n")[0]
     return texts
@@ -621,18 +669,26 @@ def test_settings_catalog_tools_are_translated(locale: str) -> None:
     # scores 2 of 176 and passes. One wholly-English tool is the signature, and
     # naming it beats a percentage. A single matching title stays legal — some
     # tool names genuinely read the same in another language.
+    #
+    # Both English renderings count: a feature-gated tool shows the stub text
+    # with its flag off and the parsed docstring with it on, and a translator
+    # pastes whichever one their instance put on screen.
+    english_sources = (english, _english_tool_texts(as_rendered=False))
     pasted = sorted(
         name
         for name, entry in catalog.items()
         if f"{name}.title" in english
-        and entry.get("title") == english[f"{name}.title"]
-        and entry.get("description") == english[f"{name}.description"]
+        and any(
+            entry.get("title") == source[f"{name}.title"]
+            and entry.get("description") == source[f"{name}.description"]
+            for source in english_sources
+        )
     )
     assert not pasted, (
         f"src/ha_mcp/settings_ui/locales/{locale}.json carries {len(pasted)} "
         f"tool(s) whose title and description are both still English: "
-        f"{pasted}. Adding a tool obliges every locale, and an untranslated "
-        "paste is what that pressure produces."
+        f"{pasted[:20]}. Adding a tool obliges every locale, and an "
+        "untranslated paste is what that pressure produces."
     )
 
     _assert_not_a_copy(
@@ -695,13 +751,28 @@ def test_addon_catalog_is_not_a_copy_of_english(addon_dir: Path, locale: str) ->
     )
 
 
+def _agents_md_section(title: str) -> str:
+    """The body of one ``## `` section of AGENTS.md.
+
+    Scoping matters: a check that greps the whole file answers a question
+    about the file, not about the section it claims to guard, and any future
+    sentence elsewhere carrying the same shape would fail it.
+    """
+    text = AGENTS_MD.read_text("utf-8")
+    match = re.search(
+        rf"^## {re.escape(title)}$(.*?)(?=^## )", text, re.MULTILINE | re.DOTALL
+    )
+    assert match, f"AGENTS.md has no '## {title}' section — this test guards it"
+    return match.group(1)
+
+
 def test_agents_md_states_the_current_ceilings() -> None:
     """The documented percentages are the ones a contributor plans against.
 
     Same reason the locale list below is pinned: the prose went stale the
     moment the constant moved, and nothing tied the two together.
     """
-    section = AGENTS_MD.read_text("utf-8")
+    section = _agents_md_section("Translations")
     documented = set(re.findall(r"(\d+)% for the", section))
 
     assert documented == {

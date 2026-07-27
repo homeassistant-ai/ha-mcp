@@ -730,7 +730,10 @@ opens. Separately from those key rules, every surface caps how much *text* a cat
 may leave byte-identical to English or omit outright, so a stub cannot ride the
 fallbacks: 5% for the settings UI `messages`, for the `tools` titles and
 descriptions and for both add-on flavors, and 15% for the component catalogs,
-which carry the product names as keys of their own.
+which carry the product names as keys of their own. On top of that share, a
+`tools` entry whose title *and* description are *both* byte-identical to English
+fails by name however small its share — for feature-gated tools against either
+English rendering, the `FEATURE_GATED_TOOLS` stub or the parsed docstring.
 
 Component catalogs need every `strings.json` key with identical
 `{placeholders}`. Add-on catalogs need `name` + `description` for every
