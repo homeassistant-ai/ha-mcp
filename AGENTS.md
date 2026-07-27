@@ -726,8 +726,11 @@ in every locale, in the PR that adds it**: the check derives the tool set from
 the sources (`scripts/extract_tools.py`), not from the committed
 `site/src/data/tools.json` that `sync-tool-docs.yml` regenerates only after
 merge — so the PR adding the tool goes red, rather than the next PR someone
-opens. Every surface also caps how much a catalog may leave byte-identical to
-English or omit outright, so a stub cannot ride the fallbacks.
+opens. Separately from those key rules, every surface caps how much *text* a catalog
+may leave byte-identical to English or omit outright, so a stub cannot ride the
+fallbacks: 5% for the settings UI `messages`, for the `tools` titles and
+descriptions and for both add-on flavors, and 15% for the component catalogs,
+which carry the product names as keys of their own.
 
 Component catalogs need every `strings.json` key with identical
 `{placeholders}`. Add-on catalogs need `name` + `description` for every
