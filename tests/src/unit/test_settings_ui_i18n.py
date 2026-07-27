@@ -372,3 +372,30 @@ def test_dropping_one_of_two_panel_links_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="but English links to"):
         load_catalogs(tmp_path)
+
+
+def test_panel_link_attribute_shown_as_literal_text_is_not_a_link(
+    tmp_path: Path,
+) -> None:
+    """Help text may document the attribute; that is not navigation.
+
+    The extraction matches the whole allowlisted anchor, so a message showing
+    ``data-panel-link="example"`` inside ``<code>`` neither has to name a real
+    panel nor has to match English's targets.
+    """
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"note": 'Write <code>data-panel-link="example"</code> to link.'},
+    )
+    _write_catalog(
+        tmp_path,
+        "de",
+        native_name="Deutsch",
+        messages={"note": 'Schreibe <code>data-panel-link="beispiel"</code>.'},
+    )
+
+    catalogs = load_catalogs(tmp_path)
+
+    assert "note" in catalogs["de"]["messages"]

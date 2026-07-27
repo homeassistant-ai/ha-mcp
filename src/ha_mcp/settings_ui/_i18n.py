@@ -170,7 +170,10 @@ _ALLOWED_TAGS_RE = re.compile(
 # tag *shape*, so "outils" or "backup" passes it and then silently does
 # nothing: settings.js hands the value to activateTab, which no-ops on an
 # unknown panel. Read the real ids out of the page rather than restating them.
-_PANEL_LINK_RE = re.compile(r'data-panel-link="([a-z][a-z-]*)"')
+# Matches the whole anchor, not a bare attribute: a message may legitimately
+# show `<code>data-panel-link="example"</code>` as literal help text, and that
+# is documentation, not navigation.
+_PANEL_LINK_RE = re.compile(r'<a href="#" data-panel-link="([a-z][a-z-]*)">')
 _PANEL_ID_RE = re.compile(r'data-panel="([a-z][a-z-]*)"')
 _SETTINGS_HTML = Path(__file__).parent / "settings.html"
 
