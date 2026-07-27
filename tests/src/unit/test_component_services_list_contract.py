@@ -256,3 +256,25 @@ async def test_translation_sourced_name_lookup_identical_both_paths(
         == legacy_resp["services"]["light.turn_on"]["name"]
         == "Turn On"
     )
+
+
+def test_non_mapping_translations_are_logged_not_swallowed(monkeypatch, caplog):
+    """Discarding the catalog leaves the service list untranslated silently.
+
+    The mirrored seam in the config flow logs the same case, and the two are
+    meant to stay in step; deleting this warning is green without the level
+    assertion.
+    """
+    import asyncio
+    import logging
+    import sys
+
+    translation = MagicMock()
+    translation.async_get_translations = AsyncMock(return_value=["not", "a", "mapping"])
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.translation", translation)
+
+    with caplog.at_level(logging.WARNING):
+        result = asyncio.run(wsapi._fetch_service_translations(MagicMock(), "de"))
+
+    assert result == {}
+    assert "expected a Mapping, got list" in caplog.text
