@@ -1,153 +1,155 @@
 ---
 configuration:
   backup_hint:
-    name: Full-HA snapshot suggestion level (LLM-facing)
+    name: HA naQ snapshot chupmeH pat (LLM-vaD)
     description: |-
-      Tunes the wording of the hint the LLM sees in the
-      `ha_manage_backup(scope='snapshot')` tool description for when to
-      suggest a full Home Assistant tarball backup before risky operations
-      (e.g. mass device deletes). Affects ONLY this one LLM-facing prompt
-      sentence.
+      Qobbogh mIw qaSpa' Home Assistant tarball backup naQ chupmeH
+      `ha_manage_backup(scope='snapshot')` jan DelmeH ghItlhDaq LLMvaD
+      'anglu'bogh qeS mu'mey choH. chovnatlh janmey law' teqmeH mIw.
+      LLM-vaD QInvam wa' neH SIgh.
 
-      For per-edit automatic snapshots of automations / scripts / helpers /
-      etc., use the separate **Enable auto-backup of edits** toggle below.
+      automation / script / helper / latlh choH Hoch qaSpa' nuv
+      vangnISbe'taHvIS snapshot chenmoHmeH, bIngDaq **choHmey
+      auto-backup yIQotlhHa'** DuH pIm yIlo'.
   secret_path:
-    name: Secret path override
+    name: pegh He le'
     description: |
-      Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path.
+      MCP turwI'vaD HTTP He le' wIvlaHlu'. chIm yIpol; vaj He pegh chenmoH pat.
   enable_tool_search:
-    name: Enable tool search
+    name: janmey nejwI' yIQotlhHa'
     description: >-
-      Replace the full tool catalog with search-based discovery. Reduces
-      idle context from ~46K to ~5K tokens. ⚠️ Do NOT enable this if you
-      use Claude in Sonnet or Opus modes — those models have their own
-      built-in tool search / deferred tools, which conflicts with ours.
-      To use ha-mcp's tool search with Claude, disable Claude's built-in
-      tool search first; otherwise leave this off. Use this only with
-      LLMs that lack native deferred tools (e.g. Claude Haiku, local
-      OpenAI-compatible models) or with smaller context windows. Tools
-      are found via ha_search_tools and executed via categorized proxies
-      (read/write/delete). Requires an add-on restart to take effect — then
-      reconnect or refresh the MCP server in your AI client so it reloads the
-      tool list. Restarting the add-on alone does NOT refresh a client's
-      cached tool list; this applies after changing any setting here.
+      janmey naQ qa'meH nejlu'taHvIS tu'lu'bogh janmey neH 'ang.
+      lo'be'lu'taHvIS context 46K tokenvo' 5K tokenDaq machmoH.
+      ⚠️ Claude Sonnet Opus ghap Dalo'chugh, yIchu'Qo' — jan nejmeH
+      pat / deferred tools luqeng modelmeyvetlh, 'ej patmaj nIS.
+      Claude tlhej ha-mcp jan nej Dalo'meH, wa'DIch Claude jan nej
+      pat yIchu'Ha'; pagh yIchu'Ha'taH. native deferred tools
+      ghajbe'bogh LLMmey (chovnatlh Claude Haiku, SumDaq Qapbogh
+      OpenAI-compatible models) ghap context Qorwagh mach ghajbogh
+      LLMmey neHvaD yIlo'. ha_search_tools vegh janmey tu'lu',
+      'ej laD/ghItlh/teq proxy Seghmey vegh lo'lu'. QapchoHmeH
+      add-on Dataghqa'moHnIS — ghIq jan tetlh chu' laDmeH AI nIqHomlIjDaq
+      MCP turwI' yIrarqa' pagh AI nIqHomlIj jan tetlh yIlaDqa'.
+      add-on neH Dataghqa'moHchugh, AI nIqHom jan tetlh ngeqlu'bogh
+      chu'moHbe'lu'; naDev DuH Hoch DachoHta'DI'
+      mIwvam yIqaSmoH.
   enable_tool_security_policies:
-    name: Enable Tool Security Policies (advanced)
+    name: jan Hung chutmey tIQotlhHa' ('Itlh)
     description: >-
-      Gate high-stakes tool calls (lock/alarm control, automation writes,
-      etc.) behind user approval. When a guarded tool is called, the agent
-      tells the user to open the Tool Security Policies tab in the web UI
-      and click Approve before the call proceeds. Per-tool rules with
-      optional argument conditions are configured in the Tool Security
-      Policies tab. Off by default. Requires restart to take effect.
+      jan Qob lo'lu'DI' (ngaQ/alarm SeH, automation ghItlh, latlh)
+      lo'wI' chaw' poQmoH. jan Hunglu'bogh lo'DI', agent jatlh:
+      web UI-Daq jan Hung chutmey jIH yIpoS 'ej QaptaHmeH lajmeH
+      leQ yIwIv. jan HochvaD chutmey, argument wanI'mey wIvlaHbogh je
+      jan Hung chutmey jIHDaq cherlu'. motlh chu'Ha'lu'. QapchoHmeH
+      add-on Dataghqa'moHnIS.
   read_only_mode:
-    name: Read Only Mode
+    name: laDlaH neH mIw
     description: >-
-      Toggles all write tools off, and removes ability for tools to make
-      any write or destructive calls. Mixed read/write tools (backups,
-      add-ons, energy preferences, voice pipelines, and code mode when
-      enabled) stay available with their write operations blocked. Same
-      toggle as the web UI Tools tab. Off by default. Requires restart to
-      take effect.
+      jan ghItlh Hoch chu'Ha', 'ej janmeyvaD ghItlhmeH Qaw'meH je
+      Qum chaw' teq. laD/ghItlh mIwmey ghajbogh janmey (backups,
+      add-ons, energy DuHmey, ghogh pipelines, code mode chu'lu'chugh
+      je) tu'lu'taH, 'ach ghItlh mIwmey botlu'. web UI janmey jIHDaq
+      rap leQ. motlh chu'Ha'lu'. QapchoHmeH add-on Dataghqa'moHnIS.
   enable_mandatory_bps:
-    name: Attach best-practice skills on writes
+    name: ghItlhDI' mIw nIvmey yIchel
     description: >-
-      Master switch for the write-tool skill content delivery feature
-      (issue #1182). When enabled (default), the six config write tools
-      (automations, scripts, scenes, helpers, dashboards, raw YAML)
-      attach the canonical Home Assistant best-practice reference files
-      under `skill_content` on every successful write, plus auto-embed
-      any reference sections cited by best-practice warnings. Each tool
-      also exposes a per-call `MandatoryBPS` parameter the agent can
-      set to false on subsequent calls once it has the content. When
-      this master switch is off, NO skill_content goes out regardless
-      of the per-call parameter or BP warnings. Recommended ON as the
-      first choice; disable only for models with very small context
-      windows. Turning this off may degrade write accuracy. Requires
-      restart to take effect.
+      jan ghItlh laH De' nobmeH pat wa'DIch SeH (issue #1182).
+      chu'lu'chugh (motlh), config ghItlh janmey jav
+      (automations, scripts, scenes, helpers, dashboards, YAML raw)
+      ghItlh Qap HochDaq `skill_content` bIngDaq Home Assistant
+      mIw QaQ paq teywI'mey motlh chel; mIw QaQ ghuHmey
+      bopbogh paq 'ay'mey Hoch chel je. Hoch janDaq
+      `MandatoryBPS` parameter tu'lu'; De' laDta'DI' agent,
+      ghIq jan rI'DI' false wIvlaH. wa'DIch leQvam
+      chu'Ha'lu'chugh, skill_content noblu'be'chu', per-call
+      parameter BP ghuHmey ghap ram. wa'DIch wIv'e' ON chuplu';
+      context Qorwagh machqu' ghajbogh modelvaD neH yIchu'Ha'.
+      leQvam chu'Ha'lu'chugh, ghItlhlu'DI' Qagh law' qaSlaH. QapchoHmeH add-on
+      Dataghqa'moHnIS.
   enable_strict_mandatory_bps:
-    name: Strict best-practices mode
+    name: mIw QaQ pabmeH mIw tlhoy
     description: >-
-      Strict mode: prevents the client from using the tool until it can
-      prove that it read the best practices. While on, the six
-      best-practice write tools (automations, scripts, scenes, helpers,
-      dashboards, raw YAML) are blocked and return an error directing the
-      client to read the best-practices skill via ha_get_skill_guide and
-      pass back the acknowledgment key it obtains there. While on, the
-      ha_get_skill_guide tool is locked enabled — it is the only
-      publisher of the acknowledgment key. Child of the
-      "Attach best-practice skills on writes" option above and inert
-      while that parent is off. Requires restart to take effect.
+      mIw tlhoy: mIw QaQ laDta' 'e' tobmeH AI nIqHom poQ; tobpa'
+      jan lo'laHbe'. chu'lu'taHvIS, mIw QaQ ghItlh janmey jav
+      (automations, scripts, scenes, helpers, dashboards, YAML raw)
+      botlu', 'ej Qagh QIn agentvaD jatlh: ha_get_skill_guide vegh
+      mIw QaQ skill yIlaD, 'ej pa' Suqbogh lajta'ghach ngoq
+      yInobqa'. chu'lu'taHvIS, ha_get_skill_guide chu'taH net
+      poQ — lajta'ghach ngoq neH 'ang janvam. DungDaq
+      "ghItlhDI' mIw nIvmey yIchel" DuH puq 'oH, 'ej DuHvetlh
+      chu'Ha'lu'chugh Qapbe'. QapchoHmeH add-on Dataghqa'moHnIS.
   enable_auto_backup:
-    name: Enable auto-backup of edits
+    name: choHmey auto-backup yIQotlhHa'
     description: >-
-      Captures a per-entity snapshot before every wrapped write/destructive
-      MCP tool call (automation, script, scene, helper, dashboard, label,
-      category, group, zone, area, calendar, todo, entity, integration, and
-      sibling remove/delete tools). Snapshots are saved as YAML files under
-      /data/ha_mcp_backups/ (override via HAMCP_BACKUP_DIR) and listed,
-      restored, or deleted via the Backups tab in the web settings UI or
-      via ha_manage_backup(scope='edits', ...). Best-effort — failures log
-      a WARNING but never block the underlying write. On by default;
-      uncheck to opt out. Requires restart to take effect.
+      MCP jan ghItlh/Qaw' Hoch qaSpa' Dol snapshot pol
+      (automation, script, scene, helper, dashboard, label, category,
+      group, zone, area, calendar, todo, Dol, integration, latlh
+      teq/polHa' janmey je). /data/ha_mcp_backups/ bIngDaq YAML
+      teywI'pu' snapshotmey pollu' (HAMCP_BACKUP_DIR vegh qa'laH),
+      'ej web DuHmey UI Backups jIHDaq pagh
+      ha_manage_backup(scope='edits', ...) vegh tetlhlu',
+      polqa'lu', Qaw'lu' ghap. nID neH — Qagh QonoSDaq ghuH
+      ghItlhlu', 'ach mIw ghItlh botbe'. motlh chu'lu';
+      wIvHa'meH yIwIvHa'. QapchoHmeH add-on Dataghqa'moHnIS.
   auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
+    name: auto-backup poH veH (tup)
     description: >-
-      Per-entity throttle window. 0 (default) captures a snapshot on every
-      wrapped write. N>0 captures at most one snapshot per N minutes per
-      entity. Range 0–1440.
+      Dol HochvaD poH veH. 0 (motlh) wIvlu'chugh, ghItlh
+      Hoch qaSpa' snapshot chenmoH. N>0 wIvlu'chugh, Hoch N tupDaq
+      Dol HochvaD wa' snapshot neH chenmoH. veH 0–1440.
   auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
+    name: auto-backup polmeH mI' (Dol Hoch)
     description: >-
-      Maximum number of snapshots kept per entity. Older snapshots beyond
-      this cap are rotated out on each successful capture. Default 100,
-      range 1–10000.
+      Dol HochvaD snapshotmey polbogh mI' jenqu'. Hoch
+      polta'ghach QapDI', snapshotmey ngo' veH juSbogh Qaw'lu'.
+      motlh 100; veH 1–10000.
   enable_snapshot_delete:
-    name: Allow snapshot deletion
+    name: snapshot Qaw'meH chaw' yInob
     description: >-
-      Lets ha_manage_backup delete full HA snapshot tarballs
-      (scope='snapshot', action='delete'). Off by default — a snapshot may
-      be the last recovery point after a mistaken change, so a human must
-      opt in here. Even when on, scheduled backups, the newest remaining
-      snapshot, and anything younger than the age floor below stay
-      protected.
+      HA snapshot tarballmey naQ Qaw'laH ha_manage_backup
+      (scope='snapshot', action='delete'). motlh chu'Ha'lu' —
+      choH muj qaSpu'DI' cheghmeH snapshot Qav 'oHlaH, vaj naDev
+      nuv wIv poQlu'. chu'lu'chugh je, backups nablu'bogh,
+      snapshot chu'qu' ratlhbogh. bIngDaq ngo' veH tu'lu';
+      snapshot ngo'be'chugh Qaw'laHbe'lu'.
   snapshot_delete_min_age_days:
-    name: Minimum snapshot age to delete (days)
+    name: snapshot Qaw'meH ngo' veH (jaj)
     description: >-
-      A snapshot must be at least this old before it can be deleted. Range
-      0–365; 0 disables the floor (the newest-snapshot and
-      scheduled-backup protections still apply). Default 7.
+      snapshot Qaw'laHlu'pa' ngo'nIS. veH 0–365; 0 wIvlu'chugh
+      veH chu'Ha' (snapshot chu'qu' backups nablu'bogh je HungtaH).
+      motlh 7.
   verify_ssl:
-    name: Verify TLS certificate
+    name: TLS certificate yI'ol
     description: >-
-      Verify the Home Assistant server's TLS certificate. The add-on
-      connects via the Supervisor proxy, so this normally has no effect
-      and should stay enabled. Disable only if you've reconfigured the
-      add-on to talk to HA over a public HTTPS hostname with a self-signed
-      certificate or hostname mismatch. Disabling weakens transport
-      security — leave on unless you know you need it. Requires restart
-      to take effect.
+      Home Assistant turwI' TLS certificate lugh 'e' yI'ol.
+      Supervisor proxy vegh rar add-on, vaj motlh pagh choH.
+      add-on Dacherqa'ta' 'ej HochvaD poSbogh HTTPS hostname, nIteb
+      'ollu'bogh certificate, pagh hostname muj lo'chugh neH yIchu'Ha'.
+      chu'Ha'lu'chugh Qum Hung pujmoH — poQbe'chugh yIchu'taH.
+      QapchoHmeH add-on Dataghqa'moHnIS.
   tool_search_max_results:
-    name: Tool search max results
+    name: jan nej mI' jenqu'
     description: >-
-      Maximum number of tools returned by ha_search_tools when tool search
-      is enabled. Lower values (2-3) save context tokens but may miss
-      relevant tools. Range: 2-10. Requires restart.
+      jan nej chu'lu'taHvIS ha_search_tools nobbogh janmey mI'
+      jenqu'. mI' mach (2-3) wIvlu'chugh context tokenmey pol,
+      'ach janmey lI' 'op leghbe'laH. veH 2-10. QapchoHmeH
+      add-on Dataghqa'moHnIS.
   disabled_tools:
-    name: Disabled tools (comma-separated)
+    name: janmey luQotlhlu'bogh (comma-mey)
     description: >-
-      Tools listed here are forced off and locked in the web Settings UI
-      (Tools tab) — they cannot be re-enabled there without unsetting this
-      option first. A small set of mandatory tools (ha_search,
-      ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
-      cannot be disabled and keep running even if listed here.
-      ha_get_skill_guide can be disabled only while strict best-practices
-      mode (enable_strict_mandatory_bps) is off. Comma-separated
-      tool names (e.g. ha_call_event,ha_eval_template).
+      naDev lutetlhlu'bogh janmey luchu'Ha'lu' 'ej web DuHmey UI
+      (janmey jIH)Daq ngaQ — naDev DuH teqbe'lu'pa' pa'
+      luchu'qa'laHbe'lu'. janmey lupoQlu'bogh mach
+      (ha_search, ha_get_overview, ha_get_state, ha_report_issue,
+      ha_manage_backup) luchu'Ha'laHbe'lu', 'ej naDev lutetlhlu'chugh
+      je QaptaH. mIw QaQ tlhoy
+      (enable_strict_mandatory_bps) chu'Ha'lu'taHvIS neH
+      ha_get_skill_guide chu'Ha'laHlu'. comma-mey lo'ta' jan
+      pongmey tIghItlh (chovnatlh ha_call_event,ha_eval_template).
   pinned_tools:
-    name: Pinned tools (comma-separated)
+    name: janmey lungu'lu'bogh (comma-mey)
     description: >-
-      Tools listed here are locked pinned — they appear at the top of the
-      Tools tab and cannot be unpinned from the web Settings UI without
-      unsetting this option first. Useful in combination with Tool Search.
-      Comma-separated tool names.
+      naDev lutetlhlu'bogh janmey luwIvlu' 'ej ngaQ — janmey jIH
+      DungDaq lu'anglu', 'ej web DuHmey UI-Daq DuHvam
+      teqbe'lu'pa' luwIvHa'laHbe'lu'. jan nej pat tlhej lo'lu'DI'
+      lI'. comma-mey lo'ta' jan pongmey tIghItlh.

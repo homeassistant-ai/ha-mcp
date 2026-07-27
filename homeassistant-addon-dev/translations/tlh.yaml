@@ -1,283 +1,279 @@
 ---
 configuration:
   backup_hint:
-    name: Full-HA snapshot suggestion level (LLM-facing)
+    name: HA naQ snapshot chupmeH pat (LLM-vaD)
     description: |-
-      Tunes the wording of the hint the LLM sees in the
-      `ha_manage_backup(scope='snapshot')` tool description for when to
-      suggest a full Home Assistant tarball backup before risky operations
-      (e.g. mass device deletes). Affects ONLY this one LLM-facing prompt
-      sentence.
+      Qobbogh mIw qaSpa' Home Assistant tarball backup naQ chupmeH
+      `ha_manage_backup(scope='snapshot')` jan DelmeH ghItlhDaq LLMvaD
+      'anglu'bogh qeS mu'mey choH. chovnatlh janmey law' teqmeH mIw.
+      LLM-vaD QInvam wa' neH SIgh.
 
-      For per-edit automatic snapshots of automations / scripts / helpers /
-      etc., use the separate **Enable auto-backup of edits** toggle below.
+      automation / script / helper / latlh choH Hoch qaSpa' nuv
+      vangnISbe'taHvIS snapshot chenmoHmeH, bIngDaq **choHmey
+      auto-backup yIQotlhHa'** DuH pIm yIlo'.
   secret_path:
-    name: Secret path override
+    name: pegh He le'
     description: |
-      Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path.
+      MCP turwI'vaD HTTP He le' wIvlaHlu'. chIm yIpol; vaj He pegh chenmoH pat.
   enable_tool_search:
-    name: Enable tool search
+    name: janmey nejwI' yIQotlhHa'
     description: >-
-      Replace the full tool catalog with search-based discovery. Reduces
-      idle context from ~46K to ~5K tokens. ⚠️ Do NOT enable this if you
-      use Claude in Sonnet or Opus modes — those models have their own
-      built-in tool search / deferred tools, which conflicts with ours.
-      To use ha-mcp's tool search with Claude, disable Claude's built-in
-      tool search first; otherwise leave this off. Use this only with
-      LLMs that lack native deferred tools (e.g. Claude Haiku, local
-      OpenAI-compatible models) or with smaller context windows. Tools
-      are found via ha_search_tools and executed via categorized proxies
-      (read/write/delete). Requires restart to take effect.
+      janmey naQ qa'meH nejlu'taHvIS tu'lu'bogh janmey neH 'ang.
+      lo'be'lu'taHvIS context 46K tokenvo' 5K tokenDaq machmoH.
+      ⚠️ Claude Sonnet Opus ghap Dalo'chugh, yIchu'Qo' — jan nejmeH
+      pat / deferred tools luqeng modelmeyvetlh, 'ej patmaj nIS.
+      Claude tlhej ha-mcp jan nej Dalo'meH, wa'DIch Claude jan nej
+      pat yIchu'Ha'; pagh yIchu'Ha'taH. native deferred tools
+      ghajbe'bogh LLMmey (chovnatlh Claude Haiku, SumDaq Qapbogh
+      OpenAI-compatible models) ghap context Qorwagh mach ghajbogh
+      LLMmey neHvaD yIlo'. ha_search_tools vegh janmey tu'lu',
+      'ej laD/ghItlh/teq proxy Seghmey vegh lo'lu'. QapchoHmeH
+      add-on Dataghqa'moHnIS.
   enable_tool_security_policies:
-    name: Enable Tool Security Policies (advanced)
+    name: jan Hung chutmey tIQotlhHa' ('Itlh)
     description: >-
-      Gate high-stakes tool calls (lock/alarm control, automation writes,
-      etc.) behind user approval. When a guarded tool is called, the agent
-      tells the user to open the Tool Security Policies tab in the web UI
-      and click Approve before the call proceeds. Per-tool rules with
-      optional argument conditions are configured in the Tool Security
-      Policies tab. Off by default. Requires restart to take effect.
+      jan Qob lo'lu'DI' (ngaQ/alarm SeH, automation ghItlh, latlh)
+      lo'wI' chaw' poQmoH. jan Hunglu'bogh lo'DI', agent jatlh:
+      web UI-Daq jan Hung chutmey jIH yIpoS 'ej QaptaHmeH lajmeH
+      leQ yIwIv. jan HochvaD chutmey, argument wanI'mey wIvlaHbogh je
+      jan Hung chutmey jIHDaq cherlu'. motlh chu'Ha'lu'. QapchoHmeH
+      add-on Dataghqa'moHnIS.
   read_only_mode:
-    name: Read Only Mode
+    name: laDlaH neH mIw
     description: >-
-      Toggles all write tools off, and removes ability for tools to make
-      any write or destructive calls. Mixed read/write tools (backups,
-      add-ons, energy preferences, voice pipelines, and code mode when
-      enabled) stay available with their write operations blocked. Same
-      toggle as the web UI Tools tab. Off by default. Requires restart to
-      take effect.
+      jan ghItlh Hoch chu'Ha', 'ej janmeyvaD ghItlhmeH Qaw'meH je
+      Qum chaw' teq. laD/ghItlh mIwmey ghajbogh janmey (backups,
+      add-ons, energy DuHmey, ghogh pipelines, code mode chu'lu'chugh
+      je) tu'lu'taH, 'ach ghItlh mIwmey botlu'. web UI janmey jIHDaq
+      rap leQ. motlh chu'Ha'lu'. QapchoHmeH add-on Dataghqa'moHnIS.
   enable_beta_features:
-    name: Enable beta features (master)
+    name: Beta DuHmey yIQotlhHa' (wa'DIch SeHwI')
     description: >-
-      ⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant
-      installation. They write to your YAML config, your filesystem,
-      install custom components, run arbitrary sandboxed Python, and
-      edit tool docstrings the AI sees. There is no warranty and no
-      support guarantee — you enable them at your OWN RISK. Take a
-      Home Assistant backup before turning this on, and never enable
-      in production without one. Master gate for the 5 experimental
-      sub-flags below; sub-flags are ignored at runtime while this
-      master is off, even when explicitly set to true. The same
-      toggle is also surfaced in the web settings UI under "Beta
-      features (dangerous)" — either surface reflects the other on
-      restart.
+      ⚠ QOB — Home AssistantlIj QIHlaHqu' janmeyvam.
+      YAML configlIj, 'a'baqa' patlIj je ghItlh; componentmey le'
+      jom; sandbox Python ngoqmey lutu'; AI leghbogh jan docstrings
+      choH. QaptaH 'e' lay'lu'be', 'ej QaH lay'lu'be' — Qob Hoch DavIv.
+      Dachu'pa' Home Assistant backup yIchenmoH, 'ej backup
+      ghajbe'chugh pat QaptaHboghDaq yIchu'Qo'. bIngDaq Beta
+      DuH puqmey vaghvaD wa'DIch lojmIt 'oH; wa'DIchvam
+      chu'Ha'lu'taHvIS, true wIvlu'pu'chugh je QaptaHvIS
+      DuH puqmey buSHa'lu'. web DuHmey UI bIngDaq "Beta DuHmey
+      (Qob)" leQDaq 'anglu' je — add-on taghqa'moHlu'DI' cha'
+      Daqmey rap.
   enable_yaml_config_editing:
-    name: Enable YAML config editing (beta)
+    name: YAML config choH yIQotlhHa' (Beta)
     description: >-
-      Beta feature. Allows AI assistants to add, replace, or remove
-      top-level keys in configuration.yaml and packages/*.yaml. Only
-      whitelisted keys are allowed (e.g., template, sensor,
-      command_line, mqtt, knx); core keys like homeassistant, http,
-      and recorder are blocked. Each edit validates YAML syntax, runs
-      a config check, and creates an automatic backup. Changes to
-      most keys require a full HA restart to take effect. See
-      docs/beta.md for known limitations. Dedicated tools
-      (automations, scripts, scenes, helpers, template sensors)
-      should be preferred when available. REQUIRES the master
-      "Enable beta features" toggle above (and in the web UI) to be
-      on — otherwise this sub-flag is ignored at runtime regardless
-      of its value here.
+      Beta DuH. configuration.yaml packages/*.yaml jeDaq ngoqmey
+      jen chellaH, qa'laH, teqlaH AI assistants. ngoqmey luchaw'lu'bogh
+      neH lo'laH (chovnatlh template, sensor, command_line, mqtt, knx);
+      homeassistant, http, recorder rur ngoqmey botlh lubotlu'. Hoch
+      choHDI' YAML pab nuD, config nuD, 'ej backup chenmoH pat.
+      ngoqmey HochHom choHmey QapchoHmoHmeH
+      Home Assistant naQ Dataghqa'moHnIS. veHmey SovmeH docs/beta.md yIlaD.
+      janmey le' (automations, scripts, scenes, helpers, template
+      sensors) tu'lu'chugh, wa'DIch yIlo'. DungDaq
+      "Beta DuHmey yIQotlhHa'" leQ chu'lu'nIS (web UI-Daq je);
+      pagh QaptaHvIS DuH puqvam buSHa'lu'; naDev true
+      wIvlu'pu'chugh je buSHa'lu'.
   enable_yaml_edit_confirm:
-    name: Require confirmation for YAML edits (diff preview)
+    name: YAML choH woqmeH chaw' yIpoQ (diff legh)
     description: >-
-      Sub-toggle of YAML config editing, ON by default (recommended).
-      The first ha_config_set_yaml call returns a unified diff of
-      exactly what would change on disk plus a confirm token and writes
-      nothing; the edit only lands when the call is repeated with that
-      token. Exists so unintended changes outside the requested edit
-      are caught before they reach disk (issue #1720). Turn off only to
-      save one round-trip per edit.
+      YAML config choHmeH DuH puq leQ; motlh ON (chup). wa'DIch
+      ha_config_set_yaml rI'lu'DI', diskDaq choHbejbogh Dochmey
+      unified diff, confirm token je nob, 'ej pagh ghItlh; tokenvetlh
+      lo'taHvIS janvam rI'lu'qa'DI' neH choH ghItlh. diskDaq
+      ghoSpa' choHmey poQbe'bogh leghmeH tu'lu' (issue #1720).
+      choH HochvaD wa'logh rI'nISbe'meH neH yIchu'Ha'.
   enable_yaml_packages_automation:
-    name: Allow automation in packages/*.yaml
+    name: packages/*.yaml-Daq automation yIchaw'
     description: >-
-      Sub-toggle of YAML config editing. When on, ha_config_set_yaml
-      accepts yaml_path='automation' inside packages/*.yaml. When off,
-      the call is rejected both client-side and server-side. The
-      storage-mode tool (ha_config_set_automation) is unaffected.
-      Default OFF; only takes effect when "Enable YAML config editing"
-      above is also on.
+      YAML config choHmeH DuH puq leQ. chu'lu'chugh, packages/*.yaml
+      qoDaq yaml_path='automation' laj ha_config_set_yaml.
+      chu'Ha'lu'chugh, AI nIqHomDaq turwI'Daq je rI'meH nID lajbe'lu'.
+      storage-mode jan (ha_config_set_automation) SIghbe'.
+      motlh OFF; DungDaq "YAML config choH yIQotlhHa'" chu'lu'chugh neH
+      Qap.
   enable_yaml_packages_script:
-    name: Allow script in packages/*.yaml
+    name: packages/*.yaml-Daq script yIchaw'
     description: >-
-      Sub-toggle of YAML config editing. When on, ha_config_set_yaml
-      accepts yaml_path='script' inside packages/*.yaml. When off, the
-      call is rejected both client-side and server-side. The
-      storage-mode tool (ha_config_set_script) is unaffected. Default
-      OFF; only takes effect when "Enable YAML config editing" above is
-      also on.
+      YAML config choHmeH DuH puq leQ. chu'lu'chugh, packages/*.yaml
+      qoDaq yaml_path='script' laj ha_config_set_yaml.
+      chu'Ha'lu'chugh, AI nIqHomDaq turwI'Daq je rI'meH nID lajbe'lu'.
+      storage-mode jan (ha_config_set_script) SIghbe'.
+      motlh OFF; DungDaq "YAML config choH yIQotlhHa'" chu'lu'chugh neH
+      Qap.
   enable_yaml_packages_scene:
-    name: Allow scene in packages/*.yaml
+    name: packages/*.yaml-Daq scene yIchaw'
     description: >-
-      Sub-toggle of YAML config editing. When on, ha_config_set_yaml
-      accepts yaml_path='scene' inside packages/*.yaml. When off, the
-      call is rejected both client-side and server-side. The
-      storage-mode tool (ha_config_set_scene) is unaffected. Default
-      OFF; only takes effect when "Enable YAML config editing" above is
-      also on.
+      YAML config choHmeH DuH puq leQ. chu'lu'chugh, packages/*.yaml
+      qoDaq yaml_path='scene' laj ha_config_set_yaml.
+      chu'Ha'lu'chugh, AI nIqHomDaq turwI'Daq je rI'meH nID lajbe'lu'.
+      storage-mode jan (ha_config_set_scene) SIghbe'.
+      motlh OFF; DungDaq "YAML config choH yIQotlhHa'" chu'lu'chugh neH
+      Qap.
   enable_code_mode:
-    name: Enable custom tool sandbox (beta)
+    name: jan le' sandbox yIQotlhHa' (Beta)
     description: >-
-      Beta feature. Enables the ha_manage_custom_tool tool, which
-      lets AI assistants create, run, save, and delete custom Python
-      code in a secure sandbox when no built-in tool can handle the
-      request. Code runs in an isolated interpreter with no filesystem
-      or arbitrary network access. Sandbox code can hit the HA REST
-      API (api_get/api_post), send WebSocket commands (ws_send), call
-      existing MCP tools (call_tool), or remove a saved tool
-      (delete_saved_tool). Saved tools persist to
-      /data/saved_tools.json by default so they survive add-on
-      restarts, and are visible to any client that can connect. See
-      docs/beta.md for known limitations. Requires
-      restart to take effect. REQUIRES the master "Enable beta
-      features" toggle above (and in the web UI) to be on — otherwise
-      this sub-flag is ignored at runtime regardless of its value
-      here.
+      Beta DuH. ha_manage_custom_tool jan chu', vaj jan motlh
+      Qapbe'DI' AI assistantsvaD sandbox HungDaq Python ngoq le'
+      ngoq chenmoH, QapmoH, pol, teq je chaw'. interpreter
+      che'ronDaq ngoq Qap; 'a'baqa' pat SIr'o' je naw'laHbe'.
+      HA REST API (api_get/api_post) QumlaH sandbox ngoq,
+      WebSocket commands (ws_send) ngeHlaH, MCP janmey QaptaHbogh
+      (call_tool) rItlaH, pagh jan polta'bogh
+      (delete_saved_tool) Qaw'laH. motlh /data/saved_tools.json-Daq
+      jan polta'bogh pol, vaj add-on taghqa'moHlu'pu'DI' poltaH; 'ej AI nIqHom
+      rarlaHbogh HochvaD leghlu'. veHmey SovmeH docs/beta.md yIlaD.
+      QapchoHmeH add-on Dataghqa'moHnIS. DungDaq "Beta DuHmey yIQotlhHa'" leQ
+      chu'lu'nIS (web UI-Daq je); pagh QaptaHvIS DuH puqvam
+      buSHa'lu'; naDev true wIvlu'pu'chugh je buSHa'lu'.
   enable_auto_backup:
-    name: Enable auto-backup of edits
+    name: choHmey auto-backup yIQotlhHa'
     description: >-
-      Captures a per-entity snapshot before every wrapped write/destructive
-      MCP tool call (automation, script, scene, helper, dashboard, label,
-      category, group, zone, area, calendar, todo, entity, integration, and
-      sibling remove/delete tools). Snapshots are saved as YAML files under
-      /data/ha_mcp_backups/ (override via HAMCP_BACKUP_DIR) and listed,
-      restored, or deleted via the Backups tab in the web settings UI or
-      via ha_manage_backup(scope='edits', ...). Best-effort — failures log
-      a WARNING but never block the underlying write. On by default;
-      uncheck to opt out. Requires restart to take effect.
+      MCP jan ghItlh/Qaw' Hoch qaSpa' Dol snapshot pol
+      (automation, script, scene, helper, dashboard, label, category,
+      group, zone, area, calendar, todo, Dol, integration, latlh
+      teq/polHa' janmey je). /data/ha_mcp_backups/ bIngDaq YAML
+      teywI'pu' snapshotmey pollu' (HAMCP_BACKUP_DIR vegh qa'laH),
+      'ej web DuHmey UI Backups jIHDaq pagh
+      ha_manage_backup(scope='edits', ...) vegh tetlhlu',
+      polqa'lu', Qaw'lu' ghap. nID neH — Qagh QonoSDaq ghuH
+      ghItlhlu', 'ach mIw ghItlh botbe'. motlh chu'lu';
+      wIvHa'meH yIwIvHa'. QapchoHmeH add-on Dataghqa'moHnIS.
   auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
+    name: auto-backup poH veH (tup)
     description: >-
-      Per-entity throttle window. 0 (default) captures a snapshot on every
-      wrapped write. N>0 captures at most one snapshot per N minutes per
-      entity. Range 0–1440.
+      Dol HochvaD poH veH. 0 (motlh) wIvlu'chugh, ghItlh
+      Hoch qaSpa' snapshot chenmoH. N>0 wIvlu'chugh, Hoch N tupDaq
+      Dol HochvaD wa' snapshot neH chenmoH. veH 0–1440.
   auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
+    name: auto-backup polmeH mI' (Dol Hoch)
     description: >-
-      Maximum number of snapshots kept per entity. Older snapshots beyond
-      this cap are rotated out on each successful capture. Default 100,
-      range 1–10000.
+      Dol HochvaD snapshotmey polbogh mI' jenqu'. Hoch
+      polta'ghach QapDI', snapshotmey ngo' veH juSbogh Qaw'lu'.
+      motlh 100; veH 1–10000.
   enable_snapshot_delete:
-    name: Allow snapshot deletion
+    name: snapshot Qaw'meH chaw' yInob
     description: >-
-      Lets ha_manage_backup delete full HA snapshot tarballs
-      (scope='snapshot', action='delete'). Off by default — a snapshot may
-      be the last recovery point after a mistaken change, so a human must
-      opt in here. Even when on, scheduled backups, the newest remaining
-      snapshot, and anything younger than the age floor below stay
-      protected.
+      HA snapshot tarballmey naQ Qaw'laH ha_manage_backup
+      (scope='snapshot', action='delete'). motlh chu'Ha'lu' —
+      choH muj qaSpu'DI' cheghmeH snapshot Qav 'oHlaH, vaj naDev
+      nuv wIv poQlu'. chu'lu'chugh je, backups nablu'bogh,
+      snapshot chu'qu' ratlhbogh. bIngDaq ngo' veH tu'lu';
+      snapshot ngo'be'chugh Qaw'laHbe'lu'.
   snapshot_delete_min_age_days:
-    name: Minimum snapshot age to delete (days)
+    name: snapshot Qaw'meH ngo' veH (jaj)
     description: >-
-      A snapshot must be at least this old before it can be deleted. Range
-      0–365; 0 disables the floor (the newest-snapshot and
-      scheduled-backup protections still apply). Default 7.
+      snapshot Qaw'laHlu'pa' ngo'nIS. veH 0–365; 0 wIvlu'chugh
+      veH chu'Ha' (snapshot chu'qu' backups nablu'bogh je HungtaH).
+      motlh 7.
   enable_lite_docstrings:
-    name: Enable lite tool docstrings (beta)
+    name: jan docstrings mach yIQotlhHa' (Beta)
     description: >-
-      Beta feature. Replaces the docstrings on a handful of heavy
-      ha-mcp tools (automations, scripts, scenes, helpers, dashboards,
-      ha_call_service, ha_config_set_yaml) with shorter variants that
-      defer schema and example detail to the ha_get_skill_guide tool
-      (or its skill:// resource). WARNING: this reduces idle token
-      usage, but may degrade LLM performance — the trimmed
-      descriptions rely on the LLM actually calling the skill tool or
-      reading the skill resource for detail, which is not guaranteed
-      (some models will skip the extra tool call and end up with less
-      guidance than they had before). Best paired with a client that
-      supports MCP resources or with enable_tool_search. Requires
-      restart to take effect. REQUIRES the master "Enable beta
-      features" toggle above (and in the web UI) to be on — otherwise
-      this sub-flag is ignored at runtime regardless of its value
-      here.
+      Beta DuH. ha-mcp janmey 'ugh 'op docstrings
+      (automations, scripts, scenes, helpers, dashboards,
+      ha_call_service, ha_config_set_yaml) ngaSbogh Dotlh
+      nI' qa'meH Dotlh mach lo'; schema ghantoH De' je
+      ha_get_skill_guide janDaq (pagh skill:// resource-Daq)
+      QIj. ghuH: lo'be'lu'taHvIS tokenmey machmoH, 'ach LLM
+      Qapchu'ghach QIHlaH — De' SuqmeH skill jan rItnIS LLM
+      pagh skill resource laDnIS, 'ej mIwvam luQoy Hoch model net
+      lay'laHbe' (jan rI'meH mIw latlh buSHa'laH model 'op, vaj
+      qeS puS ghaj). MCP resources QapmoHbogh AI nIqHom tlhej
+      pagh enable_tool_search tlhej lo'lu'DI' qaq. QapchoHmeH
+      add-on Dataghqa'moHnIS. DungDaq "Beta DuHmey yIQotlhHa'" leQ chu'lu'nIS
+      (web UI-Daq je); pagh QaptaHvIS DuH puqvam buSHa'lu';
+      naDev true wIvlu'pu'chugh je buSHa'lu'.
   enable_mandatory_bps:
-    name: Attach best-practice skills on writes
+    name: ghItlhDI' mIw nIvmey yIchel
     description: >-
-      Master switch for the write-tool skill content delivery feature
-      (issue #1182). When enabled (default), the six config write tools
-      (automations, scripts, scenes, helpers, dashboards, raw YAML)
-      attach the canonical Home Assistant best-practice reference files
-      under `skill_content` on every successful write, plus auto-embed
-      any reference sections cited by best-practice warnings. Each tool
-      also exposes a per-call `MandatoryBPS` parameter the agent can
-      set to false on subsequent calls once it has the content. When
-      this master switch is off, NO skill_content goes out regardless
-      of the per-call parameter or BP warnings. Recommended ON as the
-      first choice; disable only for models with very small context
-      windows. Turning this off may degrade write accuracy. Requires
-      restart to take effect.
+      jan ghItlh laH De' nobmeH pat wa'DIch SeH (issue #1182).
+      chu'lu'chugh (motlh), config ghItlh janmey jav
+      (automations, scripts, scenes, helpers, dashboards, YAML raw)
+      ghItlh Qap HochDaq `skill_content` bIngDaq Home Assistant
+      mIw QaQ paq teywI'mey motlh chel; mIw QaQ ghuHmey
+      bopbogh paq 'ay'mey Hoch chel je. Hoch janDaq
+      `MandatoryBPS` parameter tu'lu'; De' laDta'DI' agent,
+      ghIq jan rI'DI' false wIvlaH. wa'DIch leQvam
+      chu'Ha'lu'chugh, skill_content noblu'be'chu', per-call
+      parameter BP ghuHmey ghap ram. wa'DIch wIv'e' ON chuplu';
+      context Qorwagh machqu' ghajbogh modelvaD neH yIchu'Ha'.
+      leQvam chu'Ha'lu'chugh, ghItlhlu'DI' Qagh law' qaSlaH. QapchoHmeH add-on
+      Dataghqa'moHnIS.
   enable_strict_mandatory_bps:
-    name: Strict best-practices mode
+    name: mIw QaQ pabmeH mIw tlhoy
     description: >-
-      Strict mode: prevents the client from using the tool until it can
-      prove that it read the best practices. While on, the six
-      best-practice write tools (automations, scripts, scenes, helpers,
-      dashboards, raw YAML) are blocked and return an error directing the
-      client to read the best-practices skill via ha_get_skill_guide and
-      pass back the acknowledgment key it obtains there. While on, the
-      ha_get_skill_guide tool is locked enabled — it is the only
-      publisher of the acknowledgment key. Child of the
-      "Attach best-practice skills on writes" option above and inert
-      while that parent is off. Requires restart to take effect.
+      mIw tlhoy: mIw QaQ laDta' 'e' tobmeH AI nIqHom poQ; tobpa'
+      jan lo'laHbe'. chu'lu'taHvIS, mIw QaQ ghItlh janmey jav
+      (automations, scripts, scenes, helpers, dashboards, YAML raw)
+      botlu', 'ej Qagh QIn agentvaD jatlh: ha_get_skill_guide vegh
+      mIw QaQ skill yIlaD, 'ej pa' Suqbogh lajta'ghach ngoq
+      yInobqa'. chu'lu'taHvIS, ha_get_skill_guide chu'taH net
+      poQ — lajta'ghach ngoq neH 'ang janvam. DungDaq
+      "ghItlhDI' mIw nIvmey yIchel" DuH puq 'oH, 'ej DuHvetlh
+      chu'Ha'lu'chugh Qapbe'. QapchoHmeH add-on Dataghqa'moHnIS.
   enable_filesystem_tools:
-    name: Enable filesystem tools (beta)
+    name: "'a'baqa' pat janmey tIQotlhHa' (Beta)"
     description: >-
-      Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file
-      read/write access to your Home Assistant filesystem. WARNING:
-      This gives the MCP server sensitive direct file access to your
-      system. Only enable if you trust the AI assistant with file
-      operations. Requires restart to take effect. REQUIRES the master
-      "Enable beta features" toggle above (and in the web UI) to be on
-      — otherwise this sub-flag is ignored at runtime regardless of
-      its value here.
+      HAMCP_ENABLE_FILESYSTEM_TOOLS=true wIv. Home Assistant
+      'a'baqa'mey laDmeH ghItlhmeH je mIw pIQ chu'moH.
+      ghuH: MCP turwI'vaD patlIj 'a'baqa'mey laDmeH ghItlhmeH je
+      mIw pIQ nob. QoblaH mIwvam.
+      'a'baqa' mIwmeyvaD AI assistant Davoqchugh neH yIchu'.
+      QapchoHmeH add-on Dataghqa'moHnIS. DungDaq "Beta DuHmey yIQotlhHa'" leQ
+      chu'lu'nIS (web UI-Daq je); pagh QaptaHvIS DuH puqvam
+      buSHa'lu'; naDev true wIvlu'pu'chugh je buSHa'lu'.
   enable_dashboard_screenshot:
-    name: Enable dashboard screenshot mode (beta)
+    name: dashboard screenshot mIw yIQotlhHa' (Beta)
     description: >-
-      Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot
-      tool plus include_screenshot / return_screenshot options on the dashboard
-      get/set tools, so AI assistants can inspect one or more responsive
-      Lovelace images (e.g. to verify a dashboard they just created). Supports
-      stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP
-      output. Rendering runs in a
-      separate, opt-in engine — balloob's "Puppet" add-on (headless Chromium) —
-      which you install once (add balloob's add-on repository, then install
-      "Puppet") and give a long-lived access token; on Docker/Container
-      deployments you run that engine as a sidecar and set
-      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
-      Nothing heavy is installed unless you both enable this and install the
-      engine. Requires restart to take effect. REQUIRES the master "Enable beta
-      features" toggle above (and in the web UI) to be on — otherwise this
-      sub-flag is ignored at runtime regardless of its value here.
+      Beta DuH — motlh chu'Ha'lu'. ha_get_dashboard_screenshot
+      jan chel, 'ej dashboard get/set janmeyDaq include_screenshot /
+      return_screenshot DuHmey chel; vaj Lovelace mIlloghmey
+      wa' pagh law' nIbHa'bogh nuDlaH AI assistants (chovnatlh
+      dashboard chenmoHpu'bogh nuDmeH). views ponglu'bogh Qapchu',
+      mobile/tablet/desktop batchmey je mIllogh chenmoHlaH;
+      PNG/JPEG/WebP/BMP output chenmoHlaH je. engine pIm wIvlu'boghDaq render Qap —
+      balloob "Puppet" add-on (headless Chromium) — wa'logh
+      Dajom (balloob add-on repository yIchel, ghIq "Puppet"
+      yIjom) 'ej long-lived access token yInob; Docker/Container
+      patDaq enginevetlh sidecar rur DaqapmoH, 'ej
+      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL yIcher.
+      wa'DIchvam engine je Dalo'be'chugh pagh 'ugh jomlu'.
+      QapchoHmeH add-on Dataghqa'moHnIS. DungDaq "Beta DuHmey yIQotlhHa'" leQ
+      chu'lu'nIS (web UI-Daq je); pagh QaptaHvIS DuH puqvam
+      buSHa'lu'; naDev true wIvlu'pu'chugh je buSHa'lu'.
   tool_search_max_results:
-    name: Tool search max results
+    name: jan nej mI' jenqu'
     description: >-
-      Maximum number of tools returned by ha_search_tools when tool
-      search is enabled. Lower values (2-3) save context tokens but
-      may miss relevant tools. Range: 2-10. Requires restart.
+      jan nej chu'lu'taHvIS ha_search_tools nobbogh janmey mI'
+      jenqu'. mI' mach (2-3) wIvlu'chugh context tokenmey pol,
+      'ach janmey lI' 'op leghbe'laH. veH 2-10. QapchoHmeH
+      add-on Dataghqa'moHnIS.
   disabled_tools:
-    name: Disabled tools (comma-separated)
+    name: janmey luQotlhlu'bogh (comma-mey)
     description: >-
-      Tools listed here are forced off and locked in the web Settings UI
-      (Tools tab) — they cannot be re-enabled there without unsetting this
-      option first. A small set of mandatory tools (ha_search,
-      ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
-      cannot be disabled and keep running even if listed here.
-      ha_get_skill_guide can be disabled only while strict best-practices
-      mode (enable_strict_mandatory_bps) is off. Comma-separated
-      tool names (e.g. ha_call_event,ha_eval_template).
+      naDev lutetlhlu'bogh janmey luchu'Ha'lu' 'ej web DuHmey UI
+      (janmey jIH)Daq ngaQ — naDev DuH teqbe'lu'pa' pa'
+      luchu'qa'laHbe'lu'. janmey lupoQlu'bogh mach
+      (ha_search, ha_get_overview, ha_get_state, ha_report_issue,
+      ha_manage_backup) luchu'Ha'laHbe'lu', 'ej naDev lutetlhlu'chugh
+      je QaptaH. mIw QaQ tlhoy
+      (enable_strict_mandatory_bps) chu'Ha'lu'taHvIS neH
+      ha_get_skill_guide chu'Ha'laHlu'. comma-mey lo'ta' jan
+      pongmey tIghItlh (chovnatlh ha_call_event,ha_eval_template).
   pinned_tools:
-    name: Pinned tools (comma-separated)
+    name: janmey lungu'lu'bogh (comma-mey)
     description: >-
-      Tools listed here are locked pinned — they appear at the top of the
-      Tools tab and cannot be unpinned from the web Settings UI without
-      unsetting this option first. Useful in combination with Tool Search.
-      Comma-separated tool names.
+      naDev lutetlhlu'bogh janmey luwIvlu' 'ej ngaQ — janmey jIH
+      DungDaq lu'anglu', 'ej web DuHmey UI-Daq DuHvam
+      teqbe'lu'pa' luwIvHa'laHbe'lu'. jan nej pat tlhej lo'lu'DI'
+      lI'. comma-mey lo'ta' jan pongmey tIghItlh.
   verify_ssl:
-    name: Verify TLS certificate
+    name: TLS certificate yI'ol
     description: >-
-      Verify the Home Assistant server's TLS certificate. The add-on
-      connects via the Supervisor proxy, so this normally has no effect
-      and should stay enabled. Disable only if you've reconfigured the
-      add-on to talk to HA over a public HTTPS hostname with a self-signed
-      certificate or hostname mismatch. Disabling weakens transport
-      security — leave on unless you know you need it. Requires restart
-      to take effect.
+      Home Assistant turwI' TLS certificate lugh 'e' yI'ol.
+      Supervisor proxy vegh rar add-on, vaj motlh pagh choH.
+      add-on Dacherqa'ta' 'ej HochvaD poSbogh HTTPS hostname, nIteb
+      'ollu'bogh certificate, pagh hostname muj lo'chugh neH yIchu'Ha'.
+      chu'Ha'lu'chugh Qum Hung pujmoH — poQbe'chugh yIchu'taH.
+      QapchoHmeH add-on Dataghqa'moHnIS.

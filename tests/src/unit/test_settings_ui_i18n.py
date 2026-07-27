@@ -329,7 +329,10 @@ def test_tlh_catalog_loads_and_is_registered() -> None:
     assert "tlh" in CATALOGS
     assert CATALOGS["tlh"]["meta"]["native_name"] == "tlhIngan Hol (Klingon)"
     assert CATALOGS["tlh"]["meta"]["dir"] == "ltr"
+    assert CATALOGS["tlh"]["messages"]
     assert CATALOGS["tlh"]["messages"]["actions.save"] == "pol"
+    assert CATALOGS["tlh"]["tool_groups"]
+    assert CATALOGS["tlh"]["tools"]
 
 
 def test_disallowed_inline_markup_is_rejected(tmp_path: Path) -> None:

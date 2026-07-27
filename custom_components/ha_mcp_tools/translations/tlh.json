@@ -2,141 +2,141 @@
     "config": {
         "step": {
             "user": {
-                "title": "HA-MCP Custom Component",
-                "description": "Choose what to add. **HA-MCP Server** runs the full ha-mcp server inside Home Assistant and exposes it through a Home Assistant webhook - this is the install most people want. It is a standalone server and a complete replacement for every other install method (add-on, Docker, uvx/PyPI, stdio); if you run it, do not also run one of those. **HA-MCP File & YAML Tools** adds the privileged file and YAML editing services, needed only if you turn on ha-mcp's opt-in file/YAML tools. If your ha-mcp server already runs elsewhere (add-on, Docker, uvx), you do not need the server entry - add only this File & YAML entry, and only if you use those tools. It works with every server type and can be added later at any time.",
+                "title": "HA-MCP component le'",
+                "description": "Doch Dachel DaneHbogh yIwIv. Home Assistant qoDaq ha-mcp turwI' naQ QapmoH **HA-MCP Server**, 'ej Home Assistant webhook vegh latlhvaD 'ang. jomlu'meH mIwvam luwIv lo'wI'pu' HochHom. nIteb Qap turwI'vam, 'ej jomlu'meH mIw latlh Hoch (add-on, Docker, uvx/PyPI, stdio) qa'chu'; Dalo'chugh, mIwvetlh latlh yIQapmoHQo'. 'a'baqa' YAML je choHmeH patmey le' chel **HA-MCP 'a'baqa' & YAML janmey**; ha-mcp 'a'baqa'/YAML janmey wIvlu'bogh Dachu'chugh neH poQlu'. latlh DaqDaq (add-on, Docker, uvx) Qapchugh ha-mcp turwI'lIj, turwI' De' 'ay' DapoQbe' - 'a'baqa' & YAML De' 'ay'vam neH yIchel, 'ej janmeyvetlh Dalo'chugh neH yIchel. turwI' Segh HochvaD Qap, 'ej pa'QDI' vay' DaH chellaH.",
                 "menu_options": {
-                    "server": "HA-MCP Server (recommended)",
-                    "tools": "HA-MCP File & YAML Tools (optional)"
+                    "server": "HA-MCP Server (chup)",
+                    "tools": "HA-MCP 'a'baqa' & YAML janmey (wIvlaH)"
                 }
             },
             "tools": {
-                "title": "HA-MCP File & YAML Tools",
-                "description": "Sets up the privileged file and YAML configuration services. Only needed if you enable ha-mcp's opt-in file/YAML editing tools (feature flags, off by default) - this applies to every server type, including the in-process HA-MCP Server. You can add or remove this entry at any time."
+                "title": "HA-MCP 'a'baqa' & YAML janmey",
+                "description": "'a'baqa' YAML config je choHmeH patmey chaw' le' ghajbogh cher. ha-mcp 'a'baqa'/YAML choHmeH janmey wIvlu'bogh Dachu'chugh neH poQlu' (DuH SeHwI'mey; motlh chu'Ha'lu') - turwI' Segh HochvaD, HA-MCP Server QaptaHboghvaD je Qap. De' 'ay'vam chellaH pagh teqlaH vay' poH Hoch."
             },
             "server": {
                 "title": "HA-MCP Server",
-                "description": "This runs the full ha-mcp server inside Home Assistant and exposes it remotely through a Home Assistant webhook (reachable via Nabu Casa or any reverse proxy). It is a standalone server and a complete replacement for the add-on, Docker, uvx/PyPI, and stdio install methods - do not run it alongside another ha-mcp server. Select **Submit** to start it; you can change the port, binding, and authentication afterward in the integration options."
+                "description": "Home Assistant qoDaq ha-mcp turwI' naQ QapmoH, 'ej Home Assistant webhook vegh HopDaq 'ang (Nabu Casa proxy ghap vegh naw'laH). nIteb Qap turwI'vam, 'ej add-on, Docker, uvx/PyPI, stdio jomlu'meH mIwmey qa'chu' - latlh ha-mcp turwI' retlhDaq yIQapmoHQo'. QapchoHmeH **ngeH** yIwIv; ghIq integration DuHmeyDaq port, binding, chaw' 'olmeH mIw je DachoHlaH."
             }
         },
         "abort": {
-            "already_configured": "This entry is already set up.",
-            "unsupported_home_assistant": "The in-process HA-MCP Server requires Home Assistant {required} or newer, but this instance is running {installed}. You can still use this component's HA-MCP File & YAML Tools entry with an external ha-mcp server running as an add-on or Docker container."
+            "already_configured": "De' 'ay'vam cherlu'pu'.",
+            "unsupported_home_assistant": "Home Assistant {required} ghap Dotlh chu' law' poQ HA-MCP Server QaptaHbogh, 'ach {installed} lo' patvam. componentvam HA-MCP 'a'baqa' & YAML janmey De' 'ay' Dalo'taHlaH; add-on Docker container ghapDaq Qapbogh ha-mcp turwI' Hur retlhDaq Qap."
         }
     },
     "options": {
         "step": {
             "tools_info": {
-                "title": "HA-MCP File & YAML Tools",
-                "description": "Configure the privileged file and YAML editing services used by ha-mcp's opt-in file/YAML tools. These settings also appear in the ha-mcp server's own settings UI and apply live, with no restart. A non-overridable deny floor still blocks sensitive paths (e.g. .storage) and trust-boundary keys (homeassistant, http, frontend, lovelace).",
+                "title": "HA-MCP 'a'baqa' & YAML janmey",
+                "description": "ha-mcp 'a'baqa'/YAML janmey wIvlu'bogh lo'bogh 'a'baqa' YAML choHmeH patmey le' yIcher. ha-mcp turwI' DuHmey UI-Daq DuHmeyvam leghlu' je, 'ej SIbI' Qap; pagh Dataghqa'moHnIS. Daqmey pegh (chovnatlh .storage) 'ej Hung veH ngoqmey (homeassistant, http, frontend, lovelace) bottaH botwI' bIngHom; juSlaH pagh.",
                 "data": {
-                    "allowed_dirs": "Extra file directories",
-                    "extra_yaml_keys": "Extra YAML write keys"
+                    "allowed_dirs": "'a'baqa' ghajwI' Daqmey latlh",
+                    "extra_yaml_keys": "YAML ghItlhmeH ngoqmey latlh"
                 },
                 "data_description": {
-                    "allowed_dirs": "Directories relative to the config directory, each granted read and write (e.g. pyscript). Traversal and out-of-config entries are dropped.",
-                    "extra_yaml_keys": "Top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Trust-boundary keys are dropped."
+                    "allowed_dirs": "config ghajwI' Daq'e' bopbogh Daqmey; HochvaD laDmeH ghItlhmeH je chaw' noblu' (chovnatlh pyscript). Daq veghlu'bogh 'ej config HurDaq 'oHbogh De' 'ay'mey luteqlu'.",
+                    "extra_yaml_keys": "ngoqmey jen'e' ghItlhlaH ha_config_set_yaml, ngoqmey motlh chellu'bogh retlhDaq; jomlu'bogh patvamDaq YAML wa'DIch lo'bogh integrationsvaD (chovnatlh alert2). Hung veH ngoqmey luteqlu'."
                 }
             },
             "init": {
                 "title": "HA-MCP Server",
-                "description": "Configure the HA-MCP server. {panel_hint}Changes here are applied on save.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+                "description": "HA-MCP turwI' yIcher. {panel_hint}polDI' choHmeyvam lo'lu'.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
                 "data": {
-                    "channel": "Release channel",
-                    "auto_update": "Automatic server updates",
-                    "server_port": "MCP server listening port",
-                    "bind_host": "Network access",
-                    "webhook_auth": "Authentication mode",
-                    "oauth_client_id_override": "Legacy OAuth: custom Client ID (optional)",
-                    "oauth_client_secret_override": "Legacy OAuth: custom Client Secret (optional)",
-                    "oauth_regenerate": "Legacy OAuth: regenerate Client ID/Secret now",
-                    "pip_spec": "Developer: ha-mcp package override",
-                    "server_url": "Home Assistant URL (advanced)",
-                    "external_url": "External URL (optional)",
-                    "webhook_id_override": "Custom webhook secret (optional)",
-                    "secret_path_override": "Custom direct-access path (optional)",
-                    "regenerate_secrets": "Regenerate connect secrets now",
-                    "enable_webhook": "Remote access via webhook",
-                    "enable_llm_api": "Conversation-agent LLM API",
-                    "llm_api_exposure": "Conversation-agent tool exposure",
-                    "enable_startup_notification": "Startup notification",
-                    "enable_sidebar_panel": "Sidebar settings panel"
+                    "channel": "Dotlh He",
+                    "auto_update": "nuv vangnISbe'taHvIS turwI' yIchu'moH",
+                    "server_port": "MCP turwI' Qum lojmIt",
+                    "bind_host": "rarmeH naw'",
+                    "webhook_auth": "chaw' 'olmeH mIw",
+                    "oauth_client_id_override": "OAuth ngo': Client ID le' (wIvlaH)",
+                    "oauth_client_secret_override": "OAuth ngo': Client Secret le' (wIvlaH)",
+                    "oauth_regenerate": "OAuth ngo': DaH Client ID/Secret yIchenqa'moH",
+                    "pip_spec": "ghunwI': ha-mcp package le' yIlo'",
+                    "server_url": "Home Assistant URL ('Itlh)",
+                    "external_url": "URL Hur (wIvlaH)",
+                    "webhook_id_override": "webhook pegh le' (wIvlaH)",
+                    "secret_path_override": "naw' He le' (wIvlaH)",
+                    "regenerate_secrets": "DaH rarmeH peghmey yIchenqa'moH",
+                    "enable_webhook": "webhook vegh Hop naw' yIQotlhHa'",
+                    "enable_llm_api": "Qum-agent LLM API",
+                    "llm_api_exposure": "Qum-agentvaD janmey 'angmeH mIw",
+                    "enable_startup_notification": "QapchoH QIn yIQotlhHa'",
+                    "enable_sidebar_panel": "Dop UI DuHmey jIH yIQotlhHa'"
                 },
                 "data_description": {
-                    "channel": "Stable installs the latest stable release; Development installs the newest development build. When automatic updates are on, a reload or restart, plus a periodic check, install the newest build of the selected channel. A developer package override below takes precedence and disables automatic updates.",
-                    "auto_update": "When on, the newest release of the selected channel is installed automatically - on a reload or restart, and via a periodic check. When off, the server stays on the version currently installed until you turn this back on. This controls the ha-mcp server package only; updates to the HA-MCP Custom Component itself still come through HACS.",
-                    "server_port": "The port this server listens on. The ha-mcp add-on uses 9583, so this defaults to 9584 to let both run side by side - if you don't run the add-on, any free port works.",
-                    "bind_host": "Who can connect to the MCP server port directly. The default matches the add-on: reachable on your local network, with the secret path as the credential. Choose loopback to allow only connections from the Home Assistant machine itself - the webhook URL and the sidebar panel work either way.",
-                    "webhook_auth": "How MCP clients prove themselves at the webhook URL. With the secret URL, the link itself is the credential. With Home Assistant sign-in, clients such as claude.ai log in with a Home Assistant administrator account (OAuth). With legacy OAuth, this integration issues its own Client ID and Secret to paste into clients that require one, such as Google Gemini Spark - it needs a Home Assistant restart to turn on or off.",
-                    "oauth_client_id_override": "Replaces the auto-generated legacy OAuth Client ID. Leave empty to keep the current one. Only used while Authentication mode is set to legacy OAuth.",
-                    "oauth_client_secret_override": "Replaces the auto-generated legacy OAuth Client Secret. Leave empty to keep the current one. Only used while Authentication mode is set to legacy OAuth.",
-                    "oauth_regenerate": "One-time action: mints a fresh Client ID and Secret for legacy OAuth mode. It takes effect only after the Home Assistant restart the repair prompt asks for - until you restart, the previous Client ID and Secret keep working and the new ones do not. Also clears the two override fields above.",
-                    "pip_spec": "Leave empty. Only for testing a specific ha-mcp build (for example a pre-release pin); overrides the release channel and disables automatic updates until cleared.",
-                    "server_url": "The URL the in-process server uses to reach your Home Assistant (usually this instance itself). Leave empty to derive it from this instance's port and SSL settings; set a value only when the server needs a different route.",
-                    "external_url": "Shown as the primary connect URL - use this when Home Assistant sits behind your own domain or reverse proxy. Enter the full base address including the scheme. It must point directly at Home Assistant - opening it in a browser should reach your HA login page - and must not contain a port such as :8123 (or any other port), or remote MCP clients won't be able to reach it. Leave empty to use Nabu Casa / the local address automatically.",
-                    "webhook_id_override": "Replaces the random webhook secret in the connect URL (/api/webhook/...). The URL is the credential - use a long, hard-to-guess value. Leave empty to keep the current one.",
-                    "secret_path_override": "Replaces the random path used for direct access on the server port. Same rule: the path is the credential. Leave empty to keep the current one.",
-                    "regenerate_secrets": "One-time action: mints a fresh random webhook secret and direct-access path, invalidating the old connect URLs immediately. Also clears the two override fields above.",
-                    "enable_webhook": "Turn off for local-only mode: the Home Assistant webhook is not registered at all, so nothing - including Nabu Casa - can reach the server through Home Assistant. The direct server port and the sidebar panel keep working.",
-                    "enable_llm_api": "Offer the full toolset to Home Assistant conversation agents (OpenAI, Google, Ollama, ...): while enabled, agents can select 'HA-MCP Server' under Control Home Assistant and drive the tools from Assist chat and voice. Enabling only makes it selectable - nothing is exposed until you pick it on an agent. Usage guide: {llm_api_docs_url}",
-                    "llm_api_exposure": "Shape of the toolset offered to conversation agents. Tool search (default) keeps the agent's context small: a compact API with pinned tools plus search/execute meta-tools. Full catalog lists every exposed tool directly - better for large-context models. Both registers the two side by side so each agent picks its own under Control Home Assistant. Per-tool exposure is managed in the HA-MCP settings panel; details: {llm_api_docs_url}",
-                    "enable_startup_notification": "Show a notification each time the server starts, pointing at the admin-only settings surfaces. Turn off to start silently - the connect URLs still appear in the Home Assistant log.",
-                    "enable_sidebar_panel": "Show the HA-MCP settings panel in the sidebar (administrators only). Turn off to remove the sidebar entry - server options stay available on this screen."
+                    "channel": "Dotlh Qapchu'bogh wIvlu'chugh, release Qapchu'bogh chu'qu' jomlu'; ghunmeH Dotlh wIvlu'chugh, development build chu'qu' jomlu'. turwI' chu'moHmeH pat chu'lu'chugh, integration pagh Home Assistant taghqa'moHlu'DI', 'ej roD nuDlu'DI', He wIvlu'bogh build chu'qu' jom pat. bIngDaq ghunwI' package le' wIvlu'chugh, wa'DIch 'oH 'ej turwI' chu'moHmeH pat chu'Ha'moH.",
+                    "auto_update": "chu'lu'chugh, integration pagh Home Assistant taghqa'moHlu'DI', 'ej roD nuDlu'DI', He wIvlu'bogh release chu'qu' jom turwI' chu'moHmeH pat. chu'Ha'lu'chugh, Dotlh jomlu'bogh lo'taH turwI', latlhlogh DuHvam Dachu'pa'. ha-mcp turwI' package neH SeH; HACS vegh ghoS HA-MCP Custom Component De' chu'.",
+                    "server_port": "Qum lojmItvamDaq 'Ij turwI'vam. 9583 lo' ha-mcp add-on, vaj 9584 motlh lo' turwI'vam, cha' turwI'pu' retlhDaq QaplaHmeH - add-on Dalo'be'chugh, Qum lojmIt tlhab Dalo'laH.",
+                    "bind_host": "MCP turwI' Qum lojmItvaD rarlaHbogh ghotpu' SeH. add-on rur DuH motlh: SIr'o' Sumvo' naw'laH vay', 'ej pegh He 'oH chaw'e'. Home Assistant jan neHvo' rarmeH loopback yIwIv - webhook URL Dop jIH je QaptaH.",
+                    "webhook_auth": "webhook URL-Daq ghoSmeH, paghDaq chaw' ghaj 'e' 'ol MCP nIqHommey. pegh URL lo'lu'chugh, chaw' 'oH URL'e'. Home Assistant sign-in lo'lu'chugh, Home Assistant loHwI' mab lo'ta' claude.ai rur nIqHom (OAuth). OAuth ngo' lo'lu'chugh, integrationvam Client ID Secret je chenmoH; Google Gemini Spark rur nIqHom poQboghDaq lanlu'. Dachu'DI' pagh Dachu'Ha'DI' Home Assistant Dataghqa'moHnIS.",
+                    "oauth_client_id_override": "OAuth ngo' Client ID chenmoH pat; 'oH qa' DuHvam. chIm yIpol Client ID DaH lo'lu'bogh polmeH. chaw' 'olmeH mIw 'oHtaH OAuth ngo' neH lo'lu'.",
+                    "oauth_client_secret_override": "OAuth ngo' Client Secret chenmoH pat; 'oH qa' DuHvam. chIm yIpol Client Secret DaH lo'lu'bogh polmeH. chaw' 'olmeH mIw 'oHtaH OAuth ngo' neH lo'lu'.",
+                    "oauth_regenerate": "wa'logh vang: OAuth ngo' mIwvamvaD Client ID Secret je chu' chenmoH. repair QIn poQbogh Home Assistant Dataghqa'moHpu'DI' neH QapchoH - Home Assistant Dataghqa'moHpa', Client ID Secret je ngo' QaptaH, 'ej chu' Qapbe'. bIngDaq override 'ay'mey cha' chImmoH je.",
+                    "pip_spec": "chIm yIpol. ha-mcp build le' neH wa'logh nIDmeH lo' (chovnatlh pre-release pin); release He qa', 'ej chImmoHlu'pa' turwI' chu'moHmeH pat chu'Ha'moH.",
+                    "server_url": "Home AssistantlIj naw'meH turwI' QaptaHbogh lo'bogh URL (motlh patvam'e'). chIm yIpol patvam Qum lojmIt SSL DuHmey jevo' chenmoHmeH; latlh He poQ turwI' neHchugh, De' yIlan.",
+                    "external_url": "rarmeH URL wa'DIch 'anglu' - domainlIj proxy ghap 'emDaq ba'chugh Home Assistant, URLvam yIlo'. scheme ngaSbogh Quv wa'DIch naQ yIlan. Home Assistant neH ghoS net poQ - web leghwI'Daq DapoSmoHDI', HA login jIH Daghaj net poQ - 'ej :8123 rur port ghajbe'nIS (latlh port je), pagh Hop MCP nIqHommey naw'laHbe'. chIm yIpol; vaj Nabu Casa Quv Sum ghap wIv pat.",
+                    "webhook_id_override": "rarmeH URL (/api/webhook/...)Daq webhook pegh chenmoH pat; peghvetlh qa' DuHvam. chaw' 'oH URL'e' - nI'bogh, ghItlh Qatlhbogh De' yIlo'. chIm yIpol pegh DaH lo'lu'bogh polmeH.",
+                    "secret_path_override": "turwI' Qum lojmItDaq naw'meH He pIQ chenmoH pat; Hevetlh pegh, 'ej Hevetlh qa' DuHvam. rap chut: chaw' 'oH He'e'. chIm yIpol He DaH lo'lu'bogh polmeH.",
+                    "regenerate_secrets": "wa'logh vang: webhook pegh chu' chenmoH pat, 'ej turwI' Qum lojmItDaq naw'meH He pIQ chenmoHqa' pat, vaj SIbI' QapHa' rarmeH URLmey ngo'. bIngDaq override 'ay'mey cha' chImmoH je.",
+                    "enable_webhook": "Sum neH mIw lo'meH yIchu'Ha': Home Assistant webhook qonta'be'lu'chu', vaj turwI'Daq Home Assistant vegh naw'laH pagh - Nabu Casa je. turwI' Qum lojmIt vegh naw'lu'meH He pIQ Dop jIH je QaptaH.",
+                    "enable_llm_api": "Home Assistant Qum agentsvaD janmey naQ yInob (OpenAI, Google, Ollama, ...): chu'lu'taHvIS, Control Home Assistant bIngDaq 'HA-MCP Server' wIvlaH agents, 'ej Assist chat ghogh jevo' janmey SeHlaH. chu'moHlu' neHchugh wIvlaH; agentDaq wIvbe'lu'pa' pagh 'anglu'. lo'meH paq: {llm_api_docs_url}",
+                    "llm_api_exposure": "Qum agentsvaD noblu'bogh jan ghom SeH. jan nej (motlh) agent context mach pol: janmey lungu'lu'bogh, nej/lo' meta-janmey je ghajbogh API mach. jan tetlh naQ 'ang mIw naQ - context tIn ghajbogh modelvaD qaq. cha' mIwmey wIvlu'chugh, cha' mIwmey retlhDaq qonta'lu', vaj Control Home Assistant bIngDaq mIwvam wIvlaH Hoch agent. HA-MCP DuHmey jIHDaq Hoch jan 'angmeH DuH SeHlu'; De' latlh: {llm_api_docs_url}",
+                    "enable_startup_notification": "turwI' QapchoH Hochlogh QIn yI'ang; loHwI' neHvaD DuHmey Daqmey 'ang. tamtaH QapchoHmeH yIchu'Ha' - Home Assistant QonoSDaq rarmeH URLmey leghlu'taH.",
+                    "enable_sidebar_panel": "DopDaq HA-MCP DuHmey jIH yI'ang (loHwI' neH). Dop De' 'ay' teqmeH yIchu'Ha' - jIHvamDaq turwI' DuHmey tu'lu'taH."
                 }
             }
         }
     },
     "issues": {
         "server_start_failed": {
-            "title": "The HA-MCP in-process server failed to start",
-            "description": "The HA-MCP in-process server could not be started inside Home Assistant:\n\n{detail}\n\nCheck the Home Assistant logs, then reload the integration (or fix the underlying problem and reload) to retry."
+            "title": "QapchoHlaHbe' HA-MCP turwI' QaptaHbogh",
+            "description": "Home Assistant qoDaq HA-MCP turwI' QaptaHbogh QapchoHmoHlaHbe'lu':\n\n{detail}\n\nHome Assistant QonoSmey yInuD; ghIq nIDqa'meH integration yItaghqa'moH (pagh Qagh mung yItI' 'ej yItaghqa'moH)."
         },
         "server_package_install_failed": {
-            "title": "The HA-MCP in-process server package could not be installed",
-            "description": "Installing the ha-mcp package for the in-process server failed:\n\n{detail}\n\nResolve the compatibility or installation problem described above, then reload the integration to retry."
+            "title": "HA-MCP turwI' QaptaHbogh package jomlaHbe'lu'",
+            "description": "HA-MCP turwI' QaptaHboghvaD ha-mcp package jomlu'DI' Qagh qaS:\n\n{detail}\n\nbIngDaq compatibility Qagh, jomlu'DI' Qagh ghap QIjlu'bogh yItI'; ghIq nIDqa'meH integration yItaghqa'moH."
         },
         "component_outdated": {
-            "title": "Update the HA-MCP Custom Component via HACS",
-            "description": "The installed ha-mcp server requires HA-MCP Custom Component {required} or newer, but you have {installed}. Update the component via HACS (open the HA-MCP Custom Component entry and use 'Update information' if no update is shown yet) and restart Home Assistant. The server keeps running in the meantime, but some newer features may not work until the component is updated."
+            "title": "HACS vegh HA-MCP Custom Component yIchu'moH",
+            "description": "HA-MCP Custom Component {required} ghap chu' law' poQ ha-mcp turwI' jomlu'bogh, 'ach {installed} Daghaj. HACS vegh component yIchu'moH (HA-MCP Custom Component De' 'ay' yIpoS, 'ej De' chu' 'anglu'be'chugh 'Update information' yIlo'), ghIq Home Assistant yItaghqa'moH. qaStaHvIS QaptaH turwI', 'ach component chu'moHlu'pa' DuHmey chu' 'op Qapbe'laH."
         },
         "server_update_held": {
-            "title": "HA-MCP server update waiting for a component update",
-            "description": "ha-mcp server {latest} is available, but that release also updated the HA-MCP Custom Component (to {shipped}; you are running {running}). To avoid starting a server version the running component has never been tested with, the automatic server update is on hold until the component is updated.\n\nUpdate the component via HACS (open the HA-MCP Custom Component entry and use 'Update information' if no update is shown yet), then restart Home Assistant - the server update installs automatically afterwards. To install the server update anyway, press Install on the HA-MCP server update entity."
+            "title": "component chu'moHghach loS HA-MCP turwI' chu'moHghach",
+            "description": "ha-mcp turwI' {latest} tu'lu', 'ach HA-MCP Custom Component chu'moH je releasevetlh ({shipped}; {running} Dalo'taH). turwI' Dotlh'e' nIDbe'pu'bogh component QaptaHbogh QapchoHmoHlu'be'meH, component chu'moHlu'pa' turwI' chu'moHghach pat jomQo'.\n\nHACS vegh component yIchu'moH (HA-MCP Custom Component De' 'ay' yIpoS, 'ej De' chu' 'anglu'be'chugh 'Update information' yIlo'), ghIq Home Assistant yItaghqa'moH - ghIq nuv vangnISbe'taHvIS turwI' chu'moHghach jomlu'. turwI' chu'moHghach DaH jom DaneHchugh, HA-MCP turwI' chu'moHghach DolDaq jom leQ yIwIv."
         },
         "legacy_hacs_source": {
-            "title": "Component installed from the legacy repository",
-            "description": "HACS is tracking the main ha-mcp server repository for this component, so HACS shows the server's version numbers (7.x) and the server's release notes here instead of the component's own (1.x). Updates keep working, but stay mislabeled this way. To fix: remove this repository from HACS (your integration settings and config entries are kept), add homeassistant-ai/ha-mcp-integration as a custom repository, reinstall the component from it, and restart Home Assistant."
+            "title": "repository ngo'vo' jomlu' component",
+            "description": "componentvamvaD ha-mcp turwI' repository wa'DIch Hotlh HACS, vaj component Dotlh mI' (1.x) QInmey je 'angbe' 'ej turwI' Dotlh mI' (7.x) QInmey je 'ang. chu'moHtaH HACS, 'ach pongmey muj pol. tI'meH: HACSvo' repositoryvam yIteq (integration DuHmey config De' 'ay'mey je pollu'), repository le' 'oHmeH homeassistant-ai/ha-mcp-integration yIchel, componentvo' yIjomqa', 'ej Home Assistant yItaghqa'moH."
         },
         "legacy_oauth_restart": {
-            "title": "Restart Home Assistant to apply the legacy OAuth change",
-            "description": "The legacy OAuth authentication mode registers its own /authorize and /token web endpoints, which Home Assistant can only bind or release when it fully restarts - whether you just turned this mode on, turned it off, or changed its Client ID/Secret. Restart Home Assistant (Settings - System - Restart) to apply the change; until then the previous behavior stays in effect."
+            "title": "OAuth ngo' choH lo'meH Home Assistant yItaghqa'moH",
+            "description": "OAuth ngo' chaw' 'olmeH mIw /authorize /token web endpoints ghajbogh'e' qon; Home Assistant naQ taghqa'moHlu'DI' neH rarlaH pagh rarHa'laH - mIwvam Dachu'pu'chugh, Dachu'Ha'pu'chugh, pagh Client ID/Secret DachoHpu'chugh je, rap ghu'. choH lo'meH Home Assistant yItaghqa'moH (Settings - System - Restart); Home Assistant Dataghqa'moHpa' QaptaH mIw ngo'."
         }
     },
     "selector": {
         "server_channel": {
             "options": {
-                "stable": "Stable (recommended)",
-                "dev": "Development (latest build)"
+                "stable": "Dotlh Qapchu'bogh (chup)",
+                "dev": "ghunmeH Dotlh (build chu'qu')"
             }
         },
         "server_webhook_auth": {
             "options": {
-                "none": "Secret webhook URL (default)",
-                "ha_auth": "Sign in with Home Assistant (OAuth)",
-                "legacy": "Legacy OAuth (Client ID/Secret, for Google Gemini Spark)"
+                "none": "webhook URL pegh (motlh)",
+                "ha_auth": "Home Assistant lo'taHvIS yI'el (OAuth)",
+                "legacy": "OAuth ngo' (Client ID/Secret; Google Gemini SparkvaD)"
             }
         },
         "llm_api_exposure": {
             "options": {
-                "tool_search": "Tool search (compact, default)",
-                "full": "Full catalog",
-                "both": "Both (choose per agent)"
+                "tool_search": "jan nej (mach, motlh)",
+                "full": "janmey naQ",
+                "both": "cha' mIwmey (Hoch agentvaD yIwIv)"
             }
         }
     },
     "entity": {
         "update": {
             "server_update": {
-                "name": "Update"
+                "name": "chu'moH"
             }
         }
     }
