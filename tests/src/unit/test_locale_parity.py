@@ -454,9 +454,30 @@ def _renderable_groups_and_tools() -> tuple[frozenset[str], frozenset[str]]:
     translations.
     """
     tools = extract_tools.extract_tools()
+    assert tools, (
+        "scripts/extract_tools.py parsed no tools — its TOOL_FILES list is "
+        "hardcoded and silently skips a file that has moved. Without this "
+        "guard a shrunken parse fails below as 'translates tool(s) that do "
+        "not exist', which tells a translator to delete correct entries."
+    )
     groups = frozenset(primary_tag(tool["tags"]) for tool in tools)
     names = frozenset(str(tool["name"]) for tool in tools)
     return groups, names
+
+
+@cache
+def _english_tool_texts() -> dict[str, str]:
+    """English tool titles and descriptions, keyed like a flat catalog.
+
+    The settings UI catalogs translate the title and the description's first
+    line, so that is what a translated value is compared against.
+    """
+    texts: dict[str, str] = {}
+    for tool in extract_tools.extract_tools():
+        name = str(tool["name"])
+        texts[f"{name}.title"] = str(tool.get("title") or "")
+        texts[f"{name}.description"] = str(tool.get("description") or "").split("\n")[0]
+    return texts
 
 
 def test_settings_ui_locales_are_discovered() -> None:
@@ -573,6 +594,32 @@ def test_settings_catalog_is_not_a_copy_of_english(locale: str) -> None:
     )
 
 
+@pytest.mark.parametrize("locale", _non_english_settings_locales())
+def test_settings_catalog_tools_are_translated(locale: str) -> None:
+    """Exactness says every tool is present, not that any was translated.
+
+    87 titles and 87 descriptions is the largest translated surface in the
+    repo, and nothing looked at the values. The exactness rule above also
+    obliges every tool-adding PR to touch five languages before it can go
+    green, which is pressure toward pasting the English in — this is what
+    notices. Every shipped locale translates all 174 today.
+    """
+    catalog = _settings_catalog(locale)["tools"]
+    translated = {
+        f"{name}.{field}": text
+        for name, entry in catalog.items()
+        for field, text in entry.items()
+        if field in {"title", "description"}
+    }
+
+    _assert_not_a_copy(
+        f"src/ha_mcp/settings_ui/locales/{locale}.json (tools)",
+        _english_tool_texts(),
+        translated,
+        _MAX_ENGLISH_IDENTICAL_SHARE,
+    )
+
+
 @pytest.mark.parametrize("locale", _translated_component_locales())
 def test_component_catalog_is_not_a_copy_of_english(locale: str) -> None:
     """Key parity says every key is present, not that any was translated."""
@@ -610,7 +657,11 @@ def test_addon_locale_cases_are_discovered() -> None:
     )
 
 
-@pytest.mark.parametrize(("addon_dir", "locale"), _addon_locale_cases())
+@pytest.mark.parametrize(
+    ("addon_dir", "locale"),
+    _addon_locale_cases(),
+    ids=lambda param: param.name if isinstance(param, Path) else param,
+)
 def test_addon_catalog_is_not_a_copy_of_english(addon_dir: Path, locale: str) -> None:
     """The two flavors carry different schemas, so each needs its own check."""
     _assert_not_a_copy(

@@ -186,7 +186,7 @@ def extract_tools() -> list[dict]:
     for f in TOOL_FILES:
         if not f.exists():
             continue
-        tree = ast.parse(f.read_text())
+        tree = ast.parse(f.read_text(encoding="utf-8"))
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.AsyncFunctionDef):
@@ -360,7 +360,7 @@ def check_sync(tools: list[dict]) -> bool:
 
     expected_json = generate_tools_json(tools)
     if TOOLS_JSON_PATH.exists():
-        if TOOLS_JSON_PATH.read_text() != expected_json:
+        if TOOLS_JSON_PATH.read_text(encoding="utf-8") != expected_json:
             print("OUT OF SYNC: site/src/data/tools.json", file=sys.stderr)
             in_sync = False
     else:
