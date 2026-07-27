@@ -141,6 +141,15 @@
         }
     },
     "common": {
+        "connect_direct_access": "从 Home Assistant 所在机器直接访问：{url}",
+        "connect_local_lan": "本地/局域网（当网络访问为 0.0.0.0 时）：{url}",
+        "connect_remote_url": "远程连接 URL：{url}",
+        "connect_urls_label": "连接 URL：",
+        "connect_urls_pending": "服务器启动后，连接 URL 将显示在此处（以及 Home Assistant 日志中）。",
+        "connect_webhook_disabled": "通过 Webhook 远程访问已关闭（仅本地模式）。",
+        "oauth_creds_pending": "服务器启动后，Client ID 和 Client Secret 将显示在此处。",
+        "oauth_not_serving": "旧版 OAuth 尚未启用这些凭据——请在 Home Assistant 提示时重启以激活它们。",
+        "oauth_select_legacy_mode": "将上面的身份验证模式设为旧版 OAuth 并保存，以生成 Client ID 和 Client Secret。",
         "panel_hint": "打开 [HA-MCP 设置面板](/ha-mcp) 以管理工具和服务器设置。",
         "tools_module_installed": "Beta/高级文件与 YAML 工具模块（可选）：已安装",
         "tools_module_not_installed": "Beta/高级文件与 YAML 工具模块（可选）：未安装——请在此集成页面上点击“添加条目”并选择“HA-MCP File & YAML Tools”",

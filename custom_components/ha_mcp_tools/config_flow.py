@@ -20,6 +20,7 @@ options flow, and the tools entry gets a light informational options flow
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -110,10 +111,14 @@ _LOGGER = logging.getLogger(__name__)
 # The options form's prose is assembled here rather than in strings.json,
 # because which sentences appear depends on runtime state. Keeping the text
 # itself in the ``common`` catalog means the assembled paragraphs follow the
-# user's language instead of being English inside an otherwise translated
-# form. These are the English source strings and the fallback: if the
-# language is unreadable or the catalog cannot be loaded, the form still
+# system-configured language instead of being English inside an otherwise
+# translated form. These are the English source strings and the fallback: if
+# the language is unreadable or the catalog cannot be loaded, the form still
 # renders, in English, exactly as it did before.
+#
+# Kept identical to ``strings.json``'s ``common`` block, keys and values —
+# asserted in tests/src/unit/test_locale_parity.py, because a fallback that
+# has drifted from the source shows different English than every catalog.
 _COMMON_FALLBACKS: dict[str, str] = {
     "panel_hint": (
         "Open the [HA-MCP settings panel](/ha-mcp) for tool management and "
@@ -138,7 +143,64 @@ _COMMON_FALLBACKS: dict[str, str] = {
         'press "Add entry" on this integration\'s page and choose '
         '"HA-MCP File & YAML Tools" to add it'
     ),
+    "connect_urls_pending": (
+        "The connect URLs appear here (and in the Home Assistant log) "
+        "once the server has started."
+    ),
+    "connect_urls_label": "Connect URL(s):",
+    "connect_webhook_disabled": (
+        "Remote access via webhook is disabled (local-only mode)."
+    ),
+    "connect_direct_access": "Direct access from the Home Assistant machine: {url}",
+    "connect_remote_url": "Remote connect URL: {url}",
+    "connect_local_lan": "Local/LAN (when bind host is 0.0.0.0): {url}",
+    "oauth_select_legacy_mode": (
+        "Set Authentication mode to legacy OAuth above and save to "
+        "generate a Client ID and Client Secret."
+    ),
+    "oauth_creds_pending": (
+        "The Client ID and Client Secret appear here once the server has started."
+    ),
+    "oauth_not_serving": (
+        "Legacy OAuth is not serving these yet — restart Home Assistant "
+        "when it asks you to, to activate them."
+    ),
 }
+
+
+def _fill(common: dict[str, str], key: str, /, **values: str) -> str:
+    """Return the ``common`` string ``key`` with ``values`` substituted.
+
+    Placeholder parity is asserted in tests/src/unit/test_locale_parity.py, but
+    a catalog is data: one malformed brace, or a placeholder the parity check
+    cannot see (``{component_version.major}`` reads as no placeholder at all),
+    would otherwise take the whole options form down. The English source is a
+    module constant, so formatting it after a failure needs no second guard.
+    """
+    try:
+        return common[key].format(**values)
+    except Exception as err:
+        _LOGGER.warning(
+            "Unusable %s translation (%r), using the English source: %s",
+            key,
+            common.get(key),
+            err,
+        )
+    return _COMMON_FALLBACKS[key].format(**values)
+
+
+# Sentence-final punctuation that is itself full-width: the glyph already
+# carries the space its script wants, so an ASCII space after it renders as a
+# gap. zh-Hans ends its sentences this way, the Latin and Cyrillic catalogs
+# never do.
+_FULLWIDTH_TERMINATORS = ("。", "！", "？", "；", "：", "”", "」", "』")
+
+
+def _sentence_prefix(sentence: str) -> str:
+    """Return ``sentence`` spaced to run into the prose that follows it."""
+    if not sentence or sentence.endswith(_FULLWIDTH_TERMINATORS):
+        return sentence
+    return f"{sentence} "
 
 
 async def _fetch_common_translations(
@@ -152,11 +214,20 @@ async def _fetch_common_translations(
     from homeassistant.helpers.translation import async_get_translations
 
     result = await async_get_translations(hass, language, "common", {DOMAIN})
-    return result if isinstance(result, dict) else {}
+    # Any Mapping, not just dict: core returns a plain dict today, but the
+    # mirrored seam in ``websocket_api`` accepts a Mapping, and narrowing it
+    # here would silently discard a whole catalog on a core-internal change.
+    return dict(result) if isinstance(result, Mapping) else {}
 
 
 async def _common_strings(hass: HomeAssistant | None) -> dict[str, str]:
-    """Return the ``common`` catalog for the configured language.
+    """Return the ``common`` catalog for the system-configured language.
+
+    ``hass.config.language`` is the instance-wide language, not the profile
+    language of the administrator who opened the form — an options flow is
+    handed no requester language (Home Assistant's flow context carries
+    ``source`` and ``entry_id`` only), so where the two differ this prose
+    follows the system setting while the surrounding form follows the user.
 
     Failure-proof like the hints it feeds: an unreadable language or a
     failing lookup degrades to the English source strings rather than
@@ -169,17 +240,39 @@ async def _common_strings(hass: HomeAssistant | None) -> dict[str, str]:
     try:
         loaded = await _fetch_common_translations(hass, language)
     except Exception as err:
-        _LOGGER.debug("Could not load the options-form translations: %s", err)
+        # Warning, not debug: this is a degradation an administrator can see
+        # in the form (English paragraphs inside a translated page) and the
+        # broad ``except`` also covers an ImportError from the function-local
+        # core import — a permanent defect nobody would ever notice at debug.
+        # ``exc_info`` because the traceback is the only way to tell the two
+        # apart. Same level the ``websocket_api`` seam this mirrors uses.
+        _LOGGER.warning(
+            "Could not load the %s options-form translations, falling back to "
+            "English: %s",
+            language,
+            err,
+            exc_info=True,
+        )
         return strings
 
     prefix = f"component.{DOMAIN}.common."
-    strings.update(
-        {
-            key.removeprefix(prefix): value
-            for key, value in loaded.items()
-            if key.startswith(prefix) and isinstance(value, str) and value
-        }
-    )
+    translated = {
+        key.removeprefix(prefix): value
+        for key, value in loaded.items()
+        if key.startswith(prefix) and isinstance(value, str) and value
+    }
+    if loaded and not translated:
+        # A catalog that loaded but carries nothing under our prefix is the
+        # signature of a wrong category or a wrong prefix: the merge is a
+        # silent no-op, the form renders pure English, and no other check
+        # notices. One line, or it stays invisible.
+        _LOGGER.warning(
+            "The %s translations carry no %s keys, so the options form renders "
+            "its assembled prose in English",
+            language,
+            prefix,
+        )
+    strings.update(translated)
     return strings
 
 
@@ -552,11 +645,11 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         # The sidebar-panel sentence in the description is only truthful while
         # the panel is registered; drop it (from the CURRENT stored options, not
         # the unsaved form state) when the panel is off so the link cannot point
-        # at a route that 404s. The trailing space keeps the surrounding prose
-        # spaced correctly whether the sentence is present or empty.
+        # at a route that 404s. The separator keeps the surrounding prose spaced
+        # correctly whether the sentence is present or empty.
         common = await _common_strings(getattr(self, "hass", None))
         panel_hint = (
-            f"{common['panel_hint']} "
+            _sentence_prefix(common["panel_hint"])
             if bool(opts.get(OPT_ENABLE_SIDEBAR_PANEL, True))
             else ""
         )
@@ -572,8 +665,8 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             data_schema=schema,
             description_placeholders={
                 "versions": versions,
-                "connect_url": await self._connect_url_hint(),
-                "oauth_creds": self._oauth_creds_hint(),
+                "connect_url": await self._connect_url_hint(common),
+                "oauth_creds": self._oauth_creds_hint(common),
                 "llm_api_docs_url": LLM_API_DOCS_URL,
                 "panel_hint": panel_hint,
             },
@@ -655,19 +748,13 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             _LOGGER.debug("Could not read server version for the options hint: %s", err)
             server_version = common["version_not_installed"]
 
-        # Placeholder parity is asserted in tests/src/unit/test_locale_parity.py,
-        # but a catalog is data: a malformed brace would otherwise take the
-        # whole options form down, so fall back to the English source line.
-        for template in (common["version_line"], _COMMON_FALLBACKS["version_line"]):
-            try:
-                return template.format(
-                    component_version=component_version,
-                    server_version=server_version,
-                    channel=channel,
-                )
-            except (KeyError, IndexError, ValueError):
-                _LOGGER.debug("Unusable version_line translation: %r", template)
-        return ""
+        return _fill(
+            common,
+            "version_line",
+            component_version=component_version,
+            server_version=server_version,
+            channel=channel,
+        )
 
     def _tools_module_hint(self, common: dict[str, str]) -> str | None:
         """Return the File & YAML tools entry status line, or None if unreadable.
@@ -703,21 +790,22 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             return common["tools_module_not_loaded"]
         return common["tools_module_not_installed"]
 
-    async def _connect_url_hint(self) -> str:
+    async def _connect_url_hint(self, common: dict[str, str]) -> str:
         """Return the connect URLs for the options form.
 
         The Configure screen is admin-only, so it shows the real resolved
         URLs (the start-up notification deliberately does not - it is visible
         to every signed-in user). Falls back to a placeholder form when
         resolution is unavailable.
+
+        The URLs themselves and the two ``<...>`` stand-ins stay verbatim: they
+        are addresses to copy, not prose. Everything around them comes from the
+        ``common`` catalog.
         """
         webhook_id = self.config_entry.data.get(DATA_WEBHOOK_ID)
         secret_path = self.config_entry.data.get(DATA_SECRET_PATH)
         if not webhook_id:
-            return (
-                "The connect URLs appear here (and in the Home Assistant log) "
-                "once the server has started."
-            )
+            return common["connect_urls_pending"]
         webhook_enabled = bool(self.config_entry.options.get(OPT_ENABLE_WEBHOOK, True))
         port = self.config_entry.options.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT)
         hass = getattr(self, "hass", None)
@@ -732,7 +820,8 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     extra_hosts=await async_get_lan_hosts(hass),
                 )
                 if urls:
-                    return "Connect URL(s):\n" + "\n".join(f"- {u}" for u in urls)
+                    listed = "\n".join(f"- {u}" for u in urls)
+                    return f"{common['connect_urls_label']}\n{listed}"
             except Exception as err:
                 # The hint is auxiliary display data: a resolution bug must not
                 # take down the whole options form, but the degradation should
@@ -744,26 +833,32 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             # Local-only mode: the webhook endpoint is never registered, so
             # a webhook URL here would 404. With loopback binding the builder
             # resolves no URLs at all - state that instead of inventing one.
-            hint = "Remote access via webhook is disabled (local-only mode)."
+            hint = common["connect_webhook_disabled"]
             if secret_path:
-                hint += (
-                    f"\nDirect access from the Home Assistant machine: "
-                    f"http://127.0.0.1:{port}{secret_path}"
+                direct = _fill(
+                    common,
+                    "connect_direct_access",
+                    url=f"http://127.0.0.1:{port}{secret_path}",
                 )
+                hint += f"\n{direct}"
             return hint
         external = str(self.config_entry.options.get(OPT_EXTERNAL_URL) or "").rstrip(
             "/"
         )
         base = external or "<your-home-assistant-url>"
-        hint = f"Remote connect URL: {base}/api/webhook/{webhook_id}"
+        hint = _fill(
+            common, "connect_remote_url", url=f"{base}/api/webhook/{webhook_id}"
+        )
         if secret_path:
-            hint += (
-                f"\nLocal/LAN (when bind host is 0.0.0.0): "
-                f"http://<home-assistant-ip>:{port}{secret_path}"
+            lan = _fill(
+                common,
+                "connect_local_lan",
+                url=f"http://<home-assistant-ip>:{port}{secret_path}",
             )
+            hint += f"\n{lan}"
         return hint
 
-    def _oauth_creds_hint(self) -> str:
+    def _oauth_creds_hint(self, common: dict[str, str]) -> str:
         """Return the resolved legacy OAuth Client ID + Secret for the options
         form, or a note pointing at the mode selector when legacy mode isn't
         the CONFIGURED mode. Admin-only screen (like ``_connect_url_hint``),
@@ -773,23 +868,21 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         log, where a still-valid old-identity token could read them; an HA
         admin here is trusted). A pending rotation gets a caveat so the admin
         doesn't paste values that only start working after the restart.
+
+        The ``Client ID`` / ``Client Secret`` labels stay verbatim: they name
+        the two fields the client an admin pastes them into asks for, and those
+        clients label them in English whatever this instance's language is.
         """
         configured_mode = str(self.config_entry.options.get(OPT_WEBHOOK_AUTH) or "")
         if configured_mode != WEBHOOK_AUTH_LEGACY:
-            return (
-                "Set Authentication mode to legacy OAuth above and save to "
-                "generate a Client ID and Client Secret."
-            )
+            return common["oauth_select_legacy_mode"]
         client_id = self.config_entry.data.get(DATA_OAUTH_CLIENT_ID)
         client_secret = self.config_entry.data.get(DATA_OAUTH_CLIENT_SECRET)
         if not client_id or not client_secret:
             # Not minted yet — the entry hasn't finished a bring-up cycle
             # since legacy mode was selected (e.g. this save just turned it
             # on). They appear after the next reload.
-            return (
-                "The Client ID and Client Secret appear here once the server "
-                "has started."
-            )
+            return common["oauth_creds_pending"]
         creds = f"Client ID: {client_id}\nClient Secret: {client_secret}"
         signing_key = str(self.config_entry.data.get(DATA_OAUTH_SIGNING_KEY) or "")
         active = _legacy_credentials_active(
@@ -804,8 +897,4 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         # previous Client ID and Client Secret remain active" was false at a
         # first enable and when nothing of ours is bound. Matches the startup
         # log's first-enable caveat and the oauth_regenerate help text.
-        return (
-            f"{creds}\n"
-            "Legacy OAuth is not serving these yet — restart Home Assistant "
-            "when it asks you to, to activate them."
-        )
+        return f"{creds}\n{common['oauth_not_serving']}"

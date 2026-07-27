@@ -141,6 +141,15 @@
         }
     },
     "common": {
+        "connect_direct_access": "Direct access from the Home Assistant machine: {url}",
+        "connect_local_lan": "Local/LAN (when bind host is 0.0.0.0): {url}",
+        "connect_remote_url": "Remote connect URL: {url}",
+        "connect_urls_label": "Connect URL(s):",
+        "connect_urls_pending": "The connect URLs appear here (and in the Home Assistant log) once the server has started.",
+        "connect_webhook_disabled": "Remote access via webhook is disabled (local-only mode).",
+        "oauth_creds_pending": "The Client ID and Client Secret appear here once the server has started.",
+        "oauth_not_serving": "Legacy OAuth is not serving these yet — restart Home Assistant when it asks you to, to activate them.",
+        "oauth_select_legacy_mode": "Set Authentication mode to legacy OAuth above and save to generate a Client ID and Client Secret.",
         "panel_hint": "Open the [HA-MCP settings panel](/ha-mcp) for tool management and server settings.",
         "tools_module_installed": "Beta/advanced file & YAML tools module (optional): Installed",
         "tools_module_not_installed": "Beta/advanced file & YAML tools module (optional): Not installed — press \"Add entry\" on this integration's page and choose \"HA-MCP File & YAML Tools\" to add it",

@@ -18,9 +18,14 @@ directly.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 # --- Stub Home Assistant so the merged config_flow imports without HA installed.
@@ -237,7 +242,7 @@ class TestOAuthCredsHint:
         flow = _make_options_flow(
             options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
         )
-        hint = flow._oauth_creds_hint()
+        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
         assert "Set Authentication mode" in hint
         assert "Client ID" in hint
 
@@ -245,7 +250,7 @@ class TestOAuthCredsHint:
         flow = _make_options_flow(
             options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY}
         )
-        hint = flow._oauth_creds_hint()
+        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
         assert "once the server" in hint
 
     def test_legacy_mode_live_creds_shows_values_without_caveat(self, monkeypatch):
@@ -259,7 +264,7 @@ class TestOAuthCredsHint:
                 const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
             },
         )
-        hint = flow._oauth_creds_hint()
+        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
         assert "Client ID: hamcp-abc" in hint
         assert "Client Secret: s3cr3t" in hint
         assert "not serving these yet" not in hint
@@ -277,7 +282,7 @@ class TestOAuthCredsHint:
                 const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
             },
         )
-        hint = flow._oauth_creds_hint()
+        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
         assert "Client ID: hamcp-abc" in hint
         assert "not serving these yet" in hint
 
@@ -293,7 +298,7 @@ class TestOAuthCredsHint:
                 const.DATA_OAUTH_CLIENT_SECRET: "new-secret",
             },
         )
-        hint = flow._oauth_creds_hint()
+        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
         assert "Client ID: hamcp-new" in hint
         assert "Client Secret: new-secret" in hint
         assert "not serving these yet" in hint
@@ -908,14 +913,14 @@ class TestServerOptionsFlow:
                 const.DATA_SECRET_PATH: "/private_x",
             },
         )
-        hint = asyncio.run(flow._connect_url_hint())
+        hint = asyncio.run(flow._connect_url_hint(cf._COMMON_FALLBACKS))
         assert "/api/webhook/mcp_abc" in hint
         # The LAN hint uses the CONFIGURED port, not the 9584 default.
         assert ":9999/private_x" in hint
 
     def test_connect_url_hint_before_start_points_at_log(self):
         flow = _make_options_flow(data={})
-        hint = asyncio.run(flow._connect_url_hint()).lower()
+        hint = asyncio.run(flow._connect_url_hint(cf._COMMON_FALLBACKS)).lower()
         assert "once the server has started" in hint
         assert "notification" not in hint
 
@@ -956,7 +961,7 @@ class TestServerOptionsFlow:
         orig = sys.modules.get("custom_components.ha_mcp_tools.embedded_setup")
         sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = stub
         try:
-            hint = asyncio.run(flow._connect_url_hint())
+            hint = asyncio.run(flow._connect_url_hint(cf._COMMON_FALLBACKS))
         finally:
             if orig is None:
                 del sys.modules["custom_components.ha_mcp_tools.embedded_setup"]
@@ -990,7 +995,7 @@ class TestServerOptionsFlow:
         orig = sys.modules.get("custom_components.ha_mcp_tools.embedded_setup")
         sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = stub
         try:
-            return asyncio.run(flow._connect_url_hint())
+            return asyncio.run(flow._connect_url_hint(cf._COMMON_FALLBACKS))
         finally:
             if orig is None:
                 del sys.modules["custom_components.ha_mcp_tools.embedded_setup"]
@@ -1207,3 +1212,181 @@ class TestOptionsFormTranslations:
         assert placeholders["versions"].startswith(
             "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
         )
+
+    def test_dotted_placeholder_in_version_line_does_not_break_the_form(
+        self, monkeypatch
+    ):
+        """The failure the placeholder-parity check cannot see.
+
+        ``{component_version.major}`` matches no placeholder pattern, so the
+        parity check reads the placeholder set as unchanged and passes it
+        through — and ``.format`` then raises ``AttributeError``, which is not
+        among the errors a narrow guard would catch.
+        """
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(
+                return_value=self._catalog(
+                    version_line="Komponente {component_version.major}"
+                )
+            ),
+        )
+        flow = self._flow_with_language("de")
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        assert placeholders["versions"].startswith(
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+        )
+
+    def test_the_seam_is_asked_for_the_configured_language(self, monkeypatch):
+        """Every test above stays green if the call site hardcodes ``"en"``."""
+        seam = AsyncMock(return_value={})
+        monkeypatch.setattr(cf, "_fetch_common_translations", seam)
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        flow = self._flow_with_language("de")
+
+        asyncio.run(flow.async_step_init(None))
+
+        seam.assert_awaited_once_with(flow.hass, "de")
+
+    def test_empty_translated_value_keeps_the_english_source(self, monkeypatch):
+        """An empty value in a catalog would otherwise blank the sentence.
+
+        Deleting the truthiness filter in the merge leaves every other test
+        green; only an empty string discriminates.
+        """
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(return_value=self._catalog(panel_hint="")),
+        )
+        flow = self._flow_with_language("de")
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
+
+    def test_catalog_without_our_prefix_says_so(self, monkeypatch, caplog):
+        """A wrong category or prefix is a silent no-op otherwise.
+
+        The lookup succeeds, the merge matches nothing, the form renders pure
+        English, and no other check has an opinion about it.
+        """
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(
+                return_value={"component.other.common.panel_hint": "Öffne das Panel."}
+            ),
+        )
+        flow = self._flow_with_language("de")
+
+        with caplog.at_level(logging.WARNING):
+            placeholders = asyncio.run(flow.async_step_init(None))[
+                "description_placeholders"
+            ]
+
+        assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
+        assert self.PREFIX in caplog.text
+
+    def test_full_width_sentence_end_gets_no_ascii_space(self, monkeypatch):
+        """The separator the caller adds belongs to the script, not the string.
+
+        zh-Hans ends the sentence with a full-width stop, which already carries
+        the space its script wants — an ASCII space after it renders as a gap.
+        """
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(return_value=self._catalog(panel_hint="打开设置面板。")),
+        )
+        flow = self._flow_with_language("zh-Hans")
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        assert placeholders["panel_hint"] == "打开设置面板。"
+
+    def test_connect_and_oauth_prose_follow_the_catalog(self, monkeypatch):
+        """The two hints were the last all-English blocks in the paragraph."""
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(
+                return_value=self._catalog(
+                    connect_remote_url="Remote-Verbindungs-URL: {url}",
+                    oauth_select_legacy_mode="Setze den Authentifizierungsmodus.",
+                )
+            ),
+        )
+        flow = self._flow_with_language("de")
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        assert placeholders["connect_url"].startswith("Remote-Verbindungs-URL: ")
+        assert "/api/webhook/mcp_abc" in placeholders["connect_url"]
+        assert placeholders["oauth_creds"] == "Setze den Authentifizierungsmodus."
+
+
+def test_common_fallbacks_mirror_strings_json():
+    """``strings.json`` is the source; the fallback dict is a copy of it.
+
+    Nothing else compares the two: reword a string in ``strings.json``, sweep
+    the five catalogs and refresh the locale baseline, and CI stays green while
+    this copy keeps serving the old English to every failed lookup.
+    """
+    strings = json.loads(
+        (_REPO_ROOT / "custom_components" / "ha_mcp_tools" / "strings.json").read_text(
+            "utf-8"
+        )
+    )
+
+    assert strings["common"] == cf._COMMON_FALLBACKS, (
+        "custom_components/ha_mcp_tools/config_flow.py's _COMMON_FALLBACKS has "
+        "drifted from strings.json's common block — the fallback must show the "
+        "same English every catalog is keyed against"
+    )

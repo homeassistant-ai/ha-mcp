@@ -141,12 +141,21 @@
         }
     },
     "common": {
+        "connect_direct_access": "Acceso directo desde la máquina de Home Assistant: {url}",
+        "connect_local_lan": "Local/LAN (cuando el acceso desde la red es 0.0.0.0): {url}",
+        "connect_remote_url": "URL de conexión remota: {url}",
+        "connect_urls_label": "URL de conexión:",
+        "connect_urls_pending": "Las URL de conexión aparecen aquí (y en el registro de Home Assistant) una vez que el servidor se ha iniciado.",
+        "connect_webhook_disabled": "El acceso remoto mediante webhook está desactivado (modo solo local).",
+        "oauth_creds_pending": "El Client ID y el Client Secret aparecen aquí una vez que el servidor se ha iniciado.",
+        "oauth_not_serving": "OAuth heredado aún no los está sirviendo — reinicia Home Assistant cuando te lo pida para activarlos.",
+        "oauth_select_legacy_mode": "Pon el modo de autenticación de arriba en OAuth heredado y guarda para generar un Client ID y un Client Secret.",
         "panel_hint": "Abre el [panel de ajustes de HA-MCP](/ha-mcp) para la gestión de herramientas y los ajustes del servidor.",
         "tools_module_installed": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): Instalado",
-        "tools_module_not_installed": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): No instalado: pulsa \"Añadir entrada\" en la página de esta integración y elige \"HA-MCP File & YAML Tools\"",
-        "tools_module_not_loaded": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): Instalado pero no cargado: activa o vuelve a cargar la entrada \"HA-MCP File & YAML Tools\" en la página de esta integración",
+        "tools_module_not_installed": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): No instalado — pulsa \"Añadir entrada\" en la página de esta integración y elige \"HA-MCP File & YAML Tools\"",
+        "tools_module_not_loaded": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): Instalado pero no cargado — activa o vuelve a cargar la entrada \"HA-MCP File & YAML Tools\" en la página de esta integración",
         "version_line": "Componente {component_version} - Servidor ha-mcp {server_version} (canal {channel})",
         "version_not_installed": "aún no instalado",
-        "version_unknown": "desconocida"
+        "version_unknown": "desconocido"
     }
 }

@@ -141,12 +141,21 @@
         }
     },
     "common": {
+        "connect_direct_access": "Accès direct depuis la machine Home Assistant : {url}",
+        "connect_local_lan": "Local/LAN (lorsque l'accès réseau est 0.0.0.0) : {url}",
+        "connect_remote_url": "URL de connexion distante : {url}",
+        "connect_urls_label": "URL de connexion :",
+        "connect_urls_pending": "Les URL de connexion apparaissent ici (et dans le journal Home Assistant) une fois le serveur démarré.",
+        "connect_webhook_disabled": "L'accès distant via webhook est désactivé (mode local uniquement).",
+        "oauth_creds_pending": "Le Client ID et le Client Secret apparaissent ici une fois le serveur démarré.",
+        "oauth_not_serving": "OAuth hérité ne les sert pas encore — redémarrez Home Assistant lorsqu'il vous le demande pour les activer.",
+        "oauth_select_legacy_mode": "Réglez le mode d'authentification ci-dessus sur OAuth hérité et enregistrez pour générer un Client ID et un Client Secret.",
         "panel_hint": "Ouvrez le [panneau de réglages HA-MCP](/ha-mcp) pour la gestion des outils et les réglages du serveur.",
         "tools_module_installed": "Module bêta/avancé d'outils fichiers & YAML (facultatif) : Installé",
         "tools_module_not_installed": "Module bêta/avancé d'outils fichiers & YAML (facultatif) : Non installé — appuyez sur « Ajouter une entrée » sur la page de cette intégration et choisissez « HA-MCP File & YAML Tools »",
         "tools_module_not_loaded": "Module bêta/avancé d'outils fichiers & YAML (facultatif) : Installé mais non chargé — activez ou rechargez l'entrée « HA-MCP File & YAML Tools » sur la page de cette intégration",
         "version_line": "Composant {component_version} - Serveur ha-mcp {server_version} (canal {channel})",
         "version_not_installed": "pas encore installé",
-        "version_unknown": "inconnue"
+        "version_unknown": "inconnu"
     }
 }
