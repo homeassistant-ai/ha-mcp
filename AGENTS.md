@@ -718,11 +718,21 @@ code (`de`, `es`, `fr`, `ru`, `zh-Hans`) names every file:
 `custom_components/ha_mcp_tools/translations/<code>.json`, and
 `homeassistant-addon{,-dev}/translations/<code>.yaml`.
 
-Settings UI catalogs are auto-discovered (no registration) and may omit keys —
-English is the per-key fallback. Component catalogs need every `strings.json`
-key with identical `{placeholders}`. Add-on catalogs need `name` +
-`description` for every `schema:` key of *that* flavor's `config.yaml`; the two
-flavors differ.
+Settings UI catalogs are auto-discovered (no registration). Their `messages` may
+omit keys — English is the per-key fallback — but `tool_groups` and `tools` may
+not: each locale must carry exactly the renderable group headings and every tool
+name, no key more and none fewer. **Adding a tool therefore means translating it
+in every locale, in the PR that adds it**: the check derives the tool set from
+the sources (`scripts/extract_tools.py`), not from the committed
+`site/src/data/tools.json` that `sync-tool-docs.yml` regenerates only after
+merge — so the PR adding the tool goes red, rather than the next PR someone
+opens. Every surface also caps how much a catalog may leave byte-identical to
+English or omit outright, so a stub cannot ride the fallbacks.
+
+Component catalogs need every `strings.json` key with identical
+`{placeholders}`. Add-on catalogs need `name` + `description` for every
+`schema:` key of *that* flavor's `config.yaml`, and no `configuration.<key>`
+left behind for a key the schema no longer has; the two flavors differ.
 
 **Changing an English string means updating every locale that carries it**,
 then `python scripts/update_locale_baseline.py`. The baseline pins the English
