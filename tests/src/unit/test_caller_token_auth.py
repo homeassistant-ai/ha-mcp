@@ -40,8 +40,8 @@ sys.modules.setdefault("homeassistant.helpers.storage", MagicMock())
 sys.modules.setdefault("homeassistant.loader", MagicMock())
 
 from custom_components.ha_mcp_tools import (  # noqa: E402
-    CALLER_TOKEN_FIELD,
     _HASS_DATA_TOKEN_KEY,
+    CALLER_TOKEN_FIELD,
     _build_get_caller_token_handler,
     _caller_is_admin,
     _caller_token_ok,
@@ -238,9 +238,7 @@ class TestGetCallerTokenManifestVersion:
     async def test_version_less_manifest_reports_unreadable(self, monkeypatch):
         import custom_components.ha_mcp_tools as component
 
-        monkeypatch.setattr(
-            component, "_caller_is_admin", AsyncMock(return_value=True)
-        )
+        monkeypatch.setattr(component, "_caller_is_admin", AsyncMock(return_value=True))
         monkeypatch.setattr(
             component,
             "async_get_integration",
@@ -259,9 +257,7 @@ class TestGetCallerTokenManifestVersion:
     async def test_readable_manifest_reports_its_version(self, monkeypatch):
         import custom_components.ha_mcp_tools as component
 
-        monkeypatch.setattr(
-            component, "_caller_is_admin", AsyncMock(return_value=True)
-        )
+        monkeypatch.setattr(component, "_caller_is_admin", AsyncMock(return_value=True))
         monkeypatch.setattr(
             component,
             "async_get_integration",
