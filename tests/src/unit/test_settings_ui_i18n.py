@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -268,3 +269,213 @@ def test_allowlisted_inline_markup_loads(tmp_path: Path) -> None:
     )
     catalogs = load_catalogs(tmp_path)
     assert "note" in catalogs["en"]["messages"]
+
+
+def _write_settings_html(directory: Path, *panels: str) -> Path:
+    """A stand-in settings page declaring exactly ``panels`` as tabs.
+
+    The panel-link tests own their tab ids this way rather than borrowing the
+    shipped page's, so renaming a real tab cannot make them fail for a reason
+    that has nothing to do with what they assert.
+    """
+    path = directory / "settings.html"
+    path.write_text(
+        "\n".join(
+            f'<button class="tab" data-panel="{panel}" role="tab">{panel}</button>'
+            for panel in panels
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_panel_link_to_unknown_tab_is_rejected(tmp_path: Path) -> None:
+    """A mistyped target passes the markup allowlist and then does nothing.
+
+    ``settings.js`` hands the value straight to ``activateTab``, which no-ops
+    on an id no panel declares — so the link silently stops working in that
+    one language while the visible link text still reads correctly.
+    """
+    settings_html = _write_settings_html(tmp_path, "alpha", "beta")
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"note": '<a href="#" data-panel-link="alpha">Alpha</a>'},
+    )
+    _write_catalog(
+        tmp_path,
+        "fr",
+        native_name="Français",
+        messages={"note": '<a href="#" data-panel-link="alfa">Alfa</a>'},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("settings.html does not declare")):
+        load_catalogs(tmp_path, settings_html)
+
+
+def test_panel_link_must_target_the_same_tab_as_english(tmp_path: Path) -> None:
+    """Both ids are real, so only a cross-locale comparison catches this."""
+    settings_html = _write_settings_html(tmp_path, "alpha", "beta")
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"note": '<a href="#" data-panel-link="alpha">Alpha</a>'},
+    )
+    _write_catalog(
+        tmp_path,
+        "de",
+        native_name="Deutsch",
+        messages={"note": '<a href="#" data-panel-link="beta">Beta</a>'},
+    )
+
+    with pytest.raises(ValueError, match="but English links to"):
+        load_catalogs(tmp_path, settings_html)
+
+
+def test_panel_links_may_be_reordered_by_a_translation(tmp_path: Path) -> None:
+    """Grammar reorders links; the targets are what must match, not the order.
+
+    ``load_catalogs`` runs at import, so rejecting a legitimately reordered
+    pair would stop the server from starting.
+    """
+    settings_html = _write_settings_html(tmp_path, "alpha", "beta")
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={
+            "note": (
+                '<a href="#" data-panel-link="alpha">Alpha</a> then '
+                '<a href="#" data-panel-link="beta">Beta</a>'
+            )
+        },
+    )
+    _write_catalog(
+        tmp_path,
+        "fr",
+        native_name="Français",
+        messages={
+            "note": (
+                '<a href="#" data-panel-link="beta">Bêta</a> puis '
+                '<a href="#" data-panel-link="alpha">Alpha</a>'
+            )
+        },
+    )
+
+    catalogs = load_catalogs(tmp_path, settings_html)
+
+    assert "note" in catalogs["fr"]["messages"]
+
+
+def test_dropping_one_of_two_panel_links_is_rejected(tmp_path: Path) -> None:
+    """Order-independence must not become "any subset will do"."""
+    settings_html = _write_settings_html(tmp_path, "alpha", "beta")
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={
+            "note": (
+                '<a href="#" data-panel-link="alpha">Alpha</a> then '
+                '<a href="#" data-panel-link="beta">Beta</a>'
+            )
+        },
+    )
+    _write_catalog(
+        tmp_path,
+        "fr",
+        native_name="Français",
+        messages={"note": '<a href="#" data-panel-link="alpha">Alpha</a>'},
+    )
+
+    with pytest.raises(ValueError, match="but English links to"):
+        load_catalogs(tmp_path, settings_html)
+
+
+def test_panel_link_attribute_shown_as_literal_text_is_not_a_link(
+    tmp_path: Path,
+) -> None:
+    """Help text may document the attribute; that is not navigation.
+
+    The extraction matches the whole allowlisted anchor, so a message showing
+    ``data-panel-link="example"`` inside ``<code>`` neither has to name a real
+    panel nor has to match English's targets.
+    """
+    settings_html = _write_settings_html(tmp_path, "alpha")
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"note": 'Write <code>data-panel-link="example"</code> to link.'},
+    )
+    _write_catalog(
+        tmp_path,
+        "de",
+        native_name="Deutsch",
+        messages={"note": 'Schreibe <code>data-panel-link="beispiel"</code>.'},
+    )
+
+    catalogs = load_catalogs(tmp_path, settings_html)
+
+    assert "note" in catalogs["de"]["messages"]
+
+
+def test_only_tab_buttons_declare_panels(tmp_path: Path) -> None:
+    """A page that merely mentions the attribute declares no tab.
+
+    Scanning the whole page would let a code sample or doc comment register a
+    panel that has no button, so a link to it would pass this check and then
+    dead-end in the UI — the same "textually present, functionally absent" gap
+    the link side closes.
+    """
+    settings_html = tmp_path / "settings.html"
+    settings_html.write_text(
+        '<!-- to add a tab, set data-panel="ghost" on the button -->\n'
+        '<button class="tab" data-panel="alpha" role="tab">Alpha</button>',
+        encoding="utf-8",
+    )
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"note": '<a href="#" data-panel-link="ghost">Ghost</a>'},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("settings.html does not declare")):
+        load_catalogs(tmp_path, settings_html)
+
+
+def test_english_message_with_unknown_panel_target_is_rejected(tmp_path: Path) -> None:
+    """The source catalog is checked too, not just the translations.
+
+    The cross-locale comparison skips English by definition, so only the
+    known-panel check covers it. Nothing else would notice a dead link written
+    into ``en.json`` itself.
+    """
+    settings_html = _write_settings_html(tmp_path, "alpha")
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"note": '<a href="#" data-panel-link="bogus">Bogus</a>'},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("settings.html does not declare")):
+        load_catalogs(tmp_path, settings_html)
+
+
+def test_panel_link_in_a_locale_only_key_is_still_checked(tmp_path: Path) -> None:
+    """A key English does not have skips the comparison, not the panel check."""
+    settings_html = _write_settings_html(tmp_path, "alpha")
+    _write_catalog(tmp_path, "en", native_name="English", messages={"other": "hi"})
+    _write_catalog(
+        tmp_path,
+        "fr",
+        native_name="Français",
+        messages={"extra": '<a href="#" data-panel-link="bogus">Bogus</a>'},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("settings.html does not declare")):
+        load_catalogs(tmp_path, settings_html)

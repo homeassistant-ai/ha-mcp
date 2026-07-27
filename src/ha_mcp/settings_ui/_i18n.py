@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 DEFAULT_LOCALE = "en"
 LOCALE_COOKIE = "ha_mcp_locale"
 LOCALES_DIR = Path(__file__).parent / "locales"
+# The page whose tab buttons define the valid cross-panel link targets.
+_SETTINGS_HTML = Path(__file__).parent / "settings.html"
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
@@ -60,8 +63,14 @@ def _validate_tools(value: Any, *, context: str) -> dict[str, dict[str, str]]:
     return result
 
 
-def load_catalogs(directory: Path = LOCALES_DIR) -> dict[str, dict[str, Any]]:
-    """Load and validate every JSON translation catalog in ``directory``."""
+def load_catalogs(
+    directory: Path = LOCALES_DIR, settings_html: Path = _SETTINGS_HTML
+) -> dict[str, dict[str, Any]]:
+    """Load and validate every JSON translation catalog in ``directory``.
+
+    ``settings_html`` is the page whose tab buttons define the valid
+    cross-panel link targets; overridable so tests need not depend on the
+    shipped page's panel ids."""
     catalogs: dict[str, dict[str, Any]] = {}
     try:
         paths = sorted(directory.glob("*.json"))
@@ -113,6 +122,7 @@ def load_catalogs(directory: Path = LOCALES_DIR) -> dict[str, dict[str, Any]]:
         )
     _validate_placeholder_parity(catalogs)
     _validate_inline_markup(catalogs)
+    _validate_panel_links(catalogs, settings_html)
     return catalogs
 
 
@@ -164,6 +174,80 @@ _TAG_LIKE_RE = re.compile(r"</?[a-zA-Z][^>]*>")
 _ALLOWED_TAGS_RE = re.compile(
     r'</?code>|</?strong>|</a>|<a href="#" data-panel-link="[a-z][a-z-]*">'
 )
+# The tab a cross-panel link switches to. The allowlist above only accepts the
+# tag *shape*, so "outils" or "backup" passes it and then silently does
+# nothing: settings.js hands the value to activateTab, which no-ops on an
+# unknown panel. Read the real ids out of the page rather than restating them.
+# Matches the whole anchor, not a bare attribute: a message may legitimately
+# show `<code>data-panel-link="example"</code>` as literal help text, and that
+# is documentation, not navigation.
+_PANEL_LINK_RE = re.compile(r'<a href="#" data-panel-link="([a-z][a-z-]*)">')
+_PANEL_ID_RE = re.compile(r'data-panel="([a-z][a-z-]*)"')
+# Only a real tab button declares a panel. Scanning the whole page for the
+# attribute would let a future code sample or doc comment mentioning
+# `data-panel="example"` register a tab that does not exist — the same gap
+# between "textually present" and "functionally real" this module closes on
+# the link side.
+_TAB_BUTTON_RE = re.compile(r"<button\b[^>]*>")
+
+
+def _known_panels(settings_html: Path = _SETTINGS_HTML) -> set[str]:
+    """Panel ids declared by the settings page's own tab buttons."""
+    try:
+        markup = settings_html.read_text(encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - packaging guard
+        raise ImportError(
+            f"settings.html missing at {settings_html}. It must ship in "
+            "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller "
+            "datas (binary) -- this is a packaging bug, not a usage error."
+        ) from exc
+    return {
+        panel
+        for tag in _TAB_BUTTON_RE.findall(markup)
+        if 'role="tab"' in tag
+        for panel in _PANEL_ID_RE.findall(tag)
+    }
+
+
+def _validate_panel_links(
+    catalogs: dict[str, dict[str, Any]], settings_html: Path = _SETTINGS_HTML
+) -> None:
+    """Reject cross-panel links that point at a tab which does not exist.
+
+    A mistyped target is invisible to every other check: the tag shape is
+    allowlisted, the string carries no placeholders, and the visible link text
+    still reads correctly. The link just stops working, in that one language.
+
+    Scoped to ``messages`` for the same reason ``_validate_inline_markup`` is:
+    only those render through ``tHtml``, which restores the anchor. Tool names
+    and group labels go through ``escapeHtml``, so a link written there shows
+    as visible garbled markup rather than a dead link — wrong, but not silent.
+    """
+    panels = _known_panels(settings_html)
+    english_messages = catalogs[DEFAULT_LOCALE]["messages"]
+    for locale, catalog in catalogs.items():
+        for key, value in catalog["messages"].items():
+            targets = _PANEL_LINK_RE.findall(value)
+            unknown = sorted(set(targets) - panels)
+            if unknown:
+                raise ValueError(
+                    f"Locale {locale} message {key!r} links to panel(s) "
+                    f"{unknown}, which settings.html does not declare; "
+                    f"known panels: {sorted(panels)}"
+                )
+            source = english_messages.get(key)
+            if source is None or locale == DEFAULT_LOCALE:
+                continue
+            source_targets = _PANEL_LINK_RE.findall(source)
+            # Order-independent: a translation may reorder two links to suit
+            # its grammar and still point at the same tabs. Counter keeps the
+            # multiplicity check, so dropping one of a repeated pair fails.
+            if Counter(targets) != Counter(source_targets):
+                raise ValueError(
+                    f"Locale {locale} message {key!r} links to "
+                    f"{sorted(targets)}, but English links to "
+                    f"{sorted(source_targets)}"
+                )
 
 
 def _validate_inline_markup(catalogs: dict[str, dict[str, Any]]) -> None:
