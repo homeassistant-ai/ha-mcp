@@ -200,19 +200,36 @@ def _fill(common: dict[str, str], key: str, /, **values: str) -> str:
 # Keyed off the language, not off the last character. Sniffing glyphs got it
 # wrong in both directions: U+201D (”) is Simplified Chinese's closing quote and
 # was removed as "Latin", while 「」『』 are the traditional forms zh-Hans does
-# not use and were kept. The language is the thing actually being asked about.
-_NO_ASCII_SENTENCE_SPACE = frozenset({"zh", "ja", "ko"})
+# not use and were kept.
+#
+# ``ko`` is deliberately absent. Korean separates words with ASCII spaces and
+# ends sentences on an ASCII full stop, so a future ``ko`` catalog wants the
+# separator exactly like a Latin one — the full-width rationale above simply
+# does not apply to it.
+_NO_ASCII_SENTENCE_SPACE = frozenset({"zh", "ja"})
 
 
-def _configured_language(hass: HomeAssistant | None) -> str:
-    """The instance-wide language, or ``en`` when it cannot be read."""
-    language = getattr(getattr(hass, "config", None), "language", None)
-    return language if isinstance(language, str) else "en"
+def _sentence_prefix(sentence: str, language: str, english: str) -> str:
+    """Return ``sentence`` spaced to run into the prose that follows it.
 
+    Two inputs decide this, and each alone has already been wrong once. The
+    language names the script, which the last character cannot. But the
+    language does not promise the text follows it: core loads
+    ``[en, <language>]`` and merges English first as the documented fallback
+    (``helpers/translation.py``), so an instance set to a language this
+    integration does not ship reads these sentences in English — and English
+    needs the ASCII separator whatever ``hass.config.language`` says. The same
+    holds for a shipped language whenever the catalog load degrades.
 
-def _sentence_prefix(sentence: str, language: str) -> str:
-    """Return ``sentence`` spaced to run into the prose that follows it."""
-    if not sentence or language.split("-")[0].lower() in _NO_ASCII_SENTENCE_SPACE:
+    ``english`` is the English source for this sentence; when the catalog
+    hands back exactly that, the rendered text is English and gets the space.
+    """
+    if not sentence:
+        return sentence
+    if (
+        language.split("-")[0].lower() in _NO_ASCII_SENTENCE_SPACE
+        and sentence != english
+    ):
         return sentence
     return f"{sentence} "
 
@@ -243,8 +260,8 @@ async def _fetch_common_translations(
     return {}
 
 
-async def _common_strings(hass: HomeAssistant | None) -> dict[str, str]:
-    """Return the ``common`` catalog for the system-configured language.
+async def _common_strings(hass: HomeAssistant | None) -> tuple[dict[str, str], str]:
+    """Return the ``common`` catalog and the language it was fetched for.
 
     ``hass.config.language`` is the instance-wide language, not the profile
     language of the administrator who opened the form — an options flow is
@@ -252,14 +269,22 @@ async def _common_strings(hass: HomeAssistant | None) -> dict[str, str]:
     ``source`` and ``entry_id`` only), so where the two differ this prose
     follows the system setting while the surrounding form follows the user.
 
+    The language is returned rather than left for the caller to read again:
+    the sentence separator needs it, and two independent reads of the same
+    attribute can disagree about which catalog is actually in hand. Here they
+    cannot — this is the only place the attribute is read, and ``en`` is what
+    both the fallback strings and the returned language say when it is
+    unreadable.
+
     Failure-proof like the hints it feeds: an unreadable language or a
     failing lookup degrades to the English source strings rather than
     breaking the options form.
     """
     strings = dict(_COMMON_FALLBACKS)
-    language = getattr(getattr(hass, "config", None), "language", None)
-    if hass is None or not isinstance(language, str):
-        return strings
+    configured = getattr(getattr(hass, "config", None), "language", None)
+    if hass is None or not isinstance(configured, str):
+        return strings, "en"
+    language = configured
     try:
         loaded = await _fetch_common_translations(hass, language)
     except Exception as err:
@@ -276,7 +301,7 @@ async def _common_strings(hass: HomeAssistant | None) -> dict[str, str]:
             err,
             exc_info=True,
         )
-        return strings
+        return strings, language
 
     prefix = f"component.{DOMAIN}.common."
     translated = {
@@ -302,7 +327,7 @@ async def _common_strings(hass: HomeAssistant | None) -> dict[str, str]:
             prefix,
         )
     strings.update(translated)
-    return strings
+    return strings, language
 
 
 def _legacy_credentials_active(
@@ -676,10 +701,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         # the unsaved form state) when the panel is off so the link cannot point
         # at a route that 404s. The separator keeps the surrounding prose spaced
         # correctly whether the sentence is present or empty.
-        common = await _common_strings(getattr(self, "hass", None))
+        common, language = await _common_strings(getattr(self, "hass", None))
         panel_hint = (
             _sentence_prefix(
-                common["panel_hint"], _configured_language(getattr(self, "hass", None))
+                common["panel_hint"], language, _COMMON_FALLBACKS["panel_hint"]
             )
             if bool(opts.get(OPT_ENABLE_SIDEBAR_PANEL, True))
             else ""

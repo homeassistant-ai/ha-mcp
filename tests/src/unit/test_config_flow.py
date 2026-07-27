@@ -25,6 +25,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -1336,6 +1338,12 @@ class TestOptionsFormTranslations:
 
         assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
         assert self.PREFIX in caplog.text
+        # The wording itself, not just the prefix it names: this line also
+        # covers the path where the seam discarded the catalog, and the
+        # earlier "carries no keys" described a catalog that never existed.
+        # Both sentences contain the prefix, so only this assert tells them
+        # apart.
+        assert "No usable" in caplog.text
 
     def test_manifest_without_a_version_shows_the_unknown_wording(
         self, monkeypatch, caplog
@@ -1420,6 +1428,11 @@ class TestOptionsFormTranslations:
         Character sniffing got this wrong twice: U+201D is Simplified Chinese's
         closing quote and was dropped as "Latin", while the traditional
         brackets zh-Hans does not use were kept. The language decides.
+
+        The sentence deliberately ends on U+201D, the character the glyph list
+        got wrong, so this test discriminates the two implementations instead
+        of merely agreeing with both: a list-based rule spaces this string and
+        fails here. Ending it on U+3002 would pass either way.
         """
         monkeypatch.setattr(
             cf,
@@ -1430,7 +1443,7 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "_fetch_common_translations",
-            AsyncMock(return_value=self._catalog(panel_hint="打开设置面板。")),
+            AsyncMock(return_value=self._catalog(panel_hint="打开“设置面板”")),
         )
         flow = self._flow_with_language("zh-Hans")
 
@@ -1438,7 +1451,69 @@ class TestOptionsFormTranslations:
             "description_placeholders"
         ]
 
-        assert placeholders["panel_hint"] == "打开设置面板。"
+        assert placeholders["panel_hint"] == "打开“设置面板”"
+
+    @pytest.mark.parametrize("language", ["ja", "zh-Hans"])
+    def test_english_text_keeps_its_space_under_a_cjk_language(
+        self, monkeypatch, language
+    ):
+        """The language alone does not decide it — the text has to agree.
+
+        Home Assistant serves English for any language this integration does
+        not ship (core loads ``[en, <language>]`` and merges English first),
+        so a ``ja`` instance renders these sentences in English while
+        ``hass.config.language`` still reads ``ja``. Keying the separator off
+        the language alone jammed the two English sentences together. The same
+        applies to a shipped language whose catalog load degrades, which
+        ``zh-Hans`` covers here.
+        """
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        english = cf._COMMON_FALLBACKS["panel_hint"]
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(return_value=self._catalog(panel_hint=english)),
+        )
+        flow = self._flow_with_language(language)
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        assert placeholders["panel_hint"] == f"{english} "
+
+    def test_korean_keeps_the_separator(self, monkeypatch):
+        """Korean is not a full-width-punctuation script.
+
+        It separates words with ASCII spaces and ends sentences on an ASCII
+        full stop, so it belongs with the Latin catalogs here even though it
+        is written in a non-Latin script. The text is deliberately not the
+        English source, so this fails if ``ko`` is ever added back to the
+        no-space set rather than passing via the English-text exemption.
+        """
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(return_value=self._catalog(panel_hint="설정 패널을 여세요.")),
+        )
+        flow = self._flow_with_language("ko")
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        assert placeholders["panel_hint"] == "설정 패널을 여세요. "
 
     def test_latin_sentence_ending_on_a_quote_keeps_its_space(self, monkeypatch):
         """The other direction of the same rule.
@@ -1491,6 +1566,10 @@ class TestOptionsFormTranslations:
                 "description_placeholders"
             ]
 
+        # Anchor the paragraph that must survive before asserting the one that
+        # must not: an absence check alone stays green when the whole
+        # placeholder regresses to empty, which would be the larger loss.
+        assert placeholders["versions"].startswith("Component ")
         assert "Beta/advanced file & YAML tools module" not in placeholders["versions"]
         assert "Could not read the tools-entry state" in caplog.text
 
