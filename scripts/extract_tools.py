@@ -201,12 +201,12 @@ def extract_tools() -> list[dict]:
         name = str(t["name"])
         source = str(t["source_file"])
         if name in seen:
-            print(
-                f"ERROR: Duplicate tool name '{name}' in {source} "
-                f"(first seen in {seen[name]})",
-                file=sys.stderr,
+            # Raise rather than exit: this function is imported by the locale
+            # check, where a bare SystemExit surfaces as an unexplained abort
+            # instead of a named failure. ``main`` turns it back into exit 1.
+            raise ValueError(
+                f"Duplicate tool name '{name}' in {source} (first seen in {seen[name]})"
             )
-            sys.exit(1)
         seen[name] = source
 
     tools.sort(key=lambda x: (next(iter(x["tags"]), "zzz"), x["name"]))
@@ -390,7 +390,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    tools = extract_tools()
+    try:
+        tools = extract_tools()
+    except ValueError as err:
+        print(f"ERROR: {err}", file=sys.stderr)
+        sys.exit(1)
     cat_count = len({t["tags"][0] for t in tools if t["tags"]})
     print(f"Extracted {len(tools)} tools across {cat_count} categories")
 
@@ -405,7 +409,7 @@ def main() -> None:
             sys.exit(1)
     else:
         TOOLS_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
-        TOOLS_JSON_PATH.write_text(generate_tools_json(tools))
+        TOOLS_JSON_PATH.write_text(generate_tools_json(tools), encoding="utf-8")
         print(f"Wrote {TOOLS_JSON_PATH.relative_to(REPO_ROOT)}")
 
         README_PATH.write_text(update_readme(tools), encoding="utf-8")

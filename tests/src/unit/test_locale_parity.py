@@ -473,6 +473,9 @@ def _english_tool_texts() -> dict[str, str]:
     line, so that is what a translated value is compared against.
     """
     texts: dict[str, str] = {}
+    # Same discovery guard as the group/name helper: without it a shrunken
+    # parse reaches the share check as a ZeroDivisionError.
+    _renderable_groups_and_tools()
     for tool in extract_tools.extract_tools():
         name = str(tool["name"])
         texts[f"{name}.title"] = str(tool.get("title") or "")
@@ -604,13 +607,33 @@ def test_settings_catalog_tools_are_translated(locale: str) -> None:
     green, which is pressure toward pasting the English in — this is what
     notices. Every shipped locale translates all 174 today.
     """
-    catalog = _settings_catalog(locale)["tools"]
+    english = _english_tool_texts()
+    catalog = _settings_catalog(locale).get("tools", {})
     translated = {
         f"{name}.{field}": text
         for name, entry in catalog.items()
         for field, text in entry.items()
         if field in {"title", "description"}
     }
+
+    # The share alone does not cover the case this check exists for: adding one
+    # tool and pasting its English title and description into all five locales
+    # scores 2 of 176 and passes. One wholly-English tool is the signature, and
+    # naming it beats a percentage. A single matching title stays legal — some
+    # tool names genuinely read the same in another language.
+    pasted = sorted(
+        name
+        for name, entry in catalog.items()
+        if f"{name}.title" in english
+        and entry.get("title") == english[f"{name}.title"]
+        and entry.get("description") == english[f"{name}.description"]
+    )
+    assert not pasted, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json carries {len(pasted)} "
+        f"tool(s) whose title and description are both still English: "
+        f"{pasted}. Adding a tool obliges every locale, and an untranslated "
+        "paste is what that pressure produces."
+    )
 
     _assert_not_a_copy(
         f"src/ha_mcp/settings_ui/locales/{locale}.json (tools)",
@@ -669,6 +692,25 @@ def test_addon_catalog_is_not_a_copy_of_english(addon_dir: Path, locale: str) ->
         _addon_catalog(addon_dir, "en"),
         _addon_catalog(addon_dir, locale),
         _MAX_ENGLISH_IDENTICAL_SHARE,
+    )
+
+
+def test_agents_md_states_the_current_ceilings() -> None:
+    """The documented percentages are the ones a contributor plans against.
+
+    Same reason the locale list below is pinned: the prose went stale the
+    moment the constant moved, and nothing tied the two together.
+    """
+    section = AGENTS_MD.read_text("utf-8")
+    documented = set(re.findall(r"(\d+)% for the", section))
+
+    assert documented == {
+        f"{_MAX_ENGLISH_IDENTICAL_SHARE:.0%}".rstrip("%"),
+        f"{_MAX_COMPONENT_IDENTICAL_SHARE:.0%}".rstrip("%"),
+    }, (
+        f"AGENTS.md § Translations documents ceilings {sorted(documented)} but "
+        f"the constants are {_MAX_ENGLISH_IDENTICAL_SHARE:.0%} and "
+        f"{_MAX_COMPONENT_IDENTICAL_SHARE:.0%}. Update the prose."
     )
 
 
