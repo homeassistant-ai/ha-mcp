@@ -446,19 +446,14 @@
     "Integrations": "Integraciones",
     "Labels & Categories": "Etiquetas y categorías",
     "Matter": "Matter",
-    "Radio Management": "Gestión de radios",
     "Scenes": "Escenas",
     "Scripts": "Scripts",
     "Search & Discovery": "Búsqueda y descubrimiento",
     "Service & Device Control": "Control de servicios y dispositivos",
     "System": "Sistema",
-    "Thread": "Thread",
     "Todo Lists": "Listas de tareas",
     "Utilities": "Utilidades",
-    "Z-Wave": "Z-Wave",
-    "Zigbee": "Zigbee",
-    "Zones": "Zonas",
-    "beta": "beta"
+    "Zones": "Zonas"
   },
   "tools": {
     "ha_get_addon": {
