@@ -152,8 +152,8 @@
         "oauth_select_legacy_mode": "Pon el modo de autenticación de arriba en OAuth heredado y guarda para generar un Client ID y un Client Secret.",
         "panel_hint": "Abre el [panel de ajustes de HA-MCP](/ha-mcp) para la gestión de herramientas y los ajustes del servidor.",
         "tools_module_installed": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): Instalado",
-        "tools_module_not_installed": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): No instalado — pulsa \"Añadir entrada\" en la página de esta integración y elige \"HA-MCP File & YAML Tools\"",
-        "tools_module_not_loaded": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): Instalado pero no cargado — activa o vuelve a cargar la entrada \"HA-MCP File & YAML Tools\" en la página de esta integración",
+        "tools_module_not_installed": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): No instalado — pulsa «Añadir entrada» en la página de esta integración y elige «HA-MCP File & YAML Tools»",
+        "tools_module_not_loaded": "Módulo beta/avanzado de herramientas de archivos y YAML (opcional): Instalado pero no cargado — activa o vuelve a cargar la entrada «HA-MCP File & YAML Tools» en la página de esta integración",
         "version_line": "Componente {component_version} - Servidor ha-mcp {server_version} (canal {channel})",
         "version_not_installed": "aún no instalado",
         "version_unknown": "desconocido"
