@@ -153,7 +153,7 @@ _COMMON_FALLBACKS: dict[str, str] = {
     ),
     "connect_direct_access": "Direct access from the Home Assistant machine: {url}",
     "connect_remote_url": "Remote connect URL: {url}",
-    "connect_local_lan": "Local/LAN (when Network access is 0.0.0.0): {url}",
+    "connect_local_lan": 'Local/LAN (when Network access is "Local network"): {url}',
     "oauth_select_legacy_mode": (
         "Set Authentication mode to legacy OAuth above and save to "
         "generate a Client ID and Client Secret."
@@ -194,18 +194,25 @@ def _fill(common: dict[str, str], key: str, /, **values: str) -> str:
     return _COMMON_FALLBACKS[key].format(**values)
 
 
-# Sentence-final punctuation that is itself full-width: the glyph already
-# carries the space its script wants, so an ASCII space after it renders as a
-# gap. zh-Hans ends its sentences this way, the Latin and Cyrillic catalogs
-# never do. Every entry has to be a glyph no Latin catalog can end on — U+201D
-# (”) looked full-width and is not: it is the ordinary Latin closing quote, so
-# a Latin sentence ending on a quoted phrase would have lost its separator.
-_FULLWIDTH_TERMINATORS = ("。", "！", "？", "；", "：", "」", "』")
+# Scripts that set their own inter-sentence spacing: the full-width punctuation
+# they end on already carries it, so an ASCII space after it renders as a gap.
+#
+# Keyed off the language, not off the last character. Sniffing glyphs got it
+# wrong in both directions: U+201D (”) is Simplified Chinese's closing quote and
+# was removed as "Latin", while 「」『』 are the traditional forms zh-Hans does
+# not use and were kept. The language is the thing actually being asked about.
+_NO_ASCII_SENTENCE_SPACE = frozenset({"zh", "ja", "ko"})
 
 
-def _sentence_prefix(sentence: str) -> str:
+def _configured_language(hass: HomeAssistant | None) -> str:
+    """The instance-wide language, or ``en`` when it cannot be read."""
+    language = getattr(getattr(hass, "config", None), "language", None)
+    return language if isinstance(language, str) else "en"
+
+
+def _sentence_prefix(sentence: str, language: str) -> str:
     """Return ``sentence`` spaced to run into the prose that follows it."""
-    if not sentence or sentence.endswith(_FULLWIDTH_TERMINATORS):
+    if not sentence or language.split("-")[0].lower() in _NO_ASCII_SENTENCE_SPACE:
         return sentence
     return f"{sentence} "
 
@@ -285,8 +292,11 @@ async def _common_strings(hass: HomeAssistant | None) -> dict[str, str]:
         # seeing, and an empty-``loaded`` condition would skip it. The merge is
         # a silent no-op either way: the form renders pure English and no other
         # check notices.
+        # Wording covers both ways to get here: a catalog that carries nothing
+        # under our prefix, and one the seam already discarded and warned about
+        # (where "carries no keys" would be untrue — there was no catalog).
         _LOGGER.warning(
-            "The %s translations carry no %s keys, so the options form renders "
+            "No usable %s translations under %s, so the options form renders "
             "its assembled prose in English",
             language,
             prefix,
@@ -668,7 +678,9 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         # correctly whether the sentence is present or empty.
         common = await _common_strings(getattr(self, "hass", None))
         panel_hint = (
-            _sentence_prefix(common["panel_hint"])
+            _sentence_prefix(
+                common["panel_hint"], _configured_language(getattr(self, "hass", None))
+            )
             if bool(opts.get(OPT_ENABLE_SIDEBAR_PANEL, True))
             else ""
         )
@@ -818,7 +830,14 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 entry.state is ConfigEntryState.LOADED for entry in tools_entries
             )
         except Exception as err:
-            _LOGGER.debug("Could not read the tools-entry state for the hint: %s", err)
+            # Warning, like the two version reads above: this drops the whole
+            # tools-module paragraph from the form, which is a larger visible
+            # loss than either of those fallbacks.
+            _LOGGER.warning(
+                "Could not read the tools-entry state, dropping the "
+                "tools-module line from the options form: %s",
+                err,
+            )
             return None
         if loaded:
             return common["tools_module_installed"]

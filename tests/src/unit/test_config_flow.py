@@ -433,9 +433,12 @@ class TestServerOptionsFlow:
             "Component 0.14.0 - Server ha-mcp 7.9.0 (dev channel)"
         )
 
-    def test_versions_placeholder_is_failure_proof(self, monkeypatch):
+    def test_versions_placeholder_is_failure_proof(self, monkeypatch, caplog):
         # A broken version read must not break the form: the component read
         # failing and the server read raising both degrade to safe text.
+        # Both degradations are asserted at warning level — they put a
+        # visible fallback on the form, and reverting either to debug
+        # otherwise keeps this test green.
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         flow.hass = MagicMock()
         flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
@@ -448,11 +451,14 @@ class TestServerOptionsFlow:
 
         monkeypatch.setattr(cf, "_installed_server_version", _raise)
 
-        form = asyncio.run(flow.async_step_init(None))  # must not raise
+        with caplog.at_level(logging.WARNING):
+            form = asyncio.run(flow.async_step_init(None))  # must not raise
         versions = form["description_placeholders"]["versions"]
         assert versions.startswith(
             "Component unknown - Server ha-mcp not installed yet (stable channel)"
         )
+        assert "Could not read the component version" in caplog.text
+        assert "Could not read the server version" in caplog.text
 
     def test_versions_placeholder_server_not_installed_yet(self, monkeypatch):
         # Before the server package is installed, the server half reads
@@ -1392,14 +1398,14 @@ class TestOptionsFormTranslations:
 
         Exercises the seam itself, since every other test here replaces it.
         """
-        translation = sys.modules.setdefault(
-            "homeassistant.helpers.translation", MagicMock()
+        # setitem, not setdefault: the module stub has to be removed again, or
+        # this test leaves an ordering dependence behind for its peers.
+        translation = MagicMock()
+        translation.async_get_translations = AsyncMock(
+            return_value=["not", "a", "mapping"]
         )
-        monkeypatch.setattr(
-            translation,
-            "async_get_translations",
-            AsyncMock(return_value=["not", "a", "mapping"]),
-            raising=False,
+        monkeypatch.setitem(
+            sys.modules, "homeassistant.helpers.translation", translation
         )
 
         with caplog.at_level(logging.WARNING):
@@ -1408,11 +1414,12 @@ class TestOptionsFormTranslations:
         assert result == {}
         assert "expected a Mapping, got list" in caplog.text
 
-    def test_full_width_sentence_end_gets_no_ascii_space(self, monkeypatch):
-        """The separator the caller adds belongs to the script, not the string.
+    def test_cjk_language_gets_no_ascii_space(self, monkeypatch):
+        """The separator belongs to the script, and the language names it.
 
-        zh-Hans ends the sentence with a full-width stop, which already carries
-        the space its script wants — an ASCII space after it renders as a gap.
+        Character sniffing got this wrong twice: U+201D is Simplified Chinese's
+        closing quote and was dropped as "Latin", while the traditional
+        brackets zh-Hans does not use were kept. The language decides.
         """
         monkeypatch.setattr(
             cf,
@@ -1432,6 +1439,60 @@ class TestOptionsFormTranslations:
         ]
 
         assert placeholders["panel_hint"] == "打开设置面板。"
+
+    def test_latin_sentence_ending_on_a_quote_keeps_its_space(self, monkeypatch):
+        """The other direction of the same rule.
+
+        A Latin catalog may legitimately end this sentence on U+201D, and it
+        still needs the separator — re-adding that character to a glyph list
+        would silently run the two sentences together.
+        """
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf,
+            "_fetch_common_translations",
+            AsyncMock(return_value=self._catalog(panel_hint="Öffne das “Panel”")),
+        )
+        flow = self._flow_with_language("de")
+
+        placeholders = asyncio.run(flow.async_step_init(None))[
+            "description_placeholders"
+        ]
+
+        assert placeholders["panel_hint"] == "Öffne das “Panel” "
+
+    def test_tools_module_read_failure_is_logged(self, monkeypatch, caplog):
+        """Dropping the paragraph is a bigger loss than either version wording.
+
+        The line vanishes from the form entirely, so the degradation has to be
+        visible at the same level as the two version reads above it.
+        """
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
+        )
+        flow = self._flow_with_language("de")
+        flow.hass.config_entries.async_entries = MagicMock(
+            side_effect=RuntimeError("registry boom")
+        )
+
+        with caplog.at_level(logging.WARNING):
+            placeholders = asyncio.run(flow.async_step_init(None))[
+                "description_placeholders"
+            ]
+
+        assert "Beta/advanced file & YAML tools module" not in placeholders["versions"]
+        assert "Could not read the tools-entry state" in caplog.text
 
     def test_connect_and_oauth_prose_follow_the_catalog(self, monkeypatch):
         """The two hints were the last all-English blocks in the paragraph."""
