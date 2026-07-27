@@ -327,7 +327,7 @@ def test_tlh_catalog_loads_and_is_registered() -> None:
     from ha_mcp.settings_ui._i18n import CATALOGS
 
     assert "tlh" in CATALOGS
-    assert CATALOGS["tlh"]["meta"]["native_name"] == "tlhIngan Hol"
+    assert CATALOGS["tlh"]["meta"]["native_name"] == "tlhIngan Hol (Klingon)"
     assert CATALOGS["tlh"]["meta"]["dir"] == "ltr"
     assert CATALOGS["tlh"]["messages"]["actions.save"] == "pol"
 
