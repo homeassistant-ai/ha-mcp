@@ -301,3 +301,43 @@ class TestClassifyByMessageBranches:
         exc = Exception("Server returned 401")
         result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
+
+
+class TestUnclassifiedExceptionTraceback:
+    """The INTERNAL_ERROR branch logs the traceback of the exception it was
+    handed, not whatever ``sys.exc_info()`` happens to hold.
+
+    ``exception_to_structured_error`` is a plain helper, so ruff's LOG004
+    (stabilized in ruff 0.16.0) rejects ``logger.exception()`` here. The
+    replacement must keep the traceback rather than degrade to a bare
+    ``.error()``, including on the ``raise_error=False`` paths that can run
+    outside an ``except`` block.
+    """
+
+    def test_traceback_logged_outside_except_handler(self, caplog):
+        """No live ``sys.exc_info()``: the record still carries the traceback."""
+        exc = RuntimeError("totally unexpected gibberish")
+
+        with caplog.at_level("ERROR", logger="ha_mcp.tools.helpers"):
+            result = exception_to_structured_error(exc, raise_error=False)
+
+        assert result["error"]["code"] == "INTERNAL_ERROR"
+        records = [r for r in caplog.records if "Unclassified exception" in r.message]
+        assert len(records) == 1, "expected exactly one unclassified-exception record"
+        assert records[0].exc_info is not None, (
+            "traceback dropped — operators lose the line numbers this branch exists for"
+        )
+        assert records[0].exc_info[1] is exc
+
+    def test_classified_exception_logs_no_traceback(self, caplog):
+        """Classified failures stay quiet — no duplicate ERROR-log noise."""
+        with caplog.at_level("ERROR", logger="ha_mcp.tools.helpers"):
+            result = exception_to_structured_error(
+                HomeAssistantCommandError(
+                    "Command failed: Unknown config specified: d"
+                ),
+                raise_error=False,
+            )
+
+        assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert not [r for r in caplog.records if "Unclassified exception" in r.message]
