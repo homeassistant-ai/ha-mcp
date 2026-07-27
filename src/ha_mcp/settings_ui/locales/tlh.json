@@ -446,19 +446,14 @@
     "Integrations": "rarwI'mey",
     "Labels & Categories": "pong permey Seghmey je",
     "Matter": "Matter",
-    "Radio Management": "wab labwI'mey SeH",
     "Scenes": "ghu'mey",
     "Scripts": "mIw ghItlhmey",
     "Search & Discovery": "nej 'ej Sam",
     "Service & Device Control": "mIw jan je SeH",
     "System": "pat",
-    "Thread": "Thread",
     "Todo Lists": "ta'nISbogh tetlhmey",
     "Utilities": "lo' law' janmey",
-    "Z-Wave": "Z-Wave",
-    "Zigbee": "Zigbee",
-    "Zones": "mIchmey",
-    "beta": "Beta"
+    "Zones": "mIchmey"
   },
   "tools": {
     "ha_get_addon": {
