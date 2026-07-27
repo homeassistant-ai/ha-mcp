@@ -16,6 +16,8 @@ from typing import Any
 DEFAULT_LOCALE = "en"
 LOCALE_COOKIE = "ha_mcp_locale"
 LOCALES_DIR = Path(__file__).parent / "locales"
+# The page whose tab buttons define the valid cross-panel link targets.
+_SETTINGS_HTML = Path(__file__).parent / "settings.html"
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
@@ -61,8 +63,14 @@ def _validate_tools(value: Any, *, context: str) -> dict[str, dict[str, str]]:
     return result
 
 
-def load_catalogs(directory: Path = LOCALES_DIR) -> dict[str, dict[str, Any]]:
-    """Load and validate every JSON translation catalog in ``directory``."""
+def load_catalogs(
+    directory: Path = LOCALES_DIR, settings_html: Path = _SETTINGS_HTML
+) -> dict[str, dict[str, Any]]:
+    """Load and validate every JSON translation catalog in ``directory``.
+
+    ``settings_html`` is the page whose tab buttons define the valid
+    cross-panel link targets; overridable so tests need not depend on the
+    shipped page's panel ids."""
     catalogs: dict[str, dict[str, Any]] = {}
     try:
         paths = sorted(directory.glob("*.json"))
@@ -114,7 +122,7 @@ def load_catalogs(directory: Path = LOCALES_DIR) -> dict[str, dict[str, Any]]:
         )
     _validate_placeholder_parity(catalogs)
     _validate_inline_markup(catalogs)
-    _validate_panel_links(catalogs)
+    _validate_panel_links(catalogs, settings_html)
     return catalogs
 
 
@@ -175,26 +183,42 @@ _ALLOWED_TAGS_RE = re.compile(
 # is documentation, not navigation.
 _PANEL_LINK_RE = re.compile(r'<a href="#" data-panel-link="([a-z][a-z-]*)">')
 _PANEL_ID_RE = re.compile(r'data-panel="([a-z][a-z-]*)"')
-_SETTINGS_HTML = Path(__file__).parent / "settings.html"
+# Only a real tab button declares a panel. Scanning the whole page for the
+# attribute would let a future code sample or doc comment mentioning
+# `data-panel="example"` register a tab that does not exist — the same gap
+# between "textually present" and "functionally real" this module closes on
+# the link side.
+_TAB_BUTTON_RE = re.compile(r"<button\b[^>]*>")
 
 
-def _known_panels() -> set[str]:
-    """Panel ids declared by the settings page itself."""
+def _known_panels(settings_html: Path = _SETTINGS_HTML) -> set[str]:
+    """Panel ids declared by the settings page's own tab buttons."""
     try:
-        markup = _SETTINGS_HTML.read_text(encoding="utf-8")
+        markup = settings_html.read_text(encoding="utf-8")
     except OSError as exc:  # pragma: no cover - packaging guard
-        raise ImportError(f"Unable to read {_SETTINGS_HTML}") from exc
-    return set(_PANEL_ID_RE.findall(markup))
+        raise ImportError(
+            f"settings.html missing at {settings_html}. It must ship in "
+            "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller "
+            "datas (binary) -- this is a packaging bug, not a usage error."
+        ) from exc
+    return {
+        panel
+        for tag in _TAB_BUTTON_RE.findall(markup)
+        if 'role="tab"' in tag
+        for panel in _PANEL_ID_RE.findall(tag)
+    }
 
 
-def _validate_panel_links(catalogs: dict[str, dict[str, Any]]) -> None:
+def _validate_panel_links(
+    catalogs: dict[str, dict[str, Any]], settings_html: Path = _SETTINGS_HTML
+) -> None:
     """Reject cross-panel links that point at a tab which does not exist.
 
     A mistyped target is invisible to every other check: the tag shape is
     allowlisted, the string carries no placeholders, and the visible link text
     still reads correctly. The link just stops working, in that one language.
     """
-    panels = _known_panels()
+    panels = _known_panels(settings_html)
     english_messages = catalogs[DEFAULT_LOCALE]["messages"]
     for locale, catalog in catalogs.items():
         for key, value in catalog["messages"].items():
