@@ -20,7 +20,7 @@
         },
         "abort": {
             "already_configured": "此条目已配置。",
-            "unsupported_home_assistant": "进程内 HA-MCP 服务器需要 Home Assistant {required} 或更高版本，但此实例运行的是 {installed}。你仍可将本组件的 HA-MCP 文件与 YAML 工具条目与以插件或 Docker 容器方式运行的外部 ha-mcp 服务器搭配使用。"
+            "unsupported_home_assistant": "进程内 HA-MCP 服务器需要 Home Assistant {required} 或更高版本，但此实例运行的是 {installed}。你仍可将本组件的 HA-MCP File & YAML Tools 条目与以插件或 Docker 容器方式运行的外部 ha-mcp 服务器搭配使用。"
         }
     },
     "options": {
@@ -141,7 +141,7 @@
         }
     },
     "common": {
-        "connect_direct_access": "从 Home Assistant 所在机器直接访问：{url}",
+        "connect_direct_access": "从 Home Assistant 所在主机直接访问：{url}",
         "connect_local_lan": "本地/局域网（当网络访问为 0.0.0.0 时）：{url}",
         "connect_remote_url": "远程连接 URL：{url}",
         "connect_urls_label": "连接 URL：",

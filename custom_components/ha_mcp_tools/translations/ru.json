@@ -20,7 +20,7 @@
         },
         "abort": {
             "already_configured": "Эта запись уже настроена.",
-            "unsupported_home_assistant": "Для внутрипроцессного сервера HA-MCP требуется Home Assistant версии {required} или новее, но в этом экземпляре установлена версия {installed}. Вы по-прежнему можете использовать запись «Файловые инструменты и инструменты YAML HA-MCP» этого компонента с внешним сервером ha-mcp, работающим как дополнение или контейнер Docker."
+            "unsupported_home_assistant": "Для внутрипроцессного сервера HA-MCP требуется Home Assistant версии {required} или новее, но в этом экземпляре установлена версия {installed}. Вы по-прежнему можете использовать запись «HA-MCP File & YAML Tools» этого компонента с внешним сервером ha-mcp, работающим как дополнение или контейнер Docker."
         }
     },
     "options": {
@@ -141,14 +141,14 @@
         }
     },
     "common": {
-        "connect_direct_access": "Прямой доступ с машины Home Assistant: {url}",
+        "connect_direct_access": "Прямой доступ с компьютера Home Assistant: {url}",
         "connect_local_lan": "Локально/LAN (когда сетевой доступ — 0.0.0.0): {url}",
         "connect_remote_url": "URL-адрес удалённого подключения: {url}",
         "connect_urls_label": "URL-адреса подключения:",
         "connect_urls_pending": "URL-адреса подключения появятся здесь (и в журнале Home Assistant) после запуска сервера.",
         "connect_webhook_disabled": "Удалённый доступ через вебхук отключён (только локальный режим).",
         "oauth_creds_pending": "Client ID и Client Secret появятся здесь после запуска сервера.",
-        "oauth_not_serving": "Устаревший OAuth пока их не использует — перезапустите Home Assistant, когда он об этом попросит, чтобы активировать их.",
+        "oauth_not_serving": "Устаревший OAuth пока их не обслуживает — перезапустите Home Assistant, когда он об этом попросит, чтобы активировать их.",
         "oauth_select_legacy_mode": "Установите режим аутентификации выше на устаревший OAuth и сохраните, чтобы создать Client ID и Client Secret.",
         "panel_hint": "Откройте [панель настроек HA-MCP](/ha-mcp) для управления инструментами и настройками сервера.",
         "tools_module_installed": "Бета-модуль расширенных инструментов для файлов и YAML (необязательно): Установлен",

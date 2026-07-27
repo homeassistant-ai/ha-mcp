@@ -141,7 +141,7 @@
         }
     },
     "common": {
-        "connect_direct_access": "Direkter Zugriff vom Home Assistant Rechner: {url}",
+        "connect_direct_access": "Direkter Zugriff von der Home Assistant Maschine: {url}",
         "connect_local_lan": "Lokal/LAN (wenn Netzwerkzugriff auf 0.0.0.0 steht): {url}",
         "connect_remote_url": "Remote-Verbindungs-URL: {url}",
         "connect_urls_label": "Verbindungs-URL(s):",

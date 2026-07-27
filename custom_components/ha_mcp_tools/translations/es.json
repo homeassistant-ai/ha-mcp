@@ -20,7 +20,7 @@
         },
         "abort": {
             "already_configured": "Esta entrada ya está configurada.",
-            "unsupported_home_assistant": "El servidor HA-MCP integrado en el proceso requiere Home Assistant {required} o posterior, pero esta instancia ejecuta {installed}. Aun así puedes usar la entrada Herramientas de archivos y YAML de HA-MCP de este componente con un servidor ha-mcp externo que se ejecute como complemento o contenedor Docker."
+            "unsupported_home_assistant": "El servidor HA-MCP integrado en el proceso requiere Home Assistant {required} o posterior, pero esta instancia ejecuta {installed}. Aun así puedes usar la entrada HA-MCP File & YAML Tools de este componente con un servidor ha-mcp externo que se ejecute como complemento o contenedor Docker."
         }
     },
     "options": {
