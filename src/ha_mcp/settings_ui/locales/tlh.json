@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "native_name": "tlhIngan Hol",
+    "dir": "ltr"
+  },
+  "messages": {
+    "actions.save": "pol",
+    "actions.refresh": "labqa'",
+    "actions.close": "SoQmoH",
+    "actions.view": "'ang",
+    "actions.restore": "polqa'",
+    "actions.delete": "polHa'",
+    "actions.edit": "choH",
+    "actions.cancel": "qIl",
+    "actions.approve": "laj",
+    "common.none": "(pagh)"
+  },
+  "tool_groups": {},
+  "tools": {}
+}
