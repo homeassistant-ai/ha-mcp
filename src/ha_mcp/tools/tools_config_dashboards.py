@@ -2437,9 +2437,7 @@ class DashboardConfigTools:
         ``force_reload`` bypasses the component fast path entirely: the component
         ``get`` carries no force semantic, so a forced read must go straight to the
         legacy ``lovelace/config`` request below (which threads ``force=True``) to
-        actually bust HA's Lovelace cache. The optimistic-lock re-read in
-        ``_fetch_and_verify_dashboard_hash`` deliberately keeps the no-force
-        component read because it needs the same in-memory object that Core serves.
+        actually bust HA's Lovelace cache.
         """
         component_url_path = (
             None if (not url_path or url_path == "default") else url_path

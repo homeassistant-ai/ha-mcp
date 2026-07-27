@@ -1849,8 +1849,8 @@ class HomeAssistantSmartMCPServer:
         except Exception as e:
             logger.error(f"❌ Error testing connection: {e}")
 
-        # Log available tools count
-        logger.info("🔧 Smart server with enhanced tools loaded")
+        # Log successful server initialization
+        logger.info("🔧 Home Assistant MCP tools loaded")
 
         # Run the MCP server with async compatibility
         await self.mcp.run_async()

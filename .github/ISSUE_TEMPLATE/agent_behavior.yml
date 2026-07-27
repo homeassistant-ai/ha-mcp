@@ -16,7 +16,7 @@ body:
         **This is NOT for bugs in ha-mcp** (use Runtime Bug template instead).
 
         > 📝 **Title tip:** replace the default `[AGENT] ` with a one-line summary
-        > of what the agent did wrong (e.g. `[AGENT] re-runs ha_search_entities
+        > of what the agent did wrong (e.g. `[AGENT] re-runs ha_search
         > instead of caching the result`). If `ha_report_issue` gave you a
         > submission link, the title is already filled in — keep it or refine it,
         > just don't leave it as a bare `[AGENT]`.
@@ -33,7 +33,7 @@ body:
 
         **Examples:**
         - "The agent searched for entities 3 times instead of using the result from the first search"
-        - "It used ha_search_entities when I just needed the state of one light"
+        - "It used ha_search when I just needed the state of one light"
         - "The agent kept retrying the same failed command without adjusting its approach"
         - "I'm not sure why it's wrong, but it felt slow and inefficient"
 
@@ -76,11 +76,11 @@ body:
         User: Can you turn on the living room lights?
 
         Agent: I'll search for the living room light entity.
-        [Tool: ha_search_entities, query="living room light"]
+        [Tool: ha_search, query="living room light"]
         Result: Found entity light.living_room
 
         Agent: Now I'll search for it again to confirm...
-        [Tool: ha_search_entities, query="living room"]
+        [Tool: ha_search, query="living room"]
         Result: ...
 
         [Paste everything here, including ha_report_issue output if available]
