@@ -153,7 +153,7 @@ _COMMON_FALLBACKS: dict[str, str] = {
     ),
     "connect_direct_access": "Direct access from the Home Assistant machine: {url}",
     "connect_remote_url": "Remote connect URL: {url}",
-    "connect_local_lan": "Local/LAN (when bind host is 0.0.0.0): {url}",
+    "connect_local_lan": "Local/LAN (when Network access is 0.0.0.0): {url}",
     "oauth_select_legacy_mode": (
         "Set Authentication mode to legacy OAuth above and save to "
         "generate a Client ID and Client Secret."
@@ -180,8 +180,13 @@ def _fill(common: dict[str, str], key: str, /, **values: str) -> str:
     try:
         return common[key].format(**values)
     except Exception as err:
+        # Names both causes: a catalog string this caller cannot fill, or a
+        # caller passing values the template never declared. The second is our
+        # bug and crashes on the English constant below, so the log line has to
+        # point at the caller rather than blame the translator.
         _LOGGER.warning(
-            "Unusable %s translation (%r), using the English source: %s",
+            "Unusable %s template (%r) — bad catalog string or wrong caller "
+            "arguments; using the English source: %s",
             key,
             common.get(key),
             err,
@@ -192,8 +197,10 @@ def _fill(common: dict[str, str], key: str, /, **values: str) -> str:
 # Sentence-final punctuation that is itself full-width: the glyph already
 # carries the space its script wants, so an ASCII space after it renders as a
 # gap. zh-Hans ends its sentences this way, the Latin and Cyrillic catalogs
-# never do.
-_FULLWIDTH_TERMINATORS = ("。", "！", "？", "；", "：", "”", "」", "』")
+# never do. Every entry has to be a glyph no Latin catalog can end on — U+201D
+# (”) looked full-width and is not: it is the ordinary Latin closing quote, so
+# a Latin sentence ending on a quoted phrase would have lost its separator.
+_FULLWIDTH_TERMINATORS = ("。", "！", "？", "；", "：", "」", "』")
 
 
 def _sentence_prefix(sentence: str) -> str:
@@ -217,7 +224,16 @@ async def _fetch_common_translations(
     # Any Mapping, not just dict: core returns a plain dict today, but the
     # mirrored seam in ``websocket_api`` accepts a Mapping, and narrowing it
     # here would silently discard a whole catalog on a core-internal change.
-    return dict(result) if isinstance(result, Mapping) else {}
+    if isinstance(result, Mapping):
+        return dict(result)
+    # Discarding a whole catalog is the same pure-English outcome as a failed
+    # load, so it gets the same visibility; the type is the only useful clue.
+    _LOGGER.warning(
+        "Ignoring the %s common translations: expected a Mapping, got %s",
+        language,
+        type(result).__name__,
+    )
+    return {}
 
 
 async def _common_strings(hass: HomeAssistant | None) -> dict[str, str]:
@@ -261,11 +277,14 @@ async def _common_strings(hass: HomeAssistant | None) -> dict[str, str]:
         for key, value in loaded.items()
         if key.startswith(prefix) and isinstance(value, str) and value
     }
-    if loaded and not translated:
-        # A catalog that loaded but carries nothing under our prefix is the
-        # signature of a wrong category or a wrong prefix: the merge is a
-        # silent no-op, the form renders pure English, and no other check
-        # notices. One line, or it stays invisible.
+    if not translated:
+        # Deliberately not ``if loaded and not translated``: core returns a
+        # single-component lookup straight from that component's cache entry
+        # (``_TranslationCache.get_cached``), so a category that was never
+        # built arrives as ``{}`` — which is exactly the developer error worth
+        # seeing, and an empty-``loaded`` condition would skip it. The merge is
+        # a silent no-op either way: the form renders pure English and no other
+        # check notices.
         _LOGGER.warning(
             "The %s translations carry no %s keys, so the options form renders "
             "its assembled prose in English",
@@ -729,10 +748,23 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         if hass is not None:
             try:
                 integration = await async_get_integration(hass, DOMAIN)
-                component_version = str(integration.version)
+                # A manifest without a version yields None, not an exception —
+                # ``str()`` would render the literal "None" into the form and
+                # the "unknown" wording would never appear for the likeliest
+                # defect it exists for.
+                if integration.version is not None:
+                    component_version = str(integration.version)
+                else:
+                    _LOGGER.warning(
+                        "The %s manifest carries no version; the options form "
+                        "shows the unknown-version wording",
+                        DOMAIN,
+                    )
             except Exception as err:
-                _LOGGER.debug(
-                    "Could not read component version for the options hint: %s", err
+                _LOGGER.warning(
+                    "Could not read the component version for the options hint, "
+                    "showing the unknown-version wording: %s",
+                    err,
                 )
 
         try:
@@ -745,7 +777,11 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             )
             server_version = raw_version or common["version_not_installed"]
         except Exception as err:
-            _LOGGER.debug("Could not read server version for the options hint: %s", err)
+            _LOGGER.warning(
+                "Could not read the server version for the options hint, showing "
+                "the not-installed wording: %s",
+                err,
+            )
             server_version = common["version_not_installed"]
 
         return _fill(

@@ -1147,8 +1147,13 @@ class TestOptionsFormTranslations:
             "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
         )
 
-    def test_failing_lookup_degrades_to_english(self, monkeypatch):
-        """Translations are additive; a broken catalog must not break the form."""
+    def test_failing_lookup_degrades_to_english(self, monkeypatch, caplog):
+        """Translations are additive; a broken catalog must not break the form.
+
+        The level is asserted, not just the fallback text: reverting this
+        ``except`` to debug leaves the degradation invisible while every
+        text assertion stays green.
+        """
         monkeypatch.setattr(
             cf,
             "async_get_integration",
@@ -1162,12 +1167,14 @@ class TestOptionsFormTranslations:
         )
         flow = self._flow_with_language("de")
 
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
+        with caplog.at_level(logging.WARNING):
+            placeholders = asyncio.run(flow.async_step_init(None))[
+                "description_placeholders"
+            ]
 
         assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
         assert placeholders["versions"].startswith("Component 1.2.4")
+        assert "falling back to" in caplog.text
 
     def test_unreadable_language_skips_the_lookup(self, monkeypatch):
         """No language to ask for means English, not a lookup with a bad key."""
@@ -1189,9 +1196,13 @@ class TestOptionsFormTranslations:
         assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
 
     def test_malformed_version_line_falls_back_to_the_english_template(
-        self, monkeypatch
+        self, monkeypatch, caplog
     ):
-        """A catalog is data — an unusable brace must not take the form down."""
+        """A catalog is data — an unusable brace must not take the form down.
+
+        The level is asserted for the same reason as the lookup failure above:
+        the fallback text alone stays green at debug.
+        """
         monkeypatch.setattr(
             cf,
             "async_get_integration",
@@ -1205,13 +1216,15 @@ class TestOptionsFormTranslations:
         )
         flow = self._flow_with_language("de")
 
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
+        with caplog.at_level(logging.WARNING):
+            placeholders = asyncio.run(flow.async_step_init(None))[
+                "description_placeholders"
+            ]
 
         assert placeholders["versions"].startswith(
             "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
         )
+        assert "Unusable version_line template" in caplog.text
 
     def test_dotted_placeholder_in_version_line_does_not_break_the_form(
         self, monkeypatch
@@ -1317,6 +1330,83 @@ class TestOptionsFormTranslations:
 
         assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
         assert self.PREFIX in caplog.text
+
+    def test_manifest_without_a_version_shows_the_unknown_wording(
+        self, monkeypatch, caplog
+    ):
+        """``str(None)`` renders "None" into the form, with no exception.
+
+        The translated unknown-version wording exists for exactly this case and
+        would never have fired: the read succeeds, so the ``except`` never runs.
+        """
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version=None)),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
+        )
+        flow = self._flow_with_language("de")
+
+        with caplog.at_level(logging.WARNING):
+            placeholders = asyncio.run(flow.async_step_init(None))[
+                "description_placeholders"
+            ]
+
+        assert placeholders["versions"].startswith("Component unknown - ")
+        assert "None" not in placeholders["versions"]
+        assert "carries no version" in caplog.text
+
+    def test_empty_catalog_says_so(self, monkeypatch, caplog):
+        """The reachable half of the same defect, and the likelier one.
+
+        Core serves a single-component lookup straight out of that component's
+        cache entry, so everything a non-empty result can contain is already
+        prefixed. The developer error worth seeing — the ``common`` category
+        never built, or the block missing from ``strings.json`` — arrives as
+        ``{}`` instead, which an ``if loaded and ...`` condition skips.
+        """
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(
+            cf, "_fetch_common_translations", AsyncMock(return_value={})
+        )
+        flow = self._flow_with_language("de")
+
+        with caplog.at_level(logging.WARNING):
+            placeholders = asyncio.run(flow.async_step_init(None))[
+                "description_placeholders"
+            ]
+
+        assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
+        assert self.PREFIX in caplog.text
+
+    def test_non_mapping_lookup_result_says_so(self, monkeypatch, caplog):
+        """Discarding a whole catalog is the same pure-English outcome.
+
+        Exercises the seam itself, since every other test here replaces it.
+        """
+        translation = sys.modules.setdefault(
+            "homeassistant.helpers.translation", MagicMock()
+        )
+        monkeypatch.setattr(
+            translation,
+            "async_get_translations",
+            AsyncMock(return_value=["not", "a", "mapping"]),
+            raising=False,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = asyncio.run(cf._fetch_common_translations(MagicMock(), "de"))
+
+        assert result == {}
+        assert "expected a Mapping, got list" in caplog.text
 
     def test_full_width_sentence_end_gets_no_ascii_space(self, monkeypatch):
         """The separator the caller adds belongs to the script, not the string.

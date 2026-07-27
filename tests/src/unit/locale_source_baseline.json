@@ -1,7 +1,7 @@
 {
   "custom_components/ha_mcp_tools/translations": {
     "common.connect_direct_access": "77cbc196e65c3954",
-    "common.connect_local_lan": "b739d1527bc6c80c",
+    "common.connect_local_lan": "3f651f0f4de54d89",
     "common.connect_remote_url": "929083ccca6e9a99",
     "common.connect_urls_label": "b2619827086d7e2b",
     "common.connect_urls_pending": "f599d4f845f26d82",
