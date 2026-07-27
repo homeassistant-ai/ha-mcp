@@ -20,7 +20,7 @@ configuration:
     name: Activar la búsqueda de herramientas
     description: >-
       Sustituye el catálogo completo de herramientas por un descubrimiento
-      basado en búsqueda. Reduce el contexto en reposo de unos 46K a 5K tokens.
+      basado en búsqueda. Reduce el contexto en reposo de unos 46K a unos 5K tokens.
       ⚠️ NO actives esto si usas Claude en modo Sonnet u Opus: esos modelos
       tienen su propia búsqueda de herramientas / herramientas diferidas
       integrada, que entra en conflicto con la nuestra. Para usar la búsqueda de
