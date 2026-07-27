@@ -41,6 +41,8 @@ sys.modules.setdefault("homeassistant.loader", MagicMock())
 
 from custom_components.ha_mcp_tools import (  # noqa: E402
     CALLER_TOKEN_FIELD,
+    _HASS_DATA_TOKEN_KEY,
+    _build_get_caller_token_handler,
     _caller_is_admin,
     _caller_token_ok,
     _unauthorized_response,
@@ -210,6 +212,66 @@ class TestManifestVersionCoupling:
             f"MIN_COMPONENT_VERSION {MIN_COMPONENT_VERSION!r}; a fresh component "
             "would fail its own version gate. Bump manifest.json in lockstep."
         )
+
+
+class TestGetCallerTokenManifestVersion:
+    """The bootstrap response reports the component's manifest version.
+
+    A manifest without a version reads as ``None`` from the loader rather than
+    raising, so ``str()`` would put the literal "None" in the response and the
+    server's version gate would compare against it. The component's own
+    unreadable-manifest path is the right answer, and only an explicit guard
+    routes it there.
+
+    Unreachable in production — core's loader refuses to set up a custom
+    integration whose manifest carries no version — which is exactly why a
+    test is the only thing keeping the branch honest.
+    """
+
+    @staticmethod
+    def _hass_with_token(token: str = "tok"):
+        hass = MagicMock()
+        hass.data = {DOMAIN: {_HASS_DATA_TOKEN_KEY: token}}
+        return hass
+
+    @pytest.mark.asyncio
+    async def test_version_less_manifest_reports_unreadable(self, monkeypatch):
+        import custom_components.ha_mcp_tools as component
+
+        monkeypatch.setattr(
+            component, "_caller_is_admin", AsyncMock(return_value=True)
+        )
+        monkeypatch.setattr(
+            component,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version=None)),
+        )
+        handler = _build_get_caller_token_handler(self._hass_with_token())
+
+        response = await handler(MagicMock())
+
+        assert response["success"] is False
+        assert response["error_code"] == "manifest_unreadable"
+        # The token must not leak out of a response that reports failure.
+        assert "token" not in response
+
+    @pytest.mark.asyncio
+    async def test_readable_manifest_reports_its_version(self, monkeypatch):
+        import custom_components.ha_mcp_tools as component
+
+        monkeypatch.setattr(
+            component, "_caller_is_admin", AsyncMock(return_value=True)
+        )
+        monkeypatch.setattr(
+            component,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+        )
+        handler = _build_get_caller_token_handler(self._hass_with_token())
+
+        response = await handler(MagicMock())
+
+        assert response == {"success": True, "token": "tok", "version": "1.2.4"}
 
 
 # =============================================================================
@@ -395,6 +457,35 @@ class TestCallMcpToolsServiceInjectsToken:
         # Bootstrap returns a malformed response
         client.call_service.return_value = {"service_response": {"success": False}}
         with pytest.raises(ToolError, match="did not return a usable token"):
+            await call_mcp_tools_service(client, "list_files", {"path": "www"})
+
+    @pytest.mark.asyncio
+    async def test_component_reported_reason_is_surfaced_verbatim(self):
+        """A component that says why it failed must not be re-diagnosed here.
+
+        ``manifest_unreadable`` carries no token, so it lands on the same
+        branch as a malformed response — but the generic wording sends the
+        operator to the reload and admin-rights suggestions, neither of which
+        touches a manifest. The component's own message is the accurate one.
+        """
+        client = AsyncMock()
+        client.get_services.return_value = [
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
+            }
+        ]
+        client.call_service.return_value = {
+            "service_response": {
+                "success": False,
+                "error_code": "manifest_unreadable",
+                "error": (
+                    "ha_mcp_tools manifest version could not be read. "
+                    "Reinstall the integration via HACS."
+                ),
+            }
+        }
+        with pytest.raises(ToolError, match="manifest version could not be read"):
             await call_mcp_tools_service(client, "list_files", {"path": "www"})
 
     @pytest.mark.asyncio

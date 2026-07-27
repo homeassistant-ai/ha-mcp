@@ -3096,7 +3096,7 @@ def _build_get_caller_token_handler(
                 # an absent one deserve the same answer.
                 raise ValueError("the manifest carries no version")
             version = str(integration.version)
-        except Exception as exc:  # pragma: no cover — manifest sanity
+        except Exception as exc:
             _LOGGER.warning(
                 "Could not read ha_mcp_tools manifest version for "
                 "get_caller_token response: %s",
