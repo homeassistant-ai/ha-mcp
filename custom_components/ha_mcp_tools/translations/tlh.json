@@ -20,7 +20,7 @@
         },
         "abort": {
             "already_configured": "De' 'ay'vam cherlu'pu'.",
-            "unsupported_home_assistant": "Home Assistant {required} ghap Dotlh chu' law' poQ HA-MCP Server QaptaHbogh, 'ach {installed} lo' patvam. componentvam HA-MCP 'a'baqa' & YAML janmey De' 'ay' Dalo'taHlaH; add-on Docker container ghapDaq Qapbogh ha-mcp turwI' Hur retlhDaq Qap."
+            "unsupported_home_assistant": "Home Assistant {required} ghap Dotlh chu' law' poQ HA-MCP Server QaptaHbogh, 'ach {installed} lo' patvam. componentvam HA-MCP File & YAML Tools De' 'ay' Dalo'taHlaH; add-on Docker container ghapDaq Qapbogh ha-mcp turwI' Hur retlhDaq Qap."
         }
     },
     "options": {
@@ -139,5 +139,23 @@
                 "name": "chu'moH"
             }
         }
+    },
+    "common": {
+        "connect_direct_access": "Home Assistant janvo' naw' pIQ: {url}",
+        "connect_local_lan": "SIr'o' Sum/LAN (rarmeH naw'Daq \"Local network\" wIvlu'chugh): {url}",
+        "connect_remote_url": "Daq Hopvo' rarmeH URL: {url}",
+        "connect_urls_label": "rarmeH URLmey:",
+        "connect_urls_pending": "turwI' QapchoHpu'DI', naDev rarmeH URLmey 'anglu', 'ej Home Assistant QonoSDaq 'anglu' je.",
+        "connect_webhook_disabled": "Daq Hopvo' webhook lo'bogh naw' Qotlhlu' (Daq Sumvo' neH naw'lu').",
+        "oauth_creds_pending": "turwI' QapchoHpu'DI', naDev Client ID, Client Secret je 'anglu'.",
+        "oauth_not_serving": "wej Dochmeyvam laj OAuth ngo' — Home Assistant Dataghqa'moH 'e' tlhoblu'DI', QapchoHmeH Dochmeyvam Home Assistant yItaghqa'moH.",
+        "oauth_select_legacy_mode": "DungDaq chaw' 'olmeH mIwvaD OAuth ngo' yIwIv 'ej Client ID Client Secret je chenmoHlu'meH yIpol.",
+        "panel_hint": "janmey Davu'meH 'ej turwI' DuHmey DachermeH [HA-MCP SeHlaw](/ha-mcp) yIpoSmoH.",
+        "tools_module_installed": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'pu'",
+        "tools_module_not_installed": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'be' — navvamDaq \"De' 'ay' chel\" yI'uy, 'ej bobcho'vam DachelmeH \"HA-MCP File & YAML Tools\" yIwIv",
+        "tools_module_not_loaded": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'pu' 'ach QaptaHbe' — navvamDaq \"HA-MCP File & YAML Tools\" De' 'ay' yIQotlhHa' pagh yItaghqa'moH",
+        "version_line": "component {component_version} - ha-mcp turwI' {server_version} ({channel} Dotlh He)",
+        "version_not_installed": "wej jomlu'",
+        "version_unknown": "Sovbe'lu'"
     }
 }
