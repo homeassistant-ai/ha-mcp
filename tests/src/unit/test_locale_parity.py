@@ -222,13 +222,32 @@ def _english_tool_sources() -> dict[str, str]:
     A feature-gated tool has two English renderings and a setting decides which
     one the UI shows, so where the stub and the docstring differ, both are
     pinned.
+
+    What gets hashed is the summary *paragraph*, while the row displays its
+    first physical line (``settings.js`` cuts at the newline, then at 120
+    characters). The two are the same text for 86 of the 87 tools;
+    ``ha_config_set_helper`` wraps its summary, and the Chinese catalog
+    translates the half that wraps off — so hashing the line would leave "(28
+    types, unified interface)" free to move while a shipped translation states
+    it. The copy checks keep using the displayed line: a paste is of what was
+    on screen.
     """
     rendered = _english_tool_texts()
     parsed = _english_tool_texts(as_rendered=False)
+    summaries = {
+        f"{str(tool['name'])}.description": " ".join(
+            str(tool.get("description") or "").split("\n\n")[0].split()
+        )
+        for tool in extract_tools.extract_tools()
+    }
     sources = dict(rendered)
     for key, text in parsed.items():
+        # A key whose rendered text differs is showing a stub, and those are
+        # hand-written one-liners — the docstring is the only text a wrap cuts.
         if text != rendered.get(key):
-            sources[f"{key} (docstring)"] = text
+            sources[f"{key} (docstring)"] = summaries.get(key, text)
+        else:
+            sources[key] = summaries.get(key, text)
     return sources
 
 
