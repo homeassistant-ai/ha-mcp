@@ -531,6 +531,69 @@ class TestPerClientInstructionTemplate:
         )
 
 
+class TestMcpProxySdkPin:
+    """The generated mcp-proxy config must pin the MCP SDK below 2.0.
+
+    mcp-proxy imports ``request_ctx`` from ``mcp.server.lowlevel.server``
+    but declares an unbounded ``mcp>=`` dependency, so an unconstrained
+    ``uvx mcp-proxy`` resolves mcp 2.x and dies on an ImportError before
+    it ever connects (#2073). ``--with`` is a *global* uvx option, so
+    dropping it after the package name silently stops constraining
+    anything — hence the ordering assertion.
+
+    Every stdio-only client that goes through the bridge is covered:
+    Zed is excluded because it takes the URL directly.
+    """
+
+    @pytest.mark.parametrize("client_id", ["claude-desktop", "jetbrains"])
+    def test_generated_config_pins_mcp_below_2(
+        self,
+        client_id: str,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        assert client_id in wizard_vars["stdioOnlyClients"], (
+            f"test premise: {client_id!r} must be a stdio-only client"
+        )
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-addon")
+                + _click("client", client_id)
+                + _click("scope", "local")
+                + _click("platform", "macos")
+                + "document.body.dataset.configCode = "
+                "document.querySelector('#config-output code').textContent || '';\n"
+            ),
+        )
+        _assert_clean_init(result)
+        match = re.search(r'data-config-code="([^"]*)"', result.dom)
+        assert match is not None, "config-output was not captured"
+        # The capture round-trips through an HTML attribute, so `"` in the
+        # emitted JSON comes back as `&quot;`. Parse the args out of the
+        # unescaped text rather than substring-matching quoted fragments.
+        config = json.loads(match.group(1).replace("&quot;", '"'))
+        args = config["mcpServers"]["home-assistant"]["args"]
+
+        assert "mcp-proxy" in args, f"{client_id}: not an mcp-proxy config: {args}"
+        assert "--with" in args, (
+            f"{client_id}: mcp-proxy config does not pin the MCP SDK — an "
+            f"unconstrained uvx resolves mcp 2.x and fails on ImportError "
+            f"(#2073); args={args}"
+        )
+        assert args[args.index("--with") + 1] == "mcp<2.0.0", (
+            f"{client_id}: --with must be followed by the mcp<2.0.0 "
+            f"constraint; args={args}"
+        )
+        assert args.index("--with") < args.index("mcp-proxy"), (
+            f"{client_id}: --with is a global uv option and must precede the "
+            f"package name, otherwise it constrains nothing; args={args}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Remote-path tile filtering (updateSections -> remotePathsForMethod)
 # ---------------------------------------------------------------------------

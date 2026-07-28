@@ -1787,7 +1787,8 @@ ingress:
       const mcpProxyInstr = `<div class="instruction-block border-yellow-700/50 bg-yellow-900/10">
         <h3 class="instruction-title text-yellow-300">mcp-proxy Required</h3>
         <p class="text-slate-300 mb-2">${state.client.name} only supports stdio. Use mcp-proxy to connect to HTTP servers:</p>
-        <pre class="code-block"><code># mcp-proxy is run automatically via uvx in the config below</code></pre>${brewNote}
+        <pre class="code-block"><code># mcp-proxy is run automatically via uvx in the config below</code></pre>
+        <p class="text-xs text-slate-400 mt-2">The config below pins <code>mcp&lt;2.0.0</code>. mcp-proxy is not yet compatible with version 2 of the MCP SDK, and without the pin it fails to start with <code>ImportError: cannot import name 'request_ctx'</code>.</p>${brewNote}
       </div>`;
       instructions.push(mcpProxyInstr);
     }
@@ -1939,11 +1940,18 @@ ingress:
             }
           }, null, 2);
         } else {
+          // `--with "mcp<2.0.0"` pins the MCP SDK below 2.0. mcp-proxy 0.12.0
+          // declares an unbounded `mcp>=1.27.1` but imports `request_ctx` from
+          // `mcp.server.lowlevel.server`, which mcp 2.0.0 removed — so an
+          // unconstrained `uvx mcp-proxy` resolves 2.x and dies on an
+          // ImportError before it ever connects (#2073). `--with` is a global
+          // uvx option, so it must precede the package name. Drop the pin once
+          // mcp-proxy ships an mcp 2.x-compatible release.
           config = JSON.stringify({
             mcpServers: {
               "home-assistant": {
                 command: "uvx",
-                args: ["mcp-proxy", "--transport", "streamablehttp", mcpUrl]
+                args: ["--with", "mcp<2.0.0", "mcp-proxy", "--transport", "streamablehttp", mcpUrl]
               }
             }
           }, null, 2);

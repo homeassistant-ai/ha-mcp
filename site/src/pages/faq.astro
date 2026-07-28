@@ -216,6 +216,32 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
           </ol>
         </div>
 
+        <div class="faq-item" id="mcp-proxy-request-ctx">
+          <h3 class="text-lg font-medium text-white mb-2">mcp-proxy fails with <code class="bg-slate-800 px-1 rounded">ImportError: cannot import name 'request_ctx'</code></h3>
+          <p class="text-slate-300 mb-3">A previously working <code class="bg-slate-800 px-1 rounded">uvx mcp-proxy</code> config stops connecting and the client shows "Server disconnected". Running the command by hand shows:</p>
+          <pre class="code-block mb-3"><code>from mcp.server.lowlevel.server import request_ctx
+ImportError: cannot import name 'request_ctx' from 'mcp.server.lowlevel.server'</code></pre>
+          <p class="text-slate-300 mb-3"><strong class="text-white">Cause:</strong> the <code class="bg-slate-800 px-1 rounded">mcp</code> SDK released version 2.0.0, which removed <code class="bg-slate-800 px-1 rounded">request_ctx</code>. mcp-proxy depends on <code class="bg-slate-800 px-1 rounded">mcp</code> without an upper version bound, so <code class="bg-slate-800 px-1 rounded">uvx</code> installs the incompatible 2.x release. Clearing the uv cache does not help — a fresh install picks the same version.</p>
+          <p class="text-slate-300 mb-3">This only affects clients that reach an HTTP ha-mcp deployment through the mcp-proxy bridge (Claude Desktop and JetBrains). The local stdio setup — <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest</code> — is unaffected, and so are the add-on, Docker, and the custom component themselves: ha-mcp already pins the SDK below 2.0.</p>
+          <p class="text-slate-300 mb-2"><strong class="text-white">Fix:</strong> pin the SDK in the mcp-proxy config's <code class="bg-slate-800 px-1 rounded">args</code>. <code class="bg-slate-800 px-1 rounded">--with</code> is a global <code class="bg-slate-800 px-1 rounded">uv</code> option, so it must come <em>before</em> the package name:</p>
+          <pre class="code-block"><code>{`{
+  "mcpServers": {
+    "home-assistant": {
+      "command": "uvx",
+      "args": [
+        "--with",
+        "mcp<2.0.0",
+        "mcp-proxy",
+        "--transport",
+        "streamablehttp",
+        "http://192.168.1.100:9583/private_your_secret_path"
+      ]
+    }
+  }
+}`}</code></pre>
+          <p class="text-slate-400 text-sm mt-3">Restart the client after saving. The <a href={withBase('/setup')} class="text-blue-400 hover:underline">Setup Wizard</a> now generates this pin automatically — existing configs written before it need the two <code class="bg-slate-800 px-1 rounded">args</code> entries added by hand. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/2073" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#2073</a>.</p>
+        </div>
+
         <div class="faq-item" id="uv-tls-interception">
           <h3 class="text-lg font-medium text-white mb-2">uvx fails with <code class="bg-slate-800 px-1 rounded">invalid peer certificate: UnknownIssuer</code></h3>
           <p class="text-slate-300 mb-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> can't download ha-mcp (or <code class="bg-slate-800 px-1 rounded">mcp-proxy</code>, if you connect to the app through it) and the log shows a certificate error fetching from PyPI, the failure is in <code class="bg-slate-800 px-1 rounded">uv</code>'s package download — it never reaches Home Assistant:</p>
