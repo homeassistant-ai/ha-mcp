@@ -138,7 +138,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 (it never fetches the registry on its own — see
                 ``_deep_search_helpers``). The orchestrator only hands one down
                 when both the entity and config-body branches run, so direct
-                direct ``deep_search`` callers get ``None`` here.
+                ``deep_search`` callers get ``None`` here.
 
         Returns:
             Dictionary with search results grouped by type

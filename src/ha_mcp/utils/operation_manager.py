@@ -273,41 +273,6 @@ class OperationManager:
 
         return True
 
-    def get_operations_summary(self) -> dict[str, Any]:
-        """Get summary of all operations.
-
-        Returns:
-            Dictionary with operation statistics
-        """
-        total = len(self.operations)
-        by_status = {}
-
-        for status in OperationStatus:
-            by_status[status.value] = len(
-                [op for op in self.operations.values() if op.status == status]
-            )
-
-        # Count expired pending operations
-        expired_pending = len(
-            [
-                op
-                for op in self.operations.values()
-                if op.status == OperationStatus.PENDING and op.is_expired
-            ]
-        )
-
-        return {
-            "total_operations": total,
-            "by_status": by_status,
-            "expired_pending": expired_pending,
-            "memory_usage_mb": self._estimate_memory_usage(),
-        }
-
-    def _estimate_memory_usage(self) -> float:
-        """Estimate memory usage in MB (rough approximation)."""
-        # Very rough estimate: ~1KB per operation
-        return len(self.operations) * 1024 / (1024 * 1024)
-
     def cleanup_expired_operations(self, force: bool = False) -> None:
         """Clean up expired and completed operations.
 

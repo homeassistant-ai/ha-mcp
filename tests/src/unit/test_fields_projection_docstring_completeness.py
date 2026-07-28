@@ -569,7 +569,7 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
     The parametrized ``ha_search`` drift-check runs in manifest mode and
     is structurally blind to keys the entities branch emits but that
     ``_merge_payload_metadata`` then propagates into the orchestrator
-    response. A new key added to ``ha_search_entities``'s sub-payload
+    response. A new key added to ``_ha_search_entities``'s sub-payload
     builders would silently land at the top level of ``ha_search`` and
     pass the manifest check (the manifest is hand-maintained, doesn't
     re-derive).
@@ -619,7 +619,7 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
 
     uncategorised = emitted - stripped - documented - _AUTO_RETAINED
     assert not uncategorised, (
-        f"ha_search_entities emits {sorted(uncategorised)!r} into its "
+        f"_ha_search_entities emits {sorted(uncategorised)!r} into its "
         f"sub-payload, but the orchestrator neither strips them (not in "
         f"_ENTITIES_BRANCH_SKIP_KEYS) nor documents them (not in the "
         f"`Available keys:` enumeration / documented_must_equal manifest). "

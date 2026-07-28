@@ -130,7 +130,7 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 ## Architecture Alignment
 
 1. **New tools**: Create `tools_<domain>.py` with `register_<domain>_tools()` function
-2. **Shared logic**: Use service layer (`smart_search.py`, `device_control.py`)
+2. **Shared logic**: Use service layer (`smart_search/`, `device_control.py`)
 3. **WebSocket operations**: Verify state changes in real-time
 4. **Tool completion**: Operations should wait for completion (not just API acknowledgment)
 

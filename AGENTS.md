@@ -429,7 +429,7 @@ src/ha_mcp/
 │   └── consent_form.py      # OAuth consent screen
 ├── tools/             # 36 modules, auto-discovered
 │   ├── registry.py          # Lazy auto-discovery
-│   ├── smart_search.py      # Fuzzy entity search
+│   ├── smart_search/        # Fuzzy entity search
 │   ├── device_control.py    # WebSocket-verified control
 │   ├── best_practice_checker.py # Reactive HA config validator (warns + embeds skill content)
 │   ├── tools_*.py           # Domain-specific tools
@@ -455,7 +455,7 @@ src/ha_mcp/
 
 **Lazy Initialization**: Server, client, and tools created on-demand for fast startup.
 
-**Service Layer**: Business logic in `smart_search.py`, `device_control.py` separate from tool modules.
+**Service Layer**: Business logic in `smart_search/`, `device_control.py` separate from tool modules.
 
 **WebSocket Verification**: Device operations verified via real-time state changes.
 

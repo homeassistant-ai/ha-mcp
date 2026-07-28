@@ -371,8 +371,6 @@
     "advanced.verify_ssl.help": "仅在受信任网络上禁用 TLS 验证。需重启。",
     "advanced.fuzzy_threshold.label": "模糊搜索阈值",
     "advanced.fuzzy_threshold.help": "较低的值允许更宽松的实体匹配。范围 0–100。",
-    "advanced.entity_search_limit.label": "实体搜索结果上限",
-    "advanced.entity_search_limit.help": "ha_search 返回的最大实体数。范围 1–1000。",
     "advanced.automation_config_time_budget.label": "自动化配置时间预算（秒）",
     "advanced.automation_config_time_budget.help": "深度搜索获取自动化配置所花费的最大时间。范围 1–600。需重启。",
     "advanced.script_config_time_budget.label": "脚本配置时间预算（秒）",

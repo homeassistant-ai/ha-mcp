@@ -371,8 +371,6 @@
     "advanced.verify_ssl.help": "Deaktiviere TLS-Überprüfung nur in vertrauenswürdigen Netzwerken. Neustart erforderlich.",
     "advanced.fuzzy_threshold.label": "Fuzzy-Such-Schwellenwert",
     "advanced.fuzzy_threshold.help": "Niedrigere Werte erlauben lockerere Entitätsabgleichung. Bereich 0-100.",
-    "advanced.entity_search_limit.label": "Entitätssuchergebnis-Limit",
-    "advanced.entity_search_limit.help": "Maximale Entitäten, die von ha_search zurückgegeben werden. Bereich 1-1000.",
     "advanced.automation_config_time_budget.label": "Automatisierungskonfigurations-Zeitbudget (s)",
     "advanced.automation_config_time_budget.help": "Maximale Zeit, die die Tiefensuche für das Abrufen von Automatisierungskonfigurationen aufwendet. Bereich 1-600. Neustart erforderlich.",
     "advanced.script_config_time_budget.label": "Skriptkonfigurations-Zeitbudget (s)",

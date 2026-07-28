@@ -7,7 +7,6 @@ WebSocket events and updates operation status in real-time.
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Any
 
 from ..config import get_global_settings
@@ -29,13 +28,6 @@ class WebSocketListenerService:
         self.cleanup_task: asyncio.Task | None = None
         self.running = False
         self._event_loop: asyncio.AbstractEventLoop | None = None
-        self.stats: dict[str, Any] = {
-            "events_processed": 0,
-            "operations_updated": 0,
-            "connection_errors": 0,
-            "last_event_time": None,
-            "start_time": None,
-        }
 
     async def start(self) -> bool:
         """Start the WebSocket listener service.
@@ -64,7 +56,6 @@ class WebSocketListenerService:
             self.cleanup_task = asyncio.create_task(self._periodic_cleanup())
 
             self.running = True
-            self.stats["start_time"] = datetime.now()
 
             logger.info("WebSocket listener service started successfully")
             return True
@@ -141,11 +132,6 @@ class WebSocketListenerService:
         entity_id: str | None = None
         new_state: dict[str, Any] | None = None
         try:
-            events_processed = self.stats["events_processed"]
-            if isinstance(events_processed, int):
-                self.stats["events_processed"] = events_processed + 1
-            self.stats["last_event_time"] = datetime.now()
-
             # Extract event data — fields are nested under ``event["data"]``.
             event_data = event.get("data") or {}
             entity_id = event_data.get("entity_id")
@@ -164,11 +150,6 @@ class WebSocketListenerService:
             # Update pending operations
             updated_ops = update_pending_operations(entity_id, new_state)
             if updated_ops:
-                operations_updated = self.stats["operations_updated"]
-                if isinstance(operations_updated, int):
-                    self.stats["operations_updated"] = operations_updated + len(
-                        updated_ops
-                    )
                 logger.info(f"Updated {len(updated_ops)} operations for {entity_id}")
 
         except (RuntimeError, ConnectionError, OSError) as e:
@@ -198,14 +179,8 @@ class WebSocketListenerService:
                     ping_success = await self.websocket_client.ping()
                     if not ping_success:
                         logger.warning("WebSocket ping failed")
-                        connection_errors = self.stats["connection_errors"]
-                        if isinstance(connection_errors, int):
-                            self.stats["connection_errors"] = connection_errors + 1
                 else:
                     logger.warning("WebSocket connection lost")
-                    connection_errors = self.stats["connection_errors"]
-                    if isinstance(connection_errors, int):
-                        self.stats["connection_errors"] = connection_errors + 1
 
                     # Try to reconnect
                     try:
@@ -240,39 +215,6 @@ class WebSocketListenerService:
             except Exception as e:
                 logger.error(f"Cleanup task error: {e}")
                 await asyncio.sleep(300)
-
-    def get_status(self) -> dict[str, Any]:
-        """Get service status and statistics.
-
-        Returns:
-            Dictionary with service status and statistics
-        """
-        uptime: float | None = None
-        start_time = self.stats["start_time"]
-        if isinstance(start_time, datetime):
-            uptime = (datetime.now() - start_time).total_seconds()
-
-        return {
-            "running": self.running,
-            "websocket_connected": (
-                self.websocket_client.is_connected if self.websocket_client else False
-            ),
-            "uptime_seconds": uptime,
-            "statistics": {
-                **self.stats,
-                "last_event_time": (
-                    self.stats["last_event_time"].isoformat()
-                    if isinstance(self.stats["last_event_time"], datetime)
-                    else None
-                ),
-                "start_time": (
-                    self.stats["start_time"].isoformat()
-                    if isinstance(self.stats["start_time"], datetime)
-                    else None
-                ),
-            },
-            "operation_summary": self.operation_manager.get_operations_summary(),
-        }
 
 
 # Global listener service instance

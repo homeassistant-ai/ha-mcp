@@ -371,8 +371,6 @@
     "advanced.verify_ssl.help": "Désactive la vérification TLS uniquement sur les réseaux de confiance. Redémarrage requis.",
     "advanced.fuzzy_threshold.label": "Seuil de recherche floue",
     "advanced.fuzzy_threshold.help": "Des valeurs plus basses permettent une correspondance d'entités plus lâche. Plage 0–100.",
-    "advanced.entity_search_limit.label": "Limite des résultats de recherche d'entités",
-    "advanced.entity_search_limit.help": "Nombre maximum d'entités renvoyées par ha_search. Plage 1–1000.",
     "advanced.automation_config_time_budget.label": "Budget de temps de configuration d'automatisation (s)",
     "advanced.automation_config_time_budget.help": "Temps maximum que la recherche approfondie consacre à la récupération des configurations d'automatisation. Plage 1–600. Redémarrage requis.",
     "advanced.script_config_time_budget.label": "Budget de temps de configuration de script (s)",

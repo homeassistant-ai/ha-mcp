@@ -63,7 +63,6 @@ class Settings(BaseSettings):
 
     # Tool configuration
     fuzzy_threshold: int = Field(60, alias="FUZZY_THRESHOLD")
-    entity_search_limit: int = Field(20, alias="ENTITY_SEARCH_LIMIT")
 
     # Smart-search config-fetch time budgets (seconds). Bound how long
     # ha_search spends fetching automation/script/scene
@@ -784,7 +783,6 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     AdvancedField("verify_ssl", "HA_VERIFY_SSL", bool, "operations", True),
     # Search & matching.
     AdvancedField("fuzzy_threshold", "FUZZY_THRESHOLD", int, "search", True),
-    AdvancedField("entity_search_limit", "ENTITY_SEARCH_LIMIT", int, "search", True),
     # Smart-search config-fetch time budgets (#1538). Restart-required
     # (consumed as import-time constants in smart_search/_config.py).
     AdvancedField(
@@ -914,12 +912,11 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
 # Bounds present on the Settings field today (mirrored):
 #   fuzzy_threshold (validator 0-100), code_mode_* (Field ge/le).
 # Bounds added purely as UI/POST guardrails (no Field constraint):
-#   timeout, max_retries, entity_search_limit.
+#   timeout, max_retries.
 _ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
     "timeout": (1, 600),
     "max_retries": (0, 20),
     "fuzzy_threshold": (0, 100),
-    "entity_search_limit": (1, 1000),
     "automation_config_time_budget": (1.0, 600.0),
     "script_config_time_budget": (1.0, 600.0),
     "scene_config_time_budget": (1.0, 600.0),

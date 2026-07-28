@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp import FastMCP
@@ -21,7 +21,6 @@ from pydantic import Field
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
 from .tools.helpers import raise_tool_error
-from .tools.util_helpers import strip_internal_fields
 from .transforms import DEFAULT_PINNED_TOOLS
 
 if TYPE_CHECKING:
@@ -1784,51 +1783,6 @@ class HomeAssistantSmartMCPServer:
             }
         )
         return response
-
-    # Public bridges to the underlying client and smart-search services.
-
-    async def smart_entity_search(
-        self, query: str, domain_filter: str | None = None, limit: int = 10
-    ) -> dict[str, Any]:
-        """Bridge method to existing smart search implementation."""
-        return cast(
-            dict[str, Any],
-            await self.smart_tools.smart_entity_search(
-                query=query, limit=limit, include_attributes=False
-            ),
-        )
-
-    async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
-        """Bridge method to existing entity state implementation."""
-        return await self.client.get_entity_state(entity_id)
-
-    async def call_service(
-        self,
-        domain: str,
-        service: str,
-        entity_id: str | None = None,
-        data: dict | None = None,
-    ) -> list[dict[str, Any]] | dict[str, Any]:
-        """Bridge method to existing service call implementation."""
-        service_data = data or {}
-        if entity_id:
-            service_data["entity_id"] = entity_id
-        return await self.client.call_service(domain, service, service_data)
-
-    async def get_entities_by_area(self, area_name: str) -> dict[str, Any]:
-        """Bridge method to existing area functionality.
-
-        ``smart_tools.get_entities_by_area`` enriches per-entity dicts
-        with leading-underscore internals (``_hidden_by`` etc.) so
-        downstream search branches can apply the score penalty without
-        a second registry lookup. Strip them here so this public bridge
-        doesn't leak internals to MCP clients.
-        """
-        result = await self.smart_tools.get_entities_by_area(
-            area_query=area_name, group_by_domain=True
-        )
-        strip_internal_fields(result)
-        return cast(dict[str, Any], result)
 
     async def start(self) -> None:
         """Start the Smart MCP server with async compatibility."""

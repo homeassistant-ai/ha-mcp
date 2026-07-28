@@ -3961,7 +3961,7 @@ class SearchTools:
             limit: Maximum total results to return (default: 5)
             exact_match: Use exact substring matching (default: True)
 
-        Examples:
+        Public entry-point examples (via ``ha_search``):
             - Find automations referencing an entity: ha_search(query="sensor.temperature")
             - Find with fuzzy matching: ha_search(query="motion", exact_match=False)
             - Find scenes touching a light: ha_search(query="light.kitchen")
