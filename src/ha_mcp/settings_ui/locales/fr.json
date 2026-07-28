@@ -789,7 +789,7 @@
       "description": "Évalue un modèle Jinja2 avec le moteur Home Assistant."
     },
     "ha_report_issue": {
-      "title": "Signaler un problème",
+      "title": "Signaler un problème ou envoyer un retour",
       "description": "Fournit des informations de diagnostic et des modèles pour signaler un problème ou envoyer un retour."
     },
     "ha_get_zone": {

@@ -759,6 +759,15 @@ each translation was written against, because key parity cannot see a string
 whose meaning changed: #1993 flipped a policy string from ALL-match to
 ANY-match and left the Chinese text asserting the opposite.
 
+**A tool docstring is one of those English strings.** `en.json` ships `tools`
+empty, so the English a `tools` entry translates is read from the tool
+definition in `src/ha_mcp/tools/` — the `title=` kwarg and the summary
+paragraph of the docstring, or the `FEATURE_GATED_TOOLS` stub where a gated
+tool shows one instead. Editing
+that summary therefore moves the English out from under five catalogs and goes
+red here, in the PR that edits it, rather than leaving every locale describing
+the old behaviour.
+
 The Webhook Proxy add-on and its bundled integration stay **English-only by
 decision** — not worth the upkeep. The test records that, so any other new
 catalog directory fails until it is either translated everywhere or listed as
