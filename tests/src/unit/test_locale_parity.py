@@ -529,7 +529,12 @@ def test_no_gated_stub_pins_a_paragraph_the_ui_hides() -> None:
         key = f"{name}.description"
         if name not in FEATURE_GATED_TOOLS or rendered.get(key) != parsed.get(key):
             continue
-        if _summary_paragraph(tool) != parsed.get(key):
+        # Against the physical first line, as in the sibling guard: whether the
+        # summary wraps is a property of the docstring, not of the display cut.
+        if (
+            _summary_paragraph(tool)
+            != str(tool.get("description") or "").split("\n")[0]
+        ):
             hidden.append(name)
 
     assert not hidden, (
@@ -1008,7 +1013,11 @@ def _english_tool_texts(*, as_rendered: bool = True) -> dict[str, str]:
         stub = FEATURE_GATED_TOOLS.get(name) if as_rendered else None
         if stub is not None:
             texts[f"{name}.title"] = stub["title"]
-            texts[f"{name}.description"] = stub["description"]
+            # A stub reaches the row through the same field as a docstring
+            # (``_render_stub`` feeds ``description``), so it takes the same cut.
+            texts[f"{name}.description"] = stub["description"][
+                :_DISPLAYED_DESCRIPTION_CHARS
+            ]
             continue
         texts[f"{name}.title"] = str(tool.get("title") or "")
         first_line = str(tool.get("description") or "").split("\n")[0]
