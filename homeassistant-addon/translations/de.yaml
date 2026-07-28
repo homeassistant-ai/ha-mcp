@@ -19,20 +19,21 @@ configuration:
   enable_tool_search:
     name: Tool-Suche aktivieren
     description: >-
-      Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung. Reduziert
-      den Idle-Kontext von ~46K auf ~5K Tokens. ⚠️ Aktiviere dies NICHT, wenn du
-      Claude in Sonnet- oder Opus-Modi nutzt – diese Modelle haben eigenen
-      eingebauten Tool Search / Deferred Tools, der mit unserem kollidiert. Um
-      ha-mcps Tool Search mit Claude zu nutzen, deaktiviere zuerst Claudes
-      eingebauten Tool Search; ansonsten lass dies aus. Nutze dies nur mit LLMs,
-      denen native Deferred Tools fehlen (z.B. Claude Haiku, lokale
-      OpenAI-kompatible Modelle) oder mit kleineren Kontextfenstern. Tools werden
-      via ha_search_tools gefunden und über kategorisierte Proxies ausgeführt
-      (read/write/delete). Erfordert einen Neustart, um wirksam zu werden. Dann
-      neu verbinden oder den MCP-Server in deinem AI-Client aktualisieren, damit
-      er die Tool-Liste neu lädt. Ein Neustart des Add-ons allein aktualisiert
-      NICHT die gecachte Tool-Liste eines Clients; dies gilt nach jeder
-      Einstellungsänderung hier.
+      Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung.
+      Reduziert den Leerlauf-Kontext von ~46K auf ~5K Tokens. ⚠️ Aktiviere dies
+      NICHT, wenn du Claude im Sonnet- oder Opus-Modus verwendest – diese
+      Modelle haben ihre eigene integrierte Tool-Suche / aufgeschobene Tools,
+      die mit unserer kollidiert. Um die Tool-Suche von ha-mcp mit Claude zu
+      verwenden, deaktiviere zuerst Claudes integrierte Tool-Suche; lasse dies
+      andernfalls ausgeschaltet. Verwende dies nur mit LLMs, denen native
+      aufgeschobene Tools fehlen (z. B. Claude Haiku, lokale OpenAI-kompatible
+      Modelle) oder mit kleineren Kontextfenstern. Tools werden über
+      ha_search_tools gefunden und über kategorisierte Proxys
+      (read/write/delete) ausgeführt. Erfordert einen Neustart, um wirksam zu
+      werden. Dann neu verbinden oder den MCP-Server in deinem AI-Client
+      aktualisieren, damit er die Tool-Liste neu lädt. Ein Neustart des Add-ons
+      allein aktualisiert NICHT die gecachte Tool-Liste eines Clients; dies
+      gilt nach jeder Einstellungsänderung hier.
   enable_tool_security_policies:
     name: Tool-Sicherheitsrichtlinien aktivieren (erweitert)
     description: >-
@@ -81,7 +82,7 @@ configuration:
       blockiert und geben einen Fehler zurück, der den Client anweist, das
       Best-Practices-Skill über ha_get_skill_guide zu lesen und den dort
       erhaltenen Bestätigungsschlüssel zurückzugeben. Während er eingeschaltet
-      ist, ist das ha_get_skill_guide-Tool gesperrt aktiviert - es ist der
+      ist, ist das ha_get_skill_guide-Tool gesperrt aktiviert – es ist der
       einzige Herausgeber des Bestätigungsschlüssels. Kind der Option
       Best-Practice-Skills bei Schreibvorgängen anhängen oben und inert,
       während dieser Elternteil ausgeschaltet ist. Erfordert Neustart, um

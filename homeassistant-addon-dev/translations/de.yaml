@@ -21,7 +21,7 @@ configuration:
     description: >-
       Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung.
       Reduziert den Leerlauf-Kontext von ~46K auf ~5K Tokens. ⚠️ Aktiviere dies
-      NICHT, wenn du Claude im Sonnet- oder Opus-Modus verwendest - diese
+      NICHT, wenn du Claude im Sonnet- oder Opus-Modus verwendest – diese
       Modelle haben ihre eigene integrierte Tool-Suche / aufgeschobene Tools,
       die mit unserer kollidiert. Um die Tool-Suche von ha-mcp mit Claude zu
       verwenden, deaktiviere zuerst Claudes integrierte Tool-Suche; lasse dies
@@ -53,17 +53,17 @@ configuration:
   enable_beta_features:
     name: Beta-Funktionen aktivieren (Master)
     description: >-
-      ⚠ GEFAHR - diese Tools können deine Home-Assistant-Installation DAUERHAFT
+      ⚠ GEFAHR – diese Tools können deine Home-Assistant-Installation DAUERHAFT
       BESCHÄDIGEN. Sie schreiben in deine YAML-Konfiguration, dein Dateisystem,
       installieren benutzerdefinierte Komponenten, führen beliebigen sandboxed
       Python aus und bearbeiten Tool-Docstrings, die die KI sieht. Es gibt
-      keine Garantie und keine Support-Garantie - du aktivierst sie auf EIGENES
+      keine Garantie und keine Support-Garantie – du aktivierst sie auf EIGENES
       RISIKO. Erstelle ein Home-Assistant-Backup, bevor du dies einschaltest,
       und aktiviere es niemals in der Produktion ohne eines. Master-Gate für
       die 5 experimentellen Unter-Flags unten; Unter-Flags werden zur Laufzeit
       ignoriert, während dieser Master ausgeschaltet ist, selbst wenn sie
       explizit auf true gesetzt sind. Derselbe Schalter wird auch in der
-      Web-Einstellungs-UI unter Beta-Funktionen (gefährlich) angezeigt - beide
+      Web-Einstellungs-UI unter Beta-Funktionen (gefährlich) angezeigt – beide
       Ansichten spiegeln sich nach dem Neustart wider.
   enable_yaml_config_editing:
     name: YAML-Konfigurations-Bearbeitung aktivieren (Beta)
@@ -79,7 +79,7 @@ configuration:
       docs/beta.md für bekannte Einschränkungen. Dedizierte Tools
       (Automatisierungen, Skripte, Szenen, Helfer, Template-Sensoren) sollten
       bevorzugt werden, wenn verfügbar. ERFORDERT, dass der Master-Schalter
-      Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist -
+      Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist –
       andernfalls wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von
       seinem Wert hier.
   enable_yaml_edit_confirm:
@@ -139,7 +139,7 @@ configuration:
       überstehen und für jeden Client sichtbar sind, der sich verbinden kann.
       Siehe docs/beta.md für bekannte Einschränkungen. Erfordert Neustart, um
       wirksam zu werden. ERFORDERT, dass der Master-Schalter Beta-Funktionen
-      aktivieren oben (und in der Web-UI) eingeschaltet ist - andernfalls wird
+      aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls wird
       dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert
       hier.
   enable_auto_backup:
@@ -190,7 +190,7 @@ configuration:
       ha_call_service, ha_config_set_yaml) durch kürzere Varianten, die Schema-
       und Beispieldetails auf das ha_get_skill_guide-Tool (oder seine
       skill://-Ressource) verschieben. WARNUNG: Dies reduziert die
-      Leerlauf-Token-Nutzung, kann aber die LLM-Leistung beeinträchtigen - die
+      Leerlauf-Token-Nutzung, kann aber die LLM-Leistung beeinträchtigen – die
       gekürzten Beschreibungen verlassen sich darauf, dass das LLM tatsächlich
       das Skill-Tool aufruft oder die Skill-Ressource für Details liest, was
       nicht garantiert ist (einige Modelle überspringen den zusätzlichen
@@ -198,7 +198,7 @@ configuration:
       einem Client gepaart, der MCP-Ressourcen unterstützt, oder mit
       enable_tool_search. Erfordert Neustart, um wirksam zu werden. ERFORDERT,
       dass der Master-Schalter Beta-Funktionen aktivieren oben (und in der
-      Web-UI) eingeschaltet ist - andernfalls wird dieses Unter-Flag zur
+      Web-UI) eingeschaltet ist – andernfalls wird dieses Unter-Flag zur
       Laufzeit ignoriert, unabhängig von seinem Wert hier.
   enable_mandatory_bps:
     name: Best-Practice-Skills bei Schreibvorgängen anhängen
@@ -228,7 +228,7 @@ configuration:
       blockiert und geben einen Fehler zurück, der den Client anweist, das
       Best-Practices-Skill über ha_get_skill_guide zu lesen und den dort
       erhaltenen Bestätigungsschlüssel zurückzugeben. Während er eingeschaltet
-      ist, ist das ha_get_skill_guide-Tool gesperrt aktiviert - es ist der
+      ist, ist das ha_get_skill_guide-Tool gesperrt aktiviert – es ist der
       einzige Herausgeber des Bestätigungsschlüssels. Kind der Option
       Best-Practice-Skills bei Schreibvorgängen anhängen oben und inert,
       während dieser Elternteil ausgeschaltet ist. Erfordert Neustart, um
@@ -242,20 +242,20 @@ configuration:
       Aktiviere nur, wenn du dem KI-Assistenten bei Dateioperationen vertraust.
       Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der
       Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI)
-      eingeschaltet ist - andernfalls wird dieses Unter-Flag zur Laufzeit
+      eingeschaltet ist – andernfalls wird dieses Unter-Flag zur Laufzeit
       ignoriert, unabhängig von seinem Wert hier.
   enable_dashboard_screenshot:
     name: Dashboard-Screenshot-Modus aktivieren (Beta)
     description: >-
-      Beta-Funktion - standardmäßig deaktiviert. Fügt das
+      Beta-Funktion – standardmäßig deaktiviert. Fügt das
       ha_get_dashboard_screenshot-Tool plus include_screenshot /
       return_screenshot-Optionen auf den Dashboard-Get-/Set-Tools hinzu, sodass
       KI-Assistenten ein oder mehrere responsive Lovelace-Bilder inspizieren
       können (z. B. um ein Dashboard zu verifizieren, das sie gerade erstellt
       haben). Unterstützt stabile benannte Ansichten,
       Mobile-/Tablet-/Desktop-Batches und PNG-/JPEG-/WebP-/BMP-Ausgabe. Das
-      Rendering läuft in einer separaten Opt-in-Engine - balloobs Puppet-Add-on
-      (headless Chromium) - die du einmal installierst (füge balloobs
+      Rendering läuft in einer separaten Opt-in-Engine – balloobs Puppet-Add-on
+      (headless Chromium) – die du einmal installierst (füge balloobs
       Add-on-Repository hinzu, dann installiere Puppet) und gibst ihm ein
       langlebiges Zugriffstoken; bei Docker-/Container-Deployments führst du
       diese Engine als Sidecar aus und setzt
@@ -263,7 +263,7 @@ configuration:
       es sei denn, du aktivierst dies sowohl als auch installierst die Engine.
       Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der
       Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI)
-      eingeschaltet ist - andernfalls wird dieses Unter-Flag zur Laufzeit
+      eingeschaltet ist – andernfalls wird dieses Unter-Flag zur Laufzeit
       ignoriert, unabhängig von seinem Wert hier.
   tool_search_max_results:
     name: Max. Tool-Suchergebnisse
