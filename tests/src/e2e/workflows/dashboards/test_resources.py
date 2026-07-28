@@ -16,6 +16,8 @@ production-level functionality and compatibility.
 import base64
 import logging
 
+from ha_mcp.client import HomeAssistantClient
+
 # Import test utilities
 from ...utilities.assertions import (
     MCPAssertions,
@@ -499,7 +501,9 @@ class TestDashboardResourceUrlPatterns:
         logger.info("Hacsfiles URL pattern test completed successfully")
 
 
-async def _raw_resource_url(ha_client, resource_id) -> str | None:
+async def _raw_resource_url(
+    ha_client: HomeAssistantClient, resource_id: str | None
+) -> str | None:
     """Fetch a resource's URL straight from HA's registry over the raw WS API.
 
     Ground truth for what the tool actually registered — the MCP list tool

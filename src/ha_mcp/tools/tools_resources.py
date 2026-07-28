@@ -196,6 +196,48 @@ def _decode_data_uri(url: str) -> str | None:
         return None
 
 
+def _normalize_url_for_scheme_check(url: str) -> str:
+    """Normalize ``url`` the way a browser's URL parser does, for scheme checks.
+
+    WHATWG URL parsing strips leading/trailing C0-control-or-space and
+    removes every ASCII tab/newline before reading the scheme, so
+    ``" data:..."`` and ``"da\\tta:..."`` both parse as ``data:``. Checking
+    the raw string would miss those and let them through.
+    """
+    return (
+        url.strip(
+            "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f"
+            "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d"
+            "\x1e\x1f "
+        )
+        .replace("\t", "")
+        .replace("\n", "")
+        .replace("\r", "")
+    )
+
+
+def _is_data_url(url: str) -> bool:
+    """True when ``url`` parses as the ``data:`` scheme in a browser."""
+    return _normalize_url_for_scheme_check(url)[:5].lower() == "data:"
+
+
+def _decode_inline_content(url: str) -> tuple[str | None, bool]:
+    """Decode an inline resource URL. Returns ``(content, is_legacy_worker)``.
+
+    ``content`` is None when the URL is not one of ours, or is one of ours
+    but holds an empty/corrupt payload — the single source of truth for
+    "is this an inline resource we can show", so the list summary counts
+    and the per-resource markers can never disagree.
+    """
+    content = _decode_data_uri(url)
+    if content:
+        return content, False
+    legacy = _decode_legacy_worker_url(url)
+    if legacy:
+        return legacy, True
+    return None, False
+
+
 def _decode_legacy_worker_url(url: str) -> str | None:
     """Decode a legacy worker inline URL back to content (pure local base64).
 
@@ -212,13 +254,6 @@ def _decode_legacy_worker_url(url: str) -> str | None:
         return base64.urlsafe_b64decode(encoded).decode("utf-8")
     except Exception:
         return None
-
-
-def _is_inline_url(url: str) -> bool:
-    """Check if a URL is an inline resource URL (current data: or legacy worker)."""
-    return _match_data_uri_prefix(url) is not None or url.startswith(
-        f"{LEGACY_WORKER_BASE_URL}/"
-    )
 
 
 class ResourceTools:
@@ -319,7 +354,10 @@ class ResourceTools:
                 if res_type in by_type_counts:
                     by_type_counts[res_type] += 1
                 url = res.get("url", "")
-                if isinstance(url, str) and _is_inline_url(url):
+                # Decode (discarding the content) rather than shape-matching
+                # the URL: the count must agree with the per-resource
+                # markers, which only appear when the payload decodes.
+                if isinstance(url, str) and _decode_inline_content(url)[0]:
                     inline_count += 1
 
             total_count = len(resources)
@@ -497,7 +535,7 @@ class ResourceTools:
         # size / type checks and the #1072 YAML-misroute rejection) now that
         # the inline format is documented in this docstring. Route callers to
         # content=, where those guards run.
-        if url is not None and url[:5].lower() == "data:":
+        if url is not None and _is_data_url(url):
             raise_tool_error(
                 create_error_response(
                     code=ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -689,7 +727,7 @@ class ResourceTools:
             url = res.get("url", "")
             stored = None
             if isinstance(url, str):
-                stored = _decode_data_uri(url) or _decode_legacy_worker_url(url)
+                stored = _decode_inline_content(url)[0]
             if (
                 stored
                 and len(stored) > _PREVIEW_LENGTH
@@ -949,24 +987,24 @@ def _process_resource_list(
         res = dict(resource)
         url = res.get("url", "")
 
-        if isinstance(url, str) and _is_inline_url(url):
-            content = _decode_data_uri(url)
-            if not content:
-                content = _decode_legacy_worker_url(url)
-                if content:
-                    res["_legacy_worker"] = True
-                    res["_migration"] = (
-                        "Hosted on the legacy Cloudflare worker. First fetch "
-                        "the FULL code with ha_config_list_dashboard_resources("
-                        "include_content=True), then re-save it with "
-                        "ha_config_set_dashboard_resource(content=..., "
-                        "resource_id=...) to convert this resource to a "
-                        "self-contained data: URI. Never use _preview as "
-                        "content — it is truncated."
-                    )
-            # Empty or undecodable payloads fall through with their real URL
-            # visible — masking them as "[inline]" would hide exactly what a
-            # user debugging a broken resource needs to see.
+        if isinstance(url, str):
+            # Empty or undecodable payloads decode to None and fall through
+            # with their real URL visible — masking them as "[inline]" would
+            # hide exactly what a user debugging a broken resource needs to
+            # see. The same call drives ``inline_count``, so the summary and
+            # these markers cannot disagree.
+            content, is_legacy = _decode_inline_content(url)
+            if content and is_legacy:
+                res["_legacy_worker"] = True
+                res["_migration"] = (
+                    "Hosted on the legacy Cloudflare worker. First fetch "
+                    "the FULL code with ha_config_list_dashboard_resources("
+                    "include_content=True), then re-save it with "
+                    "ha_config_set_dashboard_resource(content=..., "
+                    "resource_id=...) to convert this resource to a "
+                    "self-contained data: URI. Never use _preview as "
+                    "content — it is truncated."
+                )
             if content:
                 res["_inline"] = True
                 res["_size"] = len(content.encode("utf-8"))

@@ -13,9 +13,10 @@ from ha_mcp.tools.tools_resources import (
     ResourceTools,
     _data_uri_for,
     _decode_data_uri,
+    _decode_inline_content,
     _decode_legacy_worker_url,
     _detect_ha_config_yaml,
-    _is_inline_url,
+    _is_data_url,
     register_resources_tools,
 )
 
@@ -92,36 +93,60 @@ class TestHelperFunctions:
         payload = url[len("data:text/javascript;base64,") :]
         assert _decode_data_uri(upper_head + payload) == content
 
-    def test_is_inline_url_data_uri(self):
-        """Our data: URIs are inline resources (case-insensitive scheme)."""
-        assert _is_inline_url("data:text/javascript;base64,YWJj") is True
-        assert _is_inline_url("DATA:TEXT/JAVASCRIPT;BASE64,YWJj") is True
-        assert _is_inline_url("data:text/css;charset=utf-8;base64,YWJj") is True
+    def test_decode_inline_content_data_uri(self):
+        """Our data: URIs decode as non-legacy inline content."""
+        content = "export const x = 1;"
+        assert _decode_inline_content(_data_uri_for(content, "module")) == (
+            content,
+            False,
+        )
+        assert _decode_inline_content(_data_uri_for(".x {}", "css")) == (".x {}", False)
 
-    def test_is_inline_url_foreign_data_uri_false(self):
-        """Foreign data: URLs are NOT inline resources."""
-        assert _is_inline_url("data:image/png;base64,aGVsbG8=") is False
-        assert _is_inline_url("data:text/javascript,console.log(1)") is False
+    def test_decode_inline_content_legacy_worker(self):
+        """Legacy worker URLs decode and are flagged as legacy."""
+        content = "export const legacy = 1;"
+        assert _decode_inline_content(_legacy_url(content)) == (content, True)
 
-    def test_is_inline_url_legacy_worker(self):
-        """Legacy worker URLs still count as inline resources."""
-        assert _is_inline_url(f"{LEGACY_WORKER_BASE_URL}/abc123?type=module") is True
+    def test_decode_inline_content_non_inline(self):
+        """Foreign and undecodable URLs yield no content.
 
-    def test_is_inline_url_false(self):
-        """Test non-inline URL detection."""
-        assert _is_inline_url("/local/card.js") is False
-        assert _is_inline_url("https://cdn.example.com/card.js") is False
+        This is the single source of truth for the list tool's inline_count
+        AND its per-resource markers, so anything returning None here must
+        also be left unmarked and uncounted.
+        """
+        for url in (
+            "/local/card.js",
+            "https://cdn.example.com/card.js",
+            "data:image/png;base64,aGVsbG8=",
+            "data:text/javascript,console.log(1)",
+            "data:text/css;charset=utf-8;base64,",
+            "data:text/javascript;base64,!!not-base64!!",
+        ):
+            assert _decode_inline_content(url) == (None, False), url
 
-    def test_is_inline_url_lookalike_host_false(self):
+    def test_decode_inline_content_lookalike_host(self):
         """Detection is anchored — lookalike hosts embedding the worker host
-        string are neither classified inline nor decoded."""
+        string are neither decoded nor flagged."""
         lookalike = LEGACY_WORKER_BASE_URL.replace(
             "https://", "https://evil.example.com/"
         )
-        assert _is_inline_url(f"{lookalike}/YWJj?type=module") is False
-        assert _decode_legacy_worker_url(f"{lookalike}/YWJj?type=module") is None
+        assert _decode_inline_content(f"{lookalike}/YWJj?type=module") == (None, False)
         suffixed = f"{LEGACY_WORKER_BASE_URL}.evil.example.com/YWJj"
-        assert _is_inline_url(suffixed) is False
+        assert _decode_inline_content(suffixed) == (None, False)
+
+    def test_is_data_url_normalizes_like_a_browser(self):
+        """Leading C0/space and embedded tab/newline are stripped before the
+        scheme check, matching WHATWG URL parsing — otherwise a padded
+        data: URL slips past the url= guard and still loads in a browser."""
+        assert _is_data_url("data:text/javascript;base64,YWJj") is True
+        assert _is_data_url("DATA:text/javascript;base64,YWJj") is True
+        assert _is_data_url(" data:text/javascript,x") is True
+        assert _is_data_url("\tdata:text/javascript,x") is True
+        assert _is_data_url("\n data:text/javascript,x") is True
+        assert _is_data_url("\x00data:text/javascript,x") is True
+        assert _is_data_url("da\tta:text/javascript,x") is True
+        assert _is_data_url("/local/card.js") is False
+        assert _is_data_url("https://cdn.example.com/data:x") is False
 
     def test_decode_legacy_worker_url(self):
         """Test decoding legacy worker URL (pure local base64)."""
