@@ -73,7 +73,7 @@ Then add to your Claude Desktop configuration file:
   "mcpServers": {
     "home-assistant": {
       "command": "uvx",
-      "args": ["mcp-proxy", "--transport", "streamablehttp", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
+      "args": ["--with", "mcp<2.0.0", "mcp-proxy", "--transport", "streamablehttp", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
     }
   }
 }
@@ -84,6 +84,8 @@ Replace the URL in `args` with the one from your add-on logs. No token goes here
 **Restart Claude Desktop** after saving the configuration.
 
 **How it works:** `uvx` runs mcp-proxy, which converts the add-on's HTTP endpoint to the stdio Claude Desktop expects.
+
+**Why `--with "mcp<2.0.0"`:** it pins the MCP SDK below version 2, which mcp-proxy does not yet support. Without the pin, mcp-proxy fails to start with `ImportError: cannot import name 'request_ctx'` and Claude Desktop shows "Server disconnected" ([#2073](https://github.com/homeassistant-ai/ha-mcp/issues/2073)).
 
 </details>
 

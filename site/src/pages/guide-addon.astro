@@ -102,6 +102,8 @@ winget install --id=astral-sh.uv -e</code></pre>
     "home-assistant": {
       "command": "uvx",
       "args": [
+        "--with",
+        "mcp<2.0.0",
         "mcp-proxy",
         "--transport",
         "streamablehttp",
@@ -110,6 +112,7 @@ winget install --id=astral-sh.uv -e</code></pre>
     }
   }
 }`}</code></pre>
+          <p class="text-slate-400 text-sm mt-3">The <code class="bg-slate-800 px-1 rounded">--with "mcp&lt;2.0.0"</code> entry pins the MCP SDK below version 2, which mcp-proxy does not yet support. Without it, mcp-proxy fails to start with <code class="bg-slate-800 px-1 rounded">ImportError: cannot import name 'request_ctx'</code> and the client shows "Server disconnected". See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/2073" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#2073</a>.</p>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mt-4">
             <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">No token goes here.</strong> The app already handles authentication behind the secret path in the URL. Do <strong>not</strong> add <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code>, <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>, or an <code class="bg-slate-800 px-1 rounded">env</code> block &mdash; that is the local/stdio config, and pasting it alongside the app is a known cause of connection hangs.</p>
           </div>
