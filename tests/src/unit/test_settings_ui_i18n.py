@@ -11,9 +11,8 @@ from typing import get_args
 import pytest
 from starlette.requests import Request
 
-import ha_mcp.settings_ui
 from ha_mcp.policy.approval_queue import Decision
-from ha_mcp.settings_ui import _render_settings_html
+from ha_mcp.settings_ui import _SETTINGS_JS, _render_settings_html
 from ha_mcp.settings_ui._i18n import (
     CATALOGS,
     build_payload,
@@ -598,10 +597,7 @@ def test_every_decided_outcome_has_a_catalog_word() -> None:
         "every locale beside it."
     )
 
-    settings_js = (
-        Path(ha_mcp.settings_ui.__file__).resolve().parent / "settings.js"
-    ).read_text("utf-8")
-    assert "'policies.pending.decision.' + body.current_decision" in settings_js, (
+    assert "'policies.pending.decision.' + body.current_decision" in _SETTINGS_JS, (
         "settings.js no longer resolves current_decision through the catalog. "
         "The keys above then sit unused while the English enum renders inside "
         "the translated sentence again."
