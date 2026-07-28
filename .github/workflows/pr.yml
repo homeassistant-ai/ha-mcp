@@ -190,7 +190,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.28-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim
     timeout-minutes: 2
 
     steps:
@@ -257,7 +257,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.28-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -304,7 +304,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.28-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim
     timeout-minutes: 2
 
     steps:
@@ -321,7 +321,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.28-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -342,7 +342,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.28-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim
     # Bumped 5 → 8 for the issue #2027 regression tests, which spawn real
     # subprocesses — including a full stdio server session — costing tens
     # of seconds on a slow runner.
