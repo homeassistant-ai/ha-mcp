@@ -185,28 +185,41 @@ def _translated_component_locales() -> list[str]:
 BASELINE_PATH = Path(__file__).with_name("locale_source_baseline.json")
 
 
+def _catalogs_by_surface(locale: str) -> dict[str, dict[str, str]]:
+    """One locale's catalogs, flattened, keyed by the directory they live in.
+
+    Shared by the baseline hashes and the cross-surface check below, so those
+    two cannot end up reading a different set of files than one another. The
+    per-surface helpers above still read their own catalog directly; this is
+    for the checks that have to look at all four at once.
+    """
+    catalogs = {
+        "src/ha_mcp/settings_ui/locales": _flatten(
+            json.loads((SETTINGS_LOCALES / f"{locale}.json").read_text("utf-8"))
+        ),
+        "custom_components/ha_mcp_tools/translations": _component_catalog(locale),
+    }
+    for addon_dir in ADDON_DIRS:
+        catalogs[f"{addon_dir.name}/translations"] = _flatten(
+            yaml.safe_load(
+                (addon_dir / "translations" / f"{locale}.yaml").read_text("utf-8")
+            )
+        )
+    return catalogs
+
+
 def english_sources() -> dict[str, dict[str, str]]:
     """Hash every English string a translation is written against, per surface.
 
     Imported by ``scripts/update_locale_baseline.py`` so the baseline and the
     check that reads it can never disagree about what is hashed.
     """
-    sources = {
-        "src/ha_mcp/settings_ui/locales": _flatten(
-            json.loads((SETTINGS_LOCALES / "en.json").read_text("utf-8"))
-        ),
-        "custom_components/ha_mcp_tools/translations": _component_catalog("en"),
-    }
-    for addon_dir in ADDON_DIRS:
-        sources[f"{addon_dir.name}/translations"] = _flatten(
-            yaml.safe_load((addon_dir / "translations" / "en.yaml").read_text("utf-8"))
-        )
     return {
         surface: {
             key: hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
             for key, text in strings.items()
         }
-        for surface, strings in sources.items()
+        for surface, strings in _catalogs_by_surface("en").items()
     }
 
 
@@ -452,6 +465,92 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
             f"common.connect_local_lan is {value!r}, which does not quote the "
             f"{quoted!r} option the reader has to find on the form"
         )
+
+
+@cache
+def _shared_english_strings() -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    """English strings that reach the reader from more than one surface.
+
+    The add-on options and the settings UI describe the same switches, so a
+    number of English strings are written once and shipped from two or three
+    catalogs — ``read_only_mode`` is the add-on's ``name``, the settings UI's
+    ``messages.features.read_only_mode.label`` and its
+    ``messages.tools.read_only.label``.
+
+    Grouping them by text rather than by key is what makes the check below
+    possible at all: the keys differ per surface and only the text ties them
+    together.
+
+    Deliberately cross-surface only. The same English twice *within* one
+    catalog may legitimately differ — Spanish agrees ``activado``/``activada``
+    with the noun each sentence is about, and Italian writes a button as an
+    imperative and the same action in a list as an infinitive. Across
+    surfaces there is no such context to differ by: it is one option,
+    described twice.
+    """
+    places: dict[str, list[tuple[str, str]]] = {}
+    for surface, strings in _catalogs_by_surface("en").items():
+        for key, text in strings.items():
+            places.setdefault(text, []).append((surface, key))
+    return tuple(
+        (text, tuple(where))
+        for text, where in places.items()
+        if len({surface for surface, _ in where}) > 1
+    )
+
+
+def test_shared_english_strings_are_discovered() -> None:
+    """The check below passes trivially if the grouping stops finding any."""
+    assert _shared_english_strings(), (
+        "no English string was found on two surfaces at once — either the "
+        "catalogs stopped sharing wording, or _catalogs_by_surface no longer "
+        "reads what it used to, which would make the check below vacuous"
+    )
+
+
+@pytest.mark.parametrize("locale", _translated_component_locales())
+def test_one_english_string_reads_the_same_on_every_surface(locale: str) -> None:
+    """Same sentence in the add-on options and the web UI, same translation.
+
+    Each catalog was checked against English and nothing compared them to each
+    other, so a translator working one surface at a time could — and did —
+    write two different sentences for one switch: ``de`` phrased 35 of these
+    values differently between the add-on and the settings UI, ``zh-Hans`` 24.
+    A reader who configures the add-on and then opens the panel meets the same
+    option twice and has to work out whether it is the same option.
+
+    Byte-identical English is the whole justification: there is no context to
+    adapt to, or the English would have adapted first.
+    """
+    catalogs = _catalogs_by_surface(locale)
+
+    # Reported as short lines rather than as the offending texts: these are
+    # multi-sentence help strings, and a diff of two 400-character paragraphs
+    # buries the one thing the reader needs, which is where to look.
+    divergent: list[str] = []
+    for english, where in _shared_english_strings():
+        rendered: dict[str, list[str]] = {}
+        for surface, key in where:
+            value = catalogs[surface].get(key)
+            label = f"{surface}/{locale}: {key}"
+            if value is None:
+                # Omission is legal for settings UI messages, and English is
+                # the per-key fallback — so the screen still disagrees.
+                value, label = english, f"{label} (missing, renders English)"
+            rendered.setdefault(value, []).append(label)
+        if len(rendered) > 1:
+            divergent.append(
+                f"{english[:50]!r}...: "
+                + " vs ".join(", ".join(labels) for labels in rendered.values())
+            )
+
+    assert not divergent, (
+        f"{locale} renders {len(divergent)} English string(s) differently "
+        "depending on which surface they appear on. The English is "
+        "byte-identical in each group, so there is no context to adapt to: "
+        "pick one wording per group and use it on every surface. The settings "
+        "UI is the wording the others follow today."
+    )
 
 
 def _settings_catalog(locale: str) -> dict[str, Any]:

@@ -740,6 +740,13 @@ Component catalogs need every `strings.json` key with identical
 `schema:` key of *that* flavor's `config.yaml`, and no `configuration.<key>`
 left behind for a key the schema no longer has; the two flavors differ.
 
+Some English strings are shipped from more than one catalog — the add-on
+options and the settings UI describe the same switches — and **a string that is
+byte-identical in English must be byte-identical in every other language too**.
+The keys differ per surface, so translating one surface at a time is how they
+drift apart; check the wording you are about to write against the other
+catalogs, or let the test tell you afterwards.
+
 **Changing an English string means updating every locale that carries it**,
 then `python scripts/update_locale_baseline.py`. The baseline pins the English
 each translation was written against, because key parity cannot see a string

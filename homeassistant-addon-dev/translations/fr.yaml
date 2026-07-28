@@ -34,7 +34,7 @@ configuration:
   enable_tool_security_policies:
     name: Activer les politiques de sécurité des outils (avancé)
     description: >-
-      Protège les appels d'outils à haut risque (contrôle des
+      Contrôle les appels d'outils à enjeux élevés (contrôle des
       serrures/alarmes, écritures d'automatisations, etc.) derrière une
       approbation utilisateur. Lorsqu'un outil protégé est appelé, l'agent dit
       à l'utilisateur d'ouvrir l'onglet Politiques de sécurité des outils dans
@@ -170,7 +170,7 @@ configuration:
       anciens au-delà de cette limite sont retirés à chaque capture réussie.
       Par défaut 100, plage 1–10000.
   enable_snapshot_delete:
-    name: Autoriser la suppression des snapshots
+    name: Autoriser la suppression d'instantanés
     description: >-
       Permet à ha_manage_backup de supprimer des snapshots HA complets
       (scope='snapshot', action='delete'). Désactivé par défaut — un snapshot
@@ -180,7 +180,7 @@ configuration:
       et tout ce qui est plus récent que le seuil d'âge ci-dessous restent
       protégés.
   snapshot_delete_min_age_days:
-    name: Âge minimum pour la suppression d'un snapshot (jours)
+    name: Âge minimum de l'instantané pour suppression (jours)
     description: >-
       Un snapshot doit avoir au moins cet âge avant de pouvoir être supprimé.
       Plage 0–365 ; 0 désactive le seuil (les protections du snapshot le plus
