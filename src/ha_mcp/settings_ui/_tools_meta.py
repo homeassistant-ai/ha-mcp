@@ -75,9 +75,13 @@ def primary_tag(tags: Iterable[str]) -> str:
 
 
 # Tools that are always enabled regardless of saved config — the server
-# strips them out of any disable list before applying. Four of these
-# overlap with DEFAULT_PINNED_TOOLS in transforms/categorized_search.py
-# (ha_search, ha_get_overview, ha_report_issue, ha_manage_backup);
+# strips them out of any disable list before applying. The settings UI
+# additionally locks the pin toggle for mandatory tools, so the four
+# that overlap with DEFAULT_PINNED_TOOLS in
+# transforms/categorized_search.py
+# (ha_search, ha_get_overview, ha_report_issue, ha_manage_backup)
+# cannot be unpinned either — always pinned, not just always enabled
+# (#2058);
 # ha_get_state is mandatory but not pinned-by-default because it is
 # reachable via the ha_call_read_tool proxy when tool search is on.
 # ha_get_skill_guide is conditionally mandatory via BPS_MANDATORY_TOOLS
