@@ -25,6 +25,7 @@ import json
 import re
 import subprocess
 import sys
+from collections import Counter
 from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -467,6 +468,15 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
         )
 
 
+# How many (surface, key) places take part in the grouping below, per surface.
+SHARED_ENGLISH_PLACES = {
+    "src/ha_mcp/settings_ui/locales": 36,
+    "custom_components/ha_mcp_tools/translations": 1,
+    "homeassistant-addon/translations": 31,
+    "homeassistant-addon-dev/translations": 52,
+}
+
+
 @cache
 def _shared_english_strings() -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
     """English strings that reach the reader from more than one surface.
@@ -479,7 +489,9 @@ def _shared_english_strings() -> tuple[tuple[str, tuple[tuple[str, str], ...]], 
 
     Grouping them by text rather than by key is what makes the check below
     possible at all: the keys differ per surface and only the text ties them
-    together.
+    together. That same grouping lets an option leave the check quietly, so
+    what this finds is pinned — see
+    ``test_shared_english_strings_are_discovered``.
 
     Deliberately cross-surface only. The same English twice *within* one
     catalog may legitimately differ — Spanish agrees ``activado``/``activada``
@@ -500,11 +512,32 @@ def _shared_english_strings() -> tuple[tuple[str, tuple[tuple[str, str], ...]], 
 
 
 def test_shared_english_strings_are_discovered() -> None:
-    """The check below passes trivially if the grouping stops finding any."""
-    assert _shared_english_strings(), (
-        "no English string was found on two surfaces at once — either the "
-        "catalogs stopped sharing wording, or _catalogs_by_surface no longer "
-        "reads what it used to, which would make the check below vacuous"
+    """The check below only covers what the grouping still finds.
+
+    A wording that moves on one surface and not the other stops being shared,
+    so the option leaves the check instead of failing it. The English edit is
+    caught by ``test_translations_are_checked_against_current_english`` — but
+    the sanctioned answer there is to regenerate the baseline, and that would
+    carry the lost coverage away with it. Hence a count: it is not written by
+    ``scripts/update_locale_baseline.py`` and has to be changed by hand.
+    """
+    found = Counter(
+        surface for _, where in _shared_english_strings() for surface, _ in where
+    )
+    drift = {
+        surface: (SHARED_ENGLISH_PLACES.get(surface, 0), found.get(surface, 0))
+        for surface in SHARED_ENGLISH_PLACES.keys() | found.keys()
+        if SHARED_ENGLISH_PLACES.get(surface, 0) != found.get(surface, 0)
+    }
+
+    assert not drift, (
+        "the strings shipped from more than one surface are no longer the "
+        f"ones this check was written for — {drift} as surface: (expected, "
+        "found). Fewer means an option dropped out of the check below, "
+        "usually because its English moved on one surface and not the other, "
+        "which is the drift that check exists to catch: fix the wording, not "
+        "the number. More means a newly shared string is now covered. Update "
+        "SHARED_ENGLISH_PLACES once the difference is the intended one."
     )
 
 
