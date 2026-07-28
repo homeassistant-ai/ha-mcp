@@ -117,19 +117,20 @@ configuration:
   enable_snapshot_delete:
     name: Autoriser la suppression d'instantanés
     description: >-
-      Permet à ha_manage_backup de supprimer des snapshots HA complets
-      (scope='snapshot', action='delete'). Désactivé par défaut — un snapshot
-      pourrait être le dernier point de restauration après une modification
-      défectueuse, donc un humain doit activement l'activer ici. Même lorsque
-      activé, les sauvegardes planifiées, le snapshot restant le plus récent
-      et tout ce qui est plus récent que le seuil d'âge ci-dessous restent
-      protégés.
+      Permet à ha_manage_backup de supprimer des instantanés HA complets
+      (scope='snapshot', action='delete'). Désactivé par défaut — un
+      instantané pourrait être le dernier point de restauration après une
+      modification défectueuse, donc un humain doit activement l'activer ici.
+      Même lorsque activé, les sauvegardes planifiées, l'instantané restant
+      le plus récent et tout ce qui est plus récent que le seuil d'âge
+      ci-dessous restent protégés.
   snapshot_delete_min_age_days:
     name: Âge minimum de l'instantané pour suppression (jours)
     description: >-
-      Un snapshot doit avoir au moins cet âge avant de pouvoir être supprimé.
-      Plage 0–365 ; 0 désactive le seuil (les protections du snapshot le plus
-      récent et de la sauvegarde planifiée s'appliquent toujours). Par défaut 7.
+      Un instantané doit avoir au moins cet âge avant de pouvoir être
+      supprimé. Plage 0–365 ; 0 désactive le seuil (les protections de
+      l'instantané le plus récent et de la sauvegarde planifiée s'appliquent
+      toujours). Par défaut 7.
   verify_ssl:
     name: Vérifier le certificat TLS
     description: >-

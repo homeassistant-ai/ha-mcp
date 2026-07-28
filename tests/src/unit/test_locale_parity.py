@@ -25,7 +25,6 @@ import json
 import re
 import subprocess
 import sys
-from collections import Counter
 from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -468,12 +467,138 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
         )
 
 
-# How many (surface, key) places take part in the grouping below, per surface.
+# The (surface, key) places that take part in the grouping below, by name.
+# A per-surface total would be compensable: one place can leave the
+# grouping while another arrives on the same surface, and the sum holds.
 SHARED_ENGLISH_PLACES = {
-    "src/ha_mcp/settings_ui/locales": 36,
-    "custom_components/ha_mcp_tools/translations": 1,
-    "homeassistant-addon/translations": 31,
-    "homeassistant-addon-dev/translations": 52,
+    "custom_components/ha_mcp_tools/translations": (
+        "options.step.tools_info.data.extra_yaml_keys",
+    ),
+    "homeassistant-addon-dev/translations": (
+        "configuration.auto_backup_retain_per_entity.description",
+        "configuration.auto_backup_retain_per_entity.name",
+        "configuration.auto_backup_throttle_minutes.description",
+        "configuration.auto_backup_throttle_minutes.name",
+        "configuration.backup_hint.description",
+        "configuration.backup_hint.name",
+        "configuration.disabled_tools.description",
+        "configuration.disabled_tools.name",
+        "configuration.enable_auto_backup.description",
+        "configuration.enable_auto_backup.name",
+        "configuration.enable_beta_features.description",
+        "configuration.enable_beta_features.name",
+        "configuration.enable_code_mode.description",
+        "configuration.enable_code_mode.name",
+        "configuration.enable_dashboard_screenshot.description",
+        "configuration.enable_dashboard_screenshot.name",
+        "configuration.enable_filesystem_tools.description",
+        "configuration.enable_filesystem_tools.name",
+        "configuration.enable_lite_docstrings.description",
+        "configuration.enable_lite_docstrings.name",
+        "configuration.enable_mandatory_bps.description",
+        "configuration.enable_mandatory_bps.name",
+        "configuration.enable_snapshot_delete.description",
+        "configuration.enable_snapshot_delete.name",
+        "configuration.enable_strict_mandatory_bps.description",
+        "configuration.enable_strict_mandatory_bps.name",
+        "configuration.enable_tool_search.description",
+        "configuration.enable_tool_search.name",
+        "configuration.enable_tool_security_policies.description",
+        "configuration.enable_tool_security_policies.name",
+        "configuration.enable_yaml_config_editing.description",
+        "configuration.enable_yaml_config_editing.name",
+        "configuration.enable_yaml_edit_confirm.description",
+        "configuration.enable_yaml_edit_confirm.name",
+        "configuration.enable_yaml_packages_automation.description",
+        "configuration.enable_yaml_packages_automation.name",
+        "configuration.enable_yaml_packages_scene.description",
+        "configuration.enable_yaml_packages_scene.name",
+        "configuration.enable_yaml_packages_script.description",
+        "configuration.enable_yaml_packages_script.name",
+        "configuration.pinned_tools.description",
+        "configuration.pinned_tools.name",
+        "configuration.read_only_mode.description",
+        "configuration.read_only_mode.name",
+        "configuration.secret_path.description",
+        "configuration.secret_path.name",
+        "configuration.snapshot_delete_min_age_days.description",
+        "configuration.snapshot_delete_min_age_days.name",
+        "configuration.tool_search_max_results.description",
+        "configuration.tool_search_max_results.name",
+        "configuration.verify_ssl.description",
+        "configuration.verify_ssl.name",
+    ),
+    "homeassistant-addon/translations": (
+        "configuration.auto_backup_retain_per_entity.description",
+        "configuration.auto_backup_retain_per_entity.name",
+        "configuration.auto_backup_throttle_minutes.description",
+        "configuration.auto_backup_throttle_minutes.name",
+        "configuration.backup_hint.description",
+        "configuration.backup_hint.name",
+        "configuration.disabled_tools.description",
+        "configuration.disabled_tools.name",
+        "configuration.enable_auto_backup.description",
+        "configuration.enable_auto_backup.name",
+        "configuration.enable_mandatory_bps.description",
+        "configuration.enable_mandatory_bps.name",
+        "configuration.enable_snapshot_delete.description",
+        "configuration.enable_snapshot_delete.name",
+        "configuration.enable_strict_mandatory_bps.description",
+        "configuration.enable_strict_mandatory_bps.name",
+        "configuration.enable_tool_search.name",
+        "configuration.enable_tool_security_policies.description",
+        "configuration.enable_tool_security_policies.name",
+        "configuration.pinned_tools.description",
+        "configuration.pinned_tools.name",
+        "configuration.read_only_mode.description",
+        "configuration.read_only_mode.name",
+        "configuration.secret_path.description",
+        "configuration.secret_path.name",
+        "configuration.snapshot_delete_min_age_days.description",
+        "configuration.snapshot_delete_min_age_days.name",
+        "configuration.tool_search_max_results.description",
+        "configuration.tool_search_max_results.name",
+        "configuration.verify_ssl.description",
+        "configuration.verify_ssl.name",
+    ),
+    "src/ha_mcp/settings_ui/locales": (
+        "messages.advanced.extra_yaml_write_keys.label",
+        "messages.backup.fields.enable_snapshot_delete.label",
+        "messages.backup.fields.snapshot_delete_min_age_days.label",
+        "messages.features.enable_beta_features.help",
+        "messages.features.enable_beta_features.label",
+        "messages.features.enable_code_mode.help",
+        "messages.features.enable_code_mode.label",
+        "messages.features.enable_dashboard_screenshot.help",
+        "messages.features.enable_dashboard_screenshot.label",
+        "messages.features.enable_filesystem_tools.help",
+        "messages.features.enable_filesystem_tools.label",
+        "messages.features.enable_lite_docstrings.help",
+        "messages.features.enable_lite_docstrings.label",
+        "messages.features.enable_mandatory_bps.help",
+        "messages.features.enable_mandatory_bps.label",
+        "messages.features.enable_strict_mandatory_bps.help",
+        "messages.features.enable_strict_mandatory_bps.label",
+        "messages.features.enable_tool_search.help",
+        "messages.features.enable_tool_search.label",
+        "messages.features.enable_tool_security_policies.help",
+        "messages.features.enable_tool_security_policies.label",
+        "messages.features.enable_yaml_config_editing.help",
+        "messages.features.enable_yaml_config_editing.label",
+        "messages.features.enable_yaml_edit_confirm.help",
+        "messages.features.enable_yaml_edit_confirm.label",
+        "messages.features.enable_yaml_packages_automation.help",
+        "messages.features.enable_yaml_packages_automation.label",
+        "messages.features.enable_yaml_packages_scene.help",
+        "messages.features.enable_yaml_packages_scene.label",
+        "messages.features.enable_yaml_packages_script.help",
+        "messages.features.enable_yaml_packages_script.label",
+        "messages.features.read_only_mode.help",
+        "messages.features.read_only_mode.label",
+        "messages.features.tool_search_max_results.help",
+        "messages.features.tool_search_max_results.label",
+        "messages.tools.read_only.label",
+    ),
 }
 
 
@@ -518,25 +643,35 @@ def test_shared_english_strings_are_discovered() -> None:
     so the option leaves the check instead of failing it. The English edit is
     caught by ``test_translations_are_checked_against_current_english`` — but
     the sanctioned answer there is to regenerate the baseline, and that would
-    carry the lost coverage away with it. Hence a count: it is not written by
+    carry the lost coverage away with it. Hence a pin: it is not written by
     ``scripts/update_locale_baseline.py`` and has to be changed by hand.
     """
-    found = Counter(
-        surface for _, where in _shared_english_strings() for surface, _ in where
-    )
+    found: dict[str, set[str]] = {}
+    for _, where in _shared_english_strings():
+        for surface, key in where:
+            found.setdefault(surface, set()).add(key)
+
+    surfaces = SHARED_ENGLISH_PLACES.keys() | found.keys()
+    lost = {
+        surface: sorted(set(SHARED_ENGLISH_PLACES.get(surface, ())) - found.get(surface, set()))
+        for surface in surfaces
+    }
+    gained = {
+        surface: sorted(found.get(surface, set()) - set(SHARED_ENGLISH_PLACES.get(surface, ())))
+        for surface in surfaces
+    }
     drift = {
-        surface: (SHARED_ENGLISH_PLACES.get(surface, 0), found.get(surface, 0))
-        for surface in SHARED_ENGLISH_PLACES.keys() | found.keys()
-        if SHARED_ENGLISH_PLACES.get(surface, 0) != found.get(surface, 0)
+        surface: {"left the grouping": lost[surface], "newly shared": gained[surface]}
+        for surface in sorted(surfaces)
+        if lost[surface] or gained[surface]
     }
 
     assert not drift, (
         "the strings shipped from more than one surface are no longer the "
-        f"ones this check was written for — {drift} as surface: (expected, "
-        "found). Fewer means an option dropped out of the check below, "
-        "usually because its English moved on one surface and not the other, "
-        "which is the drift that check exists to catch: fix the wording, not "
-        "the number. More means a newly shared string is now covered. Update "
+        f"ones this check was written for — {drift}. A key that left usually "
+        "did so because its English moved on one surface and not the other, "
+        "which is the drift the check below exists to catch: fix the wording, "
+        "not the pin. A key that arrived is newly covered. Update "
         "SHARED_ENGLISH_PLACES once the difference is the intended one."
     )
 
@@ -582,7 +717,7 @@ def test_one_english_string_reads_the_same_on_every_surface(locale: str) -> None
         "depending on which surface they appear on. The English is "
         "byte-identical in each group, so there is no context to adapt to: "
         "pick one wording per group and use it on every surface. The settings "
-        "UI is the wording the others follow today."
+        "UI is the wording the others follow today.\n" + "\n".join(divergent)
     )
 
 
