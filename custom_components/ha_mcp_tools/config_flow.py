@@ -117,8 +117,9 @@ _LOGGER = logging.getLogger(__name__)
 # renders, in English, exactly as it did before.
 #
 # Kept identical to ``strings.json``'s ``common`` block, keys and values —
-# asserted in tests/src/unit/test_locale_parity.py, because a fallback that
-# has drifted from the source shows different English than every catalog.
+# asserted by ``test_common_fallbacks_mirror_strings_json`` in
+# tests/src/unit/test_config_flow.py, because a fallback that has drifted
+# from the source shows different English than every catalog.
 _COMMON_FALLBACKS: dict[str, str] = {
     "panel_hint": (
         "Open the [HA-MCP settings panel](/ha-mcp) for tool management and "
