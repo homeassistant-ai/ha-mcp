@@ -209,18 +209,79 @@ def _catalogs_by_surface(locale: str) -> dict[str, dict[str, str]]:
     return catalogs
 
 
+def _summary_paragraph(tool: dict[str, Any]) -> str:
+    """A tool description's first paragraph, joined onto one line.
+
+    What a translator reads as the sentence, as opposed to the shorter text
+    the row displays — see ``_english_tool_sources`` for why the two differ.
+    """
+    return " ".join(str(tool.get("description") or "").split("\n\n")[0].split())
+
+
+def _english_tool_sources() -> dict[str, str]:
+    """The English tool texts a settings UI catalog translates.
+
+    ``en.json`` leaves ``tools`` empty — English for those comes from the tool
+    definitions at runtime — so these 174 strings live in no catalog and the
+    baseline did not cover them. An edit to a docstring therefore left every
+    locale describing the old behaviour with nothing going red:
+    ``ha_dev_manage_settings`` gained the Tools/Policies/Backups surfaces and
+    four locales went on saying "directly".
+
+    ``tool_groups`` is the sibling case and stays uncovered on purpose: a group
+    key *is* its own English text, so a renamed heading cannot move out from
+    under a translation without ``test_settings_catalog_keys_name_real_groups
+    _and_tools`` naming it.
+
+    A feature-gated tool has two English renderings and a setting decides which
+    one the UI shows, so where the stub and the parsed text differ, both are
+    pinned.
+
+    What gets hashed is the summary *paragraph*, while the row displays its
+    first physical line cut at 120 characters — the same text for 84 of the 87
+    tools. ``ha_config_set_helper`` wraps its summary and the Chinese catalog
+    translates the half that wraps off, so hashing the displayed text would
+    leave "(28 types, unified interface)" free to move while a shipped
+    translation states it. The copy checks stay on the displayed text, because
+    a paste is of what was on screen.
+    """
+    rendered = _english_tool_texts()
+    parsed = _english_tool_texts(as_rendered=False)
+    summaries = {
+        f"{str(tool['name'])}.description": _summary_paragraph(tool)
+        for tool in extract_tools.extract_tools()
+    }
+    sources = dict(rendered)
+    for key, text in parsed.items():
+        # ``summaries`` is keyed by ``.description`` alone, so every title takes
+        # the default arm and is pinned as its own parsed text. The default is
+        # load-bearing: tightening it to ``summaries[key]`` drops every title
+        # key out of the baseline.
+        pinned = summaries.get(key, text)
+        # A key whose rendered text differs is showing a stub. "(parsed)" is the
+        # other rendering, whatever produced it — a docstring for a description,
+        # the ``title=`` kwarg for ``ha_config_set_yaml.title``.
+        if text != rendered.get(key):
+            sources[f"{key} (parsed)"] = pinned
+        else:
+            sources[key] = pinned
+    return sources
+
+
 def english_sources() -> dict[str, dict[str, str]]:
     """Hash every English string a translation is written against, per surface.
 
     Imported by ``scripts/update_locale_baseline.py`` so the baseline and the
     check that reads it can never disagree about what is hashed.
     """
+    sources = _catalogs_by_surface("en")
+    sources["settings UI tool titles and descriptions"] = _english_tool_sources()
     return {
         surface: {
             key: hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
             for key, text in strings.items()
         }
-        for surface, strings in _catalogs_by_surface("en").items()
+        for surface, strings in sources.items()
     }
 
 
@@ -421,6 +482,66 @@ def test_translations_are_checked_against_current_english() -> None:
         "every locale carrying the changed keys (or confirm the existing "
         "wording still reads correctly), then run "
         f"`python scripts/update_locale_baseline.py`. {detail}"
+    )
+
+
+def test_the_baseline_hashes_more_than_the_first_line() -> None:
+    """Hashing the paragraph only covers a wrapped clause while one wraps.
+
+    ``_english_tool_sources`` pins the summary paragraph rather than the line
+    the row is built from, so a clause wrapping off that line cannot move
+    unseen. If ``extract_tools()`` ever truncated ``description`` to its first
+    line, exactly one key would move — reading like an ordinary wording edit —
+    and the wrapped clause would drop out of coverage with nothing saying so.
+
+    Deliberately measured against the *physical* first line rather than the
+    displayed one: the 120-character cut makes two more descriptions differ on
+    its own, which would hold this green with the wrap gone.
+    """
+    wrapping = sorted(
+        str(tool["name"])
+        for tool in extract_tools.extract_tools()
+        if _summary_paragraph(tool) != str(tool.get("description") or "").split("\n")[0]
+    )
+
+    assert wrapping, (
+        "no tool's summary paragraph outruns its first physical line, so "
+        "hashing the paragraph discriminates nothing — either every summary "
+        "now fits one line, or extract_tools() began truncating description "
+        "to its first line"
+    )
+
+
+def test_no_gated_stub_pins_a_paragraph_the_ui_hides() -> None:
+    """A stub equal to its parsed text takes the ``else`` arm in the pin.
+
+    That arm pins the summary paragraph under the plain key, while a reader
+    with the feature flag off sees the stub — so a gated tool whose summary
+    wraps would have text pinned that no reader of that tool can see. None
+    wraps today; this fails when one starts to, which is when the arm needs
+    splitting.
+    """
+    rendered = _english_tool_texts()
+    parsed = _english_tool_texts(as_rendered=False)
+    hidden = []
+    for tool in extract_tools.extract_tools():
+        name = str(tool["name"])
+        key = f"{name}.description"
+        if name not in FEATURE_GATED_TOOLS or rendered.get(key) != parsed.get(key):
+            continue
+        # Against the physical first line, as in the sibling guard: whether the
+        # summary wraps is a property of the docstring, not of the display cut.
+        if (
+            _summary_paragraph(tool)
+            != str(tool.get("description") or "").split("\n")[0]
+        ):
+            hidden.append(name)
+
+    assert not hidden, (
+        f"{sorted(hidden)} show a stub whose text equals their parsed first "
+        "line while their summary wraps, so _english_tool_sources pins the "
+        "paragraph under the plain key and the stub stops being the pinned "
+        "text. Split the else arm before this ships."
     )
 
 
@@ -856,12 +977,23 @@ def _renderable_groups_and_tools() -> tuple[frozenset[str], frozenset[str]]:
     return groups, names
 
 
+# ``settings.js`` renders a tool row's description as
+# ``(t.description || '').split('\n')[0].slice(0, 120)``. Both cuts model the
+# same thing — the text a translator can actually see and paste.
+_DISPLAYED_DESCRIPTION_CHARS = 120
+
+
 @cache
 def _english_tool_texts(*, as_rendered: bool = True) -> dict[str, str]:
     """English tool titles and descriptions, keyed like a flat catalog.
 
-    The settings UI catalogs translate the title and the description's first
-    line, so that is what a translated value is compared against.
+    What a translator has on screen is what a paste is of, so that is what a
+    translated value is compared against: ``settings.js`` cuts a description
+    at the first newline and then at 120 characters, and both halves of that
+    cut belong here. Leaving the second one out let a paste of the two
+    descriptions that outrun 120 characters — ``ha_get_state`` at 130 and
+    ``ha_search`` at 171 — byte-differ from the text they were pasted from,
+    and pass.
 
     A feature-gated tool has two English renderings, and which one a
     translator is looking at depends on a setting. With its flag off — the
@@ -881,10 +1013,15 @@ def _english_tool_texts(*, as_rendered: bool = True) -> dict[str, str]:
         stub = FEATURE_GATED_TOOLS.get(name) if as_rendered else None
         if stub is not None:
             texts[f"{name}.title"] = stub["title"]
-            texts[f"{name}.description"] = stub["description"]
+            # A stub reaches the row through the same field as a docstring
+            # (``_render_stub`` feeds ``description``), so it takes the same cut.
+            texts[f"{name}.description"] = stub["description"][
+                :_DISPLAYED_DESCRIPTION_CHARS
+            ]
             continue
         texts[f"{name}.title"] = str(tool.get("title") or "")
-        texts[f"{name}.description"] = str(tool.get("description") or "").split("\n")[0]
+        first_line = str(tool.get("description") or "").split("\n")[0]
+        texts[f"{name}.description"] = first_line[:_DISPLAYED_DESCRIPTION_CHARS]
     return texts
 
 

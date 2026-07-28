@@ -550,7 +550,7 @@
     },
     "ha_dev_manage_settings": {
       "title": "Server-Einstellungen verwalten (dev)",
-      "description": "Ändert ha-mcp-Einstellungen direkt im Entwicklermodus."
+      "description": "Verwaltet die ha-mcp-Servereinstellungen und die Abschnitte Tools/Richtlinien/Backups (Entwicklermodus)."
     },
     "ha_get_device": {
       "title": "Gerät abrufen",
@@ -789,8 +789,8 @@
       "description": "Wertet ein Jinja2-Template mit der Home-Assistant-Engine aus."
     },
     "ha_report_issue": {
-      "title": "Problem melden",
-      "description": "Sammelt Diagnosen für einen Fehlerbericht oder Feedback."
+      "title": "Problem melden oder Feedback geben",
+      "description": "Liefert Diagnoseinformationen und Vorlagen für Fehlerberichte oder Feedback."
     },
     "ha_get_zone": {
       "title": "Zonen abrufen",

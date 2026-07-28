@@ -490,7 +490,7 @@
     },
     "ha_report_issue": {
       "title": "报告问题或反馈",
-      "description": "收集诊断信息以提交问题报告或反馈。"
+      "description": "获取诊断信息和用于提交问题报告或反馈的模板。"
     },
     "ha_config_get_calendar_events": {
       "title": "获取日历事件",
@@ -586,7 +586,7 @@
     },
     "ha_dev_manage_settings": {
       "title": "管理服务器设置（开发者）",
-      "description": "直接管理 ha-mcp 服务器设置（开发者模式）。"
+      "description": "管理 ha-mcp 服务器设置以及“工具”/“工具安全策略”/“备份”页面（开发者模式）。"
     },
     "ha_dev_manage_server": {
       "title": "管理 MCP 服务器（开发者）",
