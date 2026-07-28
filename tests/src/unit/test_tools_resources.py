@@ -8,52 +8,76 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_resources import (
+    LEGACY_WORKER_BASE_URL,
     MAX_CONTENT_SIZE,
-    MAX_ENCODED_LENGTH,
-    WORKER_BASE_URL,
     ResourceTools,
-    _decode_inline_url,
+    _data_uri_for,
+    _decode_data_uri,
+    _decode_legacy_worker_url,
     _detect_ha_config_yaml,
-    _encode_content,
     _is_inline_url,
     register_resources_tools,
 )
 
 
+def _legacy_url(content: str, resource_type: str = "module") -> str:
+    """Build a legacy worker inline URL the way the retired writer did."""
+    encoded = base64.urlsafe_b64encode(content.encode()).decode()
+    return f"{LEGACY_WORKER_BASE_URL}/{encoded}?type={resource_type}"
+
+
 class TestHelperFunctions:
     """Test helper functions."""
 
-    def test_encode_content(self):
-        """Test content encoding."""
-        content = "test content"
-        encoded, content_size, encoded_size = _encode_content(content)
+    def test_data_uri_roundtrip(self):
+        """Content encodes to a data: URI that decodes back byte-identical."""
+        content = "export const x = 'ünïcode';"
+        url = _data_uri_for(content, "module")
 
-        assert content_size == len(content.encode("utf-8"))
-        assert encoded_size == len(encoded)
-        assert base64.urlsafe_b64decode(encoded).decode("utf-8") == content
+        assert url.startswith("data:text/javascript;base64,")
+        assert _decode_data_uri(url) == content
 
-    def test_is_inline_url_true(self):
-        """Test inline URL detection."""
-        url = f"{WORKER_BASE_URL}/abc123?type=module"
-        assert _is_inline_url(url) is True
+    def test_data_uri_mime_by_type(self):
+        """module → text/javascript, css → text/css."""
+        assert _data_uri_for(".x {}", "css").startswith("data:text/css;base64,")
+        assert _data_uri_for("1;", "module").startswith("data:text/javascript;base64,")
+
+    def test_data_uri_deterministic(self):
+        """Same content always maps to the same URL."""
+        assert _data_uri_for("const a = 1;", "module") == _data_uri_for(
+            "const a = 1;", "module"
+        )
+
+    def test_decode_data_uri_rejects_non_data(self):
+        """Non-data: URLs decode to None."""
+        assert _decode_data_uri("/local/card.js") is None
+        assert _decode_data_uri("https://cdn.example.com/card.js") is None
+
+    def test_decode_data_uri_rejects_non_base64_form(self):
+        """Percent-encoded (non-base64) data: URIs decode to None, not garbage."""
+        assert _decode_data_uri("data:text/javascript,console.log(1)") is None
+
+    def test_is_inline_url_data_uri(self):
+        """data: URIs are inline resources."""
+        assert _is_inline_url("data:text/javascript;base64,YWJj") is True
+
+    def test_is_inline_url_legacy_worker(self):
+        """Legacy worker URLs still count as inline resources."""
+        assert _is_inline_url(f"{LEGACY_WORKER_BASE_URL}/abc123?type=module") is True
 
     def test_is_inline_url_false(self):
         """Test non-inline URL detection."""
         assert _is_inline_url("/local/card.js") is False
         assert _is_inline_url("https://cdn.example.com/card.js") is False
 
-    def test_decode_inline_url(self):
-        """Test decoding inline URL."""
+    def test_decode_legacy_worker_url(self):
+        """Test decoding legacy worker URL (pure local base64)."""
         content = "export const x = 1;"
-        encoded = base64.urlsafe_b64encode(content.encode()).decode()
-        url = f"{WORKER_BASE_URL}/{encoded}?type=module"
+        assert _decode_legacy_worker_url(_legacy_url(content)) == content
 
-        decoded = _decode_inline_url(url)
-        assert decoded == content
-
-    def test_decode_inline_url_non_inline(self):
-        """Test decoding non-inline URL returns None."""
-        assert _decode_inline_url("/local/card.js") is None
+    def test_decode_legacy_worker_url_non_worker(self):
+        """Test decoding non-worker URL returns None."""
+        assert _decode_legacy_worker_url("/local/card.js") is None
 
 
 class TestDetectHaConfigYaml:
@@ -197,10 +221,9 @@ class TestHaConfigListDashboardResources:
 
     @pytest.mark.asyncio
     async def test_list_inline_resources_decoded(self, list_tool, mock_client):
-        """Test that inline resources are decoded with preview."""
+        """Test that data: URI inline resources are decoded with preview."""
         content = "export const myFunction = () => 'hello world';"
-        encoded = base64.urlsafe_b64encode(content.encode()).decode()
-        inline_url = f"{WORKER_BASE_URL}/{encoded}?type=module"
+        inline_url = _data_uri_for(content, "module")
 
         mock_client.send_websocket_message.return_value = {
             "result": [{"id": "1", "type": "module", "url": inline_url}]
@@ -215,13 +238,31 @@ class TestHaConfigListDashboardResources:
         assert resource["_size"] == len(content)
         assert resource["_preview"] == content
         assert resource["url"] == "[inline]"  # URL replaced
+        assert "_legacy_worker" not in resource
+
+    @pytest.mark.asyncio
+    async def test_list_legacy_worker_resources_flagged(self, list_tool, mock_client):
+        """Legacy worker resources decode locally and carry a migration hint."""
+        content = "export const legacy = true;"
+        mock_client.send_websocket_message.return_value = {
+            "result": [{"id": "1", "type": "module", "url": _legacy_url(content)}]
+        }
+
+        result = await list_tool()
+
+        assert result["inline_count"] == 1
+        resource = result["resources"][0]
+        assert resource["_inline"] is True
+        assert resource["_preview"] == content
+        assert resource["_legacy_worker"] is True
+        assert "retired" in resource["_migration"]
+        assert resource["url"] == "[inline]"
 
     @pytest.mark.asyncio
     async def test_list_inline_preview_truncated(self, list_tool, mock_client):
         """Test that long inline content preview is truncated."""
         content = "x" * 200
-        encoded = base64.urlsafe_b64encode(content.encode()).decode()
-        inline_url = f"{WORKER_BASE_URL}/{encoded}?type=module"
+        inline_url = _data_uri_for(content, "module")
 
         mock_client.send_websocket_message.return_value = {
             "result": [{"id": "1", "type": "module", "url": inline_url}]
@@ -237,8 +278,7 @@ class TestHaConfigListDashboardResources:
     async def test_list_include_content_flag(self, list_tool, mock_client):
         """Test that include_content=True returns full content."""
         content = "x" * 200
-        encoded = base64.urlsafe_b64encode(content.encode()).decode()
-        inline_url = f"{WORKER_BASE_URL}/{encoded}?type=module"
+        inline_url = _data_uri_for(content, "module")
 
         mock_client.send_websocket_message.return_value = {
             "result": [{"id": "1", "type": "module", "url": inline_url}]
@@ -308,11 +348,13 @@ class TestHaConfigSetDashboardResource:
         assert result["resource_type"] == "module"
         assert result["size"] == len(content.encode("utf-8"))
 
-        # Verify WebSocket call uses Cloudflare Worker URL
+        # Registered URL is a self-contained data: URI holding exactly the
+        # submitted content — nothing external involved.
         call_args = mock_client.send_websocket_message.call_args[0][0]
         assert call_args["type"] == "lovelace/resources/create"
         assert call_args["res_type"] == "module"
-        assert WORKER_BASE_URL in call_args["url"]
+        assert call_args["url"].startswith("data:text/javascript;base64,")
+        assert _decode_data_uri(call_args["url"]) == content
 
     @pytest.mark.asyncio
     async def test_create_inline_css(self, set_tool, mock_client):
@@ -323,6 +365,10 @@ class TestHaConfigSetDashboardResource:
 
         assert result["success"] is True
         assert result["resource_type"] == "css"
+
+        call_args = mock_client.send_websocket_message.call_args[0][0]
+        assert call_args["url"].startswith("data:text/css;base64,")
+        assert _decode_data_uri(call_args["url"]) == ".card { color: red; }"
 
     @pytest.mark.asyncio
     async def test_default_type_is_module(self, set_tool, mock_client):
@@ -349,9 +395,13 @@ class TestHaConfigSetDashboardResource:
         assert result["action"] == "updated"
         assert result["resource_id"] == "existing"
 
+        # Updates always write the current data: URI form — updating a
+        # legacy worker-hosted resource with new content migrates it off
+        # the retired worker as a side effect.
         call_args = mock_client.send_websocket_message.call_args[0][0]
         assert call_args["type"] == "lovelace/resources/update"
         assert call_args["resource_id"] == "existing"
+        assert call_args["url"].startswith("data:text/javascript;base64,")
 
     @pytest.mark.asyncio
     async def test_inline_empty_content_error(self, set_tool, mock_client):
@@ -655,17 +705,10 @@ class TestToolRegistration:
 class TestConstants:
     """Test module constants."""
 
-    def test_worker_url_is_https(self):
-        """Test worker URL uses HTTPS."""
-        assert WORKER_BASE_URL.startswith("https://")
+    def test_legacy_worker_url_is_https(self):
+        """Legacy recognition constant still matches the worker's https URL."""
+        assert LEGACY_WORKER_BASE_URL.startswith("https://")
 
-    def test_size_limits_reasonable(self):
-        """Test size limits allow useful content."""
-        assert MAX_CONTENT_SIZE >= 20000  # At least 20KB
-        assert MAX_ENCODED_LENGTH >= 30000  # At least 30KB
-
-    def test_base64_overhead_accounted(self):
-        """Test content limit accounts for base64 expansion."""
-        # Base64 increases size by 4/3
-        expected_encoded = (MAX_CONTENT_SIZE * 4 + 2) // 3
-        assert expected_encoded <= MAX_ENCODED_LENGTH
+    def test_size_limit_not_below_old_worker_cap(self):
+        """The data: URI limit must not regress below the old 24KB worker cap."""
+        assert MAX_CONTENT_SIZE >= 24000

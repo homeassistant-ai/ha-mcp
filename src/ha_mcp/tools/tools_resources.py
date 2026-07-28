@@ -2,10 +2,19 @@
 Dashboard resource hosting tools for Home Assistant MCP server.
 
 Provides tools for managing dashboard resources (custom cards, CSS, JS):
-- Inline resources: Code embedded in URL via Cloudflare Worker
+- Inline resources: Code embedded directly in the resource URL as a
+  ``data:`` URI — stored in HA's own resource registry, served by nothing
 - External resources: URLs to /local/, /hacsfiles/, or external CDNs
 
-See: https://github.com/homeassistant-ai/ha-mcp/issues/266
+Inline resources were previously served by a Cloudflare Worker that decoded
+base64 content embedded in its URL, based on issue #71's claim that browsers
+reject ``data:`` URIs for ES6 modules. That claim was wrong — HA's WS API
+applies no URL-scheme validation, HA ships no CSP, and every layer loads
+``data:`` modules and stylesheets fine (verified live; see #2060). Inline
+content now goes straight into a ``data:`` URI: same storage location
+(the resource registry), no third-party hop on dashboard loads.
+``LEGACY_WORKER_BASE_URL`` survives only to recognize and locally decode
+resources created before the switch — the worker is never contacted.
 """
 
 import base64
@@ -29,15 +38,20 @@ from .util_helpers import build_pagination_metadata
 
 logger = logging.getLogger(__name__)
 
-# Cloudflare Worker URL for resource hosting
-WORKER_BASE_URL = "https://ha-mcp-resources.rapid-math-bbad.workers.dev"
+# Retired Cloudflare Worker URL. Only used to recognize and locally decode
+# inline resources created before the data: URI switch (#2060) — never fetched.
+LEGACY_WORKER_BASE_URL = "https://ha-mcp-resources.rapid-math-bbad.workers.dev"
 
-# Maximum base64-encoded URL path length (tested limit: 32KB)
-MAX_ENCODED_LENGTH = 32000
+# data: URI media types per resource_type ('js' is rejected for inline mode).
+_DATA_URI_MIME = {"module": "text/javascript", "css": "text/css"}
 
-# Maximum content size (~24KB before base64 encoding)
-# Base64 encoding increases size by ~33%, so 24KB * 1.33 ≈ 32KB
-MAX_CONTENT_SIZE = 24000
+_DATA_URI_PREFIX = "data:"
+
+# Maximum inline content size. Browsers load data: modules far larger than
+# this (verified to 2MB), so the bound is prudence about the resource
+# registry (.storage/lovelace_resources) and WS message sizes, not a URL
+# limit like the old worker's 24KB cap.
+MAX_CONTENT_SIZE = 1_000_000
 
 # Top-level HA-config YAML keys that LLMs sometimes emit when they pick this
 # tool (`ha_config_set_dashboard_resource`) to "create a scene/automation/...".
@@ -113,28 +127,49 @@ def _detect_ha_config_yaml(content: str) -> str | None:
     return None
 
 
-def _encode_content(content: str) -> tuple[str, int, int]:
-    """Encode content to URL-safe base64. Returns (encoded, content_size, encoded_size)."""
-    content_bytes = content.encode("utf-8")
-    encoded = base64.urlsafe_b64encode(content_bytes).decode("ascii")
-    return encoded, len(content_bytes), len(encoded)
+def _data_uri_for(content: str, resource_type: str) -> str:
+    """Encode content as a base64 ``data:`` URI for the given resource type.
+
+    Standard base64 (not URL-safe): browsers decode data: URIs with the
+    standard alphabet. Deterministic — same content, same URI.
+    """
+    mime = _DATA_URI_MIME[resource_type]
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
 
 
-def _decode_inline_url(url: str) -> str | None:
-    """Decode an inline resource URL back to content. Returns None if not an inline URL."""
-    if WORKER_BASE_URL not in url:
+def _decode_data_uri(url: str) -> str | None:
+    """Decode a base64 ``data:`` URI back to content. None if not one of ours."""
+    if not url.startswith(_DATA_URI_PREFIX):
+        return None
+    header, sep, payload = url.partition(",")
+    if not sep or not header.endswith(";base64"):
+        return None
+    try:
+        return base64.b64decode(payload).decode("utf-8")
+    except Exception:
+        return None
+
+
+def _decode_legacy_worker_url(url: str) -> str | None:
+    """Decode a legacy worker inline URL back to content (pure local base64).
+
+    The worker embedded URL-safe base64 in its path; decoding needs no
+    network. Returns None if the URL is not a legacy worker URL.
+    """
+    if LEGACY_WORKER_BASE_URL not in url:
         return None
     try:
         # Extract base64 part: https://worker.dev/{base64}?type=module
-        encoded = url.replace(f"{WORKER_BASE_URL}/", "").split("?")[0]
+        encoded = url.replace(f"{LEGACY_WORKER_BASE_URL}/", "").split("?")[0]
         return base64.urlsafe_b64decode(encoded).decode("utf-8")
     except Exception:
         return None
 
 
 def _is_inline_url(url: str) -> bool:
-    """Check if a URL is an inline resource URL."""
-    return WORKER_BASE_URL in url
+    """Check if a URL is an inline resource URL (current data: or legacy worker)."""
+    return url.startswith(_DATA_URI_PREFIX) or LEGACY_WORKER_BASE_URL in url
 
 
 class ResourceTools:
@@ -284,8 +319,9 @@ class ResourceTools:
         content: Annotated[
             str | None,
             Field(
-                description="JavaScript or CSS code to host inline (max ~24KB). "
-                "The code is embedded in the URL via Cloudflare Worker - no file storage needed. "
+                description="JavaScript or CSS code to host inline. "
+                "The code is embedded directly in the resource URL as a data: URI - "
+                "no file storage or external hosting involved. "
                 "Mutually exclusive with url. Supports 'module' and 'css' types only."
             ),
         ] = None,
@@ -318,14 +354,16 @@ class ResourceTools:
         Create or update a dashboard resource (inline code or external URL).
 
         Provide exactly one of:
-        - content: Inline JavaScript or CSS code (embedded in URL, no file storage needed)
+        - content: Inline JavaScript or CSS code (embedded in the resource URL
+          as a data: URI — no file storage or external hosting involved)
         - url: External resource URL (/local/, /hacsfiles/, or https://...)
 
         INLINE MODE (content=):
         - Custom card code written inline
         - CSS styling for dashboards
-        - Small utility modules (<24KB)
         - URLs are deterministic (same content = same URL)
+        - Content must be self-contained (a data: URI has no base URL, so
+          relative imports inside the module cannot resolve)
         - Supports 'module' and 'css' types only (not 'js')
 
         URL MODE (url=):
@@ -498,18 +536,7 @@ class ResourceTools:
                 )
             )
 
-        encoded, _, encoded_size = _encode_content(content)
-
-        if encoded_size > MAX_ENCODED_LENGTH:
-            raise_tool_error(
-                create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message=f"Encoded content too large: {encoded_size:,} chars (max {MAX_ENCODED_LENGTH:,})",
-                    context={"size": content_size},
-                )
-            )
-
-        resource_url = f"{WORKER_BASE_URL}/{encoded}?type={resource_type}"
+        resource_url = _data_uri_for(content, resource_type)
 
         try:
             result, action = await self._upsert_resource(
@@ -789,15 +816,30 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 def _process_resource_list(
     resources: list[Any], include_content: bool
 ) -> list[dict[str, Any]]:
-    """Process raw resources, decoding inline URLs for preview."""
+    """Process raw resources, decoding inline URLs for preview.
+
+    Current inline resources are ``data:`` URIs; resources created before
+    the worker retirement (#2060) still point at the worker and get a
+    migration hint. Both decode locally — no network involved.
+    """
     processed = []
     for resource in resources:
         res = dict(resource)
         url = res.get("url", "")
 
-        if _is_inline_url(url):
-            content = _decode_inline_url(url)
-            if content:
+        if isinstance(url, str) and _is_inline_url(url):
+            content = _decode_data_uri(url)
+            if content is None:
+                content = _decode_legacy_worker_url(url)
+                if content is not None:
+                    res["_legacy_worker"] = True
+                    res["_migration"] = (
+                        "Hosted on the retired Cloudflare worker. Re-save with "
+                        "ha_config_set_dashboard_resource(content=..., "
+                        "resource_id=...) to convert it to a self-contained "
+                        "data: URI."
+                    )
+            if content is not None:
                 res["_inline"] = True
                 res["_size"] = len(content)
 

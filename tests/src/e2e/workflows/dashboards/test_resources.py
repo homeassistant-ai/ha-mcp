@@ -13,6 +13,7 @@ Each test uses real Home Assistant API calls via the MCP server to ensure
 production-level functionality and compatibility.
 """
 
+import base64
 import logging
 
 # Import test utilities
@@ -498,11 +499,26 @@ class TestDashboardResourceUrlPatterns:
         logger.info("Hacsfiles URL pattern test completed successfully")
 
 
-class TestInlineDashboardResource:
-    """Test inline dashboard resource creation (code to URL)."""
+async def _raw_resource_url(ha_client, resource_id) -> str | None:
+    """Fetch a resource's URL straight from HA's registry over the raw WS API.
 
-    async def test_create_inline_module(self, mcp_client):
-        """Test creating an inline module resource."""
+    Ground truth for what the tool actually registered — the MCP list tool
+    masks inline URLs as "[inline]", so proving the stored URL is a
+    self-contained data: URI needs this side channel.
+    """
+    result = await ha_client.send_websocket_message({"type": "lovelace/resources"})
+    resources = result.get("result") if isinstance(result, dict) else result
+    for res in resources or []:
+        if str(res.get("id")) == str(resource_id):
+            return res.get("url")
+    return None
+
+
+class TestInlineDashboardResource:
+    """Test inline dashboard resource creation (code to data: URI)."""
+
+    async def test_create_inline_module(self, mcp_client, ha_client):
+        """Inline module: registered as a data: URI holding the exact content."""
         logger.info("Starting inline module creation test")
         mcp = MCPAssertions(mcp_client)
 
@@ -521,9 +537,17 @@ class TestInlineDashboardResource:
             assert create_data["size"] == len(content.encode("utf-8"))
             assert resource_id is not None
 
+            # Ground truth: HA's registry holds a self-contained data: URI
+            # that decodes byte-identical to the submitted content.
+            raw_url = await _raw_resource_url(ha_client, resource_id)
+            assert raw_url is not None
+            assert raw_url.startswith("data:text/javascript;base64,")
+            decoded = base64.b64decode(raw_url.partition(",")[2]).decode("utf-8")
+            assert decoded == content
+
             # Verify it appears in list with inline marker
             list_data = await mcp.call_tool_success(
-                "ha_config_list_dashboard_resources", {}
+                "ha_config_list_dashboard_resources", {"include_content": True}
             )
 
             # Find our inline resource
@@ -538,7 +562,8 @@ class TestInlineDashboardResource:
             assert our_resource is not None
             assert our_resource.get("_inline") is True
             assert our_resource.get("url") == "[inline]"
-            assert "_preview" in our_resource or "_size" in our_resource
+            assert our_resource.get("_content") == content
+            assert "_legacy_worker" not in our_resource
 
         finally:
             if resource_id:
@@ -549,8 +574,8 @@ class TestInlineDashboardResource:
 
         logger.info("Inline module creation test completed successfully")
 
-    async def test_create_inline_css(self, mcp_client):
-        """Test creating an inline CSS resource."""
+    async def test_create_inline_css(self, mcp_client, ha_client):
+        """Inline CSS: registered as a data:text/css URI holding the content."""
         logger.info("Starting inline CSS creation test")
         mcp = MCPAssertions(mcp_client)
 
@@ -564,6 +589,12 @@ class TestInlineDashboardResource:
         try:
             assert create_data["success"] is True
             assert create_data["resource_type"] == "css"
+
+            raw_url = await _raw_resource_url(ha_client, resource_id)
+            assert raw_url is not None
+            assert raw_url.startswith("data:text/css;base64,")
+            decoded = base64.b64decode(raw_url.partition(",")[2]).decode("utf-8")
+            assert decoded == content
         finally:
             if resource_id:
                 await mcp_client.call_tool(
@@ -572,6 +603,75 @@ class TestInlineDashboardResource:
                 )
 
         logger.info("Inline CSS creation test completed successfully")
+
+    async def test_legacy_worker_resource_migrates_on_update(
+        self, mcp_client, ha_client
+    ):
+        """A pre-switch worker-hosted resource converts to a data: URI on update.
+
+        Installations that created inline resources before the worker
+        retirement (#2060) still have workers.dev URLs registered; re-saving
+        with content= must replace them with self-contained data: URIs.
+        """
+        logger.info("Starting legacy worker migration test")
+        mcp = MCPAssertions(mcp_client)
+
+        legacy_content = "export const LEGACY = 1;"
+        encoded = base64.urlsafe_b64encode(legacy_content.encode()).decode()
+        legacy_url = (
+            "https://ha-mcp-resources.rapid-math-bbad.workers.dev/"
+            f"{encoded}?type=module"
+        )
+
+        # Seed the pre-switch state via url= mode (a plain URL registration).
+        create_data = await mcp.call_tool_success(
+            "ha_config_set_dashboard_resource",
+            {"url": legacy_url, "resource_type": "module"},
+        )
+        resource_id = create_data.get("resource_id")
+        try:
+            # The list tool must recognize it, decode it locally, and flag it.
+            list_data = await mcp.call_tool_success(
+                "ha_config_list_dashboard_resources", {"include_content": True}
+            )
+            legacy_res = next(
+                (
+                    r
+                    for r in list_data.get("resources", [])
+                    if r.get("id") == resource_id
+                ),
+                None,
+            )
+            assert legacy_res is not None
+            assert legacy_res.get("_inline") is True
+            assert legacy_res.get("_legacy_worker") is True
+            assert legacy_res.get("_content") == legacy_content
+
+            # Re-save with content= → migrated to a data: URI.
+            new_content = "export const MIGRATED = 2;"
+            update_data = await mcp.call_tool_success(
+                "ha_config_set_dashboard_resource",
+                {
+                    "content": new_content,
+                    "resource_type": "module",
+                    "resource_id": resource_id,
+                },
+            )
+            assert update_data["action"] == "updated"
+
+            raw_url = await _raw_resource_url(ha_client, resource_id)
+            assert raw_url is not None
+            assert raw_url.startswith("data:text/javascript;base64,")
+            decoded = base64.b64decode(raw_url.partition(",")[2]).decode("utf-8")
+            assert decoded == new_content
+        finally:
+            if resource_id:
+                await mcp_client.call_tool(
+                    "ha_config_delete_dashboard_resource",
+                    {"resource_id": resource_id},
+                )
+
+        logger.info("Legacy worker migration test completed successfully")
 
     async def test_inline_empty_content_error(self, mcp_client):
         """Test that empty content returns error."""
