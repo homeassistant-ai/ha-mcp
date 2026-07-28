@@ -74,6 +74,24 @@ This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp
 
 **Check for a port in the URL.** Your connector URL is built on your Home Assistant's own public address, which must **not** contain a port such as `:8123` (or any other port). To check, open just that base address (e.g. `https://ha.example.com`, without the `/api/webhook/...` secret path) in a browser — it should bring up your HA login page. Remote clients cannot reach a URL that carries a port, even though it loads fine in your own browser. Home Assistant can still listen on 8123 internally, as long as a reverse proxy, tunnel, or 443 port-forward serves that hostname — just don't put the port in the URL you paste.
 
+### Claude can't connect to hosts using a wildcard certificate
+
+If your Home Assistant (or reverse proxy) is served over HTTPS with a
+**wildcard certificate** (`*.example.com`), Claude may fail to connect even
+though the same URL loads fine in a browser and works with `curl`.
+
+**Symptoms:**
+
+- The connector shows a connection or TLS error, while the browser reports a
+  valid certificate
+- Other MCP clients against the same URL may work
+
+
+**Workaround:**
+
+Issue a host-specific certificate (single-name or SAN) for the hostname used
+by ha-mcp instead of relying on the wildcard.
+
 ### "Terminating session: None" in server logs
 
 **This is normal.** ha-mcp runs in stateless HTTP mode, which means each request creates and discards a temporary session. The `Terminating session: None` log message is the MCP SDK reporting this routine cleanup — the connection stays active.
