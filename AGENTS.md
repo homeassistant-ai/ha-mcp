@@ -742,10 +742,16 @@ left behind for a key the schema no longer has; the two flavors differ.
 
 Some English strings are shipped from more than one catalog — the add-on
 options and the settings UI describe the same switches — and **a string that is
-byte-identical in English must be byte-identical in every other language too**.
-The keys differ per surface, so translating one surface at a time is how they
-drift apart; check the wording you are about to write against the other
-catalogs, or let the test tell you afterwards.
+byte-identical in English on two different surfaces must be byte-identical in
+every other language too**. The keys differ per surface, so translating one
+surface at a time is how they drift apart; check the wording you are about to
+write against the other catalogs, or let the test tell you afterwards. The same
+English twice *within* one catalog may differ — Spanish agrees
+`activado`/`activada` with the noun each sentence is about — unless that text
+also reaches a second surface, in which case both keys follow the shared
+wording. What this covers is pinned by name in `SHARED_ENGLISH_PLACES`: give a
+new option English that an existing string already uses and
+`test_shared_english_strings_are_discovered` goes red until you add it there.
 
 **Changing an English string means updating every locale that carries it**,
 then `python scripts/update_locale_baseline.py`. The baseline pins the English
