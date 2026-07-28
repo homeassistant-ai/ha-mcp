@@ -600,7 +600,9 @@ _MAX_COMPONENT_IDENTICAL_SHARE = 0.15
 
 
 def _untranslated_keys(
-    english: dict[str, str], translated: dict[str, str]
+    english: dict[str, str],
+    translated: dict[str, str],
+    alternate: dict[str, str] | None = None,
 ) -> list[str]:
     """The English keys ``translated`` does not translate.
 
@@ -609,16 +611,27 @@ def _untranslated_keys(
     catalog carries let ``messages: {}`` score 0% and a 20-key all-English stub
     score 4.8% — both under any sane ceiling, and since omission is legal
     everywhere else, nothing else caught them.
+
+    ``alternate`` is a second English rendering of the same keys, for a surface
+    that has one. A paste of either rendering is English on screen, so the same
+    argument that makes the paste check consult both applies key by key here.
     """
+    alternates = alternate or {}
     return sorted(
-        key for key, text in english.items() if translated.get(key, text) == text
+        key
+        for key, text in english.items()
+        if (value := translated.get(key, text)) == text or value == alternates.get(key)
     )
 
 
 def _assert_not_a_copy(
-    label: str, english: dict[str, str], translated: dict[str, str], ceiling: float
+    label: str,
+    english: dict[str, str],
+    translated: dict[str, str],
+    ceiling: float,
+    alternate: dict[str, str] | None = None,
 ) -> None:
-    untranslated = _untranslated_keys(english, translated)
+    untranslated = _untranslated_keys(english, translated, alternate)
     share = len(untranslated) / len(english)
 
     assert share <= ceiling, (
@@ -673,7 +686,15 @@ def test_settings_catalog_tools_are_translated(locale: str) -> None:
     # Both English renderings count: a feature-gated tool shows the stub text
     # with its flag off and the parsed docstring with it on, and a translator
     # pastes whichever one their instance put on screen.
-    english_sources = (english, _english_tool_texts(as_rendered=False))
+    as_parsed = _english_tool_texts(as_rendered=False)
+    assert english != as_parsed, (
+        "the two English renderings are identical, so consulting both below "
+        "discriminates nothing — either FEATURE_GATED_TOOLS no longer overrides "
+        "any title or description, or the stub lookup in _english_tool_texts "
+        "stopped taking effect"
+    )
+
+    english_sources = (english, as_parsed)
     pasted = sorted(
         name
         for name, entry in catalog.items()
@@ -693,10 +714,38 @@ def test_settings_catalog_tools_are_translated(locale: str) -> None:
 
     _assert_not_a_copy(
         f"src/ha_mcp/settings_ui/locales/{locale}.json (tools)",
-        _english_tool_texts(),
+        english,
         translated,
         _MAX_ENGLISH_IDENTICAL_SHARE,
+        alternate=as_parsed,
     )
+
+
+def test_the_tools_share_counts_both_english_renderings() -> None:
+    """No shipped locale pastes either English, so real data cannot show this.
+
+    A description pasted from the *parsed* English of a feature-gated tool is
+    English on screen but byte-differs from the rendered text, so counting only
+    the rendered one reads it as translated. Six of the 174 keys differ between
+    the renderings today — 3.4%, invisible under the ceiling on their own and
+    enough to hide a genuinely untranslated remainder underneath it.
+    """
+    english = _english_tool_texts()
+    as_parsed = _english_tool_texts(as_rendered=False)
+    differing = sorted(key for key in english if english[key] != as_parsed[key])
+    assert differing, "the two renderings no longer differ — see the tools check"
+
+    translated = {key: f"traducido {text}" for key, text in english.items()}
+    translated.update({key: as_parsed[key] for key in differing})
+
+    # Nothing here is byte-identical to the rendered English, so the rendered
+    # set alone finds no untranslated key at all — a zero ceiling holds.
+    _assert_not_a_copy("rendered English only", english, translated, 0.0)
+
+    with pytest.raises(AssertionError, match="untranslated"):
+        _assert_not_a_copy(
+            "both renderings", english, translated, 0.0, alternate=as_parsed
+        )
 
 
 @pytest.mark.parametrize("locale", _translated_component_locales())
