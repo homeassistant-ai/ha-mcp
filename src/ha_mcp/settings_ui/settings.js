@@ -3316,10 +3316,17 @@ async function policyDecide(token, action) {
     let body;
     try { body = await resp.json(); } catch (_) { body = {error: 'HTTP ' + resp.status}; }
     if (resp.status === 409 && body.current_decision) {
+      // current_decision is a backend enum, not display text: interpolating it
+      // raw leaves an English word inside a translated sentence.
+      const decision = t(
+        'policies.pending.decision.' + body.current_decision,
+        {},
+        body.current_decision
+      );
       alert(t(
         'policies.pending.already_decided',
-        {decision: body.current_decision},
-        'This approval was already ' + body.current_decision + ', possibly by another tab or session.'
+        {decision},
+        'This approval was already ' + decision + ', possibly by another tab or session.'
       ));
     } else if (resp.status === 404) {
       alert(t('policies.pending.invalid_token', {}, 'This approval token is no longer valid (already consumed or expired).'));

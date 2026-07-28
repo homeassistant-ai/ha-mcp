@@ -669,6 +669,8 @@
     "messages.policies.operators.regex": "ad700316746ce65c",
     "messages.policies.pending.action_failed": "3faebdd820f4dc38",
     "messages.policies.pending.already_decided": "b3c44f60c9bc8d0a",
+    "messages.policies.pending.decision.approved": "2687f86ed6784b8a",
+    "messages.policies.pending.decision.denied": "62d6c2330036f64b",
     "messages.policies.pending.disabled": "91884526ee136e9c",
     "messages.policies.pending.empty": "bac0662a619b4f21",
     "messages.policies.pending.expires": "2f6dc10f0ea19eea",

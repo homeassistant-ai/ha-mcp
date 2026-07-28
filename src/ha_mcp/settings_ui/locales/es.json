@@ -353,6 +353,8 @@
     "policies.pending.unavailable": "Las aprobaciones en vivo no están disponibles. Revisa el registro de la app (complemento).",
     "policies.pending.expires": "Caduca: {time}",
     "policies.pending.already_decided": "Esta aprobación ya estaba {decision}, posiblemente desde otra pestaña o sesión.",
+    "policies.pending.decision.approved": "aprobada",
+    "policies.pending.decision.denied": "denegada",
     "policies.pending.invalid_token": "Este token de aprobación ya no es válido (ya se ha consumido o ha caducado).",
     "policies.pending.action_failed": "Ha fallado la acción de aprobación: {detail}",
     "visibility.errors.reach_server": "No se ha podido contactar con el servidor: {message}",

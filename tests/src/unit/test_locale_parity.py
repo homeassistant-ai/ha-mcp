@@ -561,7 +561,7 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
     ``connect_local_lan`` tells the reader which dropdown entry produces this
     URL, and every catalog quotes the label untranslated for that reason —
     the reader matches it against the form. Renaming the option in
-    ``config_flow.py`` would leave six catalogs quoting a label that no longer
+    ``config_flow.py`` would leave seven catalogs quoting a label that no longer
     exists, silently, which is the drift class the ceilings test closed for
     percentages and this one closes for a literal.
     """
@@ -961,7 +961,7 @@ def _renderable_groups_and_tools() -> tuple[frozenset[str], frozenset[str]]:
     committed ``site/src/data/tools.json``: that file is regenerated only
     *after* merge, by ``sync-tool-docs.yml`` on a ``[skip ci]`` commit. Reading
     it would let the PR that adds a tool stay green and then turn every
-    subsequent PR red across all five locales, landing the failure on whoever
+    subsequent PR red across all six locales, landing the failure on whoever
     opens the next one. Parsing the sources puts it on the PR that owes the
     translations.
     """
@@ -1158,7 +1158,7 @@ def test_settings_catalog_tools_are_translated(locale: str) -> None:
 
     87 titles and 87 descriptions is the largest translated surface in the
     repo, and nothing looked at the values. The exactness rule above also
-    obliges every tool-adding PR to touch five languages before it can go
+    obliges every tool-adding PR to touch six languages before it can go
     green, which is pressure toward pasting the English in — this is what
     notices. Every shipped locale translates all 174 today.
     """
@@ -1172,7 +1172,7 @@ def test_settings_catalog_tools_are_translated(locale: str) -> None:
     }
 
     # The share alone does not cover the case this check exists for: adding one
-    # tool and pasting its English title and description into all five locales
+    # tool and pasting its English title and description into all six locales
     # scores 2 of 176 and passes. One wholly-English tool is the signature, and
     # naming it beats a percentage. A single matching title stays legal — some
     # tool names genuinely read the same in another language.

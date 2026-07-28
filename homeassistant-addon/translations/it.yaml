@@ -52,7 +52,7 @@ configuration:
     description: >-
       Disattiva tutti gli strumenti di scrittura e impedisce a qualunque
       strumento di eseguire chiamate di scrittura o distruttive. Gli strumenti
-      misti di lettura/scrittura (backup, app [componenti aggiuntivi],
+      misti di lettura/scrittura (backup, componenti aggiuntivi,
       preferenze energetiche, pipeline vocali e la modalità codice quando è
       attiva) restano disponibili, ma con le operazioni di scrittura bloccate.
       È la stessa opzione della scheda Strumenti nell'interfaccia web.
@@ -147,7 +147,7 @@ configuration:
       lascialo attivo a meno che tu non sappia di averne bisogno. Richiede il
       riavvio per avere effetto.
   tool_search_max_results:
-    name: Numero massimo di risultati della ricerca strumenti
+    name: Numero massimo di risultati della ricerca degli strumenti
     description: >-
       Numero massimo di strumenti restituiti da ha_search_tools quando la
       ricerca degli strumenti è attiva. Valori bassi (2-3) risparmiano token di

@@ -353,6 +353,8 @@
     "policies.pending.unavailable": "Live approvals unavailable. Check the App (add-on) log.",
     "policies.pending.expires": "Expires: {time}",
     "policies.pending.already_decided": "This approval was already {decision}, possibly by another tab or session.",
+    "policies.pending.decision.approved": "approved",
+    "policies.pending.decision.denied": "denied",
     "policies.pending.invalid_token": "This approval token is no longer valid (already consumed or expired).",
     "policies.pending.action_failed": "Approval action failed: {detail}",
     "visibility.errors.reach_server": "Could not reach the server: {message}",

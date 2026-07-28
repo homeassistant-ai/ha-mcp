@@ -353,6 +353,8 @@
     "policies.pending.unavailable": "实时审批不可用。请检查应用（插件）日志。",
     "policies.pending.expires": "过期时间：{time}",
     "policies.pending.already_decided": "此审批已被 {decision}，可能由另一个标签页或会话完成。",
+    "policies.pending.decision.approved": "批准",
+    "policies.pending.decision.denied": "拒绝",
     "policies.pending.invalid_token": "此审批令牌已失效（已被消费或过期）。",
     "policies.pending.action_failed": "审批操作失败：{detail}",
     "visibility.errors.reach_server": "无法连接到服务器：{message}",

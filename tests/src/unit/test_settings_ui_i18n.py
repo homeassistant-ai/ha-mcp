@@ -6,10 +6,13 @@ import json
 import re
 from collections import Counter
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from starlette.requests import Request
 
+import ha_mcp.settings_ui
+from ha_mcp.policy.approval_queue import Decision
 from ha_mcp.settings_ui import _render_settings_html
 from ha_mcp.settings_ui._i18n import (
     CATALOGS,
@@ -302,7 +305,7 @@ def test_native_names_name_their_own_language() -> None:
     ``native_name`` assertion, so ``es.json`` shipping ``"Deutsch"`` — or
     English's own name — is green today: the picker then offers the same label
     twice, and the label does not name the language it selects. Comparing the
-    catalogs to each other pins that without hardcoding six literals here.
+    catalogs to each other pins that without hardcoding seven literals here.
     """
     english = CATALOGS["en"]["meta"]["native_name"]
     names = {
@@ -564,3 +567,42 @@ def test_panel_link_in_a_locale_only_key_is_still_checked(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match=re.escape("settings.html does not declare")):
         load_catalogs(tmp_path, settings_html)
+
+
+def test_every_decided_outcome_has_a_catalog_word() -> None:
+    """The 409 body carries a backend enum; the sentence around it is translated.
+
+    ``settings.js`` renders ``policies.pending.already_decided`` with the
+    ``current_decision`` value the conflict response returns. That value is a
+    ``Decision`` literal, not display text, so interpolating it raw dropped an
+    English word into an otherwise translated sentence — Italian read
+    ``Questa approvazione è già stata approved``. It is mapped through the
+    catalog now, which only holds while every outcome the queue can report has
+    a key: adding one to ``Decision`` and nothing else would put the English
+    back, in every language at once, with no other test noticing.
+    """
+    outcomes = sorted(set(get_args(Decision)) - {"pending"})
+    assert outcomes, (
+        "Decision no longer names any decided outcome — the 409 branch in "
+        "settings.js that this pins cannot be reached, so either the branch "
+        "or this test is now dead"
+    )
+
+    messages = CATALOGS["en"]["messages"]
+    missing = [f"policies.pending.decision.{o}" for o in outcomes]
+    missing = [key for key in missing if key not in messages]
+    assert not missing, (
+        f"en.json is missing {missing}. The settings UI shows that raw enum "
+        "value inside the translated 'already decided' sentence, so every "
+        "locale renders an English word there. Add the key to en.json and to "
+        "every locale beside it."
+    )
+
+    settings_js = (
+        Path(ha_mcp.settings_ui.__file__).resolve().parent / "settings.js"
+    ).read_text("utf-8")
+    assert "'policies.pending.decision.' + body.current_decision" in settings_js, (
+        "settings.js no longer resolves current_decision through the catalog. "
+        "The keys above then sit unused while the English enum renders inside "
+        "the translated sentence again."
+    )

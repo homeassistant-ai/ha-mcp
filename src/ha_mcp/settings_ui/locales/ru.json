@@ -353,6 +353,8 @@
     "policies.pending.unavailable": "Одобрения в реальном времени недоступны. Проверьте журнал дополнения.",
     "policies.pending.expires": "Истекает: {time}",
     "policies.pending.already_decided": "Этот запрос уже имеет решение «{decision}», возможно из другой вкладки или сеанса.",
+    "policies.pending.decision.approved": "одобрено",
+    "policies.pending.decision.denied": "отклонено",
     "policies.pending.invalid_token": "Токен одобрения больше недействителен: он уже использован или истёк.",
     "policies.pending.action_failed": "Операция с одобрением не выполнена: {detail}",
     "visibility.errors.reach_server": "Не удалось связаться с сервером: {message}",

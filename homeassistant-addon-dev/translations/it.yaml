@@ -47,7 +47,7 @@ configuration:
     description: >-
       Disattiva tutti gli strumenti di scrittura e impedisce a qualunque
       strumento di eseguire chiamate di scrittura o distruttive. Gli strumenti
-      misti di lettura/scrittura (backup, app [componenti aggiuntivi],
+      misti di lettura/scrittura (backup, componenti aggiuntivi,
       preferenze energetiche, pipeline vocali e la modalità codice quando è
       attiva) restano disponibili, ma con le operazioni di scrittura bloccate.
       È la stessa opzione della scheda Strumenti nell'interfaccia web.
@@ -139,7 +139,7 @@ configuration:
       strumenti MCP esistenti (call_tool) o rimuovere uno strumento salvato
       (delete_saved_tool). Per impostazione predefinita gli strumenti salvati
       vengono scritti in /data/saved_tools.json, quindi sopravvivono ai riavvii
-      dell'app (componente aggiuntivo), e sono visibili a qualunque client
+      del componente aggiuntivo, e sono visibili a qualunque client
       riesca a connettersi. Vedi docs/beta.md per i limiti noti. Richiede il
       riavvio per avere effetto. RICHIEDE che l'opzione principale «Attiva le
       funzioni beta» qui sopra (e nell'interfaccia web) sia attiva, altrimenti
@@ -260,7 +260,7 @@ configuration:
       di Lovelace (per esempio per verificare una dashboard appena creata).
       Supporta viste con nome stabile, batch per cellulare/tablet/computer e
       output PNG/JPEG/WebP/BMP. Il rendering avviene in un motore separato e
-      facoltativo — l'app (componente aggiuntivo) «Puppet» di balloob, basata
+      facoltativo — il componente aggiuntivo «Puppet» di balloob, basata
       su Chromium headless — che installi una volta sola (aggiungi il
       repository di componenti aggiuntivi di balloob, poi installa «Puppet») e
       a cui fornisci un token di accesso di lunga durata; nelle installazioni
@@ -272,7 +272,7 @@ configuration:
       altrimenti questo sotto-flag viene ignorato in esecuzione a prescindere
       dal valore impostato qui.
   tool_search_max_results:
-    name: Numero massimo di risultati della ricerca strumenti
+    name: Numero massimo di risultati della ricerca degli strumenti
     description: >-
       Numero massimo di strumenti restituiti da ha_search_tools quando la
       ricerca degli strumenti è attiva. Valori bassi (2-3) risparmiano token di
