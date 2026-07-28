@@ -653,11 +653,15 @@ def test_shared_english_strings_are_discovered() -> None:
 
     surfaces = SHARED_ENGLISH_PLACES.keys() | found.keys()
     lost = {
-        surface: sorted(set(SHARED_ENGLISH_PLACES.get(surface, ())) - found.get(surface, set()))
+        surface: sorted(
+            set(SHARED_ENGLISH_PLACES.get(surface, ())) - found.get(surface, set())
+        )
         for surface in surfaces
     }
     gained = {
-        surface: sorted(found.get(surface, set()) - set(SHARED_ENGLISH_PLACES.get(surface, ())))
+        surface: sorted(
+            found.get(surface, set()) - set(SHARED_ENGLISH_PLACES.get(surface, ()))
+        )
         for surface in surfaces
     }
     drift = {
