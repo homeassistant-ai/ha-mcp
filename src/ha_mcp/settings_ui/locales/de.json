@@ -550,7 +550,7 @@
     },
     "ha_dev_manage_settings": {
       "title": "Server-Einstellungen verwalten (dev)",
-      "description": "Ändert ha-mcp-Einstellungen direkt im Entwicklermodus."
+      "description": "Verwaltet die ha-mcp-Servereinstellungen und die Bereiche Tools/Richtlinien/Backups (Entwicklermodus)."
     },
     "ha_get_device": {
       "title": "Gerät abrufen",
@@ -790,7 +790,7 @@
     },
     "ha_report_issue": {
       "title": "Problem melden",
-      "description": "Sammelt Diagnosen für einen Fehlerbericht oder Feedback."
+      "description": "Liefert Diagnoseinformationen und Vorlagen für Fehlerberichte oder Feedback."
     },
     "ha_get_zone": {
       "title": "Zonen abrufen",

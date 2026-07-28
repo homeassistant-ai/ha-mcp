@@ -479,7 +479,7 @@
     "ha_config_set_dashboard": {"title": "Создать или изменить панель", "description": "Создать новую или обновить существующую панель Home Assistant."},
     "ha_config_set_dashboard_resource": {"title": "Задать ресурс панели", "description": "Создать или обновить ресурс панели из кода или внешнего URL."},
     "ha_dev_manage_server": {"title": "Управлять MCP-сервером (dev)", "description": "Управлять запущенным сервером ha-mcp в режиме разработчика."},
-    "ha_dev_manage_settings": {"title": "Управлять настройками сервера (dev)", "description": "Напрямую изменять настройки ha-mcp в режиме разработчика."},
+    "ha_dev_manage_settings": {"title": "Управлять настройками сервера (dev)", "description": "Управлять настройками сервера ha-mcp и разделами «Инструменты», «Политики безопасности», «Резервные копии» (режим разработчика)."},
     "ha_get_device": {"title": "Получить устройство", "description": "Получить сведения об устройствах, включая Zigbee, Z-Wave и Matter."},
     "ha_remove_device": {"title": "Удалить устройство", "description": "Удалить осиротевшее устройство из реестра Home Assistant."},
     "ha_set_device": {"title": "Изменить устройство", "description": "Обновить имя, зону, метки и другие свойства устройства."},
@@ -539,7 +539,7 @@
     "ha_remove_todo_item": {"title": "Удалить задачу", "description": "Удалить задачу из списка дел Home Assistant."},
     "ha_set_todo_item": {"title": "Создать или изменить задачу", "description": "Создать новую или обновить задачу в списке дел."},
     "ha_eval_template": {"title": "Вычислить шаблон", "description": "Вычислить Jinja2-шаблон с помощью движка Home Assistant."},
-    "ha_report_issue": {"title": "Сообщить о проблеме", "description": "Собрать диагностику для отчёта об ошибке или обратной связи."},
+    "ha_report_issue": {"title": "Сообщить о проблеме", "description": "Получить диагностические сведения и шаблоны для отчёта об ошибке или обратной связи."},
     "ha_get_zone": {"title": "Получить зоны", "description": "Показать все географические зоны или сведения об одной зоне."},
     "ha_remove_zone": {"title": "Удалить зону", "description": "Удалить географическую зону Home Assistant."},
     "ha_set_zone": {"title": "Создать или изменить зону", "description": "Создать новую или обновить географическую зону Home Assistant."}

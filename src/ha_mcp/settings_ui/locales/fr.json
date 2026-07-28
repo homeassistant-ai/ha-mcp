@@ -550,7 +550,7 @@
     },
     "ha_dev_manage_settings": {
       "title": "Gérer les paramètres du serveur (dev)",
-      "description": "Modifie directement les paramètres ha-mcp en mode développeur."
+      "description": "Gère les paramètres du serveur ha-mcp et les sections Outils/Politiques/Sauvegardes (mode développeur)."
     },
     "ha_get_device": {
       "title": "Obtenir l'appareil",
@@ -790,7 +790,7 @@
     },
     "ha_report_issue": {
       "title": "Signaler un problème",
-      "description": "Recueille les diagnostics pour un rapport de bogue ou un retour d'information."
+      "description": "Fournit des informations de diagnostic et des modèles pour signaler un problème ou envoyer un retour."
     },
     "ha_get_zone": {
       "title": "Obtenir les zones",

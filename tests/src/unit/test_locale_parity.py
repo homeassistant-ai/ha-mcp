@@ -209,18 +209,43 @@ def _catalogs_by_surface(locale: str) -> dict[str, dict[str, str]]:
     return catalogs
 
 
+def _english_tool_sources() -> dict[str, str]:
+    """The English tool texts a settings UI catalog translates.
+
+    ``en.json`` leaves ``tools`` empty — English for those comes from the tool
+    definitions at runtime — so these 174 strings live in no catalog, and they
+    were the one translated surface the baseline did not cover. An edit to a
+    docstring therefore left every locale describing the old behaviour with
+    nothing going red: ``ha_dev_manage_settings`` gained the
+    Tools/Policies/Backups surfaces and four locales went on saying "directly".
+
+    A feature-gated tool has two English renderings and a setting decides which
+    one the UI shows, so where the stub and the docstring differ, both are
+    pinned.
+    """
+    rendered = _english_tool_texts()
+    parsed = _english_tool_texts(as_rendered=False)
+    sources = dict(rendered)
+    for key, text in parsed.items():
+        if text != rendered.get(key):
+            sources[f"{key} (docstring)"] = text
+    return sources
+
+
 def english_sources() -> dict[str, dict[str, str]]:
     """Hash every English string a translation is written against, per surface.
 
     Imported by ``scripts/update_locale_baseline.py`` so the baseline and the
     check that reads it can never disagree about what is hashed.
     """
+    sources = _catalogs_by_surface("en")
+    sources["settings UI tool titles and descriptions"] = _english_tool_sources()
     return {
         surface: {
             key: hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
             for key, text in strings.items()
         }
-        for surface, strings in _catalogs_by_surface("en").items()
+        for surface, strings in sources.items()
     }
 
 
