@@ -251,20 +251,21 @@ configuration:
       Función beta, desactivada de forma predeterminada. Añade la herramienta
       ha_get_dashboard_screenshot y las opciones include_screenshot /
       return_screenshot en las herramientas de lectura y escritura de paneles,
-      de modo que los asistentes de IA puedan inspeccionar una o varias imágenes
-      responsivas de Lovelace (p. ej. para comprobar un panel que acaban de
-      crear). Admite vistas con nombre estable, lotes para móvil/tableta/
-      escritorio y salida PNG/JPEG/WebP/BMP. El renderizado se ejecuta en un
-      motor aparte y opcional — el complemento "Puppet" de balloob (Chromium sin
-      interfaz) —, que instalas una sola vez (añade el repositorio de
-      complementos de balloob y luego instala "Puppet") y al que das un token de
-      acceso de larga duración; en despliegues Docker/Container ese motor se
-      ejecuta como sidecar y se configura HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
-      No se instala nada pesado salvo que actives esto y además instales el
-      motor. Requiere reiniciar para que surta efecto. REQUIERE que la opción
-      principal "Activar las funciones beta" de arriba (y en la interfaz web)
-      esté activada; de lo contrario, este subindicador se ignora en tiempo de
-      ejecución sea cual sea su valor aquí.
+      de modo que los asistentes de IA puedan inspeccionar una o varias
+      imágenes responsivas de Lovelace (p. ej. para comprobar un panel que
+      acaban de crear). Admite vistas con nombre estable, lotes para
+      móvil/tableta/escritorio y salida PNG/JPEG/WebP/BMP. El renderizado se
+      ejecuta en un motor aparte y opcional — el complemento "Puppet" de
+      balloob (Chromium sin interfaz) —, que instalas una sola vez (añade el
+      repositorio de complementos de balloob y luego instala "Puppet") y al que
+      das un token de acceso de larga duración; en despliegues Docker/Container
+      ese motor se ejecuta como sidecar y se configura
+      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. No se instala nada pesado salvo
+      que actives esto y además instales el motor. Requiere reiniciar para que
+      surta efecto. REQUIERE que la opción principal "Activar las funciones
+      beta" de arriba (y en la interfaz web) esté activada; de lo contrario,
+      este subindicador se ignora en tiempo de ejecución sea cual sea su valor
+      aquí.
   tool_search_max_results:
     name: Máximo de resultados de la búsqueda de herramientas
     description: >-

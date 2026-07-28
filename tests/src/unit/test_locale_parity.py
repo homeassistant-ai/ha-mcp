@@ -25,6 +25,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Callable, Sequence
 from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -185,28 +186,41 @@ def _translated_component_locales() -> list[str]:
 BASELINE_PATH = Path(__file__).with_name("locale_source_baseline.json")
 
 
+def _catalogs_by_surface(locale: str) -> dict[str, dict[str, str]]:
+    """One locale's catalogs, flattened, keyed by the directory they live in.
+
+    Shared by the baseline hashes and the cross-surface check below, so those
+    two cannot end up reading a different set of files than one another. The
+    per-surface helpers above still read their own catalog directly; this is
+    for the checks that have to look at all four at once.
+    """
+    catalogs = {
+        "src/ha_mcp/settings_ui/locales": _flatten(
+            json.loads((SETTINGS_LOCALES / f"{locale}.json").read_text("utf-8"))
+        ),
+        "custom_components/ha_mcp_tools/translations": _component_catalog(locale),
+    }
+    for addon_dir in ADDON_DIRS:
+        catalogs[f"{addon_dir.name}/translations"] = _flatten(
+            yaml.safe_load(
+                (addon_dir / "translations" / f"{locale}.yaml").read_text("utf-8")
+            )
+        )
+    return catalogs
+
+
 def english_sources() -> dict[str, dict[str, str]]:
     """Hash every English string a translation is written against, per surface.
 
     Imported by ``scripts/update_locale_baseline.py`` so the baseline and the
     check that reads it can never disagree about what is hashed.
     """
-    sources = {
-        "src/ha_mcp/settings_ui/locales": _flatten(
-            json.loads((SETTINGS_LOCALES / "en.json").read_text("utf-8"))
-        ),
-        "custom_components/ha_mcp_tools/translations": _component_catalog("en"),
-    }
-    for addon_dir in ADDON_DIRS:
-        sources[f"{addon_dir.name}/translations"] = _flatten(
-            yaml.safe_load((addon_dir / "translations" / "en.yaml").read_text("utf-8"))
-        )
     return {
         surface: {
             key: hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
             for key, text in strings.items()
         }
-        for surface, strings in sources.items()
+        for surface, strings in _catalogs_by_surface("en").items()
     }
 
 
@@ -451,6 +465,349 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
             f"custom_components/ha_mcp_tools/translations/{locale}.json "
             f"common.connect_local_lan is {value!r}, which does not quote the "
             f"{quoted!r} option the reader has to find on the form"
+        )
+
+
+# The (surface, key) places that take part in the grouping below, by name.
+# A per-surface total would be compensable: one place can leave the
+# grouping while another arrives on the same surface, and the sum holds.
+# Membership is per place, not per group, so one narrow case still passes:
+# reword a key's English onto another already-shared text and the place
+# stays pinned while the group it left keeps enough surfaces to survive.
+SHARED_ENGLISH_PLACES = {
+    "custom_components/ha_mcp_tools/translations": (
+        "options.step.tools_info.data.extra_yaml_keys",
+    ),
+    "homeassistant-addon-dev/translations": (
+        "configuration.auto_backup_retain_per_entity.description",
+        "configuration.auto_backup_retain_per_entity.name",
+        "configuration.auto_backup_throttle_minutes.description",
+        "configuration.auto_backup_throttle_minutes.name",
+        "configuration.backup_hint.description",
+        "configuration.backup_hint.name",
+        "configuration.disabled_tools.description",
+        "configuration.disabled_tools.name",
+        "configuration.enable_auto_backup.description",
+        "configuration.enable_auto_backup.name",
+        "configuration.enable_beta_features.description",
+        "configuration.enable_beta_features.name",
+        "configuration.enable_code_mode.description",
+        "configuration.enable_code_mode.name",
+        "configuration.enable_dashboard_screenshot.description",
+        "configuration.enable_dashboard_screenshot.name",
+        "configuration.enable_filesystem_tools.description",
+        "configuration.enable_filesystem_tools.name",
+        "configuration.enable_lite_docstrings.description",
+        "configuration.enable_lite_docstrings.name",
+        "configuration.enable_mandatory_bps.description",
+        "configuration.enable_mandatory_bps.name",
+        "configuration.enable_snapshot_delete.description",
+        "configuration.enable_snapshot_delete.name",
+        "configuration.enable_strict_mandatory_bps.description",
+        "configuration.enable_strict_mandatory_bps.name",
+        "configuration.enable_tool_search.description",
+        "configuration.enable_tool_search.name",
+        "configuration.enable_tool_security_policies.description",
+        "configuration.enable_tool_security_policies.name",
+        "configuration.enable_yaml_config_editing.description",
+        "configuration.enable_yaml_config_editing.name",
+        "configuration.enable_yaml_edit_confirm.description",
+        "configuration.enable_yaml_edit_confirm.name",
+        "configuration.enable_yaml_packages_automation.description",
+        "configuration.enable_yaml_packages_automation.name",
+        "configuration.enable_yaml_packages_scene.description",
+        "configuration.enable_yaml_packages_scene.name",
+        "configuration.enable_yaml_packages_script.description",
+        "configuration.enable_yaml_packages_script.name",
+        "configuration.pinned_tools.description",
+        "configuration.pinned_tools.name",
+        "configuration.read_only_mode.description",
+        "configuration.read_only_mode.name",
+        "configuration.secret_path.description",
+        "configuration.secret_path.name",
+        "configuration.snapshot_delete_min_age_days.description",
+        "configuration.snapshot_delete_min_age_days.name",
+        "configuration.tool_search_max_results.description",
+        "configuration.tool_search_max_results.name",
+        "configuration.verify_ssl.description",
+        "configuration.verify_ssl.name",
+    ),
+    "homeassistant-addon/translations": (
+        "configuration.auto_backup_retain_per_entity.description",
+        "configuration.auto_backup_retain_per_entity.name",
+        "configuration.auto_backup_throttle_minutes.description",
+        "configuration.auto_backup_throttle_minutes.name",
+        "configuration.backup_hint.description",
+        "configuration.backup_hint.name",
+        "configuration.disabled_tools.description",
+        "configuration.disabled_tools.name",
+        "configuration.enable_auto_backup.description",
+        "configuration.enable_auto_backup.name",
+        "configuration.enable_mandatory_bps.description",
+        "configuration.enable_mandatory_bps.name",
+        "configuration.enable_snapshot_delete.description",
+        "configuration.enable_snapshot_delete.name",
+        "configuration.enable_strict_mandatory_bps.description",
+        "configuration.enable_strict_mandatory_bps.name",
+        "configuration.enable_tool_search.name",
+        "configuration.enable_tool_security_policies.description",
+        "configuration.enable_tool_security_policies.name",
+        "configuration.pinned_tools.description",
+        "configuration.pinned_tools.name",
+        "configuration.read_only_mode.description",
+        "configuration.read_only_mode.name",
+        "configuration.secret_path.description",
+        "configuration.secret_path.name",
+        "configuration.snapshot_delete_min_age_days.description",
+        "configuration.snapshot_delete_min_age_days.name",
+        "configuration.tool_search_max_results.description",
+        "configuration.tool_search_max_results.name",
+        "configuration.verify_ssl.description",
+        "configuration.verify_ssl.name",
+    ),
+    "src/ha_mcp/settings_ui/locales": (
+        "messages.advanced.extra_yaml_write_keys.label",
+        "messages.backup.fields.enable_snapshot_delete.label",
+        "messages.backup.fields.snapshot_delete_min_age_days.label",
+        "messages.features.enable_beta_features.help",
+        "messages.features.enable_beta_features.label",
+        "messages.features.enable_code_mode.help",
+        "messages.features.enable_code_mode.label",
+        "messages.features.enable_dashboard_screenshot.help",
+        "messages.features.enable_dashboard_screenshot.label",
+        "messages.features.enable_filesystem_tools.help",
+        "messages.features.enable_filesystem_tools.label",
+        "messages.features.enable_lite_docstrings.help",
+        "messages.features.enable_lite_docstrings.label",
+        "messages.features.enable_mandatory_bps.help",
+        "messages.features.enable_mandatory_bps.label",
+        "messages.features.enable_strict_mandatory_bps.help",
+        "messages.features.enable_strict_mandatory_bps.label",
+        "messages.features.enable_tool_search.help",
+        "messages.features.enable_tool_search.label",
+        "messages.features.enable_tool_security_policies.help",
+        "messages.features.enable_tool_security_policies.label",
+        "messages.features.enable_yaml_config_editing.help",
+        "messages.features.enable_yaml_config_editing.label",
+        "messages.features.enable_yaml_edit_confirm.help",
+        "messages.features.enable_yaml_edit_confirm.label",
+        "messages.features.enable_yaml_packages_automation.help",
+        "messages.features.enable_yaml_packages_automation.label",
+        "messages.features.enable_yaml_packages_scene.help",
+        "messages.features.enable_yaml_packages_scene.label",
+        "messages.features.enable_yaml_packages_script.help",
+        "messages.features.enable_yaml_packages_script.label",
+        "messages.features.read_only_mode.help",
+        "messages.features.read_only_mode.label",
+        "messages.features.tool_search_max_results.help",
+        "messages.features.tool_search_max_results.label",
+        "messages.tools.read_only.label",
+    ),
+}
+
+
+@cache
+def _shared_english_strings() -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    """English strings that reach the reader from more than one surface.
+
+    The add-on options and the settings UI describe the same switches, so a
+    number of English strings are written once and shipped from two or three
+    catalogs — ``read_only_mode`` is the add-on's ``name``, the settings UI's
+    ``messages.features.read_only_mode.label`` and its
+    ``messages.tools.read_only.label``.
+
+    Grouping them by text rather than by key is what makes the check below
+    possible at all: the keys differ per surface and only the text ties them
+    together. That same grouping lets an option leave the check quietly, so
+    what this finds is pinned — see
+    ``test_shared_english_strings_are_discovered``.
+
+    Selection is deliberately cross-surface only. The same English twice
+    *within* one catalog may legitimately differ — Spanish agrees
+    ``activado``/``activada`` with the noun each sentence is about, and
+    Russian words the policies tab and the policies heading differently.
+    Across surfaces there is no such context to differ by: it is one option,
+    described twice.
+
+    Selection is not comparison, though: once a group is in, every place in
+    it is compared, same-surface siblings included. ``Read Only Mode`` is the
+    only text where that happens today — it is an add-on ``name`` as well, so
+    its two settings UI keys follow the shared wording rather than the
+    within-catalog exemption.
+    """
+    places: dict[str, list[tuple[str, str]]] = {}
+    for surface, strings in _catalogs_by_surface("en").items():
+        for key, text in strings.items():
+            places.setdefault(text, []).append((surface, key))
+    return tuple(
+        (text, tuple(where))
+        for text, where in places.items()
+        if len({surface for surface, _ in where}) > 1
+    )
+
+
+def test_shared_english_strings_are_discovered() -> None:
+    """The check below only covers what the grouping still finds.
+
+    A wording that moves on one surface and not the other stops being shared,
+    so the option leaves the check instead of failing it. The English edit is
+    caught by ``test_translations_are_checked_against_current_english`` — but
+    the sanctioned answer there is to regenerate the baseline, and that would
+    carry the lost coverage away with it. Hence a pin: it is not written by
+    ``scripts/update_locale_baseline.py`` and has to be changed by hand.
+    """
+    found: dict[str, set[str]] = {}
+    for _, where in _shared_english_strings():
+        for surface, key in where:
+            found.setdefault(surface, set()).add(key)
+
+    surfaces = SHARED_ENGLISH_PLACES.keys() | found.keys()
+    lost = {
+        surface: sorted(
+            set(SHARED_ENGLISH_PLACES.get(surface, ())) - found.get(surface, set())
+        )
+        for surface in surfaces
+    }
+    gained = {
+        surface: sorted(
+            found.get(surface, set()) - set(SHARED_ENGLISH_PLACES.get(surface, ()))
+        )
+        for surface in surfaces
+    }
+    drift = {
+        surface: {"left the grouping": lost[surface], "newly shared": gained[surface]}
+        for surface in sorted(surfaces)
+        if lost[surface] or gained[surface]
+    }
+
+    assert not drift, (
+        "the strings shipped from more than one surface are no longer the "
+        f"ones this check was written for — {drift}. A key that left usually "
+        "did so because its English moved on one surface and not the other, "
+        "which is the drift the check below exists to catch: fix the wording, "
+        "not the pin. A key that arrived is newly covered. Update "
+        "SHARED_ENGLISH_PLACES once the difference is the intended one."
+    )
+
+
+def _excerpt(text: str, limit: int = 50) -> str:
+    """Enough English to recognise the group; the keys beside it are its name.
+
+    Three groups share their first 82 characters, so the excerpt alone does
+    not always tell them apart — which is why each line leads with its places
+    and carries this only as orientation.
+    """
+    return repr(text) if len(text) <= limit else f"{text[:limit]!r}…"
+
+
+def _assert_one_wording_per_group(
+    locale: str,
+    groups: Sequence[tuple[str, tuple[tuple[str, str], ...]]],
+    catalogs_for: Callable[[str], dict[str, dict[str, str]]] = _catalogs_by_surface,
+) -> None:
+    """Every place in a group renders one text, or name the ones that do not.
+
+    ``catalogs_for`` is a seam: the shipped catalogs have no divergence left
+    to show, so the failure path is driven from synthetic ones below.
+    """
+    catalogs = catalogs_for(locale)
+
+    # The places are the identity and the English is context, not the other
+    # way round: these are multi-sentence help strings, and leading with two
+    # 400-character paragraphs buries the one thing the reader needs, which
+    # is where to look.
+    divergent: list[str] = []
+    for english, where in groups:
+        rendered: dict[str, list[str]] = {}
+        for surface, key in where:
+            value = catalogs[surface].get(key)
+            label = f"{surface}/{locale}: {key}"
+            if value is None:
+                # Omission is legal for settings UI messages, and English is
+                # the per-key fallback — so the screen still disagrees.
+                value, label = english, f"{label} (missing, renders English)"
+            rendered.setdefault(value, []).append(label)
+        if len(rendered) > 1:
+            divergent.append(
+                " vs ".join(", ".join(labels) for labels in rendered.values())
+                + f" — {_excerpt(english)}"
+            )
+
+    assert not divergent, (
+        f"{locale} renders {len(divergent)} English string(s) differently "
+        "depending on which surface they appear on. The English is "
+        "byte-identical in each group, so there is no context to adapt to: "
+        "pick one wording per group and use it on every surface — where a "
+        "group has a settings UI member, that is the wording the others "
+        "follow today.\n" + "\n".join(divergent)
+    )
+
+
+@pytest.mark.parametrize("locale", _translated_component_locales())
+def test_one_english_string_reads_the_same_on_every_surface(locale: str) -> None:
+    """Same sentence in the add-on options and the web UI, same translation.
+
+    Each catalog was checked against English and nothing compared them to each
+    other, so a translator working one surface at a time could — and did —
+    write two different sentences for one switch: ``de`` phrased 25 of these
+    groups differently between the add-on and the settings UI, ``zh-Hans`` 18.
+    A reader who configures the add-on and then opens the panel meets the same
+    option twice and has to work out whether it is the same option.
+
+    Byte-identical English is the whole justification: there is no context to
+    adapt to, or the English would have adapted first.
+    """
+    _assert_one_wording_per_group(locale, _shared_english_strings())
+
+
+def test_one_wording_per_group_names_the_surface_that_disagrees() -> None:
+    """No group diverges in any shipped locale, so real data cannot show this.
+
+    The check asserts an absence, and a green run cannot tell an absence apart
+    from a comparison that stopped comparing: read the locale's catalogs as
+    English and nothing ever differs, or require three renderings instead of
+    two and the 40 two-place groups drop out. Both keep the suite green on the
+    shipped catalogs, so the failure path is driven from synthetic ones — the
+    same answer as ``test_the_tools_share_counts_both_english_renderings``.
+    """
+    groups = (
+        (
+            "Read only mode",
+            (("ui", "features.read_only.label"), ("addon", "read_only.name")),
+        ),
+    )
+    # English agrees with itself, so a comparison that loads "en" instead of
+    # the locale it was asked for finds nothing in any of the three sets.
+    english: dict[str, dict[str, str]] = {
+        "ui": {"features.read_only.label": "Read only mode"},
+        "addon": {"read_only.name": "Read only mode"},
+    }
+    agreeing: dict[str, dict[str, str]] = {
+        "ui": {"features.read_only.label": "Nur-Lese-Modus"},
+        "addon": {"read_only.name": "Nur-Lese-Modus"},
+    }
+    _assert_one_wording_per_group(
+        "xx", groups, {"xx": agreeing, "en": english}.__getitem__
+    )
+
+    disagreeing: dict[str, dict[str, str]] = {
+        "ui": {"features.read_only.label": "Nur-Lese-Modus"},
+        "addon": {"read_only.name": "Schreibgeschützter Modus"},
+    }
+    with pytest.raises(AssertionError, match="depending on which surface"):
+        _assert_one_wording_per_group(
+            "xx", groups, {"xx": disagreeing, "en": english}.__getitem__
+        )
+
+    # A place the catalog omits falls back to English while the other surface
+    # is translated, which is the same disagreement on screen.
+    omitted: dict[str, dict[str, str]] = {
+        "ui": {"features.read_only.label": "Nur-Lese-Modus"},
+        "addon": {},
+    }
+    with pytest.raises(AssertionError, match="renders English"):
+        _assert_one_wording_per_group(
+            "xx", groups, {"xx": omitted, "en": english}.__getitem__
         )
 
 

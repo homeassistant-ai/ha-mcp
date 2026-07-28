@@ -30,7 +30,7 @@
                 "description": "Configurez les services privilégiés d'édition de fichiers et de YAML utilisés par les outils fichier/YAML optionnels de ha-mcp. Ces paramètres apparaissent également dans l'interface de configuration du serveur ha-mcp et s'appliquent en direct, sans redémarrage. Un plancher de refus non contournable bloque toujours les chemins sensibles (ex. .storage) et les clés de limite de confiance (homeassistant, http, frontend, lovelace).",
                 "data": {
                     "allowed_dirs": "Répertoires de fichiers supplémentaires",
-                    "extra_yaml_keys": "Clés YAML en écriture supplémentaires"
+                    "extra_yaml_keys": "Clés d'écriture YAML supplémentaires"
                 },
                 "data_description": {
                     "allowed_dirs": "Répertoires relatifs au répertoire de configuration, chacun avec accès en lecture et écriture (ex. pyscript). Les traversées et les entrées hors du répertoire de configuration sont ignorées.",

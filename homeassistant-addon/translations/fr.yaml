@@ -1,7 +1,7 @@
 ---
 configuration:
   backup_hint:
-    name: Niveau d'indication de snapshot HA complet (côté LLM)
+    name: Niveau d'indication d'instantané HA complet (côté LLM)
     description: |-
       Ajuste le libellé de l'invite que le LLM voit dans la description de
       l'outil `ha_manage_backup(scope='snapshot')` pour suggérer une sauvegarde
@@ -9,7 +9,7 @@ configuration:
       suppressions groupées d'appareils). Concerne UNIQUEMENT cet ensemble
       d'invites côté LLM.
 
-      Pour les snapshots automatiques par modification d'automatisations /
+      Pour les instantanés automatiques par modification d'automatisations /
       scripts / assistants / etc., utilise le bouton **Activer la sauvegarde
       automatique des modifications** séparé ci-dessous.
   secret_path:
@@ -37,7 +37,7 @@ configuration:
   enable_tool_security_policies:
     name: Activer les politiques de sécurité des outils (avancé)
     description: >-
-      Protège les appels d'outils à haut risque (contrôle des
+      Contrôle les appels d'outils à enjeux élevés (contrôle des
       serrures/alarmes, écritures d'automatisations, etc.) derrière une
       approbation utilisateur. Lorsqu'un outil protégé est appelé, l'agent dit
       à l'utilisateur d'ouvrir l'onglet Politiques de sécurité des outils dans
@@ -90,12 +90,12 @@ configuration:
   enable_auto_backup:
     name: Activer la sauvegarde automatique des modifications
     description: >-
-      Capture un snapshot par entité avant chaque appel d'outil MCP
+      Capture un instantané par entité avant chaque appel d'outil MCP
       d'écriture/destructeur encapsulé (automatisation, script, scène,
       assistant, tableau de bord, étiquette, catégorie, groupe, zone, zone
       géographique, calendrier, todo, entité, intégration et outils de
-      suppression/suppression associés). Les snapshots sont stockés sous forme
-      de fichiers YAML dans /data/ha_mcp_backups/ (remplacement via
+      suppression/suppression associés). Les instantanés sont stockés sous
+      forme de fichiers YAML dans /data/ha_mcp_backups/ (remplacement via
       HAMCP_BACKUP_DIR) et listés, restaurés ou supprimés via l'onglet
       Sauvegardes dans l'interface Web des paramètres ou via
       ha_manage_backup(scope='edits', ...). Au mieux — les erreurs
@@ -105,31 +105,32 @@ configuration:
   auto_backup_throttle_minutes:
     name: Limitation de la sauvegarde automatique (minutes)
     description: >-
-      Fenêtre de limitation par entité. 0 (par défaut) capture un snapshot à
-      chaque écriture encapsulée. N>0 capture au plus un snapshot par N minutes
-      par entité. Plage 0–1440.
+      Fenêtre de limitation par entité. 0 (par défaut) capture un instantané à
+      chaque écriture encapsulée. N>0 capture au plus un instantané par N
+      minutes par entité. Plage 0–1440.
   auto_backup_retain_per_entity:
     name: Conservation de la sauvegarde automatique (par entité)
     description: >-
-      Nombre maximum de snapshots conservés par entité. Les snapshots plus
-      anciens au-delà de cette limite sont retirés à chaque capture réussie.
-      Par défaut 100, plage 1–10000.
+      Nombre maximum d'instantanés conservés par entité. Les instantanés
+      plus anciens au-delà de cette limite sont retirés à chaque capture
+      réussie. Par défaut 100, plage 1–10000.
   enable_snapshot_delete:
-    name: Autoriser la suppression des snapshots
+    name: Autoriser la suppression d'instantanés
     description: >-
-      Permet à ha_manage_backup de supprimer des snapshots HA complets
-      (scope='snapshot', action='delete'). Désactivé par défaut — un snapshot
-      pourrait être le dernier point de restauration après une modification
-      défectueuse, donc un humain doit activement l'activer ici. Même lorsque
-      activé, les sauvegardes planifiées, le snapshot restant le plus récent
-      et tout ce qui est plus récent que le seuil d'âge ci-dessous restent
-      protégés.
+      Permet à ha_manage_backup de supprimer des instantanés HA complets
+      (scope='snapshot', action='delete'). Désactivé par défaut — un
+      instantané pourrait être le dernier point de restauration après une
+      modification défectueuse, donc un humain doit activement l'activer ici.
+      Même lorsque activé, les sauvegardes planifiées, l'instantané restant
+      le plus récent et tout ce qui est plus récent que le seuil d'âge
+      ci-dessous restent protégés.
   snapshot_delete_min_age_days:
-    name: Âge minimum pour la suppression d'un snapshot (jours)
+    name: Âge minimum de l'instantané pour suppression (jours)
     description: >-
-      Un snapshot doit avoir au moins cet âge avant de pouvoir être supprimé.
-      Plage 0–365 ; 0 désactive le seuil (les protections du snapshot le plus
-      récent et de la sauvegarde planifiée s'appliquent toujours). Par défaut 7.
+      Un instantané doit avoir au moins cet âge avant de pouvoir être
+      supprimé. Plage 0–365 ; 0 désactive le seuil (les protections de
+      l'instantané le plus récent et de la sauvegarde planifiée s'appliquent
+      toujours). Par défaut 7.
   verify_ssl:
     name: Vérifier le certificat TLS
     description: >-
