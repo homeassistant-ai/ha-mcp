@@ -931,7 +931,8 @@ class TestConstants:
     """Test module constants."""
 
     def test_max_content_size_pinned(self):
-        """Pin the cap at the worker-era 24KB: the registered URL ships to
-        every browser on every dashboard load and auto-backup snapshots it
-        whole per edit, so raising this needs a deliberate decision."""
-        assert MAX_CONTENT_SIZE == 24000
+        """Pin the cap at 128KB — sized to fit established single-file card
+        bundles. The registered URL ships to every browser on each dashboard
+        load and auto-backup snapshots it whole per edit, so changing this
+        needs a deliberate decision."""
+        assert MAX_CONTENT_SIZE == 128_000

@@ -65,12 +65,13 @@ _DATA_URI_HEAD = max(len(p) for p in _ALLOWED_DATA_URI_PREFIXES)
 # Characters of decoded content shown in list previews.
 _PREVIEW_LENGTH = 150
 
-# Maximum inline content size — unchanged from the worker era. Browsers load
-# data: URIs far larger (verified to 2MB), but the registered URL is shipped
-# to every browser on every dashboard load and snapshotted whole by
-# auto-backup on every edit, so the bound is response/footprint prudence,
-# no longer a URL-length limit.
-MAX_CONTENT_SIZE = 24000
+# Maximum inline content size. The old 24KB bound was the worker's URL-path
+# limit; data: URIs have no such limit (browsers verified to 2MB), so the cap
+# is sized to fit established single-file card bundles without truncation
+# while bounding what every dashboard load ships (the registered URL rides
+# the Lovelace bootstrap to every browser) and what auto-backup snapshots
+# per edit.
+MAX_CONTENT_SIZE = 128_000
 
 # Top-level HA-config YAML keys that LLMs sometimes emit when they pick this
 # tool (`ha_config_set_dashboard_resource`) to "create a scene/automation/...".
@@ -366,7 +367,7 @@ class ResourceTools:
         content: Annotated[
             str | None,
             Field(
-                description="JavaScript or CSS code to host inline (max ~24KB). "
+                description="JavaScript or CSS code to host inline (max ~128KB). "
                 "The code is embedded directly in the resource URL as a data: URI - "
                 "no file storage or external hosting involved. "
                 "Mutually exclusive with url. Supports 'module' and 'css' types only."
@@ -408,7 +409,7 @@ class ResourceTools:
         INLINE MODE (content=):
         - Custom card code written inline
         - CSS styling for dashboards
-        - Small self-contained files only (max ~24KB)
+        - Self-contained files up to ~128KB
         - URLs are deterministic (same content = same URL)
         - Content must be self-contained: a data: URI has no base URL, so
           relative imports inside a module and relative url() references
