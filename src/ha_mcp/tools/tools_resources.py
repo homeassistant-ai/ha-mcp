@@ -428,8 +428,9 @@ class ResourceTools:
             else:
                 resources = []
 
-            by_type_counts, decoded_by_index = _summarize_resources(resources)
-            inline_count = len(decoded_by_index)
+            by_type_counts, inline_count, decoded_by_index = _summarize_resources(
+                resources, offset, offset + limit
+            )
 
             total_count = len(resources)
             page = resources[offset : offset + limit]
@@ -1100,15 +1101,27 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
 def _summarize_resources(
     resources: list[Any],
-) -> tuple[dict[str, int], dict[int, tuple[str, bool]]]:
-    """Count resources by type and decode every inline one, exactly once.
+    keep_start: int,
+    keep_stop: int,
+) -> tuple[dict[str, int], int, dict[int, tuple[str, bool]]]:
+    """Count resources by type, and decode every inline one exactly once.
 
-    Returns ``(by_type_counts, {index: (content, is_legacy)})``. The decode
-    map is the single source of truth for both ``inline_count`` and the
-    per-resource ``_inline`` markers, so the two can never disagree, and no
-    resource is decoded a second time when the page is rendered.
+    Returns ``(by_type_counts, inline_count, {index: (content, is_legacy)})``.
+
+    Decoding is deliberately WHOLE-SET: ``inline_count`` reports the full
+    registry and must agree with the per-resource ``_inline`` markers, and
+    only a real decode can tell a genuine inline resource from a corrupt
+    payload that merely looks like one.
+
+    RETENTION, by contrast, is page-scoped: only indices in
+    ``[keep_start, keep_stop)`` are kept in the returned map. Holding every
+    decoded payload would mean a ``limit=1`` call sat on the whole
+    registry's content — up to ``MAX_CONTENT_SIZE`` per resource — for a
+    one-row response. Because the page's entries are retained, nothing is
+    decoded twice.
     """
     by_type_counts = {"module": 0, "js": 0, "css": 0}
+    inline_count = 0
     decoded_by_index: dict[int, tuple[str, bool]] = {}
     for index, resource in enumerate(resources):
         res = resource if isinstance(resource, dict) else {}
@@ -1119,8 +1132,10 @@ def _summarize_resources(
         if isinstance(url, str):
             decoded = _decode_inline_content(url)
             if decoded:
-                decoded_by_index[index] = decoded
-    return by_type_counts, decoded_by_index
+                inline_count += 1
+                if keep_start <= index < keep_stop:
+                    decoded_by_index[index] = decoded
+    return by_type_counts, inline_count, decoded_by_index
 
 
 def _process_resource_list(
@@ -1144,21 +1159,22 @@ def _process_resource_list(
     truncated_count = 0
     content_budget = _MAX_CONTENT_BUDGET
 
-    for resource, decoded in zip(resources, decoded_page, strict=False):
+    for resource, decoded in zip(resources, decoded_page, strict=True):
         res = dict(resource) if isinstance(resource, dict) else {"url": resource}
         url = res.get("url", "")
         content, is_legacy = decoded if decoded else (None, False)
 
         if content:
+            content_bytes = len(content.encode("utf-8"))
             res["_inline"] = True
-            res["_size"] = len(content.encode("utf-8"))
+            res["_size"] = content_bytes
             if is_legacy:
                 # The full remediation text lives once at response level;
                 # repeating it per resource wasted ~330 chars each.
                 res["_legacy_worker"] = True
 
             if include_content:
-                cost = len(content.encode("utf-8"))
+                cost = content_bytes
                 if cost <= content_budget:
                     res["_content"] = content
                     content_budget -= cost

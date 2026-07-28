@@ -501,12 +501,18 @@ class TestHaConfigListDashboardResources:
         assert result["resources"][1]["_decode_error"] is True
 
     @pytest.mark.asyncio
-    async def test_list_decodes_only_the_returned_page(
+    async def test_list_retains_content_for_the_returned_page_only(
         self, list_tool, mock_client, monkeypatch
     ):
-        """Content is materialized for the requested page only, while
-        inline_count still summarizes the full set — include_content=True
-        responses stay bounded by limit/offset."""
+        """Decoded content is RETAINED only for the requested page.
+
+        Decoding itself is whole-set on purpose (inline_count reports the
+        full registry and must agree with the per-resource markers), but
+        holding every payload would mean a limit=1 call sat on the entire
+        registry's content. This pins retention scope directly, via the
+        decode map the renderer is handed — asserting on the response
+        alone cannot distinguish the two designs.
+        """
         contents = [f"export const page_test_{i} = {i};" for i in range(3)]
         mock_client.send_websocket_message.return_value = {
             "result": [
@@ -516,10 +522,12 @@ class TestHaConfigListDashboardResources:
         }
 
         seen_page_sizes = []
+        retained_counts = []
         real_process = tools_resources._process_resource_list
 
         def _spy(page, decoded_page, include):
             seen_page_sizes.append(len(page))
+            retained_counts.append(sum(1 for d in decoded_page if d is not None))
             return real_process(page, decoded_page, include)
 
         monkeypatch.setattr(tools_resources, "_process_resource_list", _spy)
@@ -530,10 +538,33 @@ class TestHaConfigListDashboardResources:
         assert result["inline_count"] == 3
         assert len(result["resources"]) == 1
         assert result["resources"][0]["_content"] == contents[1]
-        # The probe is what actually pins the behavior: reverting to
-        # "process everything, then slice" would still satisfy the
-        # assertions above, but would hand the renderer all 3 records.
         assert seen_page_sizes == [1]
+        # The load-bearing assertion: exactly ONE decoded payload was
+        # retained, not all three. Retaining the whole registry would still
+        # satisfy every assertion above.
+        assert retained_counts == [1]
+
+    @pytest.mark.asyncio
+    async def test_summarize_retains_only_the_page_window(self):
+        """Unit-level proof of the same property, independent of the tool."""
+        rows = [
+            {
+                "id": str(i),
+                "type": "module",
+                "url": _data_uri_for(f"const x={i};", "module"),
+            }
+            for i in range(5)
+        ]
+
+        by_type, inline_count, decoded = tools_resources._summarize_resources(
+            rows, 1, 3
+        )
+
+        # Counting spans the whole registry...
+        assert by_type["module"] == 5
+        assert inline_count == 5
+        # ...while retention is confined to [1, 3).
+        assert sorted(decoded) == [1, 2]
 
     @pytest.mark.asyncio
     async def test_list_content_budget_flags_rather_than_shortens(

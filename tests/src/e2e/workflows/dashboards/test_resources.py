@@ -693,17 +693,32 @@ class TestInlineDashboardResource:
             assert decoded == content
 
             # And the tool can hand it back intact (the migration path
-            # depends on full-fidelity read-back).
+            # depends on full-fidelity read-back). Locate the resource
+            # deterministically first: a fixed limit=1/offset=0 window only
+            # ever inspects the first registry row, so the assertion below
+            # would silently be skipped whenever this resource is not it.
+            index_probe = await mcp.call_tool_success(
+                "ha_config_list_dashboard_resources", {"limit": 500}
+            )
+            ids = [r.get("id") for r in index_probe.get("resources", [])]
+            assert resource_id in ids, f"resource {resource_id} missing from listing"
+            offset = ids.index(resource_id)
+
+            # Fetch exactly that row, so the whole content budget is
+            # available to it regardless of what else is registered.
             listed = await mcp.call_tool_success(
                 "ha_config_list_dashboard_resources",
-                {"include_content": True, "limit": 1, "offset": 0},
+                {"include_content": True, "limit": 1, "offset": offset},
             )
             match = next(
                 (r for r in listed.get("resources", []) if r.get("id") == resource_id),
                 None,
             )
-            if match is not None and "_content" in match:
-                assert match["_content"] == content
+            assert match is not None, "resource not returned at its own offset"
+            assert not match.get("_content_truncated"), (
+                "a lone max-size resource must fit the per-response budget"
+            )
+            assert match["_content"] == content
         finally:
             if resource_id:
                 await mcp_client.call_tool(
