@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.tools import tools_resources
 from ha_mcp.tools.tools_resources import (
+    _ALLOWED_DATA_URI_PREFIXES,
     LEGACY_WORKER_BASE_URL,
     MAX_CONTENT_SIZE,
     ResourceTools,
@@ -122,7 +124,7 @@ class TestHelperFunctions:
             "data:text/css;charset=utf-8;base64,",
             "data:text/javascript;base64,!!not-base64!!",
         ):
-            assert _decode_inline_content(url) == (None, False), url
+            assert _decode_inline_content(url) is None, url
 
     def test_decode_inline_content_lookalike_host(self):
         """Detection is anchored — lookalike hosts embedding the worker host
@@ -130,9 +132,9 @@ class TestHelperFunctions:
         lookalike = LEGACY_WORKER_BASE_URL.replace(
             "https://", "https://evil.example.com/"
         )
-        assert _decode_inline_content(f"{lookalike}/YWJj?type=module") == (None, False)
+        assert _decode_inline_content(f"{lookalike}/YWJj?type=module") is None
         suffixed = f"{LEGACY_WORKER_BASE_URL}.evil.example.com/YWJj"
-        assert _decode_inline_content(suffixed) == (None, False)
+        assert _decode_inline_content(suffixed) is None
 
     def test_is_data_url_normalizes_like_a_browser(self):
         """Leading C0/space and embedded tab/newline are stripped before the
@@ -147,6 +149,55 @@ class TestHelperFunctions:
         assert _is_data_url("da\tta:text/javascript,x") is True
         assert _is_data_url("/local/card.js") is False
         assert _is_data_url("https://cdn.example.com/data:x") is False
+
+    @pytest.mark.parametrize("prefix", _ALLOWED_DATA_URI_PREFIXES)
+    def test_decode_data_uri_accepts_every_generated_prefix(self, prefix):
+        """All four accepted prefixes decode, including the two read-compat
+        forms the writer never emits (js-with-charset, css-without).
+
+        Dropping them as 'dead' would silently stop recognizing resources
+        written by a differently-versioned ha-mcp: they would lose _inline,
+        fall out of inline_count, and — critically — escape the truncated
+        preview guard, so an agent could overwrite them with a preview.
+        """
+        import base64 as _b64
+
+        content = "export const x = 1;"
+        url = prefix + _b64.b64encode(content.encode()).decode()
+        assert _decode_data_uri(url) == content
+
+    def test_decode_data_uri_rejects_invalid_utf8(self):
+        """Valid base64 that is not valid UTF-8 decodes to None.
+
+        Distinct code path from the corrupt-alphabet case (UnicodeDecodeError
+        rather than binascii.Error).
+        """
+        import base64 as _b64
+
+        payload = _b64.b64encode(bytes([255, 254, 0]) + b"abc").decode()
+        assert _decode_data_uri("data:text/javascript;base64," + payload) is None
+
+    def test_decode_legacy_worker_url_rejects_corrupt_payload(self):
+        """The legacy decoder is as strict as the data: one.
+
+        urlsafe_b64decode silently DISCARDS non-alphabet characters, so
+        without an explicit check a junk path could decode to plausible text
+        and be masked as inline content.
+        """
+        assert (
+            _decode_legacy_worker_url(f"{LEGACY_WORKER_BASE_URL}/$$$$aGVsbG8=") is None
+        )
+        assert (
+            _decode_legacy_worker_url(f"{LEGACY_WORKER_BASE_URL}/some-random-path")
+            is None
+        )
+
+    def test_decode_legacy_worker_url_case_insensitive_origin(self):
+        """Scheme/host case does not lose a legacy resource its migration path."""
+        content = "export const legacy = 1;"
+        url = _legacy_url(content)
+        shouty = url.replace("https://", "HTTPS://", 1)
+        assert _decode_legacy_worker_url(shouty) == content
 
     def test_decode_legacy_worker_url(self):
         """Test decoding legacy worker URL (pure local base64)."""
@@ -333,12 +384,14 @@ class TestHaConfigListDashboardResources:
         assert resource["_inline"] is True
         assert resource["_preview"] == content
         assert resource["_legacy_worker"] is True
-        # The hint MUST route agents through include_content=True — the
-        # default response only carries the truncated _preview, and
-        # re-saving that would destroy the resource.
-        assert "include_content=True" in resource["_migration"]
-        assert "_preview" in resource["_migration"]
         assert resource["url"] == "[inline]"
+        # The hint is emitted ONCE per response, not repeated per resource,
+        # and MUST route agents through include_content=True — the default
+        # response only carries the truncated _preview, and re-saving that
+        # would destroy the resource.
+        assert "_migration" not in resource
+        assert "include_content=True" in result["migration_hint"]
+        assert "_preview" in result["migration_hint"]
 
     @pytest.mark.asyncio
     async def test_list_inline_preview_truncated(self, list_tool, mock_client):
@@ -424,9 +477,19 @@ class TestHaConfigListDashboardResources:
         assert "_inline" not in result["resources"][0]
         assert result["resources"][1]["url"] == corrupt
         assert "_inline" not in result["resources"][1]
+        # The summary must agree with the markers — this is the ONLY input
+        # shape where a decode-based count and a URL-shape count differ, so
+        # it is what pins the "cannot disagree" invariant.
+        assert result["inline_count"] == 0
+        # Recognized as ours but undecodable: say so, or a user debugging a
+        # dead card reads it as someone else's resource.
+        assert result["resources"][0]["_decode_error"] is True
+        assert result["resources"][1]["_decode_error"] is True
 
     @pytest.mark.asyncio
-    async def test_list_decodes_only_the_returned_page(self, list_tool, mock_client):
+    async def test_list_decodes_only_the_returned_page(
+        self, list_tool, mock_client, monkeypatch
+    ):
         """Content is materialized for the requested page only, while
         inline_count still summarizes the full set — include_content=True
         responses stay bounded by limit/offset."""
@@ -438,12 +501,61 @@ class TestHaConfigListDashboardResources:
             ]
         }
 
+        seen_page_sizes = []
+        real_process = tools_resources._process_resource_list
+
+        def _spy(page, decoded_page, include):
+            seen_page_sizes.append(len(page))
+            return real_process(page, decoded_page, include)
+
+        monkeypatch.setattr(tools_resources, "_process_resource_list", _spy)
+
         result = await list_tool(include_content=True, limit=1, offset=1)
 
         assert result["total_count"] == 3
         assert result["inline_count"] == 3
         assert len(result["resources"]) == 1
         assert result["resources"][0]["_content"] == contents[1]
+        # The probe is what actually pins the behavior: reverting to
+        # "process everything, then slice" would still satisfy the
+        # assertions above, but would hand the renderer all 3 records.
+        assert seen_page_sizes == [1]
+
+    @pytest.mark.asyncio
+    async def test_list_content_budget_flags_rather_than_shortens(
+        self, list_tool, mock_client
+    ):
+        """Past the per-response content budget, rows are FLAGGED not cut.
+
+        Handing back a silently-shortened payload is exactly how a resource
+        gets destroyed when an agent writes it back, so the budget must
+        never produce a partial _content value.
+        """
+        big = "q" * 200_000
+        mock_client.send_websocket_message.return_value = {
+            "result": [
+                {
+                    "id": str(i),
+                    "type": "module",
+                    "url": _data_uri_for(big + str(i), "module"),
+                }
+                for i in range(4)
+            ]
+        }
+
+        result = await list_tool(include_content=True)
+
+        emitted = [r for r in result["resources"] if "_content" in r]
+        flagged = [r for r in result["resources"] if r.get("_content_truncated")]
+        assert emitted and flagged, "expected some emitted and some flagged"
+        assert len(emitted) + len(flagged) == 4
+        # Nothing partial: every emitted value is the whole resource.
+        for row in emitted:
+            assert row["_content"].startswith(big)
+        for row in flagged:
+            assert "_content" not in row
+        assert result["content_truncated"] == len(flagged)
+        assert "limit=1" in result["content_truncation_note"]
 
 
 class TestHaConfigSetDashboardResource:
@@ -601,6 +713,116 @@ class TestHaConfigSetDashboardResource:
         assert mock_client.send_websocket_message.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_short_legit_update_skips_the_preview_check(
+        self, set_tool, mock_client
+    ):
+        """Ordinary short content must not trigger the guard at all.
+
+        The guard fails closed, so matching routine short updates would
+        make them fail whenever a listing hiccups — for content that
+        cannot be a preview of anything.
+        """
+        mock_client.send_websocket_message.return_value = {"result": {"id": "existing"}}
+
+        result = await set_tool(
+            content="/* tweak */", resource_type="css", resource_id="existing"
+        )
+
+        assert result["success"] is True
+        # One call only: the update. No verification listing was needed.
+        assert mock_client.send_websocket_message.call_count == 1
+        assert (
+            mock_client.send_websocket_message.call_args[0][0]["type"]
+            == "lovelace/resources/update"
+        )
+
+    @pytest.mark.asyncio
+    async def test_preview_guard_fails_closed_when_listing_raises(
+        self, set_tool, mock_client
+    ):
+        """An unverifiable preview-shaped write is REFUSED, not allowed.
+
+        A timeout on the (now large) listing does not imply the connection
+        is dead, so the small upsert frame right after would succeed and
+        destroy the card while reporting success.
+        """
+        mock_client.send_websocket_message.side_effect = TimeoutError("no answer")
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(
+                content="x" * 150 + "...", resource_type="module", resource_id="res1"
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert "could not be read back" in error_data["error"]["message"]
+        # Exactly one call — the listing. No update was attempted.
+        assert mock_client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_preview_guard_fails_closed_on_ws_error_envelope(
+        self, set_tool, mock_client
+    ):
+        """An HA-side rejection of the listing also fails closed."""
+        mock_client.send_websocket_message.return_value = {
+            "success": False,
+            "error": {"message": "unauthorized"},
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(
+                content="x" * 150 + "...", resource_type="module", resource_id="res1"
+            )
+
+        assert "unauthorized" in str(exc_info.value)
+        assert mock_client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_preview_guard_survives_malformed_listing_entries(
+        self, set_tool, mock_client
+    ):
+        """A non-dict entry must not escape as a bare AttributeError."""
+        full = "y" * 400
+        mock_client.send_websocket_message.side_effect = [
+            {
+                "result": [
+                    "not-a-dict",
+                    None,
+                    {
+                        "id": "res1",
+                        "type": "module",
+                        "url": _data_uri_for(full, "module"),
+                    },
+                ]
+            },
+            {"result": {"id": "res1"}},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(
+                content=full[:150] + "...", resource_type="module", resource_id="res1"
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_preview_guard_catches_ellipsis_stripped_preview(
+        self, set_tool, mock_client
+    ):
+        """The guard tolerates an agent trimming the ellipsis or whitespace."""
+        full = "z" * 500
+        mock_client.send_websocket_message.return_value = {
+            "result": [
+                {"id": "res1", "type": "module", "url": _data_uri_for(full, "module")}
+            ]
+        }
+
+        with pytest.raises(ToolError):
+            await set_tool(
+                content=full[:150], resource_type="module", resource_id="res1"
+            )
+
+    @pytest.mark.asyncio
     async def test_update_allows_legit_content_shaped_like_preview(
         self, set_tool, mock_client
     ):
@@ -658,6 +880,50 @@ class TestHaConfigSetDashboardResource:
         assert error_data["success"] is False
         assert "too large" in error_data["error"]["message"].lower()
         assert "suggestions" in error_data["error"]
+
+    @pytest.mark.asyncio
+    async def test_inline_size_is_utf8_bytes_not_characters(
+        self, set_tool, mock_client
+    ):
+        """size (and the cap) are measured in UTF-8 bytes, not characters.
+
+        Every other size test uses ASCII, where the two are identical — so
+        a refactor to len(content) would pass them all while letting a
+        multibyte payload up to 4x over the cap through.
+        """
+        mock_client.send_websocket_message.return_value = {"result": {"id": "1"}}
+        content = chr(233) * 100  # 100 chars, 200 UTF-8 bytes
+
+        result = await set_tool(content=content, resource_type="module")
+
+        assert result["size"] == len(content.encode("utf-8")) == 200
+        assert result["size"] != len(content)
+
+    @pytest.mark.asyncio
+    async def test_inline_cap_counts_bytes_not_characters(self, set_tool, mock_client):
+        """Content under the cap in characters but over it in bytes is rejected."""
+        content = chr(233) * (MAX_CONTENT_SIZE // 2 + 1)  # 2 bytes each -> over
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(content=content, resource_type="module")
+
+        assert len(content) < MAX_CONTENT_SIZE  # would pass a character check
+        error_data = json.loads(str(exc_info.value))
+        assert "too large" in error_data["error"]["message"].lower()
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_inline_cap_boundary(self, set_tool, mock_client):
+        """Exactly MAX_CONTENT_SIZE is accepted; one byte over is rejected."""
+        mock_client.send_websocket_message.return_value = {"result": {"id": "1"}}
+
+        at_cap = "x" * MAX_CONTENT_SIZE
+        result = await set_tool(content=at_cap, resource_type="module")
+        assert result["success"] is True
+        assert result["size"] == MAX_CONTENT_SIZE
+
+        with pytest.raises(ToolError):
+            await set_tool(content="x" * (MAX_CONTENT_SIZE + 1), resource_type="module")
 
     @pytest.mark.asyncio
     async def test_inline_js_type_not_supported(self, set_tool, mock_client):

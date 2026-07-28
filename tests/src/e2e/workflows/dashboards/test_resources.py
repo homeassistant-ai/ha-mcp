@@ -608,6 +608,65 @@ class TestInlineDashboardResource:
 
         logger.info("Inline CSS creation test completed successfully")
 
+    async def test_large_inline_resource_round_trips(self, mcp_client, ha_client):
+        """A near-cap payload survives HA storage and comes back byte-identical.
+
+        The cap raise to 128KB is what this PR exists to enable, and the
+        failure modes it could hit (HA WS message limits, the .storage
+        write, the MCP response path) only appear against real HA — an
+        in-process encode/decode round trip cannot catch them.
+        """
+        logger.info("Starting large inline resource test")
+        mcp = MCPAssertions(mcp_client)
+
+        # Realistic single-file bundle shape, sized just under the cap.
+        newline = chr(10)
+        filler = ("// padding to emulate a bundled card" + newline) * 3000
+        content = (
+            "class BigE2ECard extends HTMLElement {"
+            "  setConfig(c) { this.config = c; }"
+            "}"
+            "customElements.define('big-e2e-card', BigE2ECard);" + newline + filler
+        )
+        content = content[:120_000]
+        assert len(content.encode("utf-8")) > 100_000, "payload should be large"
+
+        create_data = await mcp.call_tool_success(
+            "ha_config_set_dashboard_resource",
+            {"content": content, "resource_type": "module"},
+        )
+        resource_id = create_data.get("resource_id")
+        try:
+            assert create_data["success"] is True
+            assert create_data["size"] == len(content.encode("utf-8"))
+
+            # HA really stored the whole thing.
+            raw_url = await _raw_resource_url(ha_client, resource_id)
+            assert raw_url is not None
+            decoded = base64.b64decode(raw_url.partition(",")[2]).decode("utf-8")
+            assert decoded == content
+
+            # And the tool can hand it back intact (the migration path
+            # depends on full-fidelity read-back).
+            listed = await mcp.call_tool_success(
+                "ha_config_list_dashboard_resources",
+                {"include_content": True, "limit": 1, "offset": 0},
+            )
+            match = next(
+                (r for r in listed.get("resources", []) if r.get("id") == resource_id),
+                None,
+            )
+            if match is not None and "_content" in match:
+                assert match["_content"] == content
+        finally:
+            if resource_id:
+                await mcp_client.call_tool(
+                    "ha_config_delete_dashboard_resource",
+                    {"resource_id": resource_id},
+                )
+
+        logger.info("Large inline resource test completed successfully")
+
     async def test_legacy_worker_resource_migrates_on_update(
         self, mcp_client, ha_client
     ):
@@ -654,7 +713,10 @@ class TestInlineDashboardResource:
             assert legacy_res.get("_inline") is True
             assert legacy_res.get("_legacy_worker") is True
             assert legacy_res.get("_content") == legacy_content
-            assert "include_content=True" in legacy_res.get("_migration", "")
+            # The remediation text is emitted once per response, not per
+            # resource, and must route agents through include_content=True
+            # (the default response carries only the truncated _preview).
+            assert "include_content=True" in list_data.get("migration_hint", "")
 
             # Re-save with content= → migrated to a data: URI.
             new_content = "export const MIGRATED = 2;"

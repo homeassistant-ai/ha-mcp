@@ -13,13 +13,13 @@ applies no URL-scheme validation, HA ships no CSP, and every layer loads
 ``data:`` modules and stylesheets fine (verified live; see #2060). Inline
 content now goes straight into a ``data:`` URI: same storage location
 (the resource registry), no third-party hop on dashboard loads.
-``LEGACY_WORKER_BASE_URL`` survives only to recognize and locally decode
-resources created before the switch — the worker is never contacted.
 """
 
 import base64
 import logging
+import re
 from typing import Annotated, Any, Literal, NoReturn
+from urllib.parse import urlsplit
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -44,33 +44,67 @@ logger = logging.getLogger(__name__)
 # keep loading until their resources are converted.
 LEGACY_WORKER_BASE_URL = "https://ha-mcp-resources.rapid-math-bbad.workers.dev"
 
-# data: URI media types per resource_type ('js' is rejected for inline mode).
+# data: URI media types per inline resource_type ('js' is url-mode only).
 # CSS carries an explicit charset because stylesheets, unlike module scripts,
 # have no spec-mandated UTF-8 fallback.
-_DATA_URI_MIME = {"module": "text/javascript", "css": "text/css;charset=utf-8"}
+_RESOURCE_TYPE = Literal["module", "js", "css"]
+_INLINE_RESOURCE_TYPE = Literal["module", "css"]
+_DATA_URI_MIME: dict[_INLINE_RESOURCE_TYPE, str] = {
+    "module": "text/javascript",
+    "css": "text/css;charset=utf-8",
+}
 
-# URL prefixes recognized as ha-mcp inline resources. Scoped to the media
-# types this tool writes (with and without the charset param) so foreign
-# data: resources a user registered by other means are passed through
-# untouched instead of being claimed and masked as "[inline]".
+# URL prefixes recognized as ha-mcp inline resources — DERIVED from the media
+# types above rather than restated, so the read side cannot drift from the
+# write side (a desync would make the server fail to recognize its own
+# output, leaking raw base64 URLs into list responses). Each media type is
+# accepted with and without the charset parameter so resources written
+# before and after a charset change both still decode. Foreign data: URLs
+# match nothing here and pass through untouched instead of being claimed.
 _ALLOWED_DATA_URI_PREFIXES = tuple(
-    f"data:{mime}{charset};base64,"
-    for mime in ("text/javascript", "text/css")
+    f"data:{base}{charset};base64,"
+    # dict.fromkeys dedupes while keeping a deterministic order.
+    for base in dict.fromkeys(mime.split(";", 1)[0] for mime in _DATA_URI_MIME.values())
     for charset in ("", ";charset=utf-8")
 )
 # Scheme and media type are case-insensitive (RFC 3986/2397); prefixes are
 # lowercase, so matching lowercases the URL head. Longest prefix is 42 chars.
 _DATA_URI_HEAD = max(len(p) for p in _ALLOWED_DATA_URI_PREFIXES)
 
+_B64_URLSAFE_RE = re.compile(r"[A-Za-z0-9_-]*={0,2}")
+
+# Longest data: URL echoed verbatim for a resource we cannot decode.
+# Beyond this the value is truncated: a corrupt or foreign payload can be
+# ~171KB of base64, and echoing it whole would flood the response.
+_MAX_ECHOED_URL = 300
+
 # Characters of decoded content shown in list previews.
 _PREVIEW_LENGTH = 150
 
-# Maximum inline content size. The old 24KB bound was the worker's URL-path
-# limit; data: URIs have no such limit (browsers verified to 2MB), so the cap
-# is sized to fit established single-file card bundles without truncation
-# while bounding what every dashboard load ships (the registered URL rides
-# the Lovelace bootstrap to every browser) and what auto-backup snapshots
-# per edit.
+# Total decoded content emitted per include_content=True response. A page
+# of max-size resources would otherwise return limit x MAX_CONTENT_SIZE
+# (up to ~64MB). Rows past the budget are FLAGGED, never shortened —
+# handing back a silently-truncated payload is how a resource gets
+# destroyed on write-back.
+_MAX_CONTENT_BUDGET = 512_000
+
+# Emitted once per response (not per resource) when any listed resource
+# still lives on the legacy worker.
+_LEGACY_MIGRATION_HINT = (
+    "Resources flagged '_legacy_worker' are still hosted on the legacy "
+    "Cloudflare worker. To convert one: fetch its FULL code with "
+    "ha_config_list_dashboard_resources(include_content=True), then re-save "
+    "it with ha_config_set_dashboard_resource(content=..., resource_id=...). "
+    "Never pass '_preview' as content — it is truncated and would destroy "
+    "the resource."
+)
+
+# Maximum inline content size, in UTF-8 bytes. The old 24KB bound was the
+# content budget derived from the worker's ~32KB encoded URL-path limit;
+# data: URIs impose no comparable limit, so the cap is now sized to fit
+# established single-file card bundles without truncation while bounding
+# what every dashboard load ships (the registered URL rides the Lovelace
+# bootstrap to every browser) and what auto-backup snapshots per edit.
 MAX_CONTENT_SIZE = 128_000
 
 # Top-level HA-config YAML keys that LLMs sometimes emit when they pick this
@@ -147,7 +181,7 @@ def _detect_ha_config_yaml(content: str) -> str | None:
     return None
 
 
-def _data_uri_for(content: str, resource_type: str) -> str:
+def _data_uri_for(content: str, resource_type: _INLINE_RESOURCE_TYPE) -> str:
     """Encode content as a base64 ``data:`` URI for the given resource type.
 
     Standard base64 (not URL-safe): browsers decode data: URIs with the
@@ -196,38 +230,85 @@ def _decode_data_uri(url: str) -> str | None:
         return None
 
 
-def _normalize_url_for_scheme_check(url: str) -> str:
-    """Normalize ``url`` the way a browser's URL parser does, for scheme checks.
-
-    WHATWG URL parsing strips leading/trailing C0-control-or-space and
-    removes every ASCII tab/newline before reading the scheme, so
-    ``" data:..."`` and ``"da\\tta:..."`` both parse as ``data:``. Checking
-    the raw string would miss those and let them through.
-    """
-    return (
-        url.strip(
-            "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f"
-            "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d"
-            "\x1e\x1f "
-        )
-        .replace("\t", "")
-        .replace("\n", "")
-        .replace("\r", "")
-    )
-
-
 def _is_data_url(url: str) -> bool:
-    """True when ``url`` parses as the ``data:`` scheme in a browser."""
-    return _normalize_url_for_scheme_check(url)[:5].lower() == "data:"
+    """True when ``url`` parses as the ``data:`` scheme in a browser.
+
+    ``urlsplit`` applies WHATWG's leading C0-control-or-space strip and
+    ASCII tab/newline/CR removal before reading the scheme (the
+    CVE-2023-24329 hardening; this package requires Python >=3.13), and
+    lowercases it. A raw ``url[:5]`` check would miss ``" data:..."`` and
+    ``"da\\tta:..."``, which browsers still load.
+    """
+    return urlsplit(url).scheme == "data"
 
 
-def _decode_inline_content(url: str) -> tuple[str | None, bool]:
-    """Decode an inline resource URL. Returns ``(content, is_legacy_worker)``.
+def _pad_b64(encoded: str) -> str:
+    """Reject non-alphabet characters, then restore any stripped ``=`` padding.
 
-    ``content`` is None when the URL is not one of ours, or is one of ours
-    but holds an empty/corrupt payload — the single source of truth for
-    "is this an inline resource we can show", so the list summary counts
-    and the per-resource markers can never disagree.
+    ``urlsafe_b64decode`` has no ``validate=`` parameter, so strictness has
+    to be enforced here; the padding fix-up keeps genuine worker URLs (which
+    always carried padding) working either way.
+    """
+    if not _B64_URLSAFE_RE.fullmatch(encoded):
+        raise ValueError("non-base64 characters in payload")
+    return encoded + "=" * (-len(encoded) % 4)
+
+
+def _has_inline_url_shape(url: str) -> bool:
+    """True when ``url`` LOOKS like one of ours, regardless of decodability.
+
+    Only used to flag a recognized-but-corrupt payload; the decode result
+    itself (never this) decides what counts as an inline resource.
+    """
+    if _match_data_uri_prefix(url) is not None:
+        return True
+    prefix = f"{LEGACY_WORKER_BASE_URL}/"
+    return url[: len(prefix)].lower() == prefix.lower()
+
+
+def _looks_like_preview(content: str) -> bool:
+    """Cheap pre-filter: could ``content`` be a list-tool ``_preview``?
+
+    Previews are ``_PREVIEW_LENGTH`` characters plus a trailing ``"..."``.
+    Two shapes qualify: that signature itself (tolerating surrounding
+    whitespace), and exactly ``_PREVIEW_LENGTH`` characters, which is what
+    an agent produces by stripping the ellipsis.
+
+    Deliberately narrow. Everything matching pays a WS round-trip and, if
+    that round-trip fails, is refused — so matching ordinary short content
+    (a legitimate 20-character CSS tweak) would make routine updates
+    fragile for no safety gain, since such content cannot be a preview of
+    anything.
+    """
+    stripped = content.strip()
+    if stripped.endswith("...") and len(stripped) <= _PREVIEW_LENGTH + 3:
+        return True
+    return len(stripped) == _PREVIEW_LENGTH
+
+
+def _is_preview_of(content: str, stored: str) -> bool:
+    """True when ``content`` is the truncated preview of ``stored``.
+
+    Tolerates the ellipsis being stripped and surrounding whitespace, so a
+    lightly-mangled preview writeback is still caught.
+    """
+    if len(stored) <= _PREVIEW_LENGTH:
+        # Short resources have no truncated preview to confuse with.
+        return False
+    candidate = content.strip().removesuffix("...")
+    return bool(candidate) and stored.startswith(candidate)
+
+
+def _decode_inline_content(url: str) -> tuple[str, bool] | None:
+    """Decode an inline resource URL to ``(content, is_legacy_worker)``.
+
+    ``None`` when the URL is not one of ours, or is one of ours but holds
+    an empty/corrupt payload. This is the single source of truth for "is
+    this an inline resource we can show", so the list summary counts and
+    the per-resource markers can never disagree. Returning one ``None``
+    rather than a ``(None, bool)`` pair keeps the meaningless
+    "not-ours-but-legacy" combination unrepresentable and forces callers
+    through one check instead of indexing the tuple.
     """
     content = _decode_data_uri(url)
     if content:
@@ -235,7 +316,7 @@ def _decode_inline_content(url: str) -> tuple[str | None, bool]:
     legacy = _decode_legacy_worker_url(url)
     if legacy:
         return legacy, True
-    return None, False
+    return None
 
 
 def _decode_legacy_worker_url(url: str) -> str | None:
@@ -246,12 +327,17 @@ def _decode_legacy_worker_url(url: str) -> str | None:
     contain the worker host string are not decoded. Returns None if the URL
     is not a legacy worker URL.
     """
-    if not url.startswith(f"{LEGACY_WORKER_BASE_URL}/"):
+    prefix = f"{LEGACY_WORKER_BASE_URL}/"
+    # Scheme and host are case-insensitive; the base64 payload is not.
+    if url[: len(prefix)].lower() != prefix.lower():
         return None
     try:
         # Extract base64 part: https://worker.dev/{base64}?type=module
-        encoded = url.removeprefix(f"{LEGACY_WORKER_BASE_URL}/").split("?")[0]
-        return base64.urlsafe_b64decode(encoded).decode("utf-8")
+        encoded = url[len(prefix) :].split("?")[0]
+        # validate=True mirrors _decode_data_uri: urlsafe_b64decode otherwise
+        # silently DISCARDS non-alphabet characters, so a junk path could
+        # decode to plausible text and be masked as inline content.
+        return base64.urlsafe_b64decode(_pad_b64(encoded)).decode("utf-8")
     except Exception:
         return None
 
@@ -342,29 +428,17 @@ class ResourceTools:
             else:
                 resources = []
 
-            # Summaries cover ALL resources via cheap URL-shape checks; the
-            # decode/preview work runs only on the returned page, so
-            # include_content=True responses stay bounded by limit/offset
-            # instead of materializing every inline resource's content.
-            by_type_counts = {"module": 0, "js": 0, "css": 0}
-            inline_count = 0
-            for resource in resources:
-                res = resource if isinstance(resource, dict) else {}
-                res_type = res.get("type", "unknown")
-                if res_type in by_type_counts:
-                    by_type_counts[res_type] += 1
-                url = res.get("url", "")
-                # Decode (discarding the content) rather than shape-matching
-                # the URL: the count must agree with the per-resource
-                # markers, which only appear when the payload decodes.
-                if isinstance(url, str) and _decode_inline_content(url)[0]:
-                    inline_count += 1
+            by_type_counts, decoded_by_index = _summarize_resources(resources)
+            inline_count = len(decoded_by_index)
 
             total_count = len(resources)
             page = resources[offset : offset + limit]
-            paginated = _process_resource_list(page, include_content)
+            page_decoded = [decoded_by_index.get(offset + i) for i in range(len(page))]
+            paginated, truncated_count = _process_resource_list(
+                page, page_decoded, include_content
+            )
 
-            return {
+            response: dict[str, Any] = {
                 "success": True,
                 "action": "list",
                 "resources": paginated,
@@ -372,6 +446,18 @@ class ResourceTools:
                 "inline_count": inline_count,
                 "by_type": by_type_counts,
             }
+            if truncated_count:
+                response["content_truncated"] = truncated_count
+                response["content_truncation_note"] = (
+                    f"{truncated_count} resource(s) exceeded the "
+                    f"{_MAX_CONTENT_BUDGET:,}-byte per-response content budget and "
+                    "carry '_content_truncated': True. Re-request them with a "
+                    "smaller limit (e.g. limit=1 plus offset) to get their full "
+                    "content — never save a truncated value back."
+                )
+            if any(r.get("_legacy_worker") for r in paginated):
+                response["migration_hint"] = _LEGACY_MIGRATION_HINT
+            return response
         except ToolError:
             raise
         except Exception as e:
@@ -452,6 +538,11 @@ class ResourceTools:
         - Content must be self-contained: a data: URI has no base URL, so
           relative imports inside a module and relative url() references
           inside CSS cannot resolve (use fully-qualified URLs instead)
+        - If Home Assistant is behind a reverse proxy that injects a
+          Content-Security-Policy without 'data:' in script-src/style-src,
+          the browser blocks these resources: this call still succeeds and
+          the card simply never renders. Register the code as a file and
+          use url='/local/...' on such a deployment. (HA itself ships no CSP.)
         - Supports 'module' and 'css' types only (not 'js')
 
         URL MODE (url=):
@@ -592,7 +683,7 @@ class ResourceTools:
     async def _set_inline_resource(
         self,
         content: str,
-        resource_type: str,
+        resource_type: _RESOURCE_TYPE,
         resource_id: str | None,
     ) -> dict[str, Any]:
         """Create or update an inline dashboard resource."""
@@ -704,39 +795,72 @@ class ResourceTools:
         The list tool's default output carries ``_preview`` — the first
         ``_PREVIEW_LENGTH`` characters plus ``"..."``. An agent that re-saves
         a resource using that string as ``content`` would silently replace
-        the user's card with a syntactically broken fragment. Only content
-        shaped exactly like a preview triggers the (one WS round-trip) check
-        against the stored resource, so normal updates pay nothing.
+        the user's card with a syntactically broken fragment.
+
+        Only preview-shaped content triggers the (one WS round-trip) check,
+        so normal updates pay nothing. When the check itself cannot run, it
+        FAILS CLOSED: the write is refused rather than allowed unverified.
+        A preview-shaped payload is already the suspicious case, and the
+        costs are lopsided — a wrong refusal costs one retry with the real
+        content, a wrong allow destroys the user's card and still reports
+        ``success: True``.
         """
-        if not (len(content) == _PREVIEW_LENGTH + 3 and content.endswith("...")):
+        if not _looks_like_preview(content):
             return
+
+        def _unverifiable(detail: str) -> NoReturn:
+            logger.warning(
+                "Preview-writeback guard could not verify resource %s (%s); "
+                "refusing the update rather than risking content loss",
+                resource_id,
+                detail,
+            )
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.SERVICE_CALL_FAILED,
+                    message=(
+                        "Content looks like the truncated preview from "
+                        "ha_config_list_dashboard_resources, and the stored "
+                        f"resource could not be read back to confirm ({detail}). "
+                        "Refusing the write: saving a preview would destroy the "
+                        "resource."
+                    ),
+                    context={"resource_id": resource_id},
+                    suggestions=[
+                        "Fetch the full code with ha_config_list_dashboard_resources(include_content=True)",
+                        "Re-save with the complete content (this check only "
+                        "triggers on preview-shaped content)",
+                    ],
+                )
+            )
+
         try:
             result = await self._client.send_websocket_message(
                 {"type": "lovelace/resources"}
             )
-        except Exception:
-            # Best-effort guard: a listing hiccup must not block the update;
-            # a real connectivity problem fails the upsert itself right after.
-            return
+        except Exception as e:
+            _unverifiable(f"listing the resources failed: {e}")
+        error_msg = _check_ws_error(result)
+        if error_msg:
+            _unverifiable(f"Home Assistant rejected the listing: {error_msg}")
         resources = result.get("result") if isinstance(result, dict) else result
         if not isinstance(resources, list):
-            return
+            _unverifiable("Home Assistant returned an unreadable resource list")
         for res in resources:
-            if str(res.get("id")) != str(resource_id):
+            # Element type is guarded too: a malformed entry must not raise a
+            # bare AttributeError out of the tool.
+            if not isinstance(res, dict) or str(res.get("id")) != str(resource_id):
                 continue
             url = res.get("url", "")
             stored = None
             if isinstance(url, str):
-                stored = _decode_inline_content(url)[0]
-            if (
-                stored
-                and len(stored) > _PREVIEW_LENGTH
-                and content == stored[:_PREVIEW_LENGTH] + "..."
-            ):
+                decoded = _decode_inline_content(url)
+                stored = decoded[0] if decoded else None
+            if stored and _is_preview_of(content, stored):
                 raise_tool_error(
                     create_error_response(
                         code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        message="Content is the truncated 150-char preview from "
+                        message="Content is the truncated preview from "
                         "ha_config_list_dashboard_resources, not the full "
                         "resource code — saving it would destroy the resource",
                         context={"resource_id": resource_id},
@@ -751,7 +875,7 @@ class ResourceTools:
     async def _set_url_resource(
         self,
         url: str | None,
-        resource_type: str,
+        resource_type: _RESOURCE_TYPE,
         resource_id: str | None,
     ) -> dict[str, Any]:
         """Create or update an external URL dashboard resource."""
@@ -824,7 +948,7 @@ class ResourceTools:
         self,
         resource_id: str | None,
         url: str | None,
-        resource_type: str,
+        resource_type: _RESOURCE_TYPE,
     ) -> tuple[dict[str, Any], str]:
         """Create or update a lovelace resource. Returns (result, action)."""
         # ``None`` stays the documented "create-new" sentinel; explicit
@@ -973,54 +1097,94 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     register_tool_methods(mcp, ResourceTools(client))
 
 
-def _process_resource_list(
-    resources: list[Any], include_content: bool
-) -> list[dict[str, Any]]:
-    """Process raw resources, decoding inline URLs for preview.
+def _summarize_resources(
+    resources: list[Any],
+) -> tuple[dict[str, int], dict[int, tuple[str, bool]]]:
+    """Count resources by type and decode every inline one, exactly once.
 
-    Current inline resources are ``data:`` URIs; resources created before
-    the worker retirement (#2060) still point at the worker and get a
-    migration hint. Both decode locally — no network involved.
+    Returns ``(by_type_counts, {index: (content, is_legacy)})``. The decode
+    map is the single source of truth for both ``inline_count`` and the
+    per-resource ``_inline`` markers, so the two can never disagree, and no
+    resource is decoded a second time when the page is rendered.
     """
-    processed = []
-    for resource in resources:
-        res = dict(resource)
+    by_type_counts = {"module": 0, "js": 0, "css": 0}
+    decoded_by_index: dict[int, tuple[str, bool]] = {}
+    for index, resource in enumerate(resources):
+        res = resource if isinstance(resource, dict) else {}
+        res_type = res.get("type", "unknown")
+        if res_type in by_type_counts:
+            by_type_counts[res_type] += 1
         url = res.get("url", "")
-
         if isinstance(url, str):
-            # Empty or undecodable payloads decode to None and fall through
-            # with their real URL visible — masking them as "[inline]" would
-            # hide exactly what a user debugging a broken resource needs to
-            # see. The same call drives ``inline_count``, so the summary and
-            # these markers cannot disagree.
-            content, is_legacy = _decode_inline_content(url)
-            if content and is_legacy:
+            decoded = _decode_inline_content(url)
+            if decoded:
+                decoded_by_index[index] = decoded
+    return by_type_counts, decoded_by_index
+
+
+def _process_resource_list(
+    resources: list[Any],
+    decoded_page: list[tuple[str, bool] | None],
+    include_content: bool,
+) -> tuple[list[dict[str, Any]], int]:
+    """Render one page of resources. Returns ``(rows, truncated_count)``.
+
+    ``decoded_page`` carries the already-decoded ``(content, is_legacy)`` for
+    each row (``None`` when the resource is not a decodable inline one), so
+    this never re-decodes and can never classify a resource differently than
+    the caller's summary did.
+
+    With ``include_content``, content is emitted until the per-response byte
+    budget is spent; rows past it are marked ``_content_truncated`` rather
+    than silently shortened, because a truncated value written back would
+    destroy the resource.
+    """
+    processed: list[dict[str, Any]] = []
+    truncated_count = 0
+    content_budget = _MAX_CONTENT_BUDGET
+
+    for resource, decoded in zip(resources, decoded_page, strict=False):
+        res = dict(resource) if isinstance(resource, dict) else {"url": resource}
+        url = res.get("url", "")
+        content, is_legacy = decoded if decoded else (None, False)
+
+        if content:
+            res["_inline"] = True
+            res["_size"] = len(content.encode("utf-8"))
+            if is_legacy:
+                # The full remediation text lives once at response level;
+                # repeating it per resource wasted ~330 chars each.
                 res["_legacy_worker"] = True
-                res["_migration"] = (
-                    "Hosted on the legacy Cloudflare worker. First fetch "
-                    "the FULL code with ha_config_list_dashboard_resources("
-                    "include_content=True), then re-save it with "
-                    "ha_config_set_dashboard_resource(content=..., "
-                    "resource_id=...) to convert this resource to a "
-                    "self-contained data: URI. Never use _preview as "
-                    "content — it is truncated."
-                )
-            if content:
-                res["_inline"] = True
-                res["_size"] = len(content.encode("utf-8"))
 
-                if include_content:
+            if include_content:
+                cost = len(content.encode("utf-8"))
+                if cost <= content_budget:
                     res["_content"] = content
+                    content_budget -= cost
                 else:
-                    preview = content[:_PREVIEW_LENGTH]
-                    if len(content) > _PREVIEW_LENGTH:
-                        preview += "..."
-                    res["_preview"] = preview
+                    res["_content_truncated"] = True
+                    truncated_count += 1
+            else:
+                preview = content[:_PREVIEW_LENGTH]
+                if len(content) > _PREVIEW_LENGTH:
+                    preview += "..."
+                res["_preview"] = preview
 
-                res["url"] = "[inline]"
+            res["url"] = "[inline]"
+        elif isinstance(url, str) and _has_inline_url_shape(url):
+            # Recognized as one of ours but the payload does not decode
+            # (empty, corrupt, or not UTF-8). Say so explicitly: without a
+            # marker this reads as "an external resource, not my problem",
+            # which is the wrong conclusion for someone debugging a card
+            # that stopped rendering. The real URL stays visible (truncated
+            # if huge) because that is what diagnosis needs.
+            res["_decode_error"] = True
+            if len(url) > _MAX_ECHOED_URL:
+                res["_url_length"] = len(url)
+                res["url"] = url[:_MAX_ECHOED_URL] + "…[truncated]"
 
         processed.append(res)
-    return processed
+    return processed, truncated_count
 
 
 def _check_ws_error(result: Any) -> str | None:

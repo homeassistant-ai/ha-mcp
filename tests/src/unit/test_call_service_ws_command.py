@@ -239,6 +239,12 @@ class TestWsCommandBlockedWriteCommands:
             "config/entity_registry/remove",
             "config/core/update",
             "LOVELACE/CONFIG/SAVE",
+            # Resource writes carry the same wrapping-tool guards (#2060):
+            # auto-backup, the #1072 YAML-misroute rejection, the inline
+            # size cap and the data:-URL routing guard.
+            "lovelace/resources/create",
+            "lovelace/resources/update",
+            "lovelace/resources/delete",
         ],
         ids=[
             "lovelace_config_save",
@@ -246,6 +252,9 @@ class TestWsCommandBlockedWriteCommands:
             "config_entity_registry_remove",
             "config_core_update",
             "case_variant",
+            "lovelace_resources_create",
+            "lovelace_resources_update",
+            "lovelace_resources_delete",
         ],
     )
     async def test_blocked_write_command_rejected(self, command):
