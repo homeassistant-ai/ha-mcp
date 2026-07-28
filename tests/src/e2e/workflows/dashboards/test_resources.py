@@ -592,7 +592,7 @@ class TestInlineDashboardResource:
 
             raw_url = await _raw_resource_url(ha_client, resource_id)
             assert raw_url is not None
-            assert raw_url.startswith("data:text/css;base64,")
+            assert raw_url.startswith("data:text/css;charset=utf-8;base64,")
             decoded = base64.b64decode(raw_url.partition(",")[2]).decode("utf-8")
             assert decoded == content
         finally:
@@ -616,8 +616,12 @@ class TestInlineDashboardResource:
         logger.info("Starting legacy worker migration test")
         mcp = MCPAssertions(mcp_client)
 
-        legacy_content = "export const LEGACY = 1;"
+        # The ÿ forces bytes whose base64 uses the URL-safe alphabet's
+        # '-'/'_' characters, so the legacy decoder's distinct alphabet is
+        # actually exercised (standard-b64 decode of it would differ).
+        legacy_content = "export const LEGACY = 'ÿÿ';"
         encoded = base64.urlsafe_b64encode(legacy_content.encode()).decode()
+        assert "-" in encoded or "_" in encoded
         legacy_url = (
             "https://ha-mcp-resources.rapid-math-bbad.workers.dev/"
             f"{encoded}?type=module"
@@ -646,6 +650,7 @@ class TestInlineDashboardResource:
             assert legacy_res.get("_inline") is True
             assert legacy_res.get("_legacy_worker") is True
             assert legacy_res.get("_content") == legacy_content
+            assert "include_content=True" in legacy_res.get("_migration", "")
 
             # Re-save with content= → migrated to a data: URI.
             new_content = "export const MIGRATED = 2;"
@@ -664,6 +669,23 @@ class TestInlineDashboardResource:
             assert raw_url.startswith("data:text/javascript;base64,")
             decoded = base64.b64decode(raw_url.partition(",")[2]).decode("utf-8")
             assert decoded == new_content
+
+            # The list tool no longer flags it as legacy-hosted.
+            post_list = await mcp.call_tool_success(
+                "ha_config_list_dashboard_resources", {"include_content": True}
+            )
+            migrated = next(
+                (
+                    r
+                    for r in post_list.get("resources", [])
+                    if r.get("id") == resource_id
+                ),
+                None,
+            )
+            assert migrated is not None
+            assert migrated.get("_inline") is True
+            assert "_legacy_worker" not in migrated
+            assert migrated.get("_content") == new_content
         finally:
             if resource_id:
                 await mcp_client.call_tool(

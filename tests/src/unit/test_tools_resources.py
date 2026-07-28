@@ -37,9 +37,19 @@ class TestHelperFunctions:
         assert url.startswith("data:text/javascript;base64,")
         assert _decode_data_uri(url) == content
 
+    def test_data_uri_css_roundtrip_with_charset(self):
+        """CSS gets an explicit UTF-8 charset and round-trips non-ASCII."""
+        content = '.card::before { content: "ünïcode ✓"; }'
+        url = _data_uri_for(content, "css")
+
+        assert url.startswith("data:text/css;charset=utf-8;base64,")
+        assert _decode_data_uri(url) == content
+
     def test_data_uri_mime_by_type(self):
-        """module → text/javascript, css → text/css."""
-        assert _data_uri_for(".x {}", "css").startswith("data:text/css;base64,")
+        """module → text/javascript, css → text/css with charset."""
+        assert _data_uri_for(".x {}", "css").startswith(
+            "data:text/css;charset=utf-8;base64,"
+        )
         assert _data_uri_for("1;", "module").startswith("data:text/javascript;base64,")
 
     def test_data_uri_deterministic(self):
@@ -48,18 +58,50 @@ class TestHelperFunctions:
             "const a = 1;", "module"
         )
 
+    def test_data_uri_roundtrip_at_max_size(self):
+        """A payload at exactly MAX_CONTENT_SIZE survives the round-trip."""
+        content = "x" * MAX_CONTENT_SIZE
+        assert _decode_data_uri(_data_uri_for(content, "module")) == content
+
     def test_decode_data_uri_rejects_non_data(self):
         """Non-data: URLs decode to None."""
         assert _decode_data_uri("/local/card.js") is None
         assert _decode_data_uri("https://cdn.example.com/card.js") is None
 
-    def test_decode_data_uri_rejects_non_base64_form(self):
-        """Percent-encoded (non-base64) data: URIs decode to None, not garbage."""
+    def test_decode_data_uri_rejects_percent_encoded_form(self):
+        """Percent-encoded (non-base64) data: URIs are not claimed as ours."""
         assert _decode_data_uri("data:text/javascript,console.log(1)") is None
 
+    def test_decode_data_uri_rejects_foreign_media_type(self):
+        """data: URLs with media types we never write are not claimed."""
+        assert _decode_data_uri("data:image/png;base64,aGVsbG8=") is None
+        assert _decode_data_uri("data:text/html;base64,aGVsbG8=") is None
+
+    def test_decode_data_uri_rejects_corrupt_payload(self):
+        """Non-alphabet bytes in the payload decode to None, not silently
+        truncated content — the browser's forgiving-base64 rejects them, so
+        reporting 'valid' content would point diagnosis away from the cause."""
+        good = _data_uri_for("console.log(1)", "module")
+        assert _decode_data_uri(good + "!!junktail") is None
+
+    def test_decode_data_uri_scheme_case_insensitive(self):
+        """Scheme/media type match case-insensitively; payload case preserved."""
+        content = "const CasePreserved = 1;"
+        url = _data_uri_for(content, "module")
+        upper_head = url[: len("data:text/javascript;base64,")].upper()
+        payload = url[len("data:text/javascript;base64,") :]
+        assert _decode_data_uri(upper_head + payload) == content
+
     def test_is_inline_url_data_uri(self):
-        """data: URIs are inline resources."""
+        """Our data: URIs are inline resources (case-insensitive scheme)."""
         assert _is_inline_url("data:text/javascript;base64,YWJj") is True
+        assert _is_inline_url("DATA:TEXT/JAVASCRIPT;BASE64,YWJj") is True
+        assert _is_inline_url("data:text/css;charset=utf-8;base64,YWJj") is True
+
+    def test_is_inline_url_foreign_data_uri_false(self):
+        """Foreign data: URLs are NOT inline resources."""
+        assert _is_inline_url("data:image/png;base64,aGVsbG8=") is False
+        assert _is_inline_url("data:text/javascript,console.log(1)") is False
 
     def test_is_inline_url_legacy_worker(self):
         """Legacy worker URLs still count as inline resources."""
@@ -69,6 +111,17 @@ class TestHelperFunctions:
         """Test non-inline URL detection."""
         assert _is_inline_url("/local/card.js") is False
         assert _is_inline_url("https://cdn.example.com/card.js") is False
+
+    def test_is_inline_url_lookalike_host_false(self):
+        """Detection is anchored — lookalike hosts embedding the worker host
+        string are neither classified inline nor decoded."""
+        lookalike = LEGACY_WORKER_BASE_URL.replace(
+            "https://", "https://evil.example.com/"
+        )
+        assert _is_inline_url(f"{lookalike}/YWJj?type=module") is False
+        assert _decode_legacy_worker_url(f"{lookalike}/YWJj?type=module") is None
+        suffixed = f"{LEGACY_WORKER_BASE_URL}.evil.example.com/YWJj"
+        assert _is_inline_url(suffixed) is False
 
     def test_decode_legacy_worker_url(self):
         """Test decoding legacy worker URL (pure local base64)."""
@@ -255,7 +308,11 @@ class TestHaConfigListDashboardResources:
         assert resource["_inline"] is True
         assert resource["_preview"] == content
         assert resource["_legacy_worker"] is True
-        assert "retired" in resource["_migration"]
+        # The hint MUST route agents through include_content=True — the
+        # default response only carries the truncated _preview, and
+        # re-saving that would destroy the resource.
+        assert "include_content=True" in resource["_migration"]
+        assert "_preview" in resource["_migration"]
         assert resource["url"] == "[inline]"
 
     @pytest.mark.asyncio
@@ -290,6 +347,78 @@ class TestHaConfigListDashboardResources:
         assert "_content" in resource
         assert resource["_content"] == content
         assert "_preview" not in resource  # Preview not included when content is
+
+    @pytest.mark.asyncio
+    async def test_list_size_is_bytes(self, list_tool, mock_client):
+        """_size reports UTF-8 bytes, matching the set response's size field."""
+        content = "const s = 'ünïcode';"
+        mock_client.send_websocket_message.return_value = {
+            "result": [
+                {"id": "1", "type": "module", "url": _data_uri_for(content, "module")}
+            ]
+        }
+
+        result = await list_tool()
+
+        assert result["resources"][0]["_size"] == len(content.encode("utf-8"))
+
+    @pytest.mark.asyncio
+    async def test_list_foreign_data_uri_passes_through(self, list_tool, mock_client):
+        """Foreign data: resources keep their real URL and are not claimed."""
+        url = "data:image/png;base64,aGVsbG8="
+        mock_client.send_websocket_message.return_value = {
+            "result": [{"id": "1", "type": "module", "url": url}]
+        }
+
+        result = await list_tool()
+
+        resource = result["resources"][0]
+        assert resource["url"] == url
+        assert "_inline" not in resource
+        assert result["inline_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_list_undecodable_inline_passes_through(self, list_tool, mock_client):
+        """Empty or corrupt payloads keep their real URL visible.
+
+        Masking them as "[inline]" would hide exactly what a user debugging
+        a broken resource needs to see.
+        """
+        empty = "data:text/css;charset=utf-8;base64,"
+        corrupt = "data:text/javascript;base64,!!not-base64!!"
+        mock_client.send_websocket_message.return_value = {
+            "result": [
+                {"id": "1", "type": "css", "url": empty},
+                {"id": "2", "type": "module", "url": corrupt},
+            ]
+        }
+
+        result = await list_tool()
+
+        assert result["resources"][0]["url"] == empty
+        assert "_inline" not in result["resources"][0]
+        assert result["resources"][1]["url"] == corrupt
+        assert "_inline" not in result["resources"][1]
+
+    @pytest.mark.asyncio
+    async def test_list_decodes_only_the_returned_page(self, list_tool, mock_client):
+        """Content is materialized for the requested page only, while
+        inline_count still summarizes the full set — include_content=True
+        responses stay bounded by limit/offset."""
+        contents = [f"export const page_test_{i} = {i};" for i in range(3)]
+        mock_client.send_websocket_message.return_value = {
+            "result": [
+                {"id": str(i), "type": "module", "url": _data_uri_for(c, "module")}
+                for i, c in enumerate(contents)
+            ]
+        }
+
+        result = await list_tool(include_content=True, limit=1, offset=1)
+
+        assert result["total_count"] == 3
+        assert result["inline_count"] == 3
+        assert len(result["resources"]) == 1
+        assert result["resources"][0]["_content"] == contents[1]
 
 
 class TestHaConfigSetDashboardResource:
@@ -367,7 +496,7 @@ class TestHaConfigSetDashboardResource:
         assert result["resource_type"] == "css"
 
         call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert call_args["url"].startswith("data:text/css;base64,")
+        assert call_args["url"].startswith("data:text/css;charset=utf-8;base64,")
         assert _decode_data_uri(call_args["url"]) == ".card { color: red; }"
 
     @pytest.mark.asyncio
@@ -397,11 +526,81 @@ class TestHaConfigSetDashboardResource:
 
         # Updates always write the current data: URI form — updating a
         # legacy worker-hosted resource with new content migrates it off
-        # the retired worker as a side effect.
+        # the legacy worker as a side effect.
         call_args = mock_client.send_websocket_message.call_args[0][0]
         assert call_args["type"] == "lovelace/resources/update"
         assert call_args["resource_id"] == "existing"
         assert call_args["url"].startswith("data:text/javascript;base64,")
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_truncated_preview_resave(self, set_tool, mock_client):
+        """Re-saving the list tool's truncated _preview as content is refused.
+
+        The default list response carries only the 150-char preview + "...";
+        an agent that writes that back would destroy the user's card.
+        """
+        full = "x" * 200
+        preview = full[:150] + "..."
+        mock_client.send_websocket_message.return_value = {
+            "result": [
+                {"id": "res1", "type": "module", "url": _data_uri_for(full, "module")}
+            ]
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(content=preview, resource_type="module", resource_id="res1")
+
+        error_data = json.loads(str(exc_info.value))
+        assert "truncated" in error_data["error"]["message"]
+        suggestions = error_data["error"]["suggestions"]
+        assert any("include_content=True" in s for s in suggestions)
+        # Only the guard's listing call ran — no update was sent.
+        assert mock_client.send_websocket_message.call_count == 1
+        sent = mock_client.send_websocket_message.call_args[0][0]
+        assert sent["type"] == "lovelace/resources"
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_truncated_preview_of_legacy_resource(
+        self, set_tool, mock_client
+    ):
+        """The preview guard also protects legacy worker-hosted resources."""
+        full = "y" * 300
+        preview = full[:150] + "..."
+        mock_client.send_websocket_message.return_value = {
+            "result": [{"id": "res1", "type": "module", "url": _legacy_url(full)}]
+        }
+
+        with pytest.raises(ToolError):
+            await set_tool(content=preview, resource_type="module", resource_id="res1")
+
+        assert mock_client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_update_allows_legit_content_shaped_like_preview(
+        self, set_tool, mock_client
+    ):
+        """153-char content ending in '...' that is NOT the stored preview saves."""
+        legit = "a" * 150 + "..."
+        stored = "completely different stored content " * 10
+        mock_client.send_websocket_message.side_effect = [
+            {
+                "result": [
+                    {
+                        "id": "res1",
+                        "type": "module",
+                        "url": _data_uri_for(stored, "module"),
+                    }
+                ]
+            },
+            {"result": {"id": "res1"}},
+        ]
+
+        result = await set_tool(
+            content=legit, resource_type="module", resource_id="res1"
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "updated"
 
     @pytest.mark.asyncio
     async def test_inline_empty_content_error(self, set_tool, mock_client):
@@ -633,6 +832,32 @@ class TestHaConfigSetDashboardResource:
         assert result["success"] is True
         assert result["resource_type"] == "js"
 
+    @pytest.mark.asyncio
+    async def test_url_mode_rejects_data_urls(self, set_tool, mock_client):
+        """Hand-built data: URLs can't bypass the inline-mode guards via url=.
+
+        url= runs none of the inline validations (empty/size/type checks and
+        the #1072 YAML-misroute rejection), so a documented data: format
+        registered through it would be a guard bypass.
+        """
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(url="data:text/javascript;base64,eA==")
+
+        error_data = json.loads(str(exc_info.value))
+        assert "content=" in error_data["error"]["message"]
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_url_mode_rejects_data_urls_any_case_and_type(
+        self, set_tool, mock_client
+    ):
+        """The data: rejection is scheme-case-insensitive and mime-agnostic."""
+        with pytest.raises(ToolError):
+            await set_tool(url="DATA:text/javascript;base64,eA==")
+        with pytest.raises(ToolError):
+            await set_tool(url="data:image/png;base64,eA==", resource_type="js")
+        mock_client.send_websocket_message.assert_not_called()
+
 
 class TestHaConfigDeleteDashboardResource:
     """Test ha_config_delete_dashboard_resource tool."""
@@ -705,10 +930,8 @@ class TestToolRegistration:
 class TestConstants:
     """Test module constants."""
 
-    def test_legacy_worker_url_is_https(self):
-        """Legacy recognition constant still matches the worker's https URL."""
-        assert LEGACY_WORKER_BASE_URL.startswith("https://")
-
-    def test_size_limit_not_below_old_worker_cap(self):
-        """The data: URI limit must not regress below the old 24KB worker cap."""
-        assert MAX_CONTENT_SIZE >= 24000
+    def test_max_content_size_pinned(self):
+        """Pin the cap at the worker-era 24KB: the registered URL ships to
+        every browser on every dashboard load and auto-backup snapshots it
+        whole per edit, so raising this needs a deliberate decision."""
+        assert MAX_CONTENT_SIZE == 24000

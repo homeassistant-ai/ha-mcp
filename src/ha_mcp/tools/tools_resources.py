@@ -38,20 +38,39 @@ from .util_helpers import build_pagination_metadata
 
 logger = logging.getLogger(__name__)
 
-# Retired Cloudflare Worker URL. Only used to recognize and locally decode
-# inline resources created before the data: URI switch (#2060) — never fetched.
+# Legacy Cloudflare Worker URL. Only used to recognize and locally decode
+# inline resources created before the data: URI switch (#2060) — this server
+# never fetches it. The worker deployment stays up so pre-existing dashboards
+# keep loading until their resources are converted.
 LEGACY_WORKER_BASE_URL = "https://ha-mcp-resources.rapid-math-bbad.workers.dev"
 
 # data: URI media types per resource_type ('js' is rejected for inline mode).
-_DATA_URI_MIME = {"module": "text/javascript", "css": "text/css"}
+# CSS carries an explicit charset because stylesheets, unlike module scripts,
+# have no spec-mandated UTF-8 fallback.
+_DATA_URI_MIME = {"module": "text/javascript", "css": "text/css;charset=utf-8"}
 
-_DATA_URI_PREFIX = "data:"
+# URL prefixes recognized as ha-mcp inline resources. Scoped to the media
+# types this tool writes (with and without the charset param) so foreign
+# data: resources a user registered by other means are passed through
+# untouched instead of being claimed and masked as "[inline]".
+_ALLOWED_DATA_URI_PREFIXES = tuple(
+    f"data:{mime}{charset};base64,"
+    for mime in ("text/javascript", "text/css")
+    for charset in ("", ";charset=utf-8")
+)
+# Scheme and media type are case-insensitive (RFC 3986/2397); prefixes are
+# lowercase, so matching lowercases the URL head. Longest prefix is 42 chars.
+_DATA_URI_HEAD = max(len(p) for p in _ALLOWED_DATA_URI_PREFIXES)
 
-# Maximum inline content size. Browsers load data: modules far larger than
-# this (verified to 2MB), so the bound is prudence about the resource
-# registry (.storage/lovelace_resources) and WS message sizes, not a URL
-# limit like the old worker's 24KB cap.
-MAX_CONTENT_SIZE = 1_000_000
+# Characters of decoded content shown in list previews.
+_PREVIEW_LENGTH = 150
+
+# Maximum inline content size — unchanged from the worker era. Browsers load
+# data: URIs far larger (verified to 2MB), but the registered URL is shipped
+# to every browser on every dashboard load and snapshotted whole by
+# auto-backup on every edit, so the bound is response/footprint prudence,
+# no longer a URL-length limit.
+MAX_CONTENT_SIZE = 24000
 
 # Top-level HA-config YAML keys that LLMs sometimes emit when they pick this
 # tool (`ha_config_set_dashboard_resource`) to "create a scene/automation/...".
@@ -133,20 +152,45 @@ def _data_uri_for(content: str, resource_type: str) -> str:
     Standard base64 (not URL-safe): browsers decode data: URIs with the
     standard alphabet. Deterministic — same content, same URI.
     """
-    mime = _DATA_URI_MIME[resource_type]
+    mime = _DATA_URI_MIME.get(resource_type)
+    if mime is None:
+        raise_tool_error(
+            create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message=f"Inline content does not support resource_type={resource_type!r}",
+                suggestions=["Use resource_type='module' or 'css' for inline content"],
+            )
+        )
     encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
     return f"data:{mime};base64,{encoded}"
 
 
+def _match_data_uri_prefix(url: str) -> str | None:
+    """Return the matched ha-mcp inline data: prefix of ``url``, else None.
+
+    Prefix matching is case-insensitive (scheme and media type are
+    case-insensitive per RFC 3986/2397); the payload's case is preserved.
+    """
+    head = url[:_DATA_URI_HEAD].lower()
+    for prefix in _ALLOWED_DATA_URI_PREFIXES:
+        if head.startswith(prefix):
+            return prefix
+    return None
+
+
 def _decode_data_uri(url: str) -> str | None:
-    """Decode a base64 ``data:`` URI back to content. None if not one of ours."""
-    if not url.startswith(_DATA_URI_PREFIX):
-        return None
-    header, sep, payload = url.partition(",")
-    if not sep or not header.endswith(";base64"):
+    """Decode one of our base64 ``data:`` URIs back to content.
+
+    None for foreign data: URLs (other media types, percent-encoded form) —
+    those are passed through untouched, not claimed as inline resources —
+    and for corrupt payloads (``validate=True``: a payload the browser's
+    forgiving-base64 would reject must not be reported as valid content).
+    """
+    prefix = _match_data_uri_prefix(url)
+    if prefix is None:
         return None
     try:
-        return base64.b64decode(payload).decode("utf-8")
+        return base64.b64decode(url[len(prefix) :], validate=True).decode("utf-8")
     except Exception:
         return None
 
@@ -155,13 +199,15 @@ def _decode_legacy_worker_url(url: str) -> str | None:
     """Decode a legacy worker inline URL back to content (pure local base64).
 
     The worker embedded URL-safe base64 in its path; decoding needs no
-    network. Returns None if the URL is not a legacy worker URL.
+    network. Anchored to the worker origin — lookalike hosts that merely
+    contain the worker host string are not decoded. Returns None if the URL
+    is not a legacy worker URL.
     """
-    if LEGACY_WORKER_BASE_URL not in url:
+    if not url.startswith(f"{LEGACY_WORKER_BASE_URL}/"):
         return None
     try:
         # Extract base64 part: https://worker.dev/{base64}?type=module
-        encoded = url.replace(f"{LEGACY_WORKER_BASE_URL}/", "").split("?")[0]
+        encoded = url.removeprefix(f"{LEGACY_WORKER_BASE_URL}/").split("?")[0]
         return base64.urlsafe_b64decode(encoded).decode("utf-8")
     except Exception:
         return None
@@ -169,7 +215,9 @@ def _decode_legacy_worker_url(url: str) -> str | None:
 
 def _is_inline_url(url: str) -> bool:
     """Check if a URL is an inline resource URL (current data: or legacy worker)."""
-    return url.startswith(_DATA_URI_PREFIX) or LEGACY_WORKER_BASE_URL in url
+    return _match_data_uri_prefix(url) is not None or url.startswith(
+        f"{LEGACY_WORKER_BASE_URL}/"
+    )
 
 
 class ResourceTools:
@@ -258,21 +306,24 @@ class ResourceTools:
             else:
                 resources = []
 
-            # Process resources - decode inline URLs for preview
-            processed = _process_resource_list(resources, include_content)
-
-            # Categorize resources by type
-            categorized: dict[str, list[Any]] = {"module": [], "js": [], "css": []}
+            # Summaries cover ALL resources via cheap URL-shape checks; the
+            # decode/preview work runs only on the returned page, so
+            # include_content=True responses stay bounded by limit/offset
+            # instead of materializing every inline resource's content.
+            by_type_counts = {"module": 0, "js": 0, "css": 0}
             inline_count = 0
-            for res in processed:
+            for resource in resources:
+                res = resource if isinstance(resource, dict) else {}
                 res_type = res.get("type", "unknown")
-                if res_type in categorized:
-                    categorized[res_type].append(res)
-                if res.get("_inline"):
+                if res_type in by_type_counts:
+                    by_type_counts[res_type] += 1
+                url = res.get("url", "")
+                if isinstance(url, str) and _is_inline_url(url):
                     inline_count += 1
 
-            total_count = len(processed)
-            paginated = processed[offset : offset + limit]
+            total_count = len(resources)
+            page = resources[offset : offset + limit]
+            paginated = _process_resource_list(page, include_content)
 
             return {
                 "success": True,
@@ -280,11 +331,7 @@ class ResourceTools:
                 "resources": paginated,
                 **build_pagination_metadata(total_count, offset, limit, len(paginated)),
                 "inline_count": inline_count,
-                "by_type": {
-                    "module": len(categorized["module"]),
-                    "js": len(categorized["js"]),
-                    "css": len(categorized["css"]),
-                },
+                "by_type": by_type_counts,
             }
         except ToolError:
             raise
@@ -319,7 +366,7 @@ class ResourceTools:
         content: Annotated[
             str | None,
             Field(
-                description="JavaScript or CSS code to host inline. "
+                description="JavaScript or CSS code to host inline (max ~24KB). "
                 "The code is embedded directly in the resource URL as a data: URI - "
                 "no file storage or external hosting involved. "
                 "Mutually exclusive with url. Supports 'module' and 'css' types only."
@@ -361,9 +408,11 @@ class ResourceTools:
         INLINE MODE (content=):
         - Custom card code written inline
         - CSS styling for dashboards
+        - Small self-contained files only (max ~24KB)
         - URLs are deterministic (same content = same URL)
-        - Content must be self-contained (a data: URI has no base URL, so
-          relative imports inside the module cannot resolve)
+        - Content must be self-contained: a data: URI has no base URL, so
+          relative imports inside a module and relative url() references
+          inside CSS cannot resolve (use fully-qualified URLs instead)
         - Supports 'module' and 'css' types only (not 'js')
 
         URL MODE (url=):
@@ -442,6 +491,23 @@ class ResourceTools:
 
         if content is not None:
             return await self._set_inline_resource(content, resource_type, resource_id)
+
+        # Hand-built data: URLs would bypass every inline-mode guard (empty /
+        # size / type checks and the #1072 YAML-misroute rejection) now that
+        # the inline format is documented in this docstring. Route callers to
+        # content=, where those guards run.
+        if url is not None and url[:5].lower() == "data:":
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="data: URLs cannot be registered via url= — "
+                    "pass the code itself via content= instead",
+                    suggestions=[
+                        "Use content=<your JS/CSS source> (the tool builds the data: URI)",
+                        "url= is for /local/, /hacsfiles/, and https:// resources",
+                    ],
+                )
+            )
         return await self._set_url_resource(url, resource_type, resource_id)
 
     def _raise_ha_config_yaml_misroute(
@@ -536,6 +602,9 @@ class ResourceTools:
                 )
             )
 
+        if resource_id is not None:
+            await self._reject_truncated_preview_resave(content, resource_id)
+
         resource_url = _data_uri_for(content, resource_type)
 
         try:
@@ -587,6 +656,58 @@ class ResourceTools:
             # explicit raise makes the function's exit unambiguous (no implicit
             # ``return None`` fall-through) and is never reached at runtime.
             raise
+
+    async def _reject_truncated_preview_resave(
+        self, content: str, resource_id: str
+    ) -> None:
+        """Refuse to overwrite an inline resource with its own truncated preview.
+
+        The list tool's default output carries ``_preview`` — the first
+        ``_PREVIEW_LENGTH`` characters plus ``"..."``. An agent that re-saves
+        a resource using that string as ``content`` would silently replace
+        the user's card with a syntactically broken fragment. Only content
+        shaped exactly like a preview triggers the (one WS round-trip) check
+        against the stored resource, so normal updates pay nothing.
+        """
+        if not (len(content) == _PREVIEW_LENGTH + 3 and content.endswith("...")):
+            return
+        try:
+            result = await self._client.send_websocket_message(
+                {"type": "lovelace/resources"}
+            )
+        except Exception:
+            # Best-effort guard: a listing hiccup must not block the update;
+            # a real connectivity problem fails the upsert itself right after.
+            return
+        resources = result.get("result") if isinstance(result, dict) else result
+        if not isinstance(resources, list):
+            return
+        for res in resources:
+            if str(res.get("id")) != str(resource_id):
+                continue
+            url = res.get("url", "")
+            stored = None
+            if isinstance(url, str):
+                stored = _decode_data_uri(url) or _decode_legacy_worker_url(url)
+            if (
+                stored
+                and len(stored) > _PREVIEW_LENGTH
+                and content == stored[:_PREVIEW_LENGTH] + "..."
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        message="Content is the truncated 150-char preview from "
+                        "ha_config_list_dashboard_resources, not the full "
+                        "resource code — saving it would destroy the resource",
+                        context={"resource_id": resource_id},
+                        suggestions=[
+                            "Fetch the full code with ha_config_list_dashboard_resources(include_content=True)",
+                            "Then re-save with the complete content",
+                        ],
+                    )
+                )
+            return
 
     async def _set_url_resource(
         self,
@@ -829,25 +950,31 @@ def _process_resource_list(
 
         if isinstance(url, str) and _is_inline_url(url):
             content = _decode_data_uri(url)
-            if content is None:
+            if not content:
                 content = _decode_legacy_worker_url(url)
-                if content is not None:
+                if content:
                     res["_legacy_worker"] = True
                     res["_migration"] = (
-                        "Hosted on the retired Cloudflare worker. Re-save with "
+                        "Hosted on the legacy Cloudflare worker. First fetch "
+                        "the FULL code with ha_config_list_dashboard_resources("
+                        "include_content=True), then re-save it with "
                         "ha_config_set_dashboard_resource(content=..., "
-                        "resource_id=...) to convert it to a self-contained "
-                        "data: URI."
+                        "resource_id=...) to convert this resource to a "
+                        "self-contained data: URI. Never use _preview as "
+                        "content — it is truncated."
                     )
-            if content is not None:
+            # Empty or undecodable payloads fall through with their real URL
+            # visible — masking them as "[inline]" would hide exactly what a
+            # user debugging a broken resource needs to see.
+            if content:
                 res["_inline"] = True
-                res["_size"] = len(content)
+                res["_size"] = len(content.encode("utf-8"))
 
                 if include_content:
                     res["_content"] = content
                 else:
-                    preview = content[:150]
-                    if len(content) > 150:
+                    preview = content[:_PREVIEW_LENGTH]
+                    if len(content) > _PREVIEW_LENGTH:
                         preview += "..."
                     res["_preview"] = preview
 
