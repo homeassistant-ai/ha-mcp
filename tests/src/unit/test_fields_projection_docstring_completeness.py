@@ -524,7 +524,6 @@ def test_fields_description_lists_every_emitted_key(spec: dict[str, Any]) -> Non
         emitted |= _harvest_return_keys(mod, fn)
     for mod, fn, markers in spec.get("marker_harvest", []):
         emitted |= _harvest_marker_dicts(mod, fn, markers)
-    emitted -= spec.get("exclude_internal", frozenset())
 
     assert emitted, (
         f"{spec['tool']}: harvested no response keys — check that the "
@@ -683,31 +682,9 @@ def test_tool_specs_covers_every_fields_using_tool() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "spec",
-    [s for s in TOOL_SPECS if s.get("exclude_internal")],
-    ids=lambda s: s["tool"],
-)
-def test_exclude_internal_keys_actually_appear_in_raw_harvest(
-    spec: dict[str, Any],
-) -> None:
-    """``exclude_internal`` entries should still be present in the raw
-    AST harvest. If a key listed there stops being emitted (e.g. the
-    helper rename it documents was undone, or the internal field was
-    deleted), the exclusion is dead code — silently masking nothing.
-    """
-    raw: set[str] = set()
-    for mod, fn, var in spec["var_harvest"]:
-        raw |= _harvest_var_keys(mod, fn, var)
-    for mod, fn in spec["return_harvest"]:
-        raw |= _harvest_return_keys(mod, fn)
-    for mod, fn, markers in spec.get("marker_harvest", []):
-        raw |= _harvest_marker_dicts(mod, fn, markers)
-
-    dead = spec["exclude_internal"] - raw
-    assert not dead, (
-        f"{spec['tool']}: `exclude_internal` lists key(s) {sorted(dead)!r} "
-        f"that no longer appear in the AST harvest — the exclusion is "
-        f"masking nothing. Either remove from `exclude_internal` or "
-        f"investigate whether the rename it documents was undone."
-    )
+# ``exclude_internal`` and the test that policed it were removed with the
+# ``empty_parameter_set_mark = fail_at_collect`` change: no ``TOOL_SPECS``
+# entry has ever carried the key, so the mask subtracted an empty set and its
+# guard collected zero cases — reported as a skip the summary does not count.
+# Both come back together the day a spec genuinely needs to hide an internal
+# key from the docstring comparison.

@@ -1,0 +1,171 @@
+---
+configuration:
+  backup_hint:
+    name: Nivel de sugerencia de instantánea completa de HA (para el LLM)
+    description: |-
+      Ajusta la redacción de la indicación que el LLM ve en la descripción de la
+      herramienta `ha_manage_backup(scope='snapshot')` sobre cuándo sugerir una
+      copia de seguridad completa de Home Assistant antes de operaciones
+      arriesgadas (p. ej. borrados masivos de dispositivos). Afecta ÚNICAMENTE a
+      esa frase dirigida al LLM.
+
+      Para instantáneas automáticas por edición de automatizaciones / scripts /
+      auxiliares / etc., usa la opción independiente **Activar copia de
+      seguridad automática de las ediciones** que aparece más abajo.
+  secret_path:
+    name: Ruta secreta personalizada
+    description: |
+      Ruta HTTP personalizada opcional para el servidor MCP. Déjala vacía para usar la ruta segura generada automáticamente.
+  enable_tool_search:
+    name: Activar la búsqueda de herramientas
+    description: >-
+      Sustituye el catálogo completo de herramientas por un descubrimiento
+      basado en búsqueda. Reduce el contexto en reposo de unos 46K a unos 5K tokens.
+      ⚠️ NO actives esto si usas Claude en modo Sonnet u Opus: esos modelos
+      tienen su propia búsqueda de herramientas / herramientas diferidas
+      integrada, que entra en conflicto con la nuestra. Para usar la búsqueda de
+      herramientas de ha-mcp con Claude, desactiva primero la búsqueda integrada
+      de Claude; si no, deja esto desactivado. Úsalo solo con LLM que carezcan de
+      herramientas diferidas nativas (p. ej. Claude Haiku, modelos locales
+      compatibles con OpenAI) o con ventanas de contexto más pequeñas. Las
+      herramientas se localizan mediante ha_search_tools y se ejecutan a través
+      de proxies por categoría (lectura/escritura/borrado). Requiere reiniciar el
+      complemento para que surta efecto; después, vuelve a conectar o actualiza
+      el servidor MCP en tu cliente de IA para que recargue la lista de
+      herramientas. Reiniciar el complemento por sí solo NO actualiza la lista de
+      herramientas almacenada en caché por el cliente; esto vale para cualquier
+      cambio de ajustes aquí.
+  enable_tool_security_policies:
+    name: Activar las políticas de seguridad de herramientas (avanzado)
+    description: >-
+      Somete a aprobación del usuario las llamadas a herramientas de alto riesgo
+      (control de cerraduras y alarmas, escritura de automatizaciones, etc.).
+      Cuando se llama a una herramienta protegida, el agente indica al usuario
+      que abra la pestaña Políticas de seguridad de herramientas en la interfaz
+      web y pulse Aprobar antes de que la llamada continúe. Las reglas por
+      herramienta, con condiciones opcionales sobre los argumentos, se configuran
+      en esa misma pestaña. Desactivado de forma predeterminada. Requiere
+      reiniciar para que surta efecto.
+  read_only_mode:
+    name: Modo de solo lectura
+    description: >-
+      Desactiva todas las herramientas de escritura y les retira la capacidad de
+      hacer llamadas de escritura o destructivas. Las herramientas mixtas de
+      lectura/escritura (copias de seguridad, complementos, preferencias de
+      energía, canalizaciones de voz y el modo de código cuando está activado)
+      siguen disponibles, pero con sus operaciones de escritura bloqueadas. Es la
+      misma opción que la de la pestaña Herramientas de la interfaz web.
+      Desactivado de forma predeterminada. Requiere reiniciar para que surta
+      efecto.
+  enable_mandatory_bps:
+    name: Adjuntar skills de buenas prácticas en las escrituras
+    description: >-
+      Interruptor principal de la entrega de contenido de skills en las
+      herramientas de escritura (issue #1182). Cuando está activado
+      (predeterminado), las seis herramientas de escritura de configuración
+      (automatizaciones, scripts, escenas, auxiliares, paneles, YAML en bruto)
+      adjuntan los archivos de referencia canónicos de buenas prácticas de Home
+      Assistant en `skill_content` tras cada escritura correcta, y además
+      incrustan automáticamente las secciones de referencia citadas por los
+      avisos de buenas prácticas. Cada herramienta expone también un parámetro
+      `MandatoryBPS` por llamada que el agente puede poner a false en llamadas
+      posteriores una vez que tiene el contenido. Con este interruptor principal
+      desactivado NO se envía ningún skill_content, independientemente del
+      parámetro por llamada o de los avisos de buenas prácticas. Se recomienda
+      dejarlo activado; desactívalo solo para modelos con ventanas de contexto
+      muy pequeñas. Desactivarlo puede degradar la precisión de las escrituras.
+      Requiere reiniciar para que surta efecto.
+  enable_strict_mandatory_bps:
+    name: Modo estricto de buenas prácticas
+    description: >-
+      Modo estricto: impide que el cliente use la herramienta hasta que pueda
+      demostrar que ha leído las buenas prácticas. Mientras está activo, las seis
+      herramientas de escritura sujetas a buenas prácticas (automatizaciones,
+      scripts, escenas, auxiliares, paneles, YAML en bruto) quedan bloqueadas y
+      devuelven un error que indica al cliente que lea la skill de buenas
+      prácticas mediante ha_get_skill_guide y devuelva la clave de confirmación
+      que obtiene allí. Mientras está activo, la herramienta ha_get_skill_guide
+      queda forzada como activada: es la única que publica esa clave de
+      confirmación. Depende de la opción "Adjuntar skills de buenas prácticas en
+      las escrituras" de arriba y es inerte mientras esa opción principal esté
+      desactivada. Requiere reiniciar para que surta efecto.
+  enable_auto_backup:
+    name: Activar copia de seguridad automática de las ediciones
+    description: >-
+      Captura una instantánea por entidad antes de cada llamada a una herramienta
+      MCP de escritura o destructiva cubierta (automatización, script, escena,
+      auxiliar, panel, etiqueta, categoría, grupo, zona, área, calendario, tareas
+      pendientes, entidad, integración y las herramientas hermanas de
+      eliminación). Las instantáneas se guardan como archivos YAML en
+      /data/ha_mcp_backups/ (se puede cambiar con HAMCP_BACKUP_DIR) y se listan,
+      restauran o eliminan desde la pestaña Copias de seguridad de la interfaz
+      web de ajustes o mediante ha_manage_backup(scope='edits', ...). Funciona en
+      la medida de lo posible: los fallos registran un WARNING pero nunca
+      bloquean la escritura subyacente. Activado de forma predeterminada;
+      desmárcalo para excluirte. Requiere reiniciar para que surta efecto.
+  auto_backup_throttle_minutes:
+    name: Limitación de la copia automática (minutos)
+    description: >-
+      Ventana de limitación por entidad. 0 (predeterminado) captura una
+      instantánea en cada escritura cubierta. N>0 captura como mucho una
+      instantánea cada N minutos por entidad. Rango 0–1440.
+  auto_backup_retain_per_entity:
+    name: Retención de copias automáticas (por entidad)
+    description: >-
+      Número máximo de instantáneas conservadas por entidad. Las instantáneas más
+      antiguas que superen este límite se rotan en cada captura correcta.
+      Predeterminado 100, rango 1–10000.
+  enable_snapshot_delete:
+    name: Permitir la eliminación de instantáneas
+    description: >-
+      Permite que ha_manage_backup elimine archivos tarball de instantáneas
+      completas de HA (scope='snapshot', action='delete'). Desactivado de forma
+      predeterminada: una instantánea puede ser el último punto de recuperación
+      tras un cambio equivocado, así que una persona debe autorizarlo aquí
+      expresamente. Incluso estando activado, las copias de seguridad
+      programadas, la instantánea más reciente que quede y todo lo más nuevo que
+      el mínimo de antigüedad de abajo siguen protegidos.
+  snapshot_delete_min_age_days:
+    name: Antigüedad mínima de la instantánea para eliminarla (días)
+    description: >-
+      Una instantánea debe tener al menos esta antigüedad para poder eliminarse.
+      Rango 0–365; 0 desactiva el mínimo (las protecciones de la instantánea más
+      reciente y de las copias programadas siguen aplicándose). Predeterminado 7.
+  verify_ssl:
+    name: Verificar el certificado TLS
+    description: >-
+      Verifica el certificado TLS del servidor de Home Assistant. El complemento
+      se conecta a través del proxy del Supervisor, así que normalmente esto no
+      tiene ningún efecto y debería quedarse activado. Desactívalo solo si has
+      reconfigurado el complemento para hablar con HA por un nombre de host HTTPS
+      público con un certificado autofirmado o con un nombre de host que no
+      coincide. Desactivarlo debilita la seguridad del transporte: déjalo
+      activado salvo que sepas que lo necesitas. Requiere reiniciar para que
+      surta efecto.
+  tool_search_max_results:
+    name: Máximo de resultados de la búsqueda de herramientas
+    description: >-
+      Número máximo de herramientas que devuelve ha_search_tools cuando la
+      búsqueda de herramientas está activada. Los valores bajos (2-3) ahorran
+      tokens de contexto pero pueden dejar fuera herramientas relevantes. Rango:
+      2-10. Requiere reiniciar.
+  disabled_tools:
+    name: Herramientas desactivadas (separadas por comas)
+    description: >-
+      Las herramientas indicadas aquí quedan forzadas a desactivadas y bloqueadas
+      en la interfaz web de ajustes (pestaña Herramientas): no se pueden volver a
+      activar allí sin quitar antes esta opción. Un pequeño conjunto de
+      herramientas obligatorias (ha_search, ha_get_overview, ha_get_state,
+      ha_report_issue, ha_manage_backup) no se puede desactivar y sigue
+      funcionando aunque se indique aquí. ha_get_skill_guide solo se puede
+      desactivar mientras el modo estricto de buenas prácticas
+      (enable_strict_mandatory_bps) esté desactivado. Nombres de herramientas
+      separados por comas (p. ej. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Herramientas fijadas (separadas por comas)
+    description: >-
+      Las herramientas indicadas aquí quedan fijadas de forma bloqueada: aparecen
+      en la parte superior de la pestaña Herramientas y no se pueden desfijar
+      desde la interfaz web de ajustes sin quitar antes esta opción. Resulta útil
+      en combinación con la búsqueda de herramientas. Nombres de herramientas
+      separados por comas.

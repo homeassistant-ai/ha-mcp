@@ -172,6 +172,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+# See tests/pytest.ini: an empty parametrize list is a guard that stopped
+# running, and the default mark hides it as a skip the summary ignores.
+empty_parameter_set_mark = "fail_at_collect"
 addopts = [
     "--strict-markers",
     "--strict-config",

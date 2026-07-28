@@ -446,19 +446,14 @@
     "Integrations": "集成",
     "Labels & Categories": "标签与类别",
     "Matter": "Matter",
-    "Radio Management": "无线电管理",
     "Scenes": "场景",
     "Scripts": "脚本",
     "Search & Discovery": "搜索与发现",
     "Service & Device Control": "服务与设备控制",
     "System": "系统",
-    "Thread": "Thread",
     "Todo Lists": "待办清单",
     "Utilities": "实用工具",
-    "Z-Wave": "Z-Wave",
-    "Zigbee": "Zigbee",
-    "Zones": "地理区域",
-    "beta": "测试版"
+    "Zones": "地理区域"
   },
   "tools": {
     "ha_manage_backup": {

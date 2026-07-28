@@ -4741,7 +4741,18 @@ async def _fetch_service_translations(
             exc_info=True,
         )
         return {}
-    return result if isinstance(result, Mapping) else {}
+    if isinstance(result, Mapping):
+        return result
+    # Same visibility as the failure above: discarding the catalog leaves the
+    # service list untranslated, and the type is the only useful clue. Kept in
+    # step with the mirrored seam in config_flow.
+    _LOGGER.warning(
+        "services_list: ignoring the %s service translations: expected a "
+        "Mapping, got %s",
+        language,
+        type(result).__name__,
+    )
+    return {}
 
 
 def _filter_service_translations(

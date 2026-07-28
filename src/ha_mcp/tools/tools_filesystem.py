@@ -257,10 +257,21 @@ async def _fetch_caller_token(client: Any) -> str:
     unwrapped = unwrap_service_response(result) if isinstance(result, dict) else {}
     token = unwrapped.get("token") if isinstance(unwrapped, dict) else None
     if not isinstance(token, str) or not token:
+        # The component says why it could not answer when it knows (an
+        # unreadable manifest reports itself as ``manifest_unreadable``).
+        # Report that verbatim rather than the generic wording: re-diagnosing a
+        # manifest problem as a missing token sends the operator to the token
+        # and reload suggestions below, which cannot fix it.
+        reported = unwrapped.get("error") if isinstance(unwrapped, dict) else None
+        detail = (
+            reported
+            if isinstance(reported, str) and reported
+            else "ha_mcp_tools.get_caller_token did not return a usable token."
+        )
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                "ha_mcp_tools.get_caller_token did not return a usable token.",
+                detail,
                 suggestions=[
                     "Reload the ha_mcp_tools integration in Home Assistant",
                     "Verify the HA token used by ha-mcp has admin rights",

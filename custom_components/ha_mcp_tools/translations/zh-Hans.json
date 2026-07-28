@@ -20,7 +20,7 @@
         },
         "abort": {
             "already_configured": "此条目已配置。",
-            "unsupported_home_assistant": "进程内 HA-MCP 服务器需要 Home Assistant {required} 或更高版本，但此实例运行的是 {installed}。你仍可将本组件的 HA-MCP 文件与 YAML 工具条目与以插件或 Docker 容器方式运行的外部 ha-mcp 服务器搭配使用。"
+            "unsupported_home_assistant": "进程内 HA-MCP 服务器需要 Home Assistant {required} 或更高版本，但此实例运行的是 {installed}。你仍可将本组件的 HA-MCP File & YAML Tools 条目与以插件或 Docker 容器方式运行的外部 ha-mcp 服务器搭配使用。"
         }
     },
     "options": {
@@ -77,7 +77,7 @@
                     "secret_path_override": "替换在服务器端口上用于直连的随机路径。规则相同：该路径就是凭据。留空则保留当前值。",
                     "regenerate_secrets": "一次性操作：生成新的随机 Webhook 密钥和直连路径，并立即使旧的连接 URL 失效。同时会清空上面两个覆盖字段。",
                     "enable_webhook": "关闭以进入仅本地模式：完全不注册 Home Assistant Webhook，因此任何一方——包括 Nabu Casa——都无法通过 Home Assistant 访问服务器。服务器端口直连和侧边栏面板仍可继续使用。",
-                    "enable_llm_api": "向 Home Assistant 对话智能体（OpenAI、Google、Ollama 等）提供完整工具集：启用后，智能体可在“控制 Home Assistant”下选择“HA-MCP 服务器”，并在 Assist 聊天和语音中使用这些工具。启用只是让它可供选择——在你为某个智能体选中它之前，不会暴露任何内容。使用指南：{llm_api_docs_url}",
+                    "enable_llm_api": "向 Home Assistant 对话智能体（OpenAI、Google、Ollama 等）提供完整工具集：启用后，智能体可在“控制 Home Assistant”下选择“HA-MCP Server”，并在 Assist 聊天和语音中使用这些工具。启用只是让它可供选择——在你为某个智能体选中它之前，不会暴露任何内容。使用指南：{llm_api_docs_url}",
                     "llm_api_exposure": "提供给对话智能体的工具集形态。工具搜索（默认）可让智能体的上下文保持精简：一个包含固定工具以及搜索/执行元工具的紧凑 API。完整目录会直接列出每个已暴露的工具——更适合大上下文模型。两者会将二者并列注册，让每个智能体在“控制 Home Assistant”下各自选择。按工具的暴露设置在 HA-MCP 设置面板中管理；详情：{llm_api_docs_url}",
                     "enable_startup_notification": "每次服务器启动时显示通知，指向仅管理员可见的设置界面。关闭则静默启动——连接 URL 仍会出现在 Home Assistant 日志中。",
                     "enable_sidebar_panel": "在侧边栏中显示 HA-MCP 设置面板（仅管理员）。关闭则移除侧边栏条目——服务器选项仍可在此界面中使用。"
@@ -139,5 +139,23 @@
                 "name": "更新"
             }
         }
+    },
+    "common": {
+        "connect_direct_access": "从 Home Assistant 所在主机直接访问：{url}",
+        "connect_local_lan": "本地/局域网（当网络访问为“Local network”时）：{url}",
+        "connect_remote_url": "远程连接 URL：{url}",
+        "connect_urls_label": "连接 URL：",
+        "connect_urls_pending": "服务器启动后，连接 URL 将显示在此处（以及 Home Assistant 日志中）。",
+        "connect_webhook_disabled": "通过 Webhook 远程访问已关闭（仅本地模式）。",
+        "oauth_creds_pending": "服务器启动后，Client ID 和 Client Secret 将显示在此处。",
+        "oauth_not_serving": "旧版 OAuth 尚未启用这些凭据——请在 Home Assistant 提示时重启以激活它们。",
+        "oauth_select_legacy_mode": "将上面的身份验证模式设为旧版 OAuth 并保存，以生成 Client ID 和 Client Secret。",
+        "panel_hint": "打开 [HA-MCP 设置面板](/ha-mcp) 以管理工具和服务器设置。",
+        "tools_module_installed": "Beta/高级文件与 YAML 工具模块（可选）：已安装",
+        "tools_module_not_installed": "Beta/高级文件与 YAML 工具模块（可选）：未安装——请在此集成页面上点击“添加条目”并选择“HA-MCP File & YAML Tools”",
+        "tools_module_not_loaded": "Beta/高级文件与 YAML 工具模块（可选）：已安装但未加载——请在此集成页面上启用或重新加载“HA-MCP File & YAML Tools”条目",
+        "version_line": "组件 {component_version} - 服务器 ha-mcp {server_version}（{channel} 通道）",
+        "version_not_installed": "尚未安装",
+        "version_unknown": "未知"
     }
 }

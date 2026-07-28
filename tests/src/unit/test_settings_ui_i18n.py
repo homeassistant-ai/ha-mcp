@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -11,12 +12,18 @@ from starlette.requests import Request
 
 from ha_mcp.settings_ui import _render_settings_html
 from ha_mcp.settings_ui._i18n import (
+    CATALOGS,
     build_payload,
     load_catalogs,
     normalize_locale,
     select_locale,
     serialize_payload,
 )
+
+
+def _shipped_locales() -> list[str]:
+    """Registered catalog codes except English, which has no translations."""
+    return sorted(code for code in CATALOGS if code != "en")
 
 
 def _write_catalog(
@@ -161,6 +168,48 @@ def test_tool_placeholder_mismatch_is_rejected(tmp_path: Path) -> None:
         load_catalogs(tmp_path)
 
 
+def test_unknown_text_direction_is_rejected(tmp_path: Path) -> None:
+    """``meta.dir`` reaches the rendered ``<html dir>`` attribute verbatim.
+
+    This is the guard that makes a bad direction impossible, and it had no
+    test: the registered-catalog check downstream can only ever see ``ltr`` or
+    ``rtl`` because loading raises here first, and a missing key defaults
+    rather than failing.
+    """
+    (tmp_path / "en.json").write_text(
+        json.dumps(
+            {
+                "meta": {"native_name": "English", "dir": "sideways"},
+                "messages": {},
+                "tool_groups": {},
+                "tools": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=re.escape("meta.dir must be ltr or rtl")):
+        load_catalogs(tmp_path)
+
+
+def test_catalog_without_a_native_name_is_rejected(tmp_path: Path) -> None:
+    """The language picker has no label to render without it."""
+    (tmp_path / "en.json").write_text(
+        json.dumps(
+            {
+                "meta": {"native_name": "   "},
+                "messages": {},
+                "tool_groups": {},
+                "tools": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=re.escape("needs meta.native_name")):
+        load_catalogs(tmp_path)
+
+
 def test_inline_payload_escapes_script_breakout() -> None:
     serialized = serialize_payload({"messages": {"unsafe": "</script><b>&"}})
 
@@ -209,33 +258,69 @@ def test_render_cookie_overrides_home_assistant_and_browser_language() -> None:
     assert '<html lang="ru" dir="ltr">' in html
 
 
-def test_de_catalog_loads_and_is_registered() -> None:
-    from ha_mcp.settings_ui._i18n import CATALOGS
-
-    assert "de" in CATALOGS
-    assert CATALOGS["de"]["meta"]["native_name"] == "Deutsch"
-    assert CATALOGS["de"]["meta"]["dir"] == "ltr"
-
-
-def test_zh_hans_catalog_loads_and_is_registered() -> None:
-    from ha_mcp.settings_ui._i18n import CATALOGS
-
-    assert "zh-hans" in CATALOGS
-    assert CATALOGS["zh-hans"]["meta"]["native_name"] == "简体中文"
-    assert CATALOGS["zh-hans"]["meta"]["dir"] == "ltr"
-    # 工具分组与工具 UI 翻译须已填充，避免空翻译漏过 CI
-    assert CATALOGS["zh-hans"]["tool_groups"]
-    assert CATALOGS["zh-hans"]["tools"]
+def test_shipped_locales_are_discovered() -> None:
+    """The parametrized check below collects nothing on an empty registry."""
+    assert _shipped_locales(), (
+        "no non-English catalogs registered in ha_mcp.settings_ui._i18n.CATALOGS "
+        "— the per-locale check below would pass by collecting zero cases"
+    )
 
 
-def test_fr_catalog_loads_and_is_registered() -> None:
-    from ha_mcp.settings_ui._i18n import CATALOGS
+@pytest.mark.parametrize("locale", _shipped_locales())
+def test_shipped_catalog_loads_and_is_registered(locale: str) -> None:
+    """One rule for every locale, rather than a copy per language.
 
-    assert "fr" in CATALOGS
-    assert CATALOGS["fr"]["meta"]["native_name"] == "Français"
-    assert CATALOGS["fr"]["meta"]["dir"] == "ltr"
-    assert CATALOGS["fr"]["tool_groups"]
-    assert CATALOGS["fr"]["tools"]
+    The four hand-written copies this replaces had already drifted: ``ru``
+    had no test at all and ``de`` asserted neither ``tool_groups`` nor
+    ``tools``, so a catalog could ship those two sections empty and stay
+    green — the half-install ``test_locale_parity`` exists to prevent.
+    """
+    catalog = CATALOGS[locale]
+
+    assert catalog["meta"]["native_name"], (
+        f"{locale}.json needs a non-empty meta.native_name — the language "
+        "picker renders it as the option label"
+    )
+    assert catalog["meta"].get("dir") in {"ltr", "rtl"}, (
+        f"{locale}.json meta.dir is {catalog['meta'].get('dir')!r}; the "
+        "rendered <html dir> attribute only accepts 'ltr' or 'rtl'"
+    )
+    assert catalog["tool_groups"], (
+        f"{locale}.json has an empty tool_groups — the tools tab would fall "
+        "back to English group headings for this language"
+    )
+    assert catalog["tools"], (
+        f"{locale}.json has an empty tools section — every tool title and "
+        "description would fall back to English for this language"
+    )
+
+
+def test_native_names_name_their_own_language() -> None:
+    """One rule per locale cannot pin the name each locale must carry.
+
+    Collapsing the four hand-written tests dropped every specific
+    ``native_name`` assertion, so ``es.json`` shipping ``"Deutsch"`` — or
+    English's own name — is green today: the picker then offers the same label
+    twice, and the label does not name the language it selects. Comparing the
+    catalogs to each other pins that without hardcoding six literals here.
+    """
+    english = CATALOGS["en"]["meta"]["native_name"]
+    names = {
+        locale: CATALOGS[locale]["meta"]["native_name"] for locale in _shipped_locales()
+    }
+
+    borrowed = sorted(locale for locale, name in names.items() if name == english)
+    assert not borrowed, (
+        f"{borrowed} carry English's own native_name {english!r} — the "
+        "language picker would offer it twice and select the wrong catalog"
+    )
+
+    counts = Counter(names.values())
+    shared = sorted(name for name, count in counts.items() if count > 1)
+    assert not shared, (
+        f"native_name {shared} is used by more than one catalog ({names}) — "
+        "each option label in the language picker must name its own language"
+    )
 
 
 def test_disallowed_inline_markup_is_rejected(tmp_path: Path) -> None:

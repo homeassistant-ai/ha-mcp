@@ -1238,6 +1238,25 @@ class TestAutoUpdateComponentGate:
         hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
         esetup.ir.async_create_issue.assert_not_called()
 
+    async def test_version_less_manifest_fails_open_loudly(self, monkeypatch, caplog):
+        # A manifest without a version reads as None rather than raising, so
+        # the sibling test above does not cover it. Without the explicit guard
+        # the literal "None" reaches the comparison and decides whether to hold
+        # an update — silently, and on a string. The warning is what
+        # discriminates the two implementations.
+        import logging
+
+        hass = _make_async_hass()
+        entry = _make_entry()
+        self._stub_gate(monkeypatch, shipped="1.0.9", running=None)
+
+        with caplog.at_level(logging.WARNING):
+            await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
+        esetup.ir.async_create_issue.assert_not_called()
+        assert "Could not read the HA-MCP component version" in caplog.text
+
     async def test_incomparable_component_versions_fail_open(self, monkeypatch):
         from awesomeversion import AwesomeVersion as RealAwesomeVersion
 
@@ -1676,6 +1695,31 @@ class TestComponentCompat:
 
         await esetup._async_check_component_compat(hass, entry)  # must not raise
 
+        esetup.ir.async_create_issue.assert_not_called()
+
+    async def test_version_less_manifest_takes_the_unreadable_path(
+        self, monkeypatch, caplog
+    ):
+        # A manifest without a version reads as None rather than raising, so
+        # only the explicit guard routes it here. The warning is what
+        # discriminates: without the guard the literal "None" reaches
+        # AwesomeVersion and the comparison decides the outcome quietly — the
+        # silent misreport the guard exists to prevent.
+        import logging
+
+        hass = _make_async_hass()
+        entry = _make_entry()
+        monkeypatch.setattr(esetup, "_read_min_component_version", lambda: "0.15.0")
+        monkeypatch.setattr(
+            esetup,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version=None)),
+        )
+
+        with caplog.at_level(logging.WARNING):
+            await esetup._async_check_component_compat(hass, entry)
+
+        assert "Could not read the HA-MCP component version" in caplog.text
         esetup.ir.async_create_issue.assert_not_called()
 
     def test_read_min_component_version_skips_when_server_absent(self, monkeypatch):

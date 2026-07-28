@@ -24,14 +24,25 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
+from functools import cache
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import pytest
 import yaml
 
+from ha_mcp.settings_ui._tools_meta import FEATURE_GATED_TOOLS, primary_tag
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# The tool set comes from the same static AST parse that generates the docs,
+# not from its committed output — see ``_renderable_groups_and_tools``.
+sys.path.insert(0, str(_REPO_ROOT / "scripts"))
+import extract_tools  # noqa: E402
+
 SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
+AGENTS_MD = _REPO_ROOT / "AGENTS.md"
 COMPONENT_TRANSLATIONS = (
     _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "translations"
 )
@@ -406,4 +417,444 @@ def test_component_english_catalog_mirrors_strings_json() -> None:
     ), (
         "custom_components/ha_mcp_tools/strings.json and translations/en.json "
         "have drifted — every translated catalog is keyed against en.json"
+    )
+
+
+def test_connect_local_lan_quotes_the_bind_host_option() -> None:
+    """The sentence names an on-screen option, so it has to name that option.
+
+    ``connect_local_lan`` tells the reader which dropdown entry produces this
+    URL, and every catalog quotes the label untranslated for that reason —
+    the reader matches it against the form. Renaming the option in
+    ``config_flow.py`` would leave six catalogs quoting a label that no longer
+    exists, silently, which is the drift class the ceilings test closed for
+    percentages and this one closes for a literal.
+    """
+    source = (COMPONENT_STRINGS.parent / "config_flow.py").read_text("utf-8")
+    match = re.search(r'value=BIND_HOST_ALL,\s*label="([^"]+)"', source)
+    assert match, (
+        "could not find the BIND_HOST_ALL option label in config_flow.py — "
+        "the selector was restructured, so update this test with it"
+    )
+    label = match.group(1)
+
+    quoted = "Local network"
+    assert label.startswith(quoted), (
+        f"the bind-host dropdown now reads {label!r}, which no longer starts "
+        f"with the {quoted!r} the catalogs quote — rename it in every "
+        "common.connect_local_lan string, then here"
+    )
+
+    for locale in ["en", *_translated_component_locales()]:
+        value = _component_catalog(locale)["common.connect_local_lan"]
+        assert quoted in value, (
+            f"custom_components/ha_mcp_tools/translations/{locale}.json "
+            f"common.connect_local_lan is {value!r}, which does not quote the "
+            f"{quoted!r} option the reader has to find on the form"
+        )
+
+
+def _settings_catalog(locale: str) -> dict[str, Any]:
+    """The raw catalog: ``tools`` nests a dict per tool, the rest is flat."""
+    catalog: dict[str, Any] = json.loads(
+        (SETTINGS_LOCALES / f"{locale}.json").read_text("utf-8")
+    )
+    return catalog
+
+
+def _non_english_settings_locales() -> list[str]:
+    """Settings UI catalog codes except ``en``, which carries no overrides."""
+    return sorted(
+        path.stem for path in SETTINGS_LOCALES.glob("*.json") if path.stem != "en"
+    )
+
+
+@cache
+def _renderable_groups_and_tools() -> tuple[frozenset[str], frozenset[str]]:
+    """The group headings and tool names the settings UI can actually show.
+
+    ``en.json`` leaves ``tool_groups``/``tools`` empty — English for those
+    comes from the tool definitions at runtime — so the tool set is the only
+    cross-check a translated catalog has. Group headings come from
+    ``_tools_meta``'s own ``primary_tag`` (imported, not copied) so the rule
+    and its consumers cannot drift apart.
+
+    The tools are parsed out of their sources rather than read from the
+    committed ``site/src/data/tools.json``: that file is regenerated only
+    *after* merge, by ``sync-tool-docs.yml`` on a ``[skip ci]`` commit. Reading
+    it would let the PR that adds a tool stay green and then turn every
+    subsequent PR red across all five locales, landing the failure on whoever
+    opens the next one. Parsing the sources puts it on the PR that owes the
+    translations.
+    """
+    tools = extract_tools.extract_tools()
+    assert tools, (
+        "scripts/extract_tools.py parsed no tools — its TOOL_FILES list is "
+        "hardcoded and silently skips a file that has moved. Without this "
+        "guard a shrunken parse fails below as 'translates tool(s) that do "
+        "not exist', which tells a translator to delete correct entries."
+    )
+    groups = frozenset(primary_tag(tool["tags"]) for tool in tools)
+    names = frozenset(str(tool["name"]) for tool in tools)
+    return groups, names
+
+
+@cache
+def _english_tool_texts(*, as_rendered: bool = True) -> dict[str, str]:
+    """English tool titles and descriptions, keyed like a flat catalog.
+
+    The settings UI catalogs translate the title and the description's first
+    line, so that is what a translated value is compared against.
+
+    A feature-gated tool has two English renderings, and which one a
+    translator is looking at depends on a setting. With its flag off — the
+    default — the tool never registers, so the UI shows the hand-written
+    ``FEATURE_GATED_TOOLS`` stub; with the flag on it shows the parsed
+    docstring. Five of the seven differ (``ha_config_set_yaml`` reads "Set
+    YAML Config" as a stub and "Raw YAML Config Edit" parsed), so checking
+    only one of them lets a paste of the other through. ``as_rendered``
+    selects which set this call returns; the paste check consults both.
+    """
+    texts: dict[str, str] = {}
+    # Same discovery guard as the group/name helper: without it a shrunken
+    # parse reaches the share check as a ZeroDivisionError.
+    _renderable_groups_and_tools()
+    for tool in extract_tools.extract_tools():
+        name = str(tool["name"])
+        stub = FEATURE_GATED_TOOLS.get(name) if as_rendered else None
+        if stub is not None:
+            texts[f"{name}.title"] = stub["title"]
+            texts[f"{name}.description"] = stub["description"]
+            continue
+        texts[f"{name}.title"] = str(tool.get("title") or "")
+        texts[f"{name}.description"] = str(tool.get("description") or "").split("\n")[0]
+    return texts
+
+
+def test_settings_ui_locales_are_discovered() -> None:
+    """The parametrized checks below collect nothing on an empty glob."""
+    assert _non_english_settings_locales(), (
+        "no translated catalogs found in src/ha_mcp/settings_ui/locales/ — the "
+        "per-locale checks below would pass by collecting zero cases"
+    )
+
+
+@pytest.mark.parametrize("locale", _non_english_settings_locales())
+def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
+    """Both sections are keyed off the tool catalog, and nothing checked it.
+
+    ``settings.js`` resolves a group heading by ``primary_tag`` and falls
+    back to English on any key it does not find, so a stale or misspelled
+    entry is invisible: ``build_payload`` happily ships it and nothing reads
+    it. The reverse direction is the one that actually bites — a new tool, or
+    a new tag that sorts first for an existing tool, leaves *every* locale
+    showing English for it with no test going red.
+
+    The tool set is parsed from the sources, so the PR that adds a tool is the
+    one that goes red — see ``_renderable_groups_and_tools`` for why reading
+    the committed ``tools.json`` instead would move that failure onto the next
+    PR to open.
+    """
+    groups, tool_names = _renderable_groups_and_tools()
+    catalog = _settings_catalog(locale)
+
+    catalog_groups = set(catalog.get("tool_groups", {}))
+    catalog_tools = set(catalog.get("tools", {}))
+
+    assert not catalog_groups - groups, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json translates tool_groups "
+        f"key(s) no tool can render: {sorted(catalog_groups - groups)}. The "
+        "settings UI only looks up a group by a tool's primary tag — delete "
+        "them."
+    )
+    assert not groups - catalog_groups, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json is missing tool_groups "
+        f"key(s): {sorted(groups - catalog_groups)}. Those headings render in "
+        "English for this language."
+    )
+    assert not catalog_tools - tool_names, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json translates tool(s) that "
+        f"do not exist: {sorted(catalog_tools - tool_names)}"
+    )
+    assert not tool_names - catalog_tools, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json is missing tool(s): "
+        f"{sorted(tool_names - catalog_tools)}. Their title and description "
+        "render in English for this language."
+    )
+
+
+# A catalog wholesale-copied from English passes key parity, placeholder
+# parity and the markup allowlist — every existing check. All four surfaces
+# get a ceiling: leaving one of them out accepts a wholesale-English catalog
+# there.
+#
+# The ceilings differ because what legitimately repeats differs. The settings
+# UI messages sit far under theirs: the highest among the shipped locales is 9
+# of 419 (2.1%), all words that genuinely read the same in that language. The
+# component catalogs are short and carry the product names as keys of their
+# own, so ``de``'s 7 of 93 (7.5%) — six product names plus ``Update`` — is
+# correct and the ceiling has to clear it. Both add-on flavors translate
+# everything today (0%).
+_MAX_ENGLISH_IDENTICAL_SHARE = 0.05
+_MAX_COMPONENT_IDENTICAL_SHARE = 0.15
+
+
+def _untranslated_keys(
+    english: dict[str, str],
+    translated: dict[str, str],
+    alternate: dict[str, str] | None = None,
+) -> list[str]:
+    """The English keys ``translated`` does not translate.
+
+    A missing key counts as untranslated: English is the per-key fallback, so
+    an omitted key renders exactly like a copied one. Counting only the keys a
+    catalog carries let ``messages: {}`` score 0% and a 20-key all-English stub
+    score 4.8% — both under any sane ceiling, and since omission is legal
+    everywhere else, nothing else caught them.
+
+    ``alternate`` is a second English rendering of the same keys, for a surface
+    that has one. A paste of either rendering is English on screen, so the same
+    argument that makes the paste check consult both applies key by key here.
+    """
+    alternates = alternate or {}
+    return sorted(
+        key
+        for key, text in english.items()
+        if (value := translated.get(key, text)) == text or value == alternates.get(key)
+    )
+
+
+def _assert_not_a_copy(
+    label: str,
+    english: dict[str, str],
+    translated: dict[str, str],
+    ceiling: float,
+    alternate: dict[str, str] | None = None,
+) -> None:
+    untranslated = _untranslated_keys(english, translated, alternate)
+    share = len(untranslated) / len(english)
+
+    assert share <= ceiling, (
+        f"{label} leaves {len(untranslated)} of {len(english)} strings "
+        f"({share:.1%}) untranslated — byte-identical to English or missing "
+        f"outright — over the {ceiling:.0%} ceiling. This reads as a partly "
+        f"untranslated catalog. Untranslated keys: {untranslated[:20]}"
+    )
+
+
+@pytest.mark.parametrize("locale", _non_english_settings_locales())
+def test_settings_catalog_is_not_a_copy_of_english(locale: str) -> None:
+    """A stub catalog has to fail somewhere, and this is the only place.
+
+    Deliberately identical strings are normal — ``Total``, ``{count} min``
+    and product names read the same in several languages — so this is a
+    share, not a ban.
+    """
+    _assert_not_a_copy(
+        f"src/ha_mcp/settings_ui/locales/{locale}.json (messages)",
+        _settings_catalog("en")["messages"],
+        _settings_catalog(locale)["messages"],
+        _MAX_ENGLISH_IDENTICAL_SHARE,
+    )
+
+
+@pytest.mark.parametrize("locale", _non_english_settings_locales())
+def test_settings_catalog_tools_are_translated(locale: str) -> None:
+    """Exactness says every tool is present, not that any was translated.
+
+    87 titles and 87 descriptions is the largest translated surface in the
+    repo, and nothing looked at the values. The exactness rule above also
+    obliges every tool-adding PR to touch five languages before it can go
+    green, which is pressure toward pasting the English in — this is what
+    notices. Every shipped locale translates all 174 today.
+    """
+    english = _english_tool_texts()
+    catalog = _settings_catalog(locale).get("tools", {})
+    translated = {
+        f"{name}.{field}": text
+        for name, entry in catalog.items()
+        for field, text in entry.items()
+        if field in {"title", "description"}
+    }
+
+    # The share alone does not cover the case this check exists for: adding one
+    # tool and pasting its English title and description into all five locales
+    # scores 2 of 176 and passes. One wholly-English tool is the signature, and
+    # naming it beats a percentage. A single matching title stays legal — some
+    # tool names genuinely read the same in another language.
+    #
+    # Both English renderings count: a feature-gated tool shows the stub text
+    # with its flag off and the parsed docstring with it on, and a translator
+    # pastes whichever one their instance put on screen.
+    as_parsed = _english_tool_texts(as_rendered=False)
+    assert english != as_parsed, (
+        "the two English renderings are identical, so consulting both below "
+        "discriminates nothing — either FEATURE_GATED_TOOLS no longer overrides "
+        "any title or description, or the stub lookup in _english_tool_texts "
+        "stopped taking effect"
+    )
+
+    english_sources = (english, as_parsed)
+    pasted = sorted(
+        name
+        for name, entry in catalog.items()
+        if f"{name}.title" in english
+        and any(
+            entry.get("title") == source[f"{name}.title"]
+            and entry.get("description") == source[f"{name}.description"]
+            for source in english_sources
+        )
+    )
+    assert not pasted, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json carries {len(pasted)} "
+        f"tool(s) whose title and description are both still English: "
+        f"{pasted[:20]}. Adding a tool obliges every locale, and an "
+        "untranslated paste is what that pressure produces."
+    )
+
+    _assert_not_a_copy(
+        f"src/ha_mcp/settings_ui/locales/{locale}.json (tools)",
+        english,
+        translated,
+        _MAX_ENGLISH_IDENTICAL_SHARE,
+        alternate=as_parsed,
+    )
+
+
+def test_the_tools_share_counts_both_english_renderings() -> None:
+    """No shipped locale pastes either English, so real data cannot show this.
+
+    A description pasted from the *parsed* English of a feature-gated tool is
+    English on screen but byte-differs from the rendered text, so counting only
+    the rendered one reads it as translated. Six of the 174 keys differ between
+    the renderings today — 3.4%, invisible under the ceiling on their own and
+    enough to hide a genuinely untranslated remainder underneath it.
+    """
+    english = _english_tool_texts()
+    as_parsed = _english_tool_texts(as_rendered=False)
+    differing = sorted(key for key in english if english[key] != as_parsed[key])
+    assert differing, "the two renderings no longer differ — see the tools check"
+
+    translated = {key: f"traducido {text}" for key, text in english.items()}
+    translated.update({key: as_parsed[key] for key in differing})
+
+    # Nothing here is byte-identical to the rendered English, so the rendered
+    # set alone finds no untranslated key at all — a zero ceiling holds.
+    _assert_not_a_copy("rendered English only", english, translated, 0.0)
+
+    with pytest.raises(AssertionError, match="untranslated"):
+        _assert_not_a_copy(
+            "both renderings", english, translated, 0.0, alternate=as_parsed
+        )
+
+
+@pytest.mark.parametrize("locale", _translated_component_locales())
+def test_component_catalog_is_not_a_copy_of_english(locale: str) -> None:
+    """Key parity says every key is present, not that any was translated."""
+    _assert_not_a_copy(
+        f"custom_components/ha_mcp_tools/translations/{locale}.json",
+        _component_catalog("en"),
+        _component_catalog(locale),
+        _MAX_COMPONENT_IDENTICAL_SHARE,
+    )
+
+
+def _addon_catalog(addon_dir: Path, locale: str) -> dict[str, str]:
+    return _flatten(
+        yaml.safe_load(
+            (addon_dir / "translations" / f"{locale}.yaml").read_text("utf-8")
+        )
+    )
+
+
+def _addon_locale_cases() -> list[tuple[Path, str]]:
+    """Every (add-on flavor, locale) pair that ships a catalog."""
+    return [
+        (addon_dir, path.stem)
+        for addon_dir in ADDON_DIRS
+        for path in sorted((addon_dir / "translations").glob("*.yaml"))
+        if path.stem != "en"
+    ]
+
+
+def test_addon_locale_cases_are_discovered() -> None:
+    """The parametrized check below collects nothing on an empty glob."""
+    assert _addon_locale_cases(), (
+        "no translated add-on catalogs found — the per-flavor check below "
+        "would pass by collecting zero cases"
+    )
+
+
+@pytest.mark.parametrize(
+    ("addon_dir", "locale"),
+    _addon_locale_cases(),
+    ids=lambda param: param.name if isinstance(param, Path) else param,
+)
+def test_addon_catalog_is_not_a_copy_of_english(addon_dir: Path, locale: str) -> None:
+    """The two flavors carry different schemas, so each needs its own check."""
+    _assert_not_a_copy(
+        f"{addon_dir.name}/translations/{locale}.yaml",
+        _addon_catalog(addon_dir, "en"),
+        _addon_catalog(addon_dir, locale),
+        _MAX_ENGLISH_IDENTICAL_SHARE,
+    )
+
+
+def _agents_md_section(title: str) -> str:
+    """The body of one ``## `` section of AGENTS.md.
+
+    Scoping matters: a check that greps the whole file answers a question
+    about the file, not about the section it claims to guard, and any future
+    sentence elsewhere carrying the same shape would fail it.
+    """
+    text = AGENTS_MD.read_text("utf-8")
+    match = re.search(
+        rf"^## {re.escape(title)}$(.*?)(?=^## )", text, re.MULTILINE | re.DOTALL
+    )
+    assert match, f"AGENTS.md has no '## {title}' section — this test guards it"
+    return match.group(1)
+
+
+def test_agents_md_states_the_current_ceilings() -> None:
+    """The documented percentages are the ones a contributor plans against.
+
+    Same reason the locale list below is pinned: the prose went stale the
+    moment the constant moved, and nothing tied the two together.
+    """
+    section = _agents_md_section("Translations")
+    documented = set(re.findall(r"(\d+)% for the", section))
+
+    assert documented == {
+        f"{_MAX_ENGLISH_IDENTICAL_SHARE:.0%}".rstrip("%"),
+        f"{_MAX_COMPONENT_IDENTICAL_SHARE:.0%}".rstrip("%"),
+    }, (
+        f"AGENTS.md § Translations documents ceilings {sorted(documented)} but "
+        f"the constants are {_MAX_ENGLISH_IDENTICAL_SHARE:.0%} and "
+        f"{_MAX_COMPONENT_IDENTICAL_SHARE:.0%}. Update the prose."
+    )
+
+
+def test_agents_md_lists_every_shipped_locale() -> None:
+    """The documented list went stale the moment ``fr`` landed.
+
+    It is the one place a contributor looks up which languages exist, and
+    nothing tied it to the catalogs it describes.
+    """
+    marker = "names every file:"
+    lines = [
+        line for line in AGENTS_MD.read_text("utf-8").splitlines() if marker in line
+    ]
+    assert len(lines) == 1, (
+        f"expected exactly one AGENTS.md line containing {marker!r} to carry "
+        f"the locale list, found {len(lines)} — update this test alongside the "
+        "section it guards"
+    )
+
+    documented = set(re.findall(r"`([A-Za-z-]+)`", lines[0]))
+    shipped = set(_non_english_settings_locales())
+
+    assert documented == shipped, (
+        "AGENTS.md § Translations lists "
+        f"{sorted(documented)} but the shipped catalogs are {sorted(shipped)}. "
+        "Update the line so the documented set matches what ships."
     )
