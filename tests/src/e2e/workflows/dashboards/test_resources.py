@@ -411,16 +411,47 @@ class TestDashboardResourceList:
         logger.info("Starting list resources include_content test")
         mcp = MCPAssertions(mcp_client)
 
-        # Just verify the tool accepts the parameter and doesn't error
-        list_data = await mcp.call_tool_success(
-            "ha_config_list_dashboard_resources", {"include_content": False}
+        # Create a known inline resource so the flag has something to act on;
+        # asserting only success would pass with include_content ignored.
+        content = "export const INCLUDE_CONTENT_PROBE = 1;" + ("// pad" * 40)
+        created = await mcp.call_tool_success(
+            "ha_config_set_dashboard_resource",
+            {"content": content, "resource_type": "module"},
         )
-        assert list_data["success"] is True
+        resource_id = created.get("resource_id")
+        try:
 
-        list_data_with_content = await mcp.call_tool_success(
-            "ha_config_list_dashboard_resources", {"include_content": True}
-        )
-        assert list_data_with_content["success"] is True
+            def _find(payload):
+                return next(
+                    (
+                        r
+                        for r in payload.get("resources", [])
+                        if r.get("id") == resource_id
+                    ),
+                    None,
+                )
+
+            without = await mcp.call_tool_success(
+                "ha_config_list_dashboard_resources", {"include_content": False}
+            )
+            row = _find(without)
+            assert row is not None
+            assert "_content" not in row, "content leaked without the flag"
+            assert row["_preview"].endswith("...")
+
+            with_content = await mcp.call_tool_success(
+                "ha_config_list_dashboard_resources", {"include_content": True}
+            )
+            row = _find(with_content)
+            assert row is not None
+            assert row["_content"] == content
+            assert "_preview" not in row
+        finally:
+            if resource_id:
+                await mcp_client.call_tool(
+                    "ha_config_delete_dashboard_resource",
+                    {"resource_id": resource_id},
+                )
 
         logger.info("List resources include_content test completed successfully")
 
@@ -518,6 +549,25 @@ async def _raw_resource_url(
     return None
 
 
+async def _assert_stored_as_data_uri(
+    ha_client: HomeAssistantClient,
+    resource_id: str | None,
+    mime_prefix: str,
+    expected_content: str,
+) -> None:
+    """Assert HA stored the resource as a data: URI decoding byte-identically.
+
+    Goes through the raw WS API deliberately: the MCP list tool masks inline
+    URLs as "[inline]", so only this side channel can prove what HA actually
+    holds.
+    """
+    raw_url = await _raw_resource_url(ha_client, resource_id)
+    assert raw_url is not None
+    assert raw_url.startswith(mime_prefix)
+    decoded = base64.b64decode(raw_url.partition(",")[2]).decode("utf-8")
+    assert decoded == expected_content
+
+
 class TestInlineDashboardResource:
     """Test inline dashboard resource creation (code to data: URI)."""
 
@@ -543,11 +593,9 @@ class TestInlineDashboardResource:
 
             # Ground truth: HA's registry holds a self-contained data: URI
             # that decodes byte-identical to the submitted content.
-            raw_url = await _raw_resource_url(ha_client, resource_id)
-            assert raw_url is not None
-            assert raw_url.startswith("data:text/javascript;base64,")
-            decoded = base64.b64decode(raw_url.partition(",")[2]).decode("utf-8")
-            assert decoded == content
+            await _assert_stored_as_data_uri(
+                ha_client, resource_id, "data:text/javascript;base64,", content
+            )
 
             # Verify it appears in list with inline marker
             list_data = await mcp.call_tool_success(
@@ -594,11 +642,9 @@ class TestInlineDashboardResource:
             assert create_data["success"] is True
             assert create_data["resource_type"] == "css"
 
-            raw_url = await _raw_resource_url(ha_client, resource_id)
-            assert raw_url is not None
-            assert raw_url.startswith("data:text/css;charset=utf-8;base64,")
-            decoded = base64.b64decode(raw_url.partition(",")[2]).decode("utf-8")
-            assert decoded == content
+            await _assert_stored_as_data_uri(
+                ha_client, resource_id, "data:text/css;charset=utf-8;base64,", content
+            )
         finally:
             if resource_id:
                 await mcp_client.call_tool(
@@ -730,11 +776,9 @@ class TestInlineDashboardResource:
             )
             assert update_data["action"] == "updated"
 
-            raw_url = await _raw_resource_url(ha_client, resource_id)
-            assert raw_url is not None
-            assert raw_url.startswith("data:text/javascript;base64,")
-            decoded = base64.b64decode(raw_url.partition(",")[2]).decode("utf-8")
-            assert decoded == new_content
+            await _assert_stored_as_data_uri(
+                ha_client, resource_id, "data:text/javascript;base64,", new_content
+            )
 
             # The list tool no longer flags it as legacy-hosted.
             post_list = await mcp.call_tool_success(

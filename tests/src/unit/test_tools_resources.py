@@ -55,6 +55,20 @@ class TestHelperFunctions:
         )
         assert _data_uri_for("1;", "module").startswith("data:text/javascript;base64,")
 
+    def test_data_uri_for_rejects_non_inline_type(self):
+        """The runtime guard is exercised directly, not only via the caller.
+
+        _set_inline_resource rejects 'js' earlier, so this branch is
+        statically unreachable through the tool; the test keeps it honest
+        as defence for any future dynamic caller.
+        """
+        with pytest.raises(ToolError) as exc_info:
+            _data_uri_for("x", "js")  # type: ignore[arg-type]
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "js" in error_data["error"]["message"]
+
     def test_data_uri_deterministic(self):
         """Same content always maps to the same URL."""
         assert _data_uri_for("const a = 1;", "module") == _data_uri_for(
@@ -621,6 +635,33 @@ class TestHaConfigSetDashboardResource:
         assert call_args["res_type"] == "module"
         assert call_args["url"].startswith("data:text/javascript;base64,")
         assert _decode_data_uri(call_args["url"]) == content
+
+    @pytest.mark.asyncio
+    async def test_create_without_resource_id_fails(self, set_tool, mock_client):
+        """A create that returns no id is an error, not a success.
+
+        Reporting success would leave the caller with no handle to update
+        or delete the resource it just created.
+        """
+        mock_client.send_websocket_message.return_value = {"result": None}
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(content="const x = 1;", resource_type="module")
+
+        error_data = json.loads(str(exc_info.value))
+        assert "no resource_id" in error_data["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_update_tolerates_missing_id_in_response(self, set_tool, mock_client):
+        """The guard is create-only — an update echoes back its known id."""
+        mock_client.send_websocket_message.return_value = {"result": None}
+
+        result = await set_tool(
+            content="const x = 1;", resource_type="module", resource_id="known"
+        )
+
+        assert result["success"] is True
+        assert result["resource_id"] == "known"
 
     @pytest.mark.asyncio
     async def test_create_inline_css(self, set_tool, mock_client):

@@ -461,9 +461,12 @@ class TestResourcesIdentifierValidation:
 
     async def test_set_with_none_resource_id_routes_to_create(self, tools):
         # Control: None remains the documented "create-new" sentinel.
+        # HA returns the created resource keyed by ``id`` (which is what
+        # _extract_resource_id reads); the previous ``resource_id`` key was
+        # read by nothing, so the create silently yielded resource_id=None.
         tools._client.send_websocket_message.return_value = {
             "success": True,
-            "result": {"resource_id": "x"},
+            "result": {"id": "x"},
         }
         result = await tools.ha_config_set_dashboard_resource(
             url="/local/test.js", resource_type="module"

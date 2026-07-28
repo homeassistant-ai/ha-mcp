@@ -753,6 +753,7 @@ class ResourceTools:
                 )
 
             new_resource_id = _extract_resource_id(result, resource_id)
+            _require_created_resource_id(new_resource_id, action)
 
             logger.info(
                 f"Inline dashboard resource {action}: id={new_resource_id}, "
@@ -828,8 +829,7 @@ class ResourceTools:
                     context={"resource_id": resource_id},
                     suggestions=[
                         "Fetch the full code with ha_config_list_dashboard_resources(include_content=True)",
-                        "Re-save with the complete content (this check only "
-                        "triggers on preview-shaped content)",
+                        "Re-save with the complete content (this check only triggers on preview-shaped content)",
                     ],
                 )
             )
@@ -908,6 +908,7 @@ class ResourceTools:
                 )
 
             new_resource_id = _extract_resource_id(result, resource_id)
+            _require_created_resource_id(new_resource_id, action)
 
             logger.info(
                 f"Dashboard resource {action}: id={new_resource_id}, "
@@ -1199,8 +1200,33 @@ def _check_ws_error(result: Any) -> str | None:
 
 
 def _extract_resource_id(result: Any, fallback_id: str | None) -> str | None:
-    """Extract resource ID from a WebSocket result."""
+    """Extract resource ID from a WebSocket result.
+
+    On the create path ``fallback_id`` is None, so a response without an id
+    would yield ``resource_id: None`` alongside ``success: True`` — leaving
+    the caller no handle to update or delete what it just created. Callers
+    guard that with ``_require_created_resource_id``.
+    """
     resource_info = result.get("result") if isinstance(result, dict) else result
     if isinstance(resource_info, dict):
         return resource_info.get("id", fallback_id)
     return fallback_id
+
+
+def _require_created_resource_id(resource_id: str | None, action: str) -> None:
+    """Fail a create that came back without an id rather than reporting success."""
+    if action == "created" and not resource_id:
+        raise_tool_error(
+            create_error_response(
+                code=ErrorCode.SERVICE_CALL_FAILED,
+                message=(
+                    "Home Assistant reported the resource was created but "
+                    "returned no resource_id, so it cannot be updated or "
+                    "deleted by this tool"
+                ),
+                context={"action": action},
+                suggestions=[
+                    "Run ha_config_list_dashboard_resources() to locate the resource and confirm whether it was created",
+                ],
+            )
+        )
