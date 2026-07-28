@@ -984,8 +984,9 @@ class TestReadFileSecretsMaskingOrder:
         return inspect.getsource(_shape_read_file_response)
 
     def test_full_content_is_captured_after_masking(self):
+        """Handed to the executor as bare args, so the anchor carries no "("."""
         src = self._handler_source()
-        mask = src.index("_mask_secrets_content(content)")
+        mask = src.index("_mask_secrets_content, content")
         capture = src.index("full_content = content")
         assert mask < capture, (
             "full_content must be captured AFTER _mask_secrets_content, or "
@@ -999,6 +1000,47 @@ class TestReadFileSecretsMaskingOrder:
         """
         src = self._handler_source()
         assert "_extract_yaml_views, full_content, yaml_path" in src
+
+
+class TestReadFileSecretsMaskingOffload:
+    """Masking secrets.yaml must not run on the event loop.
+
+    ``_mask_secrets_content`` calls ``make_yaml()``, and the first such call on
+    a given thread constructs a ruamel ``YAML`` instance whose plugin discovery
+    globs the site-packages tree. Home Assistant flags that as a blocking call
+    when it happens on the loop, so the masking belongs in the executor like
+    every other ``make_yaml()`` caller in this module.
+    """
+
+    async def test_masking_is_offloaded_to_the_executor(self):
+        from custom_components.ha_mcp_tools import (
+            _mask_secrets_content,
+            _shape_read_file_response,
+        )
+
+        offloaded: list = []
+
+        async def fake_executor(func, *args):
+            offloaded.append(func)
+            return func(*args)
+
+        hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+
+        response = await _shape_read_file_response(
+            hass,
+            "secrets.yaml",
+            {"content": "api_key: hunter2\n", "mtime": 0, "size": 17},
+            tail_lines=None,
+            yaml_path=None,
+            include_parsed=False,
+        )
+
+        assert _mask_secrets_content in offloaded, (
+            "secrets.yaml masking must go through hass.async_add_executor_job, "
+            "or ruamel's plugin discovery blocks the event loop"
+        )
+        assert response["content"] == 'api_key: "[MASKED]"'
 
 
 class TestEditYamlConfigBackCompat:
