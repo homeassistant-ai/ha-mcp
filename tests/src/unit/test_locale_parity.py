@@ -25,6 +25,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Callable, Sequence
 from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -470,6 +471,9 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
 # The (surface, key) places that take part in the grouping below, by name.
 # A per-surface total would be compensable: one place can leave the
 # grouping while another arrives on the same surface, and the sum holds.
+# Membership is per place, not per group, so one narrow case still passes:
+# reword a key's English onto another already-shared text and the place
+# stays pinned while the group it left keeps enough surfaces to survive.
 SHARED_ENGLISH_PLACES = {
     "custom_components/ha_mcp_tools/translations": (
         "options.step.tools_info.data.extra_yaml_keys",
@@ -618,12 +622,18 @@ def _shared_english_strings() -> tuple[tuple[str, tuple[tuple[str, str], ...]], 
     what this finds is pinned — see
     ``test_shared_english_strings_are_discovered``.
 
-    Deliberately cross-surface only. The same English twice *within* one
-    catalog may legitimately differ — Spanish agrees ``activado``/``activada``
-    with the noun each sentence is about, and Italian writes a button as an
-    imperative and the same action in a list as an infinitive. Across
-    surfaces there is no such context to differ by: it is one option,
+    Selection is deliberately cross-surface only. The same English twice
+    *within* one catalog may legitimately differ — Spanish agrees
+    ``activado``/``activada`` with the noun each sentence is about, and
+    Russian words the policies tab and the policies heading differently.
+    Across surfaces there is no such context to differ by: it is one option,
     described twice.
+
+    Selection is not comparison, though: once a group is in, every place in
+    it is compared, same-surface siblings included. ``Read Only Mode`` is the
+    only text where that happens today — it is an add-on ``name`` as well, so
+    its two settings UI keys follow the shared wording rather than the
+    within-catalog exemption.
     """
     places: dict[str, list[tuple[str, str]]] = {}
     for surface, strings in _catalogs_by_surface("en").items():
@@ -680,27 +690,34 @@ def test_shared_english_strings_are_discovered() -> None:
     )
 
 
-@pytest.mark.parametrize("locale", _translated_component_locales())
-def test_one_english_string_reads_the_same_on_every_surface(locale: str) -> None:
-    """Same sentence in the add-on options and the web UI, same translation.
+def _excerpt(text: str, limit: int = 50) -> str:
+    """Enough English to recognise the group; the keys beside it are its name.
 
-    Each catalog was checked against English and nothing compared them to each
-    other, so a translator working one surface at a time could — and did —
-    write two different sentences for one switch: ``de`` phrased 35 of these
-    values differently between the add-on and the settings UI, ``zh-Hans`` 24.
-    A reader who configures the add-on and then opens the panel meets the same
-    option twice and has to work out whether it is the same option.
-
-    Byte-identical English is the whole justification: there is no context to
-    adapt to, or the English would have adapted first.
+    Three groups share their first 82 characters, so the excerpt alone does
+    not always tell them apart — which is why each line leads with its places
+    and carries this only as orientation.
     """
-    catalogs = _catalogs_by_surface(locale)
+    return repr(text) if len(text) <= limit else f"{text[:limit]!r}…"
 
-    # Reported as short lines rather than as the offending texts: these are
-    # multi-sentence help strings, and a diff of two 400-character paragraphs
-    # buries the one thing the reader needs, which is where to look.
+
+def _assert_one_wording_per_group(
+    locale: str,
+    groups: Sequence[tuple[str, tuple[tuple[str, str], ...]]],
+    catalogs_for: Callable[[str], dict[str, dict[str, str]]] = _catalogs_by_surface,
+) -> None:
+    """Every place in a group renders one text, or name the ones that do not.
+
+    ``catalogs_for`` is a seam: the shipped catalogs have no divergence left
+    to show, so the failure path is driven from synthetic ones below.
+    """
+    catalogs = catalogs_for(locale)
+
+    # The places are the identity and the English is context, not the other
+    # way round: these are multi-sentence help strings, and leading with two
+    # 400-character paragraphs buries the one thing the reader needs, which
+    # is where to look.
     divergent: list[str] = []
-    for english, where in _shared_english_strings():
+    for english, where in groups:
         rendered: dict[str, list[str]] = {}
         for surface, key in where:
             value = catalogs[surface].get(key)
@@ -712,17 +729,86 @@ def test_one_english_string_reads_the_same_on_every_surface(locale: str) -> None
             rendered.setdefault(value, []).append(label)
         if len(rendered) > 1:
             divergent.append(
-                f"{english[:50]!r}...: "
-                + " vs ".join(", ".join(labels) for labels in rendered.values())
+                " vs ".join(", ".join(labels) for labels in rendered.values())
+                + f" — {_excerpt(english)}"
             )
 
     assert not divergent, (
         f"{locale} renders {len(divergent)} English string(s) differently "
         "depending on which surface they appear on. The English is "
         "byte-identical in each group, so there is no context to adapt to: "
-        "pick one wording per group and use it on every surface. The settings "
-        "UI is the wording the others follow today.\n" + "\n".join(divergent)
+        "pick one wording per group and use it on every surface — where a "
+        "group has a settings UI member, that is the wording the others "
+        "follow today.\n" + "\n".join(divergent)
     )
+
+
+@pytest.mark.parametrize("locale", _translated_component_locales())
+def test_one_english_string_reads_the_same_on_every_surface(locale: str) -> None:
+    """Same sentence in the add-on options and the web UI, same translation.
+
+    Each catalog was checked against English and nothing compared them to each
+    other, so a translator working one surface at a time could — and did —
+    write two different sentences for one switch: ``de`` phrased 25 of these
+    groups differently between the add-on and the settings UI, ``zh-Hans`` 18.
+    A reader who configures the add-on and then opens the panel meets the same
+    option twice and has to work out whether it is the same option.
+
+    Byte-identical English is the whole justification: there is no context to
+    adapt to, or the English would have adapted first.
+    """
+    _assert_one_wording_per_group(locale, _shared_english_strings())
+
+
+def test_one_wording_per_group_names_the_surface_that_disagrees() -> None:
+    """No group diverges in any shipped locale, so real data cannot show this.
+
+    The check asserts an absence, and a green run cannot tell an absence apart
+    from a comparison that stopped comparing: read the locale's catalogs as
+    English and nothing ever differs, or require three renderings instead of
+    two and the 40 two-place groups drop out. Both keep the suite green on the
+    shipped catalogs, so the failure path is driven from synthetic ones — the
+    same answer as ``test_the_tools_share_counts_both_english_renderings``.
+    """
+    groups = (
+        (
+            "Read only mode",
+            (("ui", "features.read_only.label"), ("addon", "read_only.name")),
+        ),
+    )
+    # English agrees with itself, so a comparison that loads "en" instead of
+    # the locale it was asked for finds nothing in any of the three sets.
+    english: dict[str, dict[str, str]] = {
+        "ui": {"features.read_only.label": "Read only mode"},
+        "addon": {"read_only.name": "Read only mode"},
+    }
+    agreeing: dict[str, dict[str, str]] = {
+        "ui": {"features.read_only.label": "Nur-Lese-Modus"},
+        "addon": {"read_only.name": "Nur-Lese-Modus"},
+    }
+    _assert_one_wording_per_group(
+        "xx", groups, {"xx": agreeing, "en": english}.__getitem__
+    )
+
+    disagreeing: dict[str, dict[str, str]] = {
+        "ui": {"features.read_only.label": "Nur-Lese-Modus"},
+        "addon": {"read_only.name": "Schreibgeschützter Modus"},
+    }
+    with pytest.raises(AssertionError, match="depending on which surface"):
+        _assert_one_wording_per_group(
+            "xx", groups, {"xx": disagreeing, "en": english}.__getitem__
+        )
+
+    # A place the catalog omits falls back to English while the other surface
+    # is translated, which is the same disagreement on screen.
+    omitted: dict[str, dict[str, str]] = {
+        "ui": {"features.read_only.label": "Nur-Lese-Modus"},
+        "addon": {},
+    }
+    with pytest.raises(AssertionError, match="renders English"):
+        _assert_one_wording_per_group(
+            "xx", groups, {"xx": omitted, "en": english}.__getitem__
+        )
 
 
 def _settings_catalog(locale: str) -> dict[str, Any]:
