@@ -37,7 +37,7 @@ Any reachable HA instance works for `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN`.
 - `settings.html` — the page markup. `__HA_MCP_CSS__` and `__HA_MCP_JS__` are filled once at import. `__HA_MCP_THEME_PREFS__`, `__HA_MCP_I18N__`, `__HA_MCP_LANG__`, and `__HA_MCP_DIR__` are filled per request by `_render_settings_html()`.
 - `settings.js` — the client script, injected into `<script>__HA_MCP_JS__</script>`. Not served as a separate asset.
 - `settings.css` — the stylesheet, injected into `<style>__HA_MCP_CSS__</style>`.
-- `_i18n.py` and `locales/*.json` — auto-discovered translation catalogs. English is the fallback; a new language is added by copying `locales/en.json`, translating values, and preserving keys/placeholders. Locale JSON must remain listed in wheel, sdist, and binary packaging declarations.
+- `_i18n.py` and `locales/*.json` — auto-discovered translation catalogs. English is the per-key fallback for `messages`. Adding a language is not a single-file change: it ships on all four translated surfaces or not at all, its `tool_groups` and `tools` sections are mandatory and exact, and `en.json` is the wrong starting point because it carries both of those empty. See `locales/README.md` for the procedure and `AGENTS.md` § Translations for the rules CI enforces. The wheel, sdist and binary declarations match the locale directory by pattern, so a new catalog needs no packaging edit — but keep those patterns intact when touching packaging.
 
 ## Gotchas (read before editing)
 
