@@ -588,12 +588,16 @@ def test_panel_link_in_a_locale_only_key_is_still_checked(tmp_path: Path) -> Non
 def _assert_catalog_words(prefix: str, values: list[str], what: str) -> None:
     """Every catalog translates ``prefix + value`` for each backend value.
 
-    ``settings.js`` resolves these keys with the raw value as the fallback, so
-    a value the catalogs do not cover renders the enum itself inside otherwise
-    translated copy. ``values`` is derived from the type the backend sends,
-    which makes extending that type without adding words a failure here rather
-    than English on screen — a missing key falls back silently and a couple of
-    them stay far under the identical-share ceiling, so nothing else notices.
+    A key one catalog omits still renders: ``build_payload`` merges English
+    under the selected locale, so what reaches the page is English's word for
+    that value, sitting inside otherwise translated copy. Only a value English
+    does not carry either reaches ``settings.js``'s own fallback and renders as
+    the raw enum. Both are English on screen, which is what this guards.
+
+    ``values`` is derived from the type the backend sends, which makes
+    extending that type without adding words a failure here rather than on
+    screen — the merge is silent and a couple of English words stay far under
+    the identical-share ceiling, so nothing else notices.
     """
     assert values, (
         f"no {what} is defined any more — the settings.js branch these words "
@@ -604,10 +608,11 @@ def _assert_catalog_words(prefix: str, values: list[str], what: str) -> None:
         messages = catalog["messages"]
         missing = [key for value in values if (key := prefix + value) not in messages]
         assert not missing, (
-            f"{_catalog_file(locale)} is missing {missing}. The settings UI "
-            f"shows the raw {what} instead, inside a translated sentence, so "
-            "this language renders an English word there. The key belongs in "
-            "every catalog, not only in en.json."
+            f"{_catalog_file(locale)} is missing {missing}. The page payload "
+            f"merges English underneath, so this language shows English's word "
+            f"for that {what} inside a translated sentence — and the raw "
+            f"{what} where English is missing it too. The key belongs in every "
+            "catalog, not only in en.json."
         )
         blank = [value for value in values if not messages[prefix + value].strip()]
         assert not blank, (
@@ -667,15 +672,17 @@ def test_every_decided_outcome_has_a_catalog_word() -> None:
 def test_every_predicate_operator_has_a_catalog_word() -> None:
     """Condition rows read the operator through the catalog, same as the 409.
 
-    ``displayPredicate`` renders ``policies.operators.<op>`` with the raw
-    ``PredicateOp`` literal as its fallback, in the middle of an otherwise
-    translated condition row. Every operator has a word in every catalog
-    today, so this is not a live defect — it is the one thing the fix above
-    built machinery for and then left unpinned. Adding an operator and
-    shipping without catalog entries would put ``args.domain starts_with
-    "light"`` mid-sentence in every non-English UI, and nothing would say so:
-    the decided-outcome check derives only from ``Decision``, and one missing
-    key is absorbed by the identical-share ceiling.
+    ``displayPredicate`` renders ``policies.operators.<op>`` in the middle of
+    an otherwise translated condition row. Every operator has a word in every
+    catalog today, so this is not a live defect — it is the one thing the fix
+    above built machinery for and then left unpinned. Drop
+    ``policies.operators.regex`` from one catalog and that language reads
+    ``args.domain matches regex "light"`` mid-sentence, English's own phrasing
+    merged in underneath; add an operator to ``PredicateOp`` and ship without
+    catalog entries at all and it is the bare literal, in every language
+    including English. Nothing else would say so: the decided-outcome check
+    derives only from ``Decision``, and one missing key is absorbed by the
+    identical-share ceiling.
     """
     _assert_catalog_words(
         "policies.operators.",

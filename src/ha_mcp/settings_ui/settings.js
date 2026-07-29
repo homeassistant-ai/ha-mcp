@@ -3313,8 +3313,17 @@ async function policyDecide(token, action) {
     return;
   }
   if (!resp.ok) {
-    let body;
-    try { body = await resp.json(); } catch (_) { body = {error: 'HTTP ' + resp.status}; }
+    // Only a body that actually parsed can carry a server message, so an
+    // unparsable one leaves serverError empty rather than standing in with the
+    // status line: a stand-in reads as a server message to both branches that
+    // consult it — the 503 default and the generic detail — and shadows the
+    // translated line meant to cover exactly this case.
+    let body = {};
+    let serverError = '';
+    try {
+      body = (await resp.json()) || {};
+      if (typeof body.error === 'string') serverError = body.error;
+    } catch (_) { /* not JSON — no server message to show */ }
     if (resp.status === 409 && body.current_decision) {
       // current_decision is a backend enum, not display text: interpolating it
       // raw leaves an English word inside a translated sentence.
@@ -3344,16 +3353,17 @@ async function policyDecide(token, action) {
       } else {
         // Feature is on (or we could not determine the flag). The server's
         // message names which of the remaining causes applied, so it stands
-        // on its own rather than inside a sentence — the trade-off
-        // policyLoadPending already makes deliberately.
-        alert(body.error || t(
+        // on its own rather than inside a sentence. Without one — a 503 from
+        // an ingress or reverse proxy in front of us — the translated line is
+        // all the user gets, which is what policyLoadPending does too.
+        alert(serverError || t(
           'policies.pending.unavailable',
           {},
           'Live approvals unavailable. Check the App (add-on) log for ImportError / RuntimeError details.'
         ));
       }
     } else {
-      const detail = body.error || resp.statusText;
+      const detail = serverError || resp.statusText || 'HTTP ' + resp.status;
       alert(t('policies.pending.action_failed', {detail}, 'Approval action failed: ' + detail));
     }
   }

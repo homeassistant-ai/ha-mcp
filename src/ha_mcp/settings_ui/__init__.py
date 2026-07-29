@@ -188,9 +188,13 @@ _SETTINGS_HTML = _settings_html_template.replace(
 ).replace("__HA_MCP_JS__", _SETTINGS_JS)
 
 
-# Body of the 503 the pending/approve/deny routes answer with. Module-level
-# so the guard on the settings-UI copy pins the string the server actually
-# sends, rather than a hand-copied paraphrase that drifts away from it.
+# Body of the 503 the five live-approval routes — pending, approve, deny,
+# tool-schema and value-source — answer with whenever these stub handlers are
+# in use: the stdio sidecar, but equally a main server with no approval queue
+# (feature off, or the policy package failed to import). Config GET/PUT are
+# served for real even then. Module-level so the guard on the settings-UI copy
+# pins the string the server actually sends, rather than a hand-copied
+# paraphrase that drifts away from it.
 POLICY_UNAVAILABLE_MESSAGE = (
     "Tool security policies live approvals are not active. "
     "Either the feature is turned off in App (add-on) config, the "

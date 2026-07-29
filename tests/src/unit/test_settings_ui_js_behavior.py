@@ -1126,6 +1126,20 @@ def _policy_panel_dom() -> str:
     return MIN_DOM.replace("</body>", extras + "</body>")
 
 
+def _server_503_body() -> str:
+    """The exact 503 body the server sends, not a copy of it.
+
+    A hand-written fixture drifts, and drifts in the direction that keeps its
+    own assertion passing: the first two copies of this paragraph in this file
+    both dropped the sentence naming the three causes and wrote ``addon log``
+    where the server writes ``App (add-on) log``, so an assertion on
+    ``addon log`` passed only because the fixture was wrong.
+    """
+    from ha_mcp.settings_ui import POLICY_UNAVAILABLE_MESSAGE
+
+    return POLICY_UNAVAILABLE_MESSAGE
+
+
 class TestPolicyTabFlow:
     """Locks in the new condition-builder UX wiring: master toggle
     posts to the same feature-flag endpoint the Server-Settings tab
@@ -1644,8 +1658,8 @@ class TestPolicyTabFlow:
     ) -> None:
         """Feature is on but the queue is unreachable (sidecar mode or
         ImportError at startup). The server's 503 message should
-        propagate verbatim so the user knows to check the addon log,
-        instead of the generic "feature off" text."""
+        propagate verbatim — it names which cause applied — instead of
+        the generic "feature off" text."""
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/features": {
@@ -1662,10 +1676,7 @@ class TestPolicyTabFlow:
             },
             "/api/policy/pending": {
                 "status": 503,
-                "json": {
-                    "error": "Tool security policies live approvals are not active. "
-                    "Check the addon log for ImportError / RuntimeError details."
-                },
+                "json": {"error": _server_503_body()},
             },
         }
         result = run_script(
@@ -1678,9 +1689,9 @@ class TestPolicyTabFlow:
             """,
         )
         _assert_clean_init(result)
-        assert "addon log" in result.dom.lower(), (
-            f"expected addon-log message in pending-list snapshot; "
-            f"dom contains: {result.dom[-2000:]}"
+        assert _server_503_body() in result.dom, (
+            f"expected the server's 503 paragraph in the pending-list "
+            f"snapshot; dom contains: {result.dom[-2000:]}"
         )
 
 
@@ -1791,27 +1802,19 @@ class TestDecideUnavailableCopy:
     remaining causes applied and the generic line cannot.
     """
 
-    @staticmethod
-    def _server_503() -> str:
-        """The exact 503 body the server sends, not a copy of it.
-
-        A hand-written fixture drifts: the first draft of this one dropped
-        the middle sentence — the one naming which three causes the message
-        distinguishes, which is the whole reason the branch shows it rather
-        than a generic line.
-        """
-        from ha_mcp.settings_ui import POLICY_UNAVAILABLE_MESSAGE
-
-        return POLICY_UNAVAILABLE_MESSAGE
-
     def _decide_under_503(
-        self, settings_script: str, *, enabled: bool
+        self,
+        settings_script: str,
+        *,
+        enabled: bool,
+        approve_response: dict[str, object] | None = None,
     ) -> HarnessResult:
         """Drive an Italian UI through a 503 decide with the flag at ``enabled``.
 
         ``loadPolicyState`` is invoked explicitly rather than left to page
         init, so the branch reads a settled ``policyState`` instead of racing
-        the init fetch.
+        the init fetch. ``approve_response`` overrides the 503 the decide
+        call receives, for the case where it carries no JSON at all.
         """
         fetches = {
             **DEFAULT_FETCHES,
@@ -1825,10 +1828,8 @@ class TestDecideUnavailableCopy:
                 "status": 200,
                 "json": {"wait_seconds": 60, "approval_ttl_minutes": 5, "rules": []},
             },
-            "/api/policy/approve": {
-                "status": 503,
-                "json": {"error": self._server_503()},
-            },
+            "/api/policy/approve": approve_response
+            or {"status": 503, "json": {"error": _server_503_body()}},
             "/api/policy/pending": {"status": 200, "json": {"pending": []}},
         }
         return run_script(
@@ -1862,10 +1863,41 @@ class TestDecideUnavailableCopy:
         result = self._decide_under_503(settings_script, enabled=True)
         _assert_clean_init(result)
 
-        assert result.alerts == [self._server_503()], (
+        assert result.alerts == [_server_503_body()], (
             f"expected the server paragraph alone; got {result.alerts}. Equality "
             "is the point: anything longer means it was spliced into a "
             "translated sentence, which is the mixed-language render this fixes."
+        )
+
+    def test_503_without_a_json_body_shows_the_translated_line(
+        self, settings_script: str
+    ) -> None:
+        """No JSON body means no server message, so the catalog line is all
+        there is — and it has to be the translated one.
+
+        Our own routes always send JSON, but an ingress or reverse proxy in
+        front of them does not, and that is the deployment this branch exists
+        for. A stand-in error synthesised from the status line looks like a
+        server message to the branch, so it would shadow the catalog line and
+        alert a bare ``HTTP 503`` in every language.
+        """
+        from ha_mcp.settings_ui._i18n import CATALOGS
+
+        result = self._decide_under_503(
+            settings_script,
+            enabled=True,
+            approve_response={
+                "status": 503,
+                "body": "<html><body>503 Service Unavailable</body></html>",
+            },
+        )
+        _assert_clean_init(result)
+
+        expected = CATALOGS["it"]["messages"]["policies.pending.unavailable"]
+        assert result.alerts == [expected], (
+            f"expected the Italian unavailable line {expected!r}; got "
+            f"{result.alerts}. Anything else here is untranslated text — or the "
+            "proxy's HTML — put in front of an Italian user."
         )
 
 
