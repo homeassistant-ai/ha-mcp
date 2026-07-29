@@ -13,11 +13,7 @@ configuration:
   enable_tool_search:
     name: 启用工具搜索
     description: >-
-      用基于搜索的发现取代完整工具目录。将空闲上下文从约 46K 降至约 5K token。⚠️ 如果你在 Sonnet 或 Opus 模式下使用
-      Claude，请勿启用此功能——这些模型自带内置工具搜索/延迟工具，会与我们的功能冲突。要在 Claude 中使用 ha-mcp
-      的工具搜索，请先禁用 Claude 的内置工具搜索；否则请保持关闭。仅在与缺乏原生延迟工具的 LLM 一起使用（例如 Claude
-      Haiku、本地 OpenAI 兼容模型）或上下文窗口较小时才使用此功能。工具通过 ha_search_tools
-      发现，并通过分类代理（读/写/删）执行。需要重启才能生效。
+      用基于搜索的发现取代完整工具目录。将空闲上下文从约 46K 降至约 5K token。⚠️ 如果客户端自带内置工具搜索/延迟工具（claude.ai、Claude Desktop、Claude Code），请勿启用此功能——两层搜索会相互冲突，且在这些客户端中其内置工具搜索是更好的选择；请保持关闭。延迟工具是客户端功能，而非模型功能：当完整目录会被一次性加载时才使用此功能——例如没有原生延迟工具的模型（如 Gemini、本地 OpenAI 兼容模型、Claude Haiku）、无论模型如何都会内联全部工具架构的客户端（如 GitHub Copilot CLI），或上下文窗口较小时。部分 Codex 模型和 ChatGPT 也带有延迟工具——请直接向你的客户端/模型确认其具备哪些功能，以免不必要地保持启用此功能。工具通过 ha_search_tools 发现，并通过分类代理（读/写/删）执行。需要重启才能生效。
   enable_tool_security_policies:
     name: 启用工具安全策略（高级）
     description: >-

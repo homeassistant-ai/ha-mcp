@@ -110,7 +110,7 @@
     "visibility.assist.help": "隐藏未暴露给 Home Assistant 的 Assist（“对话”）语音助手的实体，对应设置 > 语音助手 > 暴露列表。启用时每次搜索额外增加两次 websocket 读取。",
     "visibility.assist.only_exposed": "仅显示暴露给 Assist 的实体",
     "features.enable_tool_search.label": "启用工具搜索",
-    "features.enable_tool_search.help": "用基于搜索的发现取代完整工具目录。将空闲上下文从约 46K 降至约 5K token。⚠️ 如果你在 Sonnet 或 Opus 模式下使用 Claude，请勿启用此功能——这些模型自带内置工具搜索/延迟工具，会与我们的功能冲突。要在 Claude 中使用 ha-mcp 的工具搜索，请先禁用 Claude 的内置工具搜索；否则请保持关闭。仅在与缺乏原生延迟工具的 LLM 一起使用（例如 Claude Haiku、本地 OpenAI 兼容模型）或上下文窗口较小时才使用此功能。工具通过 ha_search_tools 发现，并通过分类代理（读/写/删）执行。需要重启才能生效。",
+    "features.enable_tool_search.help": "用基于搜索的发现取代完整工具目录。将空闲上下文从约 46K 降至约 5K token。⚠️ 如果客户端自带内置工具搜索/延迟工具（claude.ai、Claude Desktop、Claude Code），请勿启用此功能——两层搜索会相互冲突，且在这些客户端中其内置工具搜索是更好的选择；请保持关闭。延迟工具是客户端功能，而非模型功能：当完整目录会被一次性加载时才使用此功能——例如没有原生延迟工具的模型（如 Gemini、本地 OpenAI 兼容模型、Claude Haiku）、无论模型如何都会内联全部工具架构的客户端（如 GitHub Copilot CLI），或上下文窗口较小时。部分 Codex 模型和 ChatGPT 也带有延迟工具——请直接向你的客户端/模型确认其具备哪些功能，以免不必要地保持启用此功能。工具通过 ha_search_tools 发现，并通过分类代理（读/写/删）执行。需要重启才能生效。",
     "features.tool_search_max_results.label": "工具搜索最大结果数",
     "features.tool_search_max_results.help": "启用工具搜索时 ha_search_tools 返回的最大工具数。较小的值（2–3）可节省上下文 token，但可能遗漏相关工具。范围：2–10。需要重启。",
     "features.enable_tool_security_policies.label": "启用工具安全策略（高级）",
