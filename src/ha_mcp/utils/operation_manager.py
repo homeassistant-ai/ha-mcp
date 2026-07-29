@@ -285,15 +285,18 @@ class OperationManager:
 
         initial_count = len(self.operations)
 
-        # Remove completed operations older than 5 minutes
-        # Remove failed/timed-out operations older than 1 minute (TIMEOUT
-        # can be set outside this pass: get_operation() marks an expired
-        # PENDING op in place on the read path)
+        # Remove completed operations 5 minutes after completion
+        # Remove failed/timed-out operations 1 minute after completion
+        # (TIMEOUT can be set outside this pass: get_operation() marks an
+        # expired PENDING op in place on the read path — anchoring the TTL
+        # on completion_time keeps such an op queryable for its full
+        # terminal minute even when it timed out long after start_time)
         # Remove expired pending operations
         to_remove = []
 
         for op_id, operation in self.operations.items():
-            age_seconds = (current_time * 1000 - operation.start_time) / 1000
+            terminal_anchor = operation.completion_time or operation.start_time
+            age_seconds = (current_time * 1000 - terminal_anchor) / 1000
 
             if (
                 operation.status == OperationStatus.COMPLETED and age_seconds > 300

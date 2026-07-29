@@ -9,7 +9,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import safe_call_tool
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -69,22 +69,23 @@ class TestOperationStatusConsolidation:
         """
         logger.info("Testing list of invalid operation IDs")
 
-        result = await safe_call_tool(
-            mcp_client,
-            "ha_get_operation_status",
-            {
-                "operation_id": [
-                    "nonexistent_op_111",
-                    "nonexistent_op_222",
-                    "nonexistent_op_333",
-                ],
-            },
-        )
+        # The bulk summary succeeds even when every item fails (per-item
+        # errors live inside detailed_results) — so this goes through the
+        # success-path assertion helper, which enforces the top-level
+        # success contract.
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success(
+                "ha_get_operation_status",
+                {
+                    "operation_id": [
+                        "nonexistent_op_111",
+                        "nonexistent_op_222",
+                        "nonexistent_op_333",
+                    ],
+                },
+            )
 
         assert isinstance(result, dict), f"Expected dict response, got {type(result)}"
-        assert result.get("success") is True, (
-            f"Bulk summary must carry the top-level success contract: {result}"
-        )
         assert result.get("total_operations") == 3, (
             f"Bulk status must cover every requested ID, got: {result}"
         )

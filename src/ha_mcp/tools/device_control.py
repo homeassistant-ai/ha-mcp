@@ -1274,17 +1274,20 @@ class DeviceControlTools:
         return response
 
     async def get_bulk_operation_status(
-        self, operation_ids: list[str]
+        self, operation_ids: list[str], timeout_seconds: int = 10
     ) -> dict[str, Any]:
         """
         Check status of multiple operations.
 
-        Takes an immediate per-operation snapshot (no polling). Per-item
-        failures become structured entries in ``detailed_results`` rather
-        than aborting the batch.
+        Polls all operations concurrently under one shared
+        ``timeout_seconds`` window, so the wall time is bounded by the
+        window rather than growing with the batch size. Per-item failures
+        become structured entries in ``detailed_results`` rather than
+        aborting the batch.
 
         Args:
             operation_ids: List of operation IDs to check
+            timeout_seconds: Wait window applied to every operation
 
         Returns:
             Status summary for all operations
@@ -1300,39 +1303,42 @@ class DeviceControlTools:
                 )
             )
 
-        # Check all operations. Per-item failures must not abort the batch:
-        # get_device_operation_status raises ToolError for failed / timed-out /
-        # not-found operations, so each one is caught and folded back into
-        # detailed_results as a structured entry — otherwise the first bad
-        # operation would discard the status of every other one.
-        # timeout_seconds=0 takes an immediate snapshot instead of polling
-        # each pending operation serially for the full single-op timeout.
+        # Check all operations concurrently under one shared wait window.
+        # Per-item failures must not abort the batch: get_device_operation_status
+        # raises ToolError for failed / timed-out / not-found operations, so each
+        # one is caught and folded back into detailed_results as a structured
+        # entry — otherwise the first bad operation would discard the status of
+        # every other one. The whole parsed error payload is preserved (context
+        # keys like entity_id / duration_ms sit at its top level), with the
+        # batch "status" field layered on for the summary counts.
         error_code_to_status = {
             ErrorCode.SERVICE_CALL_FAILED.value: "failed",
             ErrorCode.TIMEOUT_OPERATION.value: "timeout",
             ErrorCode.RESOURCE_NOT_FOUND.value: "not_found",
         }
-        statuses = []
-        for op_id in operation_ids:
+
+        async def check_one(op_id: str) -> dict[str, Any]:
             try:
-                status = await self.get_device_operation_status(
-                    op_id, timeout_seconds=0
+                return await self.get_device_operation_status(
+                    op_id, timeout_seconds=timeout_seconds
                 )
             except ToolError as e:
                 try:
                     err = json.loads(str(e))
                 except ValueError:
-                    err = {"error": {"message": str(e)}}
+                    err = {"success": False, "error": {"message": str(e)}}
                 error_info = err.get("error") or {}
-                status = {
+                return {
+                    **err,
                     "operation_id": op_id,
                     "status": error_code_to_status.get(
                         error_info.get("code", ""), "failed"
                     ),
-                    "success": False,
-                    "error": error_info,
                 }
-            statuses.append(status)
+
+        statuses = list(
+            await asyncio.gather(*(check_one(op_id) for op_id in operation_ids))
+        )
 
         # Summarize results
         completed = len([s for s in statuses if s.get("status") == "completed"])
@@ -1353,7 +1359,13 @@ class DeviceControlTools:
             "all_complete": pending == 0,
             "summary": {
                 "success_rate": f"{completed}/{len(operation_ids)}",
-                "completion_percentage": (completed / len(operation_ids)) * 100,
+                # Terminal fraction (nothing left in flight) — consistent
+                # with all_complete; success_rate carries the successful
+                # fraction separately.
+                "completion_percentage": (
+                    (completed + failed + not_found) / len(operation_ids)
+                )
+                * 100,
             },
             "detailed_results": statuses,
             "recommendations": (

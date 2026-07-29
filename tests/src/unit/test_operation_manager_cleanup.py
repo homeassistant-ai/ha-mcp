@@ -48,7 +48,9 @@ def _manager_with(*operations: DeviceOperation) -> OperationManager:
 class TestCleanupExpiredOperations:
     def test_read_path_timeout_operation_is_reclaimed(self):
         # The regression scenario end to end: an expired PENDING op is
-        # flipped to TIMEOUT by the read path, then cleanup must remove it.
+        # flipped to TIMEOUT by the read path (completion_time = now). It
+        # survives its terminal minute so the timeout stays queryable,
+        # then cleanup reclaims it.
         manager = _manager_with(
             _make_operation("op-1", OperationStatus.PENDING, 120, timeout_ms=1000)
         )
@@ -56,6 +58,10 @@ class TestCleanupExpiredOperations:
         assert polled is not None
         assert polled.status == OperationStatus.TIMEOUT
 
+        manager.cleanup_expired_operations(force=True)
+        assert "op-1" in manager.operations, "still inside its terminal minute"
+
+        manager.operations["op-1"].completion_time = (time.time() - 61) * 1000
         manager.cleanup_expired_operations(force=True)
         assert "op-1" not in manager.operations
 
@@ -66,6 +72,16 @@ class TestCleanupExpiredOperations:
 
     def test_young_timeout_operation_is_kept(self):
         manager = _manager_with(_make_operation("op-1", OperationStatus.TIMEOUT, 10))
+        manager.cleanup_expired_operations(force=True)
+        assert "op-1" in manager.operations
+
+    def test_terminal_ttl_anchors_on_completion_time(self):
+        # A long-timeout op can be flipped to TIMEOUT well after start_time
+        # (get_operation's read path). Its terminal minute counts from
+        # completion_time, so a just-timed-out op must survive cleanup even
+        # when start_time is already old.
+        manager = _manager_with(_make_operation("op-1", OperationStatus.TIMEOUT, 300))
+        manager.operations["op-1"].completion_time = time.time() * 1000
         manager.cleanup_expired_operations(force=True)
         assert "op-1" in manager.operations
 
