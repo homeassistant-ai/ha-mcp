@@ -260,7 +260,7 @@ configuration:
       di Lovelace (per esempio per verificare una dashboard appena creata).
       Supporta viste con nome stabile, batch per cellulare/tablet/computer e
       output PNG/JPEG/WebP/BMP. Il rendering avviene in un motore separato e
-      facoltativo — il componente aggiuntivo «Puppet» di balloob, basata
+      facoltativo — il componente aggiuntivo «Puppet» di balloob, basato
       su Chromium headless — che installi una volta sola (aggiungi il
       repository di componenti aggiuntivi di balloob, poi installa «Puppet») e
       a cui fornisci un token di accesso di lunga durata; nelle installazioni
