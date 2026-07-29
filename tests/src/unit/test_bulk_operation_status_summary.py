@@ -120,9 +120,10 @@ async def test_bulk_wait_window_observes_completion_inside_it(bulk_tools):
         op.status = OperationStatus.COMPLETED
         op.completion_time = time.time() * 1000
 
-    flip = asyncio.create_task(flip_soon())
-    result = await tools.get_bulk_operation_status(["op-flips"], timeout_seconds=5)
-    await flip
+    result, _ = await asyncio.gather(
+        tools.get_bulk_operation_status(["op-flips"], timeout_seconds=5),
+        flip_soon(),
+    )
 
     assert result["completed"] == 1
     assert result["pending"] == 0
