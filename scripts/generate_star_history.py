@@ -132,7 +132,9 @@ def fetch_starred_at(
                 f"GitHub stargazers request failed with HTTP {err.code}: {detail}"
             ) from err
         except URLError as err:
-            raise RuntimeError(f"GitHub stargazers request failed: {err.reason}") from err
+            raise RuntimeError(
+                f"GitHub stargazers request failed: {err.reason}"
+            ) from err
 
         if not isinstance(payload, list):
             raise RuntimeError("GitHub stargazers response was not a list")
@@ -219,8 +221,7 @@ def _coordinates(
     coordinates = [
         (
             x_for(point.day),
-            PLOT_BOTTOM
-            - (point.stars / maximum) * (PLOT_BOTTOM - PLOT_TOP),
+            PLOT_BOTTOM - (point.stars / maximum) * (PLOT_BOTTOM - PLOT_TOP),
         )
         for point in history.points
     ]
@@ -236,7 +237,9 @@ def _monotone_tangents(
     ]
     tangents = [slopes[0]]
     for previous, following in pairwise(slopes):
-        tangents.append(0.0 if previous * following <= 0 else (previous + following) / 2)
+        tangents.append(
+            0.0 if previous * following <= 0 else (previous + following) / 2
+        )
     tangents.append(slopes[-1])
 
     for index, slope in enumerate(slopes):
@@ -371,8 +374,8 @@ def render_svg(
   {_header_svg(theme, history)}
   <rect x="{PLOT_LEFT}" y="{PLOT_TOP}" width="{PLOT_RIGHT - PLOT_LEFT}" height="{PLOT_BOTTOM - PLOT_TOP}" rx="8" fill="{theme.plot_surface}" stroke="{theme.border}"/>
   <g stroke-width="1" shape-rendering="crispEdges">
-    {''.join(horizontal_grid)}
-    {''.join(date_grid)}
+    {"".join(horizontal_grid)}
+    {"".join(date_grid)}
   </g>
   {area_element}
   <path d="{path}" fill="none" stroke="url(#{line_gradient_id})" stroke-width="{LINE_WIDTH}" stroke-linecap="round" stroke-linejoin="round"/>
@@ -394,7 +397,9 @@ def write_charts(history: StarHistory, output_dir: Path) -> list[Path]:
 
 def _load_timestamps(path: Path) -> list[datetime]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
+    if not isinstance(payload, list) or not all(
+        isinstance(item, str) for item in payload
+    ):
         raise ValueError("input JSON must be an array of timestamp strings")
     return [_parse_timestamp(item) for item in payload]
 
