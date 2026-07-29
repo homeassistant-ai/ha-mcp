@@ -164,19 +164,29 @@ _RE_THIS_REFERENCE = re.compile(r"\bthis\s*\.\s*\w+")
 # plain string value never counts as a reference.
 _RE_TEMPLATE_SPAN = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
 # Quoted literal inside a span — a sibling's name appearing in one (including
-# as a dict subscript, `x['meldung']`) is text, not a read.
-_RE_STRING_LITERAL = re.compile(r"'[^']*'|\"[^\"]*\"")
-# `{% set a, b = ... %}` — names bound inside the template itself. Shadow any
-# same-named sibling, so they are not reads of it.
-_RE_JINJA_SET = re.compile(r"\{%-?\s*set\s+([\w\s,]+?)\s*=")
+# as a dict subscript, `x['meldung']`) is text, not a read. Jinja takes Python's
+# string rules, so a backslash escape has to be consumed as one unit or the
+# literal ends early and its tail is scanned as code (`{{ 'don\'t drop x' }}`).
+# ``re.DOTALL`` so an escaped newline inside a literal is consumed with it,
+# matching Jinja's own ``string_re``; without it the literal goes unrecognised
+# and its contents are scanned as code.
+_RE_STRING_LITERAL = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"", re.DOTALL)
+# `{% set a, b = ... %}` — names bound inside the template itself. Matched by
+# position, not collected up front: the right-hand side is read *before* the
+# binding takes effect (see _referenced_names). The quantifiers are possessive
+# because `\s`, `[\w\s,]` and the run between them all match whitespace; with
+# backtracking enabled a long space run inside `{% set %}` costs cubic time.
+_RE_JINJA_SET = re.compile(r"\{%-?\s*+set\s++([\w\s,]*+)=")
 # `| name` is a filter, never a variable read.
-_RE_FILTER_NAME = re.compile(r"\|\s*[A-Za-z_]\w*")
+_RE_FILTER_NAME = re.compile(r"\|\s*[^\W\d]\w*")
 # An identifier read. A longer name is handled by the greedy `\w*` alone, which
 # consumes `offene_tueren_extra` whole rather than reporting `offene_tueren`.
 # The lookbehind adds the two positions that greed does not cover: a preceding
 # dot (attribute access on something else, `wetter.meldung`) and a preceding
 # word char, which only arises after a digit (`e3` in the literal `2.5e3`).
-_RE_JINJA_IDENT = re.compile(r"(?<![\w.])[A-Za-z_]\w*")
+# `[^\W\d]` rather than `[A-Za-z_]` because Jinja inherits Python's identifier
+# rules, so `über` and `变量` are valid variable names.
+_RE_JINJA_IDENT = re.compile(r"(?<![\w.])[^\W\d]\w*")
 
 # Target sub-fields scanned for templates. These are the only keys allowed
 # under ``target:`` in HA's modern action schema.
@@ -633,9 +643,12 @@ def _check_control_flow_actions(
     if "if" in action:
         _check_condition_templates(action["if"], warnings, skill_prefix)
 
+    # Every one of these is a `SCRIPT_SCHEMA` position, and that schema is
+    # `vol.All(ensure_list, [script_action])` — a lone action mapping is valid
+    # wherever a list is, so both shapes have to be walked.
     for key in ("then", "else", "default", "sequence"):
         nested = action.get(key)
-        if isinstance(nested, list):
+        if isinstance(nested, list | dict):
             _check_action_tree(nested, warnings, skill_prefix)
 
     if "repeat" in action and isinstance(action["repeat"], dict):
@@ -644,7 +657,7 @@ def _check_control_flow_actions(
     # `parallel:` runs sub-actions concurrently — same shape as `sequence`,
     # different semantics. Recurse so templates inside parallel branches
     # are inspected the same as templates inside choose/repeat sequences.
-    if "parallel" in action and isinstance(action["parallel"], list):
+    if isinstance(action.get("parallel"), list | dict):
         _check_action_tree(action["parallel"], warnings, skill_prefix)
 
 
@@ -806,21 +819,19 @@ def _referenced_names(value: Any) -> set[str]:
     """Return the identifier tokens a variables-block value reads."""
     names: set[str] = set()
     for text in _iter_strings(value):
-        spans = [
-            _RE_STRING_LITERAL.sub(" ", span)
-            for span in _RE_TEMPLATE_SPAN.findall(text)
-        ]
-        # A `{% set %}` binds for the rest of the string, so it has to be
-        # collected across all spans before any of them is scanned.
-        local = {
-            name.strip()
-            for span in spans
-            for group in _RE_JINJA_SET.findall(span)
-            for name in group.split(",")
-        }
-        for span in spans:
-            body = _RE_FILTER_NAME.sub(" ", span)
+        # A `{% set %}` shadows a sibling only from its own position onward, so
+        # the spans are walked in order and `local` grows as bindings are met.
+        # Collecting the targets up front instead would swallow a genuine read
+        # that happens earlier in the string, or in the binding's own RHS.
+        local: set[str] = set()
+        for raw_span in _RE_TEMPLATE_SPAN.findall(text):
+            span = _RE_STRING_LITERAL.sub(" ", raw_span)
+            binding = _RE_JINJA_SET.search(span)
+            body = span[binding.end() :] if binding else span
+            body = _RE_FILTER_NAME.sub(" ", body)
             names.update(n for n in _RE_JINJA_IDENT.findall(body) if n not in local)
+            if binding:
+                local.update(n.strip() for n in binding.group(1).split(","))
     return names
 
 
@@ -858,11 +869,19 @@ def _check_variables_order(
       (``{{ dict(meldung=1) }}``) or sits inside a ``{% raw %}`` body, neither
       of which is a read
 
-    Known gap: when an automation declares both ``trigger_variables`` and
-    ``variables``, HA merges them into a single sequentially-rendered mapping
-    (``components/automation/__init__.py``, ``_async_process_config``), so a
-    ``trigger_variables`` key reading a ``variables`` key is a forward read that
-    this per-block scan does not see.
+    Known gaps:
+
+    * when an automation declares both ``trigger_variables`` and ``variables``,
+      HA merges them into a single sequentially-rendered mapping
+      (``components/automation/__init__.py``, ``_async_process_config``), so a
+      ``trigger_variables`` key reading a ``variables`` key is a forward read
+      this per-block scan does not see
+    * a ``}}`` or ``%}`` inside a string literal ends the span early for
+      :data:`_RE_TEMPLATE_SPAN`. This one cuts both ways: ``{{ "}}" ~ later }}``
+      hides a real forward read, and ``{{ 'later }}' }}`` truncates before the
+      literal is recognised and warns about a name that is only text. Closing it
+      needs a real Jinja tokenizer, which is more machinery than an advisory
+      check warrants.
     """
     if not isinstance(variables, dict) or len(variables) < 2:
         return

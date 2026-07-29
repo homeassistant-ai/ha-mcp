@@ -2656,6 +2656,92 @@ class TestVariablesForwardReferenceNegatives:
         assert check_automation_config(config) == []
 
 
+class TestVariablesForwardReferenceTokenising:
+    """Shapes where the token scan has to be positional or Unicode-aware."""
+
+    @staticmethod
+    def _auto(variables):
+        return check_automation_config(
+            {
+                "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+                "actions": [{"variables": variables}],
+            }
+        )
+
+    def test_read_before_local_set_still_flagged(self):
+        # The read happens before the binding, so the `{% set %}` must not
+        # retroactively shadow it.
+        warnings = self._auto({"first": "{{ later }}{% set later = 1 %}", "later": "1"})
+        assert _has_warning_containing(warnings, "`first`", "`later`")
+
+    def test_set_right_hand_side_still_flagged(self):
+        # Self-referential on purpose: the RHS `later` is read before the
+        # binding exists, so it is the sibling, not the local.
+        warnings = self._auto(
+            {"first": "{% set later = later %}{{ later }}", "later": "1"}
+        )
+        assert _has_warning_containing(warnings, "`first`", "`later`")
+
+    def test_set_target_is_not_itself_a_read(self):
+        # The target name is on the left of the `=`; only the RHS is scanned,
+        # so a `{% set %}` naming a later sibling is not a reference to it.
+        assert self._auto({"first": "{% set later = 1 %}ok", "later": "1"}) == []
+
+    def test_literal_spanning_an_escaped_newline_stays_closed(self):
+        # The sibling name sits *inside* the literal; if the escaped newline
+        # ends the literal early the name is scanned as code.
+        config = {"first": "{{ 'trail\\\nthreshold' ~ other }}", "threshold": "1"}
+        assert self._auto(config) == []
+
+    def test_escaped_quote_keeps_literal_closed(self):
+        # A backslash escape has to be consumed with the literal, otherwise its
+        # tail is scanned as code and `threshold` reads as a reference.
+        config = {"first": r"{{ 'don\'t use threshold' }}", "threshold": "1"}
+        assert self._auto(config) == []
+
+    def test_non_ascii_identifier_flagged(self):
+        warnings = self._auto({"first": "{{ über }}", "über": "1"})
+        assert _has_warning_containing(warnings, "`first`", "`über`")
+
+    def test_non_latin_identifier_flagged(self):
+        warnings = self._auto({"first": "{{ 变量 }}", "变量": "1"})
+        assert _has_warning_containing(warnings, "`first`", "`变量`")
+
+
+class TestSingletonActionMappings:
+    """`SCRIPT_SCHEMA` is `ensure_list`, so a lone action mapping is valid."""
+
+    @staticmethod
+    def _step():
+        return {"variables": {"first": "{{ second }}", "second": "2"}}
+
+    def test_nested_sequence_mapping(self):
+        warnings = check_script_config({"sequence": [{"sequence": self._step()}]})
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_then_mapping(self):
+        warnings = check_script_config({"sequence": [{"if": [], "then": self._step()}]})
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_else_mapping(self):
+        warnings = check_script_config(
+            {"sequence": [{"if": [], "then": [], "else": self._step()}]}
+        )
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_default_mapping(self):
+        warnings = check_script_config(
+            {"sequence": [{"choose": [], "default": self._step()}]}
+        )
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_parallel_mapping(self):
+        warnings = check_script_config(
+            {"sequence": [{"parallel": {"sequence": [self._step()]}}]}
+        )
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+
 class TestVariablesForwardReferenceWiring:
     """Every block that renders one key at a time is covered."""
 
