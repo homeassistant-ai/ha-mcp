@@ -20,22 +20,23 @@ configuration:
     name: Activer la recherche d'outils
     description: >-
       Remplace le catalogue complet d'outils par une découverte basée sur la
-      recherche. Réduit le contexte inactif d'environ 46K à 5K tokens. ⚠️
-      N'active PAS ceci dans les clients qui ont leur propre recherche
-      d'outils intégrée / outils différés (claude.ai, Claude Desktop, Claude
-      Code) — les deux couches de recherche entrent en conflit, et la
-      recherche d'outils intégrée du client y est le meilleur choix ; laisse
-      ceci désactivé. Les outils différés sont une fonctionnalité du client,
-      pas du modèle : utilise ceci lorsque le catalogue complet serait chargé
-      d'emblée — modèles sans outils différés natifs (p. ex. Gemini, modèles
-      locaux compatibles OpenAI, Claude Haiku), clients qui intègrent tous les
-      schémas d'outils quel que soit le modèle (p. ex. GitHub Copilot CLI), ou
-      fenêtres de contexte plus petites. Certains modèles Codex et ChatGPT
-      incluent aussi des outils différés — vérifie directement auprès de ton
-      client/modèle quelles fonctionnalités il possède pour ne pas laisser
-      ceci activé inutilement. Les outils sont trouvés via ha_search_tools et
-      exécutés via des proxys catégorisés (lecture/écriture/suppression).
-      Nécessite un redémarrage pour prendre effet.
+      recherche. Réduit le contexte inactif d'environ 90 %, à près de 5K
+      tokens. ⚠️ N'active PAS ceci dans les clients qui ont leur propre
+      recherche d'outils intégrée / outils différés (claude.ai, Claude
+      Desktop, Claude Code) — les deux couches de recherche entrent en
+      conflit, et la recherche d'outils intégrée du client y est le meilleur
+      choix ; laisse ceci désactivé. Les outils différés sont une
+      fonctionnalité du client, pas du modèle : utilise ceci lorsque le
+      catalogue complet serait chargé d'emblée — modèles sans outils différés
+      natifs (p. ex. Gemini, modèles locaux compatibles OpenAI, Claude Haiku),
+      clients qui intègrent tous les schémas d'outils quel que soit le modèle
+      (p. ex. GitHub Copilot CLI), ou fenêtres de contexte plus petites.
+      Certains modèles Codex et ChatGPT incluent aussi des outils différés —
+      vérifie directement auprès de ton client/modèle quelles fonctionnalités
+      il possède pour ne pas laisser ceci activé inutilement. Les outils sont
+      trouvés via ha_search_tools et exécutés via des proxys catégorisés
+      (lecture/écriture/suppression). Nécessite un redémarrage pour prendre
+      effet.
   enable_tool_security_policies:
     name: Activer les politiques de sécurité des outils (avancé)
     description: >-

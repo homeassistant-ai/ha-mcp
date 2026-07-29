@@ -20,17 +20,17 @@ configuration:
     name: Activar la búsqueda de herramientas
     description: >-
       Sustituye el catálogo completo de herramientas por un descubrimiento
-      basado en búsqueda. Reduce el contexto en reposo de unos 46K a unos 5K
-      tokens. ⚠️ NO actives esto en clientes con su propia búsqueda de
-      herramientas / herramientas diferidas integrada (claude.ai, Claude
-      Desktop, Claude Code): las dos capas de búsqueda entran en conflicto y
-      la búsqueda integrada del cliente es allí la mejor opción; deja esto
-      desactivado. Las herramientas diferidas son una característica del
-      cliente, no del modelo: usa esto cuando el catálogo completo se cargaría
-      de entrada — modelos sin herramientas diferidas nativas (p. ej. Gemini,
-      modelos locales compatibles con OpenAI, Claude Haiku), clientes que
-      insertan todos los esquemas de herramientas sea cual sea el modelo (p.
-      ej. GitHub Copilot CLI) o ventanas de contexto más pequeñas. Algunos
+      basado en búsqueda. Reduce el contexto en reposo en torno a un 90 %,
+      hasta unos 5K tokens. ⚠️ NO actives esto en clientes con su propia
+      búsqueda de herramientas / herramientas diferidas integrada (claude.ai,
+      Claude Desktop, Claude Code): las dos capas de búsqueda entran en
+      conflicto y la búsqueda integrada del cliente es allí la mejor opción;
+      deja esto desactivado. Las herramientas diferidas son una característica
+      del cliente, no del modelo: usa esto cuando el catálogo completo se
+      cargaría de entrada — modelos sin herramientas diferidas nativas (p. ej.
+      Gemini, modelos locales compatibles con OpenAI, Claude Haiku), clientes
+      que insertan todos los esquemas de herramientas sea cual sea el modelo
+      (p. ej. GitHub Copilot CLI) o ventanas de contexto más pequeñas. Algunos
       modelos Codex y ChatGPT también incluyen herramientas diferidas:
       comprueba directamente con tu cliente/modelo qué características tiene
       para no dejar esto activado innecesariamente. Las herramientas se

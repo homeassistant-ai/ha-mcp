@@ -20,8 +20,8 @@ configuration:
     name: Tool-Suche aktivieren
     description: >-
       Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung.
-      Reduziert den Leerlauf-Kontext von ~46K auf ~5K Tokens. ⚠️ Aktiviere
-      dies NICHT in Clients mit eigener integrierter Tool-Suche /
+      Reduziert den Leerlauf-Kontext um rund 90 % auf etwa 5K Tokens. ⚠️
+      Aktiviere dies NICHT in Clients mit eigener integrierter Tool-Suche /
       aufgeschobenen Tools (claude.ai, Claude Desktop, Claude Code) – die
       beiden Suchebenen kollidieren, und die integrierte Tool-Suche des
       Clients ist dort die bessere Wahl; lasse dies ausgeschaltet.
