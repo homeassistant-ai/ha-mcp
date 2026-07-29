@@ -188,6 +188,23 @@ _SETTINGS_HTML = _settings_html_template.replace(
 ).replace("__HA_MCP_JS__", _SETTINGS_JS)
 
 
+# Body of the 503 the five live-approval routes — pending, approve, deny,
+# tool-schema and value-source — answer with whenever these stub handlers are
+# in use: the stdio sidecar, but equally a main server with no approval queue
+# (feature off, or the policy package failed to import). Config GET/PUT are
+# served for real even then. Module-level so the guard on the settings-UI copy
+# pins the string the server actually sends, rather than a hand-copied
+# paraphrase that drifts away from it.
+POLICY_UNAVAILABLE_MESSAGE = (
+    "Tool security policies live approvals are not active. "
+    "Either the feature is turned off in App (add-on) config, the "
+    "settings UI is running in stdio-sidecar mode, or the "
+    "policy package failed to import at startup. Check the "
+    "App (add-on) log for ImportError / RuntimeError details if you "
+    "expected gating to be on."
+)
+
+
 def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
     """Sidecar variant of the tool security policies handlers.
 
@@ -243,19 +260,7 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
         # Either way, point users at the addon log for the real reason
         # (a startup ImportError on the policy package surfaces here as
         # the same 503 with a "ModuleNotFoundError" in the log).
-        return JSONResponse(
-            {
-                "error": (
-                    "Tool security policies live approvals are not active. "
-                    "Either the feature is turned off in App (add-on) config, the "
-                    "settings UI is running in stdio-sidecar mode, or the "
-                    "policy package failed to import at startup. Check the "
-                    "App (add-on) log for ImportError / RuntimeError details if you "
-                    "expected gating to be on."
-                )
-            },
-            status_code=503,
-        )
+        return JSONResponse({"error": POLICY_UNAVAILABLE_MESSAGE}, status_code=503)
 
     return {
         "policy_get_config": get_config,

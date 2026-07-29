@@ -6,13 +6,18 @@ import json
 import re
 from collections import Counter
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from starlette.requests import Request
 
+from ha_mcp.policy.approval_queue import Decision
+from ha_mcp.policy.model import PredicateOp
 from ha_mcp.settings_ui import _render_settings_html
 from ha_mcp.settings_ui._i18n import (
     CATALOGS,
+    DEFAULT_LOCALE,
+    LOCALES_DIR,
     build_payload,
     load_catalogs,
     normalize_locale,
@@ -23,7 +28,21 @@ from ha_mcp.settings_ui._i18n import (
 
 def _shipped_locales() -> list[str]:
     """Registered catalog codes except English, which has no translations."""
-    return sorted(code for code in CATALOGS if code != "en")
+    return sorted(code for code in CATALOGS if code != DEFAULT_LOCALE)
+
+
+def _catalog_file(locale: str) -> str:
+    """The on-disk file name for a registered catalog code.
+
+    ``load_catalogs`` lowercases the stem, so ``zh-Hans.json`` registers under
+    the code ``zh-hans``. Spelling a failure message as ``f"{locale}.json"``
+    therefore names a file that does not exist for that language, and the
+    contributor it is written for has to guess the casing back.
+    """
+    for path in sorted(LOCALES_DIR.glob("*.json")):
+        if path.stem.lower().replace("_", "-") == locale:
+            return path.name
+    return f"{locale}.json"
 
 
 def _write_catalog(
@@ -278,20 +297,20 @@ def test_shipped_catalog_loads_and_is_registered(locale: str) -> None:
     catalog = CATALOGS[locale]
 
     assert catalog["meta"]["native_name"], (
-        f"{locale}.json needs a non-empty meta.native_name — the language "
-        "picker renders it as the option label"
+        f"{_catalog_file(locale)} needs a non-empty meta.native_name — the "
+        "language picker renders it as the option label"
     )
     assert catalog["meta"].get("dir") in {"ltr", "rtl"}, (
-        f"{locale}.json meta.dir is {catalog['meta'].get('dir')!r}; the "
-        "rendered <html dir> attribute only accepts 'ltr' or 'rtl'"
+        f"{_catalog_file(locale)} meta.dir is {catalog['meta'].get('dir')!r}; "
+        "the rendered <html dir> attribute only accepts 'ltr' or 'rtl'"
     )
     assert catalog["tool_groups"], (
-        f"{locale}.json has an empty tool_groups — the tools tab would fall "
-        "back to English group headings for this language"
+        f"{_catalog_file(locale)} has an empty tool_groups — the tools tab "
+        "would fall back to English group headings for this language"
     )
     assert catalog["tools"], (
-        f"{locale}.json has an empty tools section — every tool title and "
-        "description would fall back to English for this language"
+        f"{_catalog_file(locale)} has an empty tools section — every tool "
+        "title and description would fall back to English for this language"
     )
 
 
@@ -302,7 +321,7 @@ def test_native_names_name_their_own_language() -> None:
     ``native_name`` assertion, so ``es.json`` shipping ``"Deutsch"`` — or
     English's own name — is green today: the picker then offers the same label
     twice, and the label does not name the language it selects. Comparing the
-    catalogs to each other pins that without hardcoding six literals here.
+    catalogs to each other pins that without hardcoding seven literals here.
     """
     english = CATALOGS["en"]["meta"]["native_name"]
     names = {
@@ -564,3 +583,109 @@ def test_panel_link_in_a_locale_only_key_is_still_checked(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match=re.escape("settings.html does not declare")):
         load_catalogs(tmp_path, settings_html)
+
+
+def _assert_catalog_words(prefix: str, values: list[str], what: str) -> None:
+    """Every catalog translates ``prefix + value`` for each backend value.
+
+    A key one catalog omits still renders: ``build_payload`` merges English
+    under the selected locale, so what reaches the page is English's word for
+    that value, sitting inside otherwise translated copy. Only a value English
+    does not carry either reaches ``settings.js``'s own fallback and renders as
+    the raw enum. Both are English on screen, which is what this guards.
+
+    ``values`` is derived from the type the backend sends, which makes
+    extending that type without adding words a failure here rather than on
+    screen — the merge is silent and a couple of English words stay far under
+    the identical-share ceiling, so nothing else notices.
+    """
+    assert values, (
+        f"no {what} is defined any more — the settings.js branch these words "
+        "serve cannot be reached, so either the branch or this check is dead"
+    )
+
+    for locale, catalog in sorted(CATALOGS.items()):
+        messages = catalog["messages"]
+        missing = [key for value in values if (key := prefix + value) not in messages]
+        assert not missing, (
+            f"{_catalog_file(locale)} is missing {missing}. The page payload "
+            f"merges English underneath, so this language shows English's word "
+            f"for that {what} inside a translated sentence — and the raw "
+            f"{what} where English is missing it too. The key belongs in every "
+            "catalog, not only in en.json."
+        )
+        blank = [value for value in values if not messages[prefix + value].strip()]
+        assert not blank, (
+            f"{_catalog_file(locale)} leaves {blank} empty or whitespace-only. "
+            "The word is interpolated into a sentence rather than shown alone, "
+            "so a blank value renders a hole in that sentence — it does not "
+            "fall back to English."
+        )
+        if locale == DEFAULT_LOCALE:
+            # English is where these words legitimately read as the enum does.
+            continue
+        # A present key is not a translated one. The English value survives a
+        # copied catalog and an en-fallback autofill, and a couple of such
+        # words stay far under the identical-share ceiling, so nothing else
+        # reds on them. Stripped and casefolded because sentence-casing a
+        # display word is what a translator actually does, and a capitalised
+        # copy renders the same English the backend spells.
+        untranslated = [
+            value
+            for value in values
+            if messages[prefix + value].strip().casefold() == value
+        ]
+        assert not untranslated, (
+            f"{_catalog_file(locale)} still spells {untranslated} the way the "
+            "backend does. That word renders inside translated copy, which is "
+            "the English-in-a-translated-sentence bug these keys prevent."
+        )
+
+
+def test_every_decided_outcome_has_a_catalog_word() -> None:
+    """The 409 body carries a backend enum; the sentence around it is translated.
+
+    ``settings.js`` renders ``policies.pending.already_decided`` with the
+    ``current_decision`` value the conflict response returns. That value is a
+    ``Decision`` literal, not display text, so interpolating it raw dropped an
+    English word into an otherwise translated sentence — Italian read
+    ``Questa approvazione è già stata approved``. It is mapped through the
+    catalog now, which only holds while every outcome the queue can report has
+    a translated key in every catalog: adding one to ``Decision`` and nothing
+    else would put the English back, and a key that lands in ``en.json`` alone
+    renders English in every other language while staying far under the
+    identical-share ceiling, so nothing else would notice either.
+
+    This is the type-derived half of the check and runs everywhere.
+    ``TestAlreadyDecidedCopy`` in ``test_settings_ui_js_behavior.py`` drives the
+    409 handler under each catalog and asserts on the alert the user actually
+    reads; it needs the JSDOM harness and skips without it, which is why the
+    key coverage lives here rather than only there.
+    """
+    _assert_catalog_words(
+        "policies.pending.decision.",
+        sorted(set(get_args(Decision)) - {"pending"}),
+        "Decision outcome",
+    )
+
+
+def test_every_predicate_operator_has_a_catalog_word() -> None:
+    """Condition rows read the operator through the catalog, same as the 409.
+
+    ``displayPredicate`` renders ``policies.operators.<op>`` in the middle of
+    an otherwise translated condition row. Every operator has a word in every
+    catalog today, so this is not a live defect — it is the one thing the fix
+    above built machinery for and then left unpinned. Drop
+    ``policies.operators.regex`` from one catalog and that language reads
+    ``args.domain matches regex "light"`` mid-sentence, English's own phrasing
+    merged in underneath; add an operator to ``PredicateOp`` and ship without
+    catalog entries at all and it is the bare literal, in every language
+    including English. Nothing else would say so: the decided-outcome check
+    derives only from ``Decision``, and one missing key is absorbed by the
+    identical-share ceiling.
+    """
+    _assert_catalog_words(
+        "policies.operators.",
+        sorted(get_args(PredicateOp)),
+        "PredicateOp operator",
+    )

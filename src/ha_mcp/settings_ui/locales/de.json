@@ -353,6 +353,8 @@
     "policies.pending.unavailable": "Live-Genehmigungen nicht verfügbar. Überprüfe das Add-on-Protokoll.",
     "policies.pending.expires": "Läuft ab: {time}",
     "policies.pending.already_decided": "Diese Genehmigung war bereits {decision}, möglicherweise von einem anderen Tab oder einer anderen Sitzung.",
+    "policies.pending.decision.approved": "genehmigt",
+    "policies.pending.decision.denied": "abgelehnt",
     "policies.pending.invalid_token": "Dieses Genehmigungs-Token ist nicht mehr gültig (bereits verbraucht oder abgelaufen).",
     "policies.pending.action_failed": "Genehmigungs-Aktion fehlgeschlagen: {detail}",
     "visibility.errors.reach_server": "Server konnte nicht erreicht werden: {message}",

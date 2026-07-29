@@ -713,7 +713,7 @@ fully validate a component change before merge.
 
 A language ships on all four surfaces or not at all —
 `tests/src/unit/test_locale_parity.py` enforces it. One Home Assistant language
-code (`de`, `es`, `fr`, `ru`, `zh-Hans`) names every file:
+code (`de`, `es`, `fr`, `it`, `ru`, `zh-Hans`) names every file:
 `src/ha_mcp/settings_ui/locales/<code>.json`,
 `custom_components/ha_mcp_tools/translations/<code>.json`, and
 `homeassistant-addon{,-dev}/translations/<code>.yaml`.

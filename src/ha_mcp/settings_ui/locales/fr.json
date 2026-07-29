@@ -353,6 +353,8 @@
     "policies.pending.unavailable": "Approbations en direct indisponibles. Vérifie le journal de l'App (add-on).",
     "policies.pending.expires": "Expire : {time}",
     "policies.pending.already_decided": "Cette approbation était déjà {decision}, peut-être par un autre onglet ou une autre session.",
+    "policies.pending.decision.approved": "approuvée",
+    "policies.pending.decision.denied": "refusée",
     "policies.pending.invalid_token": "Ce jeton d'approbation n'est plus valide (déjà consommé ou expiré).",
     "policies.pending.action_failed": "L'action d'approbation a échoué : {detail}",
     "visibility.errors.reach_server": "Impossible d'atteindre le serveur : {message}",
