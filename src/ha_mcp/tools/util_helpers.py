@@ -517,6 +517,13 @@ BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
         "lovelace/dashboards/create",
         "lovelace/dashboards/delete",
         "lovelace/dashboards/update",
+        # Resource writes carry the same wrapping-tool validation as the
+        # dashboard commands above -- auto-backup, the #1072 HA-config-YAML
+        # misroute rejection, the inline size cap, and the data:-URL routing
+        # guard all live in ha_config_set_dashboard_resource (#2060).
+        "lovelace/resources/create",
+        "lovelace/resources/delete",
+        "lovelace/resources/update",
         "config/area_registry/delete",
         "config/area_registry/disable",
         "config/area_registry/update",

@@ -1613,6 +1613,82 @@ class TestDashboardResourceCaptureRestore:
             {"resource_id": resource_id},
         )
 
+    async def test_inline_dashboard_resource_full_loop(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same loop for an INLINE resource, whose URL is the content itself.
+
+        The url= lane above snapshots a ~30-character URL. An inline
+        resource's URL is a data: URI carrying the whole card, so this is
+        the case where capture and restore actually move the payload — and
+        the one the inline size cap is reasoned about (auto-backup stores
+        the URL whole on every edit).
+        """
+        _enable_auto_backup(monkeypatch)
+        suffix = uuid.uuid4().hex[:8]
+        original = f"export const E2E_BK = '{suffix}';" + ("// pad" * 200)
+
+        create = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_dashboard_resource",
+            {"content": original, "resource_type": "module"},
+        )
+        if create.get("success") is False:
+            pytest.skip(f"inline dashboard_resource create unsupported: {create}")
+        resource_id = create.get("data", {}).get("resource_id") or create.get(
+            "resource_id"
+        )
+        assert resource_id, f"resource_id missing: {create}"
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
+
+        edit = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_dashboard_resource",
+            {
+                "resource_id": resource_id,
+                "content": f"export const E2E_BK_EDITED = '{suffix}';",
+                "resource_type": "module",
+            },
+        )
+        assert edit.get("success") is not False
+
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="dashboard_resource", entity_id=str(resource_id)
+        )
+
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+
+        # The restored resource must carry the ORIGINAL content back,
+        # byte-identical — a snapshot that dropped or mangled the data: URI
+        # would still "restore" successfully without this assertion.
+        listed = await safe_call_tool(
+            mcp_client,
+            "ha_config_list_dashboard_resources",
+            {"include_content": True},
+        )
+        restored = next(
+            (r for r in listed.get("resources", []) if r.get("id") == resource_id),
+            None,
+        )
+        assert restored is not None, "restored resource missing from listing"
+        assert restored.get("_content") == original
+
+        await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_delete_dashboard_resource",
+            {"resource_id": resource_id},
+        )
+
 
 # ---------------------------------------------------------------- calendar/todo lanes
 #
