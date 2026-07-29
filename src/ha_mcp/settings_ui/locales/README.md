@@ -19,20 +19,35 @@ add the new code to the locale list in the repository-root `AGENTS.md`
 § Translations — that list is pinned by
 `test_agents_md_lists_every_shipped_locale`.
 
+Only the first of those four files is described below, and the other three
+carry content rules of their own: the component catalog needs every `en.json`
+key with identical `{placeholders}` and no extra ones, and each add-on YAML
+needs a `name` and a `description` for every `schema:` key of *that* flavor's
+`config.yaml`, with nothing left behind for a key the schema no longer
+declares. The two flavors declare different schemas, so neither YAML is a copy
+of the other. The repository-root `AGENTS.md` § Translations states all of
+this; a contributor who writes only this catalog goes red on the other three.
+
 **Start from a translated catalog, not from `en.json`.** English for the tool
 titles and descriptions comes from the tool definitions at runtime, so `en.json`
 ships `tools` and `tool_groups` empty; a copy of it is missing both sections
 that this catalog is required to carry.
 
-**Read the other surfaces before you word a switch.** The add-on options and the
-settings UI describe the same switches, so wherever the English is
-byte-identical on two surfaces, your wording has to be byte-identical too.
+**Read the other surfaces before you word a switch.** Wherever the same English
+text is shipped from more than one catalog, your wording has to be byte-identical
+in all of them. That is not only the add-on-options-versus-settings-UI axis: the
+two add-on flavors describe most of the same options, so a good part of the
+pinned parity is stable-against-dev, with no settings-UI text involved at all.
 Translating one surface at a time is exactly how one option ends up with two
 different sentences.
 
 ## Catalog sections
 
-- `meta.native_name`: language name shown in the selector.
+- `meta.native_name`: language name shown in the selector. It must be
+  non-empty, must not repeat English's own name, and must differ from every
+  other catalog's — a copied catalog that keeps the name it was copied from
+  fails `test_native_names_name_their_own_language`, because the picker would
+  then offer one label twice.
 - `meta.dir`: `ltr` or `rtl`. Omitting it means `ltr`; any other value is
   rejected when the catalog loads.
 - `messages`: interface labels, help text, notices, and runtime messages. Keys
@@ -47,6 +62,18 @@ different sentences.
 
 Keep the keys and `{placeholders}` unchanged in every section.
 
+`messages` values carry two further rules, both enforced when the catalog
+loads rather than by a named test — breaking one raises a `ValueError` at
+import, so the failure names the file but arrives as a broken test module:
+
+- The only inline markup the page can restore is `<code>`, `<strong>`, `</a>`
+  and `<a href="#" data-panel-link="...">`, spelled exactly that way. Any other
+  tag — `<b>`, `<CODE>`, `<code >` — is rejected.
+- A `data-panel-link` target must be a tab the settings page declares, and a
+  translated message must link to the same tabs as its English source, with
+  the same multiplicity. The order may differ, so a translation is free to
+  reorder two links to suit its grammar.
+
 ## What CI checks
 
 - Every surface carries the same set of language codes.
@@ -59,7 +86,9 @@ Keep the keys and `{placeholders}` unchanged in every section.
   both still English fails by name however small the share.
 - One wording per English string across surfaces, wherever the same English text
   is shipped from more than one catalog. The failure names every group that
-  disagrees, and the settings UI is the wording the other surfaces follow today.
+  disagrees. Where a group has a settings UI member, that is the wording the
+  other surfaces follow today; a group carried only by the two add-on flavors
+  has no such member, so there pick one wording and use it in both.
 - The English each translation was written against is hashed in
   `tests/src/unit/locale_source_baseline.json`, so a later edit to an English
   string turns the locales red rather than leaving them silently stale. Adding a
