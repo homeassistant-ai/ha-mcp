@@ -8,6 +8,7 @@ order and the fallback behavior added for issue #1125.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,23 @@ def _reset_cache():
     get_data_dir.cache_clear()
     yield
     get_data_dir.cache_clear()
+
+
+def _failing_os(**overrides):
+    """Return an ``os`` stand-in that fails only the named calls.
+
+    Injected as ``data_paths.os`` so the failure is scoped to the module under
+    test — monkeypatching an attribute on the real ``os`` module would apply
+    process-wide for the duration of the call.
+    """
+
+    class _ShimOS:
+        def __getattr__(self, name):
+            if name in overrides:
+                return overrides[name]
+            return getattr(os, name)
+
+    return _ShimOS()
 
 
 def _stub_write_probe(monkeypatch, writable: set[Path]) -> None:
@@ -288,6 +306,50 @@ class TestFallbacks:
         from ha_mcp.utils.data_paths import _try_write
 
         assert isinstance(_try_write(tmp_path / "nope"), OSError)
+
+    def test_write_probe_rejects_a_dir_it_cannot_clean_up(self, monkeypatch, tmp_path):
+        """create-succeeds-then-unlink-fails must fail the probe, not pass it.
+
+        Removing the probe is part of the check: the real writers finish with
+        ``os.replace``, which needs the same directory permission ``unlink``
+        does, so a share or ACL granting create but denying unlink (some
+        SMB/NFS exports) cannot persist anything. Guards against the cleanup
+        being wrapped back into ``contextlib.suppress``, which would silently
+        accept such a directory again.
+        """
+        from ha_mcp.utils import data_paths
+
+        attempts = []
+
+        def fake_unlink(target):
+            attempts.append(target)
+            raise OSError(1, "Operation not permitted")
+
+        monkeypatch.setattr(data_paths, "os", _failing_os(unlink=fake_unlink))
+        result = data_paths._try_write(tmp_path)
+
+        assert isinstance(result, OSError), (
+            "a directory whose probe cannot be removed must be rejected"
+        )
+        assert attempts, "the probe should have attempted to remove itself"
+
+    def test_write_probe_reports_a_close_failure_instead_of_raising(
+        self, monkeypatch, tmp_path
+    ):
+        """``os.close`` blowing up must not escape and abort startup.
+
+        ``_resolve_data_dir`` runs during server start, so an exception
+        escaping the probe would crash instead of falling back to a tmpdir.
+        """
+        from ha_mcp.utils import data_paths
+
+        def fake_close(fd):
+            raise OSError(5, "I/O error")
+
+        monkeypatch.setattr(data_paths, "os", _failing_os(close=fake_close))
+        result = data_paths._try_write(tmp_path)
+
+        assert isinstance(result, OSError)
 
     def test_returns_unwritable_tmpdir_when_everything_fails(
         self, monkeypatch, tmp_path, caplog

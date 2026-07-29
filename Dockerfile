@@ -49,7 +49,12 @@ LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
 # the IDs `groupadd -r`/`useradd -r` hand out, an existing ha-mcp-data volume
 # would stay owned by the old UID and the new process couldn't write to it —
 # reintroducing exactly the tmpdir fallback this change exists to prevent.
-# Bind-mounting a host directory instead? It must be writable by UID 999.
+# 999 is what `-r` already allocated on this base image, so pinning it changed
+# nothing for existing deployments: volumes and `chown 999:999` bind mounts
+# created before the pin keep working.
+# Bind-mounting a host directory instead? It must be writable by UID 999 —
+# or by whatever UID you pass to `--user`, which a 999-owned named volume
+# will NOT satisfy.
 RUN groupadd -r -g 999 mcpuser \
     && useradd -r -u 999 -g mcpuser -m mcpuser \
     && chmod 0755 /home/mcpuser \

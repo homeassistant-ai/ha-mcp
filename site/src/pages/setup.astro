@@ -1512,7 +1512,9 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
     restart: unless-stopped
 
 volumes:
-  ha-mcp-data:</code></pre>
+  ha-mcp-data:
+    name: ha-mcp-data</code></pre>
+            <p class="text-slate-400 text-xs mt-2">The <code>name:</code> line matters: without it Compose prefixes the volume with your project name (<code>myproject_ha-mcp-data</code>), so it wouldn't be the same <code>ha-mcp-data</code> the <code>docker run</code> command above and the container-management commands below refer to.</p>
             <p class="text-slate-300 text-sm mt-3 mb-2">Layer these hardening directives onto the service block before exposing on a real network:</p>
             <pre class="code-block"><code>    read_only: true
     tmpfs:

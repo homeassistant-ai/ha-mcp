@@ -98,13 +98,17 @@ class TestDockerBuild:
 
         A volume records numeric ownership, not names, so the IDs have to stay
         put: an existing ha-mcp-data volume owned by the old UID would become
-        unwritable after an image update, resurrecting the tmpdir
-        fallback of issue #2078. The Dockerfile pins the IDs to stop them
-        drifting; this test guards the pin itself — it fails if the explicit
-        ``-u``/``-g`` flags are dropped and allocation goes back to whatever
-        ``-r`` picks, or if a future base image shifts them some other way.
-        Changing the pinned value is a deliberate act that must update both
-        sides, and doing so breaks existing volumes — see the Dockerfile.
+        unwritable after an image update, resurrecting the tmpdir fallback of
+        issue #2078.
+
+        What this guards is the *value*, not the presence of the ``-u``/``-g``
+        flags. ``useradd -r`` searches downward for a free system ID and lands
+        on 999 on this base image anyway — that is why pinning was backward
+        compatible — so dropping the flags would leave this assertion green.
+        The regression it does catch is a future base image occupying 999 and
+        shifting the account out from under the pin, which would strand every
+        existing volume. Changing the pinned value is a deliberate act that
+        breaks those volumes; see the Dockerfile.
         """
         result = subprocess.run(
             ["docker", "run", "--rm", "ha-mcp-test", "id", "-u", "mcpuser"],

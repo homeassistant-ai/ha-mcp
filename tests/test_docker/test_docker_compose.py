@@ -66,6 +66,46 @@ class TestDockerCompose:
             "targets a volume that doesn't exist"
         )
 
+    def test_documented_compose_snippets_pin_the_volume_name(self):
+        """Verify the compose snippets on the docs site pin ``name:`` too.
+
+        These are the blocks users actually copy, and each page also tells
+        them to recover with ``docker volume rm ha-mcp-data``. A bare
+        ``ha-mcp-data:`` declaration makes Compose create
+        ``<project>_ha-mcp-data``, so that command would target a volume
+        they don't have — in the FAQ the two sit one paragraph apart.
+        Checking only ``docker-compose.yml`` would miss exactly the copies
+        the pin was introduced to protect.
+        """
+        pages = [
+            "site/src/pages/setup.astro",
+            "site/src/pages/faq.astro",
+        ]
+        checked = 0
+        for page in pages:
+            with open(page, encoding="utf-8") as f:
+                source = f.read()
+
+            # Each fenced block is `<code>services:` ... `</code>`. Astro
+            # template literals escape `$`, which YAML does not care about.
+            for block in re.findall(r"<code>(services:.*?)</code>", source, re.DOTALL):
+                snippet = yaml.safe_load(block.replace("\\${", "${"))
+                declared = snippet.get("volumes")
+                if not declared or "ha-mcp-data" not in declared:
+                    continue  # service-only fragment, nothing to pin
+                checked += 1
+                spec = declared["ha-mcp-data"] or {}
+                assert spec.get("name") == "ha-mcp-data", (
+                    f"{page}: compose snippet declares a bare ha-mcp-data, so "
+                    "Compose would create <project>_ha-mcp-data and the "
+                    "documented `docker volume rm ha-mcp-data` cannot match it"
+                )
+
+        assert checked == len(pages), (
+            f"expected a top-level volumes declaration in each of {pages}, "
+            f"found {checked} — did a snippet move or stop parsing?"
+        )
+
     def test_screenshot_overlay_does_not_claim_the_data_dir(self):
         """Verify the screenshot overlay leaves persistence to the base file.
 
