@@ -96,9 +96,19 @@ def _try_write(path: Path) -> OSError | None:
         fd, name = tempfile.mkstemp(prefix=".ha-mcp-write-probe-", dir=path)
     except OSError as e:
         return e
-    os.close(fd)
-    with contextlib.suppress(OSError):
+    try:
+        os.close(fd)
+        # Removing the probe is part of the check, not just cleanup: the real
+        # writers finish with ``os.replace`` onto the target name, so a share
+        # or ACL that grants create but denies unlink/replace (seen on some
+        # SMB/NFS exports) cannot actually persist anything. Letting either
+        # call raise out of here instead of returning it would abort startup
+        # rather than fall back.
         os.unlink(name)
+    except OSError as e:
+        with contextlib.suppress(OSError):
+            os.unlink(name)
+        return e
     return None
 
 

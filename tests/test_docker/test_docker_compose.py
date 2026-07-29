@@ -51,7 +51,20 @@ class TestDockerCompose:
         # rejects the file outright. A bind mount would fail this assert by
         # design — swapping one in would mean rewriting the docs to match.
         volume_name = named[0].split(":")[0]
-        assert volume_name in compose.get("volumes", {})
+        declared = compose.get("volumes", {})
+        assert volume_name in declared
+
+        # Compose scopes a named volume to the project (<project>_ha-mcp-data)
+        # unless `name:` pins it. Every `docker run` recipe, the OAuth
+        # persistence-failure hint and the `docker volume rm ha-mcp-data`
+        # recovery step name it unprefixed, so the pin is what keeps compose
+        # and non-compose users on the same volume.
+        spec = declared[volume_name] or {}
+        assert spec.get("name") == volume_name, (
+            f"{volume_name} needs an explicit `name:`, or Compose creates "
+            f"<project>_{volume_name} and the documented recovery command "
+            "targets a volume that doesn't exist"
+        )
 
     def test_screenshot_overlay_does_not_claim_the_data_dir(self):
         """Verify the screenshot overlay leaves persistence to the base file.

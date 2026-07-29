@@ -36,6 +36,11 @@ services:
 
 volumes:
   ha-mcp-data:
+    # Pin the real volume name. Compose otherwise scopes it to the project
+    # (<project>_ha-mcp-data), which would not be the `ha-mcp-data` that every
+    # `docker run` recipe, the OAuth persistence-failure hint, and the
+    # `docker volume rm ha-mcp-data` recovery step all refer to.
+    name: ha-mcp-data
 
 # Usage:
 # 1. Create .env file: HA_TOKEN=your_long_lived_access_token
