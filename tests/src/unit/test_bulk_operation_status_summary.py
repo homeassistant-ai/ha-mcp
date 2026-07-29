@@ -95,6 +95,41 @@ async def test_pending_batch_reports_partial_completion(bulk_tools):
 
 
 @pytest.mark.asyncio
+async def test_bulk_wait_window_observes_completion_inside_it(bulk_tools):
+    # Pins the shared wait window itself: a pending operation that flips
+    # to completed INSIDE the window must come back completed. Under a 0s
+    # snapshot (the state the review flagged) the poll loop never runs
+    # and this reports pending.
+    import asyncio
+
+    tools, store = bulk_tools
+    op = DeviceOperation(
+        operation_id="op-flips",
+        entity_id="light.test",
+        action="turn_on",
+        service_domain="light",
+        service_name="turn_on",
+        service_data={},
+        status=OperationStatus.PENDING,
+        timeout_ms=60000,
+    )
+    store["op-flips"] = op
+
+    async def flip_soon() -> None:
+        await asyncio.sleep(0.3)
+        op.status = OperationStatus.COMPLETED
+        op.completion_time = time.time() * 1000
+
+    flip = asyncio.create_task(flip_soon())
+    result = await tools.get_bulk_operation_status(["op-flips"], timeout_seconds=5)
+    await flip
+
+    assert result["completed"] == 1
+    assert result["pending"] == 0
+    assert result["all_complete"] is True
+
+
+@pytest.mark.asyncio
 async def test_per_item_failure_entries_keep_structured_context(bulk_tools):
     tools, store = bulk_tools
     store["op-failed"] = _operation("op-failed", OperationStatus.FAILED)

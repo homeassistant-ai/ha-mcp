@@ -368,11 +368,17 @@ class TestErrorHandling:
 
                     status_data = parse_mcp_result(status_result)
                     if status_data.get("success"):
-                        statuses = status_data.get("statuses", {})
+                        # The bulk summary lists per-item entries under
+                        # detailed_results (there is no "statuses" key) —
+                        # every requested ID must be represented.
+                        detailed = status_data.get("detailed_results", [])
+                        assert len(detailed) == len(operation_ids), (
+                            f"bulk summary must cover every requested ID: {status_data}"
+                        )
                         failed_ops = [
-                            op
-                            for op, status in statuses.items()
-                            if status.get("status") == "failed"
+                            entry
+                            for entry in detailed
+                            if entry.get("status") in ("failed", "timeout")
                         ]
                         logger.info(
                             f"    {len(failed_ops)} operations failed (expected for invalid entities)"
