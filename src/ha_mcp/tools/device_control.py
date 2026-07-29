@@ -1340,7 +1340,11 @@ class DeviceControlTools:
         not_found = len([s for s in statuses if s.get("status") == "not_found"])
         pending = len([s for s in statuses if s.get("status") == "pending"])
 
+        # The batch call itself succeeded; per-item failures live inside
+        # detailed_results (batch-item pattern). Top-level ``success`` is
+        # the repo-wide response contract every tool return carries.
         return {
+            "success": True,
             "total_operations": len(operation_ids),
             "completed": completed,
             "failed": failed,

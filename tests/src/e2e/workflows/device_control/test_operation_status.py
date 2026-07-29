@@ -82,6 +82,9 @@ class TestOperationStatusConsolidation:
         )
 
         assert isinstance(result, dict), f"Expected dict response, got {type(result)}"
+        assert result.get("success") is True, (
+            f"Bulk summary must carry the top-level success contract: {result}"
+        )
         assert result.get("total_operations") == 3, (
             f"Bulk status must cover every requested ID, got: {result}"
         )
