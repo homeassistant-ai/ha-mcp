@@ -244,6 +244,7 @@ def _consume_section_schema(
     ignored_config_keys: set[str] | None,
     consumed_config_keys: set[str] | None,
     path_prefix: str,
+    consumed_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Consume config values for a nested flow section."""
     nested_schema = field.get("schema")
@@ -263,6 +264,7 @@ def _consume_section_schema(
                 ignored_config_keys,
                 consumed_config_keys,
                 section_path,
+                consumed_values,
             )
         )
         _record_ignored_section_keys(
@@ -278,6 +280,7 @@ def _consume_section_schema(
             ignored_config_keys,
             consumed_config_keys,
             section_path,
+            consumed_values,
         )
     )
     return nested_data
@@ -315,19 +318,80 @@ def _auto_confirm_form_payload(current_step: dict[str, Any]) -> dict[str, Any] |
     return {name: True}
 
 
+def _reused_consumed_value(
+    field: dict[str, Any],
+    name: str,
+    consumed_values: dict[str, Any] | None,
+) -> Any:
+    """Return an earlier step's value to resubmit for ``field``, else _MISSING_DEFAULT.
+
+    A supplied config key applies to every form step that declares it, not
+    only the first one to consume it — but it never overrides a default or
+    suggested value the step's own serialized schema carries. Reuse therefore
+    fires only where the redeclared field is required AND has no default of
+    its own, which is exactly where omitting the key is a guaranteed
+    voluptuous failure.
+
+    A redeclared field that *does* carry a default belongs to an edit-style
+    form HA pre-filled with the current value; resubmitting an earlier step's
+    unrelated value over that default would silently change data the caller
+    never named. Menu selection keys never reach here.
+
+    Motivating regression (issue #2057): an options flow — LocalTuya's — that
+    declares the same field on an early step and again on a later one.
+    """
+    if consumed_values is None or name not in consumed_values:
+        return _MISSING_DEFAULT
+    if not field.get("required"):
+        return _MISSING_DEFAULT
+    if _field_default_value(field) is not _MISSING_DEFAULT:
+        return _MISSING_DEFAULT
+    return copy.deepcopy(consumed_values[name])
+
+
+def _consume_leaf_field(
+    field: dict[str, Any],
+    name: str,
+    form_data: dict[str, Any],
+    remaining_config: dict[str, Any],
+    consumed_config_keys: set[str] | None,
+    consumed_values: dict[str, Any] | None,
+    path_prefix: str,
+) -> None:
+    """Add ``name``'s caller-supplied — or earlier-consumed — value to ``form_data``.
+
+    Values are recorded in ``consumed_values`` under the leaf name so a later
+    step redeclaring the same field can resubmit them.
+    """
+    if name in remaining_config:
+        value = remaining_config.pop(name)
+        form_data[name] = value
+        _mark_consumed(consumed_config_keys, path_prefix, name)
+        if consumed_values is not None:
+            consumed_values[name] = value
+        return
+
+    reused = _reused_consumed_value(field, name, consumed_values)
+    if reused is not _MISSING_DEFAULT:
+        form_data[name] = reused
+        _mark_consumed(consumed_config_keys, path_prefix, name)
+
+
 def _consume_form_schema(
     data_schema: list[Any],
     remaining_config: dict[str, Any],
     ignored_config_keys: set[str] | None = None,
     consumed_config_keys: set[str] | None = None,
     path_prefix: str = "",
+    consumed_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Consume matching config values and shape nested flow sections.
 
     Mutates ``remaining_config`` by removing every consumed key. Flat child
     values override the same value inside an explicitly supplied section dict.
     Unknown keys inside explicit section dicts are added to
-    ``ignored_config_keys`` with their dotted section path.
+    ``ignored_config_keys`` with their dotted section path. Fields already
+    consumed by an earlier step are resubmitted per :func:`_reused_consumed_value`.
     """
     form_data: dict[str, Any] = {}
 
@@ -355,6 +419,7 @@ def _consume_form_schema(
                 ignored_config_keys,
                 consumed_config_keys,
                 path_prefix,
+                consumed_values,
             )
             if nested_data:
                 if section_name is not None:
@@ -363,13 +428,16 @@ def _consume_form_schema(
                     form_data.update(nested_data)
             continue
 
-        if (
-            isinstance(name, str)
-            and name not in _MENU_SELECTION_KEYS
-            and name in remaining_config
-        ):
-            form_data[name] = remaining_config.pop(name)
-            _mark_consumed(consumed_config_keys, path_prefix, name)
+        if isinstance(name, str) and name not in _MENU_SELECTION_KEYS:
+            _consume_leaf_field(
+                field,
+                name,
+                form_data,
+                remaining_config,
+                consumed_config_keys,
+                consumed_values,
+                path_prefix,
+            )
 
     return form_data
 
@@ -399,6 +467,7 @@ def _handle_form_step(
     remaining_config: dict[str, Any],
     ignored_config_keys: set[str] | None = None,
     consumed_config_keys: set[str] | None = None,
+    consumed_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate a form step and return form data to submit.
 
@@ -407,6 +476,11 @@ def _handle_form_step(
     keys remain available for subsequent steps. Menu selection keys are never
     submitted. Fields declared inside a section are grouped under the section
     key; callers may provide them flat or inside an explicit section dict.
+
+    Consumed values are recorded in ``consumed_values`` by leaf field name.
+    A field this step declares that an earlier step already consumed is
+    resubmitted from that record, but only when the field is required here and
+    has no default of its own — see :func:`_reused_consumed_value`.
 
     When ``data_schema`` is absent (HA didn't tell us field names), falls
     back to legacy behaviour: submit all non-menu keys and clear them. This
@@ -439,11 +513,19 @@ def _handle_form_step(
         for key in list(remaining_config.keys()):
             if key in _MENU_SELECTION_KEYS:
                 continue
-            form_data[key] = remaining_config.pop(key)
+            value = remaining_config.pop(key)
+            form_data[key] = value
             _mark_consumed(consumed_config_keys, "", key)
+            if consumed_values is not None:
+                consumed_values[key] = value
     else:
         form_data = _consume_form_schema(
-            data_schema, remaining_config, ignored_config_keys, consumed_config_keys
+            data_schema,
+            remaining_config,
+            ignored_config_keys,
+            consumed_config_keys,
+            "",
+            consumed_values,
         )
 
     return form_data
@@ -819,7 +901,10 @@ async def _handle_flow_steps(
         initial_step: The first step returned by the flow start call
         config: Full caller-provided config dict. Menu selection keys are
             consumed by menu steps; remaining keys are submitted on the
-            first form step.
+            first form step whose schema declares them. A later step that
+            redeclares an already-consumed field gets that value resubmitted
+            when the step marks it required with no default of its own
+            (see :func:`_reused_consumed_value`).
         submit_fn: Async function to submit a step. Defaults to
             client.submit_config_flow_step (create). Pass
             client.submit_options_flow_step for options (update) flows.
@@ -842,6 +927,7 @@ async def _handle_flow_steps(
     current_step = initial_step
     last_menu_choice: str | None = None
     ignored_config_keys: set[str] = set()
+    consumed_values: dict[str, Any] = {}
     supplied_keys = sorted(k for k in config if k not in _MENU_SELECTION_KEYS)
     saw_form_step = False
     any_form_key_consumed = False
@@ -896,6 +982,7 @@ async def _handle_flow_steps(
                     remaining_config,
                     ignored_config_keys,
                     consumed_form_keys,
+                    consumed_values,
                 )
             if consumed_form_keys:
                 any_form_key_consumed = True
@@ -957,12 +1044,14 @@ async def _handle_config_subentry_flow_steps(
     """Walk a config subentry flow and accept HA's reconfigure-success abort.
 
     Successful results include ``warnings`` when caller-supplied config keys
-    were not declared by any flow step.
+    were not declared by any flow step. Fields redeclared by a later step are
+    resubmitted on the same terms as :func:`_handle_flow_steps`.
     """
     remaining_config = dict(config)
     current_step = initial_step
     last_menu_choice: str | None = None
     ignored_config_keys: set[str] = set()
+    consumed_values: dict[str, Any] = {}
     max_steps = 10
 
     for step_num in range(max_steps):
@@ -1025,6 +1114,7 @@ async def _handle_config_subentry_flow_steps(
                 current_step,
                 remaining_config,
                 ignored_config_keys,
+                consumed_values=consumed_values,
             )
             logger.debug(
                 "Config subentry flow step %s: form submit (step_id=%s, keys=%s)",
