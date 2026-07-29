@@ -717,6 +717,9 @@ code (`de`, `es`, `fr`, `ru`, `zh-Hans`) names every file:
 `src/ha_mcp/settings_ui/locales/<code>.json`,
 `custom_components/ha_mcp_tools/translations/<code>.json`, and
 `homeassistant-addon{,-dev}/translations/<code>.yaml`.
+That list of codes is itself pinned by
+`test_agents_md_lists_every_shipped_locale`: adding a language means adding its
+code here, in the same PR, or the suite goes red.
 
 Settings UI catalogs are auto-discovered (no registration). Their `messages` may
 omit keys — English is the per-key fallback — but `tool_groups` and `tools` may
