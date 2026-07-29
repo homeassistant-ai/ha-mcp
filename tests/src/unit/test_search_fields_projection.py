@@ -366,6 +366,17 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         assert "area_names" in data
 
     @pytest.mark.asyncio
+    async def test_area_only_results_strip_internal_fields(self, search_tool_populated):
+        """The area-only branch spreads ``public_fields(entity)`` into each
+        result, so internal enrichment keys (``_hidden_by``) carried by the
+        smart_tools payload must never leak into the tool response."""
+        data = await search_tool_populated(area_filter="kitchen")
+        results = data["entities"]
+        assert results, "fixture should yield at least one area entity"
+        leaked = [k for r in results for k in r if k.startswith("_")]
+        assert not leaked, f"internal fields leaked into area-only results: {leaked}"
+
+    @pytest.mark.asyncio
     async def test_area_only_empty_branch_projects(self, search_tool_empty):
         """The end-pass projects the area-only empty branch: the non-always-keep
         ``entities`` bucket (``[]`` on this branch) is retained when requested

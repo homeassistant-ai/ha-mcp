@@ -6,9 +6,12 @@ enrich entity / area dicts with internal fields like ``_hidden_by`` /
 registry, and those fields must not leak through public tool returns
 (see the projection path in tools_search.py).
 
-A regression that, e.g., mishandles non-string keys or starts mutating
-the source would silently surface internal fields through the public
-tools that use it — these tests pin the contract.
+The non-mutating half of the contract is load-bearing: at the call site
+the source dict is read again right after the copy
+(``apply_hidden_penalty(100, entity.get("_hidden_by"))``), so a
+``public_fields`` that stripped the source in place would silently skip
+the hidden-entity score penalty while the output still looked clean —
+these tests pin the contract.
 """
 
 from ha_mcp.tools.util_helpers import public_fields

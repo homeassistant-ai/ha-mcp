@@ -1279,6 +1279,10 @@ class DeviceControlTools:
         """
         Check status of multiple operations.
 
+        Takes an immediate per-operation snapshot (no polling). Per-item
+        failures become structured entries in ``detailed_results`` rather
+        than aborting the batch.
+
         Args:
             operation_ids: List of operation IDs to check
 
@@ -1296,21 +1300,51 @@ class DeviceControlTools:
                 )
             )
 
-        # Check all operations
+        # Check all operations. Per-item failures must not abort the batch:
+        # get_device_operation_status raises ToolError for failed / timed-out /
+        # not-found operations, so each one is caught and folded back into
+        # detailed_results as a structured entry — otherwise the first bad
+        # operation would discard the status of every other one.
+        # timeout_seconds=0 takes an immediate snapshot instead of polling
+        # each pending operation serially for the full single-op timeout.
+        error_code_to_status = {
+            ErrorCode.SERVICE_CALL_FAILED.value: "failed",
+            ErrorCode.TIMEOUT_OPERATION.value: "timeout",
+            ErrorCode.RESOURCE_NOT_FOUND.value: "not_found",
+        }
         statuses = []
         for op_id in operation_ids:
-            status = await self.get_device_operation_status(op_id)
+            try:
+                status = await self.get_device_operation_status(
+                    op_id, timeout_seconds=0
+                )
+            except ToolError as e:
+                try:
+                    err = json.loads(str(e))
+                except ValueError:
+                    err = {"error": {"message": str(e)}}
+                error_info = err.get("error") or {}
+                status = {
+                    "operation_id": op_id,
+                    "status": error_code_to_status.get(
+                        error_info.get("code", ""), "failed"
+                    ),
+                    "success": False,
+                    "error": error_info,
+                }
             statuses.append(status)
 
         # Summarize results
         completed = len([s for s in statuses if s.get("status") == "completed"])
         failed = len([s for s in statuses if s.get("status") in ["failed", "timeout"]])
+        not_found = len([s for s in statuses if s.get("status") == "not_found"])
         pending = len([s for s in statuses if s.get("status") == "pending"])
 
         return {
             "total_operations": len(operation_ids),
             "completed": completed,
             "failed": failed,
+            "not_found": not_found,
             "pending": pending,
             "all_complete": pending == 0,
             "summary": {
@@ -1324,7 +1358,7 @@ class DeviceControlTools:
                     "Check failed operations for specific error messages",
                     "Retry failed operations with different parameters if needed",
                 ]
-                if pending > 0 or failed > 0
+                if pending > 0 or failed > 0 or not_found > 0
                 else ["All operations completed successfully!"]
             ),
         }

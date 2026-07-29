@@ -1084,7 +1084,7 @@ def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
 #
 # The ceilings differ because what legitimately repeats differs. The settings
 # UI messages sit far under theirs: the highest among the shipped locales is 9
-# of 419 (2.1%), all words that genuinely read the same in that language. The
+# of 417 (2.2%), all words that genuinely read the same in that language. The
 # component catalogs are short and carry the product names as keys of their
 # own, so ``de``'s 7 of 93 (7.5%) — six product names plus ``Update`` — is
 # correct and the ceiling has to clear it. Both add-on flavors translate

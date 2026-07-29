@@ -286,7 +286,9 @@ class OperationManager:
         initial_count = len(self.operations)
 
         # Remove completed operations older than 5 minutes
-        # Remove failed operations older than 1 minute
+        # Remove failed/timed-out operations older than 1 minute (TIMEOUT
+        # can be set outside this pass: get_operation() marks an expired
+        # PENDING op in place on the read path)
         # Remove expired pending operations
         to_remove = []
 
@@ -295,7 +297,10 @@ class OperationManager:
 
             if (
                 operation.status == OperationStatus.COMPLETED and age_seconds > 300
-            ) or (operation.status == OperationStatus.FAILED and age_seconds > 60):
+            ) or (
+                operation.status in (OperationStatus.FAILED, OperationStatus.TIMEOUT)
+                and age_seconds > 60
+            ):
                 to_remove.append(op_id)
             elif operation.status == OperationStatus.PENDING and operation.is_expired:
                 # Mark as timeout first
@@ -307,17 +312,18 @@ class OperationManager:
         for op_id in to_remove:
             del self.operations[op_id]
 
-        # If still over limit, remove oldest completed operations
+        # If still over limit, remove oldest terminal operations (never
+        # in-flight PENDING ones — those expire on their own timeout).
         if len(self.operations) > self.max_operations:
-            completed_ops = [
+            terminal_ops = [
                 (op_id, op)
                 for op_id, op in self.operations.items()
-                if op.status == OperationStatus.COMPLETED
+                if op.status != OperationStatus.PENDING
             ]
-            completed_ops.sort(key=lambda x: x[1].completion_time or 0)
+            terminal_ops.sort(key=lambda x: x[1].completion_time or 0)
 
             excess = len(self.operations) - self.max_operations
-            for op_id, _ in completed_ops[:excess]:
+            for op_id, _ in terminal_ops[:excess]:
                 del self.operations[op_id]
 
         removed_count = initial_count - len(self.operations)

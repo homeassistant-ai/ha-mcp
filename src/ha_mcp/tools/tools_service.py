@@ -1260,7 +1260,9 @@ class ServiceTools:
         to check multiple operations at once (bulk status).
 
         The timeout_seconds parameter applies to single-operation checks only.
-        Bulk checks poll each operation individually with a short internal timeout.
+        Bulk checks take an immediate per-operation snapshot without waiting,
+        and report per-item failures inside detailed_results instead of
+        aborting the batch.
 
         Use this to track operations initiated by ha_bulk_control or ha_call_service.
         For current entity states, use ha_get_state instead.
