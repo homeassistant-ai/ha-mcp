@@ -47,6 +47,10 @@ documented legitimate dynamic-data positions per
 * Top-level ``variables.*``
 * Action ``service_data.*`` (legacy alias for ``data``)
 
+The allowlist covers template *content*. Key *order* inside a ``variables``
+block is separately load-bearing — HA renders one key at a time — so those
+blocks get their own ordering-only pass (:func:`_check_variables_order`).
+
 Anti-patterns sourced from:
   https://github.com/homeassistant-ai/skills
   skill://home-assistant-best-practices
@@ -55,6 +59,7 @@ Anti-patterns sourced from:
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from typing import Any
 
 _SKILL_URI_PREFIX = "skill://home-assistant-best-practices/references"
@@ -154,6 +159,25 @@ _RE_ANY_TEMPLATE = re.compile(r"\{\{|\{%")
 # `this.X` self-reference (e.g. `{{ this.entity_id }}`)
 _RE_THIS_REFERENCE = re.compile(r"\bthis\s*\.\s*\w+")
 
+# --- Variables-block ordering scan (see _check_variables_order) -------------
+# A Jinja span. Only text inside `{{ }}` / `{% %}` can read a variable, so a
+# plain string value never counts as a reference.
+_RE_TEMPLATE_SPAN = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
+# Quoted literal inside a span — a sibling's name appearing in one (including
+# as a dict subscript, `x['meldung']`) is text, not a read.
+_RE_STRING_LITERAL = re.compile(r"'[^']*'|\"[^\"]*\"")
+# `{% set a, b = ... %}` — names bound inside the template itself. Shadow any
+# same-named sibling, so they are not reads of it.
+_RE_JINJA_SET = re.compile(r"\{%-?\s*set\s+([\w\s,]+?)\s*=")
+# `| name` is a filter, never a variable read.
+_RE_FILTER_NAME = re.compile(r"\|\s*[A-Za-z_]\w*")
+# An identifier read. A longer name is handled by the greedy `\w*` alone, which
+# consumes `offene_tueren_extra` whole rather than reporting `offene_tueren`.
+# The lookbehind adds the two positions that greed does not cover: a preceding
+# dot (attribute access on something else, `wetter.meldung`) and a preceding
+# word char, which only arises after a digit (`e3` in the literal `2.5e3`).
+_RE_JINJA_IDENT = re.compile(r"(?<![\w.])[A-Za-z_]\w*")
+
 # Target sub-fields scanned for templates. These are the only keys allowed
 # under ``target:`` in HA's modern action schema.
 _TARGET_FIELDS = ("entity_id", "device_id", "area_id", "floor_id", "label_id")
@@ -241,6 +265,11 @@ def check_automation_config(
     # Mode vs motion pattern
     _check_mode_motion(config, warnings, skill_prefix)
 
+    # Key order inside the top-level variables blocks. Both render one key at a
+    # time, so a forward reference between siblings is silently undefined.
+    for block_key in ("variables", "trigger_variables"):
+        _check_variables_order(config.get(block_key), warnings, skill_prefix, block_key)
+
     _dedupe_inplace(warnings)
     return warnings
 
@@ -260,6 +289,7 @@ def check_script_config(
 
     warnings = BestPracticeCheckResult()
     _check_action_tree(config.get("sequence", []), warnings, skill_prefix)
+    _check_variables_order(config.get("variables"), warnings, skill_prefix, "variables")
     _dedupe_inplace(warnings)
     return warnings
 
@@ -588,14 +618,22 @@ def _check_repeat_actions(
 def _check_control_flow_actions(
     action: dict[str, Any], warnings: BestPracticeCheckResult, skill_prefix: str | None
 ) -> None:
-    """Check choose/if/then/else/repeat/parallel sub-trees in a single action."""
+    """Check choose/if/then/else/repeat/parallel/sequence sub-trees in one action.
+
+    ``sequence`` is both a grouping action of its own
+    (``cv.SCRIPT_ACTION_SEQUENCE``) and the canonical shape of a ``parallel:``
+    branch — HA normalises the shorthand branch list into ``{"sequence": ...}``
+    (``_SCRIPT_PARALLEL_SCHEMA`` / ``_parallel_sequence_action``). Without this
+    arm only the shorthand branch was walked, so the canonical form of both was
+    invisible to every check below this point.
+    """
     if "choose" in action:
         _check_choose_actions(action["choose"], warnings, skill_prefix)
 
     if "if" in action:
         _check_condition_templates(action["if"], warnings, skill_prefix)
 
-    for key in ("then", "else", "default"):
+    for key in ("then", "else", "default", "sequence"):
         nested = action.get(key)
         if isinstance(nested, list):
             _check_action_tree(nested, warnings, skill_prefix)
@@ -645,6 +683,13 @@ def _check_action_tree(
         # `choose` (or `if/then/else`) action that picks between hardcoded
         # service names based on state.
         _check_service_template(action, warnings, skill_prefix)
+
+        # A `variables:` step is a legitimate template position, so it is never
+        # walked for template misuse. Its key *order* is still load-bearing —
+        # scanned separately.
+        _check_variables_order(
+            action.get("variables"), warnings, skill_prefix, "variables"
+        )
 
         # Templates in target sub-fields. Action `data`, `event_data`,
         # `service_data`, notification message/title, and `variables` are
@@ -733,6 +778,115 @@ def _check_target_dict(
                     skill_prefix,
                     "template-guidelines.md#when-to-avoid-templates",
                 )
+
+
+# ---------------------------------------------------------------------------
+# Variables-block ordering
+# ---------------------------------------------------------------------------
+
+
+def _iter_strings(value: Any) -> Iterator[str]:
+    """Yield every string a variables-block value renders.
+
+    Mirrors ``homeassistant.helpers.template.render_complex``, which recurses
+    into lists and mappings and renders mapping *keys* as well as values.
+    """
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_strings(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _iter_strings(key)
+            yield from _iter_strings(item)
+
+
+def _referenced_names(value: Any) -> set[str]:
+    """Return the identifier tokens a variables-block value reads."""
+    names: set[str] = set()
+    for text in _iter_strings(value):
+        spans = [
+            _RE_STRING_LITERAL.sub(" ", span)
+            for span in _RE_TEMPLATE_SPAN.findall(text)
+        ]
+        # A `{% set %}` binds for the rest of the string, so it has to be
+        # collected across all spans before any of them is scanned.
+        local = {
+            name.strip()
+            for span in spans
+            for group in _RE_JINJA_SET.findall(span)
+            for name in group.split(",")
+        }
+        for span in spans:
+            body = _RE_FILTER_NAME.sub(" ", span)
+            names.update(n for n in _RE_JINJA_IDENT.findall(body) if n not in local)
+    return names
+
+
+def _check_variables_order(
+    variables: Any,
+    warnings: BestPracticeCheckResult,
+    skill_prefix: str | None,
+    block_key: str,
+) -> None:
+    """Flag a variables key whose template reads a *later* key in the same block.
+
+    HA renders a variables block one entry at a time, feeding each result into
+    the context for the next (``ScriptVariables.async_simple_render`` for an
+    action-level step, ``async_render`` for the top-level and
+    ``trigger_variables`` blocks). A name declared further down is therefore
+    undefined at render time — with HA's default non-strict undefined it yields
+    an empty string and a falsy boolean rather than raising, so the automation
+    loads and runs on through the wrong branch. It is not fully silent: HA logs
+    a template-variable warning and records it on the trace.
+
+    Only *later* siblings count. Names coming from anywhere else — an earlier
+    sibling, an earlier action's ``response_variable``, the trigger context —
+    are legitimate and never flagged.
+
+    Known false positives, deliberately left in rather than paid for with a
+    scope walk and a Jinja parser:
+
+    * a later sibling whose name also exists in an outer scope, where the
+      reference is legal and resolves outward (the warning text names this one)
+    * a sibling whose name collides with a Jinja keyword, test, global, or a
+      ``{% for %}`` loop binding
+    * a sibling shadowed by the block form ``{% set x %}...{% endset %}``,
+      which carries no ``=`` for :data:`_RE_JINJA_SET` to match
+    * a sibling whose name is used as a call keyword argument
+      (``{{ dict(meldung=1) }}``) or sits inside a ``{% raw %}`` body, neither
+      of which is a read
+
+    Known gap: when an automation declares both ``trigger_variables`` and
+    ``variables``, HA merges them into a single sequentially-rendered mapping
+    (``components/automation/__init__.py``, ``_async_process_config``), so a
+    ``trigger_variables`` key reading a ``variables`` key is a forward read that
+    this per-block scan does not see.
+    """
+    if not isinstance(variables, dict) or len(variables) < 2:
+        return
+
+    names = [key for key in variables if isinstance(key, str)]
+    # The last key has no later sibling, so it can never carry a forward read.
+    for index, key in enumerate(names[:-1]):
+        later = set(names[index + 1 :])
+        forward = sorted(later & _referenced_names(variables[key]))
+        if not forward:
+            continue
+        reads = ", ".join(f"`{name}`" for name in forward)
+        _emit(
+            warnings,
+            f"`{block_key}` key `{key}` reads {reads}, declared later in the same "
+            "block — HA renders a variables block one key at a time, so a name "
+            "further down is not defined yet and resolves to an empty, falsy "
+            "value instead of erroring. Move the keys it reads above it, or split "
+            "them into consecutive `variables:` steps. Not a problem when the "
+            "name is also defined in an outer scope — the reference then "
+            "resolves outward.",
+            skill_prefix,
+            "automation-patterns.md#variables",
+        )
 
 
 # ---------------------------------------------------------------------------

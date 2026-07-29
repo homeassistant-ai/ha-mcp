@@ -2428,3 +2428,294 @@ class TestRenamedPurposeSpecificKeys:
             "actions": [],
         }
         assert check_automation_config(config) == []
+
+
+# ---------------------------------------------------------------------------
+# Variables-block key ordering (issue #2072)
+# ---------------------------------------------------------------------------
+
+
+class TestVariablesForwardReference:
+    """A variables key reading a LATER sibling renders undefined, silently."""
+
+    def test_action_variables_forward_reference_flagged(self):
+        # The reporter's shape: `meldung` sorted to the front of the block, so
+        # it renders against siblings that do not exist yet.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "binary_sensor.door"}],
+            "actions": [
+                {
+                    "variables": {
+                        "meldung": "{% if offene_tueren %}open{% endif %}",
+                        "offene_tueren": "{{ expand('binary_sensor.doors') | count }}",
+                    }
+                }
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`meldung`", "`offene_tueren`")
+
+    def test_names_every_forward_sibling(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "summary": "{{ a }}{{ b }}",
+                        "a": "1",
+                        "b": "2",
+                    }
+                }
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`summary`", "`a`", "`b`")
+
+    def test_backward_reference_clean(self):
+        # Correct order — each key reads only what precedes it.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "offene_tueren": "{{ expand('binary_sensor.doors') | count }}",
+                        # Backward read, and deliberately not the last key — a
+                        # trailing sibling exists for it to wrongly match on.
+                        "meldung": "{% if offene_tueren %}open{% endif %}",
+                        "tail": "1",
+                    }
+                }
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_nested_in_choose_sequence_flagged(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "choose": [
+                        {
+                            "conditions": [],
+                            "sequence": [
+                                {"variables": {"first": "{{ second }}", "second": "2"}}
+                            ],
+                        }
+                    ]
+                }
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_nested_in_canonical_parallel_branch_flagged(self):
+        # HA normalises a shorthand `parallel:` branch list into
+        # `{"sequence": [...]}`, so the canonical branch shape has to be walked.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "parallel": [
+                        {
+                            "sequence": [
+                                {"variables": {"first": "{{ second }}", "second": "2"}}
+                            ]
+                        }
+                    ]
+                }
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_nested_in_bare_sequence_action_flagged(self):
+        config = {
+            "sequence": [
+                {"sequence": [{"variables": {"first": "{{ second }}", "second": "2"}}]}
+            ]
+        }
+        warnings = check_script_config(config)
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_nested_value_structure_scanned(self):
+        # render_complex recurses into lists and mappings, so a template buried
+        # in one still renders in that key's slot.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "payload": {"items": ["{{ threshold }}"]},
+                        "threshold": "5",
+                    }
+                }
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`payload`", "`threshold`")
+
+
+class TestVariablesForwardReferenceNegatives:
+    """Shapes that look like a forward reference but are legal."""
+
+    def test_earlier_response_variable_clean(self):
+        # `wetter` comes from a preceding action, not from the block.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {"action": "weather.get_forecasts", "response_variable": "wetter"},
+                {
+                    "variables": {
+                        "stunden": "{{ wetter['weather.home'].forecast[:3] }}",
+                        "regen": "{{ 'ja' if stunden else '' }}",
+                    }
+                },
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_longer_name_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "first": "{{ offene_tueren_extra }}",
+                        "offene_tueren": "2",
+                    }
+                }
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_string_literal_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "first": "{{ payload['threshold'] }}",
+                        "threshold": "5",
+                    }
+                }
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_attribute_access_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {"variables": {"first": "{{ wetter.forecast }}", "forecast": "5"}}
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_numeric_literal_tail_is_not_a_reference(self):
+        # `e3` inside the float literal `2.5e3` starts a would-be identifier
+        # match; the digit in front of it is what rejects it.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [{"variables": {"first": "{{ 2.5e3 }}", "e3": "5"}}],
+        }
+        assert check_automation_config(config) == []
+
+    def test_filter_name_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [{"variables": {"first": "{{ [3, 1] | max }}", "max": "5"}}],
+        }
+        assert check_automation_config(config) == []
+
+    def test_jinja_set_local_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "first": "{% set total = 1 %}{{ total }}",
+                        "total": "5",
+                    }
+                }
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_plain_string_value_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [{"variables": {"first": "threshold", "threshold": "5"}}],
+        }
+        assert check_automation_config(config) == []
+
+    def test_single_key_block_clean(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [{"variables": {"only": "{{ only }}"}}],
+        }
+        assert check_automation_config(config) == []
+
+
+class TestVariablesForwardReferenceWiring:
+    """Every block that renders one key at a time is covered."""
+
+    def test_automation_top_level_variables(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "variables": {"first": "{{ second }}", "second": "2"},
+            "actions": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`variables` key `first`", "`second`")
+
+    def test_automation_trigger_variables(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "trigger_variables": {"first": "{{ second }}", "second": "2"},
+            "actions": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(
+            warnings, "`trigger_variables` key `first`", "`second`"
+        )
+
+    def test_script_top_level_variables(self):
+        config = {
+            "variables": {"first": "{{ second }}", "second": "2"},
+            "sequence": [],
+        }
+        warnings = check_script_config(config)
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_script_sequence_variables_step(self):
+        config = {"sequence": [{"variables": {"first": "{{ second }}", "second": "2"}}]}
+        warnings = check_script_config(config)
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+
+_FORWARD_REF_CONFIG = {
+    "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+    "actions": [{"variables": {"first": "{{ second }}", "second": "2"}}],
+}
+
+
+class TestVariablesForwardReferenceMessage:
+    """Warning payload: outer-scope caveat, skill route, referenced file."""
+
+    def test_names_outer_scope_caveat(self):
+        warnings = check_automation_config(_FORWARD_REF_CONFIG)
+        assert _has_warning_containing(warnings, "outer scope")
+
+    def test_skill_route_and_referenced_file(self):
+        warnings = check_automation_config(_FORWARD_REF_CONFIG)
+        assert _has_warning_containing(
+            warnings, f"{SKILL_PREFIX}/automation-patterns.md#variables"
+        )
+        assert (
+            "references/automation-patterns.md#variables" in warnings.referenced_files
+        )
+
+    def test_skill_prefix_none_suppresses_suffix(self):
+        warnings = check_automation_config(_FORWARD_REF_CONFIG, skill_prefix=None)
+        assert len(warnings) == 1
+        assert " See " not in warnings[0]
