@@ -295,15 +295,15 @@ Requires add-on restart to take effect.
 
 Replaces the full tool catalog (~87 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
-> ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Those models run their own built-in tool search / deferred tools, which conflicts with ha-mcp's — running both at once does not work. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off.
+> ⚠️ **Do NOT enable this if your client has its own built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code).** The two search layers conflict — running both at once does not work — and the client's built-in tool search is the better choice there anyway. Leave this off in those clients. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.
 
 **When to enable:**
-- Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
+- Setups that load the **full tool catalog up front** — whether that happens depends on the client and model combination. This covers models **without native deferred tool support** (OpenAI-compatible local models, Gemini, and **Claude Haiku**, which does not use Claude's built-in deferred tool loading), and clients that **inline all tool schemas regardless of model** (e.g. GitHub Copilot CLI, even when running Claude Sonnet or Opus).
 - Models with **limited context windows** (≤200K) or deployments where context cost is a concern
 - MCP clients that **cap total tools** (e.g. at 100) — reduces visible tool count to ~4
 
 **When to leave disabled (default):**
-- **Claude in Sonnet or Opus modes** — their built-in tool search conflicts with ha-mcp's. Disable one or the other.
+- **Clients with built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code)** — the two layers conflict, and the client's built-in search is the better choice; use it instead.
 - Other clients with native deferred tool support — tools are loaded on demand, so the full catalog has no idle context cost.
 - When you need direct tool access without the search step.
 

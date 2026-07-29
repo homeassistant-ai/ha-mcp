@@ -20,16 +20,22 @@ configuration:
     name: Tool-Suche aktivieren
     description: >-
       Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung.
-      Reduziert den Leerlauf-Kontext von ~46K auf ~5K Tokens. ⚠️ Aktiviere dies
-      NICHT, wenn du Claude im Sonnet- oder Opus-Modus verwendest – diese
-      Modelle haben ihre eigene integrierte Tool-Suche / aufgeschobene Tools,
-      die mit unserer kollidiert. Um die Tool-Suche von ha-mcp mit Claude zu
-      verwenden, deaktiviere zuerst Claudes integrierte Tool-Suche; lasse dies
-      andernfalls ausgeschaltet. Verwende dies nur mit LLMs, denen native
-      aufgeschobene Tools fehlen (z. B. Claude Haiku, lokale OpenAI-kompatible
-      Modelle) oder mit kleineren Kontextfenstern. Tools werden über
-      ha_search_tools gefunden und über kategorisierte Proxys
-      (read/write/delete) ausgeführt. Erfordert Neustart, um wirksam zu werden.
+      Reduziert den Leerlauf-Kontext um rund 90 % auf etwa 5K Tokens. ⚠️
+      Aktiviere dies NICHT in Clients mit eigener integrierter Tool-Suche /
+      aufgeschobenen Tools (claude.ai, Claude Desktop, Claude Code) – die
+      beiden Suchebenen kollidieren, und die integrierte Tool-Suche des
+      Clients ist dort die bessere Wahl; lasse dies ausgeschaltet. Ob Tools
+      aufgeschoben werden, hängt von der Kombination aus Client und Modell ab:
+      Verwende dies, wenn dein Setup den vollständigen Katalog von Anfang an
+      lädt – Modelle ohne native aufgeschobene Tools (z. B. Gemini, lokale
+      OpenAI-kompatible Modelle, Claude Haiku), Clients, die alle
+      Tool-Schemata unabhängig vom Modell direkt einbetten (z. B. GitHub
+      Copilot CLI), oder kleinere Kontextfenster. Auch einige Codex-Modelle
+      und ChatGPT haben aufgeschobene Tools – prüfe direkt bei deinem
+      Client/Modell, welche Features er hat, damit du dies nicht unnötig
+      aktiviert lässt. Tools werden über ha_search_tools gefunden und über
+      kategorisierte Proxys (read/write/delete) ausgeführt. Erfordert
+      Neustart, um wirksam zu werden.
   enable_tool_security_policies:
     name: Tool-Sicherheitsrichtlinien aktivieren (erweitert)
     description: >-
