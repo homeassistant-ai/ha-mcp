@@ -373,8 +373,6 @@
     "advanced.verify_ssl.help": "Disattiva la verifica TLS solo su reti fidate. È necessario il riavvio.",
     "advanced.fuzzy_threshold.label": "Soglia della ricerca approssimata",
     "advanced.fuzzy_threshold.help": "Valori più bassi rendono più permissiva la corrispondenza delle entità. Intervallo 0–100.",
-    "advanced.entity_search_limit.label": "Limite dei risultati nella ricerca delle entità",
-    "advanced.entity_search_limit.help": "Numero massimo di entità restituite da ha_search_entities. Intervallo 1–1000.",
     "advanced.automation_config_time_budget.label": "Tempo massimo per le configurazioni delle automazioni (s)",
     "advanced.automation_config_time_budget.help": "Tempo massimo che la ricerca approfondita dedica al recupero delle configurazioni delle automazioni. Intervallo 1–600. È necessario il riavvio.",
     "advanced.script_config_time_budget.label": "Tempo massimo per le configurazioni degli script (s)",

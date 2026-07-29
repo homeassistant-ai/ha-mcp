@@ -1077,6 +1077,36 @@ def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
     )
 
 
+@pytest.mark.parametrize("locale", _non_english_settings_locales())
+def test_settings_messages_carry_no_key_english_dropped(locale: str) -> None:
+    """The one direction nothing else here looks in.
+
+    ``messages`` may omit keys — English is the per-key fallback, and AGENTS.md
+    states the allowance — so this asserts the other direction only. A key with
+    no English counterpart is not a fallback, it is text that reaches nobody:
+    ``build_payload`` ships it and ``t()`` never asks for it.
+
+    #2043 removed ``advanced.entity_search_limit.label`` and ``.help`` from
+    ``en`` and from the five catalogs it knew about, and two got past it by
+    different routes — ``es`` was not one of the five, and ``it`` was written
+    against the older English source and rebased past the removal. Neither
+    failed anything: the ceilings count English keys a locale is missing, and
+    the baseline hashes English sources only, so a key English does not have is
+    outside both. The sibling sections have had this covered all along, by
+    ``test_settings_catalog_keys_name_real_groups_and_tools``; the component
+    and add-on surfaces by their own key checks.
+    """
+    english = set(_settings_catalog("en")["messages"])
+    orphaned = sorted(set(_settings_catalog(locale)["messages"]) - english)
+
+    assert not orphaned, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json translates message "
+        f"key(s) en.json does not have: {orphaned}. Nothing renders them — "
+        "delete them, or restore the English key if it went missing by "
+        "mistake."
+    )
+
+
 # A catalog wholesale-copied from English passes key parity, placeholder
 # parity and the markup allowlist — every existing check. All four surfaces
 # get a ceiling: leaving one of them out accepts a wholesale-English catalog
@@ -1084,7 +1114,7 @@ def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
 #
 # The ceilings differ because what legitimately repeats differs. The settings
 # UI messages sit far under theirs: the highest among the shipped locales is 9
-# of 421 (2.1%), all words that genuinely read the same in that language. The
+# of 419 (2.1%), all words that genuinely read the same in that language. The
 # component catalogs are short and carry the product names as keys of their
 # own, so ``de``'s 7 of 93 (7.5%) — six product names plus ``Update`` — is
 # correct and the ceiling has to clear it. Both add-on flavors translate
