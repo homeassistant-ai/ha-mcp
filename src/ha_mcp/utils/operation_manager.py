@@ -306,10 +306,13 @@ class OperationManager:
             ):
                 to_remove.append(op_id)
             elif operation.status == OperationStatus.PENDING and operation.is_expired:
-                # Mark as timeout first
+                # Mark as timeout and KEEP it for the terminal minute — same
+                # treatment as a read-path timeout, so a poll shortly after
+                # expiry reports "timeout" rather than not_found regardless
+                # of which path noticed first. The TTL branch above reclaims
+                # it once completion_time is a minute old.
                 operation.status = OperationStatus.TIMEOUT
                 operation.completion_time = current_time * 1000
-                to_remove.append(op_id)
 
         # Remove operations
         for op_id in to_remove:
