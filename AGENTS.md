@@ -722,9 +722,10 @@ That list of codes is itself pinned by
 code here, in the same PR, or the suite goes red.
 
 Settings UI catalogs are auto-discovered (no registration). Their `messages` may
-omit keys — English is the per-key fallback — but `tool_groups` and `tools` may
-not: each locale must carry exactly the renderable group headings and every tool
-name, no key more and none fewer. **Adding a tool therefore means translating it
+omit keys — English is the per-key fallback — but may not carry one `en.json`
+lacks: nothing renders it. `tool_groups` and `tools` may do neither: each locale
+must carry exactly the renderable group headings and every tool name, no key
+more and none fewer. **Adding a tool therefore means translating it
 in every locale, in the PR that adds it**: the check derives the tool set from
 the sources (`scripts/extract_tools.py`), not from the committed
 `site/src/data/tools.json` that `sync-tool-docs.yml` regenerates only after
