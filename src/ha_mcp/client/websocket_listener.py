@@ -9,7 +9,6 @@ import asyncio
 import logging
 from typing import Any
 
-from ..config import get_global_settings
 from ..utils.operation_manager import get_operation_manager, update_pending_operations
 from .websocket_client import HomeAssistantWebSocketClient, get_websocket_client
 
@@ -21,7 +20,6 @@ class WebSocketListenerService:
 
     def __init__(self) -> None:
         """Initialize the WebSocket listener service."""
-        self.settings = get_global_settings()
         self.operation_manager = get_operation_manager()
         self.websocket_client: HomeAssistantWebSocketClient | None = None
         self.listener_task: asyncio.Task | None = None

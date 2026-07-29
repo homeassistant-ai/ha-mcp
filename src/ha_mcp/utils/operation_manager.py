@@ -23,7 +23,6 @@ class OperationStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     TIMEOUT = "timeout"
-    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -287,7 +286,7 @@ class OperationManager:
         initial_count = len(self.operations)
 
         # Remove completed operations older than 5 minutes
-        # Remove failed/cancelled operations older than 1 minute
+        # Remove failed operations older than 1 minute
         # Remove expired pending operations
         to_remove = []
 
@@ -296,10 +295,7 @@ class OperationManager:
 
             if (
                 operation.status == OperationStatus.COMPLETED and age_seconds > 300
-            ) or (
-                operation.status in [OperationStatus.FAILED, OperationStatus.CANCELLED]
-                and age_seconds > 60
-            ):
+            ) or (operation.status == OperationStatus.FAILED and age_seconds > 60):
                 to_remove.append(op_id)
             elif operation.status == OperationStatus.PENDING and operation.is_expired:
                 # Mark as timeout first
