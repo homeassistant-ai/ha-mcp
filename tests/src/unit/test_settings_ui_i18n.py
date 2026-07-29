@@ -12,9 +12,10 @@ import pytest
 from starlette.requests import Request
 
 from ha_mcp.policy.approval_queue import Decision
-from ha_mcp.settings_ui import _SETTINGS_JS, _render_settings_html
+from ha_mcp.settings_ui import _render_settings_html
 from ha_mcp.settings_ui._i18n import (
     CATALOGS,
+    DEFAULT_LOCALE,
     build_payload,
     load_catalogs,
     normalize_locale,
@@ -577,10 +578,16 @@ def test_every_decided_outcome_has_a_catalog_word() -> None:
     English word into an otherwise translated sentence — Italian read
     ``Questa approvazione è già stata approved``. It is mapped through the
     catalog now, which only holds while every outcome the queue can report has
-    a key in every catalog: adding one to ``Decision`` and nothing else would
-    put the English back, and a key that lands in ``en.json`` alone renders
-    English in every other language while staying far under the identical-share
-    ceiling, so nothing else would notice either.
+    a translated key in every catalog: adding one to ``Decision`` and nothing
+    else would put the English back, and a key that lands in ``en.json`` alone
+    renders English in every other language while staying far under the
+    identical-share ceiling, so nothing else would notice either.
+
+    This is the type-derived half of the check and runs everywhere.
+    ``TestAlreadyDecidedCopy`` in ``test_settings_ui_js_behavior.py`` drives the
+    409 handler under each catalog and asserts on the alert the user actually
+    reads; it needs the JSDOM harness and skips without it, which is why the
+    key coverage lives here rather than only there.
     """
     outcomes = sorted(set(get_args(Decision)) - {"pending"})
     assert outcomes, (
@@ -589,47 +596,31 @@ def test_every_decided_outcome_has_a_catalog_word() -> None:
         "or this test is now dead"
     )
 
-    keys = [f"policies.pending.decision.{o}" for o in outcomes]
     for locale, catalog in sorted(CATALOGS.items()):
-        missing = [key for key in keys if key not in catalog["messages"]]
+        messages = catalog["messages"]
+        missing = [
+            key
+            for o in outcomes
+            if (key := f"policies.pending.decision.{o}") not in messages
+        ]
         assert not missing, (
             f"{locale}.json is missing {missing}. The settings UI shows that "
             "raw enum value inside the translated 'already decided' sentence, "
             "so this language renders an English word there. The key belongs "
             "in every catalog, not only in en.json."
         )
-
-    # Matched rather than compared literally: the resolution survives renaming
-    # ``body``, destructuring ``current_decision`` or breaking the line at the
-    # ``+``, and a literal spelling those out reds on all three while asserting
-    # the resolution is gone when it is not.
-    binding = re.search(
-        r"(?:const|let|var)\s+(\w+)\s*=\s*t\(\s*['\"]policies\.pending\.decision\.",
-        _SETTINGS_JS,
-    )
-    assert binding, (
-        "settings.js no longer resolves the decision value through the "
-        "catalog. The keys above then sit unused while the English enum "
-        "renders inside the translated sentence again."
-    )
-
-    # The lookup alone is not enough: left bound to an unused local while the
-    # sentence goes back to interpolating the raw enum, it still matches above,
-    # and no linter runs on settings.js to flag the dangling binding.
-    call = re.search(
-        r"t\(\s*['\"]policies\.pending\.already_decided['\"]\s*,\s*\{([^}]*)\}",
-        _SETTINGS_JS,
-    )
-    assert call, (
-        "settings.js no longer renders policies.pending.already_decided with "
-        "an interpolation object, so the catalog lookup above cannot reach it."
-    )
-    interpolated = []
-    for part in call.group(1).split(","):
-        name, separator, value = part.partition(":")
-        interpolated.append((value if separator else name).strip())
-    assert binding.group(1) in interpolated, (
-        f"policies.pending.already_decided interpolates {interpolated}, not "
-        f"the catalog-resolved {binding.group(1)!r} — the lookup above is then "
-        "dead and the raw enum renders inside the translated sentence again."
-    )
+        if locale == DEFAULT_LOCALE:
+            # English is where these words legitimately read as the enum does.
+            continue
+        # A present key is not a translated one. The English value survives a
+        # copied catalog and an en-fallback autofill, and two such words stay
+        # far under the identical-share ceiling, so nothing else reds on them.
+        untranslated = [
+            o for o in outcomes if messages[f"policies.pending.decision.{o}"] == o
+        ]
+        assert not untranslated, (
+            f"{locale}.json still spells {untranslated} the way the backend "
+            "does. That word renders inside the translated 'already decided' "
+            "sentence, which is the English-in-a-translated-sentence bug this "
+            "key exists to prevent."
+        )

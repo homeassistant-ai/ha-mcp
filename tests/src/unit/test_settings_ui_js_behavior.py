@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import ClassVar
+from typing import ClassVar, get_args
 
 import pytest
 
@@ -1681,6 +1681,88 @@ class TestPolicyTabFlow:
         assert "addon log" in result.dom.lower(), (
             f"expected addon-log message in pending-list snapshot; "
             f"dom contains: {result.dom[-2000:]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# "Already decided" copy on the 409 path
+# ---------------------------------------------------------------------------
+
+
+def _localized_policy_dom(locale: str) -> str:
+    """Policy-tab DOM carrying ``locale``'s catalog as the i18n payload."""
+    from ha_mcp.settings_ui._i18n import build_payload, serialize_payload
+
+    payload = serialize_payload(build_payload(locale))
+    element = f'<script id="ha-mcp-i18n" type="application/json">{payload}</script>'
+    return _policy_panel_dom().replace("</body>", element + "</body>")
+
+
+def _already_decided_cases() -> list[tuple[str, str]]:
+    """Every (non-English locale, decided outcome) pair the 409 can produce.
+
+    Derived from ``Decision`` rather than listed, so a new outcome arrives
+    here as new cases instead of as untested copy.
+    """
+    from ha_mcp.policy.approval_queue import Decision
+    from ha_mcp.settings_ui._i18n import CATALOGS
+
+    return [
+        (locale, outcome)
+        for locale in sorted(set(CATALOGS) - {"en"})
+        for outcome in sorted(set(get_args(Decision)) - {"pending"})
+    ]
+
+
+class TestAlreadyDecidedCopy:
+    """The 409 alert must read as one translated sentence.
+
+    ``current_decision`` is a backend enum. Interpolating it raw put an
+    English word inside otherwise translated copy — Italian read ``Questa
+    approvazione è già stata approved``. It is resolved through the catalog
+    now, and this drives the real handler to check what the user is shown:
+    the translated word, and nowhere the enum. Asserting on the rendered
+    alert covers the ways source-text matching cannot — a catalog whose
+    value is still the English placeholder, a key the concatenation builds
+    but no catalog holds, a resolved word no message consumes.
+    """
+
+    @pytest.mark.parametrize(("locale", "outcome"), _already_decided_cases())
+    def test_alert_shows_the_catalog_word_and_never_the_enum(
+        self, settings_script: str, locale: str, outcome: str
+    ) -> None:
+        from ha_mcp.settings_ui._i18n import CATALOGS
+
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/approve": {
+                "status": 409,
+                "json": {"error": "already decided", "current_decision": outcome},
+            },
+            "/api/policy/pending": {"status": 200, "json": {"pending": []}},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_localized_policy_dom(locale),
+            fetch_map=fetches,
+            invoke="await window.policyDecide('tok-1', 'approve');",
+        )
+        _assert_clean_init(result)
+
+        assert len(result.alerts) == 1, (
+            f"expected the single 409 alert; got {result.alerts}"
+        )
+        alert = result.alerts[0]
+        word = CATALOGS[locale]["messages"][f"policies.pending.decision.{outcome}"]
+        assert word in alert, (
+            f"{locale}: the alert reads {alert!r}, which does not contain the "
+            f"catalog word {word!r} for {outcome!r}. The sentence is showing "
+            "something other than the translation."
+        )
+        assert outcome not in alert, (
+            f"{locale}: the alert reads {alert!r}, which still contains the raw "
+            f"{outcome!r} the backend sent. That is an English word inside a "
+            "translated sentence — the bug this path was built to prevent."
         )
 
 
