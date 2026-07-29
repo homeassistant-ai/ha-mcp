@@ -1705,13 +1705,21 @@ def _already_decided_cases() -> list[tuple[str, str]]:
     here as new cases instead of as untested copy.
     """
     from ha_mcp.policy.approval_queue import Decision
-    from ha_mcp.settings_ui._i18n import CATALOGS
+    from ha_mcp.settings_ui._i18n import CATALOGS, DEFAULT_LOCALE
 
-    return [
-        (locale, outcome)
-        for locale in sorted(set(CATALOGS) - {"en"})
-        for outcome in sorted(set(get_args(Decision)) - {"pending"})
-    ]
+    locales = sorted(set(CATALOGS) - {DEFAULT_LOCALE})
+    outcomes = sorted(set(get_args(Decision)) - {"pending"})
+    # Both sides are discovered, so either emptying out collects zero cases
+    # and the class below passes without driving the handler once.
+    assert locales, (
+        "no non-English catalog is registered — every case here derives from "
+        "one, so this file would pin the 409 copy in no language at all"
+    )
+    assert outcomes, (
+        "Decision no longer names any decided outcome — the 409 branch these "
+        "cases drive cannot be reached, so either the branch or this is dead"
+    )
+    return [(locale, outcome) for locale in locales for outcome in outcomes]
 
 
 class TestAlreadyDecidedCopy:
@@ -1720,11 +1728,11 @@ class TestAlreadyDecidedCopy:
     ``current_decision`` is a backend enum. Interpolating it raw put an
     English word inside otherwise translated copy — Italian read ``Questa
     approvazione è già stata approved``. It is resolved through the catalog
-    now, and this drives the real handler to check what the user is shown:
-    the translated word, and nowhere the enum. Asserting on the rendered
-    alert covers the ways source-text matching cannot — a catalog whose
-    value is still the English placeholder, a key the concatenation builds
-    but no catalog holds, a resolved word no message consumes.
+    now, and this drives the real handler and compares the whole sentence
+    the user is shown against the locale's own copy. Asserting on the
+    rendered alert covers the ways source-text matching cannot — a catalog
+    whose value is still the English placeholder, a key the concatenation
+    builds but no catalog holds, a resolved word no message consumes.
     """
 
     @pytest.mark.parametrize(("locale", "outcome"), _already_decided_cases())
@@ -1753,16 +1761,111 @@ class TestAlreadyDecidedCopy:
             f"expected the single 409 alert; got {result.alerts}"
         )
         alert = result.alerts[0]
-        word = CATALOGS[locale]["messages"][f"policies.pending.decision.{outcome}"]
-        assert word in alert, (
-            f"{locale}: the alert reads {alert!r}, which does not contain the "
-            f"catalog word {word!r} for {outcome!r}. The sentence is showing "
-            "something other than the translation."
+        messages = CATALOGS[locale]["messages"]
+        word = messages[f"policies.pending.decision.{outcome}"]
+        # Whole sentence, not containment: the host a containment check
+        # searches is that same catalog value with the word already
+        # substituted, so it cannot fail on catalog content. Lose the host to
+        # the English fallback and "This approval was already approvata"
+        # satisfies both a containment and a not-the-enum check.
+        expected = messages["policies.pending.already_decided"].replace(
+            "{decision}", word
         )
-        assert outcome not in alert, (
-            f"{locale}: the alert reads {alert!r}, which still contains the raw "
-            f"{outcome!r} the backend sent. That is an English word inside a "
-            "translated sentence — the bug this path was built to prevent."
+        assert alert == expected, (
+            f"{locale}: the alert reads {alert!r}, not the {locale} sentence "
+            f"{expected!r}. Either the host sentence fell back to English or "
+            f"the {outcome!r} slot is not the catalog word — both put English "
+            "inside translated copy, which is the bug this path prevents."
+        )
+
+
+class TestDecideUnavailableCopy:
+    """A 503 on the decide path must not splice English into translated copy.
+
+    ``/api/policy/{approve,deny}`` answers 503 with a fixed English paragraph
+    when live approvals are not active. Folding that body into
+    ``policies.pending.action_failed`` put that whole paragraph inside an
+    Italian clause. The path now answers the way ``policyLoadPending``
+    already does: the translated off-message when the flag is known off, and
+    otherwise the server's diagnostic on its own, because it names which of the
+    remaining causes applied and the generic line cannot.
+    """
+
+    @staticmethod
+    def _server_503() -> str:
+        """The exact 503 body the server sends, not a copy of it.
+
+        A hand-written fixture drifts: the first draft of this one dropped
+        the middle sentence — the one naming which three causes the message
+        distinguishes, which is the whole reason the branch shows it rather
+        than a generic line.
+        """
+        from ha_mcp.settings_ui import POLICY_UNAVAILABLE_MESSAGE
+
+        return POLICY_UNAVAILABLE_MESSAGE
+
+    def _decide_under_503(
+        self, settings_script: str, *, enabled: bool
+    ) -> HarnessResult:
+        """Drive an Italian UI through a 503 decide with the flag at ``enabled``.
+
+        ``loadPolicyState`` is invoked explicitly rather than left to page
+        init, so the branch reads a settled ``policyState`` instead of racing
+        the init fetch.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {"enable_tool_security_policies": {"value": enabled}}
+                },
+            },
+            "/api/policy/config": {
+                "status": 200,
+                "json": {"wait_seconds": 60, "approval_ttl_minutes": 5, "rules": []},
+            },
+            "/api/policy/approve": {
+                "status": 503,
+                "json": {"error": self._server_503()},
+            },
+            "/api/policy/pending": {"status": 200, "json": {"pending": []}},
+        }
+        return run_script(
+            settings_script,
+            initial_html=_localized_policy_dom("it"),
+            fetch_map=fetches,
+            invoke=(
+                "await window.loadPolicyState();"
+                "await window.policyDecide('tok-1', 'approve');"
+            ),
+        )
+
+    def test_flag_known_off_shows_the_translated_off_message(
+        self, settings_script: str
+    ) -> None:
+        from ha_mcp.settings_ui._i18n import CATALOGS
+
+        result = self._decide_under_503(settings_script, enabled=False)
+        _assert_clean_init(result)
+
+        expected = CATALOGS["it"]["messages"]["policies.pending.disabled"]
+        assert result.alerts == [expected], (
+            f"expected the Italian off-message {expected!r}; got {result.alerts}. "
+            "A user who simply turned the feature off is being told to read the "
+            "add-on log instead."
+        )
+
+    def test_flag_on_shows_the_server_diagnostic_on_its_own(
+        self, settings_script: str
+    ) -> None:
+        result = self._decide_under_503(settings_script, enabled=True)
+        _assert_clean_init(result)
+
+        assert result.alerts == [self._server_503()], (
+            f"expected the server paragraph alone; got {result.alerts}. Equality "
+            "is the point: anything longer means it was spliced into a "
+            "translated sentence, which is the mixed-language render this fixes."
         )
 
 

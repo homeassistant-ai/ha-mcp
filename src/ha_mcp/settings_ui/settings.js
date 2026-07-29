@@ -3330,6 +3330,28 @@ async function policyDecide(token, action) {
       ));
     } else if (resp.status === 404) {
       alert(t('policies.pending.invalid_token', {}, 'This approval token is no longer valid (already consumed or expired).'));
+    } else if (resp.status === 503) {
+      // Same three causes as policyLoadPending's 503, answered the same way.
+      // The 503 body is a fixed English paragraph, so folding it into
+      // 'policies.pending.action_failed' spliced five English lines into the
+      // middle of a translated clause.
+      if (policyState.enabledKnown && !policyState.enabled) {
+        alert(t(
+          'policies.pending.disabled',
+          {},
+          'Tool Security Policies is turned off. Toggle it on (top of this tab or in Server Settings) and restart the App (add-on) to enable gating.'
+        ));
+      } else {
+        // Feature is on (or we could not determine the flag). The server's
+        // message names which of the remaining causes applied, so it stands
+        // on its own rather than inside a sentence — the trade-off
+        // policyLoadPending already makes deliberately.
+        alert(body.error || t(
+          'policies.pending.unavailable',
+          {},
+          'Live approvals unavailable. Check the App (add-on) log for ImportError / RuntimeError details.'
+        ));
+      }
     } else {
       const detail = body.error || resp.statusText;
       alert(t('policies.pending.action_failed', {detail}, 'Approval action failed: ' + detail));
