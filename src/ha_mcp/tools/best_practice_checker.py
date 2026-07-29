@@ -176,7 +176,7 @@ _RE_STRING_LITERAL = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"", re.DO
 # binding takes effect (see _referenced_names). The quantifiers are possessive
 # because `\s`, `[\w\s,]` and the run between them all match whitespace; with
 # backtracking enabled a long space run inside `{% set %}` costs cubic time.
-_RE_JINJA_SET = re.compile(r"\{%-?\s*+set\s++([\w\s,]*+)=")
+_RE_JINJA_SET = re.compile(r"\{%-?\s*+set\s++([\w\s,]++)=")
 # `| name` is a filter, never a variable read.
 _RE_FILTER_NAME = re.compile(r"\|\s*[^\W\d]\w*")
 # An identifier read. A longer name is handled by the greedy `\w*` alone, which
