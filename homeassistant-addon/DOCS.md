@@ -298,7 +298,7 @@ Replaces the full tool catalog (~87 tools) with search-based discovery (~4 proxy
 > ⚠️ **Do NOT enable this if your client has its own built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code).** The two search layers conflict — running both at once does not work — and the client's built-in tool search is the better choice there anyway. Leave this off in those clients. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.
 
 **When to enable:**
-- Setups that load the **full tool catalog up front**. Deferred tools are a client feature, not a model feature — this covers models **without native deferred tool support** (OpenAI-compatible local models, Gemini, and **Claude Haiku**, which does not use Claude's built-in deferred tool loading), and clients that **inline all tool schemas regardless of model** (e.g. GitHub Copilot CLI, even when running Claude Sonnet or Opus).
+- Setups that load the **full tool catalog up front** — whether that happens depends on the client and model combination. This covers models **without native deferred tool support** (OpenAI-compatible local models, Gemini, and **Claude Haiku**, which does not use Claude's built-in deferred tool loading), and clients that **inline all tool schemas regardless of model** (e.g. GitHub Copilot CLI, even when running Claude Sonnet or Opus).
 - Models with **limited context windows** (≤200K) or deployments where context cost is a concern
 - MCP clients that **cap total tools** (e.g. at 100) — reduces visible tool count to ~4
 

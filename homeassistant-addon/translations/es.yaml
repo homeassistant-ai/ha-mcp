@@ -25,22 +25,22 @@ configuration:
       búsqueda de herramientas / herramientas diferidas integrada (claude.ai,
       Claude Desktop, Claude Code): las dos capas de búsqueda entran en
       conflicto y la búsqueda integrada del cliente es allí la mejor opción;
-      deja esto desactivado. Las herramientas diferidas son una característica
-      del cliente, no del modelo: usa esto cuando el catálogo completo se
-      cargaría de entrada — modelos sin herramientas diferidas nativas (p. ej.
-      Gemini, modelos locales compatibles con OpenAI, Claude Haiku), clientes
-      que insertan todos los esquemas de herramientas sea cual sea el modelo
-      (p. ej. GitHub Copilot CLI) o ventanas de contexto más pequeñas. Algunos
-      modelos Codex y ChatGPT también incluyen herramientas diferidas:
-      comprueba directamente con tu cliente/modelo qué características tiene
-      para no dejar esto activado innecesariamente. Las herramientas se
-      localizan mediante ha_search_tools y se ejecutan a través de proxies por
-      categoría (lectura/escritura/borrado). Requiere reiniciar el complemento
-      para que surta efecto; después, vuelve a conectar o actualiza el
-      servidor MCP en tu cliente de IA para que recargue la lista de
-      herramientas. Reiniciar el complemento por sí solo NO actualiza la lista
-      de herramientas almacenada en caché por el cliente; esto vale para
-      cualquier cambio de ajustes aquí.
+      deja esto desactivado. Que las herramientas se difieran depende de la
+      combinación de cliente y modelo: usa esto cuando tu configuración carga
+      el catálogo completo de entrada — modelos sin herramientas diferidas
+      nativas (p. ej. Gemini, modelos locales compatibles con OpenAI, Claude
+      Haiku), clientes que insertan todos los esquemas de herramientas sea
+      cual sea el modelo (p. ej. GitHub Copilot CLI) o ventanas de contexto
+      más pequeñas. Algunos modelos Codex y ChatGPT también incluyen
+      herramientas diferidas: comprueba directamente con tu cliente/modelo qué
+      características tiene para no dejar esto activado innecesariamente. Las
+      herramientas se localizan mediante ha_search_tools y se ejecutan a
+      través de proxies por categoría (lectura/escritura/borrado). Requiere
+      reiniciar el complemento para que surta efecto; después, vuelve a
+      conectar o actualiza el servidor MCP en tu cliente de IA para que
+      recargue la lista de herramientas. Reiniciar el complemento por sí solo
+      NO actualiza la lista de herramientas almacenada en caché por el
+      cliente; esto vale para cualquier cambio de ajustes aquí.
   enable_tool_security_policies:
     name: Activar las políticas de seguridad de herramientas (avanzado)
     description: >-

@@ -25,15 +25,15 @@ configuration:
       recherche d'outils intégrée / outils différés (claude.ai, Claude
       Desktop, Claude Code) — les deux couches de recherche entrent en
       conflit, et la recherche d'outils intégrée du client y est le meilleur
-      choix ; laisse ceci désactivé. Les outils différés sont une
-      fonctionnalité du client, pas du modèle : utilise ceci lorsque le
-      catalogue complet serait chargé d'emblée — modèles sans outils différés
-      natifs (p. ex. Gemini, modèles locaux compatibles OpenAI, Claude Haiku),
-      clients qui intègrent tous les schémas d'outils quel que soit le modèle
-      (p. ex. GitHub Copilot CLI), ou fenêtres de contexte plus petites.
-      Certains modèles Codex et ChatGPT incluent aussi des outils différés —
-      vérifie directement auprès de ton client/modèle quelles fonctionnalités
-      il possède pour ne pas laisser ceci activé inutilement. Les outils sont
+      choix ; laisse ceci désactivé. Le report des outils dépend de la
+      combinaison client/modèle : utilise ceci lorsque ta configuration charge
+      le catalogue complet d'emblée — modèles sans outils différés natifs (p.
+      ex. Gemini, modèles locaux compatibles OpenAI, Claude Haiku), clients
+      qui intègrent tous les schémas d'outils quel que soit le modèle (p. ex.
+      GitHub Copilot CLI), ou fenêtres de contexte plus petites. Certains
+      modèles Codex et ChatGPT incluent aussi des outils différés — vérifie
+      directement auprès de ton client/modèle quelles fonctionnalités il
+      possède pour ne pas laisser ceci activé inutilement. Les outils sont
       trouvés via ha_search_tools et exécutés via des proxys catégorisés
       (lecture/écriture/suppression). Nécessite un redémarrage pour prendre
       effet. Reconnecte ou actualise ensuite le serveur MCP dans ton client IA

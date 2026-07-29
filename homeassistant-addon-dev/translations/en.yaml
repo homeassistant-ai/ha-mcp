@@ -23,15 +23,16 @@ configuration:
       clients with their own built-in tool search / deferred tools (claude.ai,
       Claude Desktop, Claude Code) — the two search layers conflict, and the
       client's built-in tool search is the better choice there; leave this
-      off. Deferred tools are a client feature, not a model feature: use this
-      when the full catalog would load up front — models without native
-      deferred tools (e.g. Gemini, OpenAI-compatible local models, Claude
-      Haiku), clients that inline all tool schemas regardless of model (e.g.
-      GitHub Copilot CLI), or smaller context windows. Some Codex models and
-      ChatGPT include deferred tools too — check your client/model directly to
-      confirm its features so you don't leave this enabled unnecessarily.
-      Tools are found via ha_search_tools and executed via categorized proxies
-      (read/write/delete). Requires restart to take effect.
+      off. Whether tools are deferred depends on your client and model
+      combination: use this when your setup loads the full catalog up front —
+      models without native deferred tools (e.g. Gemini, OpenAI-compatible
+      local models, Claude Haiku), clients that inline all tool schemas
+      regardless of model (e.g. GitHub Copilot CLI), or smaller context
+      windows. Some Codex models and ChatGPT include deferred tools too —
+      check your client/model directly to confirm its features so you don't
+      leave this enabled unnecessarily. Tools are found via ha_search_tools
+      and executed via categorized proxies (read/write/delete). Requires
+      restart to take effect.
   enable_tool_security_policies:
     name: Enable Tool Security Policies (advanced)
     description: >-
