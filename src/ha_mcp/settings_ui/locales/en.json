@@ -371,8 +371,6 @@
     "advanced.verify_ssl.help": "Disable TLS verification only on trusted networks. Restart required.",
     "advanced.fuzzy_threshold.label": "Fuzzy-search threshold",
     "advanced.fuzzy_threshold.help": "Lower values allow looser entity matching. Range 0–100.",
-    "advanced.entity_search_limit.label": "Entity search result limit",
-    "advanced.entity_search_limit.help": "Maximum entities returned by ha_search_entities. Range 1–1000.",
     "advanced.automation_config_time_budget.label": "Automation config time budget (s)",
     "advanced.automation_config_time_budget.help": "Maximum time deep search spends fetching automation configs. Range 1–600. Restart required.",
     "advanced.script_config_time_budget.label": "Script config time budget (s)",

@@ -62,7 +62,7 @@ from .util_helpers import (
 logger = logging.getLogger(__name__)
 
 # Configuration-body buckets the merged ``ha_search`` orchestrator collects
-# from ``ha_deep_search``. ``dashboards`` is opt-in (excluded from the default
+# from ``_ha_deep_search``. ``dashboards`` is opt-in (excluded from the default
 # response shape) — the orchestrator's pre-populated defaults intentionally
 # omit it; this tuple is the canonical "all five" list used by the bucket-copy
 # and metadata-shadow logic.
@@ -117,7 +117,7 @@ def _validate_search_types(parsed: list[str] | None) -> None:
     with no warning or partial flag. Also rejects empty list: ``[]`` pins
     branch eligibility to config-only while the response echoes the default
     type list — a silent caller / runtime / response mismatch. Centralised
-    here so ``ha_search`` and ``ha_deep_search`` share the contract — adding
+    here so ``ha_search`` and ``_ha_deep_search`` share the contract — adding
     a new valid type needs one change.
     """
     if parsed is None:
@@ -3961,12 +3961,12 @@ class SearchTools:
             limit: Maximum total results to return (default: 5)
             exact_match: Use exact substring matching (default: True)
 
-        Examples:
-            - Find automations referencing an entity: ha_deep_search("sensor.temperature")
-            - Find with fuzzy matching: ha_deep_search("motion", exact_match=False)
-            - Find scenes touching a light: ha_deep_search("light.kitchen")
-            - Search dashboards for entity refs: ha_deep_search("sensor.temperature", search_types=["dashboard"])
-            - Search everything: ha_deep_search("light.bedroom", search_types=["automation","script","scene","helper","dashboard"])
+        Public entry-point examples (via ``ha_search``):
+            - Find automations referencing an entity: ha_search(query="sensor.temperature")
+            - Find with fuzzy matching: ha_search(query="motion", exact_match=False)
+            - Find scenes touching a light: ha_search(query="light.kitchen")
+            - Search dashboards for entity refs: ha_search(query="sensor.temperature", search_types=["dashboard"])
+            - Search everything: ha_search(query="light.bedroom", search_types=["automation","script","scene","helper","dashboard"])
         """
         try:
             parsed_search_types = parse_string_list_param(search_types, "search_types")

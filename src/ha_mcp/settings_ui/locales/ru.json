@@ -371,8 +371,6 @@
     "advanced.verify_ssl.help": "Отключайте проверку TLS только в доверенной сети. Нужен перезапуск.",
     "advanced.fuzzy_threshold.label": "Порог нечёткого поиска",
     "advanced.fuzzy_threshold.help": "Меньшее значение даёт более свободное сопоставление сущностей. Диапазон 0–100.",
-    "advanced.entity_search_limit.label": "Лимит результатов поиска сущностей",
-    "advanced.entity_search_limit.help": "Максимум сущностей, возвращаемых ha_search_entities. Диапазон 1–1000.",
     "advanced.automation_config_time_budget.label": "Бюджет времени конфигураций автоматизаций (с)",
     "advanced.automation_config_time_budget.help": "Максимальное время глубокого поиска для загрузки автоматизаций. 1–600. Нужен перезапуск.",
     "advanced.script_config_time_budget.label": "Бюджет времени конфигураций скриптов (с)",

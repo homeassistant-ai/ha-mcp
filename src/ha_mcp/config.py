@@ -63,10 +63,9 @@ class Settings(BaseSettings):
 
     # Tool configuration
     fuzzy_threshold: int = Field(60, alias="FUZZY_THRESHOLD")
-    entity_search_limit: int = Field(20, alias="ENTITY_SEARCH_LIMIT")
 
     # Smart-search config-fetch time budgets (seconds). Bound how long
-    # ha_search / ha_deep_search spends fetching automation/script/scene
+    # ha_search spends fetching automation/script/scene
     # definitions during the per-id fallback before reporting a partial
     # result. Surfaced in the Advanced settings panel (issue #1538) so
     # add-on users — who cannot set raw env vars — can tune them. Consumed
@@ -466,11 +465,6 @@ class Settings(BaseSettings):
             return int(val)
         return val
 
-    @property
-    def env_file_name(self) -> str:
-        """Get the current environment file name."""
-        return os.getenv("HAMCP_ENV_FILE", ".env")
-
     @field_validator("homeassistant_url")
     @classmethod
     def validate_homeassistant_url(cls, v: str) -> str:
@@ -578,28 +572,6 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get application settings."""
     return Settings()  # type: ignore[call-arg]
-
-
-def validate_settings() -> tuple[bool, str | None]:
-    """
-    Validate settings and return (is_valid, error_message).
-
-    Returns:
-        tuple: (True, None) if valid, (False, error_message) if invalid
-    """
-    try:
-        settings = get_settings()
-
-        # Additional validation
-        if not settings.homeassistant_url:
-            return False, "Home Assistant URL is required"
-
-        if not settings.homeassistant_token:
-            return False, "Home Assistant token is required"
-
-        return True, None
-    except Exception as e:
-        return False, str(e)
 
 
 # Runtime-editable feature flags surfaced in the /settings web UI
@@ -811,7 +783,6 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     AdvancedField("verify_ssl", "HA_VERIFY_SSL", bool, "operations", True),
     # Search & matching.
     AdvancedField("fuzzy_threshold", "FUZZY_THRESHOLD", int, "search", True),
-    AdvancedField("entity_search_limit", "ENTITY_SEARCH_LIMIT", int, "search", True),
     # Smart-search config-fetch time budgets (#1538). Restart-required
     # (consumed as import-time constants in smart_search/_config.py).
     AdvancedField(
@@ -941,12 +912,11 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
 # Bounds present on the Settings field today (mirrored):
 #   fuzzy_threshold (validator 0-100), code_mode_* (Field ge/le).
 # Bounds added purely as UI/POST guardrails (no Field constraint):
-#   timeout, max_retries, entity_search_limit.
+#   timeout, max_retries.
 _ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
     "timeout": (1, 600),
     "max_retries": (0, 20),
     "fuzzy_threshold": (0, 100),
-    "entity_search_limit": (1, 1000),
     "automation_config_time_budget": (1.0, 600.0),
     "script_config_time_budget": (1.0, 600.0),
     "scene_config_time_budget": (1.0, 600.0),

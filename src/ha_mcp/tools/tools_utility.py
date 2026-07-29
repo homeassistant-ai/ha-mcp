@@ -397,7 +397,7 @@ class UtilityTools:
                 "Try reducing 'hours_back' parameter (e.g., from 24 to 1 hour)",
                 "Add a specific 'entity_id' filter to narrow down results",
                 "If debugging an automation, filter by that automation's entity_id",
-                "Use ha_bug_report tool to check Home Assistant logs for crash details",
+                "Use ha_report_issue to check Home Assistant logs for crash details",
             ]
         return [
             "Try reducing 'hours_back' parameter (e.g., from 24 to 1 hour)",
@@ -1147,7 +1147,7 @@ class UtilityTools:
                     "  • Complex template triggering security filters",
                     "Try simplifying the template (remove newlines, reduce complexity)",
                     "Break complex templates into multiple simpler calls",
-                    "Use ha_bug_report tool to check Home Assistant logs for details",
+                    "Use ha_report_issue to check Home Assistant logs for details",
                 ] + suggestions
 
             exception_to_structured_error(

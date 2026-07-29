@@ -1,7 +1,7 @@
 """
 Helper Integration E2E Tests
 
-Comprehensive tests for Home Assistant helper management via the ha_manage_helper MCP tool.
+Comprehensive tests for the Home Assistant helper configuration tool family.
 Tests all supported helper types: input_boolean, input_number, input_select, input_text,
 input_datetime, and input_button.
 

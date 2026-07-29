@@ -93,7 +93,7 @@ verify:
 
 expected:
   tools_should_use:
-    - ha_search_entities
+    - ha_search
   description: >
     [What a correct agent should do]
 ```
@@ -305,7 +305,7 @@ For EACH custom story, output a full section:
 | Question | Baseline | Target |
 |----------|----------|--------|
 | Found the entity? | confirmed | confirmed |
-| Used ha_search_entities? | confirmed | confirmed |
+| Used ha_search? | confirmed | confirmed |
 
 **Score**: baseline=pass, target=pass, trend=stable
 **Tokens**: baseline=28,500, target=27,200 (-5%)

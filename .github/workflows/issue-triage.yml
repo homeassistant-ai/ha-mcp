@@ -660,7 +660,7 @@ jobs:
               'Core features (regression blocking any = Urgent; partial outage of one = High):',
               '- HA connection / authentication',
               '- Service calls / device control (ha_call_service, ha_bulk_control)',
-              '- Entity state access (ha_get_state, ha_search_entities, ha_deep_search)',
+              '- Entity state access (ha_get_state, ha_search)',
               '- Automation management (create/edit/delete/enable/disable)',
               '- Script management (create/execute)',
               '- Dashboard management (create/modify Lovelace)',

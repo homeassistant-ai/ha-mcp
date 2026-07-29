@@ -554,46 +554,6 @@ class FuzzyEntitySearcher:
         else:
             return "fuzzy_match"
 
-    def search_by_area(
-        self, entities: list[dict[str, Any]], area_query: str
-    ) -> dict[str, list[dict[str, Any]]]:
-        """
-        Group entities by area/room based on fuzzy matching.
-
-        Args:
-            entities: List of Home Assistant entity states
-            area_query: Area/room name to search for
-
-        Returns:
-            Dictionary with area matches grouped by inferred area
-        """
-        area_matches: dict[str, list[dict[str, Any]]] = {}
-        area_lower = area_query.lower().strip()
-
-        for entity in entities:
-            entity_id = entity.get("entity_id", "")
-            attributes = entity.get("attributes", {})
-            friendly_name = attributes.get("friendly_name", entity_id)
-
-            # Check area_id attribute first
-            if "area_id" in attributes:
-                area_id = attributes["area_id"]
-                if area_lower in area_id.lower():
-                    if area_id not in area_matches:
-                        area_matches[area_id] = []
-                    area_matches[area_id].append(entity)
-                    continue
-
-            # Fuzzy match on friendly name for room inference
-            area_score = calculate_partial_ratio(area_lower, friendly_name.lower())
-            if area_score >= self.threshold:
-                inferred_area = self._infer_area_from_name(friendly_name)
-                if inferred_area not in area_matches:
-                    area_matches[inferred_area] = []
-                area_matches[inferred_area].append(entity)
-
-        return area_matches
-
     def _infer_area_from_name(self, friendly_name: str) -> str:
         """Infer area/room from entity friendly name."""
         name_lower = friendly_name.lower()
