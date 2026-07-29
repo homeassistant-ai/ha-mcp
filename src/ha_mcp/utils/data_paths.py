@@ -7,6 +7,7 @@ JSONL).
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import logging
 import os
@@ -34,11 +35,15 @@ def get_data_dir() -> Path:
        location", and silently writing to ``$HOME`` instead would surprise
        users who chose the override deliberately.
     4. ``<tempdir>/ha-mcp`` — last-resort fallback when the previously
-       chosen step fails (read-only filesystem; ``HOME`` unset so
-       ``Path.home()`` resolves to ``/``; or ``HA_MCP_CONFIG_DIR`` set but
-       its mkdir raises). Loses persistence across restarts but lets the
-       server start; users wanting persistence should set
-       ``HA_MCP_CONFIG_DIR`` to a writable path.
+       chosen step cannot be created *or written to* (read-only filesystem;
+       ``HOME`` unset so ``Path.home()`` resolves to ``/``; a Docker volume
+       whose mount point ended up owned by another user; or
+       ``HA_MCP_CONFIG_DIR`` set but unusable). Loses persistence across
+       restarts but lets the server start; users wanting persistence should
+       set ``HA_MCP_CONFIG_DIR`` to a writable path.
+
+    Each candidate is probed with a real write, not just a ``mkdir`` — see
+    :func:`_try_write` for why existence alone is not enough.
 
     Memoized so the fallback warning typically emits once at startup
     rather than on every save/load HTTP request. ``lru_cache`` serializes
@@ -53,11 +58,47 @@ def get_data_dir() -> Path:
 
 
 def _try_mkdir(path: Path) -> OSError | None:
-    """Create ``path`` (idempotent); return the ``OSError`` on failure, else ``None``."""
+    """Create ``path`` and confirm it is writable.
+
+    Returns the ``OSError`` on failure, else ``None``.
+    """
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         return e
+    return _try_write(path)
+
+
+def _try_write(path: Path) -> OSError | None:
+    """Confirm ``path`` actually accepts writes; return the ``OSError``, else ``None``.
+
+    ``Path.mkdir(exist_ok=True)`` reports success for a directory that already
+    exists no matter who owns it or whether the filesystem is read-only — it
+    only re-stats the path. So "mkdir worked" does not mean "we can write
+    here", and Docker deployments live entirely inside that gap: the mount
+    point always exists by the time Python runs, because the image ships it
+    and Docker creates it when mounting a volume. Without this probe a
+    root-owned volume, a ``read_only: true`` filesystem or a ``--user``
+    override would each resolve as a perfectly good data dir and the fallback
+    warning below would never fire — persistence would just vanish with no
+    startup signal, which is the failure issue #2078 reported.
+
+    Probes by creating a real file rather than calling ``os.access``.
+    ``access(2)`` answers for the real UID rather than the effective one, and
+    it reports success for a process holding ``CAP_DAC_OVERRIDE`` (root in a
+    default container) whose writes a later ``--user`` drop would reject. It
+    does catch a read-only mount — Linux returns ``EROFS`` for ``W_OK`` — so
+    that is not the reason to avoid it. ``mkstemp`` is chosen because it
+    exercises the same syscalls the actual writes use (see
+    ``settings_ui._persistence``), which no permission query can stand in for.
+    """
+    try:
+        fd, name = tempfile.mkstemp(prefix=".ha-mcp-write-probe-", dir=path)
+    except OSError as e:
+        return e
+    os.close(fd)
+    with contextlib.suppress(OSError):
+        os.unlink(name)
     return None
 
 
@@ -82,7 +123,9 @@ def _prepare_fallback(preferred: Path | None) -> Path:
         )
     else:
         logger.warning(
-            "Cannot write ha-mcp data to %s (read-only filesystem or HOME unset). "
+            "Cannot write ha-mcp data to %s (read-only filesystem, HOME unset, "
+            "or the directory is owned by another user — a Docker volume "
+            "mounted there must be writable by the container's user). "
             "Falling back to %s — data will NOT persist across restarts. "
             "Set HA_MCP_CONFIG_DIR to a writable path for persistence.",
             preferred,
@@ -104,8 +147,9 @@ def _resolve_data_dir() -> Path:
         if err is None:
             return custom_dir
         logger.warning(
-            "HA_MCP_CONFIG_DIR=%s could not be prepared (%s: %s); "
-            "falling back to a tmpdir.",
+            "HA_MCP_CONFIG_DIR=%s is not usable — it must exist or be "
+            "creatable AND be writable by this process (%s: %s). It will NOT "
+            "be read from either; falling back to a tmpdir.",
             custom_dir,
             type(err).__name__,
             err,

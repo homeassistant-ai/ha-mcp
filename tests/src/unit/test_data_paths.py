@@ -23,14 +23,34 @@ def _reset_cache():
     get_data_dir.cache_clear()
 
 
+def _stub_write_probe(monkeypatch, writable: set[Path]) -> None:
+    """Answer the write probe from ``writable`` for paths that don't exist here.
+
+    The resolver probes each candidate with a real ``mkstemp``. Tests that
+    fake a non-existent directory (``/data`` on a dev box) have to fake the
+    probe too, or it fails on the missing path and the candidate looks
+    unwritable. Real ``tmp_path`` directories still get a real probe.
+    """
+    from ha_mcp.utils import data_paths
+
+    original = data_paths._try_write
+
+    def fake_write(path: Path) -> OSError | None:
+        if path in writable:
+            return None
+        return original(path)
+
+    monkeypatch.setattr(data_paths, "_try_write", fake_write)
+
+
 class TestPriorityOrder:
     """HA_MCP_CONFIG_DIR > /data > ~/.ha-mcp > tempdir/ha-mcp."""
 
     def test_addon_path_when_supervisor_token_set(self, monkeypatch):
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
-        # ``/data`` is not present on dev/CI machines; stub the writability
-        # probe rather than relying on the real path.
+        # ``/data`` is not present on dev/CI machines; stub both halves of the
+        # writability check rather than relying on the real path.
         original_mkdir = Path.mkdir
 
         def fake_mkdir(self: Path, *args, **kwargs):
@@ -39,6 +59,7 @@ class TestPriorityOrder:
             return original_mkdir(self, *args, **kwargs)
 
         monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+        _stub_write_probe(monkeypatch, writable={Path("/data")})
         assert get_data_dir() == Path("/data")
 
     def test_home_path_when_no_supervisor_token(self, monkeypatch, tmp_path):
@@ -160,6 +181,9 @@ class TestFallbacks:
             return original_mkdir(self, *args, **kwargs)
 
         monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+        # /data must look fully usable — the point is that it's skipped
+        # anyway, not that it happens to be unwritable on this machine.
+        _stub_write_probe(monkeypatch, writable={Path("/data")})
         monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(broken_target))
         monkeypatch.setattr(Path, "home", lambda: tmp_path / "unused-home")
         fallback_root = tmp_path / "fallback-tmp"
@@ -203,6 +227,67 @@ class TestFallbacks:
 
         assert result == fallback_root / "ha-mcp"
         assert result.is_dir()
+
+    def test_existing_but_unwritable_dir_is_rejected(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        """Issue #2078: the mount point exists, but the container can't write it.
+
+        ``Path.mkdir(exist_ok=True)`` reports success for any directory that
+        already exists, whoever owns it. Every Docker deployment hits that
+        branch — the image ships ``~/.ha-mcp`` and Docker creates the mount
+        point when attaching a volume — so without a real write probe a
+        root-owned volume resolves as a good data dir, no warning is logged,
+        and persistence silently disappears. Simulated by failing the probe,
+        because the test process can't make a directory unwritable to itself
+        on every platform (root ignores mode bits; Windows ignores chmod).
+        """
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
+        home = tmp_path / "home"
+        home.mkdir()
+        # The mount point exists and mkdir will happily "succeed" on it.
+        (home / ".ha-mcp").mkdir()
+        monkeypatch.setattr(Path, "home", lambda: home)
+
+        from ha_mcp.utils import data_paths
+
+        original = data_paths._try_write
+
+        def fake_write(path: Path) -> OSError | None:
+            if path == home / ".ha-mcp":
+                return OSError(13, "Permission denied")
+            return original(path)
+
+        monkeypatch.setattr(data_paths, "_try_write", fake_write)
+        fallback_root = tmp_path / "fallback-tmp"
+        fallback_root.mkdir()
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.tempfile.gettempdir", lambda: str(fallback_root)
+        )
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.utils.data_paths"):
+            result = get_data_dir()
+
+        assert result == fallback_root / "ha-mcp"
+        assert [r for r in caplog.records if "Falling back" in r.getMessage()], (
+            "unwritable data dir must warn, not resolve silently"
+        )
+
+    def test_write_probe_accepts_a_writable_dir_and_leaves_nothing_behind(
+        self, tmp_path
+    ):
+        """The probe must not litter the data dir with leftover files."""
+        from ha_mcp.utils.data_paths import _try_write
+
+        assert _try_write(tmp_path) is None
+        assert list(tmp_path.iterdir()) == []
+
+    def test_write_probe_reports_the_error_for_a_missing_dir(self, tmp_path):
+        """A candidate that isn't there at all is a probe failure, not a crash."""
+        from ha_mcp.utils.data_paths import _try_write
+
+        assert isinstance(_try_write(tmp_path / "nope"), OSError)
 
     def test_returns_unwritable_tmpdir_when_everything_fails(
         self, monkeypatch, tmp_path, caplog

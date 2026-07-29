@@ -14,6 +14,12 @@ services:
       dockerfile: Dockerfile
     image: homeassistant-ai/ha-mcp:latest
     container_name: ha-mcp-server
+    volumes:
+      # Persist tool config, feature flags, backup settings and OAuth client
+      # registrations. Without this, every settings change is lost as soon as
+      # the container is re-created (image update, 'docker compose down', ...)
+      # and several settings ask you to restart before they take effect.
+      - ha-mcp-data:/home/mcpuser/.ha-mcp
     environment:
       # Point to your Home Assistant instance
       # If HA is in same compose file, use service name: http://homeassistant:8123
@@ -28,9 +34,13 @@ services:
     # networks:
     #   - your-ha-network
 
+volumes:
+  ha-mcp-data:
+
 # Usage:
 # 1. Create .env file: HA_TOKEN=your_long_lived_access_token
-# 2. Add ha-mcp service to your docker-compose.yml
+# 2. Add ha-mcp service to your docker-compose.yml (copy the 'volumes:'
+#    top-level block too — a named volume has to be declared there)
 # 3. Run: docker-compose up -d ha-mcp
 # 4. Connect your MCP client to the ha-mcp container
 #

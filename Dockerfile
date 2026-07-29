@@ -35,9 +35,26 @@ LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
 # that callers running with `--user UID:GID` overrides — common in hardened
 # Docker setups, see issue #1125 — can stat HOME-relative paths. Write
 # access stays restricted to mcpuser via ownership.
-RUN groupadd -r mcpuser \
-    && useradd -r -g mcpuser -m mcpuser \
-    && chmod 0755 /home/mcpuser
+#
+# ~/.ha-mcp is pre-created and owned by mcpuser because Docker initializes a
+# fresh named volume from the image's directory at the mount point, ownership
+# included. Without this the mount point wouldn't exist in the image, Docker
+# would create it root-owned, and the documented
+# `-v ha-mcp-data:/home/mcpuser/.ha-mcp` would leave the container unable to
+# write there. ha-mcp then warns and falls back to a tmpdir (see
+# utils/data_paths.py), losing settings on every restart — issue #2078.
+#
+# The UID/GID are pinned rather than left to `-r`'s dynamic allocation: a
+# volume records numeric ownership, not names. If a base-image update shifted
+# the IDs `groupadd -r`/`useradd -r` hand out, an existing ha-mcp-data volume
+# would stay owned by the old UID and the new process couldn't write to it —
+# reintroducing exactly the tmpdir fallback this change exists to prevent.
+# Bind-mounting a host directory instead? It must be writable by UID 999.
+RUN groupadd -r -g 999 mcpuser \
+    && useradd -r -u 999 -g mcpuser -m mcpuser \
+    && chmod 0755 /home/mcpuser \
+    && mkdir -p /home/mcpuser/.ha-mcp \
+    && chown mcpuser:mcpuser /home/mcpuser/.ha-mcp
 
 WORKDIR /app
 
