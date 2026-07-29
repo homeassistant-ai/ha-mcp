@@ -1013,10 +1013,16 @@ def _package_folder_relative_to_config(raw: str, config_dir: str) -> str | None:
     /config/integrations``) is expressed relative to it; an absolute path
     elsewhere, a parent escape, or the config root itself is dropped.
     """
-    if raw.startswith("/"):
-        norm = os.path.normpath(raw)
-        if norm == config_dir or norm.startswith(config_dir + os.sep):
-            rel = os.path.relpath(norm, config_dir)
+    if posixpath.isabs(raw) or os.path.isabs(raw):
+        # Both separator styles are folded to "/" before comparing. Gating on
+        # `raw.startswith("/")` alone never matched a Windows-absolute include
+        # (C:\ha\integrations), so it fell through to the relative branch and
+        # was returned as though the whole absolute path were a folder name,
+        # instead of being relativized or dropped.
+        norm = os.path.normpath(raw).replace(os.sep, "/")
+        base = os.path.normpath(config_dir).replace(os.sep, "/")
+        if norm == base or norm.startswith(base + "/"):
+            rel = posixpath.relpath(norm, base)
             return rel if rel != "." else None
         return None
     folder = os.path.normpath(raw)
@@ -1064,8 +1070,15 @@ def _path_in_package_dir(normalized: str, package_dirs: set[str] | None) -> bool
     """
     if not normalized.endswith(".yaml"):
         return False
+    # ``normalized`` comes from ``os.path.normpath``, so its separator is
+    # ``os.sep``. Compare on a posix-ified copy rather than a hardcoded "/",
+    # which silently matched nothing where ``os.sep`` is a backslash — the
+    # sibling directory check uses ``os.sep`` and worked, so packages/*.yaml
+    # was the only allow rule that failed there.
+    posix = normalized.replace(os.sep, "/")
     return any(
-        normalized.startswith(folder + "/") for folder in (package_dirs or {"packages"})
+        posix.startswith(folder.replace(os.sep, "/") + "/")
+        for folder in (package_dirs or {"packages"})
     )
 
 
@@ -1341,7 +1354,10 @@ def _read_file_sync(target_file: Path) -> dict[str, Any]:
     if not target_file.is_file():
         return {"_error": "not_a_file"}
     stat = target_file.stat()
-    content = target_file.read_text()
+    # Explicit utf-8: bare read_text() uses the locale's preferred encoding,
+    # which is not utf-8 under a C/POSIX locale, so a config containing any
+    # non-ASCII byte would decode wrong or raise depending on the host.
+    content = target_file.read_text(encoding="utf-8")
     return {"content": content, "size": stat.st_size, "mtime": stat.st_mtime}
 
 
@@ -1370,7 +1386,7 @@ def _write_file_sync(
             "_error": "no_parent",
             "parent": parent,
         }
-    target_file.write_text(content)
+    target_file.write_text(content, encoding="utf-8")
     stat = target_file.stat()
     return {"size": stat.st_size, "mtime": stat.st_mtime, "is_new": not exists}
 
@@ -1394,7 +1410,7 @@ def _replace_file_sync(target_file: Path, content: str) -> dict[str, Any]:
     """
     target_file.parent.mkdir(parents=True, exist_ok=True)
     tmp_file = target_file.with_suffix(".tmp")
-    tmp_file.write_text(content)
+    tmp_file.write_text(content, encoding="utf-8")
     os.replace(str(tmp_file), str(target_file))
     stat = target_file.stat()
     return {"size": stat.st_size, "mtime": stat.st_mtime}
@@ -2165,7 +2181,7 @@ async def _apply_yaml_key_edit(
         # Atomic write: write to temp file, then rename into place
         def _atomic_write() -> None:
             tmp_file = target_file.with_suffix(".tmp")
-            tmp_file.write_text(new_content)
+            tmp_file.write_text(new_content, encoding="utf-8")
             os.replace(str(tmp_file), str(target_file))
 
         await hass.async_add_executor_job(_atomic_write)
