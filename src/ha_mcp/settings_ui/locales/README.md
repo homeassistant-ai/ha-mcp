@@ -15,8 +15,9 @@ Home Assistant language code names every file:
 - `homeassistant-addon-dev/translations/<code>.yaml`
 
 Adding only this catalog fails `test_every_locale_ships_on_every_surface`. Also
-add the new code to the locale list in `AGENTS.md` § Translations — that list is
-pinned by `test_agents_md_lists_every_shipped_locale`.
+add the new code to the locale list in the repository-root `AGENTS.md`
+§ Translations — that list is pinned by
+`test_agents_md_lists_every_shipped_locale`.
 
 **Start from a translated catalog, not from `en.json`.** English for the tool
 titles and descriptions comes from the tool definitions at runtime, so `en.json`
@@ -40,7 +41,9 @@ different sentences.
 - `tool_groups`: one entry per renderable MCP tool tag, keyed by the English
   tag. Not optional, and exact: no key more and none fewer.
 - `tools`: `title` and `description` per tool, keyed by the stable MCP tool
-  name. Not optional, and exact in the same way.
+  name. The key set is not optional and exact in the same way; either field on
+  its own may be left out, but a missing one counts as untranslated against the
+  share limit below.
 
 Keep the keys and `{placeholders}` unchanged in every section.
 
