@@ -23,6 +23,12 @@ titles and descriptions comes from the tool definitions at runtime, so `en.json`
 ships `tools` and `tool_groups` empty; a copy of it is missing both sections
 that this catalog is required to carry.
 
+**Read the other surfaces before you word a switch.** The add-on options and the
+settings UI describe the same switches, so wherever the English is
+byte-identical on two surfaces, your wording has to be byte-identical too.
+Translating one surface at a time is exactly how one option ends up with two
+different sentences.
+
 ## Catalog sections
 
 - `meta.native_name`: language name shown in the selector.
@@ -44,9 +50,13 @@ Keep the keys and `{placeholders}` unchanged in every section.
 - `tool_groups` and `tools` name exactly the renderable groups and tools — a
   tool added to the codebase turns every locale red in the PR that adds it.
 - At most 5% of this catalog's `messages`, and 5% of its `tools` texts, may be
-  byte-identical to English or missing outright; the component catalogs allow
-  15%. A single tool whose `title` *and* `description` are both still English
-  fails by name however small the share.
+  byte-identical to English or missing outright. Both add-on flavors are held to
+  the same 5%; the component catalogs allow 15%, because they carry product
+  names as keys of their own. A single tool whose `title` *and* `description` are
+  both still English fails by name however small the share.
+- One wording per English string across surfaces, wherever the same English text
+  is shipped from more than one catalog. The failure names every group that
+  disagrees, and the settings UI is the wording the other surfaces follow today.
 - The English each translation was written against is hashed in
   `tests/src/unit/locale_source_baseline.json`, so a later edit to an English
   string turns the locales red rather than leaving them silently stale. Adding a
