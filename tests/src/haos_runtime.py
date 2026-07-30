@@ -132,7 +132,7 @@ SSHPASS_BIN = os.environ.get("HAOS_TEST_SSHPASS_BIN", "sshpass")
 
 
 def ssh_exec(
-    cmd: list[str], *, timeout: float = 30.0
+    cmd: list[str], *, timeout: float = 30.0, retry_deadline: float | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run ``cmd`` over SSH against the booted HAOS's Advanced SSH addon.
 
@@ -188,7 +188,9 @@ def ssh_exec(
     # Retry the entire ``subprocess.run`` on that specific stderr token
     # (and the connection-refused variant) so cold-start races don't
     # require every caller to embed retry logic.
-    deadline = time.monotonic() + max(timeout, 60.0)
+    deadline = time.monotonic() + (
+        retry_deadline if retry_deadline is not None else max(timeout, 60.0)
+    )
     attempt = 0
     while True:
         attempt += 1
@@ -208,12 +210,15 @@ def ssh_exec(
                 or "connection reset by peer" in stderr
                 or "connection refused" in stderr
                 or "no route to host" in stderr
-                # The dev addon self-restarts mid-suite (settings /restart in
-                # test_addon_debug_log_level.py), tearing its container down
-                # for 5-25s; a docker exec from the other xdist worker racing
-                # that window sees the name unresolved. The container comes
-                # back on its own, so the miss is as transient as the SSH
-                # races above.
+                # Sibling tests restart the dev addon mid-suite (the settings
+                # /restart self-restart, and the real Supervisor restart in
+                # test_supervisor_inaddon.py::TestSettingsUiRestartReal),
+                # tearing its container down; a docker exec from the other
+                # xdist worker racing that window sees the name unresolved.
+                # The container comes back on its own, so the miss is as
+                # transient as the SSH races above — but the window can exceed
+                # 60s on a loaded runner (run 30548328308 outlasted 30
+                # attempts), hence the caller-supplied retry_deadline.
                 or "no such container" in stderr
             )
             if transient and time.monotonic() < deadline:
@@ -252,7 +257,11 @@ def docker_exec_in_addon(
     back in the test's finally block.
     """
     container = f"addon_{addon_slug}"
-    result = ssh_exec(["docker", "exec", container, *cmd], timeout=timeout)
+    result = ssh_exec(
+        ["docker", "exec", container, *cmd],
+        timeout=timeout,
+        retry_deadline=180.0,
+    )
     return result.stdout
 
 
