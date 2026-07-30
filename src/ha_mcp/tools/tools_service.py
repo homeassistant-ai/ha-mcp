@@ -409,8 +409,8 @@ class ServiceTools:
     @staticmethod
     def _split_return_response_envelope(
         result: Any, *, return_response: bool
-    ) -> tuple[Any, Any, bool]:
-        """Split HA's ``return_response`` reply into (changed states, response, present).
+    ) -> tuple[Any, Any, bool, list[str]]:
+        """Split HA's reply into (changed states, response, present, warnings).
 
         HA answers ``return_response=true`` with an envelope
         ``{"changed_states": [...], "service_response": ...}``. The response data
@@ -426,12 +426,32 @@ class ServiceTools:
         very duplication this split removes. A legitimately null
         ``service_response`` is still reported as present (``True``) so the caller
         emits the key.
+
+        Either key missing means a non-conforming responder (HA core always sends
+        both), and the empty ``result`` that follows would otherwise read as an
+        affirmative "no entity states changed". The returned *warnings* say so
+        explicitly; the caller surfaces them rather than letting the emptiness lie.
         """
         if not (return_response and isinstance(result, dict)):
-            return result, None, False
+            return result, None, False, []
+        warnings = (
+            []
+            if "changed_states" in result and "service_response" in result
+            else [
+                "Home Assistant's return_response reply did not match the expected "
+                "{changed_states, service_response} envelope, so no changed-state "
+                "records could be identified. An empty 'result' here does NOT mean "
+                "nothing changed — the reply is reported under 'service_response'."
+            ]
+        )
         if "service_response" not in result:
-            return [], result, True
-        return result.get("changed_states") or [], result["service_response"], True
+            return [], result, True, warnings
+        return (
+            result.get("changed_states") or [],
+            result["service_response"],
+            True,
+            warnings,
+        )
 
     @staticmethod
     def _project_service_result(
@@ -1222,7 +1242,7 @@ class ServiceTools:
             # Peel the return_response envelope apart BEFORE projection so the
             # response data is emitted once, top-level, and only the changed
             # states reach ``result`` (issue #2085).
-            result, service_response, has_response_envelope = (
+            result, service_response, has_response_envelope, envelope_warnings = (
                 self._split_return_response_envelope(
                     result, return_response=return_response_bool
                 )
@@ -1245,8 +1265,9 @@ class ServiceTools:
                 "result": projected_result,
                 "message": f"Successfully executed {domain}.{service}",
             }
-            if projection_warnings:
-                response.setdefault("warnings", []).extend(projection_warnings)
+            call_warnings = [*projection_warnings, *envelope_warnings]
+            if call_warnings:
+                response.setdefault("warnings", []).extend(call_warnings)
 
             if has_response_envelope:
                 response["service_response"] = service_response

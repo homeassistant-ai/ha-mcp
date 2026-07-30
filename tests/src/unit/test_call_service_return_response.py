@@ -35,10 +35,7 @@ _CHANGED_STATE = {
 def _make_tools(call_service_return: Any) -> ServiceTools:
     client = MagicMock()
     client.call_service = AsyncMock(return_value=call_service_return)
-    tools = ServiceTools.__new__(ServiceTools)
-    tools._client = client
-    tools._device_tools = MagicMock()
-    return tools
+    return ServiceTools(client, MagicMock())
 
 
 def _occurrences(response: dict[str, Any], needle: str) -> int:
@@ -128,6 +125,39 @@ class TestReturnResponsePlacement:
         )
         assert _occurrences(response, "changed_states") == 1, (
             f"the fallback dict must be serialized exactly once: {response!r}"
+        )
+        # An empty result here is an artifact of the unrecognized shape, not a
+        # claim that nothing changed — say so rather than letting it read that way.
+        assert any("does NOT mean" in w for w in response["warnings"]), (
+            f"an unrecognized envelope must warn about the empty result: {response!r}"
+        )
+
+    async def test_missing_changed_states_warns(self):
+        """A reply with no ``changed_states`` warns instead of implying no changes."""
+        tools = _make_tools({"service_response": _SHELL_RESPONSE})
+
+        response = await tools.ha_call_service(
+            domain="shell_command", service="test", return_response=True
+        )
+
+        assert response["service_response"] == _SHELL_RESPONSE
+        assert response["result"] == []
+        assert any("does NOT mean" in w for w in response["warnings"]), (
+            f"a missing changed_states must warn about the empty result: {response!r}"
+        )
+
+    async def test_conforming_envelope_emits_no_envelope_warning(self):
+        """The normal HA shape must not add warning noise."""
+        tools = _make_tools(
+            {"changed_states": [_CHANGED_STATE], "service_response": _SHELL_RESPONSE}
+        )
+
+        response = await tools.ha_call_service(
+            domain="shell_command", service="test", return_response=True
+        )
+
+        assert not any("does NOT mean" in w for w in response.get("warnings", [])), (
+            f"a conforming envelope must not warn: {response!r}"
         )
 
     async def test_null_service_response_is_still_set(self):
