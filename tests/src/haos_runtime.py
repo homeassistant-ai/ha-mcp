@@ -210,15 +210,11 @@ def ssh_exec(
                 or "connection reset by peer" in stderr
                 or "connection refused" in stderr
                 or "no route to host" in stderr
-                # Sibling tests restart the dev addon mid-suite (the settings
-                # /restart self-restart, and the real Supervisor restart in
-                # test_supervisor_inaddon.py::TestSettingsUiRestartReal),
-                # tearing its container down; a docker exec from the other
-                # xdist worker racing that window sees the name unresolved.
-                # The container comes back on its own, so the miss is as
-                # transient as the SSH races above — but the window can exceed
-                # 60s on a loaded runner (run 30548328308 outlasted 30
-                # attempts), hence the caller-supplied retry_deadline.
+                # Addon restarts (settings /restart self-restart, the real
+                # Supervisor restart in TestSettingsUiRestartReal) tear the
+                # container down briefly, so a name miss during that window is
+                # as transient as the SSH races above. The caller-supplied
+                # retry_deadline sizes the window.
                 or "no such container" in stderr
             )
             if transient and time.monotonic() < deadline:
@@ -272,23 +268,44 @@ def _container_miss_diagnostics(ssh_cmd: list[str], env: dict[str, str]) -> str:
     return " | " + " | ".join(captured)
 
 
+def _resolve_addon_container(addon_slug: str) -> str:
+    """Return the addon's actual container name on the booted HAOS.
+
+    Supervisor's addon container prefix changed from ``addon_`` to ``app_``
+    (the add-ons to apps rename), and HAOS self-updates Supervisor at boot,
+    so which prefix a CI VM uses depends on the Supervisor build it booted
+    with — run 30553159100's capture shows ``app_local_ha_mcp_dev`` running
+    while ``addon_local_ha_mcp_dev`` resolves to nothing. Read the name from
+    docker instead of assuming a prefix; on a listing miss (e.g. the addon is
+    mid-restart) fall back to the legacy name so the caller's retry window
+    still applies.
+    """
+    listing = ssh_exec(["docker", "ps", "-a", "--format", "{{.Names}}"], timeout=20.0)
+    candidates = {f"addon_{addon_slug}", f"app_{addon_slug}"}
+    for name in listing.stdout.split():
+        if name in candidates:
+            return name
+    return f"addon_{addon_slug}"
+
+
 def docker_exec_in_addon(
     addon_slug: str, cmd: list[str], *, timeout: float = 30.0
 ) -> str:
     """Run ``cmd`` inside an addon container via SSH + docker exec.
 
     ``addon_slug`` is the Supervisor slug (e.g. ``local_ha_mcp_dev``);
-    the helper resolves it to the Docker container name (
-    ``addon_<slug>``). Returns stdout of the command. Raises
-    ``RuntimeError`` with stderr+stdout context on non-zero exit
-    (via the wrapping in ``ssh_exec``).
+    the container name is resolved from docker via
+    :func:`_resolve_addon_container` (the prefix differs across Supervisor
+    builds). Returns stdout of the command. Raises ``RuntimeError`` with
+    stderr+stdout context on non-zero exit (via the wrapping in
+    ``ssh_exec``).
 
     Used by item 8's filesystem-poisoning E2E to make
     ``/data/saved_tools.json`` unwriteable inside the dev addon
     container mid-test, force the save-warning rollback, then chmod
     back in the test's finally block.
     """
-    container = f"addon_{addon_slug}"
+    container = _resolve_addon_container(addon_slug)
     result = ssh_exec(
         ["docker", "exec", container, *cmd],
         timeout=timeout,
