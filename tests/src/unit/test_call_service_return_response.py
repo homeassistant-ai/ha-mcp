@@ -39,7 +39,15 @@ def _make_tools(call_service_return: Any) -> ServiceTools:
 
 
 def _occurrences(response: dict[str, Any], needle: str) -> int:
-    return json.dumps(response).count(needle)
+    """Count *needle* in the response payload, ignoring ``warnings`` prose.
+
+    These counts exist to catch a payload shipped twice (issue #2085). Warning
+    text is human-facing prose that legitimately names the envelope keys, so
+    counting it would confuse "the records duplicated" with "we explained why
+    the result is empty".
+    """
+    payload = {k: v for k, v in response.items() if k != "warnings"}
+    return json.dumps(payload).count(needle)
 
 
 @pytest.fixture(autouse=True)
