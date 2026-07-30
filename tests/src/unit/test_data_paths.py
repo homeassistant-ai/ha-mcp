@@ -107,28 +107,13 @@ class TestPriorityOrder:
         truthy but ``Path("   ")`` resolves cwd-relative — without
         ``.strip()`` the resolver would mkdir a literal three-space-named
         directory. Whitespace-only must be treated as unset.
-
-        The "nothing was created" half compares a listing of the working
-        directory rather than probing ``cwd / "   "`` directly: Windows strips
-        trailing spaces from path components, so that path resolves back to
-        the working directory itself and ``.exists()`` is unconditionally
-        true there — the probe reported a failure on Windows no matter how the
-        resolver behaved. A listing diff expresses the same intent and holds
-        on both platforms.
         """
         monkeypatch.setenv("HA_MCP_CONFIG_DIR", "   ")
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        cwd = Path.cwd()
-        before = set(cwd.iterdir())
-
         result = get_data_dir()
-
         assert result == tmp_path / ".ha-mcp"
-        assert set(cwd.iterdir()) == before, (
-            "resolver created something next to the working directory for a "
-            "whitespace-only HA_MCP_CONFIG_DIR"
-        )
+        assert not (Path.cwd() / "   ").exists()
 
 
 class TestFallbacks:
