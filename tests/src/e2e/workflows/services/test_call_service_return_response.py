@@ -18,21 +18,23 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, parse_mcp_result
+from ...utilities.assertions import MCPAssertions
 
 logger = logging.getLogger(__name__)
 
 
-async def _find_calendar_entity(mcp_client) -> str | None:
-    """Find a calendar entity in the test container (a writable local_calendar)."""
-    result = await mcp_client.call_tool(
-        "ha_search",
-        {"query": "calendar", "domain_filter": "calendar", "limit": 10},
-    )
-    entities = parse_mcp_result(result).get("entities", [])
-    if not entities:
-        return None
-    return entities[0].get("entity_id")
+async def _find_calendar_entity(mcp_client) -> str:
+    """Find the seeded local_calendar entity — its absence is a failure, not a skip."""
+    async with MCPAssertions(mcp_client) as mcp:
+        data = await mcp.call_tool_success(
+            "ha_search",
+            {"query": "calendar", "domain_filter": "calendar", "limit": 10},
+        )
+    entities = data.get("entities", [])
+    assert entities, f"seeded local_calendar not found via ha_search: {data!r}"
+    entity_id = entities[0].get("entity_id")
+    assert entity_id, f"calendar search record lacks an entity_id: {entities[0]!r}"
+    return entity_id
 
 
 @pytest.mark.asyncio
@@ -42,8 +44,6 @@ class TestReturnResponsePlacement:
 
     async def test_get_events_response_is_not_duplicated(self, mcp_client):
         calendar_entity = await _find_calendar_entity(mcp_client)
-        if not calendar_entity:
-            pytest.skip("No calendar entities available for testing")
 
         start = datetime.now(UTC)
         end = start + timedelta(days=7)

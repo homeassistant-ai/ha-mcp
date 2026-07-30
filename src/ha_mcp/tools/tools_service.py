@@ -446,6 +446,9 @@ class ServiceTools:
         Issue #1446. Precedence:
 
         - ``verbose=True``: bypass every transformation; return ``result`` as-is.
+          (A ``return_response`` envelope is split off BEFORE this helper runs —
+          see ``_split_return_response_envelope`` — so ``result`` here is always
+          the changed states, whatever the mode.)
         - Explicit ``fields`` or ``attribute_keys``: apply per-record projection
           via ``project_entity_record`` to every record. No compaction; this is
           the power-user path.
@@ -1029,9 +1032,12 @@ class ServiceTools:
             bool,
             Field(
                 description=(
-                    "Return HA's raw service response unchanged (default: False). "
-                    "Use as an escape hatch when you need the full propagation "
-                    "chain or raw attribute payload (debug / inspection). "
+                    "Return HA's raw changed-state records unchanged (default: "
+                    "False). Use as an escape hatch when you need the full "
+                    "propagation chain or raw attribute payload (debug / "
+                    "inspection). With return_response=True the response data "
+                    "still surfaces once as the top-level service_response key, "
+                    "never nested in result. "
                     "WARNING: brings back token-bloat for nested-group targets — "
                     "prefer result_fields / result_attribute_keys for targeted control."
                 ),
