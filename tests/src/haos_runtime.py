@@ -208,6 +208,13 @@ def ssh_exec(
                 or "connection reset by peer" in stderr
                 or "connection refused" in stderr
                 or "no route to host" in stderr
+                # The dev addon self-restarts mid-suite (settings /restart in
+                # test_addon_debug_log_level.py), tearing its container down
+                # for 5-25s; a docker exec from the other xdist worker racing
+                # that window sees the name unresolved. The container comes
+                # back on its own, so the miss is as transient as the SSH
+                # races above.
+                or "no such container" in stderr
             )
             if transient and time.monotonic() < deadline:
                 LOG.debug(
