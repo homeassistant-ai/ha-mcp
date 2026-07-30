@@ -1,0 +1,108 @@
+name: Locale Sync
+
+# Machine-translate stale and missing catalog strings on the PR that changed
+# the English source, so translations are reviewed in the same PR (issue
+# #2083). scripts/translate_locales.py diffs the English-source baseline,
+# retranslates exactly the changed/missing keys via the Gemini API, runs
+# scripts/generate_locales.py, repins the baseline, and this workflow commits
+# the result back to the PR branch. A second run after that push finds no
+# stale keys and commits nothing, so the loop terminates.
+#
+# Fork PRs are skipped: they carry no secrets and their branches cannot be
+# pushed to. For those, a maintainer runs the script locally (see AGENTS.md
+# § Translations).
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - 'src/ha_mcp/settings_ui/locales/**'
+      - 'src/ha_mcp/settings_ui/settings.js'
+      - 'src/ha_mcp/settings_ui/_tools_meta.py'
+      - 'src/ha_mcp/tools/**'
+      - 'custom_components/ha_mcp_tools/strings.json'
+      - 'custom_components/ha_mcp_tools/translations/**'
+      - 'homeassistant-addon/config.yaml'
+      - 'homeassistant-addon/translations/**'
+      - 'homeassistant-addon-dev/config.yaml'
+      - 'homeassistant-addon-dev/translations/**'
+      - 'scripts/extract_tools.py'
+      - 'scripts/generate_locales.py'
+      - 'scripts/translate_locales.py'
+      - 'scripts/update_locale_baseline.py'
+      - 'tests/src/unit/locale_source_baseline.json'
+      - 'tests/src/unit/test_locale_parity.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: locale-sync-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Translate changed strings
+    # Same-repo PRs only: a fork PR exposes no secrets and its head branch
+    # cannot be pushed to from here.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # A brand-new language is ~700 strings under free-tier request pacing.
+    timeout-minutes: 45
+
+    steps:
+    - name: Generate GitHub App token
+      id: app-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ secrets.RELEASE_APP_ID }}
+        private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      continue-on-error: true
+
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.pull_request.head.ref || github.ref }}
+        # An App/PAT token here does double duty: its push survives branch
+        # rules and, unlike the default GITHUB_TOKEN, the push triggers the
+        # PR checks on the new head commit instead of leaving them unreported.
+        token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+    - name: Install dependencies
+      run: uv sync --dev
+
+    - name: Translate stale and missing strings
+      id: translate
+      # continue-on-error so partial progress (e.g. a free-tier daily cap hit
+      # halfway through a new language) is still committed; the job is failed
+      # afterwards so the gap stays visible and a rerun continues from it.
+      continue-on-error: true
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      run: uv run python scripts/translate_locales.py
+
+    - name: Commit and push if changed
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add src/ha_mcp/settings_ui/locales src/ha_mcp/settings_ui/settings.js \
+                custom_components/ha_mcp_tools/translations \
+                homeassistant-addon/translations homeassistant-addon-dev/translations \
+                tests/src/unit/locale_source_baseline.json
+        if git diff --staged --quiet; then
+          echo "No translation updates."
+          exit 0
+        fi
+        git commit -m "chore(internal): machine-translate locale updates"
+        git push
+
+    - name: Fail if translation failed
+      if: steps.translate.outcome != 'success'
+      run: |
+        echo "::error::scripts/translate_locales.py did not finish cleanly; partial progress (if any) was committed. Rerun this workflow to continue."
+        exit 1
