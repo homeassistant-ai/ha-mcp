@@ -46,6 +46,14 @@ automatically on the next clean start.
 
 > **Reachability check:** Claude.ai connects from Anthropic's servers, not from your computer — so the URL must be reachable from the public internet, not just your LAN. If a connection won't establish, open the remote URL on your **phone with Wi-Fi turned off** (cellular only). If it doesn't load there, the URL isn't publicly reachable (a DNS, port-forward, TLS, or reverse-proxy problem) and Claude.ai can't reach it either — fix that first.
 
+> **Tailscale Funnel: use port 443.** Claude.ai's backend does not reliably
+> reach a Funnel published on a non-standard HTTPS port (`8443`, `10000`) —
+> the connector fails identically in every auth mode (no auth, `legacy`,
+> `ha_auth`) and no request from Anthropic's range ever reaches your logs. Use the
+> Tailscale addon's built-in **Share Home Assistant with Serve or Funnel**
+> option, which publishes on the standard port 443, and build the connector
+> URL on that hostname (same webhook path).
+
 > **Recreate the connector when OAuth or the URL changes.** Claude.ai binds an
 > authentication mode to a connector when you add it, and caches it. If you
 > later **turn OAuth on or off**, or the **webhook URL changes** (you rotated
@@ -94,6 +102,7 @@ http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
 
 - **Nabu Casa subscribers**: Leave `remote_url` blank — auto-detected from cloud storage
 - **Cloudflare/DuckDNS/nginx**: Set `remote_url` to your external URL (e.g. `https://ha.example.com`)
+- **Tailscale Funnel**: Use the Tailscale addon's built-in **Share Home Assistant with Serve or Funnel** option, which publishes on port 443, and set `remote_url` to that hostname — Claude.ai cannot reliably reach a Funnel published on an alternate port such as `8443`
 
 Your external URL must point directly at Home Assistant — opening it in a browser should land on your HA login page — and it must **not** contain a port such as `:8123` (or any other port). If the connect URL carries a port, remote MCP clients such as Claude will fail to reach it even though it loads fine in your own browser.
 

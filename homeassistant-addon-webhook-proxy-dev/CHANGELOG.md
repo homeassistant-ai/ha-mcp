@@ -9,6 +9,12 @@ history from before the fork.
 -->
 
 
+## v2.1.1.dev2 (2026-07-30)
+
+Documentation: warn Tailscale Funnel users that Claude.ai connectors require the
+standard HTTPS port 443 (#2080).
+
+
 ## v2.1.1.dev1 (2026-07-26)
 
 Version line rebased onto the 2.1.0 stable base (no code changes — dev and
