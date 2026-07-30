@@ -459,43 +459,39 @@ class ServiceTools:
         changed states to project into ``result``. Returning it in both places
         shipped it twice, byte-identical, doubling its token cost (issue #2085).
 
-        A dict with no ``service_response`` key is not the expected envelope, so
-        it surfaces whole as the response data with no changed states — echoing it
-        AND projecting its ``changed_states`` would ship those records twice, the
-        very duplication this split removes. A legitimately null
-        ``service_response`` is still reported as present (``True``) so the caller
-        emits the key.
+        A legitimately null ``service_response`` is still reported as present
+        (``True``) so the caller emits the key.
 
         With ``return_response`` false there is no envelope to split: HA returns a
         plain changed-states list, so it passes through untouched and no
         ``service_response`` key is emitted (``present`` False). That is the
         overwhelming majority of calls.
 
-        Anything that is not that envelope — a non-dict reply, a missing key, or a
-        ``changed_states`` that is not a list — means a non-conforming responder
-        (HA core always sends both keys, with a list). The empty ``result`` that
-        follows would otherwise read as an affirmative "no entity states changed",
-        so every such shape returns a *warning* AND still surfaces the reply under
-        ``service_response``: a caller that asked for response data must never get
-        back neither the data nor an explanation.
+        Anything else — a non-dict reply, a missing key, or a ``changed_states``
+        that is not a list — means a non-conforming responder (HA core always
+        sends both keys, with a list). Every such shape takes ONE path: the whole
+        reply becomes the response data, ``result`` stays empty, and a warning
+        says so. Uniformity is the point — peeling a recognised key out of an
+        unrecognised envelope would silently discard whatever else it carried,
+        and an empty ``result`` would otherwise read as an affirmative "no entity
+        states changed". A caller that asked for response data must never get back
+        neither the data nor an explanation.
         """
         if not return_response:
             return result, None, False, []
-        if not isinstance(result, dict):
-            # Not an envelope at all. Surface the raw reply as the response data
-            # rather than dropping the key the caller explicitly asked for.
-            return [], result, True, [_NON_ENVELOPE_WARNING]
-        if "service_response" not in result:
-            # Echoing the dict whole AND projecting its ``changed_states`` would
-            # ship those records twice — the duplication this split removes.
-            return [], result, True, [_NON_ENVELOPE_WARNING]
-        states = result.get("changed_states")
-        if not isinstance(states, list):
-            # A non-list ``changed_states`` would sail through projection
-            # untouched (``compact_service_result`` returns non-lists as-is),
-            # silently ignoring result_fields and emitting the raw value.
-            return [], result["service_response"], True, [_NON_ENVELOPE_WARNING]
-        return states, result["service_response"], True, []
+        if (
+            isinstance(result, dict)
+            and "service_response" in result
+            and isinstance(result.get("changed_states"), list)
+        ):
+            return result["changed_states"], result["service_response"], True, []
+        # Any other shape is non-conforming. Hand the WHOLE reply back as the
+        # response data rather than guessing which part is which: splitting one
+        # recognised key out of an unrecognised envelope discards the rest (a
+        # non-list ``changed_states`` would vanish entirely) and would make the
+        # warning's "the whole reply is reported under 'service_response'" a lie.
+        # Projecting nothing into ``result`` keeps the records from shipping twice.
+        return [], result, True, [_NON_ENVELOPE_WARNING]
 
     @staticmethod
     def _project_service_result(

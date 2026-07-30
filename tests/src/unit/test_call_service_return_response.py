@@ -146,14 +146,20 @@ class TestReturnResponsePlacement:
         )
 
     async def test_missing_changed_states_warns(self):
-        """A reply with no ``changed_states`` warns instead of implying no changes."""
-        tools = _make_tools({"service_response": _SHELL_RESPONSE})
+        """A reply with no ``changed_states`` warns instead of implying no changes.
+
+        The whole reply is handed back, not just the recognised key — every
+        non-conforming shape takes the same path, so the warning's "the whole
+        reply is reported under 'service_response'" is true without exception.
+        """
+        reply = {"service_response": _SHELL_RESPONSE}
+        tools = _make_tools(reply)
 
         response = await tools.ha_call_service(
             domain="shell_command", service="test", return_response=True
         )
 
-        assert response["service_response"] == _SHELL_RESPONSE
+        assert response["service_response"] == reply
         assert response["result"] == []
         assert _NON_ENVELOPE_WARNING in response["warnings"], (
             f"a missing changed_states must warn about the empty result: {response!r}"
@@ -177,18 +183,21 @@ class TestReturnResponsePlacement:
             f"a non-dict reply must warn rather than silently drop: {response!r}"
         )
 
-    async def test_non_list_changed_states_warns_and_does_not_reach_projection(self):
+    async def test_non_list_changed_states_warns_and_keeps_the_whole_reply(self):
         """A non-list ``changed_states`` would sail through projection untouched.
 
         ``compact_service_result`` returns non-lists unchanged, so the raw value
         would be emitted as ``result`` with ``result_fields`` silently ignored.
+        The whole reply — malformed ``changed_states`` included — must survive
+        under ``service_response``: peeling only the recognised key out would
+        discard it AND make the warning's "the whole reply is reported under
+        'service_response'" false.
         """
-        tools = _make_tools(
-            {
-                "changed_states": {"unexpected": "shape"},
-                "service_response": _SHELL_RESPONSE,
-            }
-        )
+        reply = {
+            "changed_states": {"unexpected": "shape"},
+            "service_response": _SHELL_RESPONSE,
+        }
+        tools = _make_tools(reply)
 
         response = await tools.ha_call_service(
             domain="shell_command",
@@ -197,7 +206,9 @@ class TestReturnResponsePlacement:
             result_fields=["entity_id"],
         )
 
-        assert response["service_response"] == _SHELL_RESPONSE
+        assert response["service_response"] == reply, (
+            f"the malformed changed_states must not be discarded: {response!r}"
+        )
         assert response["result"] == []
         assert _NON_ENVELOPE_WARNING in response["warnings"], (
             f"a non-list changed_states must warn: {response!r}"
