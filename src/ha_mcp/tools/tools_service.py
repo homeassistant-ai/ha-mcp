@@ -407,6 +407,32 @@ class ServiceTools:
             )
 
     @staticmethod
+    def _split_return_response_envelope(
+        result: Any, *, return_response: bool
+    ) -> tuple[Any, Any, bool]:
+        """Split HA's ``return_response`` reply into (changed states, response, present).
+
+        HA answers ``return_response=true`` with an envelope
+        ``{"changed_states": [...], "service_response": ...}``. The response data
+        belongs at the top level of ha_call_service's reply exactly ONCE — the
+        placement the component path (``_build_component_call_response``) already
+        uses — so it is peeled off here, BEFORE projection, leaving only the
+        changed states to project into ``result``. Returning it in both places
+        shipped it twice, byte-identical, doubling its token cost (issue #2085).
+
+        A dict that is not the expected envelope surfaces whole as the response
+        data with no changed states, and a legitimately null ``service_response``
+        is still reported as present (``True``) so the caller emits the key.
+        """
+        if not (return_response and isinstance(result, dict)):
+            return result, None, False
+        return (
+            result.get("changed_states") or [],
+            result.get("service_response", result),
+            True,
+        )
+
+    @staticmethod
     def _project_service_result(
         result: Any,
         *,
@@ -1085,6 +1111,9 @@ class ServiceTools:
           lists (``effect_list``, ``hue_scenes``). Escape hatches: ``verbose=True``
           for the raw HA response, or ``result_fields`` / ``result_attribute_keys``
           for explicit per-record projection (mirrors ``ha_get_state``).
+        - **return_response** (default False): the service's response data is
+          returned once, as the top-level ``service_response`` key — never nested
+          inside ``result``, which carries the changed entity states.
 
         **For detailed service documentation, use ha_get_skill_guide.**
 
@@ -1177,6 +1206,15 @@ class ServiceTools:
                 domain, service, service_data, return_response=return_response_bool
             )
 
+            # Peel the return_response envelope apart BEFORE projection so the
+            # response data is emitted once, top-level, and only the changed
+            # states reach ``result`` (issue #2085).
+            result, service_response, has_response_envelope = (
+                self._split_return_response_envelope(
+                    result, return_response=return_response_bool
+                )
+            )
+
             projected_result, projection_warnings = self._project_service_result(
                 result,
                 entity_id=entity_id,
@@ -1197,9 +1235,8 @@ class ServiceTools:
             if projection_warnings:
                 response.setdefault("warnings", []).extend(projection_warnings)
 
-            # If return_response was requested, include the service_response key prominently
-            if return_response_bool and isinstance(result, dict):
-                response["service_response"] = result.get("service_response", result)
+            if has_response_envelope:
+                response["service_response"] = service_response
 
             # Wait for entity state to change
             if should_wait and entity_id is not None:
