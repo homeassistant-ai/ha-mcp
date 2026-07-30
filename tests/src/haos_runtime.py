@@ -131,6 +131,13 @@ SSH_ADDON_PASSWORD = os.environ.get("HAOS_TEST_SSH_PASSWORD", "haosdebug")
 SSHPASS_BIN = os.environ.get("HAOS_TEST_SSHPASS_BIN", "sshpass")
 
 
+# docker's two ways of saying the target container cannot be exec'd into: the
+# name matches nothing, or it matches a container that is not running. Both mean
+# the resolved name is stale, so both take the same re-resolve and both are
+# worth capturing VM state for.
+_CONTAINER_MISS_TOKENS = ("no such container", "is not running")
+
+
 def ssh_exec(
     cmd: list[str], *, timeout: float = 30.0
 ) -> subprocess.CompletedProcess[str]:
@@ -223,7 +230,7 @@ def ssh_exec(
             # RuntimeError with full stderr+stdout so failures are
             # actionable.
             diag = ""
-            if "no such container" in stderr:
+            if any(token in stderr for token in _CONTAINER_MISS_TOKENS):
                 diag = _container_miss_diagnostics(ssh_cmd, env)
             raise RuntimeError(
                 f"ssh_exec failed (exit {exc.returncode}, attempt={attempt}): "
@@ -232,13 +239,15 @@ def ssh_exec(
 
 
 def _container_miss_diagnostics(ssh_cmd: list[str], env: dict[str, str]) -> str:
-    """Best-effort VM state capture for a container-name miss.
+    """Best-effort VM state capture for a container miss.
 
-    A container docker reports as absent while the addon's HTTP endpoint
-    still serves means the container exists under a name the test did not
-    predict — so the failure message must carry the actual names. Reuses
-    the caller's assembled ssh wrapper with the remote command swapped
-    out; failures here must never mask the original error.
+    A container docker reports as absent or stopped while the addon's HTTP
+    endpoint still serves means the container exists under a name the test
+    did not predict — so the failure message must carry the actual names.
+    This capture deliberately uses ``docker ps -a`` with statuses: unlike
+    resolution, seeing the exited containers is the point. Reuses the
+    caller's assembled ssh wrapper with the remote command swapped out;
+    failures here must never mask the original error.
     """
     captured: list[str] = []
     for label, remote in (
@@ -269,6 +278,12 @@ def _resolve_addon_container(addon_slug: str) -> str | None:
     while ``addon_local_ha_mcp_dev`` resolves to nothing. Read the name from
     docker instead of assuming a prefix.
 
+    Only RUNNING containers are listed: ``docker exec`` requires one, so an
+    Exited leftover under either prefix is never the right answer. Candidates
+    are tested in a fixed order — ``app_`` before the legacy ``addon_`` — so a
+    VM that somehow carries both resolves to the current name deterministically
+    rather than by listing order.
+
     A clean listing that carries neither name (e.g. the addon is mid-restart)
     resolves to the legacy name. If the ``docker ps`` call itself fails this
     returns ``None`` rather than propagating, so an unreadable listing degrades
@@ -276,22 +291,25 @@ def _resolve_addon_container(addon_slug: str) -> str | None:
     would have worked.
     """
     try:
-        listing = ssh_exec(
-            ["docker", "ps", "-a", "--format", "{{.Names}}"], timeout=20.0
-        )
+        listing = ssh_exec(["docker", "ps", "--format", "{{.Names}}"], timeout=20.0)
     except (RuntimeError, subprocess.TimeoutExpired) as err:
         LOG.debug("container listing failed (%s); trying both prefixes", err)
         return None
-    candidates = {f"addon_{addon_slug}", f"app_{addon_slug}"}
-    for name in listing.stdout.split():
-        if name in candidates:
-            return name
+    running = set(listing.stdout.split())
+    for candidate in (f"app_{addon_slug}", f"addon_{addon_slug}"):
+        if candidate in running:
+            return candidate
     return f"addon_{addon_slug}"
 
 
 def _is_container_miss(err: Exception) -> bool:
-    """Whether ``err`` is docker reporting the target container as absent."""
-    return "no such container" in str(err).lower()
+    """Whether ``err`` is docker refusing the exec for want of a live container.
+
+    Both shapes count: the name matching nothing, and a container that stopped
+    between the listing and the exec.
+    """
+    text = str(err).lower()
+    return any(token in text for token in _CONTAINER_MISS_TOKENS)
 
 
 def docker_exec_in_addon(
@@ -305,14 +323,15 @@ def docker_exec_in_addon(
     builds). Returns stdout of the command. Raises ``RuntimeError`` with
     stderr+stdout context on non-zero exit (via the wrapping in
     ``ssh_exec``), carrying the ``docker ps`` and Supervisor addon list for a
-    container-name miss.
+    container miss.
 
-    A name miss fails fast — there is no retry window. It only costs one
-    second attempt: the resolved name can go stale (a listing taken while the
-    addon is mid-restart resolves to the legacy fallback, then the real
-    container returns under the other prefix), so a miss re-resolves once and
-    re-runs only when the name actually changed. When the listing was
-    unreadable to begin with, the second attempt is the other prefix.
+    A miss fails fast — there is no retry window. It only costs one second
+    attempt: the resolved name can go stale (a listing taken while the addon is
+    mid-restart resolves to the legacy fallback, then the real container
+    returns under the other prefix; or the container stops between listing and
+    exec), so a miss re-resolves once and re-runs only when the name actually
+    changed. When the listing was unreadable to begin with, the second attempt
+    is the other prefix.
 
     Used by item 8's filesystem-poisoning E2E to make
     ``/data/saved_tools.json`` unwriteable inside the dev addon
@@ -2160,7 +2179,7 @@ def trigger_dev_addon_update(
         _await_supervisor_ws_result(ws, msg_id, op_endpoint, op_deadline)
 
     def _supervisor_post_with_job_retry(
-        endpoint: str, op_timeout: int, *, data: dict | None = None
+        endpoint: str, op_timeout: float, *, data: dict | None = None
     ) -> None:
         """POST a Supervisor endpoint, retrying the transient per-addon
         ``Another job is running for job group ...`` collision.
