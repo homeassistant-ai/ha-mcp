@@ -132,7 +132,7 @@ SSHPASS_BIN = os.environ.get("HAOS_TEST_SSHPASS_BIN", "sshpass")
 
 
 def ssh_exec(
-    cmd: list[str], *, timeout: float = 30.0, retry_deadline: float | None = None
+    cmd: list[str], *, timeout: float = 30.0
 ) -> subprocess.CompletedProcess[str]:
     """Run ``cmd`` over SSH against the booted HAOS's Advanced SSH addon.
 
@@ -188,9 +188,7 @@ def ssh_exec(
     # Retry the entire ``subprocess.run`` on that specific stderr token
     # (and the connection-refused variant) so cold-start races don't
     # require every caller to embed retry logic.
-    deadline = time.monotonic() + (
-        retry_deadline if retry_deadline is not None else max(timeout, 60.0)
-    )
+    deadline = time.monotonic() + max(timeout, 60.0)
     attempt = 0
     while True:
         attempt += 1
@@ -210,12 +208,6 @@ def ssh_exec(
                 or "connection reset by peer" in stderr
                 or "connection refused" in stderr
                 or "no route to host" in stderr
-                # Addon restarts (settings /restart self-restart, the real
-                # Supervisor restart in TestSettingsUiRestartReal) tear the
-                # container down briefly, so a name miss during that window is
-                # as transient as the SSH races above. The caller-supplied
-                # retry_deadline sizes the window.
-                or "no such container" in stderr
             )
             if transient and time.monotonic() < deadline:
                 LOG.debug(
@@ -240,14 +232,13 @@ def ssh_exec(
 
 
 def _container_miss_diagnostics(ssh_cmd: list[str], env: dict[str, str]) -> str:
-    """Best-effort VM state capture for a persistent container-name miss.
+    """Best-effort VM state capture for a container-name miss.
 
-    A container absent through the whole retry window while the addon's
-    HTTP endpoint still serves means the container exists under a name
-    the test did not predict — so the failure message must carry the
-    actual names. Reuses the caller's assembled ssh wrapper with the
-    remote command swapped out; failures here must never mask the
-    original error.
+    A container docker reports as absent while the addon's HTTP endpoint
+    still serves means the container exists under a name the test did not
+    predict — so the failure message must carry the actual names. Reuses
+    the caller's assembled ssh wrapper with the remote command swapped
+    out; failures here must never mask the original error.
     """
     captured: list[str] = []
     for label, remote in (
@@ -268,7 +259,7 @@ def _container_miss_diagnostics(ssh_cmd: list[str], env: dict[str, str]) -> str:
     return " | " + " | ".join(captured)
 
 
-def _resolve_addon_container(addon_slug: str) -> str:
+def _resolve_addon_container(addon_slug: str) -> str | None:
     """Return the addon's actual container name on the booted HAOS.
 
     Supervisor's addon container prefix changed from ``addon_`` to ``app_``
@@ -276,16 +267,31 @@ def _resolve_addon_container(addon_slug: str) -> str:
     so which prefix a CI VM uses depends on the Supervisor build it booted
     with — run 30553159100's capture shows ``app_local_ha_mcp_dev`` running
     while ``addon_local_ha_mcp_dev`` resolves to nothing. Read the name from
-    docker instead of assuming a prefix; on a listing miss (e.g. the addon is
-    mid-restart) fall back to the legacy name so the caller's retry window
-    still applies.
+    docker instead of assuming a prefix.
+
+    A clean listing that carries neither name (e.g. the addon is mid-restart)
+    resolves to the legacy name. If the ``docker ps`` call itself fails this
+    returns ``None`` rather than propagating, so an unreadable listing degrades
+    to the caller trying both supported names instead of blocking an exec that
+    would have worked.
     """
-    listing = ssh_exec(["docker", "ps", "-a", "--format", "{{.Names}}"], timeout=20.0)
+    try:
+        listing = ssh_exec(
+            ["docker", "ps", "-a", "--format", "{{.Names}}"], timeout=20.0
+        )
+    except (RuntimeError, subprocess.TimeoutExpired) as err:
+        LOG.debug("container listing failed (%s); trying both prefixes", err)
+        return None
     candidates = {f"addon_{addon_slug}", f"app_{addon_slug}"}
     for name in listing.stdout.split():
         if name in candidates:
             return name
     return f"addon_{addon_slug}"
+
+
+def _is_container_miss(err: Exception) -> bool:
+    """Whether ``err`` is docker reporting the target container as absent."""
+    return "no such container" in str(err).lower()
 
 
 def docker_exec_in_addon(
@@ -298,20 +304,37 @@ def docker_exec_in_addon(
     :func:`_resolve_addon_container` (the prefix differs across Supervisor
     builds). Returns stdout of the command. Raises ``RuntimeError`` with
     stderr+stdout context on non-zero exit (via the wrapping in
-    ``ssh_exec``).
+    ``ssh_exec``), carrying the ``docker ps`` and Supervisor addon list for a
+    container-name miss.
+
+    A name miss fails fast — there is no retry window. It only costs one
+    second attempt: the resolved name can go stale (a listing taken while the
+    addon is mid-restart resolves to the legacy fallback, then the real
+    container returns under the other prefix), so a miss re-resolves once and
+    re-runs only when the name actually changed. When the listing was
+    unreadable to begin with, the second attempt is the other prefix.
 
     Used by item 8's filesystem-poisoning E2E to make
     ``/data/saved_tools.json`` unwriteable inside the dev addon
     container mid-test, force the save-warning rollback, then chmod
     back in the test's finally block.
     """
-    container = _resolve_addon_container(addon_slug)
-    result = ssh_exec(
-        ["docker", "exec", container, *cmd],
-        timeout=timeout,
-        retry_deadline=180.0,
-    )
-    return result.stdout
+    resolved = _resolve_addon_container(addon_slug)
+    first = resolved if resolved is not None else f"addon_{addon_slug}"
+    try:
+        return ssh_exec(["docker", "exec", first, *cmd], timeout=timeout).stdout
+    except RuntimeError as err:
+        if not _is_container_miss(err):
+            raise
+        second = (
+            _resolve_addon_container(addon_slug)
+            if resolved is not None
+            else f"app_{addon_slug}"
+        )
+        if second is None or second == first:
+            raise
+        LOG.debug("container %r missing; retrying once as %r", first, second)
+        return ssh_exec(["docker", "exec", second, *cmd], timeout=timeout).stdout
 
 
 def is_haos_inaddon_mode() -> bool:
