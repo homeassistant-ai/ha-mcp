@@ -364,13 +364,37 @@ class TestErrorHandling:
                 or "operation_ids" in mixed_bulk_data
             )
             if bulk_succeeded:
-                # Check if partial success is reported
+                # Per-item accounting is the contract this pins: a bad
+                # entity must not abort the batch, and every requested
+                # entity must be accounted for in the bulk response —
+                # results carry per-item outcomes on BOTH dispatch tiers
+                # (the component fast path confirms inline and returns no
+                # operation_ids at all, so the response is the only
+                # tier-independent surface).
                 operation_ids = mixed_bulk_data.get("operation_ids", [])
+                results = mixed_bulk_data.get("results", [])
+                skipped = mixed_bulk_data.get("skipped_details", [])
+                assert mixed_bulk_data.get("total_operations", 0) + len(skipped) == len(
+                    mixed_entities
+                ), f"every requested entity must be accounted for: {mixed_bulk_data}"
+                assert len(results) == mixed_bulk_data.get("total_operations", 0), (
+                    f"per-item results must cover every dispatched operation "
+                    f"(a bad entity must not abort the batch): {mixed_bulk_data}"
+                )
                 logger.info(
-                    f"  ✅ Mixed entities handled, {len(operation_ids)} operations created"
+                    f"  ✅ Mixed entities handled: {len(results)} results, "
+                    f"{len(skipped)} skipped, {len(operation_ids)} operation ids"
                 )
 
-                # Check status of operations
+                # Legacy tier only: dispatched operations get polling
+                # handles. Fabricated entities never appear here (they are
+                # rejected before dispatch — the not_found VALUE contract
+                # for unknown ids is pinned by test_operation_status.py's
+                # test_list_operation_ids_invalid), so every id present
+                # must resolve to a live per-item entry whose status is one
+                # a dispatched operation can actually reach — never
+                # not_found, which would mean the batch lost track of an
+                # operation it just created.
                 if operation_ids:
                     # Keep the poll window below _safe_tool_call's 10s
                     # wrapper timeout so a still-pending operation returns
@@ -383,39 +407,26 @@ class TestErrorHandling:
 
                     status_data = parse_mcp_result(status_result)
                     if status_data.get("success"):
-                        # The point of the bulk path: per-item outcomes
-                        # surface as structured entries in detailed_results
-                        # instead of the first bad operation aborting the
-                        # batch. Every entry must carry a recognised
-                        # batch status.
                         detailed = status_data.get("detailed_results", [])
-                        assert detailed, (
-                            f"expected per-item entries for {operation_ids}: "
-                            f"{status_data}"
-                        )
-                        known = {
-                            "completed",
-                            "failed",
-                            "timeout",
-                            "not_found",
-                            "pending",
+                        by_status = {
+                            entry.get("operation_id"): entry.get("status")
+                            for entry in detailed
                         }
-                        bad = [
-                            entry
-                            for entry in detailed
-                            if entry.get("status") not in known
-                        ]
-                        assert not bad, (
-                            f"entries without a recognised batch status: {bad}"
+                        assert set(by_status) == set(operation_ids), (
+                            f"bulk status must cover exactly the dispatched "
+                            f"ids: {status_data}"
                         )
-                        failed_ops = [
-                            entry
-                            for entry in detailed
-                            if entry.get("status") in ("failed", "timeout")
-                        ]
-                        logger.info(
-                            f"    {len(failed_ops)} operations failed (expected for invalid entities)"
+                        stray = {
+                            op_id: status
+                            for op_id, status in by_status.items()
+                            if status
+                            not in ("completed", "pending", "timeout", "failed")
+                        }
+                        assert not stray, (
+                            f"dispatched operations reported an impossible "
+                            f"status (batch lost track of them): {stray}"
                         )
+                        logger.info(f"    dispatched statuses: {by_status}")
             else:
                 logger.info(
                     f"  ✅ Mixed entities correctly failed: {_get_error_str(mixed_bulk_data)}"

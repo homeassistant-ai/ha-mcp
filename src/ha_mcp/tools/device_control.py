@@ -301,33 +301,50 @@ class DeviceControlTools:
         action: str,
         parameters: dict[str, Any] | None,
     ) -> tuple[str, dict[str, Any] | None]:
-        service_mapping = {
-            "on": "turn_on",
-            "off": "turn_off",
-            "toggle": "toggle",
-            "open": "open_cover" if domain == "cover" else "turn_on",
-            "close": "close_cover" if domain == "cover" else "turn_off",
-            "set": "turn_on" if domain == "light" else "set_temperature",
-        }
+        if domain == "climate" and action in ("heat", "cool", "auto", "heat_cool"):
+            parameters = dict(parameters or {})
+            parameters["hvac_mode"] = action
+            return "set_hvac_mode", parameters
 
-        service_name = service_mapping.get(action, action)
-
-        if domain == "climate":
-            if action in ["heat", "cool", "auto"]:
-                service_name = "set_hvac_mode"
-                if not parameters:
-                    parameters = {}
-                parameters["hvac_mode"] = action
-            elif action == "set":
-                service_name = "set_temperature"
-
-        elif domain == "media_player":
-            if action in ["play", "pause", "stop"]:
-                service_name = f"media_{action}"
-            elif action == "set":
-                service_name = "volume_set"
-
+        service_name = self._SERVICE_OVERRIDES.get(
+            (domain, action), self._GENERIC_SERVICE_MAP.get(action, action)
+        )
         return service_name, parameters
+
+    # Domain-specific action-to-service mappings; anything not listed
+    # falls through to _GENERIC_SERVICE_MAP, then to the action verbatim.
+    # tests/src/e2e/workflows/device_control/test_action_service_resolution.py
+    # pins every DOMAIN_HANDLERS table entry through this resolver against
+    # a live instance's service list.
+    _SERVICE_OVERRIDES: ClassVar[dict[tuple[str, str], str]] = {
+        ("cover", "open"): "open_cover",
+        ("cover", "close"): "close_cover",
+        ("cover", "stop"): "stop_cover",
+        ("cover", "set"): "set_cover_position",
+        ("light", "set"): "turn_on",
+        # lock.open exists; the generic mapping's turn_on does not.
+        ("lock", "open"): "open",
+        ("climate", "set"): "set_temperature",
+        ("media_player", "play"): "media_play",
+        ("media_player", "pause"): "media_pause",
+        ("media_player", "stop"): "media_stop",
+        ("media_player", "next"): "media_next_track",
+        ("media_player", "previous"): "media_previous_track",
+        ("media_player", "set"): "volume_set",
+        ("alarm_control_panel", "arm_home"): "alarm_arm_home",
+        ("alarm_control_panel", "arm_away"): "alarm_arm_away",
+        ("alarm_control_panel", "arm_night"): "alarm_arm_night",
+        ("alarm_control_panel", "disarm"): "alarm_disarm",
+    }
+
+    _GENERIC_SERVICE_MAP: ClassVar[dict[str, str]] = {
+        "on": "turn_on",
+        "off": "turn_off",
+        "toggle": "toggle",
+        "open": "turn_on",
+        "close": "turn_off",
+        "set": "set_temperature",
+    }
 
     _DOMAIN_PARAMS: ClassVar[dict[str, list[str]]] = {
         "light": ["brightness", "color_temp_kelvin", "rgb_color", "effect"],

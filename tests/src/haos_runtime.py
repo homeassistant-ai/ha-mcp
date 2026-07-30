@@ -255,7 +255,8 @@ def docker_exec_in_addon(
     container mid-test, force the save-warning rollback, then chmod
     back in the test's finally block.
     """
-    deadline = time.monotonic() + 45.0
+    # Same deadline derivation as ssh_exec's own transport retries.
+    deadline = time.monotonic() + max(timeout, 60.0)
     while True:
         names = ssh_exec(
             [
@@ -269,8 +270,11 @@ def docker_exec_in_addon(
             timeout=timeout,
         ).stdout.split()
         if names:
+            # During Supervisor's legacy-name migration both prefixes can
+            # briefly match; the app_* container is the live one.
+            container = next((n for n in names if n.startswith("app_")), names[0])
             try:
-                result = ssh_exec(["docker", "exec", names[0], *cmd], timeout=timeout)
+                result = ssh_exec(["docker", "exec", container, *cmd], timeout=timeout)
                 return result.stdout
             except RuntimeError as exc:
                 message = str(exc).lower()

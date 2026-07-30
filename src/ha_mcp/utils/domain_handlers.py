@@ -10,7 +10,7 @@ from typing import Any
 # Domain-specific handler configurations
 DOMAIN_HANDLERS = {
     "light": {
-        "valid_actions": ["on", "off", "toggle", "set", "adjust"],
+        "valid_actions": ["on", "off", "toggle", "set"],
         "parameters": [
             "brightness",
             "color_temp_kelvin",
@@ -30,7 +30,16 @@ DOMAIN_HANDLERS = {
         "supports_color": True,
     },
     "climate": {
-        "valid_actions": ["on", "off", "set", "heat", "cool", "auto", "heat_cool"],
+        "valid_actions": [
+            "on",
+            "off",
+            "toggle",
+            "set",
+            "heat",
+            "cool",
+            "auto",
+            "heat_cool",
+        ],
         "parameters": [
             "temperature",
             "target_temp_high",
@@ -60,7 +69,17 @@ DOMAIN_HANDLERS = {
         "supports_color": False,
     },
     "media_player": {
-        "valid_actions": ["play", "pause", "stop", "toggle", "set", "next", "previous"],
+        "valid_actions": [
+            "on",
+            "off",
+            "play",
+            "pause",
+            "stop",
+            "toggle",
+            "set",
+            "next",
+            "previous",
+        ],
         "parameters": [
             "volume_level",
             "media_content_id",
@@ -73,7 +92,7 @@ DOMAIN_HANDLERS = {
         "supports_media": True,
     },
     "fan": {
-        "valid_actions": ["on", "off", "toggle", "set"],
+        "valid_actions": ["on", "off", "toggle"],
         # HA removed the legacy `speed` param / `fan.set_speed` service in the
         # 2021-2022 percentage migration (absent in 2026.6). Use percentage
         # (fan.set_percentage) and preset_mode (fan.set_preset_mode).
@@ -116,7 +135,7 @@ DOMAIN_HANDLERS = {
         "supports_modes": True,
     },
     "humidifier": {
-        "valid_actions": ["on", "off", "toggle", "set"],
+        "valid_actions": ["on", "off", "toggle"],
         "parameters": ["humidity", "mode"],
         "quick_actions": ["toggle", "humidity_up", "humidity_down"],
         "state_attributes": ["current_humidity", "target_humidity"],
@@ -124,7 +143,7 @@ DOMAIN_HANDLERS = {
         "supports_modes": True,
     },
     "camera": {
-        "valid_actions": ["snapshot", "record", "stream"],
+        "valid_actions": ["on", "off", "snapshot", "record"],
         "parameters": ["filename", "duration"],
         "quick_actions": ["take_snapshot"],
         "state_attributes": ["entity_picture", "access_token"],
@@ -132,7 +151,7 @@ DOMAIN_HANDLERS = {
         "supports_recording": True,
     },
     "scene": {
-        "valid_actions": ["turn_on", "activate"],
+        "valid_actions": ["on", "turn_on"],
         "parameters": [],
         "quick_actions": ["activate"],
         "state_attributes": ["state"],
@@ -140,7 +159,7 @@ DOMAIN_HANDLERS = {
         "action_only": True,
     },
     "script": {
-        "valid_actions": ["turn_on", "turn_off", "toggle"],
+        "valid_actions": ["on", "off", "toggle", "turn_on", "turn_off"],
         "parameters": [],
         "quick_actions": ["run", "stop"],
         "state_attributes": ["state"],
@@ -148,7 +167,7 @@ DOMAIN_HANDLERS = {
         "can_be_stopped": True,
     },
     "automation": {
-        "valid_actions": ["turn_on", "turn_off", "toggle", "trigger"],
+        "valid_actions": ["on", "off", "toggle", "turn_on", "turn_off", "trigger"],
         "parameters": [],
         "quick_actions": ["enable", "disable", "trigger"],
         "state_attributes": ["state", "last_triggered"],
