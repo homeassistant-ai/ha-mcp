@@ -1303,6 +1303,53 @@ class TestReuseScoping:
         }
         assert result["warnings"] == [_reuse_warning("right.name", "right_step")]
 
+    async def test_flat_override_wins_over_stale_scoped_record_on_reuse(self) -> None:
+        """The record carries the value actually submitted for a path.
+
+        A flat key overrides an explicit section value at the step declaring
+        both (see ``test_flat_section_field_overrides_explicit_section_value``),
+        so a later redeclaration of that path must resubmit the override, not
+        the overridden section value.
+        """
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-3"},
+        }
+        first_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-scope",
+            "step_id": "advanced_step",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": True,
+                    "schema": [{"name": "name", "required": True}],
+                }
+            ],
+        }
+        submit_fn = AsyncMock(
+            side_effect=[
+                self._named_section_step("later_step", "advanced"),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-scope",
+            initial_step=first_step,
+            config={"advanced": {"name": "SCOPED"}, "name": "FLAT", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[0].args[1] == {"advanced": {"name": "FLAT"}}
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "advanced": {"name": "FLAT"},
+        }
+        assert result["warnings"] == [_reuse_warning("advanced.name", "later_step")]
+
     async def test_untouched_optional_section_is_not_materialized(self) -> None:
         """Reuse never invents a section the caller did not name."""
         final_entry: dict[str, Any] = {

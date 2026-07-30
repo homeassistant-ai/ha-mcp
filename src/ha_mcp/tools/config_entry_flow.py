@@ -208,13 +208,22 @@ class _ReuseState:
     def record(
         self, path_prefix: str, name: str, value: Any, *, scoped_only: bool
     ) -> None:
-        """Snapshot a value the caller supplied at this declaration site."""
+        """Snapshot a value the caller supplied at this declaration site.
+
+        A flat value that lands on a path already recorded from an explicit
+        section dict also replaces that scoped entry: the flat key is the one
+        actually submitted for the path (flat overrides explicit), so the
+        record must carry the effective value or a later redeclaration of the
+        path would resurrect the overridden one.
+        """
         dotted = _section_path(path_prefix, name)
         self.filled.add(dotted)
         if scoped_only:
             self.scoped[dotted] = copy.deepcopy(value)
         else:
             self.flat[name] = copy.deepcopy(value)
+            if dotted in self.scoped:
+                self.scoped[dotted] = copy.deepcopy(value)
 
     def recorded_value(self, path_prefix: str, name: str) -> Any:
         """Return the value recorded for this declaration site, else _MISSING_DEFAULT."""
