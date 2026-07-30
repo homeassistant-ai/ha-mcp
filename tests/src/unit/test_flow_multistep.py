@@ -905,11 +905,11 @@ class TestRedeclaredFieldReuse:
         """HA's edit-style pre-fill is the step's own data, and it is submitted.
 
         ``add_suggested_values_to_schema`` puts the current value in
-        ``description.suggested_value`` and emits no ``"default"``, so omitting
-        the key would fail validation while resubmitting the caller's value
-        would overwrite the value being edited. The bare top-level
-        ``suggested_value`` shape is read defensively — ``voluptuous_serialize``
-        never emits it — and behaves identically.
+        ``description.suggested_value``; with no voluptuous default on the
+        marker, omitting the key would fail validation, while resubmitting the
+        caller's value would overwrite the value being edited. The bare
+        top-level ``suggested_value`` shape is read defensively —
+        ``voluptuous_serialize`` never emits it — and behaves identically.
         """
         final_entry: dict[str, Any] = {
             "type": "create_entry",
@@ -937,6 +937,46 @@ class TestRedeclaredFieldReuse:
             "friendly_name": "Existing entity name",
         }
         # Schema data, not a caller key: nothing to report.
+        assert "warnings" not in result
+
+    async def test_suggestion_outranks_a_coexisting_static_default(self) -> None:
+        """A marker keeps its voluptuous default when HA injects a suggestion.
+
+        Both keys then serialize together: the default is the static schema
+        value and the suggestion is the stored current one. The suggestion is
+        submitted — omission would let voluptuous substitute the static value
+        over the stored one.
+        """
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-2b"},
+        }
+        submit_fn = AsyncMock(
+            side_effect=[
+                _later_step(
+                    {
+                        "name": "friendly_name",
+                        "required": True,
+                        "default": 30,
+                        "description": {"suggested_value": 300},
+                    }
+                ),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=_first_step(),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "friendly_name": 300,
+        }
         assert "warnings" not in result
 
     async def test_redeclared_constant_field_submits_its_only_legal_value(self) -> None:

@@ -453,11 +453,11 @@ def _step_owned_submission_value(field: dict[str, Any]) -> Any:
     "what does the step itself say to submit", which is a different question:
 
     - ``voluptuous_serialize`` emits ``"default"`` only for an actual
-      voluptuous default, so a default is HA's to fill in and never needs to be
-      submitted. HA's edit-style pre-fill
-      (``add_suggested_values_to_schema``) instead lands the current value in
-      ``description.suggested_value`` with no ``"default"`` key at all, and
-      omitting the key would fail validation.
+      voluptuous default. HA's edit-style pre-fill
+      (``add_suggested_values_to_schema``) copies the marker and overwrites
+      only its description, so a marker that already carried a default
+      serializes with both keys; the suggestion is the stored current value
+      and outranks the static default.
     - A constant field serializes as ``{"type": "constant", "value": X}`` and
       ``X`` is the only value it accepts.
 
@@ -490,16 +490,19 @@ def _redeclared_field_submission(
     and the caller's value for this step outranks anything injected. Otherwise,
     in order:
 
-    1. The field carries a ``"default"`` key: omit it and let voluptuous fill
-       the default in. Key presence is the test, so ``default: None`` is a
-       default too.
-    2. The field is not required: omit it. Nothing is ever injected into an
+    1. The field is not required: omit it. Nothing is ever injected into an
        optional field, or into a section that is neither required nor named by
        the caller (``allow_reuse``) — materializing either would invent data.
-    3. The step's own schema supplies a value — a suggestion or a constant's
+    2. The step's own schema supplies a value — a suggestion or a constant's
        only legal value, per :func:`_step_owned_submission_value`: submit that.
        It is schema data rather than a caller key, so it is neither marked
-       consumed nor warned about.
+       consumed nor warned about. A suggestion outranks a coexisting
+       ``"default"``: both keys can serialize together, and the suggestion is
+       the stored current value while the default is the static schema one —
+       omitting would let voluptuous substitute the static value over it.
+    3. The field carries a ``"default"`` key (and no value of its own): omit it
+       and let voluptuous fill the default in. Key presence is the test, so
+       ``default: None`` is a default too.
     4. Otherwise the field is required, has no default and has no value of its
        own, which makes omitting it a guaranteed "required key not provided":
        resubmit the value the caller supplied for an earlier step, warn, and
@@ -515,13 +518,13 @@ def _redeclared_field_submission(
     dotted = _section_path(path_prefix, name)
     if dotted in reuse_state.filled:
         return _NO_SUBMISSION
-    if "default" in field:
-        return _NO_SUBMISSION
     if not field.get("required"):
         return _NO_SUBMISSION
     step_owned = _step_owned_submission_value(field)
     if step_owned is not _MISSING_DEFAULT:
         return step_owned, False
+    if "default" in field:
+        return _NO_SUBMISSION
     recorded = reuse_state.recorded_value(path_prefix, name)
     if recorded is _MISSING_DEFAULT:
         return _NO_SUBMISSION
