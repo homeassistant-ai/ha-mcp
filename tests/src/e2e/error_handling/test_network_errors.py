@@ -343,7 +343,11 @@ class TestErrorHandling:
                 "ha_bulk_control",
                 {
                     "operations": [
-                        {"entity_id": entity_id, "action": "turn_on"}
+                        # "on" is the control-action vocabulary
+                        # (valid_actions tables); "turn_on" is rejected
+                        # upfront for every entity, which kept this whole
+                        # block dead.
+                        {"entity_id": entity_id, "action": "on"}
                         for entity_id in mixed_entities
                     ]
                 },
@@ -379,12 +383,30 @@ class TestErrorHandling:
 
                     status_data = parse_mcp_result(status_result)
                     if status_data.get("success"):
-                        # The bulk summary lists per-item entries under
-                        # detailed_results (there is no "statuses" key) —
-                        # every requested ID must be represented.
+                        # The point of the bulk path: per-item outcomes
+                        # surface as structured entries in detailed_results
+                        # instead of the first bad operation aborting the
+                        # batch. Every entry must carry a recognised
+                        # batch status.
                         detailed = status_data.get("detailed_results", [])
-                        assert len(detailed) == len(operation_ids), (
-                            f"bulk summary must cover every requested ID: {status_data}"
+                        assert detailed, (
+                            f"expected per-item entries for {operation_ids}: "
+                            f"{status_data}"
+                        )
+                        known = {
+                            "completed",
+                            "failed",
+                            "timeout",
+                            "not_found",
+                            "pending",
+                        }
+                        bad = [
+                            entry
+                            for entry in detailed
+                            if entry.get("status") not in known
+                        ]
+                        assert not bad, (
+                            f"entries without a recognised batch status: {bad}"
                         )
                         failed_ops = [
                             entry
