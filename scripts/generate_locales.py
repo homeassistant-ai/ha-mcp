@@ -40,7 +40,7 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCALES_DIR = REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
@@ -123,7 +123,7 @@ def addon_yaml(
         }
         for key in keys
     }
-    body = yaml.safe_dump(
+    body: str = yaml.safe_dump(
         {"configuration": configuration},
         allow_unicode=True,
         sort_keys=False,
