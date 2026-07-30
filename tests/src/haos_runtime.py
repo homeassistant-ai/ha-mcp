@@ -234,10 +234,42 @@ def ssh_exec(
             # and would otherwise be lost in CI output. Re-raise as
             # RuntimeError with full stderr+stdout so failures are
             # actionable.
+            diag = ""
+            if "no such container" in stderr:
+                diag = _container_miss_diagnostics(ssh_cmd, env)
             raise RuntimeError(
                 f"ssh_exec failed (exit {exc.returncode}, attempt={attempt}): "
-                f"cmd={cmd!r} stderr={exc.stderr!r} stdout={exc.stdout!r}"
+                f"cmd={cmd!r} stderr={exc.stderr!r} stdout={exc.stdout!r}{diag}"
             ) from exc
+
+
+def _container_miss_diagnostics(ssh_cmd: list[str], env: dict[str, str]) -> str:
+    """Best-effort VM state capture for a persistent container-name miss.
+
+    A container absent through the whole retry window while the addon's
+    HTTP endpoint still serves means the container exists under a name
+    the test did not predict — so the failure message must carry the
+    actual names. Reuses the caller's assembled ssh wrapper with the
+    remote command swapped out; failures here must never mask the
+    original error.
+    """
+    captured: list[str] = []
+    for label, remote in (
+        ("docker_ps", "docker ps -a --format '{{.Names}} {{.Status}}'"),
+        ("ha_addons", "ha addons --raw-json | head -c 2000"),
+    ):
+        try:
+            probe = subprocess.run(
+                [*ssh_cmd[:-1], remote],
+                capture_output=True,
+                text=True,
+                timeout=20.0,
+                env=env,
+            )
+            captured.append(f"{label}={probe.stdout.strip()!r}")
+        except Exception as probe_err:  # pragma: no cover - diagnostics best-effort
+            captured.append(f"{label}_error={probe_err!r}")
+    return " | " + " | ".join(captured)
 
 
 def docker_exec_in_addon(
