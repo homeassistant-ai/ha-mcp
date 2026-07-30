@@ -346,8 +346,9 @@ def compact_service_result(
     3. Drop known-heavy attribute keys (``effect_list``, ``hue_scenes``) from
        every record's ``attributes`` dict.
 
-    Returns ``result`` unchanged when not a list (e.g. dict from
-    ``return_response=True`` services), or when the list is empty.
+    Returns ``result`` unchanged when it is not a list (defensive — every
+    ha_call_service path now projects a changed-state list), or when the list
+    is empty.
     """
     if not isinstance(result, list) or not result:
         return result

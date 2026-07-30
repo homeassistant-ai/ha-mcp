@@ -352,6 +352,54 @@ async def test_return_response_passed_through() -> None:
 
 
 @pytest.mark.asyncio
+async def test_return_response_null_still_emits_the_key() -> None:
+    """A null service_response emits the key, matching the legacy REST path.
+
+    The component only sets ``service_response`` for a non-null response, so a
+    null one arrives as an absent key. Gating the mapping on ``is not None`` made
+    the two paths answer the same call with different shapes — key omitted here,
+    ``service_response: null`` on legacy (``_split_return_response_envelope``).
+    """
+    ws = make_ws(
+        "ha_mcp_tools/call_service",
+        info_result=_CAPS_CALL,
+        cmd_result=_confirmed_result("light.a"),
+    )
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light",
+            service="turn_on",
+            entity_id="light.a",
+            return_response=True,
+        )
+
+    assert "service_response" in resp
+    assert resp["service_response"] is None
+
+
+@pytest.mark.asyncio
+async def test_no_return_response_omits_the_key() -> None:
+    """Without return_response the component path emits no service_response key."""
+    ws = make_ws(
+        "ha_mcp_tools/call_service",
+        info_result=_CAPS_CALL,
+        cmd_result=_confirmed_result("light.a"),
+    )
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert "service_response" not in resp
+
+
+@pytest.mark.asyncio
 async def test_no_capability_uses_legacy_post() -> None:
     """Component without call_service → legacy REST POST, no call_service frame."""
     ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)

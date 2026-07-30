@@ -6,10 +6,15 @@
 
 ha_call_service used to ship that response twice — once nested in ``result`` (the
 whole envelope passed through projection) and once as a top-level
-``service_response`` sibling — doubling its token cost. These assertions are
-path-agnostic: they hold whether the component ``call_service`` capability or the
-legacy REST POST serves the call, since both must surface the response exactly once
-at the top level.
+``service_response`` sibling — doubling its token cost.
+
+This exercises the legacy REST path, which is the only one that can serve the call:
+the component route requires ``should_wait``, i.e. a service in
+``_STATE_CHANGING_SERVICES``, and ``get_events`` is not one. The assertions
+themselves are written against the shared contract (the response surfaces exactly
+once, at the top level) rather than either path's internals, so they stay valid if
+routing ever changes; the component path's own coverage is in
+``tests/src/unit/test_ha_call_service_component_routing.py``.
 """
 
 import json
@@ -24,7 +29,11 @@ logger = logging.getLogger(__name__)
 
 
 async def _find_calendar_entity(mcp_client) -> str:
-    """Find the seeded local_calendar entity — its absence is a failure, not a skip."""
+    """Find a calendar entity — its absence is a failure, not a skip.
+
+    Any calendar will do (the test only needs a service that returns a response),
+    so this takes the first match rather than preferring the seeded local_calendar.
+    """
     async with MCPAssertions(mcp_client) as mcp:
         data = await mcp.call_tool_success(
             "ha_search",

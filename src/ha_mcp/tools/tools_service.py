@@ -420,17 +420,18 @@ class ServiceTools:
         changed states to project into ``result``. Returning it in both places
         shipped it twice, byte-identical, doubling its token cost (issue #2085).
 
-        A dict that is not the expected envelope surfaces whole as the response
-        data with no changed states, and a legitimately null ``service_response``
-        is still reported as present (``True``) so the caller emits the key.
+        A dict with no ``service_response`` key is not the expected envelope, so
+        it surfaces whole as the response data with no changed states — echoing it
+        AND projecting its ``changed_states`` would ship those records twice, the
+        very duplication this split removes. A legitimately null
+        ``service_response`` is still reported as present (``True``) so the caller
+        emits the key.
         """
         if not (return_response and isinstance(result, dict)):
             return result, None, False
-        return (
-            result.get("changed_states") or [],
-            result.get("service_response", result),
-            True,
-        )
+        if "service_response" not in result:
+            return [], result, True
+        return result.get("changed_states") or [], result["service_response"], True
 
     @staticmethod
     def _project_service_result(
@@ -921,8 +922,13 @@ class ServiceTools:
         }
         if projection_warnings:
             response.setdefault("warnings", []).extend(projection_warnings)
-        if return_response and component_result.get("service_response") is not None:
-            response["service_response"] = component_result["service_response"]
+        if return_response:
+            # Emit the key whenever it was requested, even for a null response —
+            # the legacy path does the same (``_split_return_response_envelope``),
+            # and gating on ``is not None`` made the two paths answer the same
+            # call with different shapes. The component only sets the key for a
+            # non-null response, so a null one arrives as an absent key here.
+            response["service_response"] = component_result.get("service_response")
         if should_wait:
             if component_result.get("partial"):
                 # Dispatched, but the confirming state_changed did not arrive within
@@ -1115,8 +1121,9 @@ class ServiceTools:
           to the targeted entity's record (drops parent-group propagation) and
           stripped of ``context`` / ``last_*`` metadata and heavy attribute
           lists (``effect_list``, ``hue_scenes``). Escape hatches: ``verbose=True``
-          for the raw HA response, or ``result_fields`` / ``result_attribute_keys``
-          for explicit per-record projection (mirrors ``ha_get_state``).
+          for the raw changed-state records, or ``result_fields`` /
+          ``result_attribute_keys`` for explicit per-record projection (mirrors
+          ``ha_get_state``).
         - **return_response** (default False): the service's response data is
           returned once, as the top-level ``service_response`` key — never nested
           inside ``result``, which carries the changed entity states.
