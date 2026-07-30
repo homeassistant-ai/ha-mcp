@@ -1845,7 +1845,7 @@ document.getElementById('stopSidecarBtn').addEventListener('click', stopSidecar)
 const FEATURE_META = {
   enable_tool_search: {
     label: "Enable tool search",
-    help: "Replace the full tool catalog with search-based discovery. Reduces idle context from ~46K to ~5K tokens. ⚠️ Do NOT enable this if you use Claude in Sonnet or Opus modes. Those models have their own built-in tool search / deferred tools, which conflicts with ours. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off. Use this only with LLMs that lack native deferred tools (e.g. Claude Haiku, local OpenAI-compatible models) or with smaller context windows. Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete). Requires restart to take effect.",
+    help: "Replace the full tool catalog with search-based discovery. Reduces idle context by roughly 90%, to about 5K tokens. ⚠️ Do NOT enable this in clients with their own built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code) — the two search layers conflict, and the client's built-in tool search is the better choice there; leave this off. Whether tools are deferred depends on your client and model combination: use this when your setup loads the full catalog up front — models without native deferred tools (e.g. Gemini, OpenAI-compatible local models, Claude Haiku), clients that inline all tool schemas regardless of model (e.g. GitHub Copilot CLI), or smaller context windows. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily. Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete). Requires restart to take effect.",
   },
   tool_search_max_results: {
     label: "Tool search max results",
@@ -3313,18 +3313,57 @@ async function policyDecide(token, action) {
     return;
   }
   if (!resp.ok) {
-    let body;
-    try { body = await resp.json(); } catch (_) { body = {error: 'HTTP ' + resp.status}; }
+    // Only a body that actually parsed can carry a server message, so an
+    // unparsable one leaves serverError empty rather than standing in with the
+    // status line: a stand-in reads as a server message to both branches that
+    // consult it — the 503 default and the generic detail — and shadows the
+    // translated line meant to cover exactly this case.
+    let body = {};
+    let serverError = '';
+    try {
+      body = (await resp.json()) || {};
+      if (typeof body.error === 'string') serverError = body.error;
+    } catch (_) { /* not JSON — no server message to show */ }
     if (resp.status === 409 && body.current_decision) {
+      // current_decision is a backend enum, not display text: interpolating it
+      // raw leaves an English word inside a translated sentence.
+      const decision = t(
+        'policies.pending.decision.' + body.current_decision,
+        {},
+        body.current_decision
+      );
       alert(t(
         'policies.pending.already_decided',
-        {decision: body.current_decision},
-        'This approval was already ' + body.current_decision + ', possibly by another tab or session.'
+        {decision},
+        'This approval was already ' + decision + ', possibly by another tab or session.'
       ));
     } else if (resp.status === 404) {
       alert(t('policies.pending.invalid_token', {}, 'This approval token is no longer valid (already consumed or expired).'));
+    } else if (resp.status === 503) {
+      // Same three causes as policyLoadPending's 503, answered the same way.
+      // The 503 body is a fixed English paragraph, so folding it into
+      // 'policies.pending.action_failed' spliced five English lines into the
+      // middle of a translated clause.
+      if (policyState.enabledKnown && !policyState.enabled) {
+        alert(t(
+          'policies.pending.disabled',
+          {},
+          'Tool Security Policies is turned off. Toggle it on (top of this tab or in Server Settings) and restart the App (add-on) to enable gating.'
+        ));
+      } else {
+        // Feature is on (or we could not determine the flag). The server's
+        // message names which of the remaining causes applied, so it stands
+        // on its own rather than inside a sentence. Without one — a 503 from
+        // an ingress or reverse proxy in front of us — the translated line is
+        // all the user gets, which is what policyLoadPending does too.
+        alert(serverError || t(
+          'policies.pending.unavailable',
+          {},
+          'Live approvals unavailable. Check the App (add-on) log for ImportError / RuntimeError details.'
+        ));
+      }
     } else {
-      const detail = body.error || resp.statusText;
+      const detail = serverError || resp.statusText || 'HTTP ' + resp.status;
       alert(t('policies.pending.action_failed', {detail}, 'Approval action failed: ' + detail));
     }
   }

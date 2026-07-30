@@ -34,6 +34,7 @@ Start the server with the `ha-mcp-oidc` entrypoint instead of `ha-mcp-web`:
 ```bash
 docker run -d --name ha-mcp-oidc \
   -p 8086:8086 \
+  -v ha-mcp-data:/home/mcpuser/.ha-mcp \
   -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
   -e HOMEASSISTANT_TOKEN=your-long-lived-access-token \
   -e OIDC_CONFIG_URL=https://auth.example.com/application/o/ha-mcp/.well-known/openid-configuration \

@@ -20,21 +20,27 @@ configuration:
     name: Activar la búsqueda de herramientas
     description: >-
       Sustituye el catálogo completo de herramientas por un descubrimiento
-      basado en búsqueda. Reduce el contexto en reposo de unos 46K a unos 5K tokens.
-      ⚠️ NO actives esto si usas Claude en modo Sonnet u Opus: esos modelos
-      tienen su propia búsqueda de herramientas / herramientas diferidas
-      integrada, que entra en conflicto con la nuestra. Para usar la búsqueda de
-      herramientas de ha-mcp con Claude, desactiva primero la búsqueda integrada
-      de Claude; si no, deja esto desactivado. Úsalo solo con LLM que carezcan de
-      herramientas diferidas nativas (p. ej. Claude Haiku, modelos locales
-      compatibles con OpenAI) o con ventanas de contexto más pequeñas. Las
-      herramientas se localizan mediante ha_search_tools y se ejecutan a través
-      de proxies por categoría (lectura/escritura/borrado). Requiere reiniciar el
-      complemento para que surta efecto; después, vuelve a conectar o actualiza
-      el servidor MCP en tu cliente de IA para que recargue la lista de
-      herramientas. Reiniciar el complemento por sí solo NO actualiza la lista de
-      herramientas almacenada en caché por el cliente; esto vale para cualquier
-      cambio de ajustes aquí.
+      basado en búsqueda. Reduce el contexto en reposo en torno a un 90 %,
+      hasta unos 5K tokens. ⚠️ NO actives esto en clientes con su propia
+      búsqueda de herramientas / herramientas diferidas integrada (claude.ai,
+      Claude Desktop, Claude Code): las dos capas de búsqueda entran en
+      conflicto y la búsqueda integrada del cliente es allí la mejor opción;
+      deja esto desactivado. Que las herramientas se difieran depende de la
+      combinación de cliente y modelo: usa esto cuando tu configuración carga
+      el catálogo completo de entrada — modelos sin herramientas diferidas
+      nativas (p. ej. Gemini, modelos locales compatibles con OpenAI, Claude
+      Haiku), clientes que insertan todos los esquemas de herramientas sea
+      cual sea el modelo (p. ej. GitHub Copilot CLI) o ventanas de contexto
+      más pequeñas. Algunos modelos Codex y ChatGPT también incluyen
+      herramientas diferidas: comprueba directamente con tu cliente/modelo qué
+      características tiene para no dejar esto activado innecesariamente. Las
+      herramientas se localizan mediante ha_search_tools y se ejecutan a
+      través de proxies por categoría (lectura/escritura/borrado). Requiere
+      reiniciar el complemento para que surta efecto; después, vuelve a
+      conectar o actualiza el servidor MCP en tu cliente de IA para que
+      recargue la lista de herramientas. Reiniciar el complemento por sí solo
+      NO actualiza la lista de herramientas almacenada en caché por el
+      cliente; esto vale para cualquier cambio de ajustes aquí.
   enable_tool_security_policies:
     name: Activar las políticas de seguridad de herramientas (avanzado)
     description: >-

@@ -222,7 +222,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 "Failed to persist OAuth client registry to %s (%s: %s). "
                 "Clients will need to re-register after the next restart. "
                 "Mount a persistent volume to fix this: "
-                "docker run -v ha_mcp_data:/home/mcpuser/.ha-mcp ...",
+                "docker run -v ha-mcp-data:/home/mcpuser/.ha-mcp ...",
                 path,
                 type(exc).__name__,
                 exc,

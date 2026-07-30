@@ -475,7 +475,10 @@ async function main() {
   // One last drain so any post-advance microtasks resolve.
   await new Promise((r) => setImmediate(r));
 
-  if (window.__harnessError) errors.push(window.__harnessError);
+  // Prefixed like the synchronous throw above: `_assert_clean_init` filters
+  // on these prefixes, and an async IIFE essentially cannot throw
+  // synchronously, so unprefixed made every rejected invoke invisible to it.
+  if (window.__harnessError) errors.push(`invoke: ${window.__harnessError}`);
 
   const response = {
     fetches,

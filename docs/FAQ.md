@@ -74,6 +74,8 @@ This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp
 
 **Check for a port in the URL.** Your connector URL is built on your Home Assistant's own public address, which must **not** contain a port such as `:8123` (or any other port). To check, open just that base address (e.g. `https://ha.example.com`, without the `/api/webhook/...` secret path) in a browser — it should bring up your HA login page. Remote clients cannot reach a URL that carries a port, even though it loads fine in your own browser. Home Assistant can still listen on 8123 internally, as long as a reverse proxy, tunnel, or 443 port-forward serves that hostname — just don't put the port in the URL you paste.
 
+**Tailscale Funnel: use port `443`.** Funnel can also serve on the alternate HTTPS ports it offers (`8443`, `10000`), but Claude.ai's connector backend does not reliably reach non-standard ports: the connection fails identically in every auth mode, and no request from Anthropic's range (`160.79.104.0/21`) ever reaches the server — nothing appears in any log. Use standard port `443` instead, where the same setup connects on the first try. The official Tailscale add-on's built-in **"Share Home Assistant with Serve or Funnel"** option already exposes Home Assistant on `443`, so use that hostname in the connector URL (same webhook path). See [#2080](https://github.com/homeassistant-ai/ha-mcp/issues/2080).
+
 ### "Terminating session: None" in server logs
 
 **This is normal.** ha-mcp runs in stateless HTTP mode, which means each request creates and discards a temporary session. The `Terminating session: None` log message is the MCP SDK reporting this routine cleanup — the connection stays active.
@@ -192,6 +194,7 @@ If you see `Failed to install: pywin32` or `os error 32` ("file is used by anoth
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
+        "-v", "ha-mcp-data:/home/mcpuser/.ha-mcp",
         "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
         "-e", "HOMEASSISTANT_TOKEN=your_token",
         "ghcr.io/homeassistant-ai/ha-mcp:latest"

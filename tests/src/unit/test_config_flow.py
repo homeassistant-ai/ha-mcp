@@ -1606,7 +1606,7 @@ def test_common_fallbacks_mirror_strings_json():
     """``strings.json`` is the source; the fallback dict is a copy of it.
 
     Nothing else compares the two: reword a string in ``strings.json``, sweep
-    the five catalogs and refresh the locale baseline, and CI stays green while
+    the six catalogs and refresh the locale baseline, and CI stays green while
     this copy keeps serving the old English to every failed lookup.
     """
     strings = json.loads(

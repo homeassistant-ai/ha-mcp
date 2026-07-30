@@ -561,7 +561,7 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
     ``connect_local_lan`` tells the reader which dropdown entry produces this
     URL, and every catalog quotes the label untranslated for that reason —
     the reader matches it against the form. Renaming the option in
-    ``config_flow.py`` would leave six catalogs quoting a label that no longer
+    ``config_flow.py`` would leave seven catalogs quoting a label that no longer
     exists, silently, which is the drift class the ceilings test closed for
     percentages and this one closes for a literal.
     """
@@ -961,7 +961,7 @@ def _renderable_groups_and_tools() -> tuple[frozenset[str], frozenset[str]]:
     committed ``site/src/data/tools.json``: that file is regenerated only
     *after* merge, by ``sync-tool-docs.yml`` on a ``[skip ci]`` commit. Reading
     it would let the PR that adds a tool stay green and then turn every
-    subsequent PR red across all five locales, landing the failure on whoever
+    subsequent PR red across all six locales, landing the failure on whoever
     opens the next one. Parsing the sources puts it on the PR that owes the
     translations.
     """
@@ -1077,6 +1077,36 @@ def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
     )
 
 
+@pytest.mark.parametrize("locale", _non_english_settings_locales())
+def test_settings_messages_carry_no_key_english_dropped(locale: str) -> None:
+    """The one direction nothing else here looks in.
+
+    ``messages`` may omit keys — English is the per-key fallback, and AGENTS.md
+    states the allowance — so this asserts the other direction only. A key with
+    no English counterpart is not a fallback, it is text that reaches nobody:
+    ``build_payload`` ships it and ``t()`` never asks for it.
+
+    #2043 removed ``advanced.entity_search_limit.label`` and ``.help`` from
+    ``en`` and from the five catalogs it knew about, and two got past it by
+    different routes — ``es`` was not one of the five, and ``it`` was written
+    against the older English source and rebased past the removal. Neither
+    failed anything: the ceilings count English keys a locale is missing, and
+    the baseline hashes English sources only, so a key English does not have is
+    outside both. The sibling sections have had this covered all along, by
+    ``test_settings_catalog_keys_name_real_groups_and_tools``; the component
+    and add-on surfaces by their own key checks.
+    """
+    english = set(_settings_catalog("en")["messages"])
+    orphaned = sorted(set(_settings_catalog(locale)["messages"]) - english)
+
+    assert not orphaned, (
+        f"src/ha_mcp/settings_ui/locales/{locale}.json translates message "
+        f"key(s) en.json does not have: {orphaned}. Nothing renders them — "
+        "delete them, or restore the English key if it went missing by "
+        "mistake."
+    )
+
+
 # A catalog wholesale-copied from English passes key parity, placeholder
 # parity and the markup allowlist — every existing check. All four surfaces
 # get a ceiling: leaving one of them out accepts a wholesale-English catalog
@@ -1158,7 +1188,7 @@ def test_settings_catalog_tools_are_translated(locale: str) -> None:
 
     87 titles and 87 descriptions is the largest translated surface in the
     repo, and nothing looked at the values. The exactness rule above also
-    obliges every tool-adding PR to touch five languages before it can go
+    obliges every tool-adding PR to touch six languages before it can go
     green, which is pressure toward pasting the English in — this is what
     notices. Every shipped locale translates all 174 today.
     """
@@ -1172,7 +1202,7 @@ def test_settings_catalog_tools_are_translated(locale: str) -> None:
     }
 
     # The share alone does not cover the case this check exists for: adding one
-    # tool and pasting its English title and description into all five locales
+    # tool and pasting its English title and description into all six locales
     # scores 2 of 176 and passes. One wholly-English tool is the signature, and
     # naming it beats a percentage. A single matching title stays legal — some
     # tool names genuinely read the same in another language.

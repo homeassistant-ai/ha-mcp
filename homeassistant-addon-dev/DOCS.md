@@ -14,7 +14,7 @@ The dev add-on uses the same configuration as the stable version. See the main a
 |--------|-------------|---------|
 | `backup_hint` | Backup strength preference | `normal` |
 | `secret_path` | Custom secret path (optional) | auto-generated |
-| `enable_tool_search` | Replace full tool catalog with search-based discovery (~46K → ~5K tokens). ⚠️ Do NOT enable for Claude Sonnet/Opus — their built-in tool search conflicts with ha-mcp's. Disable one or the other. | `false` |
+| `enable_tool_search` | Replace full tool catalog with search-based discovery (cuts idle context by ~90%, to ~5K tokens). ⚠️ Do NOT enable in clients with built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code) — the layers conflict; use the client's built-in search instead. | `false` |
 | `enable_tool_security_policies` | Gate high-stakes tool calls (lock/alarm control, automation writes, etc.) behind user approval. Guarded calls block until the user clicks Approve in the Tool Security Policies tab of the web UI. Per-tool rules with optional argument conditions are configured in that same tab. | `false` |
 | `read_only_mode` | Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Mixed read/write tools (backups, add-ons, energy preferences, voice pipelines, and code mode when enabled) stay available with their write operations blocked. Same toggle as the web UI Tools tab. | `false` |
 | `enable_beta_features` *(master)* | Master gate for the beta sub-flags below. Sub-flags are ignored at runtime while this is off — even when explicitly set to true. Mirrored to the web settings UI under "Beta features (dangerous)". | `true` |

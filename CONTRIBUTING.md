@@ -49,6 +49,9 @@ uv run lefthook install --reset-hooks-path
 - **Code**: Follow existing patterns, add type hints, test new features
 - **Docs**: Update README.md for user-facing changes
 - **PRs**: Use the template, ensure tests pass
+- **Translations**: A language ships on all four translated surfaces or not at
+  all. Read `src/ha_mcp/settings_ui/locales/README.md` first — a catalog copied
+  from `en.json` fails CI
 
 ## 💤 Abandoned PRs
 

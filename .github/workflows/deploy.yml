@@ -4,13 +4,14 @@ on:
   push:
     branches: [master]
     paths:
+      - '.github/workflows/deploy.yml'
+      - 'scripts/generate_star_history.py'
       - 'site/**'
+  schedule:
+    - cron: '17 3 * * 0'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: "pages"
@@ -18,6 +19,8 @@ concurrency:
 
 jobs:
   build:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,15 +29,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Generate star history charts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 ../scripts/generate_star_history.py
+          --repository "${{ github.repository }}"
+          --output-dir public/star-history
+
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: site/package-lock.json
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v6
 
       - name: Install dependencies
         run: npm ci
@@ -48,6 +56,9 @@ jobs:
           path: ./site/dist
 
   deploy:
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

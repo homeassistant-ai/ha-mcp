@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import ClassVar
+from typing import ClassVar, get_args
 
 import pytest
 
@@ -1126,6 +1126,20 @@ def _policy_panel_dom() -> str:
     return MIN_DOM.replace("</body>", extras + "</body>")
 
 
+def _server_503_body() -> str:
+    """The exact 503 body the server sends, not a copy of it.
+
+    A hand-written fixture drifts, and drifts in the direction that keeps its
+    own assertion passing: the first two copies of this paragraph in this file
+    both dropped the sentence naming the three causes and wrote ``addon log``
+    where the server writes ``App (add-on) log``, so an assertion on
+    ``addon log`` passed only because the fixture was wrong.
+    """
+    from ha_mcp.settings_ui import POLICY_UNAVAILABLE_MESSAGE
+
+    return POLICY_UNAVAILABLE_MESSAGE
+
+
 class TestPolicyTabFlow:
     """Locks in the new condition-builder UX wiring: master toggle
     posts to the same feature-flag endpoint the Server-Settings tab
@@ -1644,8 +1658,8 @@ class TestPolicyTabFlow:
     ) -> None:
         """Feature is on but the queue is unreachable (sidecar mode or
         ImportError at startup). The server's 503 message should
-        propagate verbatim so the user knows to check the addon log,
-        instead of the generic "feature off" text."""
+        propagate verbatim — it names which cause applied — instead of
+        the generic "feature off" text."""
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/features": {
@@ -1662,10 +1676,7 @@ class TestPolicyTabFlow:
             },
             "/api/policy/pending": {
                 "status": 503,
-                "json": {
-                    "error": "Tool security policies live approvals are not active. "
-                    "Check the addon log for ImportError / RuntimeError details."
-                },
+                "json": {"error": _server_503_body()},
             },
         }
         result = run_script(
@@ -1678,9 +1689,215 @@ class TestPolicyTabFlow:
             """,
         )
         _assert_clean_init(result)
-        assert "addon log" in result.dom.lower(), (
-            f"expected addon-log message in pending-list snapshot; "
-            f"dom contains: {result.dom[-2000:]}"
+        assert _server_503_body() in result.dom, (
+            f"expected the server's 503 paragraph in the pending-list "
+            f"snapshot; dom contains: {result.dom[-2000:]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# "Already decided" copy on the 409 path
+# ---------------------------------------------------------------------------
+
+
+def _localized_policy_dom(locale: str) -> str:
+    """Policy-tab DOM carrying ``locale``'s catalog as the i18n payload."""
+    from ha_mcp.settings_ui._i18n import build_payload, serialize_payload
+
+    payload = serialize_payload(build_payload(locale))
+    element = f'<script id="ha-mcp-i18n" type="application/json">{payload}</script>'
+    return _policy_panel_dom().replace("</body>", element + "</body>")
+
+
+def _already_decided_cases() -> list[tuple[str, str]]:
+    """Every (non-English locale, decided outcome) pair the 409 can produce.
+
+    Derived from ``Decision`` rather than listed, so a new outcome arrives
+    here as new cases instead of as untested copy.
+    """
+    from ha_mcp.policy.approval_queue import Decision
+    from ha_mcp.settings_ui._i18n import CATALOGS, DEFAULT_LOCALE
+
+    locales = sorted(set(CATALOGS) - {DEFAULT_LOCALE})
+    outcomes = sorted(set(get_args(Decision)) - {"pending"})
+    # Both sides are discovered, so either emptying out collects zero cases
+    # and the class below passes without driving the handler once.
+    assert locales, (
+        "no non-English catalog is registered — every case here derives from "
+        "one, so this file would pin the 409 copy in no language at all"
+    )
+    assert outcomes, (
+        "Decision no longer names any decided outcome — the 409 branch these "
+        "cases drive cannot be reached, so either the branch or this is dead"
+    )
+    return [(locale, outcome) for locale in locales for outcome in outcomes]
+
+
+class TestAlreadyDecidedCopy:
+    """The 409 alert must read as one translated sentence.
+
+    ``current_decision`` is a backend enum. Interpolating it raw put an
+    English word inside otherwise translated copy — Italian read ``Questa
+    approvazione è già stata approved``. It is resolved through the catalog
+    now, and this drives the real handler and compares the whole sentence
+    the user is shown against the locale's own copy. Asserting on the
+    rendered alert covers the ways source-text matching cannot — a catalog
+    whose value is still the English placeholder, a key the concatenation
+    builds but no catalog holds, a resolved word no message consumes.
+    """
+
+    @pytest.mark.parametrize(("locale", "outcome"), _already_decided_cases())
+    def test_alert_shows_the_catalog_word_and_never_the_enum(
+        self, settings_script: str, locale: str, outcome: str
+    ) -> None:
+        from ha_mcp.settings_ui._i18n import CATALOGS
+
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/approve": {
+                "status": 409,
+                "json": {"error": "already decided", "current_decision": outcome},
+            },
+            "/api/policy/pending": {"status": 200, "json": {"pending": []}},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_localized_policy_dom(locale),
+            fetch_map=fetches,
+            invoke="await window.policyDecide('tok-1', 'approve');",
+        )
+        _assert_clean_init(result)
+
+        assert len(result.alerts) == 1, (
+            f"expected the single 409 alert; got {result.alerts}"
+        )
+        alert = result.alerts[0]
+        messages = CATALOGS[locale]["messages"]
+        word = messages[f"policies.pending.decision.{outcome}"]
+        # Whole sentence, not containment: the host a containment check
+        # searches is that same catalog value with the word already
+        # substituted, so it cannot fail on catalog content. Lose the host to
+        # the English fallback and "This approval was already approvata"
+        # satisfies both a containment and a not-the-enum check.
+        expected = messages["policies.pending.already_decided"].replace(
+            "{decision}", word
+        )
+        assert alert == expected, (
+            f"{locale}: the alert reads {alert!r}, not the {locale} sentence "
+            f"{expected!r}. Either the host sentence fell back to English or "
+            f"the {outcome!r} slot is not the catalog word — both put English "
+            "inside translated copy, which is the bug this path prevents."
+        )
+
+
+class TestDecideUnavailableCopy:
+    """A 503 on the decide path must not splice English into translated copy.
+
+    ``/api/policy/{approve,deny}`` answers 503 with a fixed English paragraph
+    when live approvals are not active. Folding that body into
+    ``policies.pending.action_failed`` put that whole paragraph inside an
+    Italian clause. The path now answers the way ``policyLoadPending``
+    already does: the translated off-message when the flag is known off, and
+    otherwise the server's diagnostic on its own, because it names which of the
+    remaining causes applied and the generic line cannot.
+    """
+
+    def _decide_under_503(
+        self,
+        settings_script: str,
+        *,
+        enabled: bool,
+        approve_response: dict[str, object] | None = None,
+    ) -> HarnessResult:
+        """Drive an Italian UI through a 503 decide with the flag at ``enabled``.
+
+        ``loadPolicyState`` is invoked explicitly rather than left to page
+        init, so the branch reads a settled ``policyState`` instead of racing
+        the init fetch. ``approve_response`` overrides the 503 the decide
+        call receives, for the case where it carries no JSON at all.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {"enable_tool_security_policies": {"value": enabled}}
+                },
+            },
+            "/api/policy/config": {
+                "status": 200,
+                "json": {"wait_seconds": 60, "approval_ttl_minutes": 5, "rules": []},
+            },
+            "/api/policy/approve": approve_response
+            or {"status": 503, "json": {"error": _server_503_body()}},
+            "/api/policy/pending": {"status": 200, "json": {"pending": []}},
+        }
+        return run_script(
+            settings_script,
+            initial_html=_localized_policy_dom("it"),
+            fetch_map=fetches,
+            invoke=(
+                "await window.loadPolicyState();"
+                "await window.policyDecide('tok-1', 'approve');"
+            ),
+        )
+
+    def test_flag_known_off_shows_the_translated_off_message(
+        self, settings_script: str
+    ) -> None:
+        from ha_mcp.settings_ui._i18n import CATALOGS
+
+        result = self._decide_under_503(settings_script, enabled=False)
+        _assert_clean_init(result)
+
+        expected = CATALOGS["it"]["messages"]["policies.pending.disabled"]
+        assert result.alerts == [expected], (
+            f"expected the Italian off-message {expected!r}; got {result.alerts}. "
+            "A user who simply turned the feature off is being told to read the "
+            "add-on log instead."
+        )
+
+    def test_flag_on_shows_the_server_diagnostic_on_its_own(
+        self, settings_script: str
+    ) -> None:
+        result = self._decide_under_503(settings_script, enabled=True)
+        _assert_clean_init(result)
+
+        assert result.alerts == [_server_503_body()], (
+            f"expected the server paragraph alone; got {result.alerts}. Equality "
+            "is the point: anything longer means it was spliced into a "
+            "translated sentence, which is the mixed-language render this fixes."
+        )
+
+    def test_503_without_a_json_body_shows_the_translated_line(
+        self, settings_script: str
+    ) -> None:
+        """No JSON body means no server message, so the catalog line is all
+        there is — and it has to be the translated one.
+
+        Our own routes always send JSON, but an ingress or reverse proxy in
+        front of them does not, and that is the deployment this branch exists
+        for. A stand-in error synthesised from the status line looks like a
+        server message to the branch, so it would shadow the catalog line and
+        alert a bare ``HTTP 503`` in every language.
+        """
+        from ha_mcp.settings_ui._i18n import CATALOGS
+
+        result = self._decide_under_503(
+            settings_script,
+            enabled=True,
+            approve_response={
+                "status": 503,
+                "body": "<html><body>503 Service Unavailable</body></html>",
+            },
+        )
+        _assert_clean_init(result)
+
+        expected = CATALOGS["it"]["messages"]["policies.pending.unavailable"]
+        assert result.alerts == [expected], (
+            f"expected the Italian unavailable line {expected!r}; got "
+            f"{result.alerts}. Anything else here is untranslated text — or the "
+            "proxy's HTML — put in front of an Italian user."
         )
 
 
