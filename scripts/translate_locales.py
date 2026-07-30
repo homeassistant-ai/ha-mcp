@@ -47,8 +47,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import generate_locales  # noqa: E402
-from update_locale_baseline import _load_test_module  # noqa: E402
+import generate_locales  # type: ignore[import-not-found]  # noqa: E402
+from update_locale_baseline import (  # type: ignore[import-not-found]  # noqa: E402
+    _load_test_module,
+)
 
 from ha_mcp.settings_ui._i18n import (  # noqa: E402
     _ALLOWED_TAGS_RE,
@@ -95,7 +97,8 @@ class Plan:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return data
 
 
 def _dump_json(path: Path, data: dict[str, Any]) -> None:
