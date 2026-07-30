@@ -4,42 +4,35 @@ The settings page discovers every `*.json` catalog in this directory. No Python
 or JavaScript registration is required, and no packaging file needs editing —
 the wheel, sdist and binary declarations all match this directory by pattern.
 
+**This directory is the canonical translation store.** Besides the settings
+UI's own strings, each catalog carries the add-on option strings under
+`addon.<key>.*` (with `features.<key>.*` for options the settings UI also
+shows, and `addon_stable.<key>.*` for flavor-specific wording). Both add-on
+flavors' `translations/*.yaml` and the `FEATURE_META` block in `settings.js`
+are generated from these catalogs by `scripts/generate_locales.py` — never
+edit those by hand. Wherever one English string reaches the reader from more
+than one surface, the translation is stored once here and projected, so
+cross-surface wording cannot drift.
+
 ## Adding a language
 
 A language ships on **all four** translated surfaces or not at all, and one
 Home Assistant language code names every file:
 
-- `src/ha_mcp/settings_ui/locales/<code>.json` (this directory)
-- `custom_components/ha_mcp_tools/translations/<code>.json`
-- `homeassistant-addon/translations/<code>.yaml`
-- `homeassistant-addon-dev/translations/<code>.yaml`
+- `src/ha_mcp/settings_ui/locales/<code>.json` (this directory; authored)
+- `custom_components/ha_mcp_tools/translations/<code>.json` (authored)
+- `homeassistant-addon/translations/<code>.yaml` (generated)
+- `homeassistant-addon-dev/translations/<code>.yaml` (generated)
 
-Adding only this catalog fails `test_every_locale_ships_on_every_surface`. Also
+Add the two authored catalogs — this one may start as a `meta`-only stub
+(`native_name`, `dir`) — then run `python scripts/generate_locales.py` and let
+`scripts/translate_locales.py` (or the `locale-sync.yml` workflow on the PR)
+machine-fill every string; review its output like any other diff. Also
 add the new code to the locale list in the repository-root `AGENTS.md`
 § Translations — that list is pinned by
-`test_agents_md_lists_every_shipped_locale`.
-
-Only the first of those four files is described below, and the other three
-carry content rules of their own: the component catalog needs every `en.json`
-key with identical `{placeholders}` and no extra ones, and each add-on YAML
-needs a `name` and a `description` for every `schema:` key of *that* flavor's
-`config.yaml`, with nothing left behind for a key the schema no longer
-declares. The two flavors declare different schemas, so neither YAML is a copy
-of the other. The repository-root `AGENTS.md` § Translations states all of
-this; a contributor who writes only this catalog goes red on the other three.
-
-**Start from a translated catalog, not from `en.json`.** English for the tool
-titles and descriptions comes from the tool definitions at runtime, so `en.json`
-ships `tools` and `tool_groups` empty; a copy of it is missing both sections
-that this catalog is required to carry.
-
-**Read the other surfaces before you word a switch.** Wherever the same English
-text is shipped from more than one catalog, your wording has to be byte-identical
-in all of them. That is not only the add-on-options-versus-settings-UI axis: the
-two add-on flavors describe most of the same options, so a good part of the
-pinned parity is stable-against-dev, with no settings-UI text involved at all.
-Translating one surface at a time is exactly how one option ends up with two
-different sentences.
+`test_agents_md_lists_every_shipped_locale`. The engine reads the target
+language from `meta.native_name`, so any language an LLM can write — natural
+or constructed — needs no pipeline change.
 
 ## Catalog sections
 
@@ -80,17 +73,17 @@ import, so the failure names the file but arrives as a broken test module:
 - `tool_groups` and `tools` name exactly the renderable groups and tools — a
   tool added to the codebase turns every locale red in the PR that adds it.
 - At most 5% of this catalog's `messages`, and 5% of its `tools` texts, may be
-  byte-identical to English or missing outright. Both add-on flavors are held to
-  the same 5%; the component catalogs allow 15%, because they carry product
-  names as keys of their own. A single tool whose `title` *and* `description` are
-  both still English fails by name however small the share.
-- One wording per English string across surfaces, wherever the same English text
-  is shipped from more than one catalog. The failure names every group that
-  disagrees. Where a group has a settings UI member, that is the wording the
-  other surfaces follow today; a group carried only by the two add-on flavors
-  has no such member, so there pick one wording and use it in both.
+  byte-identical to English or missing outright; the component catalogs allow
+  15%, because they carry product names as keys of their own. A single tool
+  whose `title` *and* `description` are both still English fails by name
+  however small the share.
+- The generated files (both add-on YAMLs, `FEATURE_META`) are byte-exact
+  generator output (`test_derived_catalogs_match_the_canonical_store`); run
+  `python scripts/generate_locales.py` after touching any `addon.*`,
+  `addon_stable.*` or `features.*` key.
 - The English each translation was written against is hashed in
   `tests/src/unit/locale_source_baseline.json`, so a later edit to an English
-  string turns the locales red rather than leaving them silently stale. Adding a
-  language does not change any English source, so no baseline regeneration is
-  needed for it.
+  string turns the locales red rather than leaving them silently stale —
+  `scripts/translate_locales.py` retranslates exactly those keys and repins
+  the baseline. Adding a language does not change any English source, so no
+  baseline regeneration is needed for it.
