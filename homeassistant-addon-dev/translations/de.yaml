@@ -1,308 +1,267 @@
 ---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/de.json (keys addon.*, features.*,
+# addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   backup_hint:
     name: Full-HA Snapshot-Vorschlagsebene (LLM-seitig)
-    description: |-
-      Passt die Formulierung des Hinweises an, den das LLM in der
-      `ha_manage_backup(scope='snapshot')`-Tool-Beschreibung sieht, wann es ein
+    description: 'Passt die Formulierung des Hinweises an, den das LLM in der
+
+      `ha_manage_backup(scope=''snapshot'')`-Tool-Beschreibung sieht, wann es ein
+
       vollständiges Home Assistant Tarball-Backup vor riskanten Operationen
+
       vorschlagen soll (z.B. Massen-Gerätelöschungen). Betrifft NUR diesen einen
+
       LLM-seitigen Prompt-Satz.
 
-      Für automatische Snapshots pro Bearbeitung von Automatisierungen / Skripten /
+
+      Für automatische Snapshots pro Bearbeitung von Automatisierungen / Skripten
+      /
+
       Helfern / etc. nutze den separaten **Auto-Backup von Bearbeitungen aktivieren**-Schalter
-      unten.
+
+      unten.'
   secret_path:
     name: Secret-Pfad Override
-    description: |
-      Optionaler benutzerdefinierter HTTP-Pfad für den MCP-Server. Leer lassen, um den automatisch generierten sicheren Pfad zu verwenden.
+    description: 'Optionaler benutzerdefinierter HTTP-Pfad für den MCP-Server. Leer
+      lassen, um den automatisch generierten sicheren Pfad zu verwenden.
+
+      '
   enable_tool_search:
     name: Tool-Suche aktivieren
-    description: >-
-      Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung.
-      Reduziert den Leerlauf-Kontext um rund 90 % auf etwa 5K Tokens. ⚠️
-      Aktiviere dies NICHT in Clients mit eigener integrierter Tool-Suche /
-      aufgeschobenen Tools (claude.ai, Claude Desktop, Claude Code) – die
-      beiden Suchebenen kollidieren, und die integrierte Tool-Suche des
-      Clients ist dort die bessere Wahl; lasse dies ausgeschaltet. Ob Tools
-      aufgeschoben werden, hängt von der Kombination aus Client und Modell ab:
-      Verwende dies, wenn dein Setup den vollständigen Katalog von Anfang an
-      lädt – Modelle ohne native aufgeschobene Tools (z. B. Gemini, lokale
-      OpenAI-kompatible Modelle, Claude Haiku), Clients, die alle
-      Tool-Schemata unabhängig vom Modell direkt einbetten (z. B. GitHub
-      Copilot CLI), oder kleinere Kontextfenster. Auch einige Codex-Modelle
-      und ChatGPT haben aufgeschobene Tools – prüfe direkt bei deinem
-      Client/Modell, welche Features er hat, damit du dies nicht unnötig
-      aktiviert lässt. Tools werden über ha_search_tools gefunden und über
-      kategorisierte Proxys (read/write/delete) ausgeführt. Erfordert
-      Neustart, um wirksam zu werden.
+    description: 'Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung.
+      Reduziert den Leerlauf-Kontext um rund 90 % auf etwa 5K Tokens. ⚠️ Aktiviere
+      dies NICHT in Clients mit eigener integrierter Tool-Suche / aufgeschobenen Tools
+      (claude.ai, Claude Desktop, Claude Code) – die beiden Suchebenen kollidieren,
+      und die integrierte Tool-Suche des Clients ist dort die bessere Wahl; lasse
+      dies ausgeschaltet. Ob Tools aufgeschoben werden, hängt von der Kombination
+      aus Client und Modell ab: Verwende dies, wenn dein Setup den vollständigen Katalog
+      von Anfang an lädt – Modelle ohne native aufgeschobene Tools (z. B. Gemini,
+      lokale OpenAI-kompatible Modelle, Claude Haiku), Clients, die alle Tool-Schemata
+      unabhängig vom Modell direkt einbetten (z. B. GitHub Copilot CLI), oder kleinere
+      Kontextfenster. Auch einige Codex-Modelle und ChatGPT haben aufgeschobene Tools
+      – prüfe direkt bei deinem Client/Modell, welche Features er hat, damit du dies
+      nicht unnötig aktiviert lässt. Tools werden über ha_search_tools gefunden und
+      über kategorisierte Proxys (read/write/delete) ausgeführt. Erfordert Neustart,
+      um wirksam zu werden.'
   enable_tool_security_policies:
     name: Tool-Sicherheitsrichtlinien aktivieren (erweitert)
-    description: >-
-      Gating kritischer Tool-Aufrufe (Schloss-/Alarmsteuerung,
-      Automatisierungsschreibvorgänge usw.) hinter Benutzergenehmigung. Wenn
-      ein geschütztes Tool aufgerufen wird, weist der Agent den Benutzer an,
-      den Tab Tool-Sicherheitsrichtlinien in der Web-UI zu öffnen und auf
-      Genehmigen zu klicken, bevor der Aufruf fortgesetzt wird. Tool-bezogene
-      Regeln mit optionalen Argumentbedingungen werden im Tab
-      Tool-Sicherheitsrichtlinien konfiguriert. Standardmäßig ausgeschaltet.
-      Erfordert Neustart, um wirksam zu werden.
+    description: Gating kritischer Tool-Aufrufe (Schloss-/Alarmsteuerung, Automatisierungsschreibvorgänge
+      usw.) hinter Benutzergenehmigung. Wenn ein geschütztes Tool aufgerufen wird,
+      weist der Agent den Benutzer an, den Tab Tool-Sicherheitsrichtlinien in der
+      Web-UI zu öffnen und auf Genehmigen zu klicken, bevor der Aufruf fortgesetzt
+      wird. Tool-bezogene Regeln mit optionalen Argumentbedingungen werden im Tab
+      Tool-Sicherheitsrichtlinien konfiguriert. Standardmäßig ausgeschaltet. Erfordert
+      Neustart, um wirksam zu werden.
   read_only_mode:
     name: Nur-Lese-Modus
-    description: >-
-      Schaltet alle Schreibtools aus und nimmt Tools die Möglichkeit, Schreib-
-      oder destruktive Aufrufe zu tätigen. Gemischte Lese-/Schreib-Tools
-      (Backups, Add-ons, Energiepräferenzen, Voice-Pipelines und Code-Modus,
-      wenn aktiviert) bleiben verfügbar, wobei ihre Schreiboperationen
-      blockiert sind. Derselbe Schalter wie im Web-UI-Tab Tools. Standardmäßig
-      ausgeschaltet. Erfordert Neustart, um wirksam zu werden.
+    description: Schaltet alle Schreibtools aus und nimmt Tools die Möglichkeit, Schreib-
+      oder destruktive Aufrufe zu tätigen. Gemischte Lese-/Schreib-Tools (Backups,
+      Add-ons, Energiepräferenzen, Voice-Pipelines und Code-Modus, wenn aktiviert)
+      bleiben verfügbar, wobei ihre Schreiboperationen blockiert sind. Derselbe Schalter
+      wie im Web-UI-Tab Tools. Standardmäßig ausgeschaltet. Erfordert Neustart, um
+      wirksam zu werden.
   enable_beta_features:
     name: Beta-Funktionen aktivieren (Master)
-    description: >-
-      ⚠ GEFAHR – diese Tools können deine Home-Assistant-Installation DAUERHAFT
-      BESCHÄDIGEN. Sie schreiben in deine YAML-Konfiguration, dein Dateisystem,
-      installieren benutzerdefinierte Komponenten, führen beliebigen sandboxed
-      Python aus und bearbeiten Tool-Docstrings, die die KI sieht. Es gibt
-      keine Garantie und keine Support-Garantie – du aktivierst sie auf EIGENES
-      RISIKO. Erstelle ein Home-Assistant-Backup, bevor du dies einschaltest,
-      und aktiviere es niemals in der Produktion ohne eines. Master-Gate für
-      die 5 experimentellen Unter-Flags unten; Unter-Flags werden zur Laufzeit
-      ignoriert, während dieser Master ausgeschaltet ist, selbst wenn sie
-      explizit auf true gesetzt sind. Derselbe Schalter wird auch in der
-      Web-Einstellungs-UI unter Beta-Funktionen (gefährlich) angezeigt – beide
-      Ansichten spiegeln sich nach dem Neustart wider.
+    description: ⚠ GEFAHR – diese Tools können deine Home-Assistant-Installation DAUERHAFT
+      BESCHÄDIGEN. Sie schreiben in deine YAML-Konfiguration, dein Dateisystem, installieren
+      benutzerdefinierte Komponenten, führen beliebigen sandboxed Python aus und bearbeiten
+      Tool-Docstrings, die die KI sieht. Es gibt keine Garantie und keine Support-Garantie
+      – du aktivierst sie auf EIGENES RISIKO. Erstelle ein Home-Assistant-Backup,
+      bevor du dies einschaltest, und aktiviere es niemals in der Produktion ohne
+      eines. Master-Gate für die 5 experimentellen Unter-Flags unten; Unter-Flags
+      werden zur Laufzeit ignoriert, während dieser Master ausgeschaltet ist, selbst
+      wenn sie explizit auf true gesetzt sind. Derselbe Schalter wird auch in der
+      Web-Einstellungs-UI unter Beta-Funktionen (gefährlich) angezeigt – beide Ansichten
+      spiegeln sich nach dem Neustart wider.
   enable_yaml_config_editing:
     name: YAML-Konfigurations-Bearbeitung aktivieren (Beta)
-    description: >-
-      Beta-Funktion. Ermöglicht KI-Assistenten, Schlüssel der obersten Ebene in
-      configuration.yaml und packages/*.yaml hinzuzufügen, zu ersetzen oder zu
-      entfernen. Nur auf die Whitelist gesetzte Schlüssel sind erlaubt (z. B.
-      template, sensor, command_line, mqtt, knx); Kernschlüssel wie
-      homeassistant, http und recorder sind blockiert. Jede Bearbeitung
-      validiert YAML-Syntax, führt eine Konfigurationsprüfung durch und
-      erstellt ein automatisches Backup. Änderungen an den meisten Schlüsseln
-      erfordern einen vollständigen HA-Neustart, um wirksam zu werden. Siehe
-      docs/beta.md für bekannte Einschränkungen. Dedizierte Tools
-      (Automatisierungen, Skripte, Szenen, Helfer, Template-Sensoren) sollten
-      bevorzugt werden, wenn verfügbar. ERFORDERT, dass der Master-Schalter
-      Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist –
-      andernfalls wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von
-      seinem Wert hier.
-  enable_yaml_edit_confirm:
-    name: Bestätigung für YAML-Bearbeitungen erfordern (Diff-Vorschau)
-    description: >-
-      Unter-Toggle der YAML-Konfigurationsbearbeitung, standardmäßig EIN
-      (empfohlen). Der erste ha_config_set_yaml-Aufruf gibt ein einheitliches
-      Diff von genau dem zurück, was sich auf der Festplatte ändern würde, plus
-      ein Bestätigungstoken und schreibt nichts; die Bearbeitung landet nur,
-      wenn der Aufruf mit diesem Token wiederholt wird. Existiert, damit
-      unbeabsichtigte Änderungen außerhalb der angeforderten Bearbeitung
-      erfasst werden, bevor sie die Festplatte erreichen (Issue #1720). Schalte
-      nur aus, um einen Roundtrip pro Bearbeitung zu sparen.
+    description: Beta-Funktion. Ermöglicht KI-Assistenten, Schlüssel der obersten
+      Ebene in configuration.yaml und packages/*.yaml hinzuzufügen, zu ersetzen oder
+      zu entfernen. Nur auf die Whitelist gesetzte Schlüssel sind erlaubt (z. B. template,
+      sensor, command_line, mqtt, knx); Kernschlüssel wie homeassistant, http und
+      recorder sind blockiert. Jede Bearbeitung validiert YAML-Syntax, führt eine
+      Konfigurationsprüfung durch und erstellt ein automatisches Backup. Änderungen
+      an den meisten Schlüsseln erfordern einen vollständigen HA-Neustart, um wirksam
+      zu werden. Siehe docs/beta.md für bekannte Einschränkungen. Dedizierte Tools
+      (Automatisierungen, Skripte, Szenen, Helfer, Template-Sensoren) sollten bevorzugt
+      werden, wenn verfügbar. ERFORDERT, dass der Master-Schalter Beta-Funktionen
+      aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls wird dieses
+      Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.
   enable_yaml_packages_automation:
     name: automation in packages/*.yaml erlauben
-    description: >-
-      Unter-Toggle der YAML-Konfigurationsbearbeitung. Wenn eingeschaltet,
-      akzeptiert ha_config_set_yaml yaml_path='automation' innerhalb von
-      packages/*.yaml. Wenn ausgeschaltet, wird der Aufruf sowohl client- als
-      auch serverseitig abgelehnt. Das Storage-Modus-Tool
-      (ha_config_set_automation) ist nicht betroffen. Standard AUS; wirkt nur,
-      wenn YAML-Konfigurations-Bearbeitung aktivieren oben ebenfalls
+    description: Unter-Toggle der YAML-Konfigurationsbearbeitung. Wenn eingeschaltet,
+      akzeptiert ha_config_set_yaml yaml_path='automation' innerhalb von packages/*.yaml.
+      Wenn ausgeschaltet, wird der Aufruf sowohl client- als auch serverseitig abgelehnt.
+      Das Storage-Modus-Tool (ha_config_set_automation) ist nicht betroffen. Standard
+      AUS; wirkt nur, wenn YAML-Konfigurations-Bearbeitung aktivieren oben ebenfalls
       eingeschaltet ist.
   enable_yaml_packages_script:
     name: script in packages/*.yaml erlauben
-    description: >-
-      Unter-Toggle der YAML-Konfigurationsbearbeitung. Wenn eingeschaltet,
-      akzeptiert ha_config_set_yaml yaml_path='script' innerhalb von
-      packages/*.yaml. Wenn ausgeschaltet, wird der Aufruf sowohl client- als
-      auch serverseitig abgelehnt. Das Storage-Modus-Tool
-      (ha_config_set_script) ist nicht betroffen. Standard AUS; wirkt nur, wenn
-      YAML-Konfigurations-Bearbeitung aktivieren oben ebenfalls eingeschaltet
-      ist.
+    description: Unter-Toggle der YAML-Konfigurationsbearbeitung. Wenn eingeschaltet,
+      akzeptiert ha_config_set_yaml yaml_path='script' innerhalb von packages/*.yaml.
+      Wenn ausgeschaltet, wird der Aufruf sowohl client- als auch serverseitig abgelehnt.
+      Das Storage-Modus-Tool (ha_config_set_script) ist nicht betroffen. Standard
+      AUS; wirkt nur, wenn YAML-Konfigurations-Bearbeitung aktivieren oben ebenfalls
+      eingeschaltet ist.
   enable_yaml_packages_scene:
     name: scene in packages/*.yaml erlauben
-    description: >-
-      Unter-Toggle der YAML-Konfigurationsbearbeitung. Wenn eingeschaltet,
-      akzeptiert ha_config_set_yaml yaml_path='scene' innerhalb von
-      packages/*.yaml. Wenn ausgeschaltet, wird der Aufruf sowohl client- als
-      auch serverseitig abgelehnt. Das Storage-Modus-Tool (ha_config_set_scene)
-      ist nicht betroffen. Standard AUS; wirkt nur, wenn
-      YAML-Konfigurations-Bearbeitung aktivieren oben ebenfalls eingeschaltet
+    description: Unter-Toggle der YAML-Konfigurationsbearbeitung. Wenn eingeschaltet,
+      akzeptiert ha_config_set_yaml yaml_path='scene' innerhalb von packages/*.yaml.
+      Wenn ausgeschaltet, wird der Aufruf sowohl client- als auch serverseitig abgelehnt.
+      Das Storage-Modus-Tool (ha_config_set_scene) ist nicht betroffen. Standard AUS;
+      wirkt nur, wenn YAML-Konfigurations-Bearbeitung aktivieren oben ebenfalls eingeschaltet
       ist.
+  enable_yaml_edit_confirm:
+    name: Bestätigung für YAML-Bearbeitungen erfordern (Diff-Vorschau)
+    description: 'Unter-Toggle der YAML-Konfigurationsbearbeitung, standardmäßig EIN
+      (empfohlen). Der erste ha_config_set_yaml-Aufruf gibt ein einheitliches Diff
+      von genau dem zurück, was sich auf der Festplatte ändern würde, plus ein Bestätigungstoken
+      und schreibt nichts; die Bearbeitung landet nur, wenn der Aufruf mit diesem
+      Token wiederholt wird. Existiert, damit unbeabsichtigte Änderungen außerhalb
+      der angeforderten Bearbeitung erfasst werden, bevor sie die Festplatte erreichen
+      (Issue #1720). Schalte nur aus, um einen Roundtrip pro Bearbeitung zu sparen.'
   enable_code_mode:
     name: Benutzerdefinierte Tool-Sandbox aktivieren (Beta)
-    description: >-
-      Beta-Funktion. Aktiviert das ha_manage_custom_tool-Tool, das
-      KI-Assistenten ermöglicht, benutzerdefinierten Python-Code in einer
-      sicheren Sandbox zu erstellen, auszuführen, zu speichern und zu löschen,
-      wenn kein integriertes Tool die Anfrage bearbeiten kann. Code wird in
-      einem isolierten Interpreter ohne Dateisystem- oder beliebigen
-      Netzwerkzugriff ausgeführt. Sandbox-Code kann die HA REST API treffen
-      (api_get/api_post), WebSocket-Befehle senden (ws_send), vorhandene
-      MCP-Tools aufrufen (call_tool) oder ein gespeichertes Tool entfernen
-      (delete_saved_tool). Gespeicherte Tools werden standardmäßig in
-      /data/saved_tools.json gespeichert, sodass sie Add-on-Neustarts
-      überstehen und für jeden Client sichtbar sind, der sich verbinden kann.
-      Siehe docs/beta.md für bekannte Einschränkungen. Erfordert Neustart, um
-      wirksam zu werden. ERFORDERT, dass der Master-Schalter Beta-Funktionen
-      aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls wird
-      dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert
-      hier.
-  enable_auto_backup:
-    name: Auto-Backup von Bearbeitungen aktivieren
-    description: >-
-      Erfasst einen Pro-Entität-Snapshot vor jedem umschlossenen
-      Schreib/destruktiven MCP-Tool-Aufruf (Automatisierung, Skript, Szene,
-      Helfer, Dashboard, Label, Kategorie, Gruppe, Zone, Bereich, Kalender, Todo,
-      Entität, Integration und verwandte Remove/Delete-Tools). Snapshots werden
-      als YAML-Dateien unter /data/ha_mcp_backups/ gespeichert (Override via
-      HAMCP_BACKUP_DIR) und über den Backups-Tab im Web-Settings-UI oder via
-      ha_manage_backup(scope='edits', ...) aufgelistet, wiederhergestellt oder
-      gelöscht. Best-Effort – Fehler loggen ein WARNING, blockieren aber nie den
-      zugrunde liegenden Schreibvorgang. Standardmäßig an; Häkchen entfernen, um
-      auszusteigen. Erfordert Neustart, um wirksam zu werden.
-  auto_backup_throttle_minutes:
-    name: Auto-Backup-Drosselung (Minuten)
-    description: >-
-      Pro-Entität-Drosselungsfenster. 0 (Standard) erfasst einen Snapshot bei
-      jedem umschlossenen Schreibvorgang. N>0 erfasst höchstens einen Snapshot pro
-      N Minuten pro Entität. Bereich 0–1440.
-  auto_backup_retain_per_entity:
-    name: Auto-Backup-Aufbewahrung (pro Entität)
-    description: >-
-      Maximale Anzahl von Snapshots, die pro Entität behalten werden. Ältere
-      Snapshots jenseits dieser Grenze werden bei jeder erfolgreichen Erfassung
-      ausgetauscht. Standard 100, Bereich 1–10000.
-  enable_snapshot_delete:
-    name: Snapshot-Löschung erlauben
-    description: >-
-      Lässt ha_manage_backup vollständige HA-Snapshot-Tarballs löschen
-      (scope='snapshot', action='delete'). Standardmäßig aus – ein Snapshot
-      könnte der letzte Wiederherstellungspunkt nach einer fehlerhaften Änderung
-      sein, also muss ein Mensch dies hier aktiv aktivieren. Auch wenn an, bleiben geplante
-      Backups, der neueste verbleibende Snapshot und alles jünger als der
-      Alters-Floor unten geschützt.
-  snapshot_delete_min_age_days:
-    name: Mindestalter des Snapshots zum Löschen (Tage)
-    description: >-
-      Ein Snapshot muss mindestens so alt sein, bevor er gelöscht werden kann.
-      Bereich 0–365; 0 deaktiviert den Floor (die Neuester-Snapshot- und
-      Geplante-Backup-Schutzmaßnahmen gelten weiterhin). Standard 7.
+    description: Beta-Funktion. Aktiviert das ha_manage_custom_tool-Tool, das KI-Assistenten
+      ermöglicht, benutzerdefinierten Python-Code in einer sicheren Sandbox zu erstellen,
+      auszuführen, zu speichern und zu löschen, wenn kein integriertes Tool die Anfrage
+      bearbeiten kann. Code wird in einem isolierten Interpreter ohne Dateisystem-
+      oder beliebigen Netzwerkzugriff ausgeführt. Sandbox-Code kann die HA REST API
+      treffen (api_get/api_post), WebSocket-Befehle senden (ws_send), vorhandene MCP-Tools
+      aufrufen (call_tool) oder ein gespeichertes Tool entfernen (delete_saved_tool).
+      Gespeicherte Tools werden standardmäßig in /data/saved_tools.json gespeichert,
+      sodass sie Add-on-Neustarts überstehen und für jeden Client sichtbar sind, der
+      sich verbinden kann. Siehe docs/beta.md für bekannte Einschränkungen. Erfordert
+      Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter Beta-Funktionen
+      aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls wird dieses
+      Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.
   enable_lite_docstrings:
     name: Lite-Tool-Docstrings aktivieren (Beta)
-    description: >-
-      Beta-Funktion. Ersetzt die Docstrings auf einer Handvoll schwerer
-      ha-mcp-Tools (Automatisierungen, Skripte, Szenen, Helfer, Dashboards,
-      ha_call_service, ha_config_set_yaml) durch kürzere Varianten, die Schema-
-      und Beispieldetails auf das ha_get_skill_guide-Tool (oder seine
-      skill://-Ressource) verschieben. WARNUNG: Dies reduziert die
-      Leerlauf-Token-Nutzung, kann aber die LLM-Leistung beeinträchtigen – die
-      gekürzten Beschreibungen verlassen sich darauf, dass das LLM tatsächlich
-      das Skill-Tool aufruft oder die Skill-Ressource für Details liest, was
-      nicht garantiert ist (einige Modelle überspringen den zusätzlichen
-      Tool-Aufruf und haben am Ende weniger Anleitung als zuvor). Am besten mit
-      einem Client gepaart, der MCP-Ressourcen unterstützt, oder mit
-      enable_tool_search. Erfordert Neustart, um wirksam zu werden. ERFORDERT,
-      dass der Master-Schalter Beta-Funktionen aktivieren oben (und in der
-      Web-UI) eingeschaltet ist – andernfalls wird dieses Unter-Flag zur
-      Laufzeit ignoriert, unabhängig von seinem Wert hier.
+    description: 'Beta-Funktion. Ersetzt die Docstrings auf einer Handvoll schwerer
+      ha-mcp-Tools (Automatisierungen, Skripte, Szenen, Helfer, Dashboards, ha_call_service,
+      ha_config_set_yaml) durch kürzere Varianten, die Schema- und Beispieldetails
+      auf das ha_get_skill_guide-Tool (oder seine skill://-Ressource) verschieben.
+      WARNUNG: Dies reduziert die Leerlauf-Token-Nutzung, kann aber die LLM-Leistung
+      beeinträchtigen – die gekürzten Beschreibungen verlassen sich darauf, dass das
+      LLM tatsächlich das Skill-Tool aufruft oder die Skill-Ressource für Details
+      liest, was nicht garantiert ist (einige Modelle überspringen den zusätzlichen
+      Tool-Aufruf und haben am Ende weniger Anleitung als zuvor). Am besten mit einem
+      Client gepaart, der MCP-Ressourcen unterstützt, oder mit enable_tool_search.
+      Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter
+      Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls
+      wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.'
   enable_mandatory_bps:
     name: Best-Practice-Skills bei Schreibvorgängen anhängen
-    description: >-
-      Hauptschalter für die Funktion zur Bereitstellung von
-      Schreib-Tool-Skill-Inhalten (Issue #1182). Wenn aktiviert (Standard),
-      fügen die sechs Konfigurations-Schreibtools (Automatisierungen, Skripte,
-      Szenen, Helfer, Dashboards, rohes YAML) die kanonischen
-      Home-Assistant-Best-Practice-Referenzdateien unter skill_content bei
-      jedem erfolgreichen Schreibvorgang an, plus automatisches Einbetten aller
-      Referenzabschnitte, die von Best-Practice-Warnungen zitiert werden. Jedes
-      Tool stellt auch einen per-Aufruf-Parameter MandatoryBPS zur Verfügung,
-      den der Agent bei nachfolgenden Aufrufen auf false setzen kann, sobald er
-      den Inhalt hat. Wenn dieser Hauptschalter ausgeschaltet ist, wird KEIN
-      skill_content ausgegeben, unabhängig vom per-Aufruf-Parameter oder
-      BP-Warnungen. Empfohlen EIN als erste Wahl; deaktiviere nur für Modelle
-      mit sehr kleinen Kontextfenstern. Das Ausschalten davon kann die
-      Schreibgenauigkeit beeinträchtigen. Erfordert Neustart, um wirksam zu
-      werden.
+    description: 'Hauptschalter für die Funktion zur Bereitstellung von Schreib-Tool-Skill-Inhalten
+      (Issue #1182). Wenn aktiviert (Standard), fügen die sechs Konfigurations-Schreibtools
+      (Automatisierungen, Skripte, Szenen, Helfer, Dashboards, rohes YAML) die kanonischen
+      Home-Assistant-Best-Practice-Referenzdateien unter skill_content bei jedem erfolgreichen
+      Schreibvorgang an, plus automatisches Einbetten aller Referenzabschnitte, die
+      von Best-Practice-Warnungen zitiert werden. Jedes Tool stellt auch einen per-Aufruf-Parameter
+      MandatoryBPS zur Verfügung, den der Agent bei nachfolgenden Aufrufen auf false
+      setzen kann, sobald er den Inhalt hat. Wenn dieser Hauptschalter ausgeschaltet
+      ist, wird KEIN skill_content ausgegeben, unabhängig vom per-Aufruf-Parameter
+      oder BP-Warnungen. Empfohlen EIN als erste Wahl; deaktiviere nur für Modelle
+      mit sehr kleinen Kontextfenstern. Das Ausschalten davon kann die Schreibgenauigkeit
+      beeinträchtigen. Erfordert Neustart, um wirksam zu werden.'
   enable_strict_mandatory_bps:
     name: Strikter Best-Practices-Modus
-    description: >-
-      Strikter Modus: verhindert, dass der Client das Tool verwendet, bis er
-      nachweisen kann, dass er die Best Practices gelesen hat. Während er
-      eingeschaltet ist, werden die sechs Best-Practice-Schreibtools
-      (Automatisierungen, Skripte, Szenen, Helfer, Dashboards, rohes YAML)
-      blockiert und geben einen Fehler zurück, der den Client anweist, das
-      Best-Practices-Skill über ha_get_skill_guide zu lesen und den dort
-      erhaltenen Bestätigungsschlüssel zurückzugeben. Während er eingeschaltet
-      ist, ist das ha_get_skill_guide-Tool gesperrt aktiviert – es ist der
-      einzige Herausgeber des Bestätigungsschlüssels. Kind der Option
-      Best-Practice-Skills bei Schreibvorgängen anhängen oben und inert,
-      während dieser Elternteil ausgeschaltet ist. Erfordert Neustart, um
-      wirksam zu werden.
+    description: 'Strikter Modus: verhindert, dass der Client das Tool verwendet,
+      bis er nachweisen kann, dass er die Best Practices gelesen hat. Während er eingeschaltet
+      ist, werden die sechs Best-Practice-Schreibtools (Automatisierungen, Skripte,
+      Szenen, Helfer, Dashboards, rohes YAML) blockiert und geben einen Fehler zurück,
+      der den Client anweist, das Best-Practices-Skill über ha_get_skill_guide zu
+      lesen und den dort erhaltenen Bestätigungsschlüssel zurückzugeben. Während er
+      eingeschaltet ist, ist das ha_get_skill_guide-Tool gesperrt aktiviert – es ist
+      der einzige Herausgeber des Bestätigungsschlüssels. Kind der Option Best-Practice-Skills
+      bei Schreibvorgängen anhängen oben und inert, während dieser Elternteil ausgeschaltet
+      ist. Erfordert Neustart, um wirksam zu werden.'
   enable_filesystem_tools:
     name: Dateisystem-Tools aktivieren (Beta)
-    description: >-
-      Setzt HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Aktiviert direkten
-      Dateilese-/-schreibzugriff auf dein Home-Assistant-Dateisystem. WARNUNG:
-      Dies gibt dem MCP-Server sensiblen direkten Dateizugriff auf dein System.
-      Aktiviere nur, wenn du dem KI-Assistenten bei Dateioperationen vertraust.
-      Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der
-      Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI)
-      eingeschaltet ist – andernfalls wird dieses Unter-Flag zur Laufzeit
-      ignoriert, unabhängig von seinem Wert hier.
+    description: 'Setzt HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Aktiviert direkten Dateilese-/-schreibzugriff
+      auf dein Home-Assistant-Dateisystem. WARNUNG: Dies gibt dem MCP-Server sensiblen
+      direkten Dateizugriff auf dein System. Aktiviere nur, wenn du dem KI-Assistenten
+      bei Dateioperationen vertraust. Erfordert Neustart, um wirksam zu werden. ERFORDERT,
+      dass der Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI)
+      eingeschaltet ist – andernfalls wird dieses Unter-Flag zur Laufzeit ignoriert,
+      unabhängig von seinem Wert hier.'
   enable_dashboard_screenshot:
     name: Dashboard-Screenshot-Modus aktivieren (Beta)
-    description: >-
-      Beta-Funktion – standardmäßig deaktiviert. Fügt das
-      ha_get_dashboard_screenshot-Tool plus include_screenshot /
-      return_screenshot-Optionen auf den Dashboard-Get-/Set-Tools hinzu, sodass
-      KI-Assistenten ein oder mehrere responsive Lovelace-Bilder inspizieren
-      können (z. B. um ein Dashboard zu verifizieren, das sie gerade erstellt
-      haben). Unterstützt stabile benannte Ansichten,
-      Mobile-/Tablet-/Desktop-Batches und PNG-/JPEG-/WebP-/BMP-Ausgabe. Das
-      Rendering läuft in einer separaten Opt-in-Engine – balloobs Puppet-Add-on
-      (headless Chromium) – die du einmal installierst (füge balloobs
-      Add-on-Repository hinzu, dann installiere Puppet) und gibst ihm ein
-      langlebiges Zugriffstoken; bei Docker-/Container-Deployments führst du
-      diese Engine als Sidecar aus und setzt
-      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nichts Schweres wird installiert,
-      es sei denn, du aktivierst dies sowohl als auch installierst die Engine.
-      Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der
-      Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI)
-      eingeschaltet ist – andernfalls wird dieses Unter-Flag zur Laufzeit
-      ignoriert, unabhängig von seinem Wert hier.
+    description: Beta-Funktion – standardmäßig deaktiviert. Fügt das ha_get_dashboard_screenshot-Tool
+      plus include_screenshot / return_screenshot-Optionen auf den Dashboard-Get-/Set-Tools
+      hinzu, sodass KI-Assistenten ein oder mehrere responsive Lovelace-Bilder inspizieren
+      können (z. B. um ein Dashboard zu verifizieren, das sie gerade erstellt haben).
+      Unterstützt stabile benannte Ansichten, Mobile-/Tablet-/Desktop-Batches und
+      PNG-/JPEG-/WebP-/BMP-Ausgabe. Das Rendering läuft in einer separaten Opt-in-Engine
+      – balloobs Puppet-Add-on (headless Chromium) – die du einmal installierst (füge
+      balloobs Add-on-Repository hinzu, dann installiere Puppet) und gibst ihm ein
+      langlebiges Zugriffstoken; bei Docker-/Container-Deployments führst du diese
+      Engine als Sidecar aus und setzt HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nichts
+      Schweres wird installiert, es sei denn, du aktivierst dies sowohl als auch installierst
+      die Engine. Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter
+      Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls
+      wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.
+  enable_auto_backup:
+    name: Auto-Backup von Bearbeitungen aktivieren
+    description: Erfasst einen Pro-Entität-Snapshot vor jedem umschlossenen Schreib/destruktiven
+      MCP-Tool-Aufruf (Automatisierung, Skript, Szene, Helfer, Dashboard, Label, Kategorie,
+      Gruppe, Zone, Bereich, Kalender, Todo, Entität, Integration und verwandte Remove/Delete-Tools).
+      Snapshots werden als YAML-Dateien unter /data/ha_mcp_backups/ gespeichert (Override
+      via HAMCP_BACKUP_DIR) und über den Backups-Tab im Web-Settings-UI oder via ha_manage_backup(scope='edits',
+      ...) aufgelistet, wiederhergestellt oder gelöscht. Best-Effort – Fehler loggen
+      ein WARNING, blockieren aber nie den zugrunde liegenden Schreibvorgang. Standardmäßig
+      an; Häkchen entfernen, um auszusteigen. Erfordert Neustart, um wirksam zu werden.
+  auto_backup_throttle_minutes:
+    name: Auto-Backup-Drosselung (Minuten)
+    description: Pro-Entität-Drosselungsfenster. 0 (Standard) erfasst einen Snapshot
+      bei jedem umschlossenen Schreibvorgang. N>0 erfasst höchstens einen Snapshot
+      pro N Minuten pro Entität. Bereich 0–1440.
+  auto_backup_retain_per_entity:
+    name: Auto-Backup-Aufbewahrung (pro Entität)
+    description: Maximale Anzahl von Snapshots, die pro Entität behalten werden. Ältere
+      Snapshots jenseits dieser Grenze werden bei jeder erfolgreichen Erfassung ausgetauscht.
+      Standard 100, Bereich 1–10000.
+  enable_snapshot_delete:
+    name: Snapshot-Löschung erlauben
+    description: Lässt ha_manage_backup vollständige HA-Snapshot-Tarballs löschen
+      (scope='snapshot', action='delete'). Standardmäßig aus – ein Snapshot könnte
+      der letzte Wiederherstellungspunkt nach einer fehlerhaften Änderung sein, also
+      muss ein Mensch dies hier aktiv aktivieren. Auch wenn an, bleiben geplante Backups,
+      der neueste verbleibende Snapshot und alles jünger als der Alters-Floor unten
+      geschützt.
+  snapshot_delete_min_age_days:
+    name: Mindestalter des Snapshots zum Löschen (Tage)
+    description: Ein Snapshot muss mindestens so alt sein, bevor er gelöscht werden
+      kann. Bereich 0–365; 0 deaktiviert den Floor (die Neuester-Snapshot- und Geplante-Backup-Schutzmaßnahmen
+      gelten weiterhin). Standard 7.
   tool_search_max_results:
     name: Max. Tool-Suchergebnisse
-    description: >-
-      Maximale Anzahl von Tools, die von ha_search_tools zurückgegeben werden,
-      wenn die Tool-Suche aktiviert ist. Niedrigere Werte (2-3) sparen
-      Kontext-Tokens, können aber relevante Tools übersehen. Bereich: 2-10.
-      Erfordert Neustart.
+    description: 'Maximale Anzahl von Tools, die von ha_search_tools zurückgegeben
+      werden, wenn die Tool-Suche aktiviert ist. Niedrigere Werte (2-3) sparen Kontext-Tokens,
+      können aber relevante Tools übersehen. Bereich: 2-10. Erfordert Neustart.'
   disabled_tools:
     name: Deaktivierte Tools (kommagetrennt)
-    description: >-
-      Hier aufgelistete Tools sind zwangsweise aus und im Web-Settings-UI
-      (Tools-Tab) gesperrt – sie können dort nicht wieder aktiviert werden, ohne
-      diese Option zuerst zu entfernen. Ein kleiner Satz obligatorischer Tools
-      (ha_search, ha_get_overview, ha_get_state, ha_report_issue,
-      ha_manage_backup) kann nicht deaktiviert werden und läuft weiter, auch wenn
-      hier aufgelistet. ha_get_skill_guide kann nur deaktiviert werden, während
-      der strikte Best-Practices-Modus (enable_strict_mandatory_bps) aus ist.
-      Kommagetrennte Tool-Namen (z.B. ha_call_event,ha_eval_template).
+    description: Hier aufgelistete Tools sind zwangsweise aus und im Web-Settings-UI
+      (Tools-Tab) gesperrt – sie können dort nicht wieder aktiviert werden, ohne diese
+      Option zuerst zu entfernen. Ein kleiner Satz obligatorischer Tools (ha_search,
+      ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) kann nicht
+      deaktiviert werden und läuft weiter, auch wenn hier aufgelistet. ha_get_skill_guide
+      kann nur deaktiviert werden, während der strikte Best-Practices-Modus (enable_strict_mandatory_bps)
+      aus ist. Kommagetrennte Tool-Namen (z.B. ha_call_event,ha_eval_template).
   pinned_tools:
     name: Angeheftete Tools (kommagetrennt)
-    description: >-
-      Hier aufgelistete Tools sind gesperrt angeheftet – sie erscheinen oben im
-      Tools-Tab und können nicht vom Web-Settings-UI entfernt werden, ohne diese
-      Option zuerst zu entfernen. Nützlich in Kombination mit Tool Search.
-      Kommagetrennte Tool-Namen.
+    description: Hier aufgelistete Tools sind gesperrt angeheftet – sie erscheinen
+      oben im Tools-Tab und können nicht vom Web-Settings-UI entfernt werden, ohne
+      diese Option zuerst zu entfernen. Nützlich in Kombination mit Tool Search. Kommagetrennte
+      Tool-Namen.
   verify_ssl:
     name: TLS-Zertifikat verifizieren
-    description: >-
-      Verifiziert das TLS-Zertifikat des Home Assistant Servers. Das Add-on
-      verbindet sich via Supervisor-Proxy, daher hat dies normalerweise keinen
-      Effekt und sollte aktiviert bleiben. Deaktiviere nur, wenn du das Add-on
-      umkonfiguriert hast, um mit HA über einen öffentlichen HTTPS-Hostnamen mit
-      selbstsigniertem Zertifikat oder Hostname-Mismatch zu sprechen.
-      Deaktivieren schwächt die Transport-Sicherheit – lass an, außer du weißt,
-      dass du es brauchst. Erfordert Neustart, um wirksam zu werden.
+    description: Verifiziert das TLS-Zertifikat des Home Assistant Servers. Das Add-on
+      verbindet sich via Supervisor-Proxy, daher hat dies normalerweise keinen Effekt
+      und sollte aktiviert bleiben. Deaktiviere nur, wenn du das Add-on umkonfiguriert
+      hast, um mit HA über einen öffentlichen HTTPS-Hostnamen mit selbstsigniertem
+      Zertifikat oder Hostname-Mismatch zu sprechen. Deaktivieren schwächt die Transport-Sicherheit
+      – lass an, außer du weißt, dass du es brauchst. Erfordert Neustart, um wirksam
+      zu werden.
