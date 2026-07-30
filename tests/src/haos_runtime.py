@@ -208,15 +208,6 @@ def ssh_exec(
                 or "connection reset by peer" in stderr
                 or "connection refused" in stderr
                 or "no route to host" in stderr
-                # Supervisor stop/start cycles (watchdog recovery, restart,
-                # update swap) REMOVE the addon container and create a fresh
-                # one, so ``docker exec addon_<slug>`` can transiently hit
-                # "No such container" / "is not running" mid-swap — observed
-                # on PR #2076 run 30525619431, where the dev-addon container
-                # vanished for the ~2s window a sabotage exec ran in. The
-                # swap completes within the retry deadline.
-                or "no such container" in stderr
-                or "is not running" in stderr
             )
             if transient and time.monotonic() < deadline:
                 LOG.debug(
@@ -243,19 +234,59 @@ def docker_exec_in_addon(
     """Run ``cmd`` inside an addon container via SSH + docker exec.
 
     ``addon_slug`` is the Supervisor slug (e.g. ``local_ha_mcp_dev``);
-    the helper resolves it to the Docker container name (
-    ``addon_<slug>``). Returns stdout of the command. Raises
+    the helper resolves it to the LIVE Docker container name at call
+    time. The prefix must never be hardcoded: Supervisor 2026.07.4
+    renamed addon containers from ``addon_<slug>`` to ``app_<slug>``
+    (and migrates existing ones on attach), and the booted HAOS
+    self-updates Supervisor at boot — the hardcoded old prefix broke
+    every inaddon run the moment stable.json flipped (PR #2076 runs
+    30525619431 / 30526638563). Returns stdout of the command. Raises
     ``RuntimeError`` with stderr+stdout context on non-zero exit
     (via the wrapping in ``ssh_exec``).
+
+    The resolve+exec pair retries under one deadline across
+    Supervisor's container swap window: stop/start cycles (watchdog
+    recovery, restart, update swap) remove the container and create a
+    fresh one, so a just-resolved name can vanish before the exec
+    lands. Re-resolving on each attempt picks up the new container.
 
     Used by item 8's filesystem-poisoning E2E to make
     ``/data/saved_tools.json`` unwriteable inside the dev addon
     container mid-test, force the save-warning rollback, then chmod
     back in the test's finally block.
     """
-    container = f"addon_{addon_slug}"
-    result = ssh_exec(["docker", "exec", container, *cmd], timeout=timeout)
-    return result.stdout
+    deadline = time.monotonic() + 45.0
+    while True:
+        names = ssh_exec(
+            [
+                "docker",
+                "ps",
+                "--format",
+                "{{.Names}}",
+                "--filter",
+                f"name=^(app|addon)_{addon_slug}$",
+            ],
+            timeout=timeout,
+        ).stdout.split()
+        if names:
+            try:
+                result = ssh_exec(["docker", "exec", names[0], *cmd], timeout=timeout)
+                return result.stdout
+            except RuntimeError as exc:
+                message = str(exc).lower()
+                mid_swap = "no such container" in message or "is not running" in message
+                if not (mid_swap and time.monotonic() < deadline):
+                    raise
+        elif time.monotonic() >= deadline:
+            listing = ssh_exec(
+                ["docker", "ps", "-a", "--format", "{{.Names}} {{.Status}}"],
+                timeout=timeout,
+            ).stdout
+            raise RuntimeError(
+                f"no running container found for addon slug {addon_slug!r} "
+                f"(tried app_/addon_ prefixes). docker ps -a:\n{listing}"
+            )
+        time.sleep(2.0)
 
 
 def is_haos_inaddon_mode() -> bool:
