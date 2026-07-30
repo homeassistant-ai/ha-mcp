@@ -81,7 +81,9 @@ class TestDockerCompose:
             "site/src/pages/setup.astro",
             "site/src/pages/faq.astro",
         ]
-        checked = 0
+        # Keyed by page, not a running total: counting qualifying blocks would
+        # let two declarations on one page cover a page that has none.
+        checked: set[str] = set()
         for page in pages:
             with open(page, encoding="utf-8") as f:
                 source = f.read()
@@ -93,7 +95,7 @@ class TestDockerCompose:
                 declared = snippet.get("volumes")
                 if not declared or "ha-mcp-data" not in declared:
                     continue  # service-only fragment, nothing to pin
-                checked += 1
+                checked.add(page)
                 spec = declared["ha-mcp-data"] or {}
                 assert spec.get("name") == "ha-mcp-data", (
                     f"{page}: compose snippet declares a bare ha-mcp-data, so "
@@ -101,9 +103,9 @@ class TestDockerCompose:
                     "documented `docker volume rm ha-mcp-data` cannot match it"
                 )
 
-        assert checked == len(pages), (
-            f"expected a top-level volumes declaration in each of {pages}, "
-            f"found {checked} — did a snippet move or stop parsing?"
+        assert checked == set(pages), (
+            "expected a top-level volumes declaration on every page; missing "
+            f"{sorted(set(pages) - checked)} — did a snippet move or stop parsing?"
         )
 
     def test_screenshot_overlay_does_not_claim_the_data_dir(self):

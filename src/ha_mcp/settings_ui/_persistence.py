@@ -67,7 +67,7 @@ def dump_tool_metadata_cache(metadata: list[dict[str, Any]]) -> bool:
     """
     path = _get_tool_metadata_cache_path()
     try:
-        path.write_text(json.dumps(metadata))
+        path.write_text(json.dumps(metadata), encoding="utf-8")
     except OSError:
         logger.warning("Failed to dump tool metadata cache to %s", path, exc_info=True)
         return False
@@ -84,7 +84,7 @@ def load_tool_metadata_cache() -> list[dict[str, Any]]:
     """
     path = _get_tool_metadata_cache_path()
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
     except OSError:
@@ -137,7 +137,7 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     # but isn't readable by the runtime UID) propagates. Read directly and
     # treat ``FileNotFoundError`` as "no config yet"; log other ``OSError``s.
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         raw = None
     except OSError:
@@ -274,7 +274,7 @@ def _load_backup_settings_override() -> dict[str, Any]:
     """
     path = _get_backup_settings_override_path()
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
     except OSError:

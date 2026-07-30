@@ -167,7 +167,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         """
         path = self._clients_file()
         try:
-            data: dict[str, Any] = json.loads(path.read_text())
+            data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
             clients = {
                 cid: OAuthClientInformationFull.model_validate(c)
                 for cid, c in data.items()
@@ -236,7 +236,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         """
         path = self._hmac_secret_file()
         try:
-            hex_secret = path.read_text().strip()
+            hex_secret = path.read_text(encoding="utf-8").strip()
             if not hex_secret:
                 raise ValueError("HMAC secret file is empty")
             secret = bytes.fromhex(hex_secret)
