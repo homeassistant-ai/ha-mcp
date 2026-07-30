@@ -208,6 +208,15 @@ def ssh_exec(
                 or "connection reset by peer" in stderr
                 or "connection refused" in stderr
                 or "no route to host" in stderr
+                # Supervisor stop/start cycles (watchdog recovery, restart,
+                # update swap) REMOVE the addon container and create a fresh
+                # one, so ``docker exec addon_<slug>`` can transiently hit
+                # "No such container" / "is not running" mid-swap — observed
+                # on PR #2076 run 30525619431, where the dev-addon container
+                # vanished for the ~2s window a sabotage exec ran in. The
+                # swap completes within the retry deadline.
+                or "no such container" in stderr
+                or "is not running" in stderr
             )
             if transient and time.monotonic() < deadline:
                 LOG.debug(
