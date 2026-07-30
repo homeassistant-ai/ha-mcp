@@ -11,7 +11,9 @@ the resolver or the HA service surface.
 ``ha_list_services`` returns a FLAT ``services`` dict keyed
 ``"<domain>.<service>"`` and paginated (default 50), so the check
 queries one domain at a time with a generous limit rather than relying
-on an unfiltered listing.
+on an unfiltered listing. Every action-carrying domain must actually be
+checked — a domain that stops loading on the instance fails the pin
+instead of silently shrinking its coverage.
 """
 
 import logging
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 async def test_every_table_action_resolves_to_a_live_service(mcp_client):
     tools = DeviceControlTools(client=MagicMock())
     missing: list[str] = []
+    checked_domains: set[str] = set()
     checked = 0
     for domain, handler in DOMAIN_HANDLERS.items():
         actions = handler.get("valid_actions", [])
@@ -38,17 +41,23 @@ async def test_every_table_action_resolves_to_a_live_service(mcp_client):
         )
         live_services = set(data.get("services", {})) if data.get("success") else set()
         if not live_services:
-            # Domain not loaded on this instance (e.g. no alarm panel in
-            # the test container) — nothing to validate against.
-            logger.info("skipping %s: not loaded on instance", domain)
+            logger.info("no services returned for %s", domain)
             continue
+        checked_domains.add(domain)
         for action in actions:
             checked += 1
             service_name, _ = tools._resolve_service_name(domain, action, None)
             if f"{domain}.{service_name}" not in live_services:
                 missing.append(f"{domain}.{action} -> {service_name}")
 
-    assert checked > 0, "no domain from DOMAIN_HANDLERS is loaded on the instance"
+    # Every action-carrying domain loads on the test instance today; a
+    # domain silently dropping out of the pin (instance config drift)
+    # must fail loudly rather than shrink the coverage unnoticed.
+    expected = {d for d, h in DOMAIN_HANDLERS.items() if h.get("valid_actions")}
+    assert checked_domains == expected, (
+        f"domains missing from the resolution pin (not loaded on the "
+        f"instance?): {sorted(expected - checked_domains)}"
+    )
     assert not missing, (
         "domain-table actions resolving to services the instance does not "
         f"have: {missing}"

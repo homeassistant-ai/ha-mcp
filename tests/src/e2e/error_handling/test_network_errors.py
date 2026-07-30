@@ -364,26 +364,32 @@ class TestErrorHandling:
                 or "operation_ids" in mixed_bulk_data
             )
             if bulk_succeeded:
-                # Per-item accounting is the contract this pins: a bad
-                # entity must not abort the batch, and every requested
-                # entity must be accounted for in the bulk response —
-                # results carry per-item outcomes on BOTH dispatch tiers
-                # (the component fast path confirms inline and returns no
-                # operation_ids at all, so the response is the only
-                # tier-independent surface).
+                # This batch always exercises the LEGACY dispatch path:
+                # _build_service_call keeps each entity's own domain, so the
+                # fabricated IDs resolve to unknown services
+                # (nonexistent.turn_on), the component runs all guards
+                # before any dispatch and the whole frame raises, and
+                # _bulk_via_component treats that as a fallback signal —
+                # so operation_ids carries the real light and the status
+                # block below executes.
+                #
+                # Value-check the per-item contract on the response: the
+                # valid entities succeed and both fabricated entities fail
+                # as structured per-item entries (a missing entity becomes
+                # ENTITY_NOT_FOUND inside the batch) instead of aborting it.
                 operation_ids = mixed_bulk_data.get("operation_ids", [])
-                results = mixed_bulk_data.get("results", [])
-                skipped = mixed_bulk_data.get("skipped_details", [])
-                assert mixed_bulk_data.get("total_operations", 0) + len(skipped) == len(
-                    mixed_entities
-                ), f"every requested entity must be accounted for: {mixed_bulk_data}"
-                assert len(results) == mixed_bulk_data.get("total_operations", 0), (
-                    f"per-item results must cover every dispatched operation "
-                    f"(a bad entity must not abort the batch): {mixed_bulk_data}"
+                assert mixed_bulk_data.get("successful_commands") == len(
+                    valid_entities
+                ), f"the valid entities must succeed: {mixed_bulk_data}"
+                assert mixed_bulk_data.get("failed_commands") == 2, (
+                    f"both fabricated entities must fail as per-item entries "
+                    f"(not abort the batch): {mixed_bulk_data}"
                 )
                 logger.info(
-                    f"  ✅ Mixed entities handled: {len(results)} results, "
-                    f"{len(skipped)} skipped, {len(operation_ids)} operation ids"
+                    f"  ✅ Mixed entities handled: "
+                    f"{mixed_bulk_data.get('successful_commands')} succeeded, "
+                    f"{mixed_bulk_data.get('failed_commands')} failed, "
+                    f"{len(operation_ids)} operation ids"
                 )
 
                 # Legacy tier only: dispatched operations get polling
