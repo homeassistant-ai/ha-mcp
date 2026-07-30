@@ -9,6 +9,7 @@ without this pin it could silently drift back to the success fraction
 it used to be.
 """
 
+import asyncio
 import time
 from unittest.mock import MagicMock
 
@@ -100,8 +101,6 @@ async def test_bulk_wait_window_observes_completion_inside_it(bulk_tools):
     # to completed INSIDE the window must come back completed. Under a 0s
     # snapshot (the state the review flagged) the poll loop never runs
     # and this reports pending.
-    import asyncio
-
     tools, store = bulk_tools
     op = DeviceOperation(
         operation_id="op-flips",

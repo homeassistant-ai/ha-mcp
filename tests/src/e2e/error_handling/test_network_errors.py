@@ -351,7 +351,15 @@ class TestErrorHandling:
 
             mixed_bulk_data = parse_mcp_result(mixed_bulk_result)
 
-            if mixed_bulk_data.get("success"):
+            # The bulk response carries no top-level "success" key
+            # (_build_bulk_response emits operation_ids / total_operations /
+            # execution_mode) — mirror assert_mcp_success's bulk indicator
+            # instead of gating on a key that is never present.
+            bulk_succeeded = mixed_bulk_data.get("error") is None and (
+                mixed_bulk_data.get("success") is True
+                or "operation_ids" in mixed_bulk_data
+            )
+            if bulk_succeeded:
                 # Check if partial success is reported
                 operation_ids = mixed_bulk_data.get("operation_ids", [])
                 logger.info(
@@ -360,10 +368,13 @@ class TestErrorHandling:
 
                 # Check status of operations
                 if operation_ids:
+                    # Keep the poll window below _safe_tool_call's 10s
+                    # wrapper timeout so a still-pending operation returns
+                    # a pending entry instead of tripping the wrapper.
                     status_result = await self._safe_tool_call(
                         mcp_client,
                         "ha_get_operation_status",
-                        {"operation_id": operation_ids},
+                        {"operation_id": operation_ids, "timeout_seconds": 5},
                     )
 
                     status_data = parse_mcp_result(status_result)
