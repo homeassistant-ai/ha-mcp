@@ -192,20 +192,20 @@ DOMAIN_HANDLERS = {
 }
 
 
-def get_domain_handler(entity_or_domain: str) -> dict[str, Any]:
-    """Get domain-specific configuration for an entity ID or bare domain.
+def get_domain_handler(entity_id: str) -> dict[str, Any]:
+    """Get domain-specific configuration for an entity.
 
     Args:
-        entity_or_domain: Full entity ID ('light.living_room') or bare
-            domain ('light'). Both call sites in device_control pass the
-            bare domain — the old dot-guard sent those to the default
-            handler, making every per-domain valid_actions table
-            unreachable (e.g. climate's 'heat' was rejected upfront).
+        entity_id: Full entity ID (e.g., 'light.living_room')
 
     Returns:
         Domain handler configuration dictionary
     """
-    domain = entity_or_domain.split(".")[0] if entity_or_domain else ""
+    if "." not in entity_id:
+        # Fallback for invalid entity ID format
+        return get_default_handler()
+
+    domain = entity_id.split(".")[0]
     return DOMAIN_HANDLERS.get(domain, get_default_handler())
 
 
