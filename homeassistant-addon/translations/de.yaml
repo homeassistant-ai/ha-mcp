@@ -1,169 +1,155 @@
 ---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/de.json (keys addon.*, features.*,
+# addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   backup_hint:
     name: Full-HA Snapshot-Vorschlagsebene (LLM-seitig)
-    description: |-
-      Passt die Formulierung des Hinweises an, den das LLM in der
-      `ha_manage_backup(scope='snapshot')`-Tool-Beschreibung sieht, wann es ein
+    description: 'Passt die Formulierung des Hinweises an, den das LLM in der
+
+      `ha_manage_backup(scope=''snapshot'')`-Tool-Beschreibung sieht, wann es ein
+
       vollständiges Home Assistant Tarball-Backup vor riskanten Operationen
+
       vorschlagen soll (z.B. Massen-Gerätelöschungen). Betrifft NUR diesen einen
+
       LLM-seitigen Prompt-Satz.
 
-      Für automatische Snapshots pro Bearbeitung von Automatisierungen / Skripten /
+
+      Für automatische Snapshots pro Bearbeitung von Automatisierungen / Skripten
+      /
+
       Helfern / etc. nutze den separaten **Auto-Backup von Bearbeitungen aktivieren**-Schalter
-      unten.
+
+      unten.'
   secret_path:
     name: Secret-Pfad Override
-    description: |
-      Optionaler benutzerdefinierter HTTP-Pfad für den MCP-Server. Leer lassen, um den automatisch generierten sicheren Pfad zu verwenden.
+    description: 'Optionaler benutzerdefinierter HTTP-Pfad für den MCP-Server. Leer
+      lassen, um den automatisch generierten sicheren Pfad zu verwenden.
+
+      '
   enable_tool_search:
     name: Tool-Suche aktivieren
-    description: >-
-      Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung.
-      Reduziert den Leerlauf-Kontext um rund 90 % auf etwa 5K Tokens. ⚠️
-      Aktiviere dies NICHT in Clients mit eigener integrierter Tool-Suche /
-      aufgeschobenen Tools (claude.ai, Claude Desktop, Claude Code) – die
-      beiden Suchebenen kollidieren, und die integrierte Tool-Suche des
-      Clients ist dort die bessere Wahl; lasse dies ausgeschaltet. Ob Tools
-      aufgeschoben werden, hängt von der Kombination aus Client und Modell ab:
-      Verwende dies, wenn dein Setup den vollständigen Katalog von Anfang an
-      lädt – Modelle ohne native aufgeschobene Tools (z. B. Gemini, lokale
-      OpenAI-kompatible Modelle, Claude Haiku), Clients, die alle
-      Tool-Schemata unabhängig vom Modell direkt einbetten (z. B. GitHub
-      Copilot CLI), oder kleinere Kontextfenster. Auch einige Codex-Modelle
-      und ChatGPT haben aufgeschobene Tools – prüfe direkt bei deinem
-      Client/Modell, welche Features er hat, damit du dies nicht unnötig
-      aktiviert lässt. Tools werden über ha_search_tools gefunden und über
-      kategorisierte Proxys (read/write/delete) ausgeführt. Erfordert einen
-      Neustart, um wirksam zu werden. Dann neu verbinden oder den MCP-Server
-      in deinem AI-Client aktualisieren, damit er die Tool-Liste neu lädt. Ein
-      Neustart des Add-ons allein aktualisiert NICHT die gecachte Tool-Liste
-      eines Clients; dies gilt nach jeder Einstellungsänderung hier.
-  enable_tool_security_policies:
-    name: Tool-Sicherheitsrichtlinien aktivieren (erweitert)
-    description: >-
-      Gating kritischer Tool-Aufrufe (Schloss-/Alarmsteuerung,
-      Automatisierungsschreibvorgänge usw.) hinter Benutzergenehmigung. Wenn
-      ein geschütztes Tool aufgerufen wird, weist der Agent den Benutzer an,
-      den Tab Tool-Sicherheitsrichtlinien in der Web-UI zu öffnen und auf
-      Genehmigen zu klicken, bevor der Aufruf fortgesetzt wird. Tool-bezogene
-      Regeln mit optionalen Argumentbedingungen werden im Tab
-      Tool-Sicherheitsrichtlinien konfiguriert. Standardmäßig ausgeschaltet.
-      Erfordert Neustart, um wirksam zu werden.
-  read_only_mode:
-    name: Nur-Lese-Modus
-    description: >-
-      Schaltet alle Schreibtools aus und nimmt Tools die Möglichkeit, Schreib-
-      oder destruktive Aufrufe zu tätigen. Gemischte Lese-/Schreib-Tools
-      (Backups, Add-ons, Energiepräferenzen, Voice-Pipelines und Code-Modus,
-      wenn aktiviert) bleiben verfügbar, wobei ihre Schreiboperationen
-      blockiert sind. Derselbe Schalter wie im Web-UI-Tab Tools. Standardmäßig
-      ausgeschaltet. Erfordert Neustart, um wirksam zu werden.
-  enable_mandatory_bps:
-    name: Best-Practice-Skills bei Schreibvorgängen anhängen
-    description: >-
-      Hauptschalter für die Funktion zur Bereitstellung von
-      Schreib-Tool-Skill-Inhalten (Issue #1182). Wenn aktiviert (Standard),
-      fügen die sechs Konfigurations-Schreibtools (Automatisierungen, Skripte,
-      Szenen, Helfer, Dashboards, rohes YAML) die kanonischen
-      Home-Assistant-Best-Practice-Referenzdateien unter skill_content bei
-      jedem erfolgreichen Schreibvorgang an, plus automatisches Einbetten aller
-      Referenzabschnitte, die von Best-Practice-Warnungen zitiert werden. Jedes
-      Tool stellt auch einen per-Aufruf-Parameter MandatoryBPS zur Verfügung,
-      den der Agent bei nachfolgenden Aufrufen auf false setzen kann, sobald er
-      den Inhalt hat. Wenn dieser Hauptschalter ausgeschaltet ist, wird KEIN
-      skill_content ausgegeben, unabhängig vom per-Aufruf-Parameter oder
-      BP-Warnungen. Empfohlen EIN als erste Wahl; deaktiviere nur für Modelle
-      mit sehr kleinen Kontextfenstern. Das Ausschalten davon kann die
-      Schreibgenauigkeit beeinträchtigen. Erfordert Neustart, um wirksam zu
-      werden.
-  enable_strict_mandatory_bps:
-    name: Strikter Best-Practices-Modus
-    description: >-
-      Strikter Modus: verhindert, dass der Client das Tool verwendet, bis er
-      nachweisen kann, dass er die Best Practices gelesen hat. Während er
-      eingeschaltet ist, werden die sechs Best-Practice-Schreibtools
-      (Automatisierungen, Skripte, Szenen, Helfer, Dashboards, rohes YAML)
-      blockiert und geben einen Fehler zurück, der den Client anweist, das
-      Best-Practices-Skill über ha_get_skill_guide zu lesen und den dort
-      erhaltenen Bestätigungsschlüssel zurückzugeben. Während er eingeschaltet
-      ist, ist das ha_get_skill_guide-Tool gesperrt aktiviert – es ist der
-      einzige Herausgeber des Bestätigungsschlüssels. Kind der Option
-      Best-Practice-Skills bei Schreibvorgängen anhängen oben und inert,
-      während dieser Elternteil ausgeschaltet ist. Erfordert Neustart, um
-      wirksam zu werden.
-  enable_auto_backup:
-    name: Auto-Backup von Bearbeitungen aktivieren
-    description: >-
-      Erfasst einen Pro-Entität-Snapshot vor jedem umschlossenen
-      Schreib/destruktiven MCP-Tool-Aufruf (Automatisierung, Skript, Szene,
-      Helfer, Dashboard, Label, Kategorie, Gruppe, Zone, Bereich, Kalender, Todo,
-      Entität, Integration und verwandte Remove/Delete-Tools). Snapshots werden
-      als YAML-Dateien unter /data/ha_mcp_backups/ gespeichert (Override via
-      HAMCP_BACKUP_DIR) und über den Backups-Tab im Web-Settings-UI oder via
-      ha_manage_backup(scope='edits', ...) aufgelistet, wiederhergestellt oder
-      gelöscht. Best-Effort – Fehler loggen ein WARNING, blockieren aber nie den
-      zugrunde liegenden Schreibvorgang. Standardmäßig an; Häkchen entfernen, um
-      auszusteigen. Erfordert Neustart, um wirksam zu werden.
-  auto_backup_throttle_minutes:
-    name: Auto-Backup-Drosselung (Minuten)
-    description: >-
-      Pro-Entität-Drosselungsfenster. 0 (Standard) erfasst einen Snapshot bei
-      jedem umschlossenen Schreibvorgang. N>0 erfasst höchstens einen Snapshot pro
-      N Minuten pro Entität. Bereich 0–1440.
-  auto_backup_retain_per_entity:
-    name: Auto-Backup-Aufbewahrung (pro Entität)
-    description: >-
-      Maximale Anzahl von Snapshots, die pro Entität behalten werden. Ältere
-      Snapshots jenseits dieser Grenze werden bei jeder erfolgreichen Erfassung
-      ausgetauscht. Standard 100, Bereich 1–10000.
-  enable_snapshot_delete:
-    name: Snapshot-Löschung erlauben
-    description: >-
-      Lässt ha_manage_backup vollständige HA-Snapshot-Tarballs löschen
-      (scope='snapshot', action='delete'). Standardmäßig aus – ein Snapshot
-      könnte der letzte Wiederherstellungspunkt nach einer fehlerhaften Änderung
-      sein, also muss ein Mensch dies hier aktiv aktivieren. Auch wenn an, bleiben geplante
-      Backups, der neueste verbleibende Snapshot und alles jünger als der
-      Alters-Floor unten geschützt.
-  snapshot_delete_min_age_days:
-    name: Mindestalter des Snapshots zum Löschen (Tage)
-    description: >-
-      Ein Snapshot muss mindestens so alt sein, bevor er gelöscht werden kann.
-      Bereich 0–365; 0 deaktiviert den Floor (die Neuester-Snapshot- und
-      Geplante-Backup-Schutzmaßnahmen gelten weiterhin). Standard 7.
-  verify_ssl:
-    name: TLS-Zertifikat verifizieren
-    description: >-
-      Verifiziert das TLS-Zertifikat des Home Assistant Servers. Das Add-on
-      verbindet sich via Supervisor-Proxy, daher hat dies normalerweise keinen
-      Effekt und sollte aktiviert bleiben. Deaktiviere nur, wenn du das Add-on
-      umkonfiguriert hast, um mit HA über einen öffentlichen HTTPS-Hostnamen mit
-      selbstsigniertem Zertifikat oder Hostname-Mismatch zu sprechen.
-      Deaktivieren schwächt die Transport-Sicherheit – lass an, außer du weißt,
-      dass du es brauchst. Erfordert Neustart, um wirksam zu werden.
+    description: 'Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung.
+      Reduziert den Leerlauf-Kontext um rund 90 % auf etwa 5K Tokens. ⚠️ Aktiviere
+      dies NICHT in Clients mit eigener integrierter Tool-Suche / aufgeschobenen Tools
+      (claude.ai, Claude Desktop, Claude Code) – die beiden Suchebenen kollidieren,
+      und die integrierte Tool-Suche des Clients ist dort die bessere Wahl; lasse
+      dies ausgeschaltet. Ob Tools aufgeschoben werden, hängt von der Kombination
+      aus Client und Modell ab: Verwende dies, wenn dein Setup den vollständigen Katalog
+      von Anfang an lädt – Modelle ohne native aufgeschobene Tools (z. B. Gemini,
+      lokale OpenAI-kompatible Modelle, Claude Haiku), Clients, die alle Tool-Schemata
+      unabhängig vom Modell direkt einbetten (z. B. GitHub Copilot CLI), oder kleinere
+      Kontextfenster. Auch einige Codex-Modelle und ChatGPT haben aufgeschobene Tools
+      – prüfe direkt bei deinem Client/Modell, welche Features er hat, damit du dies
+      nicht unnötig aktiviert lässt. Tools werden über ha_search_tools gefunden und
+      über kategorisierte Proxys (read/write/delete) ausgeführt. Erfordert einen Neustart,
+      um wirksam zu werden. Dann neu verbinden oder den MCP-Server in deinem AI-Client
+      aktualisieren, damit er die Tool-Liste neu lädt. Ein Neustart des Add-ons allein
+      aktualisiert NICHT die gecachte Tool-Liste eines Clients; dies gilt nach jeder
+      Einstellungsänderung hier.'
   tool_search_max_results:
     name: Max. Tool-Suchergebnisse
-    description: >-
-      Maximale Anzahl von Tools, die von ha_search_tools zurückgegeben werden,
-      wenn die Tool-Suche aktiviert ist. Niedrigere Werte (2-3) sparen
-      Kontext-Tokens, können aber relevante Tools übersehen. Bereich: 2-10.
-      Erfordert Neustart.
+    description: 'Maximale Anzahl von Tools, die von ha_search_tools zurückgegeben
+      werden, wenn die Tool-Suche aktiviert ist. Niedrigere Werte (2-3) sparen Kontext-Tokens,
+      können aber relevante Tools übersehen. Bereich: 2-10. Erfordert Neustart.'
+  enable_tool_security_policies:
+    name: Tool-Sicherheitsrichtlinien aktivieren (erweitert)
+    description: Gating kritischer Tool-Aufrufe (Schloss-/Alarmsteuerung, Automatisierungsschreibvorgänge
+      usw.) hinter Benutzergenehmigung. Wenn ein geschütztes Tool aufgerufen wird,
+      weist der Agent den Benutzer an, den Tab Tool-Sicherheitsrichtlinien in der
+      Web-UI zu öffnen und auf Genehmigen zu klicken, bevor der Aufruf fortgesetzt
+      wird. Tool-bezogene Regeln mit optionalen Argumentbedingungen werden im Tab
+      Tool-Sicherheitsrichtlinien konfiguriert. Standardmäßig ausgeschaltet. Erfordert
+      Neustart, um wirksam zu werden.
+  read_only_mode:
+    name: Nur-Lese-Modus
+    description: Schaltet alle Schreibtools aus und nimmt Tools die Möglichkeit, Schreib-
+      oder destruktive Aufrufe zu tätigen. Gemischte Lese-/Schreib-Tools (Backups,
+      Add-ons, Energiepräferenzen, Voice-Pipelines und Code-Modus, wenn aktiviert)
+      bleiben verfügbar, wobei ihre Schreiboperationen blockiert sind. Derselbe Schalter
+      wie im Web-UI-Tab Tools. Standardmäßig ausgeschaltet. Erfordert Neustart, um
+      wirksam zu werden.
+  enable_mandatory_bps:
+    name: Best-Practice-Skills bei Schreibvorgängen anhängen
+    description: 'Hauptschalter für die Funktion zur Bereitstellung von Schreib-Tool-Skill-Inhalten
+      (Issue #1182). Wenn aktiviert (Standard), fügen die sechs Konfigurations-Schreibtools
+      (Automatisierungen, Skripte, Szenen, Helfer, Dashboards, rohes YAML) die kanonischen
+      Home-Assistant-Best-Practice-Referenzdateien unter skill_content bei jedem erfolgreichen
+      Schreibvorgang an, plus automatisches Einbetten aller Referenzabschnitte, die
+      von Best-Practice-Warnungen zitiert werden. Jedes Tool stellt auch einen per-Aufruf-Parameter
+      MandatoryBPS zur Verfügung, den der Agent bei nachfolgenden Aufrufen auf false
+      setzen kann, sobald er den Inhalt hat. Wenn dieser Hauptschalter ausgeschaltet
+      ist, wird KEIN skill_content ausgegeben, unabhängig vom per-Aufruf-Parameter
+      oder BP-Warnungen. Empfohlen EIN als erste Wahl; deaktiviere nur für Modelle
+      mit sehr kleinen Kontextfenstern. Das Ausschalten davon kann die Schreibgenauigkeit
+      beeinträchtigen. Erfordert Neustart, um wirksam zu werden.'
+  enable_strict_mandatory_bps:
+    name: Strikter Best-Practices-Modus
+    description: 'Strikter Modus: verhindert, dass der Client das Tool verwendet,
+      bis er nachweisen kann, dass er die Best Practices gelesen hat. Während er eingeschaltet
+      ist, werden die sechs Best-Practice-Schreibtools (Automatisierungen, Skripte,
+      Szenen, Helfer, Dashboards, rohes YAML) blockiert und geben einen Fehler zurück,
+      der den Client anweist, das Best-Practices-Skill über ha_get_skill_guide zu
+      lesen und den dort erhaltenen Bestätigungsschlüssel zurückzugeben. Während er
+      eingeschaltet ist, ist das ha_get_skill_guide-Tool gesperrt aktiviert – es ist
+      der einzige Herausgeber des Bestätigungsschlüssels. Kind der Option Best-Practice-Skills
+      bei Schreibvorgängen anhängen oben und inert, während dieser Elternteil ausgeschaltet
+      ist. Erfordert Neustart, um wirksam zu werden.'
   disabled_tools:
     name: Deaktivierte Tools (kommagetrennt)
-    description: >-
-      Hier aufgelistete Tools sind zwangsweise aus und im Web-Settings-UI
-      (Tools-Tab) gesperrt – sie können dort nicht wieder aktiviert werden, ohne
-      diese Option zuerst zu entfernen. Ein kleiner Satz obligatorischer Tools
-      (ha_search, ha_get_overview, ha_get_state, ha_report_issue,
-      ha_manage_backup) kann nicht deaktiviert werden und läuft weiter, auch wenn
-      hier aufgelistet. ha_get_skill_guide kann nur deaktiviert werden, während
-      der strikte Best-Practices-Modus (enable_strict_mandatory_bps) aus ist.
-      Kommagetrennte Tool-Namen (z.B. ha_call_event,ha_eval_template).
+    description: Hier aufgelistete Tools sind zwangsweise aus und im Web-Settings-UI
+      (Tools-Tab) gesperrt – sie können dort nicht wieder aktiviert werden, ohne diese
+      Option zuerst zu entfernen. Ein kleiner Satz obligatorischer Tools (ha_search,
+      ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) kann nicht
+      deaktiviert werden und läuft weiter, auch wenn hier aufgelistet. ha_get_skill_guide
+      kann nur deaktiviert werden, während der strikte Best-Practices-Modus (enable_strict_mandatory_bps)
+      aus ist. Kommagetrennte Tool-Namen (z.B. ha_call_event,ha_eval_template).
   pinned_tools:
     name: Angeheftete Tools (kommagetrennt)
-    description: >-
-      Hier aufgelistete Tools sind gesperrt angeheftet – sie erscheinen oben im
-      Tools-Tab und können nicht vom Web-Settings-UI entfernt werden, ohne diese
-      Option zuerst zu entfernen. Nützlich in Kombination mit Tool Search.
-      Kommagetrennte Tool-Namen.
+    description: Hier aufgelistete Tools sind gesperrt angeheftet – sie erscheinen
+      oben im Tools-Tab und können nicht vom Web-Settings-UI entfernt werden, ohne
+      diese Option zuerst zu entfernen. Nützlich in Kombination mit Tool Search. Kommagetrennte
+      Tool-Namen.
+  enable_auto_backup:
+    name: Auto-Backup von Bearbeitungen aktivieren
+    description: Erfasst einen Pro-Entität-Snapshot vor jedem umschlossenen Schreib/destruktiven
+      MCP-Tool-Aufruf (Automatisierung, Skript, Szene, Helfer, Dashboard, Label, Kategorie,
+      Gruppe, Zone, Bereich, Kalender, Todo, Entität, Integration und verwandte Remove/Delete-Tools).
+      Snapshots werden als YAML-Dateien unter /data/ha_mcp_backups/ gespeichert (Override
+      via HAMCP_BACKUP_DIR) und über den Backups-Tab im Web-Settings-UI oder via ha_manage_backup(scope='edits',
+      ...) aufgelistet, wiederhergestellt oder gelöscht. Best-Effort – Fehler loggen
+      ein WARNING, blockieren aber nie den zugrunde liegenden Schreibvorgang. Standardmäßig
+      an; Häkchen entfernen, um auszusteigen. Erfordert Neustart, um wirksam zu werden.
+  auto_backup_throttle_minutes:
+    name: Auto-Backup-Drosselung (Minuten)
+    description: Pro-Entität-Drosselungsfenster. 0 (Standard) erfasst einen Snapshot
+      bei jedem umschlossenen Schreibvorgang. N>0 erfasst höchstens einen Snapshot
+      pro N Minuten pro Entität. Bereich 0–1440.
+  auto_backup_retain_per_entity:
+    name: Auto-Backup-Aufbewahrung (pro Entität)
+    description: Maximale Anzahl von Snapshots, die pro Entität behalten werden. Ältere
+      Snapshots jenseits dieser Grenze werden bei jeder erfolgreichen Erfassung ausgetauscht.
+      Standard 100, Bereich 1–10000.
+  enable_snapshot_delete:
+    name: Snapshot-Löschung erlauben
+    description: Lässt ha_manage_backup vollständige HA-Snapshot-Tarballs löschen
+      (scope='snapshot', action='delete'). Standardmäßig aus – ein Snapshot könnte
+      der letzte Wiederherstellungspunkt nach einer fehlerhaften Änderung sein, also
+      muss ein Mensch dies hier aktiv aktivieren. Auch wenn an, bleiben geplante Backups,
+      der neueste verbleibende Snapshot und alles jünger als der Alters-Floor unten
+      geschützt.
+  snapshot_delete_min_age_days:
+    name: Mindestalter des Snapshots zum Löschen (Tage)
+    description: Ein Snapshot muss mindestens so alt sein, bevor er gelöscht werden
+      kann. Bereich 0–365; 0 deaktiviert den Floor (die Neuester-Snapshot- und Geplante-Backup-Schutzmaßnahmen
+      gelten weiterhin). Standard 7.
+  verify_ssl:
+    name: TLS-Zertifikat verifizieren
+    description: Verifiziert das TLS-Zertifikat des Home Assistant Servers. Das Add-on
+      verbindet sich via Supervisor-Proxy, daher hat dies normalerweise keinen Effekt
+      und sollte aktiviert bleiben. Deaktiviere nur, wenn du das Add-on umkonfiguriert
+      hast, um mit HA über einen öffentlichen HTTPS-Hostnamen mit selbstsigniertem
+      Zertifikat oder Hostname-Mismatch zu sprechen. Deaktivieren schwächt die Transport-Sicherheit
+      – lass an, außer du weißt, dass du es brauchst. Erfordert Neustart, um wirksam
+      zu werden.

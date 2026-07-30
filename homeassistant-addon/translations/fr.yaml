@@ -1,176 +1,162 @@
 ---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/fr.json (keys addon.*, features.*,
+# addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   backup_hint:
     name: Niveau d'indication d'instantané HA complet (côté LLM)
-    description: |-
-      Ajuste le libellé de l'invite que le LLM voit dans la description de
-      l'outil `ha_manage_backup(scope='snapshot')` pour suggérer une sauvegarde
-      complète de Home Assistant avant les opérations risquées (p. ex.
-      suppressions groupées d'appareils). Concerne UNIQUEMENT cet ensemble
-      d'invites côté LLM.
+    description: 'Ajuste le libellé de l''invite que le LLM voit dans la description
+      de
 
-      Pour les instantanés automatiques par modification d'automatisations /
+      l''outil `ha_manage_backup(scope=''snapshot'')` pour suggérer une sauvegarde
+
+      complète de Home Assistant avant les opérations risquées (p. ex.
+
+      suppressions groupées d''appareils). Concerne UNIQUEMENT cet ensemble
+
+      d''invites côté LLM.
+
+
+      Pour les instantanés automatiques par modification d''automatisations /
+
       scripts / assistants / etc., utilise le bouton **Activer la sauvegarde
-      automatique des modifications** séparé ci-dessous.
+
+      automatique des modifications** séparé ci-dessous.'
   secret_path:
     name: Remplacement du chemin secret
-    description: |
-      Chemin HTTP personnalisé optionnel pour le serveur MCP. Laisse vide pour utiliser le chemin sécurisé généré automatiquement.
+    description: 'Chemin HTTP personnalisé optionnel pour le serveur MCP. Laisse vide
+      pour utiliser le chemin sécurisé généré automatiquement.
+
+      '
   enable_tool_search:
     name: Activer la recherche d'outils
-    description: >-
-      Remplace le catalogue complet d'outils par une découverte basée sur la
-      recherche. Réduit le contexte inactif d'environ 90 %, à près de 5K
-      tokens. ⚠️ N'active PAS ceci dans les clients qui ont leur propre
-      recherche d'outils intégrée / outils différés (claude.ai, Claude
-      Desktop, Claude Code) — les deux couches de recherche entrent en
-      conflit, et la recherche d'outils intégrée du client y est le meilleur
-      choix ; laisse ceci désactivé. Le report des outils dépend de la
-      combinaison client/modèle : utilise ceci lorsque ta configuration charge
-      le catalogue complet d'emblée — modèles sans outils différés natifs (p.
-      ex. Gemini, modèles locaux compatibles OpenAI, Claude Haiku), clients
-      qui intègrent tous les schémas d'outils quel que soit le modèle (p. ex.
-      GitHub Copilot CLI), ou fenêtres de contexte plus petites. Certains
-      modèles Codex et ChatGPT incluent aussi des outils différés — vérifie
-      directement auprès de ton client/modèle quelles fonctionnalités il
-      possède pour ne pas laisser ceci activé inutilement. Les outils sont
-      trouvés via ha_search_tools et exécutés via des proxys catégorisés
-      (lecture/écriture/suppression). Nécessite un redémarrage pour prendre
-      effet. Reconnecte ou actualise ensuite le serveur MCP dans ton client IA
-      pour qu'il recharge la liste des outils. Un redémarrage de l'add-on seul
-      n'actualise PAS la liste d'outils mise en cache d'un client ; ceci
-      s'applique après chaque changement de paramètre ici.
-  enable_tool_security_policies:
-    name: Activer les politiques de sécurité des outils (avancé)
-    description: >-
-      Contrôle les appels d'outils à enjeux élevés (contrôle des
-      serrures/alarmes, écritures d'automatisations, etc.) derrière une
-      approbation utilisateur. Lorsqu'un outil protégé est appelé, l'agent dit
-      à l'utilisateur d'ouvrir l'onglet Politiques de sécurité des outils dans
-      l'interface Web et de cliquer sur Approuver avant que l'appel ne
-      continue. Les règles par outil avec conditions d'argument optionnelles
-      sont configurées dans l'onglet Politiques de sécurité des outils.
-      Désactivé par défaut. Nécessite un redémarrage pour prendre effet.
-  read_only_mode:
-    name: Mode lecture seule
-    description: >-
-      Désactive tous les outils d'écriture et supprime la capacité des outils à
-      effectuer des appels d'écriture ou destructeurs. Les outils mixtes
-      lecture/écriture (sauvegardes, add-ons, préférences énergétiques,
-      pipelines vocaux et mode code lorsqu'il est activé) restent disponibles
-      avec leurs opérations d'écriture bloquées. Même bouton que l'onglet
-      Outils de l'interface Web. Désactivé par défaut. Nécessite un redémarrage
-      pour prendre effet.
-  enable_mandatory_bps:
-    name: Attacher les compétences de bonnes pratiques aux écritures
-    description: >-
-      Interrupteur principal pour la fonction de livraison de contenu de
-      compétences d'outils d'écriture (problème #1182). Lorsqu'il est activé
-      (par défaut), les six outils d'écriture de configuration (automatisations,
-      scripts, scènes, assistants, tableaux de bord, YAML brut) attachent les
-      fichiers de référence canoniques des bonnes pratiques Home Assistant sous
-      `skill_content` à chaque écriture réussie, plus l'intégration automatique
-      de toutes les sections de référence citées par les avertissements de
-      bonnes pratiques. Chaque outil expose également un paramètre
-      `MandatoryBPS` par appel que l'agent peut définir sur false lors des
-      appels suivants une fois qu'il a le contenu. Lorsque cet interrupteur
-      principal est désactivé, AUCUN skill_content n'est émis, indépendamment
-      du paramètre par appel ou des avertissements BP. Recommandé ACTIVÉ comme
-      premier choix ; désactive uniquement pour les modèles avec de très petites
-      fenêtres de contexte. Désactiver ceci peut dégrader la précision des
-      écritures. Nécessite un redémarrage pour prendre effet.
-  enable_strict_mandatory_bps:
-    name: Mode strict de bonnes pratiques
-    description: >-
-      Mode strict : empêche le client d'utiliser l'outil jusqu'à ce qu'il
-      puisse prouver qu'il a lu les bonnes pratiques. Lorsqu'il est activé, les
-      six outils d'écriture de bonnes pratiques (automatisations, scripts,
-      scènes, assistants, tableaux de bord, YAML brut) sont bloqués et
-      renvoient une erreur dirigeant le client vers la compétence de bonnes
-      pratiques via ha_get_skill_guide et lui demandant de renvoyer la clé
-      d'accusé de réception obtenue. Lorsqu'il est activé, l'outil
-      ha_get_skill_guide est verrouillé activé — il est le seul éditeur de la
-      clé d'accusé de réception. Enfant de l'option « Attacher les compétences
-      de bonnes pratiques aux écritures » ci-dessus et inerte lorsque ce parent
-      est désactivé. Nécessite un redémarrage pour prendre effet.
-  enable_auto_backup:
-    name: Activer la sauvegarde automatique des modifications
-    description: >-
-      Capture un instantané par entité avant chaque appel d'outil MCP
-      d'écriture/destructeur encapsulé (automatisation, script, scène,
-      assistant, tableau de bord, étiquette, catégorie, groupe, zone, zone
-      géographique, calendrier, todo, entité, intégration et outils de
-      suppression/suppression associés). Les instantanés sont stockés sous
-      forme de fichiers YAML dans /data/ha_mcp_backups/ (remplacement via
-      HAMCP_BACKUP_DIR) et listés, restaurés ou supprimés via l'onglet
-      Sauvegardes dans l'interface Web des paramètres ou via
-      ha_manage_backup(scope='edits', ...). Au mieux — les erreurs
-      enregistrent un WARNING mais ne bloquent jamais l'écriture sous-jacente.
-      Activé par défaut ; décoche pour désactiver. Nécessite un redémarrage
-      pour prendre effet.
-  auto_backup_throttle_minutes:
-    name: Limitation de la sauvegarde automatique (minutes)
-    description: >-
-      Fenêtre de limitation par entité. 0 (par défaut) capture un instantané à
-      chaque écriture encapsulée. N>0 capture au plus un instantané par N
-      minutes par entité. Plage 0–1440.
-  auto_backup_retain_per_entity:
-    name: Conservation de la sauvegarde automatique (par entité)
-    description: >-
-      Nombre maximum d'instantanés conservés par entité. Les instantanés
-      plus anciens au-delà de cette limite sont retirés à chaque capture
-      réussie. Par défaut 100, plage 1–10000.
-  enable_snapshot_delete:
-    name: Autoriser la suppression d'instantanés
-    description: >-
-      Permet à ha_manage_backup de supprimer des instantanés HA complets
-      (scope='snapshot', action='delete'). Désactivé par défaut — un
-      instantané pourrait être le dernier point de restauration après une
-      modification défectueuse, donc un humain doit activement l'activer ici.
-      Même lorsque activé, les sauvegardes planifiées, l'instantané restant
-      le plus récent et tout ce qui est plus récent que le seuil d'âge
-      ci-dessous restent protégés.
-  snapshot_delete_min_age_days:
-    name: Âge minimum de l'instantané pour suppression (jours)
-    description: >-
-      Un instantané doit avoir au moins cet âge avant de pouvoir être
-      supprimé. Plage 0–365 ; 0 désactive le seuil (les protections de
-      l'instantané le plus récent et de la sauvegarde planifiée s'appliquent
-      toujours). Par défaut 7.
-  verify_ssl:
-    name: Vérifier le certificat TLS
-    description: >-
-      Vérifie le certificat TLS du serveur Home Assistant. L'add-on se connecte
-      via le proxy Supervisor, donc cela n'a normalement aucun effet et doit
-      rester activé. Désactive uniquement si tu as reconfiguré l'add-on pour
-      communiquer avec HA via un nom d'hôte HTTPS public avec un certificat
-      auto-signé ou une discordance de nom d'hôte. Désactiver affaiblit la
-      sécurité du transport — laisse activé sauf si tu sais que tu en as besoin.
-      Nécessite un redémarrage pour prendre effet.
+    description: 'Remplace le catalogue complet d''outils par une découverte basée
+      sur la recherche. Réduit le contexte inactif d''environ 90 %, à près de 5K tokens.
+      ⚠️ N''active PAS ceci dans les clients qui ont leur propre recherche d''outils
+      intégrée / outils différés (claude.ai, Claude Desktop, Claude Code) — les deux
+      couches de recherche entrent en conflit, et la recherche d''outils intégrée
+      du client y est le meilleur choix ; laisse ceci désactivé. Le report des outils
+      dépend de la combinaison client/modèle : utilise ceci lorsque ta configuration
+      charge le catalogue complet d''emblée — modèles sans outils différés natifs
+      (p. ex. Gemini, modèles locaux compatibles OpenAI, Claude Haiku), clients qui
+      intègrent tous les schémas d''outils quel que soit le modèle (p. ex. GitHub
+      Copilot CLI), ou fenêtres de contexte plus petites. Certains modèles Codex et
+      ChatGPT incluent aussi des outils différés — vérifie directement auprès de ton
+      client/modèle quelles fonctionnalités il possède pour ne pas laisser ceci activé
+      inutilement. Les outils sont trouvés via ha_search_tools et exécutés via des
+      proxys catégorisés (lecture/écriture/suppression). Nécessite un redémarrage
+      pour prendre effet. Reconnecte ou actualise ensuite le serveur MCP dans ton
+      client IA pour qu''il recharge la liste des outils. Un redémarrage de l''add-on
+      seul n''actualise PAS la liste d''outils mise en cache d''un client ; ceci s''applique
+      après chaque changement de paramètre ici.'
   tool_search_max_results:
     name: Résultats max. de la recherche d'outils
-    description: >-
-      Nombre maximum d'outils renvoyés par ha_search_tools lorsque la recherche
-      d'outils est activée. Des valeurs plus basses (2-3) économisent des tokens
-      de contexte mais peuvent manquer des outils pertinents. Plage : 2-10.
-      Nécessite un redémarrage.
+    description: 'Nombre maximum d''outils renvoyés par ha_search_tools lorsque la
+      recherche d''outils est activée. Des valeurs plus basses (2-3) économisent des
+      tokens de contexte mais peuvent manquer des outils pertinents. Plage : 2-10.
+      Nécessite un redémarrage.'
+  enable_tool_security_policies:
+    name: Activer les politiques de sécurité des outils (avancé)
+    description: Contrôle les appels d'outils à enjeux élevés (contrôle des serrures/alarmes,
+      écritures d'automatisations, etc.) derrière une approbation utilisateur. Lorsqu'un
+      outil protégé est appelé, l'agent dit à l'utilisateur d'ouvrir l'onglet Politiques
+      de sécurité des outils dans l'interface Web et de cliquer sur Approuver avant
+      que l'appel ne continue. Les règles par outil avec conditions d'argument optionnelles
+      sont configurées dans l'onglet Politiques de sécurité des outils. Désactivé
+      par défaut. Nécessite un redémarrage pour prendre effet.
+  read_only_mode:
+    name: Mode lecture seule
+    description: Désactive tous les outils d'écriture et supprime la capacité des
+      outils à effectuer des appels d'écriture ou destructeurs. Les outils mixtes
+      lecture/écriture (sauvegardes, add-ons, préférences énergétiques, pipelines
+      vocaux et mode code lorsqu'il est activé) restent disponibles avec leurs opérations
+      d'écriture bloquées. Même bouton que l'onglet Outils de l'interface Web. Désactivé
+      par défaut. Nécessite un redémarrage pour prendre effet.
+  enable_mandatory_bps:
+    name: Attacher les compétences de bonnes pratiques aux écritures
+    description: 'Interrupteur principal pour la fonction de livraison de contenu
+      de compétences d''outils d''écriture (problème #1182). Lorsqu''il est activé
+      (par défaut), les six outils d''écriture de configuration (automatisations,
+      scripts, scènes, assistants, tableaux de bord, YAML brut) attachent les fichiers
+      de référence canoniques des bonnes pratiques Home Assistant sous `skill_content`
+      à chaque écriture réussie, plus l''intégration automatique de toutes les sections
+      de référence citées par les avertissements de bonnes pratiques. Chaque outil
+      expose également un paramètre `MandatoryBPS` par appel que l''agent peut définir
+      sur false lors des appels suivants une fois qu''il a le contenu. Lorsque cet
+      interrupteur principal est désactivé, AUCUN skill_content n''est émis, indépendamment
+      du paramètre par appel ou des avertissements BP. Recommandé ACTIVÉ comme premier
+      choix ; désactive uniquement pour les modèles avec de très petites fenêtres
+      de contexte. Désactiver ceci peut dégrader la précision des écritures. Nécessite
+      un redémarrage pour prendre effet.'
+  enable_strict_mandatory_bps:
+    name: Mode strict de bonnes pratiques
+    description: 'Mode strict : empêche le client d''utiliser l''outil jusqu''à ce
+      qu''il puisse prouver qu''il a lu les bonnes pratiques. Lorsqu''il est activé,
+      les six outils d''écriture de bonnes pratiques (automatisations, scripts, scènes,
+      assistants, tableaux de bord, YAML brut) sont bloqués et renvoient une erreur
+      dirigeant le client vers la compétence de bonnes pratiques via ha_get_skill_guide
+      et lui demandant de renvoyer la clé d''accusé de réception obtenue. Lorsqu''il
+      est activé, l''outil ha_get_skill_guide est verrouillé activé — il est le seul
+      éditeur de la clé d''accusé de réception. Enfant de l''option « Attacher les
+      compétences de bonnes pratiques aux écritures » ci-dessus et inerte lorsque
+      ce parent est désactivé. Nécessite un redémarrage pour prendre effet.'
   disabled_tools:
     name: Outils désactivés (séparés par des virgules)
-    description: >-
-      Les outils listés ici sont forcément désactivés et verrouillés dans
-      l'interface Web des paramètres (onglet Outils) — ils ne peuvent pas être
-      réactivés là-bas sans d'abord supprimer cette option. Un petit ensemble
-      d'outils obligatoires (ha_search, ha_get_overview, ha_get_state,
-      ha_report_issue, ha_manage_backup) ne peut pas être désactivé et continue
-      de fonctionner même s'il est listé ici. ha_get_skill_guide ne peut être
-      désactivé que lorsque le mode strict de bonnes pratiques
-      (enable_strict_mandatory_bps) est désactivé. Noms d'outils séparés par
-      des virgules (p. ex. ha_call_event,ha_eval_template).
+    description: Les outils listés ici sont forcément désactivés et verrouillés dans
+      l'interface Web des paramètres (onglet Outils) — ils ne peuvent pas être réactivés
+      là-bas sans d'abord supprimer cette option. Un petit ensemble d'outils obligatoires
+      (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      ne peut pas être désactivé et continue de fonctionner même s'il est listé ici.
+      ha_get_skill_guide ne peut être désactivé que lorsque le mode strict de bonnes
+      pratiques (enable_strict_mandatory_bps) est désactivé. Noms d'outils séparés
+      par des virgules (p. ex. ha_call_event,ha_eval_template).
   pinned_tools:
     name: Outils épinglés (séparés par des virgules)
-    description: >-
-      Les outils listés ici sont verrouillés épinglés — ils apparaissent en
-      haut de l'onglet Outils et ne peuvent pas être retirés de l'interface
-      Web des paramètres sans d'abord supprimer cette option. Utile en
-      combinaison avec la recherche d'outils. Noms d'outils séparés par des
-      virgules.
+    description: Les outils listés ici sont verrouillés épinglés — ils apparaissent
+      en haut de l'onglet Outils et ne peuvent pas être retirés de l'interface Web
+      des paramètres sans d'abord supprimer cette option. Utile en combinaison avec
+      la recherche d'outils. Noms d'outils séparés par des virgules.
+  enable_auto_backup:
+    name: Activer la sauvegarde automatique des modifications
+    description: Capture un instantané par entité avant chaque appel d'outil MCP d'écriture/destructeur
+      encapsulé (automatisation, script, scène, assistant, tableau de bord, étiquette,
+      catégorie, groupe, zone, zone géographique, calendrier, todo, entité, intégration
+      et outils de suppression/suppression associés). Les instantanés sont stockés
+      sous forme de fichiers YAML dans /data/ha_mcp_backups/ (remplacement via HAMCP_BACKUP_DIR)
+      et listés, restaurés ou supprimés via l'onglet Sauvegardes dans l'interface
+      Web des paramètres ou via ha_manage_backup(scope='edits', ...). Au mieux — les
+      erreurs enregistrent un WARNING mais ne bloquent jamais l'écriture sous-jacente.
+      Activé par défaut ; décoche pour désactiver. Nécessite un redémarrage pour prendre
+      effet.
+  auto_backup_throttle_minutes:
+    name: Limitation de la sauvegarde automatique (minutes)
+    description: Fenêtre de limitation par entité. 0 (par défaut) capture un instantané
+      à chaque écriture encapsulée. N>0 capture au plus un instantané par N minutes
+      par entité. Plage 0–1440.
+  auto_backup_retain_per_entity:
+    name: Conservation de la sauvegarde automatique (par entité)
+    description: Nombre maximum d'instantanés conservés par entité. Les instantanés
+      plus anciens au-delà de cette limite sont retirés à chaque capture réussie.
+      Par défaut 100, plage 1–10000.
+  enable_snapshot_delete:
+    name: Autoriser la suppression d'instantanés
+    description: Permet à ha_manage_backup de supprimer des instantanés HA complets
+      (scope='snapshot', action='delete'). Désactivé par défaut — un instantané pourrait
+      être le dernier point de restauration après une modification défectueuse, donc
+      un humain doit activement l'activer ici. Même lorsque activé, les sauvegardes
+      planifiées, l'instantané restant le plus récent et tout ce qui est plus récent
+      que le seuil d'âge ci-dessous restent protégés.
+  snapshot_delete_min_age_days:
+    name: Âge minimum de l'instantané pour suppression (jours)
+    description: Un instantané doit avoir au moins cet âge avant de pouvoir être supprimé.
+      Plage 0–365 ; 0 désactive le seuil (les protections de l'instantané le plus
+      récent et de la sauvegarde planifiée s'appliquent toujours). Par défaut 7.
+  verify_ssl:
+    name: Vérifier le certificat TLS
+    description: Vérifie le certificat TLS du serveur Home Assistant. L'add-on se
+      connecte via le proxy Supervisor, donc cela n'a normalement aucun effet et doit
+      rester activé. Désactive uniquement si tu as reconfiguré l'add-on pour communiquer
+      avec HA via un nom d'hôte HTTPS public avec un certificat auto-signé ou une
+      discordance de nom d'hôte. Désactiver affaiblit la sécurité du transport — laisse
+      activé sauf si tu sais que tu en as besoin. Nécessite un redémarrage pour prendre
+      effet.
