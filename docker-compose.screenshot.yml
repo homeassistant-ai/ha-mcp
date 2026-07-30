@@ -18,6 +18,11 @@ services:
       dockerfile: Dockerfile
     image: homeassistant-ai/ha-mcp:latest
     container_name: ha-mcp-server
+    # No `volumes:` here on purpose. Compose merges service volumes by their
+    # container path, so a mount at /home/mcpuser/.ha-mcp in this overlay would
+    # REPLACE whatever the base file mounts there — silently redirecting the
+    # settings of anyone using a custom host path. Persistence belongs to the
+    # base docker-compose.yml, which mounts ha-mcp-data at that path.
     environment:
       - HOMEASSISTANT_URL=http://homeassistant:8123
       - HOMEASSISTANT_TOKEN=${HA_TOKEN}

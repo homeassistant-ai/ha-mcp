@@ -114,9 +114,15 @@ Every dev build is also published under an immutable `:dev-<sha>` tag (the short
 docker pull ghcr.io/homeassistant-ai/ha-mcp:dev-a1b2c3d
 ```
 
+These commands mount `ha-mcp-dev-data` rather than the `ha-mcp-data` volume the
+stable recipes use, so trying a dev build never writes to the settings your
+stable install depends on — a dev build can persist data a released version
+doesn't expect to read back.
+
 **Run in stdio mode (Claude Desktop):**
 ```bash
 docker run --rm -i \
+  -v ha-mcp-dev-data:/home/mcpuser/.ha-mcp \
   -e HOMEASSISTANT_URL=http://your-ha-instance:8123 \
   -e HOMEASSISTANT_TOKEN=your_token \
   ghcr.io/homeassistant-ai/ha-mcp:dev
@@ -125,6 +131,7 @@ docker run --rm -i \
 **Run in HTTP mode (web clients):**
 ```bash
 docker run -d -p 8086:8086 \
+  -v ha-mcp-dev-data:/home/mcpuser/.ha-mcp \
   -e HOMEASSISTANT_URL=http://your-ha-instance:8123 \
   -e HOMEASSISTANT_TOKEN=your_token \
   ghcr.io/homeassistant-ai/ha-mcp:dev ha-mcp-web

@@ -155,12 +155,16 @@ This typically happens when running Docker without the -i flag:
 To fix this, use one of the following options:
 
   1. Add the -i flag to enable interactive stdin:
-     docker run -i -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \\
+     docker run -i -v ha-mcp-data:/home/mcpuser/.ha-mcp \\
+       -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \\
        ghcr.io/homeassistant-ai/ha-mcp:latest
 
   2. Use HTTP mode instead (recommended for servers/automation):
-     docker run -d -p 8086:8086 -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \\
+     docker run -d -p 8086:8086 -v ha-mcp-data:/home/mcpuser/.ha-mcp \\
+       -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \\
        ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web
+
+The -v flag keeps your settings when the container is re-created.
 
 For more information, see:
   https://github.com/homeassistant-ai/ha-mcp#-docker

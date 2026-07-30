@@ -121,6 +121,28 @@ const withBase = (path: string) => {
           </ul>
           <p class="text-slate-400 text-sm mt-3">Changes apply on the next MCP-server restart. To stop the stdio sidecar entirely, click the "Permanently disable settings server" button on the page, set <code class="bg-slate-800 px-1 rounded">HA_MCP_DISABLE_SETTINGS_UI=1</code> in your MCP client config, or create an empty <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/settings_ui_disabled</code> file.</p>
         </div>
+
+        <div class="faq-item" id="docker-settings-not-persisted">
+          <h3 class="text-lg font-medium text-white mb-2">My settings reset every time I re-create the Docker container</h3>
+          <p class="text-slate-300">ha-mcp stores its tool configuration, feature flags, backup settings and OAuth client registrations under <code class="bg-slate-800 px-1 rounded">~/.ha-mcp</code> — which is <code class="bg-slate-800 px-1 rounded">/home/mcpuser/.ha-mcp</code> inside the container. That lives in the container's writable layer, so it disappears whenever the container is replaced (<code class="bg-slate-800 px-1 rounded">docker rm</code>, <code class="bg-slate-800 px-1 rounded">docker compose down</code>, pulling a new image, or any <code class="bg-slate-800 px-1 rounded">--rm</code> run). Mount a volume there to keep it:</p>
+          <pre class="code-block mt-3"><code>docker run -d --name ha-mcp -p 8086:8086 \
+  -v ha-mcp-data:/home/mcpuser/.ha-mcp \
+  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+  -e HOMEASSISTANT_TOKEN=your_token \
+  ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web</code></pre>
+          <p class="text-slate-300 text-sm mt-3">Or in compose:</p>
+          <pre class="code-block mt-2"><code>services:
+  ha-mcp:
+    volumes:
+      - ha-mcp-data:/home/mcpuser/.ha-mcp
+
+volumes:
+  ha-mcp-data:
+    name: ha-mcp-data</code></pre>
+          <p class="text-slate-400 text-sm mt-3">Keep the <code class="bg-slate-800 px-1 rounded">name:</code> line — without it Compose creates <code class="bg-slate-800 px-1 rounded">&lt;project&gt;_ha-mcp-data</code> instead, which is not the volume the <code class="bg-slate-800 px-1 rounded">docker run</code> command above or the <code class="bg-slate-800 px-1 rounded">docker volume rm</code> below refer to.</p>
+          <p class="text-slate-400 text-sm mt-3">A volume mount stays writable even with <code class="bg-slate-800 px-1 rounded">read_only: true</code>, so keep it when you harden the container — without it ha-mcp can't write to <code class="bg-slate-800 px-1 rounded">~/.ha-mcp</code> under a read-only root filesystem and falls back to a temporary directory that's wiped on every restart. To store the data elsewhere, mount your own path and set <code class="bg-slate-800 px-1 rounded">HA_MCP_CONFIG_DIR</code> to it. This doesn't apply to the HA App (add-on) or the custom component, which persist to Home Assistant's own storage automatically.</p>
+          <p class="text-slate-400 text-sm mt-3">Whatever you mount must be writable by the UID the container actually runs as. A named volume is initialised as UID 999 (the image's <code class="bg-slate-800 px-1 rounded">mcpuser</code>) and needs nothing further; a host bind mount needs <code class="bg-slate-800 px-1 rounded">chown 999:999</code> first; and if you run with <code class="bg-slate-800 px-1 rounded">--user</code> to override the UID, chown the mounted directory to that UID instead — a named volume stays owned by 999 and the overridden user can't write to it. If ha-mcp still can't persist, it says so at startup — look for <em>"Cannot write ha-mcp data to ... data will NOT persist across restarts"</em> in <code class="bg-slate-800 px-1 rounded">docker logs ha-mcp</code>. A volume created by an older image can be left owned by root; <code class="bg-slate-800 px-1 rounded">docker volume rm ha-mcp-data</code> and let the current image recreate it.</p>
+        </div>
       </div>
     </section>
 
@@ -158,6 +180,7 @@ const withBase = (path: string) => {
           <p class="text-slate-300 mb-4">v7.0.0 removed the Home Assistant URL field from the OAuth consent form to fix security vulnerabilities (SSRF and XSS). Set <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> as a server-side environment variable before starting ha-mcp.</p>
           <pre class="code-block mt-2"><code># Docker
 docker run -d -p 8086:8086 \
+  -v ha-mcp-data:/home/mcpuser/.ha-mcp \
   -e HOMEASSISTANT_URL=https://your-ha-instance.example.com \
   -e MCP_BASE_URL=https://your-mcp-server.example.com \
   ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-oauth
@@ -501,6 +524,7 @@ source ~/.zshrc
           <p class="text-slate-400 mb-2">If these differ, the container starts but requests never reach the server. Example using port 9000:</p>
           <pre class="code-block"><code>docker run -d --name ha-mcp \
   -p 9000:9000 \
+  -v ha-mcp-data:/home/mcpuser/.ha-mcp \
   -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
   -e HOMEASSISTANT_TOKEN=your_token \
   -e MCP_PORT=9000 \

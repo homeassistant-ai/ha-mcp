@@ -192,6 +192,7 @@ If you see `Failed to install: pywin32` or `os error 32` ("file is used by anoth
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
+        "-v", "ha-mcp-data:/home/mcpuser/.ha-mcp",
         "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
         "-e", "HOMEASSISTANT_TOKEN=your_token",
         "ghcr.io/homeassistant-ai/ha-mcp:latest"

@@ -88,6 +88,7 @@ jobs:
           ```bash
           docker pull ghcr.io/homeassistant-ai/ha-mcp:dev
           docker run --rm -i \
+            -v ha-mcp-dev-data:/home/mcpuser/.ha-mcp \
             -e HOMEASSISTANT_URL=http://your-ha:8123 \
             -e HOMEASSISTANT_TOKEN=your_token \
             ghcr.io/homeassistant-ai/ha-mcp:dev
@@ -131,6 +132,7 @@ jobs:
           \`\`\`bash
           docker pull ghcr.io/homeassistant-ai/ha-mcp:dev
           docker run --rm -i \\
+            -v ha-mcp-dev-data:/home/mcpuser/.ha-mcp \\
             -e HOMEASSISTANT_URL=http://your-ha:8123 \\
             -e HOMEASSISTANT_TOKEN=your_token \\
             ghcr.io/homeassistant-ai/ha-mcp:dev
