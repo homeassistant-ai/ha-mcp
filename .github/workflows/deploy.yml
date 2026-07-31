@@ -30,8 +30,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Generate star history charts
+        # The built-in token cannot access GitHub's restricted stargazer history.
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.STAR_HISTORY_TOKEN }}
         run: >-
           python3 ../scripts/generate_star_history.py
           --repository "${{ github.repository }}"
