@@ -156,7 +156,7 @@
     "status.loaded": "Caricato",
     "status.loading_ellipsis": "Caricamento…",
     "status.loading_parentheses": "(caricamento…)",
-    "status.unsaved": "Modifiche non salvate...",
+    "status.unsaved": "Modifiche non salvate…",
     "status.saving": "Salvataggio…",
     "status.saving_server_setting": "Salvataggio dell'impostazione del server...",
     "status.saved": "Salvato.",

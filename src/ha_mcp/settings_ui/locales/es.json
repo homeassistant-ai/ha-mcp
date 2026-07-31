@@ -156,7 +156,7 @@
     "status.loaded": "Cargado",
     "status.loading_ellipsis": "Cargando…",
     "status.loading_parentheses": "(cargando…)",
-    "status.unsaved": "Cambios sin guardar...",
+    "status.unsaved": "Cambios sin guardar…",
     "status.saving": "Guardando…",
     "status.saving_server_setting": "Guardando el ajuste del servidor...",
     "status.saved": "Guardado.",

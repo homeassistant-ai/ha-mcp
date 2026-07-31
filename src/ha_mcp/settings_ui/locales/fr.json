@@ -156,7 +156,7 @@
     "status.loaded": "Chargé",
     "status.loading_ellipsis": "Chargement…",
     "status.loading_parentheses": "(chargement…)",
-    "status.unsaved": "Modifications non enregistrées...",
+    "status.unsaved": "Modifications non enregistrées…",
     "status.saving": "Enregistrement…",
     "status.saving_server_setting": "Enregistrement du paramètre serveur...",
     "status.saved": "Enregistré.",

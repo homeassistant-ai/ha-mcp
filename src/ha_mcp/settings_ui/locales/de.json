@@ -156,7 +156,7 @@
     "status.loaded": "Geladen",
     "status.loading_ellipsis": "Lädt…",
     "status.loading_parentheses": "(wird geladen…)",
-    "status.unsaved": "Nicht gespeicherte Änderungen...",
+    "status.unsaved": "Ungespeicherte Änderungen…",
     "status.saving": "Speichert…",
     "status.saving_server_setting": "Speichert Server-Einstellung...",
     "status.saved": "Gespeichert.",
