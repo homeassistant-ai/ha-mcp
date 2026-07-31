@@ -1253,6 +1253,58 @@ class TestRedeclaredFieldReuse:
         assert payloads[:2] == [{"entity_ids": ["sensor.a"]}] * 2
         assert payloads[2:] == [{}] * 8
 
+    async def test_every_later_step_redeclaring_one_field_gets_its_own_write(
+        self,
+    ) -> None:
+        """The bound is one write per step, not one per field for the whole flow.
+
+        Three steps declare ``friendly_name`` and only the first gets the
+        caller's key. Both steps after it must be answered: a bound spent at
+        one of them would leave the next submitting nothing for a required
+        field with no default, which is the "required key not provided" that
+        resubmission exists to prevent. Each write names the step it happened
+        at.
+        """
+        second_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "second",
+            "data_schema": [
+                {"name": "id", "required": True},
+                {"name": "friendly_name", "required": True},
+            ],
+        }
+        third_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "third",
+            "data_schema": [{"name": "friendly_name", "required": True}],
+        }
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-8"},
+        }
+        submit_fn = AsyncMock(side_effect=[second_step, third_step, final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=dict(_first_step(), step_id="first"),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        payloads = [call.args[1] for call in submit_fn.await_args_list]
+        assert payloads == [
+            {"friendly_name": "Device1", "host": "10.0.0.5"},
+            {"id": 20, "friendly_name": "Device1"},
+            {"friendly_name": "Device1"},
+        ]
+        assert result["warnings"] == [
+            _reuse_warning("friendly_name", "second"),
+            _reuse_warning("friendly_name", "third"),
+        ]
+
 
 class TestReuseScoping:
     """Where a recorded value may resurface, and where it must not."""
@@ -1389,6 +1441,72 @@ class TestReuseScoping:
             "advanced": {"name": "FLAT"},
         }
         assert result["warnings"] == [_reuse_warning("advanced.name", "later_step")]
+
+    async def test_scoped_record_outranks_a_flat_one_for_the_same_leaf(self) -> None:
+        """Both records hold ``label``; a sectioned redeclaration takes the scoped one.
+
+        Step order is load-bearing. The step declaring ``label`` flat has to
+        run first: with the section step first, its explicit
+        ``{"left": {"label": ...}}`` would still be sitting beside an
+        unconsumed flat ``label``, and a flat child overrides the section value
+        it duplicates — the scoped record would be rewritten to the flat value
+        (see ``test_flat_override_wins_over_stale_scoped_record_on_reuse``) and
+        both lookups would then answer the same thing.
+        """
+        flat_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-scope",
+            "step_id": "flat_step",
+            "data_schema": [{"name": "label", "required": True}],
+        }
+        section_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-scope",
+            "step_id": "section_step",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "left",
+                    "required": True,
+                    "schema": [{"name": "label", "required": True}],
+                }
+            ],
+        }
+        redeclaring_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-scope",
+            "step_id": "redeclaring_step",
+            "data_schema": [
+                {"name": "id", "required": True},
+                {
+                    "type": "expandable",
+                    "name": "left",
+                    "required": True,
+                    "schema": [{"name": "label", "required": True}],
+                },
+            ],
+        }
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-9"},
+        }
+        submit_fn = AsyncMock(side_effect=[section_step, redeclaring_step, final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-scope",
+            initial_step=flat_step,
+            config={"label": "FLAT", "left": {"label": "SCOPED"}, "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        payloads = [call.args[1] for call in submit_fn.await_args_list]
+        assert payloads == [
+            {"label": "FLAT"},
+            {"left": {"label": "SCOPED"}},
+            {"id": 20, "left": {"label": "SCOPED"}},
+        ]
+        assert result["warnings"] == [_reuse_warning("left.label", "redeclaring_step")]
 
     async def test_untouched_optional_section_is_not_materialized(self) -> None:
         """Reuse never invents a section the caller did not name."""
