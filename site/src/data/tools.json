@@ -3054,7 +3054,7 @@
   {
     "name": "ha_get_operation_status",
     "title": "Get Operation Status",
-    "description": "Check status of one or more device operations with real-time WebSocket verification.\n\nPass a single operation_id string to check one operation, or a list of IDs\nto check multiple operations at once (bulk status).\n\nThe timeout_seconds parameter applies to single-operation checks only.\nBulk checks poll each operation individually with a short internal timeout.\n\nUse this to track operations initiated by ha_bulk_control or ha_call_service.\nFor current entity states, use ha_get_state instead.",
+    "description": "Get the status of one or more device operations with real-time WebSocket verification.\n\nPass a single operation_id string to check one operation, or a list of IDs\nto check multiple operations at once (bulk status).\n\nThe timeout_seconds wait window bounds both modes. Bulk checks poll\nall operations concurrently under one shared window and report\nper-item failures inside detailed_results instead of aborting the\nbatch.\n\nUse this to track operations initiated by ha_bulk_control or ha_call_service.\nFor current entity states, use ha_get_state instead.",
     "inputSchema": {
       "properties": {
         "operation_id": {
