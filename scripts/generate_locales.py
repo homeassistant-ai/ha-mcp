@@ -42,6 +42,8 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
+from ha_mcp.settings_ui._i18n import _validate_string_map
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCALES_DIR = REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
 SETTINGS_JS = REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "settings.js"
@@ -57,11 +59,18 @@ _FEATURE_KEY_RE = re.compile(r"^features\.([a-z0-9_]+)\.label$")
 
 
 def load_catalogs() -> dict[str, dict[str, str]]:
-    """Every canonical catalog's ``messages`` section, keyed by locale code."""
+    """Every canonical catalog's ``messages`` section, keyed by locale code.
+
+    Validated with the runtime loader's own ``_validate_string_map`` so a
+    malformed catalog fails here with the file named, not as a raw exception
+    from deep inside the YAML emitter.
+    """
     catalogs: dict[str, dict[str, str]] = {}
     for path in sorted(LOCALES_DIR.glob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
-        catalogs[path.stem] = data["messages"]
+        catalogs[path.stem] = _validate_string_map(
+            data.get("messages"), context=f"{path.name}.messages"
+        )
     if "en" not in catalogs:
         raise SystemExit(f"no en.json in {LOCALES_DIR}")
     return catalogs
@@ -134,7 +143,7 @@ def addon_yaml(
         f"# GENERATED FILE — do not edit. Translations live in\n"
         f"# src/ha_mcp/settings_ui/locales/{code}.json (keys addon.*, "
         "features.*,\n"
-        "# addon_stable.*); regenerate with: python scripts/generate_locales.py\n"
+        f"# addon_{flavor}.*); regenerate with: python scripts/generate_locales.py\n"
         + body
     )
 
@@ -152,6 +161,9 @@ def feature_meta_block(english: dict[str, str]) -> str:
         "// the strings and their order come from the features.* keys in",
         "// locales/en.json — edit that file, then run",
         "// scripts/generate_locales.py.",
+        "// The master/sub-flag gating these rows describe is enforced by",
+        "// config.py:_apply_feature_flag_overrides; the UI dims sub-rows and",
+        "// re-renders live when the master toggle flips.",
         "const FEATURE_META = {",
     ]
     for key in feature_keys_in_order(english):
