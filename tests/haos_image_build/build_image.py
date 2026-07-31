@@ -1878,6 +1878,7 @@ def bake_test_state(qcow2: Path) -> None:
             capture_output=True,
             text=True,
             timeout=120,
+            check=False,
         )
         LOG.info("guestfish filesystems on qcow2:\n%s", probe.stdout)
         if probe.returncode != 0:

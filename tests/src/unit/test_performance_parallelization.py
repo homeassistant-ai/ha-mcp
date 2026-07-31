@@ -70,7 +70,7 @@ class MockClient:
             ]
 
         if path.startswith("/config/automation/config/"):
-            uid = path.split("/")[-1]
+            uid = path.rsplit("/", maxsplit=1)[-1]
             return {
                 "id": uid,
                 "alias": f"Test Automation {uid}",

@@ -54,7 +54,7 @@ if "yarl" not in sys.modules:
     sys.modules["yarl"] = _yarl
 
 import custom_components.ha_mcp_tools.embedded_entry as eentry  # noqa: E402
-import custom_components.ha_mcp_tools.oauth_legacy as oauth_legacy  # noqa: E402
+from custom_components.ha_mcp_tools import oauth_legacy  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,

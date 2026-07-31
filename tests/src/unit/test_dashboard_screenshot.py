@@ -25,7 +25,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
-import ha_mcp.config as config
+from ha_mcp import config
 from ha_mcp.dashboard_screenshot.provision import EngineTarget
 
 _PNG = b"\x89PNG\r\n\x1a\nunit"

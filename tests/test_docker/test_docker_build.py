@@ -14,6 +14,7 @@ class TestDockerBuild:
             ["docker", "build", "-t", "ha-mcp-test", "."],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0, f"Build failed: {result.stderr}"
 
@@ -23,6 +24,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "which", "uv"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode != 0, "uv should not be in the runtime image"
 
@@ -32,6 +34,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "which", "ha-mcp"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0
 
@@ -41,6 +44,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "whoami"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.stdout.strip() == "mcpuser"
 
@@ -50,6 +54,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "python", "--version"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert "Python 3.1" in result.stdout
 
@@ -66,6 +71,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "sh", "-c", "echo $HOME"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.stdout.strip() == "/home/mcpuser"
 
@@ -90,6 +96,7 @@ class TestDockerBuild:
             ],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.stdout.strip() == "755"
 
@@ -114,6 +121,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "id", "-u", "mcpuser"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.stdout.strip() == "999", f"unexpected UID: {result.stdout!r}"
 
@@ -121,6 +129,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "id", "-g", "mcpuser"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.stdout.strip() == "999", f"unexpected GID: {result.stdout!r}"
 
@@ -139,6 +148,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "stat", "-c", "%U", DATA_DIR],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0, f"{DATA_DIR} missing from image: {result.stderr}"
         assert result.stdout.strip() == "mcpuser"
@@ -157,7 +167,10 @@ class TestDockerBuild:
         # Start clean: a volume left over from an earlier run would keep its
         # old ownership and mask a regression in the image's mount point.
         subprocess.run(
-            ["docker", "volume", "rm", "-f", volume], capture_output=True, text=True
+            ["docker", "volume", "rm", "-f", volume],
+            capture_output=True,
+            text=True,
+            check=False,
         )
         try:
             write = subprocess.run(
@@ -174,6 +187,7 @@ class TestDockerBuild:
                 ],
                 capture_output=True,
                 text=True,
+                check=False,
             )
             assert write.returncode == 0, (
                 f"mcpuser cannot write to a named volume at {DATA_DIR}: {write.stderr}"
@@ -193,6 +207,7 @@ class TestDockerBuild:
                 ],
                 capture_output=True,
                 text=True,
+                check=False,
             )
             assert read.returncode == 0, (
                 f"{marker} did not survive container re-creation: {read.stderr}"
@@ -203,4 +218,5 @@ class TestDockerBuild:
                 ["docker", "volume", "rm", "-f", volume],
                 capture_output=True,
                 text=True,
+                check=False,
             )

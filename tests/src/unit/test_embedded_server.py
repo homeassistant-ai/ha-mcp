@@ -2383,7 +2383,7 @@ class TestLifecycle:
         monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: calls.append("purge"))
         # Replace the thread body so no real ha_mcp import happens.
         started = []
-        monkeypatch.setattr(mgr, "_thread_main", lambda token: started.append(token))
+        monkeypatch.setattr(mgr, "_thread_main", started.append)
 
         await mgr.async_start()
         if mgr._thread is not None:

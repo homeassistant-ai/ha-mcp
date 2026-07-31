@@ -261,6 +261,7 @@ def _container_miss_diagnostics(ssh_cmd: list[str], env: dict[str, str]) -> str:
                 text=True,
                 timeout=20.0,
                 env=env,
+                check=False,
             )
             captured.append(f"{label}={probe.stdout.strip()!r}")
         except Exception as probe_err:  # pragma: no cover - diagnostics best-effort

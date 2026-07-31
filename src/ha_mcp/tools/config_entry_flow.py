@@ -8,12 +8,20 @@ Config Entry Flow API.
 The create/update entry point is the unified ha_config_set_helper tool in
 tools_config_helpers.py, which routes to create_flow_helper / update_flow_helper
 for the 15 helper types listed in FLOW_HELPER_TYPES.
+
+The same flow walkers drive every other config-entry surface, not just
+helpers: ``ha_set_integration`` creates entries for arbitrary domains through
+``create_config_entry`` and edits them through ``update_config_entry_options``,
+and ``ha_config_set_helper(helper_type="config_subentry")`` drives subentry
+flows through ``set_config_subentry``.
 """
 
 import asyncio
 import copy
 import logging
 from collections.abc import Iterator
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from enum import StrEnum
 from typing import Any, Literal, NoReturn
 
@@ -80,6 +88,8 @@ _RECONFIGURE_SUCCESS_REASONS = frozenset(
     }
 )
 _MISSING_DEFAULT = object()
+# "Submit nothing for this field" — see _redeclared_field_submission.
+_NO_SUBMISSION: tuple[Any, bool] = (_MISSING_DEFAULT, False)
 
 
 class _FlowType(StrEnum):
@@ -157,6 +167,89 @@ def _section_path(path_prefix: str, name: Any) -> str:
     if not isinstance(name, str):
         return path_prefix
     return f"{path_prefix}.{name}" if path_prefix else name
+
+
+@dataclass
+class _ReuseState:
+    """Caller-supplied form values a flow's steps have already consumed.
+
+    A config key applies to every form step that declares it, not only the
+    first step to pop it out of ``remaining_config`` — see
+    :func:`_redeclared_field_submission` for when a recorded value is
+    resubmitted. The record is split by how the caller wrote the value:
+
+    - ``scoped`` maps a dotted declaration path to a value that came out of an
+      explicitly supplied section dict. The caller named that section, so the
+      value belongs to that path and nowhere else.
+    - ``flat`` maps a leaf name to a value that came out of the flat caller
+      dict. The caller named no section, so the value is position-agnostic and
+      fills that leaf wherever a later step declares it.
+
+    ``filled`` holds the dotted paths the current step already filled from the
+    caller's own keys, so nothing is injected over a value the caller wrote for
+    this very step; it is cleared per step. ``fired`` bounds resubmission to
+    one write per (step, path) for the whole flow, ``notes`` collects the
+    warning each of those writes emits, and ``step_id`` names the step being
+    consumed.
+    """
+
+    scoped: dict[str, Any] = dc_field(default_factory=dict)
+    flat: dict[str, Any] = dc_field(default_factory=dict)
+    filled: set[str] = dc_field(default_factory=set)
+    fired: set[str] = dc_field(default_factory=set)
+    notes: list[str] = dc_field(default_factory=list)
+    step_id: str | None = None
+
+    def begin_step(self, step_id: Any) -> None:
+        """Start recording for a new form step."""
+        self.step_id = step_id if isinstance(step_id, str) else None
+        self.filled.clear()
+
+    def record(
+        self, path_prefix: str, name: str, value: Any, *, scoped_only: bool
+    ) -> None:
+        """Snapshot a value the caller supplied at this declaration site.
+
+        A flat value that lands on a path already recorded from an explicit
+        section dict also replaces that scoped entry: the flat key is the one
+        actually submitted for the path (flat overrides explicit), so the
+        record must carry the effective value or a later redeclaration of the
+        path would resurrect the overridden one.
+        """
+        dotted = _section_path(path_prefix, name)
+        self.filled.add(dotted)
+        if scoped_only:
+            self.scoped[dotted] = copy.deepcopy(value)
+        else:
+            self.flat[name] = copy.deepcopy(value)
+            if dotted in self.scoped:
+                self.scoped[dotted] = copy.deepcopy(value)
+
+    def recorded_value(self, path_prefix: str, name: str) -> Any:
+        """Return the value recorded for this declaration site, else _MISSING_DEFAULT."""
+        dotted = _section_path(path_prefix, name)
+        if dotted in self.scoped:
+            return copy.deepcopy(self.scoped[dotted])
+        if name in self.flat:
+            return copy.deepcopy(self.flat[name])
+        return _MISSING_DEFAULT
+
+    def claim_write(self, dotted: str) -> bool:
+        """Spend the single resubmission allowed for this (step, path), if unspent.
+
+        A flow that re-presents the same step gets one reused write and then
+        HA's own loud "required key not provided" naming the field, rather than
+        an unbounded run of silent rewrites.
+        """
+        key = f"{self.step_id}:{dotted}"
+        if key in self.fired:
+            return False
+        self.fired.add(key)
+        self.notes.append(
+            f"Resubmitted '{dotted}' at step '{self.step_id}': supplied once "
+            "but declared at more than one site in this flow"
+        )
+        return True
 
 
 def _record_ignored_section_keys(
@@ -237,6 +330,22 @@ def _ignored_keys_warnings(
     return warnings
 
 
+def _success_warnings(
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> list[str]:
+    """Build a success response's ``warnings`` list (empty when there is nothing to say).
+
+    Merges the keys no step declared with the resubmissions the walk performed,
+    keeping ``warnings`` a flat ``list[str]`` per the response contract in
+    ``tests/src/unit/test_helper_response_shape.py``.
+    """
+    return _ignored_keys_warnings(ignored_config_keys, remaining_config) + list(
+        reuse_state.notes
+    )
+
+
 def _consume_section_schema(
     field: dict[str, Any],
     explicit_section: dict[str, Any] | None,
@@ -244,8 +353,17 @@ def _consume_section_schema(
     ignored_config_keys: set[str] | None,
     consumed_config_keys: set[str] | None,
     path_prefix: str,
+    reuse_state: _ReuseState | None = None,
+    *,
+    allow_reuse: bool = True,
+    explicit_source: bool = False,
 ) -> dict[str, Any]:
-    """Consume config values for a nested flow section."""
+    """Consume config values for a nested flow section.
+
+    Values inside an explicitly supplied section dict are consumed first, then
+    flat caller keys, which is what lets a flat child override the same key
+    written inside the section dict.
+    """
     nested_schema = field.get("schema")
     if not isinstance(nested_schema, list):
         return {}
@@ -263,6 +381,9 @@ def _consume_section_schema(
                 ignored_config_keys,
                 consumed_config_keys,
                 section_path,
+                reuse_state,
+                allow_reuse=allow_reuse,
+                explicit_source=True,
             )
         )
         _record_ignored_section_keys(
@@ -278,6 +399,9 @@ def _consume_section_schema(
             ignored_config_keys,
             consumed_config_keys,
             section_path,
+            reuse_state,
+            allow_reuse=allow_reuse,
+            explicit_source=explicit_source,
         )
     )
     return nested_data
@@ -288,7 +412,13 @@ def _mark_consumed(
     path_prefix: str,
     name: str,
 ) -> None:
-    """Record that a caller-supplied form key, not an injected default, was used."""
+    """Record that a caller-supplied value was used, fresh or resubmitted.
+
+    Values the step's own schema supplies — section defaults, suggestions,
+    constants — are never marked: they are HA's data, and marking them would
+    let a config of nothing but misspelled keys look partially applied to
+    :func:`_finish_flow_entry`.
+    """
     if consumed_config_keys is not None:
         consumed_config_keys.add(_section_path(path_prefix, name))
 
@@ -315,19 +445,202 @@ def _auto_confirm_form_payload(current_step: dict[str, Any]) -> dict[str, Any] |
     return {name: True}
 
 
+def _step_owned_submission_value(field: dict[str, Any]) -> Any:
+    """Return the value a step's own schema supplies for ``field``, else _MISSING_DEFAULT.
+
+    Deliberately distinct from :func:`_field_default_value`, which answers
+    "what would the UI show in this box" and is what seeds a form. This answers
+    "what does the step itself say to submit", which is a different question:
+
+    - ``voluptuous_serialize`` emits ``"default"`` only for an actual
+      voluptuous default. HA's edit-style pre-fill
+      (``add_suggested_values_to_schema``) copies the marker and overwrites
+      only its description, so a marker that already carried a default
+      serializes with both keys; the suggestion is the stored current value
+      and outranks the static default.
+    - A constant field serializes as ``{"type": "constant", "value": X}`` and
+      ``X`` is the only value it accepts.
+
+    The bare top-level ``suggested_value`` shape is not something
+    ``voluptuous_serialize`` produces; it is read defensively alongside the
+    nested one.
+    """
+    description = field.get("description")
+    if isinstance(description, dict) and description.get("suggested_value") is not None:
+        return copy.deepcopy(description["suggested_value"])
+    if field.get("suggested_value") is not None:
+        return copy.deepcopy(field["suggested_value"])
+    if field.get("type") == "constant" and field.get("value") is not None:
+        return copy.deepcopy(field["value"])
+    return _MISSING_DEFAULT
+
+
+def _redeclared_field_submission(
+    field: dict[str, Any],
+    name: str,
+    path_prefix: str,
+    reuse_state: _ReuseState | None,
+    allow_reuse: bool,
+) -> tuple[Any, bool]:
+    """Decide what to submit for a declared field the caller named no key for here.
+
+    Returns ``(value, from_caller)``, or ``_NO_SUBMISSION`` to omit the key
+    entirely. A site the caller's own key already filled earlier in this same
+    step is left alone — a section dict and a flat key can name the same leaf,
+    and the caller's value for this step outranks anything injected. Otherwise,
+    in order:
+
+    1. The field is not required: omit it. Nothing is ever injected into an
+       optional field, or into a section that is neither required nor named by
+       the caller (``allow_reuse``) — materializing either would invent data.
+    2. The step's own schema supplies a value — a suggestion or a constant's
+       only legal value, per :func:`_step_owned_submission_value`: submit that.
+       It is schema data rather than a caller key, so it is neither marked
+       consumed nor warned about. A suggestion outranks a coexisting
+       ``"default"``: both keys can serialize together, and the suggestion is
+       the stored current value while the default is the static schema one —
+       omitting would let voluptuous substitute the static value over it.
+    3. The field carries a ``"default"`` key (and no value of its own): omit it
+       and let voluptuous fill the default in. Key presence is the test, so
+       ``default: None`` is a default too.
+    4. Otherwise the field is required, has no default and has no value of its
+       own, which makes omitting it a guaranteed "required key not provided":
+       resubmit the value the caller supplied for an earlier step, warn, and
+       spend the one write allowed per (step, path).
+
+    Mutates ``reuse_state`` on the fourth branch. Menu selection keys never
+    reach here. Motivating regression (issue #2057): an options flow —
+    LocalTuya's — that declares the same field on an early step and again on a
+    later one.
+    """
+    if reuse_state is None or not allow_reuse:
+        return _NO_SUBMISSION
+    dotted = _section_path(path_prefix, name)
+    if dotted in reuse_state.filled:
+        return _NO_SUBMISSION
+    if not field.get("required"):
+        return _NO_SUBMISSION
+    step_owned = _step_owned_submission_value(field)
+    if step_owned is not _MISSING_DEFAULT:
+        return step_owned, False
+    if "default" in field:
+        return _NO_SUBMISSION
+    recorded = reuse_state.recorded_value(path_prefix, name)
+    if recorded is _MISSING_DEFAULT:
+        return _NO_SUBMISSION
+    if not reuse_state.claim_write(dotted):
+        return _NO_SUBMISSION
+    return recorded, True
+
+
+def _consume_leaf_field(
+    field: dict[str, Any],
+    name: str,
+    form_data: dict[str, Any],
+    remaining_config: dict[str, Any],
+    consumed_config_keys: set[str] | None,
+    reuse_state: _ReuseState | None,
+    path_prefix: str,
+    *,
+    allow_reuse: bool = True,
+    explicit_source: bool = False,
+) -> None:
+    """Fill ``name`` in ``form_data`` from the caller's config or from the step itself.
+
+    A key the caller supplied here is popped, submitted, and recorded in
+    ``reuse_state`` — scoped to this dotted path when it came out of an
+    explicitly supplied section dict, keyed by leaf name when it came out of
+    the flat caller dict. With no key to pop,
+    :func:`_redeclared_field_submission` chooses between omitting the field,
+    submitting the step's own value, and resubmitting the recorded one.
+    """
+    if name in remaining_config:
+        value = remaining_config.pop(name)
+        form_data[name] = value
+        _mark_consumed(consumed_config_keys, path_prefix, name)
+        if reuse_state is not None:
+            reuse_state.record(path_prefix, name, value, scoped_only=explicit_source)
+        return
+
+    value, from_caller = _redeclared_field_submission(
+        field, name, path_prefix, reuse_state, allow_reuse
+    )
+    if value is _MISSING_DEFAULT:
+        return
+    form_data[name] = value
+    if from_caller:
+        _mark_consumed(consumed_config_keys, path_prefix, name)
+
+
+def _consume_declared_section(
+    field: dict[str, Any],
+    form_data: dict[str, Any],
+    remaining_config: dict[str, Any],
+    ignored_config_keys: set[str] | None,
+    consumed_config_keys: set[str] | None,
+    path_prefix: str,
+    reuse_state: _ReuseState | None,
+    *,
+    allow_reuse: bool,
+    explicit_source: bool,
+) -> None:
+    """Merge one section field's data into ``form_data``.
+
+    A caller who supplies the section as a non-dict value gets it submitted
+    verbatim — HA, not this walker, decides what that means. Reuse is allowed
+    inside the section only when HA marks it required or the caller named it,
+    so an untouched optional section is never brought into existence.
+    """
+    name = field.get("name")
+    section_name = name if isinstance(name, str) else None
+    explicit_section: dict[str, Any] | None = None
+    if section_name is not None and section_name in remaining_config:
+        explicit_value = remaining_config.pop(section_name)
+        if not isinstance(explicit_value, dict):
+            form_data[section_name] = explicit_value
+            _mark_consumed(consumed_config_keys, path_prefix, section_name)
+            return
+        explicit_section = explicit_value
+
+    nested_data = _consume_section_schema(
+        field,
+        explicit_section,
+        remaining_config,
+        ignored_config_keys,
+        consumed_config_keys,
+        path_prefix,
+        reuse_state,
+        allow_reuse=allow_reuse
+        and (bool(field.get("required")) or explicit_section is not None),
+        explicit_source=explicit_source,
+    )
+    if not nested_data:
+        return
+    if section_name is not None:
+        form_data[section_name] = nested_data
+    else:
+        form_data.update(nested_data)
+
+
 def _consume_form_schema(
     data_schema: list[Any],
     remaining_config: dict[str, Any],
     ignored_config_keys: set[str] | None = None,
     consumed_config_keys: set[str] | None = None,
     path_prefix: str = "",
+    reuse_state: _ReuseState | None = None,
+    *,
+    allow_reuse: bool = True,
+    explicit_source: bool = False,
 ) -> dict[str, Any]:
     """Consume matching config values and shape nested flow sections.
 
     Mutates ``remaining_config`` by removing every consumed key. Flat child
     values override the same value inside an explicitly supplied section dict.
     Unknown keys inside explicit section dicts are added to
-    ``ignored_config_keys`` with their dotted section path.
+    ``ignored_config_keys`` with their dotted section path. A declared field the
+    caller named no key for is filled per
+    :func:`_redeclared_field_submission`.
     """
     form_data: dict[str, Any] = {}
 
@@ -336,40 +649,32 @@ def _consume_form_schema(
             continue
 
         name = field.get("name")
-        nested_schema = field.get("schema")
-        if isinstance(nested_schema, list):
-            section_name = name if isinstance(name, str) else None
-            explicit_section = None
-            if section_name is not None and section_name in remaining_config:
-                explicit_value = remaining_config.pop(section_name)
-                if not isinstance(explicit_value, dict):
-                    form_data[section_name] = explicit_value
-                    _mark_consumed(consumed_config_keys, path_prefix, section_name)
-                    continue
-                explicit_section = explicit_value
-
-            nested_data = _consume_section_schema(
+        if isinstance(field.get("schema"), list):
+            _consume_declared_section(
                 field,
-                explicit_section,
+                form_data,
                 remaining_config,
                 ignored_config_keys,
                 consumed_config_keys,
                 path_prefix,
+                reuse_state,
+                allow_reuse=allow_reuse,
+                explicit_source=explicit_source,
             )
-            if nested_data:
-                if section_name is not None:
-                    form_data[section_name] = nested_data
-                else:
-                    form_data.update(nested_data)
             continue
 
-        if (
-            isinstance(name, str)
-            and name not in _MENU_SELECTION_KEYS
-            and name in remaining_config
-        ):
-            form_data[name] = remaining_config.pop(name)
-            _mark_consumed(consumed_config_keys, path_prefix, name)
+        if isinstance(name, str) and name not in _MENU_SELECTION_KEYS:
+            _consume_leaf_field(
+                field,
+                name,
+                form_data,
+                remaining_config,
+                consumed_config_keys,
+                reuse_state,
+                path_prefix,
+                allow_reuse=allow_reuse,
+                explicit_source=explicit_source,
+            )
 
     return form_data
 
@@ -393,12 +698,38 @@ def _extract_schema_field_names(data_schema: Any) -> set[str] | None:
     return names
 
 
+def _consume_all_remaining_keys(
+    remaining_config: dict[str, Any],
+    consumed_config_keys: set[str] | None,
+    reuse_state: _ReuseState | None,
+) -> dict[str, Any]:
+    """Submit every non-menu key, for a step whose schema HA did not send.
+
+    Without field names there is nothing to filter on, so the whole config is
+    dumped into this one submit and cleared out of ``remaining_config``. Each
+    consumed key is still recorded by leaf name, so a later step that *does*
+    arrive with a schema declaring one of them can be filled from the record
+    rather than submitted without it.
+    """
+    form_data: dict[str, Any] = {}
+    for key in list(remaining_config.keys()):
+        if key in _MENU_SELECTION_KEYS:
+            continue
+        value = remaining_config.pop(key)
+        form_data[key] = value
+        _mark_consumed(consumed_config_keys, "", key)
+        if reuse_state is not None:
+            reuse_state.record("", key, value, scoped_only=False)
+    return form_data
+
+
 def _handle_form_step(
     flow_id: str,
     current_step: dict[str, Any],
     remaining_config: dict[str, Any],
     ignored_config_keys: set[str] | None = None,
     consumed_config_keys: set[str] | None = None,
+    reuse_state: _ReuseState | None = None,
 ) -> dict[str, Any]:
     """Validate a form step and return form data to submit.
 
@@ -407,6 +738,15 @@ def _handle_form_step(
     keys remain available for subsequent steps. Menu selection keys are never
     submitted. Fields declared inside a section are grouped under the section
     key; callers may provide them flat or inside an explicit section dict.
+
+    Caller-supplied values are recorded in ``reuse_state``. A field this step
+    declares but the caller named no key for here is filled per
+    :func:`_redeclared_field_submission`: omitted when the schema carries a
+    ``"default"`` or the field is optional, submitted from the step's own
+    suggestion or constant, and otherwise — required, no default, no value of
+    its own — resubmitted once from an earlier step's caller value with a
+    warning. Nothing is injected into an optional field, or into a section
+    neither marked required nor named by the caller.
 
     When ``data_schema`` is absent (HA didn't tell us field names), falls
     back to legacy behaviour: submit all non-menu keys and clear them. This
@@ -429,24 +769,23 @@ def _handle_form_step(
             )
         )
 
-    data_schema = current_step.get("data_schema")
+    if reuse_state is not None:
+        reuse_state.begin_step(current_step.get("step_id"))
 
-    form_data: dict[str, Any] = {}
+    data_schema = current_step.get("data_schema")
     if not isinstance(data_schema, list):
-        # Legacy fallback: no schema info — dump every non-menu key and
-        # consume them all so a follow-up step (rare without schema) won't
-        # re-submit the same data.
-        for key in list(remaining_config.keys()):
-            if key in _MENU_SELECTION_KEYS:
-                continue
-            form_data[key] = remaining_config.pop(key)
-            _mark_consumed(consumed_config_keys, "", key)
-    else:
-        form_data = _consume_form_schema(
-            data_schema, remaining_config, ignored_config_keys, consumed_config_keys
+        return _consume_all_remaining_keys(
+            remaining_config, consumed_config_keys, reuse_state
         )
 
-    return form_data
+    return _consume_form_schema(
+        data_schema,
+        remaining_config,
+        ignored_config_keys,
+        consumed_config_keys,
+        "",
+        reuse_state,
+    )
 
 
 def _parse_flow_api_error(
@@ -738,6 +1077,7 @@ def _finish_flow_entry(
     any_form_key_consumed: bool,
     ignored_config_keys: set[str],
     remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
 ) -> dict[str, Any]:
     """Build the CREATE_ENTRY success response, or raise on total key miss.
 
@@ -770,7 +1110,7 @@ def _finish_flow_entry(
             )
         )
     response: dict[str, Any] = {"success": True, "entry": current_step}
-    warnings = _ignored_keys_warnings(ignored_config_keys, remaining_config)
+    warnings = _success_warnings(ignored_config_keys, remaining_config, reuse_state)
     if warnings:
         response["warnings"] = warnings
     return response
@@ -818,8 +1158,13 @@ async def _handle_flow_steps(
         flow_id: Flow ID from start_config_flow or start_options_flow
         initial_step: The first step returned by the flow start call
         config: Full caller-provided config dict. Menu selection keys are
-            consumed by menu steps; remaining keys are submitted on the
-            first form step.
+            consumed by menu steps; remaining keys are submitted on the first
+            form step whose schema declares them or, when HA omits the schema,
+            on the first form step outright. A later step that redeclares an
+            already-consumed field gets that value resubmitted once, with a
+            warning, where the step marks it required and supplies neither a
+            default nor a value of its own (see
+            :func:`_redeclared_field_submission`).
         submit_fn: Async function to submit a step. Defaults to
             client.submit_config_flow_step (create). Pass
             client.submit_options_flow_step for options (update) flows.
@@ -830,8 +1175,9 @@ async def _handle_flow_steps(
     Returns:
         ``{"success": True, "entry": result}`` on success, plus ``warnings``
         when SOME caller-supplied config keys were not declared by any flow
-        step. When the flow presented at least one form step and NONE of the
-        supplied keys were consumed, raises ``VALIDATION_INVALID_PARAMETER``
+        step, or when a key had to be resubmitted to a later step that
+        redeclared it. When the flow presented at least one form step and NONE
+        of the supplied keys were consumed, raises ``VALIDATION_INVALID_PARAMETER``
         instead of reporting a misleading success — the flow completed on
         empty forms (defaults), applying nothing the caller asked for (see
         :func:`_finish_flow_entry`). Raises ToolError on any failure.
@@ -842,6 +1188,7 @@ async def _handle_flow_steps(
     current_step = initial_step
     last_menu_choice: str | None = None
     ignored_config_keys: set[str] = set()
+    reuse_state = _ReuseState()
     supplied_keys = sorted(k for k in config if k not in _MENU_SELECTION_KEYS)
     saw_form_step = False
     any_form_key_consumed = False
@@ -859,6 +1206,7 @@ async def _handle_flow_steps(
                 any_form_key_consumed=any_form_key_consumed,
                 ignored_config_keys=ignored_config_keys,
                 remaining_config=remaining_config,
+                reuse_state=reuse_state,
             )
 
         if result_type == _FlowType.ABORT:
@@ -885,7 +1233,9 @@ async def _handle_flow_steps(
             # _handle_form_step pops only the keys declared in the current
             # step's data_schema, leaving any other keys in remaining_config
             # for subsequent steps (HA can present multi-step forms, e.g.
-            # statistics: user step then pick-characteristic step).
+            # statistics: user step then pick-characteristic step), and records
+            # what it consumed for any later step that redeclares the same
+            # field.
             saw_form_step = True
             consumed_form_keys: set[str] = set()
             form_data = _auto_confirm_form_payload(current_step)
@@ -896,6 +1246,7 @@ async def _handle_flow_steps(
                     remaining_config,
                     ignored_config_keys,
                     consumed_form_keys,
+                    reuse_state,
                 )
             if consumed_form_keys:
                 any_form_key_consumed = True
@@ -957,12 +1308,15 @@ async def _handle_config_subentry_flow_steps(
     """Walk a config subentry flow and accept HA's reconfigure-success abort.
 
     Successful results include ``warnings`` when caller-supplied config keys
-    were not declared by any flow step.
+    were not declared by any flow step, or when a key was resubmitted to a
+    later step that redeclared it. Fields redeclared by a later step are filled
+    on the same terms as :func:`_handle_flow_steps`.
     """
     remaining_config = dict(config)
     current_step = initial_step
     last_menu_choice: str | None = None
     ignored_config_keys: set[str] = set()
+    reuse_state = _ReuseState()
     max_steps = 10
 
     for step_num in range(max_steps):
@@ -974,7 +1328,9 @@ async def _handle_config_subentry_flow_steps(
                 "operation": "created",
                 "flow_result": current_step,
             }
-            warnings = _ignored_keys_warnings(ignored_config_keys, remaining_config)
+            warnings = _success_warnings(
+                ignored_config_keys, remaining_config, reuse_state
+            )
             if warnings:
                 response["warnings"] = warnings
             return response
@@ -987,7 +1343,9 @@ async def _handle_config_subentry_flow_steps(
                     "operation": "reconfigured",
                     "flow_result": current_step,
                 }
-                warnings = _ignored_keys_warnings(ignored_config_keys, remaining_config)
+                warnings = _success_warnings(
+                    ignored_config_keys, remaining_config, reuse_state
+                )
                 if warnings:
                     response["warnings"] = warnings
                 return response
@@ -1025,6 +1383,7 @@ async def _handle_config_subentry_flow_steps(
                 current_step,
                 remaining_config,
                 ignored_config_keys,
+                reuse_state=reuse_state,
             )
             logger.debug(
                 "Config subentry flow step %s: form submit (step_id=%s, keys=%s)",

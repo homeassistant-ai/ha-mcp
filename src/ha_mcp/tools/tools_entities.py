@@ -594,8 +594,8 @@ class EntityTools:
                     context={"new_entity_id": new_entity_id},
                 )
             )
-        current_domain = entity_id.split(".")[0]
-        new_domain = new_entity_id.split(".")[0]
+        current_domain = entity_id.split(".", maxsplit=1)[0]
+        new_domain = new_entity_id.split(".", maxsplit=1)[0]
         if current_domain != new_domain:
             raise_tool_error(
                 create_error_response(

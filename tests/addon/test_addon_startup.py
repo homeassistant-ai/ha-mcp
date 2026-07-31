@@ -295,6 +295,7 @@ def _build_addon_image():
         ],
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.returncode != 0:
         pytest.fail(f"Failed to build {IMAGE_TAG}:\n{result.stderr}")

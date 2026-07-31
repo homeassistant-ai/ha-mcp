@@ -280,7 +280,9 @@ def _validate_and_mask_target(target_url: str, webhook_id: str) -> str:
     """
     # Mask sensitive values in logs to avoid leaking secrets
     if "/private_" in target_url:
-        masked_target = target_url.split("/private_")[0] + "/private_********"
+        masked_target = (
+            target_url.split("/private_", maxsplit=1)[0] + "/private_********"
+        )
     else:
         masked_target = target_url
     masked_wh = webhook_id[:6] + "..." if len(webhook_id) > 6 else "***"

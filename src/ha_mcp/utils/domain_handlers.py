@@ -224,7 +224,7 @@ def get_domain_handler(entity_or_domain: str) -> dict[str, Any]:
     Returns:
         Domain handler configuration dictionary
     """
-    domain = entity_or_domain.split(".")[0] if entity_or_domain else ""
+    domain = entity_or_domain.split(".", maxsplit=1)[0] if entity_or_domain else ""
     return DOMAIN_HANDLERS.get(domain, get_default_handler())
 
 

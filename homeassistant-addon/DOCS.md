@@ -50,7 +50,7 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
 ### <details><summary><b>📱 Claude Desktop</b></summary>
 
-Claude Desktop talks to MCP servers over stdio, so it reaches the add-on through **mcp-proxy**, run automatically via `uvx`. That only needs **uv** on the computer running Claude Desktop:
+Claude Desktop talks to MCP servers over stdio, so it reaches the add-on through **fastmcp-remote**, run automatically via `uvx`. That only needs **uv** on the computer running Claude Desktop:
 
 ```bash
 # macOS / Linux
@@ -73,7 +73,7 @@ Then add to your Claude Desktop configuration file:
   "mcpServers": {
     "home-assistant": {
       "command": "uvx",
-      "args": ["--with", "mcp<2.0.0", "mcp-proxy", "--transport", "streamablehttp", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
+      "args": ["fastmcp-remote", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
     }
   }
 }
@@ -83,9 +83,9 @@ Replace the URL in `args` with the one from your add-on logs. No token goes here
 
 **Restart Claude Desktop** after saving the configuration.
 
-**How it works:** `uvx` runs mcp-proxy, which converts the add-on's HTTP endpoint to the stdio Claude Desktop expects.
+**How it works:** `uvx` runs fastmcp-remote, which converts the add-on's HTTP endpoint to the stdio Claude Desktop expects.
 
-**Why `--with "mcp<2.0.0"`:** it pins the MCP SDK below version 2, which mcp-proxy does not yet support. Without the pin, mcp-proxy fails to start with `ImportError: cannot import name 'request_ctx'` and Claude Desktop shows "Server disconnected" ([#2073](https://github.com/homeassistant-ai/ha-mcp/issues/2073)).
+**Upgrading from mcp-proxy:** earlier versions of this guide used `mcp-proxy`. If your config still runs it and Claude Desktop shows "Server disconnected", replace it with the config above. mcp-proxy declares no upper bound on the MCP SDK, so it fails with `ImportError: cannot import name 'request_ctx'` once the SDK ships a major release ([#2073](https://github.com/homeassistant-ai/ha-mcp/issues/2073)). fastmcp-remote pins its SDK dependency to a bounded range and cannot break that way.
 
 </details>
 

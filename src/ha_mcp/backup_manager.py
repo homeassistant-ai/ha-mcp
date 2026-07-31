@@ -1128,15 +1128,15 @@ def _diff_dict_node(
     max_ops: int,
 ) -> None:
     """Diff two dicts into JSON-Patch ops (add/remove/recurse per key)."""
-    for key in stored:
+    for key, stored_value in stored.items():
         seg = _pointer_segment(str(key))
         sub_path = f"{path}/{seg}"
         if key not in current:
-            out.append({"op": "add", "path": sub_path, "value": stored[key]})
+            out.append({"op": "add", "path": sub_path, "value": stored_value})
             if len(out) >= max_ops:
                 return
         else:
-            _diff_node(stored[key], current[key], sub_path, out, max_ops)
+            _diff_node(stored_value, current[key], sub_path, out, max_ops)
             if len(out) >= max_ops:
                 return
     for key in current:

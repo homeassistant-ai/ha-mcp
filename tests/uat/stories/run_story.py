@@ -439,6 +439,7 @@ def _run_test_prompt(
         capture_output=True,
         text=True,
         timeout=600,
+        check=False,
     )
 
     for line in result.stderr.splitlines():
@@ -672,6 +673,7 @@ def get_git_info() -> tuple[str, str]:
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),
+            check=False,
         )
         sha = result.stdout.strip()
     except Exception:
@@ -683,6 +685,7 @@ def get_git_info() -> tuple[str, str]:
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),
+            check=False,
         )
         describe = result.stdout.strip()
     except Exception:

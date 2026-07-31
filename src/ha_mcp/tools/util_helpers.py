@@ -317,8 +317,9 @@ def compact_service_result(
     3. Drop known-heavy attribute keys (``effect_list``, ``hue_scenes``) from
        every record's ``attributes`` dict.
 
-    Returns ``result`` unchanged when not a list (e.g. dict from
-    ``return_response=True`` services), or when the list is empty.
+    Returns ``result`` unchanged when it is not a list (defensive — every
+    ha_call_service path now projects a changed-state list), or when the list
+    is empty.
     """
     if not isinstance(result, list) or not result:
         return result
@@ -467,6 +468,14 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
     HA's call_service with return_response wraps results in
     {"changed_states": [...], "service_response": {...}}.
     Returns service_response if present and is a dict, otherwise the original result.
+
+    Deliberately NOT the same rule as ``ServiceTools._split_return_response_envelope``,
+    which powers ha_call_service: that one returns the response whatever its type and
+    reports the whole reply only when the key is absent. The two disagree solely for a
+    NON-DICT ``service_response`` (this helper hands back the envelope, the split hands
+    back the value). Consumers here read component services that always answer with a
+    dict, so the divergence is unreachable — but do not "align" one to the other
+    without checking those ~20 call sites.
     """
     sr = result.get("service_response")
     return sr if isinstance(sr, dict) else result

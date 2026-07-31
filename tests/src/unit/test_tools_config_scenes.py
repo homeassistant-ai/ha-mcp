@@ -297,7 +297,6 @@ class TestScenePythonTransform:
 
         async def _capture_category(*args, **kwargs):
             calls.append((args, kwargs))
-            return None
 
         from ha_mcp.tools import tools_config_scenes as scene_mod
 
