@@ -378,9 +378,12 @@ def _check_variables_order(
     ``trigger_variables`` blocks). A name declared further down is therefore
     undefined at render time, and what that costs depends on how the template
     uses it. HA's undefined is ``LoggingUndefined(jinja2.Undefined)``
-    (``helpers/template/__init__.py``), which overrides only ``__str__``,
-    ``__iter__`` and ``__bool__`` to log; every other operation goes through
-    ``_fail_with_undefined_error``:
+    (``helpers/template/__init__.py``), and the split comes from the base
+    class: jinja2's ``Undefined`` answers ``__str__``, ``__iter__``,
+    ``__bool__``, ``__len__`` and ``__eq__``/``__ne__``/``__hash__`` without
+    raising, and routes everything else to ``_fail_with_undefined_error``. HA
+    re-wraps three of the quiet ones (``__str__``, ``__iter__``, ``__bool__``)
+    to log as they pass:
 
     * silent — a bare ``{{ later }}``, ``{% if later %}``, ``~`` concatenation,
       ``==``/``!=``, ``{% for x in later %}`` and ``| length`` yield an empty,
