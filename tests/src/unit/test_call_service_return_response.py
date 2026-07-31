@@ -170,6 +170,16 @@ class TestReturnResponsePlacement:
 
         Returning neither is the masking this PR exists to remove: the caller
         asked for response data and would learn nothing about where it went.
+
+        Direct contract test — this shape does NOT arrive through the real
+        client. ``HomeAssistantClient.call_service`` normalises first: with
+        ``return_response=True`` a non-dict reply is wrapped as
+        ``{"service_response": <reply>}`` (``rest_client.py``), which reaches the
+        helper as a dict missing ``changed_states`` and lands in the same
+        fallback — the reachable shape, pinned by
+        ``test_missing_changed_states_warns``. Kept because the helper is a
+        static function with its own contract, not because the wiring can
+        deliver this.
         """
         tools = _make_tools([_CHANGED_STATE])
 
