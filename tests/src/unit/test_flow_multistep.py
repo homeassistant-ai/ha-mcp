@@ -9,8 +9,16 @@ Regression guard: prior code wiped ``remaining_config`` after the first form
 step, which made step 2+ submit ``{}`` and HA respond with HTTP 400. This
 broke ``statistics`` (multi-step user → pick-characteristic) and
 ``utility_meter`` UPDATE.
+
+``TestRedeclaredFieldReuse`` covers the other half of that split (issue
+#2057): a key the caller supplies once, consumed by an early step and then
+declared again by a later step, is resubmitted from a scoped record — but only
+where the later step marks it required and supplies neither a default nor a
+value of its own, only once per step, and never into an optional field or a
+section the caller never named.
 """
 
+import copy
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -22,6 +30,7 @@ from ha_mcp.tools.config_entry_flow import (
     _handle_config_subentry_flow_steps,
     _handle_flow_steps,
     _handle_form_step,
+    _ReuseState,
     _submit_step,
 )
 
@@ -756,6 +765,1003 @@ class TestSubentryFlowIgnoredKeys:
         ]
 
 
+def _reuse_warning(dotted: str, step_id: str) -> str:
+    """The warning a resubmitted key adds to the walk's success response."""
+    return (
+        f"Resubmitted '{dotted}' at step '{step_id}': supplied once "
+        "but declared at more than one site in this flow"
+    )
+
+
+def _later_step(redeclared_field: dict[str, Any]) -> dict[str, Any]:
+    """Build a second step declaring its own ``id`` key plus ``redeclared_field``."""
+    return {
+        "type": "form",
+        "flow_id": "flow-2057",
+        "step_id": "details",
+        "data_schema": [
+            {"name": "id", "required": True},
+            redeclared_field,
+        ],
+    }
+
+
+def _first_step() -> dict[str, Any]:
+    """Build a first step that consumes ``friendly_name`` and ``host``."""
+    return {
+        "type": "form",
+        "flow_id": "flow-2057",
+        "step_id": "user",
+        "data_schema": [
+            {"name": "friendly_name", "required": True, "default": ""},
+            {"name": "host", "required": True, "default": "1.2.3.4"},
+        ],
+    }
+
+
+class TestRedeclaredFieldReuse:
+    """A later step redeclaring a field an earlier step consumed (issue #2057).
+
+    The first step pops the key out of ``remaining_config``, so a later step
+    declaring the same name would be submitted without it and HA would answer
+    "required key not provided". Resubmission from the record closes that gap,
+    and is deliberately the last resort: a ``"default"`` key means voluptuous
+    fills the value in, a suggested value or a constant means the step supplies
+    its own, an optional field means nothing may be injected, and a section the
+    caller never named must not be brought into existence. Where it does fire
+    the response says so, and it fires at most once per step so a flow that
+    re-presents a form cannot be rewritten indefinitely.
+    """
+
+    async def test_later_step_resubmits_required_field_with_no_default(self) -> None:
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "flow_id": "flow-2057",
+            "result": {
+                "entry_id": "entry-1",
+                "title": "Device1",
+                "domain": "demo",
+            },
+        }
+        submit_fn = AsyncMock(
+            side_effect=[
+                _later_step({"name": "friendly_name", "required": True}),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=_first_step(),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        # The resubmission is reported: the caller wrote one value and two
+        # steps were given it.
+        assert result == {
+            "success": True,
+            "entry": final_entry,
+            "warnings": [
+                "Resubmitted 'friendly_name' at step 'details': supplied once "
+                "but declared at more than one site in this flow"
+            ],
+        }
+        assert submit_fn.await_args_list[0].args[1] == {
+            "friendly_name": "Device1",
+            "host": "10.0.0.5",
+        }
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "friendly_name": "Device1",
+        }
+
+    @pytest.mark.parametrize("default_source", [{"default": ""}, {"default": None}])
+    async def test_redeclared_field_with_a_default_is_not_resubmitted(
+        self, default_source: dict[str, Any]
+    ) -> None:
+        """A ``"default"`` key means voluptuous fills the value in itself.
+
+        Key presence is the whole test, so ``default: None`` counts: HA
+        serializes a default only from an actual voluptuous default, and
+        submitting an earlier step's value over one would change data the caller
+        never named for this step.
+        """
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-2"},
+        }
+        submit_fn = AsyncMock(
+            side_effect=[
+                _later_step(
+                    {"name": "friendly_name", "required": True, **default_source}
+                ),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=_first_step(),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[1].args[1] == {"id": 20}
+        assert "warnings" not in result
+
+    @pytest.mark.parametrize(
+        "suggestion_source",
+        [
+            {"description": {"suggested_value": "Existing entity name"}},
+            {"suggested_value": "Existing entity name"},
+        ],
+    )
+    async def test_redeclared_field_submits_the_steps_own_suggested_value(
+        self, suggestion_source: dict[str, Any]
+    ) -> None:
+        """HA's edit-style pre-fill is the step's own data, and it is submitted.
+
+        ``add_suggested_values_to_schema`` puts the current value in
+        ``description.suggested_value``; with no voluptuous default on the
+        marker, omitting the key would fail validation, while resubmitting the
+        caller's value would overwrite the value being edited. The bare
+        top-level ``suggested_value`` shape is read defensively —
+        ``voluptuous_serialize`` never emits it — and behaves identically.
+        """
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-2"},
+        }
+        submit_fn = AsyncMock(
+            side_effect=[
+                _later_step(
+                    {"name": "friendly_name", "required": True, **suggestion_source}
+                ),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=_first_step(),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "friendly_name": "Existing entity name",
+        }
+        # Schema data, not a caller key: nothing to report.
+        assert "warnings" not in result
+
+    async def test_suggestion_outranks_a_coexisting_static_default(self) -> None:
+        """A marker keeps its voluptuous default when HA injects a suggestion.
+
+        Both keys then serialize together: the default is the static schema
+        value and the suggestion is the stored current one. The suggestion is
+        submitted — omission would let voluptuous substitute the static value
+        over the stored one.
+        """
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-2b"},
+        }
+        submit_fn = AsyncMock(
+            side_effect=[
+                _later_step(
+                    {
+                        "name": "friendly_name",
+                        "required": True,
+                        "default": 30,
+                        "description": {"suggested_value": 300},
+                    }
+                ),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=_first_step(),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "friendly_name": 300,
+        }
+        assert "warnings" not in result
+
+    async def test_redeclared_constant_field_submits_its_only_legal_value(self) -> None:
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-2b"},
+        }
+        submit_fn = AsyncMock(
+            side_effect=[
+                _later_step(
+                    {
+                        "name": "friendly_name",
+                        "required": True,
+                        "type": "constant",
+                        "value": "LOCKED",
+                    }
+                ),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=_first_step(),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "friendly_name": "LOCKED",
+        }
+        assert "warnings" not in result
+
+    @pytest.mark.parametrize(
+        "null_suggestion",
+        [{"description": {"suggested_value": None}}, {"suggested_value": None}],
+    )
+    async def test_present_but_null_suggestion_falls_back_to_the_caller_value(
+        self, null_suggestion: dict[str, Any]
+    ) -> None:
+        """A null suggestion is no value at all, so the caller's is the last resort."""
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-2c"},
+        }
+        submit_fn = AsyncMock(
+            side_effect=[
+                _later_step(
+                    {"name": "friendly_name", "required": True, **null_suggestion}
+                ),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=_first_step(),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "friendly_name": "Device1",
+        }
+        assert result["warnings"] == [_reuse_warning("friendly_name", "details")]
+
+    @pytest.mark.parametrize("required_source", [{}, {"required": False}])
+    async def test_redeclared_optional_field_is_not_resubmitted(
+        self, required_source: dict[str, Any]
+    ) -> None:
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-3"},
+        }
+        submit_fn = AsyncMock(
+            side_effect=[
+                _later_step({"name": "friendly_name", **required_source}),
+                final_entry,
+            ]
+        )
+
+        await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=_first_step(),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[1].args[1] == {"id": 20}
+
+    async def test_resubmits_into_a_later_section_nested_field(self) -> None:
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-4"},
+        }
+        later_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "details",
+            "data_schema": [
+                {"name": "id", "required": True},
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": True,
+                    "schema": [{"name": "friendly_name", "required": True}],
+                },
+            ],
+        }
+        submit_fn = AsyncMock(side_effect=[later_step, final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=_first_step(),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "advanced": {"friendly_name": "Device1"},
+        }
+        # The warning names the dotted path the value landed on.
+        assert result["warnings"] == [
+            _reuse_warning("advanced.friendly_name", "details")
+        ]
+
+    async def test_resubmitted_value_is_a_copy(self) -> None:
+        """Two submissions must not share a mutable value object."""
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-5"},
+        }
+        later_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "details",
+            "data_schema": [{"name": "entity_ids", "required": True}],
+        }
+        submit_fn = AsyncMock(side_effect=[later_step, final_entry])
+        initial_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "user",
+            "data_schema": [{"name": "entity_ids", "required": True, "default": []}],
+        }
+
+        await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=initial_step,
+            config={"entity_ids": ["sensor.a"]},
+            submit_fn=submit_fn,
+        )
+
+        first = submit_fn.await_args_list[0].args[1]["entity_ids"]
+        second = submit_fn.await_args_list[1].args[1]["entity_ids"]
+        assert second == ["sensor.a"]
+        assert second is not first
+
+    async def test_subentry_walker_resubmits_redeclared_required_field(self) -> None:
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-6"},
+        }
+        client = AsyncMock()
+        client.submit_config_subentry_flow_step = AsyncMock(
+            side_effect=[
+                _later_step({"name": "friendly_name", "required": True}),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_config_subentry_flow_steps(
+            client,
+            "flow-2057-sub",
+            _first_step(),
+            {"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            is_reconfigure=False,
+        )
+
+        assert result["operation"] == "created"
+        # Parity with _handle_flow_steps: the subentry walker reports the
+        # resubmission on its own success path.
+        assert result["warnings"] == [_reuse_warning("friendly_name", "details")]
+        submitted = client.submit_config_subentry_flow_step.await_args_list
+        assert submitted[0].args[1] == {
+            "friendly_name": "Device1",
+            "host": "10.0.0.5",
+        }
+        assert submitted[1].args[1] == {"id": 20, "friendly_name": "Device1"}
+
+    async def test_repeated_step_is_resubmitted_once_then_left_alone(self) -> None:
+        """One reused write per step, however often the flow re-presents it.
+
+        Iteration 1 submits the caller's own key. Iteration 2 resubmits it from
+        the record, because a step asking again for a required field with no
+        default cannot be answered with nothing. From iteration 3 the key is
+        omitted, so a flow stuck on one form gets HA's loud "required key not
+        provided" naming the field instead of a silent rewrite loop. Each
+        payload is an independent object.
+        """
+        repeated: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "user",
+            "data_schema": [{"name": "entity_ids", "required": True}],
+        }
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-7"},
+        }
+        submit_fn = AsyncMock(
+            side_effect=[repeated, repeated, repeated, final_entry],
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=repeated,
+            config={"entity_ids": ["sensor.a"]},
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        assert result["warnings"] == [_reuse_warning("entity_ids", "user")]
+        payloads = [call.args[1] for call in submit_fn.await_args_list]
+        assert payloads == [
+            {"entity_ids": ["sensor.a"]},
+            {"entity_ids": ["sensor.a"]},
+            {},
+            {},
+        ]
+        first, reused = payloads[0]["entity_ids"], payloads[1]["entity_ids"]
+        assert reused is not first
+
+    async def test_walk_still_bounded_when_a_repeated_step_never_finishes(self) -> None:
+        """A flow that keeps re-presenting the same form hits the step ceiling.
+
+        The ceiling is what ends the walk; the fire-once bound is what keeps the
+        run in between from writing the same value ten times.
+        """
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        repeated: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "user",
+            "data_schema": [{"name": "entity_ids", "required": True}],
+        }
+        submit_fn = AsyncMock(return_value=repeated)
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2057",
+                initial_step=repeated,
+                config={"entity_ids": ["sensor.a"]},
+                submit_fn=submit_fn,
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "TIMEOUT_OPERATION"
+        assert submit_fn.await_count == 10
+        payloads = [call.args[1] for call in submit_fn.await_args_list]
+        assert payloads[:2] == [{"entity_ids": ["sensor.a"]}] * 2
+        assert payloads[2:] == [{}] * 8
+
+    async def test_every_later_step_redeclaring_one_field_gets_its_own_write(
+        self,
+    ) -> None:
+        """The bound is one write per step, not one per field for the whole flow.
+
+        Three steps declare ``friendly_name`` and only the first gets the
+        caller's key. Both steps after it must be answered: a bound spent at
+        one of them would leave the next submitting nothing for a required
+        field with no default, which is the "required key not provided" that
+        resubmission exists to prevent. Each write names the step it happened
+        at.
+        """
+        second_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "second",
+            "data_schema": [
+                {"name": "id", "required": True},
+                {"name": "friendly_name", "required": True},
+            ],
+        }
+        third_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "third",
+            "data_schema": [{"name": "friendly_name", "required": True}],
+        }
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-8"},
+        }
+        submit_fn = AsyncMock(side_effect=[second_step, third_step, final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=dict(_first_step(), step_id="first"),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        payloads = [call.args[1] for call in submit_fn.await_args_list]
+        assert payloads == [
+            {"friendly_name": "Device1", "host": "10.0.0.5"},
+            {"id": 20, "friendly_name": "Device1"},
+            {"friendly_name": "Device1"},
+        ]
+        assert result["warnings"] == [
+            _reuse_warning("friendly_name", "second"),
+            _reuse_warning("friendly_name", "third"),
+        ]
+
+
+class TestReuseScoping:
+    """Where a recorded value may resurface, and where it must not."""
+
+    @staticmethod
+    def _named_section_step(step_id: str, section: str) -> dict[str, Any]:
+        return {
+            "type": "form",
+            "flow_id": "flow-scope",
+            "step_id": step_id,
+            "data_schema": [
+                {"name": "id", "required": True},
+                {
+                    "type": "expandable",
+                    "name": section,
+                    "required": True,
+                    "schema": [{"name": "name", "required": True}],
+                },
+            ],
+        }
+
+    async def test_value_from_an_explicit_section_is_not_reused_for_a_sibling(
+        self,
+    ) -> None:
+        """``{"left": {"name": ...}}`` names one section, so it fills only that one."""
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-1"},
+        }
+        first_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-scope",
+            "step_id": "left_step",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "left",
+                    "required": True,
+                    "schema": [{"name": "name", "required": True}],
+                }
+            ],
+        }
+        submit_fn = AsyncMock(
+            side_effect=[self._named_section_step("right_step", "right"), final_entry]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-scope",
+            initial_step=first_step,
+            config={"left": {"name": "LEFT"}, "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[0].args[1] == {"left": {"name": "LEFT"}}
+        # right.name is required with no default, but nothing the caller wrote
+        # belongs there — HA's own error is the right answer, not "LEFT".
+        assert submit_fn.await_args_list[1].args[1] == {"id": 20}
+        assert "warnings" not in result
+
+    async def test_flat_value_is_reused_inside_a_later_section(self) -> None:
+        """A flat key names no section, so it fills the leaf wherever it is declared."""
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-2"},
+        }
+        first_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-scope",
+            "step_id": "name_step",
+            "data_schema": [{"name": "name", "required": True}],
+        }
+        submit_fn = AsyncMock(
+            side_effect=[self._named_section_step("right_step", "right"), final_entry]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-scope",
+            initial_step=first_step,
+            config={"name": "FLAT", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "right": {"name": "FLAT"},
+        }
+        assert result["warnings"] == [_reuse_warning("right.name", "right_step")]
+
+    async def test_flat_override_wins_over_stale_scoped_record_on_reuse(self) -> None:
+        """The record carries the value actually submitted for a path.
+
+        A flat key overrides an explicit section value at the step declaring
+        both (see ``test_flat_section_field_overrides_explicit_section_value``),
+        so a later redeclaration of that path must resubmit the override, not
+        the overridden section value.
+        """
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-3"},
+        }
+        first_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-scope",
+            "step_id": "advanced_step",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": True,
+                    "schema": [{"name": "name", "required": True}],
+                }
+            ],
+        }
+        submit_fn = AsyncMock(
+            side_effect=[
+                self._named_section_step("later_step", "advanced"),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-scope",
+            initial_step=first_step,
+            config={"advanced": {"name": "SCOPED"}, "name": "FLAT", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[0].args[1] == {"advanced": {"name": "FLAT"}}
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "advanced": {"name": "FLAT"},
+        }
+        assert result["warnings"] == [_reuse_warning("advanced.name", "later_step")]
+
+    async def test_scoped_record_outranks_a_flat_one_for_the_same_leaf(self) -> None:
+        """Both records hold ``label``; a sectioned redeclaration takes the scoped one.
+
+        Step order is load-bearing. The step declaring ``label`` flat has to
+        run first: with the section step first, its explicit
+        ``{"left": {"label": ...}}`` would still be sitting beside an
+        unconsumed flat ``label``, and a flat child overrides the section value
+        it duplicates — the scoped record would be rewritten to the flat value
+        (see ``test_flat_override_wins_over_stale_scoped_record_on_reuse``) and
+        both lookups would then answer the same thing.
+        """
+        flat_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-scope",
+            "step_id": "flat_step",
+            "data_schema": [{"name": "label", "required": True}],
+        }
+        section_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-scope",
+            "step_id": "section_step",
+            "data_schema": [
+                {
+                    "type": "expandable",
+                    "name": "left",
+                    "required": True,
+                    "schema": [{"name": "label", "required": True}],
+                }
+            ],
+        }
+        redeclaring_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-scope",
+            "step_id": "redeclaring_step",
+            "data_schema": [
+                {"name": "id", "required": True},
+                {
+                    "type": "expandable",
+                    "name": "left",
+                    "required": True,
+                    "schema": [{"name": "label", "required": True}],
+                },
+            ],
+        }
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-9"},
+        }
+        submit_fn = AsyncMock(side_effect=[section_step, redeclaring_step, final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-scope",
+            initial_step=flat_step,
+            config={"label": "FLAT", "left": {"label": "SCOPED"}, "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        payloads = [call.args[1] for call in submit_fn.await_args_list]
+        assert payloads == [
+            {"label": "FLAT"},
+            {"left": {"label": "SCOPED"}},
+            {"id": 20, "left": {"label": "SCOPED"}},
+        ]
+        assert result["warnings"] == [_reuse_warning("left.label", "redeclaring_step")]
+
+    async def test_untouched_optional_section_is_not_materialized(self) -> None:
+        """Reuse never invents a section the caller did not name."""
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-3"},
+        }
+        later_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "details",
+            "data_schema": [
+                {"name": "id", "required": True},
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": False,
+                    "schema": [{"name": "friendly_name", "required": True}],
+                },
+            ],
+        }
+        submit_fn = AsyncMock(side_effect=[later_step, final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=_first_step(),
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[1].args[1] == {"id": 20}
+        assert "warnings" not in result
+
+    async def test_explicitly_supplied_optional_section_allows_reuse(self) -> None:
+        """Naming the section is consent to fill the rest of what it requires."""
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-4"},
+        }
+        later_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "details",
+            "data_schema": [
+                {"name": "id", "required": True},
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": False,
+                    "schema": [
+                        {"name": "friendly_name", "required": True},
+                        {"name": "extra"},
+                    ],
+                },
+            ],
+        }
+        submit_fn = AsyncMock(side_effect=[later_step, final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=_first_step(),
+            config={
+                "friendly_name": "Device1",
+                "host": "10.0.0.5",
+                "id": 20,
+                "advanced": {"extra": 7},
+            },
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "advanced": {"extra": 7, "friendly_name": "Device1"},
+        }
+        assert result["warnings"] == [
+            _reuse_warning("advanced.friendly_name", "details")
+        ]
+
+    def test_one_step_declaring_a_leaf_twice_fills_both(self) -> None:
+        """Flat and sectioned declarations of one name in a single step."""
+        state = _ReuseState()
+        step: dict[str, Any] = {
+            "type": "form",
+            "step_id": "user",
+            "data_schema": [
+                {"name": "name", "required": True},
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": True,
+                    "schema": [{"name": "name", "required": True}],
+                },
+            ],
+        }
+        remaining = {"name": "X"}
+
+        form_data = _handle_form_step("flow-1", step, remaining, reuse_state=state)
+
+        assert form_data == {"name": "X", "advanced": {"name": "X"}}
+        assert remaining == {}
+        assert state.notes == [_reuse_warning("advanced.name", "user")]
+
+    async def test_legacy_schemaless_step_records_what_it_dumped(self) -> None:
+        """A step HA sent no schema for still feeds later schema'd steps."""
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-5"},
+        }
+        first_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "user",
+            "data_schema": None,
+        }
+        submit_fn = AsyncMock(
+            side_effect=[
+                _later_step({"name": "friendly_name", "required": True}),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=first_step,
+            config={"friendly_name": "Device1", "host": "10.0.0.5", "id": 20},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[0].args[1] == {
+            "friendly_name": "Device1",
+            "host": "10.0.0.5",
+            "id": 20,
+        }
+        # Both of step 2's required no-default fields came out of the dump.
+        assert submit_fn.await_args_list[1].args[1] == {
+            "id": 20,
+            "friendly_name": "Device1",
+        }
+        assert result["warnings"] == [
+            _reuse_warning("id", "details"),
+            _reuse_warning("friendly_name", "details"),
+        ]
+
+    async def test_injected_section_defaults_are_not_recorded_for_reuse(self) -> None:
+        """Mirror of the consumed-keys rule: HA's own defaults are not caller values."""
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-6"},
+        }
+        first_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "user",
+            "data_schema": [
+                {"name": "host", "required": True},
+                {
+                    "type": "expandable",
+                    "name": "advanced",
+                    "required": True,
+                    "schema": [{"name": "framerate", "default": 2}],
+                },
+            ],
+        }
+        later_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "details",
+            "data_schema": [{"name": "framerate", "required": True}],
+        }
+        submit_fn = AsyncMock(side_effect=[later_step, final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=first_step,
+            config={"host": "1.2.3.4"},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[0].args[1] == {
+            "host": "1.2.3.4",
+            "advanced": {"framerate": 2},
+        }
+        assert submit_fn.await_args_list[1].args[1] == {}
+        assert "warnings" not in result
+
+    async def test_menu_selection_key_is_never_reused_by_a_form_step(self) -> None:
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-7"},
+        }
+        later_step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-menu",
+            "step_id": "options",
+            "data_schema": [
+                {"name": "name", "required": True},
+                {"name": "group_type", "required": True},
+            ],
+        }
+        submit_fn = AsyncMock(side_effect=[later_step, final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-menu",
+            initial_step={
+                "type": "menu",
+                "flow_id": "flow-menu",
+                "step_id": "user",
+                "menu_options": ["light", "switch"],
+            },
+            config={"group_type": "light", "name": "x"},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[0].args[1] == {"next_step_id": "light"}
+        assert submit_fn.await_args_list[1].args[1] == {"name": "x"}
+        assert "warnings" not in result
+
+    async def test_recorded_value_is_snapshotted_at_record_time(self) -> None:
+        """Mutating the caller's list after step 1 cannot reach step 2's payload."""
+        config: dict[str, Any] = {"entity_ids": ["sensor.a"]}
+        step: dict[str, Any] = {
+            "type": "form",
+            "flow_id": "flow-2057",
+            "step_id": "user",
+            "data_schema": [{"name": "entity_ids", "required": True}],
+        }
+        later_step = dict(step, step_id="details")
+        final_entry: dict[str, Any] = {
+            "type": "create_entry",
+            "result": {"entry_id": "entry-scope-8"},
+        }
+        payloads: list[dict[str, Any]] = []
+
+        def submit(flow_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+            payloads.append(copy.deepcopy(payload))
+            config["entity_ids"].append("sensor.MUTATED")
+            return later_step if len(payloads) == 1 else final_entry
+
+        await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2057",
+            initial_step=step,
+            config=config,
+            submit_fn=AsyncMock(side_effect=submit),
+        )
+
+        assert config["entity_ids"] == ["sensor.a", "sensor.MUTATED", "sensor.MUTATED"]
+        assert payloads == [{"entity_ids": ["sensor.a"]}, {"entity_ids": ["sensor.a"]}]
+
+
 class TestSubmitStep:
     """Unit tests for _submit_step error propagation."""
 
@@ -878,6 +1884,48 @@ class TestAllKeysIgnoredIsAnError:
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "without consuming any" in body["error"]["message"]
         assert submit_fn.await_args.args[1] == {"advanced": {"framerate": 2}}
+
+    async def test_step_owned_submission_does_not_count_as_consumed_keys(self) -> None:
+        """A step's own suggestion fills a form but applies nothing the caller asked for."""
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        later_step = {
+            "type": "form",
+            "flow_id": "flow-typo",
+            "step_id": "details",
+            "data_schema": [
+                {
+                    "name": "friendly_name",
+                    "required": True,
+                    "description": {"suggested_value": "HA name"},
+                }
+            ],
+        }
+        submit_fn = AsyncMock(side_effect=[later_step, final_entry])
+        initial_step = {
+            "type": "form",
+            "flow_id": "flow-typo",
+            "step_id": "user",
+            "data_schema": [{"name": "entities"}],
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-typo",
+                initial_step=initial_step,
+                config={"typo_key": 5},
+                submit_fn=submit_fn,
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "without consuming any" in body["error"]["message"]
+        payloads = [call.args[1] for call in submit_fn.await_args_list]
+        assert payloads == [{}, {"friendly_name": "HA name"}]
 
     async def test_preview_confirm_form_is_auto_advanced(self) -> None:
         confirm_step = {
