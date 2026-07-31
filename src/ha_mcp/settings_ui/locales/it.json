@@ -12,7 +12,7 @@
     "theme.auto_os": "Automatico (SO)",
     "theme.light": "Chiaro",
     "theme.dark": "Scuro",
-    "status.loading": "Caricamento...",
+    "status.loading": "Caricamento…",
     "nav.skip": "Vai al contenuto",
     "tabs.aria": "Sezioni delle impostazioni",
     "tabs.tools": "Strumenti",
@@ -477,270 +477,6 @@
     "Zones": "Zone"
   },
   "tools": {
-    "ha_get_addon": {
-      "title": "Ottieni i componenti aggiuntivi",
-      "description": "Ottiene i componenti aggiuntivi di Home Assistant: elenca quelli installati o disponibili, oppure restituisce i dettagli di uno solo."
-    },
-    "ha_manage_addon": {
-      "title": "Gestisci un componente aggiuntivo",
-      "description": "Gestisce un componente aggiuntivo di Home Assistant: ne aggiorna la configurazione oppure ne chiama l'API interna."
-    },
-    "ha_list_floors_areas": {
-      "title": "Elenca piani e aree",
-      "description": "Elenca i piani ordinati per livello crescente, ciascuno con le aree assegnate annidate, più le aree senza piano."
-    },
-    "ha_remove_area_or_floor": {
-      "title": "Rimuovi un'area o un piano",
-      "description": "Rimuove un'area o un piano di Home Assistant."
-    },
-    "ha_set_area_or_floor": {
-      "title": "Crea o aggiorna un'area o un piano",
-      "description": "Crea o aggiorna un'area o un piano di Home Assistant."
-    },
-    "ha_manage_pipeline": {
-      "title": "Gestisci le pipeline di Assist",
-      "description": "Gestisce le pipeline di Assist di Home Assistant."
-    },
-    "ha_config_get_automation": {
-      "title": "Ottieni la configurazione di un'automazione",
-      "description": "Recupera la configurazione di un'automazione di Home Assistant."
-    },
-    "ha_config_remove_automation": {
-      "title": "Rimuovi un'automazione",
-      "description": "Elimina un'automazione di Home Assistant."
-    },
-    "ha_config_set_automation": {
-      "title": "Crea o aggiorna un'automazione",
-      "description": "Crea o aggiorna un'automazione di Home Assistant."
-    },
-    "ha_get_blueprint": {
-      "title": "Ottieni un blueprint",
-      "description": "Ottiene informazioni sui blueprint: elenca tutti i blueprint o restituisce i dettagli di uno specifico."
-    },
-    "ha_import_blueprint": {
-      "title": "Importa un blueprint",
-      "description": "Importa un blueprint da un URL."
-    },
-    "ha_config_get_calendar_events": {
-      "title": "Ottieni gli eventi del calendario",
-      "description": "Recupera gli eventi di un'entità calendario."
-    },
-    "ha_config_remove_calendar_event": {
-      "title": "Rimuovi un evento del calendario",
-      "description": "Elimina un evento da un calendario."
-    },
-    "ha_config_set_calendar_event": {
-      "title": "Crea o aggiorna un evento del calendario",
-      "description": "Crea un nuovo evento in un calendario."
-    },
-    "ha_get_camera_image": {
-      "title": "Ottieni l'immagine di una telecamera",
-      "description": "Recupera un'istantanea da un'entità telecamera di Home Assistant."
-    },
-    "ha_get_dashboard_screenshot": {
-      "title": "Ottieni lo screenshot di una dashboard",
-      "description": "Ottiene le immagini renderizzate della vista di una dashboard Lovelace di Home Assistant."
-    },
-    "ha_config_delete_dashboard": {
-      "title": "Elimina una dashboard",
-      "description": "Elimina completamente una dashboard in modalità storage."
-    },
-    "ha_config_delete_dashboard_resource": {
-      "title": "Elimina una risorsa di dashboard",
-      "description": "Elimina una risorsa di dashboard."
-    },
-    "ha_config_get_dashboard": {
-      "title": "Ottieni una dashboard",
-      "description": "Ottiene informazioni sulle dashboard: elenca tutte le dashboard, ne restituisce la configurazione o cerca le schede."
-    },
-    "ha_config_list_dashboard_resources": {
-      "title": "Elenca le risorse delle dashboard",
-      "description": "Elenca le risorse delle dashboard Lovelace (schede personalizzate, temi, CSS/JS)."
-    },
-    "ha_config_set_dashboard": {
-      "title": "Crea o aggiorna una dashboard",
-      "description": "Crea o aggiorna una dashboard di Home Assistant."
-    },
-    "ha_config_set_dashboard_resource": {
-      "title": "Imposta una risorsa di dashboard",
-      "description": "Crea o aggiorna una risorsa di dashboard (codice inline o URL esterno)."
-    },
-    "ha_dev_manage_server": {
-      "title": "Gestisci il server MCP (dev)",
-      "description": "Gestisce il server ha-mcp in esecuzione (modalità sviluppatore)."
-    },
-    "ha_dev_manage_settings": {
-      "title": "Gestisci le impostazioni del server (dev)",
-      "description": "Gestisce le impostazioni del server ha-mcp e le sezioni Strumenti/Criteri/Backup (modalità sviluppatore)."
-    },
-    "ha_get_device": {
-      "title": "Ottieni un dispositivo (compresi Zigbee/ZHA/Z2M, Z-Wave e Matter)",
-      "description": "Ottiene informazioni sui dispositivi con paginazione, compresi i dispositivi Zigbee (ZHA/Z2M) e Z-Wave JS."
-    },
-    "ha_remove_device": {
-      "title": "Rimuovi un dispositivo",
-      "description": "Rimuove un dispositivo orfano dal registro dei dispositivi di Home Assistant."
-    },
-    "ha_set_device": {
-      "title": "Imposta un dispositivo",
-      "description": "Aggiorna le proprietà di un dispositivo, come nome, area, stato di disattivazione o etichette."
-    },
-    "ha_manage_energy_prefs": {
-      "title": "Gestisci le preferenze della dashboard Energia",
-      "description": "Gestisce le preferenze della dashboard Energia di Home Assistant."
-    },
-    "ha_get_entity": {
-      "title": "Ottieni un'entità",
-      "description": "Ottiene le informazioni del registro delle entità per una o più entità."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Ottieni l'esposizione di un'entità",
-      "description": "Ottiene le impostazioni di esposizione delle entità: le elenca tutte o restituisce quelle di un'entità specifica."
-    },
-    "ha_remove_entity": {
-      "title": "Rimuovi un'entità",
-      "description": "Rimuove una o più entità dal registro delle entità di Home Assistant."
-    },
-    "ha_set_entity": {
-      "title": "Imposta un'entità",
-      "description": "Aggiorna le proprietà di un'entità nel registro delle entità."
-    },
-    "ha_delete_file": {
-      "title": "Elimina un file",
-      "description": "Elimina un file dalle cartelle consentite nella configurazione di Home Assistant."
-    },
-    "ha_list_files": {
-      "title": "Elenca i file",
-      "description": "Elenca i file di una cartella all'interno della cartella di configurazione di Home Assistant."
-    },
-    "ha_read_file": {
-      "title": "Leggi un file",
-      "description": "Legge un file dalla cartella di configurazione di Home Assistant."
-    },
-    "ha_write_file": {
-      "title": "Scrivi un file",
-      "description": "Scrive un file nelle cartelle consentite nella configurazione di Home Assistant."
-    },
-    "ha_config_list_groups": {
-      "title": "Elenca i gruppi",
-      "description": "Elenca i gruppi di entità di Home Assistant con le entità che ne fanno parte."
-    },
-    "ha_config_remove_group": {
-      "title": "Rimuovi un gruppo",
-      "description": "Rimuove un gruppo di entità di Home Assistant basato su servizio tramite il servizio group.remove."
-    },
-    "ha_config_set_group": {
-      "title": "Crea o aggiorna un gruppo",
-      "description": "Crea o aggiorna un gruppo di entità di Home Assistant basato su servizio tramite il servizio group.set."
-    },
-    "ha_get_hacs_info": {
-      "title": "Ottieni le informazioni di HACS",
-      "description": "Ottiene i dati di HACS (Home Assistant Community Store): cerca nello store o recupera i dettagli di un repository."
-    },
-    "ha_manage_hacs": {
-      "title": "Gestisci HACS",
-      "description": "Gestisce HACS (Home Assistant Community Store): installa o aggiorna elementi e aggiunge repository personalizzati."
-    },
-    "ha_config_list_helpers": {
-      "title": "Elenca gli helper",
-      "description": "Elenca gli helper di Home Assistant di un tipo specifico con le loro configurazioni."
-    },
-    "ha_config_set_helper": {
-      "title": "Crea o aggiorna un helper",
-      "description": "Crea o aggiorna le entità helper di Home Assistant e le sottovoci di configurazione"
-    },
-    "ha_remove_helpers_integrations": {
-      "title": "Rimuovi un helper o un'integrazione",
-      "description": "Rimuove una voce di configurazione di un helper o di un'integrazione di Home Assistant."
-    },
-    "ha_get_automation_traces": {
-      "title": "Ottieni le tracce delle automazioni",
-      "description": "Recupera le tracce di esecuzione di automazioni e script per analizzare i problemi."
-    },
-    "ha_get_history": {
-      "title": "Ottieni la cronologia o le statistiche di un'entità",
-      "description": "Recupera i dati storici dal recorder di Home Assistant."
-    },
-    "ha_get_logs": {
-      "title": "Ottieni i log",
-      "description": "Ottiene i log di Home Assistant da diverse sorgenti."
-    },
-    "ha_get_integration": {
-      "title": "Ottieni un'integrazione",
-      "description": "Ottiene le informazioni su un'integrazione (voce di configurazione) con paginazione."
-    },
-    "ha_get_system_health": {
-      "title": "Ottieni lo stato di salute del sistema (con diagnostica di ZHA/Z-Wave e delle integrazioni)",
-      "description": "Ottiene lo stato di salute del sistema Home Assistant, compresi i dump diagnostici di Zigbee (ZHA), Z-Wave JS e delle singole integrazioni."
-    },
-    "ha_set_integration": {
-      "title": "Imposta un'integrazione",
-      "description": "Gestisce un'integrazione (voce di configurazione): la attiva o disattiva, la aggiunge oppure ne aggiorna le opzioni."
-    },
-    "ha_config_get_category": {
-      "title": "Ottieni una categoria",
-      "description": "Ottiene informazioni sulle categorie: elenca tutte le categorie di un ambito o ne restituisce una specifica per ID."
-    },
-    "ha_config_get_label": {
-      "title": "Ottieni un'etichetta",
-      "description": "Ottiene informazioni sulle etichette: le elenca tutte o ne restituisce una specifica per ID."
-    },
-    "ha_config_remove_category": {
-      "title": "Rimuovi una categoria",
-      "description": "Elimina una categoria di Home Assistant."
-    },
-    "ha_config_remove_label": {
-      "title": "Rimuovi un'etichetta",
-      "description": "Elimina un'etichetta di Home Assistant."
-    },
-    "ha_config_set_category": {
-      "title": "Crea o aggiorna una categoria",
-      "description": "Crea o aggiorna una categoria di Home Assistant."
-    },
-    "ha_config_set_label": {
-      "title": "Crea o aggiorna un'etichetta",
-      "description": "Crea o aggiorna un'etichetta di Home Assistant."
-    },
-    "ha_manage_radio": {
-      "title": "Gestisci le radio (Z-Wave / Zigbee / Matter / Thread)",
-      "description": "Gestisce le radio di Home Assistant: Z-Wave, Zigbee, Matter e Thread."
-    },
-    "ha_config_get_scene": {
-      "title": "Ottieni la configurazione di una scena",
-      "description": "Recupera la configurazione di una scena di Home Assistant."
-    },
-    "ha_config_remove_scene": {
-      "title": "Rimuovi una scena",
-      "description": "Elimina una scena di Home Assistant."
-    },
-    "ha_config_set_scene": {
-      "title": "Crea o aggiorna una scena",
-      "description": "Crea o aggiorna una scena di Home Assistant."
-    },
-    "ha_config_get_script": {
-      "title": "Ottieni la configurazione di uno script",
-      "description": "Recupera la configurazione di uno script di Home Assistant."
-    },
-    "ha_config_remove_script": {
-      "title": "Rimuovi uno script",
-      "description": "Elimina uno script di Home Assistant."
-    },
-    "ha_config_set_script": {
-      "title": "Crea o aggiorna uno script",
-      "description": "Crea o aggiorna uno script di Home Assistant."
-    },
-    "ha_get_overview": {
-      "title": "Ottieni la panoramica del sistema",
-      "description": "Ottiene una panoramica del sistema adatta all'IA, con una categorizzazione intelligente."
-    },
-    "ha_get_state": {
-      "title": "Ottieni lo stato di un'entità",
-      "description": "Ottiene stato attuale e attributi di una o più entità (luci, interruttori, sensori, climatizzazione, tapparelle, serrature, ventilatori, ecc.)."
-    },
-    "ha_search": {
-      "title": "Cerca",
-      "description": "Cerca le entità (luci, sensori, interruttori, climatizzazione, ecc.) per nome, dominio o area — e anche all'interno delle configurazioni di automazioni, script, scene, helper e dashboard — in un'unica chiamata."
-    },
     "ha_bulk_control": {
       "title": "Controllo in blocco",
       "description": "Controlla più dispositivi con supporto alle operazioni in blocco e monitoraggio via WebSocket."
@@ -753,21 +489,237 @@
       "title": "Chiama un servizio",
       "description": "Esegue i servizi di Home Assistant per controllare le entità e attivare le automazioni."
     },
-    "ha_get_operation_status": {
-      "title": "Ottieni lo stato di un'operazione",
-      "description": "Controlla lo stato di una o più operazioni sui dispositivi con verifica via WebSocket in tempo reale."
+    "ha_config_delete_dashboard": {
+      "title": "Elimina una dashboard",
+      "description": "Elimina completamente una dashboard in modalità storage."
     },
-    "ha_list_services": {
-      "title": "Elenca i servizi disponibili",
-      "description": "Elenca i servizi disponibili di Home Assistant, con paginazione e livello di dettaglio facoltativi."
+    "ha_config_delete_dashboard_resource": {
+      "title": "Elimina una risorsa di dashboard",
+      "description": "Elimina una risorsa di dashboard."
+    },
+    "ha_config_get_automation": {
+      "title": "Ottieni la configurazione di un'automazione",
+      "description": "Recupera la configurazione di un'automazione di Home Assistant."
+    },
+    "ha_config_get_calendar_events": {
+      "title": "Ottieni gli eventi del calendario",
+      "description": "Recupera gli eventi di un'entità calendario."
+    },
+    "ha_config_get_category": {
+      "title": "Ottieni una categoria",
+      "description": "Ottiene informazioni sulle categorie: elenca tutte le categorie di un ambito o ne restituisce una specifica per ID."
+    },
+    "ha_config_get_dashboard": {
+      "title": "Ottieni una dashboard",
+      "description": "Ottiene informazioni sulle dashboard: elenca tutte le dashboard, ne restituisce la configurazione o cerca le schede."
+    },
+    "ha_config_get_label": {
+      "title": "Ottieni un'etichetta",
+      "description": "Ottiene informazioni sulle etichette: le elenca tutte o ne restituisce una specifica per ID."
+    },
+    "ha_config_get_scene": {
+      "title": "Ottieni la configurazione di una scena",
+      "description": "Recupera la configurazione di una scena di Home Assistant."
+    },
+    "ha_config_get_script": {
+      "title": "Ottieni la configurazione di uno script",
+      "description": "Recupera la configurazione di uno script di Home Assistant."
     },
     "ha_config_get_yaml": {
       "title": "Leggi un frammento di configurazione YAML",
       "description": "Ottiene il frammento YAML attuale sotto una chiave, da un singolo file di configurazione o da più file tramite glob."
     },
+    "ha_config_list_dashboard_resources": {
+      "title": "Elenca le risorse delle dashboard",
+      "description": "Elenca le risorse delle dashboard Lovelace (schede personalizzate, temi, CSS/JS)."
+    },
+    "ha_config_list_groups": {
+      "title": "Elenca i gruppi",
+      "description": "Elenca i gruppi di entità di Home Assistant con le entità che ne fanno parte."
+    },
+    "ha_config_list_helpers": {
+      "title": "Elenca gli helper",
+      "description": "Elenca gli helper di Home Assistant di un tipo specifico con le loro configurazioni."
+    },
+    "ha_config_remove_automation": {
+      "title": "Rimuovi un'automazione",
+      "description": "Elimina un'automazione di Home Assistant."
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "Rimuovi un evento del calendario",
+      "description": "Elimina un evento da un calendario."
+    },
+    "ha_config_remove_category": {
+      "title": "Rimuovi una categoria",
+      "description": "Elimina una categoria di Home Assistant."
+    },
+    "ha_config_remove_group": {
+      "title": "Rimuovi un gruppo",
+      "description": "Rimuove un gruppo di entità di Home Assistant basato su servizio tramite il servizio group.remove."
+    },
+    "ha_config_remove_label": {
+      "title": "Rimuovi un'etichetta",
+      "description": "Elimina un'etichetta di Home Assistant."
+    },
+    "ha_config_remove_scene": {
+      "title": "Rimuovi una scena",
+      "description": "Elimina una scena di Home Assistant."
+    },
+    "ha_config_remove_script": {
+      "title": "Rimuovi uno script",
+      "description": "Elimina uno script di Home Assistant."
+    },
+    "ha_config_set_automation": {
+      "title": "Crea o aggiorna un'automazione",
+      "description": "Crea o aggiorna un'automazione di Home Assistant."
+    },
+    "ha_config_set_calendar_event": {
+      "title": "Crea o aggiorna un evento del calendario",
+      "description": "Crea un nuovo evento in un calendario."
+    },
+    "ha_config_set_category": {
+      "title": "Crea o aggiorna una categoria",
+      "description": "Crea o aggiorna una categoria di Home Assistant."
+    },
+    "ha_config_set_dashboard": {
+      "title": "Crea o aggiorna una dashboard",
+      "description": "Crea o aggiorna una dashboard di Home Assistant."
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "Imposta una risorsa di dashboard",
+      "description": "Crea o aggiorna una risorsa di dashboard (codice inline o URL esterno)."
+    },
+    "ha_config_set_group": {
+      "title": "Crea o aggiorna un gruppo",
+      "description": "Crea o aggiorna un gruppo di entità di Home Assistant basato su servizio tramite il servizio group.set."
+    },
+    "ha_config_set_helper": {
+      "title": "Crea o aggiorna un helper",
+      "description": "Crea o aggiorna le entità helper di Home Assistant e le sottovoci di configurazione"
+    },
+    "ha_config_set_label": {
+      "title": "Crea o aggiorna un'etichetta",
+      "description": "Crea o aggiorna un'etichetta di Home Assistant."
+    },
+    "ha_config_set_scene": {
+      "title": "Crea o aggiorna una scena",
+      "description": "Crea o aggiorna una scena di Home Assistant."
+    },
+    "ha_config_set_script": {
+      "title": "Crea o aggiorna uno script",
+      "description": "Crea o aggiorna uno script di Home Assistant."
+    },
     "ha_config_set_yaml": {
       "title": "Modifica diretta della configurazione YAML",
       "description": "Aggiorna la configurazione YAML grezza in configuration.yaml, packages/*.yaml o themes/*.yaml (ULTIMA RISORSA)."
+    },
+    "ha_delete_file": {
+      "title": "Elimina un file",
+      "description": "Elimina un file dalle cartelle consentite nella configurazione di Home Assistant."
+    },
+    "ha_dev_manage_server": {
+      "title": "Gestisci il server MCP (dev)",
+      "description": "Gestisce il server ha-mcp in esecuzione (modalità sviluppatore)."
+    },
+    "ha_dev_manage_settings": {
+      "title": "Gestisci le impostazioni del server (dev)",
+      "description": "Gestisce le impostazioni del server ha-mcp e le sezioni Strumenti/Criteri/Backup (modalità sviluppatore)."
+    },
+    "ha_eval_template": {
+      "title": "Valuta un template",
+      "description": "Valuta i template Jinja2 usando il motore dei template di Home Assistant."
+    },
+    "ha_get_addon": {
+      "title": "Ottieni i componenti aggiuntivi",
+      "description": "Ottiene i componenti aggiuntivi di Home Assistant: elenca quelli installati o disponibili, oppure restituisce i dettagli di uno solo."
+    },
+    "ha_get_automation_traces": {
+      "title": "Ottieni le tracce delle automazioni",
+      "description": "Recupera le tracce di esecuzione di automazioni e script per analizzare i problemi."
+    },
+    "ha_get_blueprint": {
+      "title": "Ottieni un blueprint",
+      "description": "Ottiene informazioni sui blueprint: elenca tutti i blueprint o restituisce i dettagli di uno specifico."
+    },
+    "ha_get_camera_image": {
+      "title": "Ottieni l'immagine di una telecamera",
+      "description": "Recupera un'istantanea da un'entità telecamera di Home Assistant."
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "Ottieni lo screenshot di una dashboard",
+      "description": "Ottiene le immagini renderizzate della vista di una dashboard Lovelace di Home Assistant."
+    },
+    "ha_get_device": {
+      "title": "Ottieni un dispositivo (compresi Zigbee/ZHA/Z2M, Z-Wave e Matter)",
+      "description": "Ottiene informazioni sui dispositivi con paginazione, compresi i dispositivi Zigbee (ZHA/Z2M) e Z-Wave JS."
+    },
+    "ha_get_entity": {
+      "title": "Ottieni un'entità",
+      "description": "Ottiene le informazioni del registro delle entità per una o più entità."
+    },
+    "ha_get_entity_exposure": {
+      "title": "Ottieni l'esposizione di un'entità",
+      "description": "Ottiene le impostazioni di esposizione delle entità: le elenca tutte o restituisce quelle di un'entità specifica."
+    },
+    "ha_get_hacs_info": {
+      "title": "Ottieni le informazioni di HACS",
+      "description": "Ottiene i dati di HACS (Home Assistant Community Store): cerca nello store o recupera i dettagli di un repository."
+    },
+    "ha_get_history": {
+      "title": "Ottieni la cronologia o le statistiche di un'entità",
+      "description": "Recupera i dati storici dal recorder di Home Assistant."
+    },
+    "ha_get_integration": {
+      "title": "Ottieni un'integrazione",
+      "description": "Ottiene le informazioni su un'integrazione (voce di configurazione) con paginazione."
+    },
+    "ha_get_logs": {
+      "title": "Ottieni i log",
+      "description": "Ottiene i log di Home Assistant da diverse sorgenti."
+    },
+    "ha_get_operation_status": {
+      "title": "Ottieni lo stato di un'operazione",
+      "description": "Controlla lo stato di una o più operazioni sui dispositivi con verifica via WebSocket in tempo reale."
+    },
+    "ha_get_overview": {
+      "title": "Ottieni la panoramica del sistema",
+      "description": "Ottiene una panoramica del sistema adatta all'IA, con una categorizzazione intelligente."
+    },
+    "ha_get_state": {
+      "title": "Ottieni lo stato di un'entità",
+      "description": "Ottiene stato attuale e attributi di una o più entità (luci, interruttori, sensori, climatizzazione, tapparelle, serrature, ventilatori, ecc.)."
+    },
+    "ha_get_system_health": {
+      "title": "Ottieni lo stato di salute del sistema (con diagnostica di ZHA/Z-Wave e delle integrazioni)",
+      "description": "Ottiene lo stato di salute del sistema Home Assistant, compresi i dump diagnostici di Zigbee (ZHA), Z-Wave JS e delle singole integrazioni."
+    },
+    "ha_get_todo": {
+      "title": "Ottieni le cose da fare",
+      "description": "Ottiene le liste o le voci delle cose da fare: elenca tutte le liste o restituisce le voci di una lista specifica."
+    },
+    "ha_get_zone": {
+      "title": "Ottieni una zona",
+      "description": "Ottiene informazioni sulle zone: le elenca tutte o restituisce i dettagli di una specifica."
+    },
+    "ha_import_blueprint": {
+      "title": "Importa un blueprint",
+      "description": "Importa un blueprint da un URL."
+    },
+    "ha_list_files": {
+      "title": "Elenca i file",
+      "description": "Elenca i file di una cartella all'interno della cartella di configurazione di Home Assistant."
+    },
+    "ha_list_floors_areas": {
+      "title": "Elenca piani e aree",
+      "description": "Elenca i piani ordinati per livello crescente, ciascuno con le aree assegnate annidate, più le aree senza piano."
+    },
+    "ha_list_services": {
+      "title": "Elenca i servizi disponibili",
+      "description": "Elenca i servizi disponibili di Home Assistant, con paginazione e livello di dettaglio facoltativi."
+    },
+    "ha_manage_addon": {
+      "title": "Gestisci un componente aggiuntivo",
+      "description": "Gestisce un componente aggiuntivo di Home Assistant: ne aggiorna la configurazione oppure ne chiama l'API interna."
     },
     "ha_manage_backup": {
       "title": "Gestisci i backup",
@@ -777,6 +729,22 @@
       "title": "Strumento personalizzato",
       "description": "Crea ed esegue uno strumento personalizzato in una sandbox, oppure gestisce gli strumenti personalizzati salvati."
     },
+    "ha_manage_energy_prefs": {
+      "title": "Gestisci le preferenze della dashboard Energia",
+      "description": "Gestisce le preferenze della dashboard Energia di Home Assistant."
+    },
+    "ha_manage_hacs": {
+      "title": "Gestisci HACS",
+      "description": "Gestisce HACS (Home Assistant Community Store): installa o aggiorna elementi e aggiunge repository personalizzati."
+    },
+    "ha_manage_pipeline": {
+      "title": "Gestisci le pipeline di Assist",
+      "description": "Gestisce le pipeline di Assist di Home Assistant."
+    },
+    "ha_manage_radio": {
+      "title": "Gestisci le radio (Z-Wave / Zigbee / Matter / Thread)",
+      "description": "Gestisce le radio di Home Assistant: Z-Wave, Zigbee, Matter e Thread."
+    },
     "ha_manage_theme": {
       "title": "Gestisci i temi dell'interfaccia",
       "description": "Gestisce i temi dell'interfaccia di Home Assistant."
@@ -785,45 +753,77 @@
       "title": "Gestisci gli aggiornamenti",
       "description": "Gestisce gli aggiornamenti di Home Assistant: elenca, mostra i dettagli, installa in blocco, ignora o ripristina gli aggiornamenti ignorati."
     },
+    "ha_read_file": {
+      "title": "Leggi un file",
+      "description": "Legge un file dalla cartella di configurazione di Home Assistant."
+    },
     "ha_reload_core": {
       "title": "Ricarica i componenti principali",
       "description": "Ricarica la configurazione di Home Assistant senza un riavvio completo."
     },
-    "ha_restart": {
-      "title": "Riavvia Home Assistant",
-      "description": "Riavvia Home Assistant."
+    "ha_remove_area_or_floor": {
+      "title": "Rimuovi un'area o un piano",
+      "description": "Rimuove un'area o un piano di Home Assistant."
     },
-    "ha_get_todo": {
-      "title": "Ottieni le cose da fare",
-      "description": "Ottiene le liste o le voci delle cose da fare: elenca tutte le liste o restituisce le voci di una lista specifica."
+    "ha_remove_device": {
+      "title": "Rimuovi un dispositivo",
+      "description": "Rimuove un dispositivo orfano dal registro dei dispositivi di Home Assistant."
+    },
+    "ha_remove_entity": {
+      "title": "Rimuovi un'entità",
+      "description": "Rimuove una o più entità dal registro delle entità di Home Assistant."
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "Rimuovi un helper o un'integrazione",
+      "description": "Rimuove una voce di configurazione di un helper o di un'integrazione di Home Assistant."
     },
     "ha_remove_todo_item": {
       "title": "Rimuovi una voce dalle cose da fare",
       "description": "Rimuove una voce da una lista delle cose da fare di Home Assistant."
     },
-    "ha_set_todo_item": {
-      "title": "Imposta una voce delle cose da fare",
-      "description": "Crea o aggiorna una voce delle cose da fare in Home Assistant."
-    },
-    "ha_eval_template": {
-      "title": "Valuta un template",
-      "description": "Valuta i template Jinja2 usando il motore dei template di Home Assistant."
+    "ha_remove_zone": {
+      "title": "Rimuovi una zona",
+      "description": "Rimuove una zona di Home Assistant."
     },
     "ha_report_issue": {
       "title": "Segnala un problema o invia un riscontro",
       "description": "Ottiene informazioni diagnostiche e modelli per aprire una segnalazione di problema o inviare un riscontro."
     },
-    "ha_get_zone": {
-      "title": "Ottieni una zona",
-      "description": "Ottiene informazioni sulle zone: le elenca tutte o restituisce i dettagli di una specifica."
+    "ha_restart": {
+      "title": "Riavvia Home Assistant",
+      "description": "Riavvia Home Assistant."
     },
-    "ha_remove_zone": {
-      "title": "Rimuovi una zona",
-      "description": "Rimuove una zona di Home Assistant."
+    "ha_search": {
+      "title": "Cerca",
+      "description": "Cerca le entità (luci, sensori, interruttori, climatizzazione, ecc.) per nome, dominio o area — e anche all'interno delle configurazioni di automazioni, script, scene, helper e dashboard — in un'unica chiamata."
+    },
+    "ha_set_area_or_floor": {
+      "title": "Crea o aggiorna un'area o un piano",
+      "description": "Crea o aggiorna un'area o un piano di Home Assistant."
+    },
+    "ha_set_device": {
+      "title": "Imposta un dispositivo",
+      "description": "Aggiorna le proprietà di un dispositivo, come nome, area, stato di disattivazione o etichette."
+    },
+    "ha_set_entity": {
+      "title": "Imposta un'entità",
+      "description": "Aggiorna le proprietà di un'entità nel registro delle entità."
+    },
+    "ha_set_integration": {
+      "title": "Imposta un'integrazione",
+      "description": "Gestisce un'integrazione (voce di configurazione): la attiva o disattiva, la aggiunge oppure ne aggiorna le opzioni."
+    },
+    "ha_set_todo_item": {
+      "title": "Imposta una voce delle cose da fare",
+      "description": "Crea o aggiorna una voce delle cose da fare in Home Assistant."
     },
     "ha_set_zone": {
       "title": "Imposta una zona",
       "description": "Crea o aggiorna una zona di Home Assistant."
+    },
+    "ha_write_file": {
+      "title": "Scrivi un file",
+      "description": "Scrive un file nelle cartelle consentite nella configurazione di Home Assistant."
     }
   }
 }
