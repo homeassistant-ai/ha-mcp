@@ -12,7 +12,7 @@
     "theme.auto_os": "Авто (системная)",
     "theme.light": "Светлая",
     "theme.dark": "Тёмная",
-    "status.loading": "Загрузка...",
+    "status.loading": "Загрузка…",
     "nav.skip": "Перейти к содержимому",
     "tabs.aria": "Разделы настроек",
     "tabs.tools": "Инструменты",
@@ -477,270 +477,6 @@
     "Zones": "Зоны"
   },
   "tools": {
-    "ha_get_addon": {
-      "title": "Получить дополнения",
-      "description": "Показать установленные и доступные дополнения или сведения об одном из них."
-    },
-    "ha_manage_addon": {
-      "title": "Управлять дополнением",
-      "description": "Управлять жизненным циклом, настройками и внутренним API дополнения Home Assistant."
-    },
-    "ha_list_floors_areas": {
-      "title": "Список этажей и зон",
-      "description": "Показать этажи с вложенными зонами, включая зоны без этажа."
-    },
-    "ha_remove_area_or_floor": {
-      "title": "Удалить зону или этаж",
-      "description": "Удалить зону или этаж Home Assistant."
-    },
-    "ha_set_area_or_floor": {
-      "title": "Создать или изменить зону/этаж",
-      "description": "Создать или обновить зону или этаж Home Assistant."
-    },
-    "ha_manage_pipeline": {
-      "title": "Управлять конвейером Assist",
-      "description": "Просматривать, создавать, изменять и выбирать предпочтительный конвейер Assist."
-    },
-    "ha_config_get_automation": {
-      "title": "Получить автоматизацию",
-      "description": "Получить полную конфигурацию автоматизации Home Assistant."
-    },
-    "ha_config_remove_automation": {
-      "title": "Удалить автоматизацию",
-      "description": "Удалить автоматизацию Home Assistant."
-    },
-    "ha_config_set_automation": {
-      "title": "Создать или изменить автоматизацию",
-      "description": "Создать новую или обновить существующую автоматизацию."
-    },
-    "ha_get_blueprint": {
-      "title": "Получить чертежи",
-      "description": "Показать список чертежей или подробности о конкретном чертеже."
-    },
-    "ha_import_blueprint": {
-      "title": "Импортировать чертеж",
-      "description": "Импортировать чертеж Home Assistant по URL."
-    },
-    "ha_config_get_calendar_events": {
-      "title": "Получить события календаря",
-      "description": "Получить события из сущности календаря."
-    },
-    "ha_config_remove_calendar_event": {
-      "title": "Удалить событие календаря",
-      "description": "Удалить событие из календаря Home Assistant."
-    },
-    "ha_config_set_calendar_event": {
-      "title": "Создать или изменить событие",
-      "description": "Создать новое или обновить событие календаря."
-    },
-    "ha_get_camera_image": {
-      "title": "Получить снимок камеры",
-      "description": "Получить текущий кадр с камеры Home Assistant."
-    },
-    "ha_get_dashboard_screenshot": {
-      "title": "Получить снимок панели",
-      "description": "Получить отрисованные изображения представления Lovelace."
-    },
-    "ha_config_delete_dashboard": {
-      "title": "Удалить панель",
-      "description": "Полностью удалить панель, хранящуюся в Home Assistant."
-    },
-    "ha_config_delete_dashboard_resource": {
-      "title": "Удалить ресурс панели",
-      "description": "Удалить ресурс Lovelace-панели."
-    },
-    "ha_config_get_dashboard": {
-      "title": "Получить панель",
-      "description": "Показать панели, их конфигурацию или найти карточки."
-    },
-    "ha_config_list_dashboard_resources": {
-      "title": "Список ресурсов панелей",
-      "description": "Показать ресурсы Lovelace: карточки, темы, CSS и JavaScript."
-    },
-    "ha_config_set_dashboard": {
-      "title": "Создать или изменить панель",
-      "description": "Создать новую или обновить существующую панель Home Assistant."
-    },
-    "ha_config_set_dashboard_resource": {
-      "title": "Задать ресурс панели",
-      "description": "Создать или обновить ресурс панели из кода или внешнего URL."
-    },
-    "ha_dev_manage_server": {
-      "title": "Управлять MCP-сервером (dev)",
-      "description": "Управлять запущенным сервером ha-mcp в режиме разработчика."
-    },
-    "ha_dev_manage_settings": {
-      "title": "Управлять настройками сервера (dev)",
-      "description": "Управлять настройками сервера ha-mcp и разделами «Инструменты», «Политики безопасности», «Резервные копии» (режим разработчика)."
-    },
-    "ha_get_device": {
-      "title": "Получить устройство",
-      "description": "Получить сведения об устройствах, включая Zigbee, Z-Wave и Matter."
-    },
-    "ha_remove_device": {
-      "title": "Удалить устройство",
-      "description": "Удалить осиротевшее устройство из реестра Home Assistant."
-    },
-    "ha_set_device": {
-      "title": "Изменить устройство",
-      "description": "Обновить имя, зону, метки и другие свойства устройства."
-    },
-    "ha_manage_energy_prefs": {
-      "title": "Настроить панель энергии",
-      "description": "Управлять параметрами панели «Энергия» Home Assistant."
-    },
-    "ha_get_entity": {
-      "title": "Получить сущность",
-      "description": "Получить сведения из реестра об одной или нескольких сущностях."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Получить доступность сущностей",
-      "description": "Показать, какие сущности доступны голосовым помощникам."
-    },
-    "ha_remove_entity": {
-      "title": "Удалить сущность",
-      "description": "Удалить одну или несколько сущностей из реестра Home Assistant."
-    },
-    "ha_set_entity": {
-      "title": "Изменить сущность",
-      "description": "Обновить имя, зону, метки и другие свойства сущности."
-    },
-    "ha_delete_file": {
-      "title": "Удалить файл",
-      "description": "Удалить файл из разрешённого каталога Home Assistant."
-    },
-    "ha_list_files": {
-      "title": "Список файлов",
-      "description": "Показать файлы в разрешённом каталоге конфигурации."
-    },
-    "ha_read_file": {
-      "title": "Прочитать файл",
-      "description": "Прочитать файл из каталога конфигурации Home Assistant."
-    },
-    "ha_write_file": {
-      "title": "Записать файл",
-      "description": "Создать или изменить файл в разрешённом каталоге."
-    },
-    "ha_config_list_groups": {
-      "title": "Список групп",
-      "description": "Показать группы сущностей Home Assistant и их участников."
-    },
-    "ha_config_remove_group": {
-      "title": "Удалить группу",
-      "description": "Удалить группу сущностей Home Assistant."
-    },
-    "ha_config_set_group": {
-      "title": "Создать или изменить группу",
-      "description": "Создать или обновить группу сущностей Home Assistant."
-    },
-    "ha_get_hacs_info": {
-      "title": "Получить сведения HACS",
-      "description": "Искать в магазине HACS или получать сведения о репозитории."
-    },
-    "ha_manage_hacs": {
-      "title": "Управлять HACS",
-      "description": "Устанавливать, обновлять и добавлять пользовательские репозитории HACS."
-    },
-    "ha_config_list_helpers": {
-      "title": "Список помощников",
-      "description": "Показать вспомогательные сущности Home Assistant выбранного типа."
-    },
-    "ha_config_set_helper": {
-      "title": "Создать или изменить помощник",
-      "description": "Создать или обновить вспомогательную сущность Home Assistant."
-    },
-    "ha_remove_helpers_integrations": {
-      "title": "Удалить помощник или интеграцию",
-      "description": "Удалить помощник или запись конфигурации интеграции."
-    },
-    "ha_get_automation_traces": {
-      "title": "Получить трассировки",
-      "description": "Получить трассировки выполнения автоматизаций и скриптов для диагностики."
-    },
-    "ha_get_history": {
-      "title": "Получить историю или статистику",
-      "description": "Получить исторические данные из хранилища Home Assistant."
-    },
-    "ha_get_logs": {
-      "title": "Получить журналы",
-      "description": "Получить журналы Home Assistant из разных источников."
-    },
-    "ha_get_integration": {
-      "title": "Получить интеграцию",
-      "description": "Получить сведения о записях конфигурации интеграций."
-    },
-    "ha_get_system_health": {
-      "title": "Получить состояние системы",
-      "description": "Получить сведения о состоянии Home Assistant, Zigbee, Z-Wave и интеграций."
-    },
-    "ha_set_integration": {
-      "title": "Изменить интеграцию",
-      "description": "Включать, отключать, добавлять или менять параметры интеграции."
-    },
-    "ha_config_get_category": {
-      "title": "Получить категорию",
-      "description": "Показать категории в области или сведения о конкретной категории."
-    },
-    "ha_config_get_label": {
-      "title": "Получить метку",
-      "description": "Показать метки или сведения о конкретной метке."
-    },
-    "ha_config_remove_category": {
-      "title": "Удалить категорию",
-      "description": "Удалить категорию Home Assistant."
-    },
-    "ha_config_remove_label": {
-      "title": "Удалить метку",
-      "description": "Удалить метку Home Assistant."
-    },
-    "ha_config_set_category": {
-      "title": "Создать или изменить категорию",
-      "description": "Создать новую или обновить категорию Home Assistant."
-    },
-    "ha_config_set_label": {
-      "title": "Создать или изменить метку",
-      "description": "Создать новую или обновить метку Home Assistant."
-    },
-    "ha_manage_radio": {
-      "title": "Управлять радиосетями",
-      "description": "Управлять сетями Z-Wave, Zigbee, Matter и Thread в Home Assistant."
-    },
-    "ha_config_get_scene": {
-      "title": "Получить сцену",
-      "description": "Получить конфигурацию сцены Home Assistant."
-    },
-    "ha_config_remove_scene": {
-      "title": "Удалить сцену",
-      "description": "Удалить сцену Home Assistant."
-    },
-    "ha_config_set_scene": {
-      "title": "Создать или изменить сцену",
-      "description": "Создать новую или обновить сцену Home Assistant."
-    },
-    "ha_config_get_script": {
-      "title": "Получить скрипт",
-      "description": "Получить конфигурацию скрипта Home Assistant."
-    },
-    "ha_config_remove_script": {
-      "title": "Удалить скрипт",
-      "description": "Удалить скрипт Home Assistant."
-    },
-    "ha_config_set_script": {
-      "title": "Создать или изменить скрипт",
-      "description": "Создать новый или обновить скрипт Home Assistant."
-    },
-    "ha_get_overview": {
-      "title": "Обзор системы",
-      "description": "Получить удобный для ИИ обзор Home Assistant с категоризацией."
-    },
-    "ha_get_state": {
-      "title": "Получить состояние сущности",
-      "description": "Получить текущее состояние и атрибуты одной или нескольких сущностей."
-    },
-    "ha_search": {
-      "title": "Поиск",
-      "description": "Искать сущности и содержимое автоматизаций, скриптов, сцен, помощников и панелей."
-    },
     "ha_bulk_control": {
       "title": "Массовое управление",
       "description": "Управлять несколькими устройствами в одной массовой операции."
@@ -753,21 +489,237 @@
       "title": "Вызвать сервис",
       "description": "Вызвать сервис Home Assistant для управления сущностями и автоматизациями."
     },
-    "ha_get_operation_status": {
-      "title": "Статус операции",
-      "description": "Проверить статус одной или нескольких операций устройств."
+    "ha_config_delete_dashboard": {
+      "title": "Удалить панель",
+      "description": "Полностью удалить панель, хранящуюся в Home Assistant."
     },
-    "ha_list_services": {
-      "title": "Список сервисов",
-      "description": "Показать доступные сервисы Home Assistant и их параметры."
+    "ha_config_delete_dashboard_resource": {
+      "title": "Удалить ресурс панели",
+      "description": "Удалить ресурс Lovelace-панели."
+    },
+    "ha_config_get_automation": {
+      "title": "Получить автоматизацию",
+      "description": "Получить полную конфигурацию автоматизации Home Assistant."
+    },
+    "ha_config_get_calendar_events": {
+      "title": "Получить события календаря",
+      "description": "Получить события из сущности календаря."
+    },
+    "ha_config_get_category": {
+      "title": "Получить категорию",
+      "description": "Показать категории в области или сведения о конкретной категории."
+    },
+    "ha_config_get_dashboard": {
+      "title": "Получить панель",
+      "description": "Показать панели, их конфигурацию или найти карточки."
+    },
+    "ha_config_get_label": {
+      "title": "Получить метку",
+      "description": "Показать метки или сведения о конкретной метке."
+    },
+    "ha_config_get_scene": {
+      "title": "Получить сцену",
+      "description": "Получить конфигурацию сцены Home Assistant."
+    },
+    "ha_config_get_script": {
+      "title": "Получить скрипт",
+      "description": "Получить конфигурацию скрипта Home Assistant."
     },
     "ha_config_get_yaml": {
       "title": "Прочитать фрагмент YAML",
       "description": "Получить текущий YAML-фрагмент по ключу из одного или нескольких файлов."
     },
+    "ha_config_list_dashboard_resources": {
+      "title": "Список ресурсов панелей",
+      "description": "Показать ресурсы Lovelace: карточки, темы, CSS и JavaScript."
+    },
+    "ha_config_list_groups": {
+      "title": "Список групп",
+      "description": "Показать группы сущностей Home Assistant и их участников."
+    },
+    "ha_config_list_helpers": {
+      "title": "Список помощников",
+      "description": "Показать вспомогательные сущности Home Assistant выбранного типа."
+    },
+    "ha_config_remove_automation": {
+      "title": "Удалить автоматизацию",
+      "description": "Удалить автоматизацию Home Assistant."
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "Удалить событие календаря",
+      "description": "Удалить событие из календаря Home Assistant."
+    },
+    "ha_config_remove_category": {
+      "title": "Удалить категорию",
+      "description": "Удалить категорию Home Assistant."
+    },
+    "ha_config_remove_group": {
+      "title": "Удалить группу",
+      "description": "Удалить группу сущностей Home Assistant."
+    },
+    "ha_config_remove_label": {
+      "title": "Удалить метку",
+      "description": "Удалить метку Home Assistant."
+    },
+    "ha_config_remove_scene": {
+      "title": "Удалить сцену",
+      "description": "Удалить сцену Home Assistant."
+    },
+    "ha_config_remove_script": {
+      "title": "Удалить скрипт",
+      "description": "Удалить скрипт Home Assistant."
+    },
+    "ha_config_set_automation": {
+      "title": "Создать или изменить автоматизацию",
+      "description": "Создать новую или обновить существующую автоматизацию."
+    },
+    "ha_config_set_calendar_event": {
+      "title": "Создать или изменить событие",
+      "description": "Создать новое или обновить событие календаря."
+    },
+    "ha_config_set_category": {
+      "title": "Создать или изменить категорию",
+      "description": "Создать новую или обновить категорию Home Assistant."
+    },
+    "ha_config_set_dashboard": {
+      "title": "Создать или изменить панель",
+      "description": "Создать новую или обновить существующую панель Home Assistant."
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "Задать ресурс панели",
+      "description": "Создать или обновить ресурс панели из кода или внешнего URL."
+    },
+    "ha_config_set_group": {
+      "title": "Создать или изменить группу",
+      "description": "Создать или обновить группу сущностей Home Assistant."
+    },
+    "ha_config_set_helper": {
+      "title": "Создать или изменить помощник",
+      "description": "Создать или обновить вспомогательную сущность Home Assistant."
+    },
+    "ha_config_set_label": {
+      "title": "Создать или изменить метку",
+      "description": "Создать новую или обновить метку Home Assistant."
+    },
+    "ha_config_set_scene": {
+      "title": "Создать или изменить сцену",
+      "description": "Создать новую или обновить сцену Home Assistant."
+    },
+    "ha_config_set_script": {
+      "title": "Создать или изменить скрипт",
+      "description": "Создать новый или обновить скрипт Home Assistant."
+    },
     "ha_config_set_yaml": {
       "title": "Изменить исходный YAML",
       "description": "Изменить YAML-конфигурацию Home Assistant; использовать только как крайнее средство."
+    },
+    "ha_delete_file": {
+      "title": "Удалить файл",
+      "description": "Удалить файл из разрешённого каталога Home Assistant."
+    },
+    "ha_dev_manage_server": {
+      "title": "Управлять MCP-сервером (dev)",
+      "description": "Управлять запущенным сервером ha-mcp в режиме разработчика."
+    },
+    "ha_dev_manage_settings": {
+      "title": "Управлять настройками сервера (dev)",
+      "description": "Управлять настройками сервера ha-mcp и разделами «Инструменты», «Политики безопасности», «Резервные копии» (режим разработчика)."
+    },
+    "ha_eval_template": {
+      "title": "Вычислить шаблон",
+      "description": "Вычислить Jinja2-шаблон с помощью движка Home Assistant."
+    },
+    "ha_get_addon": {
+      "title": "Получить дополнения",
+      "description": "Показать установленные и доступные дополнения или сведения об одном из них."
+    },
+    "ha_get_automation_traces": {
+      "title": "Получить трассировки",
+      "description": "Получить трассировки выполнения автоматизаций и скриптов для диагностики."
+    },
+    "ha_get_blueprint": {
+      "title": "Получить чертежи",
+      "description": "Показать список чертежей или подробности о конкретном чертеже."
+    },
+    "ha_get_camera_image": {
+      "title": "Получить снимок камеры",
+      "description": "Получить текущий кадр с камеры Home Assistant."
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "Получить снимок панели",
+      "description": "Получить отрисованные изображения представления Lovelace."
+    },
+    "ha_get_device": {
+      "title": "Получить устройство",
+      "description": "Получить сведения об устройствах, включая Zigbee, Z-Wave и Matter."
+    },
+    "ha_get_entity": {
+      "title": "Получить сущность",
+      "description": "Получить сведения из реестра об одной или нескольких сущностях."
+    },
+    "ha_get_entity_exposure": {
+      "title": "Получить доступность сущностей",
+      "description": "Показать, какие сущности доступны голосовым помощникам."
+    },
+    "ha_get_hacs_info": {
+      "title": "Получить сведения HACS",
+      "description": "Искать в магазине HACS или получать сведения о репозитории."
+    },
+    "ha_get_history": {
+      "title": "Получить историю или статистику",
+      "description": "Получить исторические данные из хранилища Home Assistant."
+    },
+    "ha_get_integration": {
+      "title": "Получить интеграцию",
+      "description": "Получить сведения о записях конфигурации интеграций."
+    },
+    "ha_get_logs": {
+      "title": "Получить журналы",
+      "description": "Получить журналы Home Assistant из разных источников."
+    },
+    "ha_get_operation_status": {
+      "title": "Статус операции",
+      "description": "Проверить статус одной или нескольких операций устройств."
+    },
+    "ha_get_overview": {
+      "title": "Обзор системы",
+      "description": "Получить удобный для ИИ обзор Home Assistant с категоризацией."
+    },
+    "ha_get_state": {
+      "title": "Получить состояние сущности",
+      "description": "Получить текущее состояние и атрибуты одной или нескольких сущностей."
+    },
+    "ha_get_system_health": {
+      "title": "Получить состояние системы",
+      "description": "Получить сведения о состоянии Home Assistant, Zigbee, Z-Wave и интеграций."
+    },
+    "ha_get_todo": {
+      "title": "Получить списки дел",
+      "description": "Показать списки дел или задачи из конкретного списка."
+    },
+    "ha_get_zone": {
+      "title": "Получить зоны",
+      "description": "Показать все географические зоны или сведения об одной зоне."
+    },
+    "ha_import_blueprint": {
+      "title": "Импортировать чертеж",
+      "description": "Импортировать чертеж Home Assistant по URL."
+    },
+    "ha_list_files": {
+      "title": "Список файлов",
+      "description": "Показать файлы в разрешённом каталоге конфигурации."
+    },
+    "ha_list_floors_areas": {
+      "title": "Список этажей и зон",
+      "description": "Показать этажи с вложенными зонами, включая зоны без этажа."
+    },
+    "ha_list_services": {
+      "title": "Список сервисов",
+      "description": "Показать доступные сервисы Home Assistant и их параметры."
+    },
+    "ha_manage_addon": {
+      "title": "Управлять дополнением",
+      "description": "Управлять жизненным циклом, настройками и внутренним API дополнения Home Assistant."
     },
     "ha_manage_backup": {
       "title": "Управлять резервными копиями",
@@ -777,6 +729,22 @@
       "title": "Пользовательский инструмент",
       "description": "Создавать и запускать код в песочнице, а также управлять сохранёнными инструментами."
     },
+    "ha_manage_energy_prefs": {
+      "title": "Настроить панель энергии",
+      "description": "Управлять параметрами панели «Энергия» Home Assistant."
+    },
+    "ha_manage_hacs": {
+      "title": "Управлять HACS",
+      "description": "Устанавливать, обновлять и добавлять пользовательские репозитории HACS."
+    },
+    "ha_manage_pipeline": {
+      "title": "Управлять конвейером Assist",
+      "description": "Просматривать, создавать, изменять и выбирать предпочтительный конвейер Assist."
+    },
+    "ha_manage_radio": {
+      "title": "Управлять радиосетями",
+      "description": "Управлять сетями Z-Wave, Zigbee, Matter и Thread в Home Assistant."
+    },
     "ha_manage_theme": {
       "title": "Управлять темами",
       "description": "Управлять темами интерфейса Home Assistant."
@@ -785,45 +753,77 @@
       "title": "Управлять обновлениями",
       "description": "Показывать, устанавливать, пропускать и возвращать обновления Home Assistant."
     },
+    "ha_read_file": {
+      "title": "Прочитать файл",
+      "description": "Прочитать файл из каталога конфигурации Home Assistant."
+    },
     "ha_reload_core": {
       "title": "Перезагрузить компоненты",
       "description": "Перезагрузить конфигурацию Home Assistant без полного перезапуска."
     },
-    "ha_restart": {
-      "title": "Перезапустить Home Assistant",
-      "description": "Полностью перезапустить Home Assistant."
+    "ha_remove_area_or_floor": {
+      "title": "Удалить зону или этаж",
+      "description": "Удалить зону или этаж Home Assistant."
     },
-    "ha_get_todo": {
-      "title": "Получить списки дел",
-      "description": "Показать списки дел или задачи из конкретного списка."
+    "ha_remove_device": {
+      "title": "Удалить устройство",
+      "description": "Удалить осиротевшее устройство из реестра Home Assistant."
+    },
+    "ha_remove_entity": {
+      "title": "Удалить сущность",
+      "description": "Удалить одну или несколько сущностей из реестра Home Assistant."
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "Удалить помощник или интеграцию",
+      "description": "Удалить помощник или запись конфигурации интеграции."
     },
     "ha_remove_todo_item": {
       "title": "Удалить задачу",
       "description": "Удалить задачу из списка дел Home Assistant."
     },
-    "ha_set_todo_item": {
-      "title": "Создать или изменить задачу",
-      "description": "Создать новую или обновить задачу в списке дел."
-    },
-    "ha_eval_template": {
-      "title": "Вычислить шаблон",
-      "description": "Вычислить Jinja2-шаблон с помощью движка Home Assistant."
+    "ha_remove_zone": {
+      "title": "Удалить зону",
+      "description": "Удалить географическую зону Home Assistant."
     },
     "ha_report_issue": {
       "title": "Сообщить о проблеме или отправить отзыв",
       "description": "Получить диагностические сведения и шаблоны для отчёта об ошибке или обратной связи."
     },
-    "ha_get_zone": {
-      "title": "Получить зоны",
-      "description": "Показать все географические зоны или сведения об одной зоне."
+    "ha_restart": {
+      "title": "Перезапустить Home Assistant",
+      "description": "Полностью перезапустить Home Assistant."
     },
-    "ha_remove_zone": {
-      "title": "Удалить зону",
-      "description": "Удалить географическую зону Home Assistant."
+    "ha_search": {
+      "title": "Поиск",
+      "description": "Искать сущности и содержимое автоматизаций, скриптов, сцен, помощников и панелей."
+    },
+    "ha_set_area_or_floor": {
+      "title": "Создать или изменить зону/этаж",
+      "description": "Создать или обновить зону или этаж Home Assistant."
+    },
+    "ha_set_device": {
+      "title": "Изменить устройство",
+      "description": "Обновить имя, зону, метки и другие свойства устройства."
+    },
+    "ha_set_entity": {
+      "title": "Изменить сущность",
+      "description": "Обновить имя, зону, метки и другие свойства сущности."
+    },
+    "ha_set_integration": {
+      "title": "Изменить интеграцию",
+      "description": "Включать, отключать, добавлять или менять параметры интеграции."
+    },
+    "ha_set_todo_item": {
+      "title": "Создать или изменить задачу",
+      "description": "Создать новую или обновить задачу в списке дел."
     },
     "ha_set_zone": {
       "title": "Создать или изменить зону",
       "description": "Создать новую или обновить географическую зону Home Assistant."
+    },
+    "ha_write_file": {
+      "title": "Записать файл",
+      "description": "Создать или изменить файл в разрешённом каталоге."
     }
   }
 }
