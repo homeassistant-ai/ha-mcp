@@ -364,14 +364,28 @@ class TestIntegrationFiltering:
         # At least one entry with supports_options=True should have non-empty
         # options. The conftest seeds a HACS entry with real options. If every
         # supports_options=True entry returns {}, the regression has resurfaced.
-        entries_with_support = [e for e in data["entries"] if e.get("supports_options")]
-        if entries_with_support:
-            non_empty = [e for e in entries_with_support if e["options"]]
-            assert non_empty, (
-                "Expected at least one supports_options=True entry to expose "
-                "non-empty options via the OptionsFlow probe; all came back "
-                "empty (regression of #1245)."
+        #
+        # Only LOADED entries can answer an OptionsFlow probe. The seeded HACS
+        # entry calls GitHub during setup, and shared-runner IP pools get
+        # rate-limited — when that leaves it not_loaded, its empty options are
+        # container weather, not the #1245 regression, so an unverifiable run
+        # skips loudly instead of failing.
+        entries_with_support = [
+            e
+            for e in data["entries"]
+            if e.get("supports_options") and e.get("state") == "loaded"
+        ]
+        if not entries_with_support:
+            pytest.skip(
+                "no LOADED supports_options=True entry in this container "
+                "(seeded HACS entry failed to set up) — probe unverifiable"
             )
+        non_empty = [e for e in entries_with_support if e["options"]]
+        assert non_empty, (
+            "Expected at least one loaded supports_options=True entry to "
+            "expose non-empty options via the OptionsFlow probe; all came "
+            "back empty (regression of #1245)."
+        )
 
         logger.info(
             f"include_options test passed: {data['total_count']} entries with options"
