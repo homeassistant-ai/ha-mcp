@@ -43,10 +43,18 @@ class TestErrorHandling:
             )
         except TimeoutError:
             logger.warning(f"Tool call {tool_name} timed out after {timeout}s")
-            return {"success": False, "error": f"Operation timed out after {timeout}s"}
+            # "timed_out" lets callers tolerate the wrapper-timeout leg on
+            # flaky lanes while still failing hard on a tool error — the
+            # two legs are indistinguishable after parse_mcp_result, so
+            # the marker must be set here, before the parse.
+            return {
+                "success": False,
+                "timed_out": True,
+                "error": f"Operation timed out after {timeout}s",
+            }
         except Exception as e:
             logger.warning(f"Tool call {tool_name} failed: {e}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "tool_error": True, "error": str(e)}
 
     async def test_invalid_entity_id_handling(self, mcp_client):
         """
@@ -353,17 +361,26 @@ class TestErrorHandling:
                 },
             )
 
-            mixed_bulk_data = parse_mcp_result(mixed_bulk_result)
-
-            # The bulk response carries no top-level "success" key
-            # (_build_bulk_response emits operation_ids / total_operations /
-            # execution_mode) — mirror assert_mcp_success's bulk indicator
-            # instead of gating on a key that is never present.
-            bulk_succeeded = mixed_bulk_data.get("error") is None and (
-                mixed_bulk_data.get("success") is True
-                or "operation_ids" in mixed_bulk_data
-            )
-            if bulk_succeeded:
+            # A wholesale batch failure is the exact outcome this block
+            # exists to rule out, so it must FAIL the test, not skip it:
+            # an aborted batch arrives as a ToolError (folded into a
+            # plain dict by _safe_tool_call), never as a response with
+            # per-item entries. Only the wrapper-timeout leg is tolerated
+            # (flaky lanes) — the "timed_out" marker is set before
+            # parse_mcp_result collapses both legs into the same shape.
+            if isinstance(mixed_bulk_result, dict) and mixed_bulk_result.get(
+                "timed_out"
+            ):
+                logger.warning("  bulk call timed out; tolerated on flaky lanes")
+            else:
+                assert not (
+                    isinstance(mixed_bulk_result, dict)
+                    and mixed_bulk_result.get("success") is False
+                ), (
+                    f"bulk_device_control must not abort wholesale on a "
+                    f"batch containing invalid entities: {mixed_bulk_result}"
+                )
+                mixed_bulk_data = parse_mcp_result(mixed_bulk_result)
                 # This batch always exercises the LEGACY dispatch path:
                 # _build_service_call keeps each entity's own domain, so the
                 # fabricated IDs resolve to unknown services
@@ -411,8 +428,24 @@ class TestErrorHandling:
                         {"operation_id": operation_ids, "timeout_seconds": 5},
                     )
 
-                    status_data = parse_mcp_result(status_result)
-                    if status_data.get("success"):
+                    # Same discrimination as the bulk call: tolerate only
+                    # the wrapper timeout; a failed status call on ids the
+                    # batch just created is a regression, not a skip.
+                    if isinstance(status_result, dict) and status_result.get(
+                        "timed_out"
+                    ):
+                        logger.warning(
+                            "  status call timed out; tolerated on flaky lanes"
+                        )
+                    else:
+                        assert not (
+                            isinstance(status_result, dict)
+                            and status_result.get("success") is False
+                        ), (
+                            f"bulk status must not fail on ids the batch "
+                            f"just created: {status_result}"
+                        )
+                        status_data = parse_mcp_result(status_result)
                         detailed = status_data.get("detailed_results", [])
                         by_status = {
                             entry.get("operation_id"): entry.get("status")
@@ -433,10 +466,6 @@ class TestErrorHandling:
                             f"status (batch lost track of them): {stray}"
                         )
                         logger.info(f"    dispatched statuses: {by_status}")
-            else:
-                logger.info(
-                    f"  ✅ Mixed entities correctly failed: {_get_error_str(mixed_bulk_data)}"
-                )
 
         # 3. INVALID ACTION: Bulk operation with invalid action
         logger.info("🎬 Testing invalid action...")
