@@ -12,7 +12,7 @@
     "theme.auto_os": "Automatisch (System)",
     "theme.light": "Hell",
     "theme.dark": "Dunkel",
-    "status.loading": "Lädt...",
+    "status.loading": "Lädt…",
     "nav.skip": "Zum Inhalt springen",
     "tabs.aria": "Einstellungs-Abschnitte",
     "tabs.tools": "Tools",
@@ -155,7 +155,7 @@
     "actions.dismiss": "Schließen",
     "status.loaded": "Geladen",
     "status.loading_ellipsis": "Lädt…",
-    "status.loading_parentheses": "(lädt...)",
+    "status.loading_parentheses": "(wird geladen…)",
     "status.unsaved": "Nicht gespeicherte Änderungen...",
     "status.saving": "Speichert…",
     "status.saving_server_setting": "Speichert Server-Einstellung...",
@@ -422,7 +422,28 @@
     "advanced.sidecar_pin_port.label": "Einstellungs-UI-Sidecar-Port",
     "advanced.sidecar_pin_port.help": "0 wählt bei jedem Neustart einen freien Port; 1024-65535 heftet einen bevorzugten Port an. Neustart erforderlich.",
     "advanced.enable_dev_mode.label": "Entwicklermodus",
-    "advanced.enable_dev_mode.help": "⚠ Registriert versteckte Tools, die Einstellungen ändern und den laufenden Server ersetzen können. Nur für Entwicklung und Tests. Neustart erforderlich."
+    "advanced.enable_dev_mode.help": "⚠ Registriert versteckte Tools, die Einstellungen ändern und den laufenden Server ersetzen können. Nur für Entwicklung und Tests. Neustart erforderlich.",
+    "addon.backup_hint.name": "Full-HA Snapshot-Vorschlagsebene (LLM-seitig)",
+    "addon.backup_hint.description": "Passt die Formulierung des Hinweises an, den das LLM in der\n`ha_manage_backup(scope='snapshot')`-Tool-Beschreibung sieht, wann es ein\nvollständiges Home Assistant Tarball-Backup vor riskanten Operationen\nvorschlagen soll (z.B. Massen-Gerätelöschungen). Betrifft NUR diesen einen\nLLM-seitigen Prompt-Satz.\n\nFür automatische Snapshots pro Bearbeitung von Automatisierungen / Skripten /\nHelfern / etc. nutze den separaten **Auto-Backup von Bearbeitungen aktivieren**-Schalter\nunten.",
+    "addon.secret_path.name": "Secret-Pfad Override",
+    "addon.secret_path.description": "Optionaler benutzerdefinierter HTTP-Pfad für den MCP-Server. Leer lassen, um den automatisch generierten sicheren Pfad zu verwenden.\n",
+    "addon.enable_auto_backup.name": "Auto-Backup von Bearbeitungen aktivieren",
+    "addon.enable_auto_backup.description": "Erfasst einen Pro-Entität-Snapshot vor jedem umschlossenen Schreib/destruktiven MCP-Tool-Aufruf (Automatisierung, Skript, Szene, Helfer, Dashboard, Label, Kategorie, Gruppe, Zone, Bereich, Kalender, Todo, Entität, Integration und verwandte Remove/Delete-Tools). Snapshots werden als YAML-Dateien unter /data/ha_mcp_backups/ gespeichert (Override via HAMCP_BACKUP_DIR) und über den Backups-Tab im Web-Settings-UI oder via ha_manage_backup(scope='edits', ...) aufgelistet, wiederhergestellt oder gelöscht. Best-Effort – Fehler loggen ein WARNING, blockieren aber nie den zugrunde liegenden Schreibvorgang. Standardmäßig an; Häkchen entfernen, um auszusteigen. Erfordert Neustart, um wirksam zu werden.",
+    "addon.auto_backup_throttle_minutes.name": "Auto-Backup-Drosselung (Minuten)",
+    "addon.auto_backup_throttle_minutes.description": "Pro-Entität-Drosselungsfenster. 0 (Standard) erfasst einen Snapshot bei jedem umschlossenen Schreibvorgang. N>0 erfasst höchstens einen Snapshot pro N Minuten pro Entität. Bereich 0–1440.",
+    "addon.auto_backup_retain_per_entity.name": "Auto-Backup-Aufbewahrung (pro Entität)",
+    "addon.auto_backup_retain_per_entity.description": "Maximale Anzahl von Snapshots, die pro Entität behalten werden. Ältere Snapshots jenseits dieser Grenze werden bei jeder erfolgreichen Erfassung ausgetauscht. Standard 100, Bereich 1–10000.",
+    "addon.enable_snapshot_delete.name": "Snapshot-Löschung erlauben",
+    "addon.enable_snapshot_delete.description": "Lässt ha_manage_backup vollständige HA-Snapshot-Tarballs löschen (scope='snapshot', action='delete'). Standardmäßig aus – ein Snapshot könnte der letzte Wiederherstellungspunkt nach einer fehlerhaften Änderung sein, also muss ein Mensch dies hier aktiv aktivieren. Auch wenn an, bleiben geplante Backups, der neueste verbleibende Snapshot und alles jünger als der Alters-Floor unten geschützt.",
+    "addon.snapshot_delete_min_age_days.name": "Mindestalter des Snapshots zum Löschen (Tage)",
+    "addon.snapshot_delete_min_age_days.description": "Ein Snapshot muss mindestens so alt sein, bevor er gelöscht werden kann. Bereich 0–365; 0 deaktiviert den Floor (die Neuester-Snapshot- und Geplante-Backup-Schutzmaßnahmen gelten weiterhin). Standard 7.",
+    "addon.disabled_tools.name": "Deaktivierte Tools (kommagetrennt)",
+    "addon.disabled_tools.description": "Hier aufgelistete Tools sind zwangsweise aus und im Web-Settings-UI (Tools-Tab) gesperrt – sie können dort nicht wieder aktiviert werden, ohne diese Option zuerst zu entfernen. Ein kleiner Satz obligatorischer Tools (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) kann nicht deaktiviert werden und läuft weiter, auch wenn hier aufgelistet. ha_get_skill_guide kann nur deaktiviert werden, während der strikte Best-Practices-Modus (enable_strict_mandatory_bps) aus ist. Kommagetrennte Tool-Namen (z.B. ha_call_event,ha_eval_template).",
+    "addon.pinned_tools.name": "Angeheftete Tools (kommagetrennt)",
+    "addon.pinned_tools.description": "Hier aufgelistete Tools sind gesperrt angeheftet – sie erscheinen oben im Tools-Tab und können nicht vom Web-Settings-UI entfernt werden, ohne diese Option zuerst zu entfernen. Nützlich in Kombination mit Tool Search. Kommagetrennte Tool-Namen.",
+    "addon.verify_ssl.name": "TLS-Zertifikat verifizieren",
+    "addon.verify_ssl.description": "Verifiziert das TLS-Zertifikat des Home Assistant Servers. Das Add-on verbindet sich via Supervisor-Proxy, daher hat dies normalerweise keinen Effekt und sollte aktiviert bleiben. Deaktiviere nur, wenn du das Add-on umkonfiguriert hast, um mit HA über einen öffentlichen HTTPS-Hostnamen mit selbstsigniertem Zertifikat oder Hostname-Mismatch zu sprechen. Deaktivieren schwächt die Transport-Sicherheit – lass an, außer du weißt, dass du es brauchst. Erfordert Neustart, um wirksam zu werden.",
+    "addon_stable.enable_tool_search.description": "Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung. Reduziert den Leerlauf-Kontext um rund 90 % auf etwa 5K Tokens. ⚠️ Aktiviere dies NICHT in Clients mit eigener integrierter Tool-Suche / aufgeschobenen Tools (claude.ai, Claude Desktop, Claude Code) – die beiden Suchebenen kollidieren, und die integrierte Tool-Suche des Clients ist dort die bessere Wahl; lasse dies ausgeschaltet. Ob Tools aufgeschoben werden, hängt von der Kombination aus Client und Modell ab: Verwende dies, wenn dein Setup den vollständigen Katalog von Anfang an lädt – Modelle ohne native aufgeschobene Tools (z. B. Gemini, lokale OpenAI-kompatible Modelle, Claude Haiku), Clients, die alle Tool-Schemata unabhängig vom Modell direkt einbetten (z. B. GitHub Copilot CLI), oder kleinere Kontextfenster. Auch einige Codex-Modelle und ChatGPT haben aufgeschobene Tools – prüfe direkt bei deinem Client/Modell, welche Features er hat, damit du dies nicht unnötig aktiviert lässt. Tools werden über ha_search_tools gefunden und über kategorisierte Proxys (read/write/delete) ausgeführt. Erfordert einen Neustart, um wirksam zu werden. Dann neu verbinden oder den MCP-Server in deinem AI-Client aktualisieren, damit er die Tool-Liste neu lädt. Ein Neustart des Add-ons allein aktualisiert NICHT die gecachte Tool-Liste eines Clients; dies gilt nach jeder Einstellungsänderung hier."
   },
   "tool_groups": {
     "Add-ons": "Add-ons",
@@ -456,270 +477,6 @@
     "Zones": "Zonen"
   },
   "tools": {
-    "ha_get_addon": {
-      "title": "Add-ons abrufen",
-      "description": "Zeigt installierte und verfügbare Add-ons oder Details zu einem bestimmten Add-on."
-    },
-    "ha_manage_addon": {
-      "title": "Add-on verwalten",
-      "description": "Verwaltet Lebenszyklus, Einstellungen und interne API eines Home-Assistant-Add-ons."
-    },
-    "ha_list_floors_areas": {
-      "title": "Etagen und Bereiche auflisten",
-      "description": "Zeigt Etagen mit verschachtelten Bereichen, einschließlich Bereiche ohne Etage."
-    },
-    "ha_remove_area_or_floor": {
-      "title": "Bereich oder Etage entfernen",
-      "description": "Entfernt einen Bereich oder eine Etage aus Home Assistant."
-    },
-    "ha_set_area_or_floor": {
-      "title": "Bereich oder Etage erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert einen Bereich oder eine Etage in Home Assistant."
-    },
-    "ha_manage_pipeline": {
-      "title": "Assist-Pipeline verwalten",
-      "description": "Zeigt, erstellt, bearbeitet und wählt bevorzugte Assist-Pipeline aus."
-    },
-    "ha_config_get_automation": {
-      "title": "Automatisierung abrufen",
-      "description": "Ruft die vollständige Konfiguration einer Home-Assistant-Automatisierung ab."
-    },
-    "ha_config_remove_automation": {
-      "title": "Automatisierung entfernen",
-      "description": "Löscht eine Home-Assistant-Automatisierung."
-    },
-    "ha_config_set_automation": {
-      "title": "Automatisierung erstellen/aktualisieren",
-      "description": "Erstellt eine neue oder aktualisiert eine bestehende Automatisierung."
-    },
-    "ha_get_blueprint": {
-      "title": "Blueprint abrufen",
-      "description": "Zeigt die Liste der Blueprints oder Details zu einem bestimmten Blueprint."
-    },
-    "ha_import_blueprint": {
-      "title": "Blueprint importieren",
-      "description": "Importiert einen Blueprint aus einer URL in Home Assistant."
-    },
-    "ha_config_get_calendar_events": {
-      "title": "Kalenderereignisse abrufen",
-      "description": "Ruft Ereignisse aus einer Kalender-Entität ab."
-    },
-    "ha_config_remove_calendar_event": {
-      "title": "Kalenderereignis entfernen",
-      "description": "Löscht ein Ereignis aus einem Home-Assistant-Kalender."
-    },
-    "ha_config_set_calendar_event": {
-      "title": "Kalenderereignis erstellen/aktualisieren",
-      "description": "Erstellt ein neues oder aktualisiert ein bestehendes Kalenderereignis."
-    },
-    "ha_get_camera_image": {
-      "title": "Kamerabild abrufen",
-      "description": "Ruft das aktuelle Standbild von einer Home-Assistant-Kamera ab."
-    },
-    "ha_get_dashboard_screenshot": {
-      "title": "Dashboard-Screenshot abrufen",
-      "description": "Ruft gerenderte Bilder einer Lovelace-Ansicht ab."
-    },
-    "ha_config_delete_dashboard": {
-      "title": "Dashboard löschen",
-      "description": "Entfernt ein in Home Assistant gespeichertes Dashboard vollständig."
-    },
-    "ha_config_delete_dashboard_resource": {
-      "title": "Dashboard-Ressource löschen",
-      "description": "Entfernt eine Lovelace-Dashboard-Ressource."
-    },
-    "ha_config_get_dashboard": {
-      "title": "Dashboard abrufen",
-      "description": "Zeigt Dashboards, deren Konfiguration oder findet Karten."
-    },
-    "ha_config_list_dashboard_resources": {
-      "title": "Dashboard-Ressourcen auflisten",
-      "description": "Zeigt Lovelace-Ressourcen: Karten, Themes, CSS und JavaScript."
-    },
-    "ha_config_set_dashboard": {
-      "title": "Dashboard erstellen/aktualisieren",
-      "description": "Erstellt ein neues oder aktualisiert ein bestehendes Home-Assistant-Dashboard."
-    },
-    "ha_config_set_dashboard_resource": {
-      "title": "Dashboard-Ressource setzen",
-      "description": "Erstellt oder aktualisiert eine Dashboard-Ressource aus Code oder externer URL."
-    },
-    "ha_dev_manage_server": {
-      "title": "MCP-Server verwalten (dev)",
-      "description": "Verwaltet den laufenden ha-mcp-Server im Entwicklermodus."
-    },
-    "ha_dev_manage_settings": {
-      "title": "Server-Einstellungen verwalten (dev)",
-      "description": "Verwaltet die ha-mcp-Servereinstellungen und die Abschnitte Tools/Richtlinien/Backups (Entwicklermodus)."
-    },
-    "ha_get_device": {
-      "title": "Gerät abrufen",
-      "description": "Ruft Geräteinformationen ab, einschließlich Zigbee, Z-Wave und Matter."
-    },
-    "ha_remove_device": {
-      "title": "Gerät entfernen",
-      "description": "Entfernt ein verwaistes Gerät aus dem Home-Assistant-Register."
-    },
-    "ha_set_device": {
-      "title": "Gerät aktualisieren",
-      "description": "Aktualisiert Name, Bereich, Labels und andere Geräteeigenschaften."
-    },
-    "ha_manage_energy_prefs": {
-      "title": "Energie-Dashboard konfigurieren",
-      "description": "Verwaltet die Einstellungen des Home-Assistant-Energie-Dashboards."
-    },
-    "ha_get_entity": {
-      "title": "Entität abrufen",
-      "description": "Ruft Registerinformationen über eine oder mehrere Entitäten ab."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Entitäts-Sichtbarkeit abrufen",
-      "description": "Zeigt, welche Entitäten für Sprachassistenten freigegeben sind."
-    },
-    "ha_remove_entity": {
-      "title": "Entität entfernen",
-      "description": "Entfernt eine oder mehrere Entitäten aus dem Home-Assistant-Register."
-    },
-    "ha_set_entity": {
-      "title": "Entität aktualisieren",
-      "description": "Aktualisiert Name, Bereich, Labels und andere Entitätseigenschaften."
-    },
-    "ha_delete_file": {
-      "title": "Datei löschen",
-      "description": "Löscht eine Datei aus einem erlaubten Home-Assistant-Verzeichnis."
-    },
-    "ha_list_files": {
-      "title": "Dateien auflisten",
-      "description": "Zeigt Dateien in einem erlaubten Konfigurationsverzeichnis."
-    },
-    "ha_read_file": {
-      "title": "Datei lesen",
-      "description": "Liest eine Datei aus dem Home-Assistant-Konfigurationsverzeichnis."
-    },
-    "ha_write_file": {
-      "title": "Datei schreiben",
-      "description": "Erstellt oder ändert eine Datei in einem erlaubten Verzeichnis."
-    },
-    "ha_config_list_groups": {
-      "title": "Gruppen auflisten",
-      "description": "Zeigt Home-Assistant-Entitätsgruppen und deren Mitglieder."
-    },
-    "ha_config_remove_group": {
-      "title": "Gruppe entfernen",
-      "description": "Entfernt eine Home-Assistant-Entitätsgruppe."
-    },
-    "ha_config_set_group": {
-      "title": "Gruppe erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Entitätsgruppe."
-    },
-    "ha_get_hacs_info": {
-      "title": "HACS-Informationen abrufen",
-      "description": "Durchsucht den HACS-Store oder ruft Repository-Informationen ab."
-    },
-    "ha_manage_hacs": {
-      "title": "HACS verwalten",
-      "description": "Installiert, aktualisiert und fügt benutzerdefinierte HACS-Repositories hinzu."
-    },
-    "ha_config_list_helpers": {
-      "title": "Helfer auflisten",
-      "description": "Zeigt Home-Assistant-Helfer-Entitäten des ausgewählten Typs."
-    },
-    "ha_config_set_helper": {
-      "title": "Helfer erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Helfer-Entität."
-    },
-    "ha_remove_helpers_integrations": {
-      "title": "Helfer oder Integration entfernen",
-      "description": "Entfernt einen Helfer oder Integrations-Konfigurationseintrag."
-    },
-    "ha_get_automation_traces": {
-      "title": "Traces abrufen",
-      "description": "Ruft Ausführungstraces von Automatisierungen und Skripten zur Diagnose ab."
-    },
-    "ha_get_history": {
-      "title": "Verlauf oder Statistiken abrufen",
-      "description": "Ruft historische Daten aus dem Home-Assistant-Speicher ab."
-    },
-    "ha_get_logs": {
-      "title": "Protokolle abrufen",
-      "description": "Ruft Home-Assistant-Protokolle aus verschiedenen Quellen ab."
-    },
-    "ha_get_integration": {
-      "title": "Integration abrufen",
-      "description": "Ruft Informationen über Integrations-Konfigurationseinträge ab."
-    },
-    "ha_get_system_health": {
-      "title": "Systemzustand abrufen",
-      "description": "Ruft Zustandsinformationen zu Home Assistant, Zigbee, Z-Wave und Integrationen ab."
-    },
-    "ha_set_integration": {
-      "title": "Integration aktualisieren",
-      "description": "Aktiviert, deaktiviert, fügt hinzu oder ändert Integrationsparameter."
-    },
-    "ha_config_get_category": {
-      "title": "Kategorie abrufen",
-      "description": "Zeigt Kategorien in einem Bereich oder Details zu einer bestimmten Kategorie."
-    },
-    "ha_config_get_label": {
-      "title": "Label abrufen",
-      "description": "Zeigt Labels oder Details zu einem bestimmten Label."
-    },
-    "ha_config_remove_category": {
-      "title": "Kategorie entfernen",
-      "description": "Entfernt eine Home-Assistant-Kategorie."
-    },
-    "ha_config_remove_label": {
-      "title": "Label entfernen",
-      "description": "Entfernt ein Home-Assistant-Label."
-    },
-    "ha_config_set_category": {
-      "title": "Kategorie erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Kategorie."
-    },
-    "ha_config_set_label": {
-      "title": "Label erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert ein Home-Assistant-Label."
-    },
-    "ha_manage_radio": {
-      "title": "Funknetzwerke verwalten",
-      "description": "Verwaltet Z-Wave-, Zigbee-, Matter- und Thread-Netzwerke in Home Assistant."
-    },
-    "ha_config_get_scene": {
-      "title": "Szene abrufen",
-      "description": "Ruft die Konfiguration einer Home-Assistant-Szene ab."
-    },
-    "ha_config_remove_scene": {
-      "title": "Szene entfernen",
-      "description": "Entfernt eine Home-Assistant-Szene."
-    },
-    "ha_config_set_scene": {
-      "title": "Szene erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Szene."
-    },
-    "ha_config_get_script": {
-      "title": "Skript abrufen",
-      "description": "Ruft die Konfiguration eines Home-Assistant-Skripts ab."
-    },
-    "ha_config_remove_script": {
-      "title": "Skript entfernen",
-      "description": "Entfernt ein Home-Assistant-Skript."
-    },
-    "ha_config_set_script": {
-      "title": "Skript erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert ein Home-Assistant-Skript."
-    },
-    "ha_get_overview": {
-      "title": "System-Übersicht",
-      "description": "Ruft eine KI-freundliche Übersicht von Home Assistant mit Kategorisierung ab."
-    },
-    "ha_get_state": {
-      "title": "Entitätsstatus abrufen",
-      "description": "Ruft aktuellen Status und Attribute einer oder mehrerer Entitäten ab."
-    },
-    "ha_search": {
-      "title": "Suchen",
-      "description": "Durchsucht Entitäten und Inhalte von Automatisierungen, Skripten, Szenen, Helfern und Dashboards."
-    },
     "ha_bulk_control": {
       "title": "Massensteuerung",
       "description": "Steuert mehrere Geräte in einer einzigen Massenoperation."
@@ -732,21 +489,237 @@
       "title": "Dienst aufrufen",
       "description": "Ruft einen Home-Assistant-Dienst zur Steuerung von Entitäten und Automatisierungen auf."
     },
-    "ha_get_operation_status": {
-      "title": "Operationsstatus",
-      "description": "Prüft den Status einer oder mehrerer Geräteoperationen."
+    "ha_config_delete_dashboard": {
+      "title": "Dashboard löschen",
+      "description": "Entfernt ein in Home Assistant gespeichertes Dashboard vollständig."
     },
-    "ha_list_services": {
-      "title": "Dienste auflisten",
-      "description": "Zeigt verfügbare Home-Assistant-Dienste und deren Parameter."
+    "ha_config_delete_dashboard_resource": {
+      "title": "Dashboard-Ressource löschen",
+      "description": "Entfernt eine Lovelace-Dashboard-Ressource."
+    },
+    "ha_config_get_automation": {
+      "title": "Automatisierung abrufen",
+      "description": "Ruft die vollständige Konfiguration einer Home-Assistant-Automatisierung ab."
+    },
+    "ha_config_get_calendar_events": {
+      "title": "Kalenderereignisse abrufen",
+      "description": "Ruft Ereignisse aus einer Kalender-Entität ab."
+    },
+    "ha_config_get_category": {
+      "title": "Kategorie abrufen",
+      "description": "Zeigt Kategorien in einem Bereich oder Details zu einer bestimmten Kategorie."
+    },
+    "ha_config_get_dashboard": {
+      "title": "Dashboard abrufen",
+      "description": "Zeigt Dashboards, deren Konfiguration oder findet Karten."
+    },
+    "ha_config_get_label": {
+      "title": "Label abrufen",
+      "description": "Zeigt Labels oder Details zu einem bestimmten Label."
+    },
+    "ha_config_get_scene": {
+      "title": "Szene abrufen",
+      "description": "Ruft die Konfiguration einer Home-Assistant-Szene ab."
+    },
+    "ha_config_get_script": {
+      "title": "Skript abrufen",
+      "description": "Ruft die Konfiguration eines Home-Assistant-Skripts ab."
     },
     "ha_config_get_yaml": {
       "title": "YAML-Fragment lesen",
       "description": "Ruft das aktuelle YAML-Fragment nach Schlüssel aus einer oder mehreren Dateien ab."
     },
+    "ha_config_list_dashboard_resources": {
+      "title": "Dashboard-Ressourcen auflisten",
+      "description": "Zeigt Lovelace-Ressourcen: Karten, Themes, CSS und JavaScript."
+    },
+    "ha_config_list_groups": {
+      "title": "Gruppen auflisten",
+      "description": "Zeigt Home-Assistant-Entitätsgruppen und deren Mitglieder."
+    },
+    "ha_config_list_helpers": {
+      "title": "Helfer auflisten",
+      "description": "Zeigt Home-Assistant-Helfer-Entitäten des ausgewählten Typs."
+    },
+    "ha_config_remove_automation": {
+      "title": "Automatisierung entfernen",
+      "description": "Löscht eine Home-Assistant-Automatisierung."
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "Kalenderereignis entfernen",
+      "description": "Löscht ein Ereignis aus einem Home-Assistant-Kalender."
+    },
+    "ha_config_remove_category": {
+      "title": "Kategorie entfernen",
+      "description": "Entfernt eine Home-Assistant-Kategorie."
+    },
+    "ha_config_remove_group": {
+      "title": "Gruppe entfernen",
+      "description": "Entfernt eine Home-Assistant-Entitätsgruppe."
+    },
+    "ha_config_remove_label": {
+      "title": "Label entfernen",
+      "description": "Entfernt ein Home-Assistant-Label."
+    },
+    "ha_config_remove_scene": {
+      "title": "Szene entfernen",
+      "description": "Entfernt eine Home-Assistant-Szene."
+    },
+    "ha_config_remove_script": {
+      "title": "Skript entfernen",
+      "description": "Entfernt ein Home-Assistant-Skript."
+    },
+    "ha_config_set_automation": {
+      "title": "Automatisierung erstellen/aktualisieren",
+      "description": "Erstellt eine neue oder aktualisiert eine bestehende Automatisierung."
+    },
+    "ha_config_set_calendar_event": {
+      "title": "Kalenderereignis erstellen/aktualisieren",
+      "description": "Erstellt ein neues oder aktualisiert ein bestehendes Kalenderereignis."
+    },
+    "ha_config_set_category": {
+      "title": "Kategorie erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert eine Home-Assistant-Kategorie."
+    },
+    "ha_config_set_dashboard": {
+      "title": "Dashboard erstellen/aktualisieren",
+      "description": "Erstellt ein neues oder aktualisiert ein bestehendes Home-Assistant-Dashboard."
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "Dashboard-Ressource setzen",
+      "description": "Erstellt oder aktualisiert eine Dashboard-Ressource aus Code oder externer URL."
+    },
+    "ha_config_set_group": {
+      "title": "Gruppe erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert eine Home-Assistant-Entitätsgruppe."
+    },
+    "ha_config_set_helper": {
+      "title": "Helfer erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert eine Home-Assistant-Helfer-Entität."
+    },
+    "ha_config_set_label": {
+      "title": "Label erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert ein Home-Assistant-Label."
+    },
+    "ha_config_set_scene": {
+      "title": "Szene erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert eine Home-Assistant-Szene."
+    },
+    "ha_config_set_script": {
+      "title": "Skript erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert ein Home-Assistant-Skript."
+    },
     "ha_config_set_yaml": {
       "title": "Rohes YAML bearbeiten",
       "description": "Bearbeitet die Home-Assistant-YAML-Konfiguration; nur als letztes Mittel verwenden."
+    },
+    "ha_delete_file": {
+      "title": "Datei löschen",
+      "description": "Löscht eine Datei aus einem erlaubten Home-Assistant-Verzeichnis."
+    },
+    "ha_dev_manage_server": {
+      "title": "MCP-Server verwalten (dev)",
+      "description": "Verwaltet den laufenden ha-mcp-Server im Entwicklermodus."
+    },
+    "ha_dev_manage_settings": {
+      "title": "Server-Einstellungen verwalten (dev)",
+      "description": "Verwaltet die ha-mcp-Servereinstellungen und die Abschnitte Tools/Richtlinien/Backups (Entwicklermodus)."
+    },
+    "ha_eval_template": {
+      "title": "Template auswerten",
+      "description": "Wertet ein Jinja2-Template mit der Home-Assistant-Engine aus."
+    },
+    "ha_get_addon": {
+      "title": "Add-ons abrufen",
+      "description": "Zeigt installierte und verfügbare Add-ons oder Details zu einem bestimmten Add-on."
+    },
+    "ha_get_automation_traces": {
+      "title": "Traces abrufen",
+      "description": "Ruft Ausführungstraces von Automatisierungen und Skripten zur Diagnose ab."
+    },
+    "ha_get_blueprint": {
+      "title": "Blueprint abrufen",
+      "description": "Zeigt die Liste der Blueprints oder Details zu einem bestimmten Blueprint."
+    },
+    "ha_get_camera_image": {
+      "title": "Kamerabild abrufen",
+      "description": "Ruft das aktuelle Standbild von einer Home-Assistant-Kamera ab."
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "Dashboard-Screenshot abrufen",
+      "description": "Ruft gerenderte Bilder einer Lovelace-Ansicht ab."
+    },
+    "ha_get_device": {
+      "title": "Gerät abrufen",
+      "description": "Ruft Geräteinformationen ab, einschließlich Zigbee, Z-Wave und Matter."
+    },
+    "ha_get_entity": {
+      "title": "Entität abrufen",
+      "description": "Ruft Registerinformationen über eine oder mehrere Entitäten ab."
+    },
+    "ha_get_entity_exposure": {
+      "title": "Entitäts-Sichtbarkeit abrufen",
+      "description": "Zeigt, welche Entitäten für Sprachassistenten freigegeben sind."
+    },
+    "ha_get_hacs_info": {
+      "title": "HACS-Informationen abrufen",
+      "description": "Durchsucht den HACS-Store oder ruft Repository-Informationen ab."
+    },
+    "ha_get_history": {
+      "title": "Verlauf oder Statistiken abrufen",
+      "description": "Ruft historische Daten aus dem Home-Assistant-Speicher ab."
+    },
+    "ha_get_integration": {
+      "title": "Integration abrufen",
+      "description": "Ruft Informationen über Integrations-Konfigurationseinträge ab."
+    },
+    "ha_get_logs": {
+      "title": "Protokolle abrufen",
+      "description": "Ruft Home-Assistant-Protokolle aus verschiedenen Quellen ab."
+    },
+    "ha_get_operation_status": {
+      "title": "Operationsstatus",
+      "description": "Prüft den Status einer oder mehrerer Geräteoperationen."
+    },
+    "ha_get_overview": {
+      "title": "System-Übersicht",
+      "description": "Ruft eine KI-freundliche Übersicht von Home Assistant mit Kategorisierung ab."
+    },
+    "ha_get_state": {
+      "title": "Entitätsstatus abrufen",
+      "description": "Ruft aktuellen Status und Attribute einer oder mehrerer Entitäten ab."
+    },
+    "ha_get_system_health": {
+      "title": "Systemzustand abrufen",
+      "description": "Ruft Zustandsinformationen zu Home Assistant, Zigbee, Z-Wave und Integrationen ab."
+    },
+    "ha_get_todo": {
+      "title": "To-do-Listen abrufen",
+      "description": "Zeigt To-do-Listen oder Aufgaben aus einer bestimmten Liste."
+    },
+    "ha_get_zone": {
+      "title": "Zonen abrufen",
+      "description": "Zeigt alle geografischen Zonen oder Details zu einer Zone."
+    },
+    "ha_import_blueprint": {
+      "title": "Blueprint importieren",
+      "description": "Importiert einen Blueprint aus einer URL in Home Assistant."
+    },
+    "ha_list_files": {
+      "title": "Dateien auflisten",
+      "description": "Zeigt Dateien in einem erlaubten Konfigurationsverzeichnis."
+    },
+    "ha_list_floors_areas": {
+      "title": "Etagen und Bereiche auflisten",
+      "description": "Zeigt Etagen mit verschachtelten Bereichen, einschließlich Bereiche ohne Etage."
+    },
+    "ha_list_services": {
+      "title": "Dienste auflisten",
+      "description": "Zeigt verfügbare Home-Assistant-Dienste und deren Parameter."
+    },
+    "ha_manage_addon": {
+      "title": "Add-on verwalten",
+      "description": "Verwaltet Lebenszyklus, Einstellungen und interne API eines Home-Assistant-Add-ons."
     },
     "ha_manage_backup": {
       "title": "Backups verwalten",
@@ -756,6 +729,22 @@
       "title": "Benutzerdefiniertes Tool",
       "description": "Erstellt und führt Code in einer Sandbox aus und verwaltet gespeicherte Tools."
     },
+    "ha_manage_energy_prefs": {
+      "title": "Energie-Dashboard konfigurieren",
+      "description": "Verwaltet die Einstellungen des Home-Assistant-Energie-Dashboards."
+    },
+    "ha_manage_hacs": {
+      "title": "HACS verwalten",
+      "description": "Installiert, aktualisiert und fügt benutzerdefinierte HACS-Repositories hinzu."
+    },
+    "ha_manage_pipeline": {
+      "title": "Assist-Pipeline verwalten",
+      "description": "Zeigt, erstellt, bearbeitet und wählt bevorzugte Assist-Pipeline aus."
+    },
+    "ha_manage_radio": {
+      "title": "Funknetzwerke verwalten",
+      "description": "Verwaltet Z-Wave-, Zigbee-, Matter- und Thread-Netzwerke in Home Assistant."
+    },
     "ha_manage_theme": {
       "title": "Themes verwalten",
       "description": "Verwaltet Home-Assistant-Oberflächen-Themes."
@@ -764,45 +753,77 @@
       "title": "Updates verwalten",
       "description": "Zeigt an, installiert, überspringt und rollt Home-Assistant-Updates zurück."
     },
+    "ha_read_file": {
+      "title": "Datei lesen",
+      "description": "Liest eine Datei aus dem Home-Assistant-Konfigurationsverzeichnis."
+    },
     "ha_reload_core": {
       "title": "Komponenten neu laden",
       "description": "Lädt die Home-Assistant-Konfiguration ohne vollständigen Neustart neu."
     },
-    "ha_restart": {
-      "title": "Home Assistant neu starten",
-      "description": "Startet Home Assistant vollständig neu."
+    "ha_remove_area_or_floor": {
+      "title": "Bereich oder Etage entfernen",
+      "description": "Entfernt einen Bereich oder eine Etage aus Home Assistant."
     },
-    "ha_get_todo": {
-      "title": "To-do-Listen abrufen",
-      "description": "Zeigt To-do-Listen oder Aufgaben aus einer bestimmten Liste."
+    "ha_remove_device": {
+      "title": "Gerät entfernen",
+      "description": "Entfernt ein verwaistes Gerät aus dem Home-Assistant-Register."
+    },
+    "ha_remove_entity": {
+      "title": "Entität entfernen",
+      "description": "Entfernt eine oder mehrere Entitäten aus dem Home-Assistant-Register."
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "Helfer oder Integration entfernen",
+      "description": "Entfernt einen Helfer oder Integrations-Konfigurationseintrag."
     },
     "ha_remove_todo_item": {
       "title": "To-do-Element entfernen",
       "description": "Entfernt eine Aufgabe aus einer Home-Assistant-To-do-Liste."
     },
-    "ha_set_todo_item": {
-      "title": "To-do-Element erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Aufgabe in einer To-do-Liste."
-    },
-    "ha_eval_template": {
-      "title": "Template auswerten",
-      "description": "Wertet ein Jinja2-Template mit der Home-Assistant-Engine aus."
+    "ha_remove_zone": {
+      "title": "Zone entfernen",
+      "description": "Entfernt eine geografische Zone aus Home Assistant."
     },
     "ha_report_issue": {
       "title": "Problem melden oder Feedback geben",
       "description": "Liefert Diagnoseinformationen und Vorlagen für Fehlerberichte oder Feedback."
     },
-    "ha_get_zone": {
-      "title": "Zonen abrufen",
-      "description": "Zeigt alle geografischen Zonen oder Details zu einer Zone."
+    "ha_restart": {
+      "title": "Home Assistant neu starten",
+      "description": "Startet Home Assistant vollständig neu."
     },
-    "ha_remove_zone": {
-      "title": "Zone entfernen",
-      "description": "Entfernt eine geografische Zone aus Home Assistant."
+    "ha_search": {
+      "title": "Suchen",
+      "description": "Durchsucht Entitäten und Inhalte von Automatisierungen, Skripten, Szenen, Helfern und Dashboards."
+    },
+    "ha_set_area_or_floor": {
+      "title": "Bereich oder Etage erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert einen Bereich oder eine Etage in Home Assistant."
+    },
+    "ha_set_device": {
+      "title": "Gerät aktualisieren",
+      "description": "Aktualisiert Name, Bereich, Labels und andere Geräteeigenschaften."
+    },
+    "ha_set_entity": {
+      "title": "Entität aktualisieren",
+      "description": "Aktualisiert Name, Bereich, Labels und andere Entitätseigenschaften."
+    },
+    "ha_set_integration": {
+      "title": "Integration aktualisieren",
+      "description": "Aktiviert, deaktiviert, fügt hinzu oder ändert Integrationsparameter."
+    },
+    "ha_set_todo_item": {
+      "title": "To-do-Element erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert eine Aufgabe in einer To-do-Liste."
     },
     "ha_set_zone": {
       "title": "Zone erstellen/aktualisieren",
       "description": "Erstellt oder aktualisiert eine geografische Zone in Home Assistant."
+    },
+    "ha_write_file": {
+      "title": "Datei schreiben",
+      "description": "Erstellt oder ändert eine Datei in einem erlaubten Verzeichnis."
     }
   }
 }

@@ -1,8 +1,10 @@
 """Regenerate the English-source baseline that guards translation drift.
 
 ``tests/src/unit/test_locale_parity.py`` pins the English string every
-translation was written against. Run this after changing an English string,
-once every locale carrying that key has been updated or confirmed:
+translation was written against. ``scripts/translate_locales.py`` repins it
+automatically after a machine-translation pass; run this directly after a
+*hand*-translation pass, once every locale carrying the changed key has been
+updated or confirmed:
 
     python scripts/update_locale_baseline.py
 """

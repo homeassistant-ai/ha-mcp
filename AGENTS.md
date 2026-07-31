@@ -336,6 +336,7 @@ On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, sy
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
 | `addon-publish.yml` | Release | HA add-on update |
 | `sync-tool-docs.yml` | Push to master (`src/ha_mcp/tools/`, `scripts/extract_tools.py`) | Regenerate `tools.json`, README, DOCS.md |
+| `locale-sync.yml` | Same-repo PR touching locale catalogs, tool sources, or the locale scripts | Machine-translate stale/missing strings and commit them to the PR branch |
 
 **Docker image tags** (`ghcr.io/homeassistant-ai/ha-mcp`): stable releases push `:latest` + `:stable` + semver tags (`release-publish.yml`); dev builds push only `:dev` + `:dev-<sha>` (`publish-dev.yml`) — **never `:latest`**, which is reserved for stable. The HA add-on images live in separate repos (`-addon-{arch}`, `-addon-dev-{arch}`) and are selected by an explicit `version:` pin, not by `:latest`.
 
@@ -711,6 +712,20 @@ fully validate a component change before merge.
 
 ## Translations
 
+**One canonical store, generated projections, automated retranslation**
+(issue #2083). The settings UI catalogs
+(`src/ha_mcp/settings_ui/locales/<code>.json`) are the canonical store for
+every string except the component's config flow: the add-on option strings
+live there under `addon.<key>.*` (plus `features.<key>.*` for options the
+settings UI also shows, and `addon_stable.<key>.*` for a stable-flavor
+wording deviation). Both add-on flavors' `translations/*.yaml` and the
+`FEATURE_META` block in `settings.js` are **generated** from that store by
+`scripts/generate_locales.py` — never edit them by hand;
+`test_derived_catalogs_match_the_canonical_store` fails until you regenerate.
+Each flavor's key list is its own `config.yaml` `schema:`, so the two YAMLs
+are different projections of the one store, and cross-surface wording
+identity holds by construction.
+
 A language ships on all four surfaces or not at all —
 `tests/src/unit/test_locale_parity.py` enforces it. One Home Assistant language
 code (`de`, `es`, `fr`, `it`, `ru`, `zh-Hans`) names every file:
@@ -719,58 +734,78 @@ code (`de`, `es`, `fr`, `it`, `ru`, `zh-Hans`) names every file:
 `homeassistant-addon{,-dev}/translations/<code>.yaml`.
 That list of codes is itself pinned by
 `test_agents_md_lists_every_shipped_locale`: adding a language means adding its
-code here, in the same PR, or the suite goes red.
+code here, in the same PR, or the suite goes red. To add a language, add the
+two authored catalogs (settings UI + component; the settings one can start as
+a `meta`-only stub), regenerate, and let the translation pipeline below fill
+the strings.
 
 Settings UI catalogs are auto-discovered (no registration). Their `messages` may
 omit keys — English is the per-key fallback — but may not carry one `en.json`
 lacks: nothing renders it. `tool_groups` and `tools` may do neither: each locale
 must carry exactly the renderable group headings and every tool name, no key
-more and none fewer. **Adding a tool therefore means translating it
-in every locale, in the PR that adds it**: the check derives the tool set from
+more and none fewer. The check derives the tool set from
 the sources (`scripts/extract_tools.py`), not from the committed
 `site/src/data/tools.json` that `sync-tool-docs.yml` regenerates only after
-merge — so the PR adding the tool goes red, rather than the next PR someone
-opens. Separately from those key rules, every surface caps how much *text* a catalog
+merge — so the PR adding a tool goes red, rather than the next PR someone
+opens. Separately from those key rules, both authored surfaces cap how much
+*text* a catalog
 may leave byte-identical to English or omit outright, so a stub cannot ride the
-fallbacks: 5% for the settings UI `messages`, for the `tools` titles and
-descriptions and for both add-on flavors, and 15% for the component catalogs,
+fallbacks: 5% for the settings UI `messages`, its `tools` titles and
+descriptions, and each generated add-on projection (per flavor, computed from
+the canonical store), and 15% for the component catalogs,
 which carry the product names as keys of their own. On top of that share, a
 `tools` entry whose title *and* description are *both* byte-identical to English
 fails by name however small its share — for feature-gated tools against either
 English rendering, the `FEATURE_GATED_TOOLS` stub or the parsed docstring.
-
 Component catalogs need every `strings.json` key with identical
-`{placeholders}`. Add-on catalogs need `name` + `description` for every
-`schema:` key of *that* flavor's `config.yaml`, and no `configuration.<key>`
-left behind for a key the schema no longer has; the two flavors differ.
+`{placeholders}`.
 
-Some English strings are shipped from more than one catalog — the add-on
-options and the settings UI describe the same switches — and **a string that is
-byte-identical in English on two different surfaces must be byte-identical in
-every other language too**. The keys differ per surface, so translating one
-surface at a time is how they drift apart; check the wording you are about to
-write against the other catalogs, or let the test tell you afterwards. The same
-English twice *within* one catalog may differ — Spanish agrees
-`activado`/`activada` with the noun each sentence is about — unless that text
-also reaches a second surface, in which case both keys follow the shared
-wording. What this covers is pinned by name in `SHARED_ENGLISH_PLACES`: give a
-new option English that an existing string already uses and
-`test_shared_english_strings_are_discovered` goes red until you add it there.
-
-**Changing an English string means updating every locale that carries it**,
-then `python scripts/update_locale_baseline.py`. The baseline pins the English
-each translation was written against, because key parity cannot see a string
-whose meaning changed: #1993 flipped a policy string from ALL-match to
-ANY-match and left the Chinese text asserting the opposite.
+**Changing an English string is a one-place edit** (`en.json` `messages`, a
+tool docstring, or `strings.json` + component `en.json`), and the machine
+translates the rest: `scripts/translate_locales.py` reads the English-source
+baseline diff (`tests/src/unit/locale_source_baseline.json`), retranslates
+the changed or missing keys in every language via the Gemini API
+(`GEMINI_API_KEY`; free tier), validates placeholders and markup, regenerates
+the derived catalogs, and repins the baseline. The `locale-sync.yml` workflow
+runs it automatically on same-repo PRs and commits the result to the PR
+branch for review; run it locally for fork PRs or to use a different engine.
+The baseline pins the English each translation was written against, because
+key parity cannot see a string whose meaning changed: #1993 flipped a policy
+string from ALL-match to ANY-match and left the Chinese text asserting the
+opposite. `python scripts/update_locale_baseline.py` repins it manually after
+a hand-translation pass.
 
 **A tool docstring is one of those English strings.** `en.json` ships `tools`
 empty, so the English a `tools` entry translates is read from the tool
 definition in `src/ha_mcp/tools/` — the `title=` kwarg and the summary
 paragraph of the docstring, or the `FEATURE_GATED_TOOLS` stub where a gated
-tool shows one instead. Editing
-that summary therefore moves the English out from under five catalogs and goes
-red here, in the PR that edits it, rather than leaving every locale describing
-the old behaviour.
+tool shows one instead. Editing that summary moves the English out from under
+six catalogs; the pipeline retranslates them. One deliberate exception: a
+change to a feature-gated tool's PARSED docstring (its stub unchanged) is
+stub-review work, not translation work — the pipeline holds that baseline key
+stale, and the red check clears only when a human confirms the stub still
+describes the tool and runs `python scripts/update_locale_baseline.py`.
+
+**Rate limits and outages degrade loudly, never silently.** Engine calls are
+paced under the free-tier request rate and retry transient errors (429/5xx,
+timeouts) with backoff; a request that keeps failing marks its strings failed
+and the run continues, and two consecutive dead batches stop the run early
+instead of burning the remaining quota. A partial run — a daily-quota hit,
+an outage — still commits every finished translation plus
+`tests/src/unit/locale_sync_progress.json`, which the next run reads to
+resume where it stopped: **re-running the workflow is the entire recovery
+procedure.** Only a fully successful run repins the baseline and deletes the
+progress file, so CI stays red until every string is translated and nothing
+unvalidated ever ships. **The fallback when the engine is down is a human**:
+anyone (the PR author included) can hand-translate the strings the dry-run
+lists, run `python scripts/generate_locales.py` and
+`python scripts/update_locale_baseline.py`, and push — CI goes green and the
+next pipeline run no-ops (it also cleans up any committed progress file).
+Hand-edits always win; the machine only ever touches strings whose English
+changed. The engine itself is one function (`_call_gemini`) with
+`GEMINI_API_URL` / `GEMINI_MODEL` / `GEMINI_API_KEY` overrides for any
+Gemini-compatible endpoint, so replacing the provider stays a one-function
+change.
 
 The Webhook Proxy add-on and its bundled integration stay **English-only by
 decision** — not worth the upkeep. The test records that, so any other new

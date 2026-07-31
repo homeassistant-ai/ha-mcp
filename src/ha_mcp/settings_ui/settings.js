@@ -1835,13 +1835,14 @@ document.getElementById('modalBackdrop').addEventListener('click', (e) => {
 
 document.getElementById('stopSidecarBtn').addEventListener('click', stopSidecar);
 
-// Feature-flag metadata (display labels + help text). Keyed by the
-// Settings field name. The strings are intentionally copied verbatim
-// from ``homeassistant-addon-dev/translations/en.yaml`` so the web
-// UI and the add-on Configuration tab read identically — a user who
-// flips between the two surfaces never wonders if the option name
-// or warning text shifted meaning. Keep them in sync when one side
-// changes; the addon-dev translations file is the source of truth.
+// FEATURE_META:BEGIN GENERATED (scripts/generate_locales.py)
+// English fallback + row order for the feature toggles. Do not edit:
+// the strings and their order come from the features.* keys in
+// locales/en.json — edit that file, then run
+// scripts/generate_locales.py.
+// The master/sub-flag gating these rows describe is enforced by
+// config.py:_apply_feature_flag_overrides; the UI dims sub-rows and
+// re-renders live when the master toggle flips.
 const FEATURE_META = {
   enable_tool_search: {
     label: "Enable tool search",
@@ -1852,31 +1853,28 @@ const FEATURE_META = {
     help: "Maximum number of tools returned by ha_search_tools when tool search is enabled. Lower values (2-3) save context tokens but may miss relevant tools. Range: 2-10. Requires restart.",
   },
   enable_tool_security_policies: {
-    label: "Enable Tool Security Policies",
-    help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Requires restart to take effect.",
+    label: "Enable Tool Security Policies (advanced)",
+    help: "Gate high-stakes tool calls (lock/alarm control, automation writes, etc.) behind user approval. When a guarded tool is called, the agent tells the user to open the Tool Security Policies tab in the web UI and click Approve before the call proceeds. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Off by default. Requires restart to take effect.",
   },
   read_only_mode: {
     label: "Read Only Mode",
-    help: "Turns all write tools off and blocks tools from making any write or destructive calls. Mixed read/write tools (dashboard configuration, backups, Apps (add-ons), energy preferences, voice pipelines, and code mode when enabled) stay listed with their write operations blocked server-side. Dashboard screenshots remain blocked because Puppet can persist frontend preferences. The AI gets a clear READ_ONLY_MODE error if it tries. Mirrors the toggle at the top of the Tools tab. Off by default. Requires restart to take effect (applies live in standalone HTTP mode).",
+    help: "Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Mixed read/write tools (backups, add-ons, energy preferences, voice pipelines, and code mode when enabled) stay available with their write operations blocked. Same toggle as the web UI Tools tab. Off by default. Requires restart to take effect.",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",
-    help: "Master switch for the write-tool skill content delivery feature (issue #1182). When enabled (default), the six config write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant best-practice reference files under skill_content on every successful write, plus auto-embed any reference sections cited by best-practice warnings. Each tool also exposes a per-call MandatoryBPS parameter the agent can set to false on subsequent calls once it has the content. When this master switch is off, NO skill_content goes out regardless of the per-call parameter or BP warnings. Recommended ON as the first choice; disable only for models with very small context windows. Turning this off may degrade write accuracy. Requires restart to take effect.",
+    help: "Master switch for the write-tool skill content delivery feature (issue #1182). When enabled (default), the six config write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant best-practice reference files under `skill_content` on every successful write, plus auto-embed any reference sections cited by best-practice warnings. Each tool also exposes a per-call `MandatoryBPS` parameter the agent can set to false on subsequent calls once it has the content. When this master switch is off, NO skill_content goes out regardless of the per-call parameter or BP warnings. Recommended ON as the first choice; disable only for models with very small context windows. Turning this off may degrade write accuracy. Requires restart to take effect.",
   },
   enable_strict_mandatory_bps: {
     label: "Strict best-practices mode",
-    help: "Strict mode: prevents the client from using the tool until it can prove that it read the best practices. While on, the six best-practice write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked and return an error directing the client to read the best-practices skill via ha_get_skill_guide and pass back the acknowledgment key it obtains there. While on, the ha_get_skill_guide tool is locked enabled — it is the only publisher of the acknowledgment key. Nested under \"Attach best-practice skills on writes\" above and inert while that parent toggle is off. Requires restart to take effect (applies live in standalone HTTP mode).",
+    help: "Strict mode: prevents the client from using the tool until it can prove that it read the best practices. While on, the six best-practice write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked and return an error directing the client to read the best-practices skill via ha_get_skill_guide and pass back the acknowledgment key it obtains there. While on, the ha_get_skill_guide tool is locked enabled — it is the only publisher of the acknowledgment key. Child of the \"Attach best-practice skills on writes\" option above and inert while that parent is off. Requires restart to take effect.",
   },
-  // Master beta toggle — gates the 5 sub-flags below at runtime
-  // (see config.py:_apply_feature_flag_overrides master gate). UI
-  // dims sub-rows when this is off and re-renders live on flip.
   enable_beta_features: {
-    label: "Enable beta features",
-    help: "⚠ DANGER. These tools can PERMANENTLY DAMAGE your Home Assistant installation. They write to your YAML config, write to your filesystem, install custom components, run arbitrary sandboxed Python, and edit tool docstrings the AI sees. There is no warranty and no support guarantee. You enable them at your OWN RISK. Take a Home Assistant backup before turning this on, and never enable in production without one. Master toggle for the 5 experimental tools below; sub-toggles are dimmed and ignored at runtime while this is off (even a sub-flag set via env var is forced off until the master is on). Requires restart to take effect.",
+    label: "Enable beta features (master)",
+    help: "⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant installation. They write to your YAML config, your filesystem, install custom components, run arbitrary sandboxed Python, and edit tool docstrings the AI sees. There is no warranty and no support guarantee — you enable them at your OWN RISK. Take a Home Assistant backup before turning this on, and never enable in production without one. Master gate for the 5 experimental sub-flags below; sub-flags are ignored at runtime while this master is off, even when explicitly set to true. The same toggle is also surfaced in the web settings UI under \"Beta features (dangerous)\" — either surface reflects the other on restart.",
   },
   enable_yaml_config_editing: {
     label: "Enable YAML config editing (beta)",
-    help: "Beta feature, disabled by default. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available.",
+    help: "Beta feature. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_yaml_edit_confirm: {
     label: "Require confirmation for YAML edits (diff preview)",
@@ -1896,21 +1894,22 @@ const FEATURE_META = {
   },
   enable_filesystem_tools: {
     label: "Enable filesystem tools (beta)",
-    help: "Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write access to your Home Assistant filesystem. WARNING: This gives the MCP server sensitive direct file access to your system. Only enable if you trust the AI assistant with file operations. Requires restart to take effect.",
+    help: "Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write access to your Home Assistant filesystem. WARNING: This gives the MCP server sensitive direct file access to your system. Only enable if you trust the AI assistant with file operations. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_code_mode: {
-    label: "Enable code-mode sandbox (beta)",
-    help: "Beta feature, disabled by default. Enables ha_manage_custom_tool, a sandboxed Python interpreter (pydantic-monty) that lets AI assistants write/run/save/delete custom tools when no built-in tool covers the request. Sandbox cannot touch the filesystem or arbitrary network, but CAN call any registered MCP tool, hit the HA REST API, or send HA WebSocket commands, effectively 'do whatever existing tools allow you to do, in any combination'. Saved tools persist and are visible to any client that can connect to ha-mcp. See docs/beta.md for known limitations. Requires restart to take effect.",
+    label: "Enable custom tool sandbox (beta)",
+    help: "Beta feature. Enables the ha_manage_custom_tool tool, which lets AI assistants create, run, save, and delete custom Python code in a secure sandbox when no built-in tool can handle the request. Code runs in an isolated interpreter with no filesystem or arbitrary network access. Sandbox code can hit the HA REST API (api_get/api_post), send WebSocket commands (ws_send), call existing MCP tools (call_tool), or remove a saved tool (delete_saved_tool). Saved tools persist to /data/saved_tools.json by default so they survive add-on restarts, and are visible to any client that can connect. See docs/beta.md for known limitations. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_lite_docstrings: {
     label: "Enable lite tool docstrings (beta)",
-    help: "Beta feature, disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance. The trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
+    help: "Beta feature. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_dashboard_screenshot: {
     label: "Enable dashboard screenshot mode (beta)",
-    help: "Beta feature, disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can inspect one or more responsive Lovelace images (e.g. to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in engine, balloob's \"Puppet\" App (add-on) (headless Chromium), which you install once (add balloob's App (add-on) repository, then install \"Puppet\") and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on. Otherwise this sub-flag is ignored at runtime regardless of its value here.",
+    help: "Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can inspect one or more responsive Lovelace images (e.g. to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in engine — balloob's \"Puppet\" add-on (headless Chromium) — which you install once (add balloob's add-on repository, then install \"Puppet\") and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
 };
+// FEATURE_META:END GENERATED
 
 // The beta sub-flag fields gated by the master beta toggle. Populated
 // from the ``beta_sub_flags`` array in the /api/settings/features

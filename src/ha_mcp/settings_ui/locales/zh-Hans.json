@@ -422,7 +422,28 @@
     "advanced.sidecar_pin_port.label": "设置界面旁路服务端口",
     "advanced.sidecar_pin_port.help": "0 表示每次重启选择空闲端口；1024–65535 固定首选端口。需重启。",
     "advanced.enable_dev_mode.label": "开发者模式",
-    "advanced.enable_dev_mode.help": "⚠ 注册可更改设置并替换运行中服务器的隐藏工具。仅用于开发和测试。需重启。"
+    "advanced.enable_dev_mode.help": "⚠ 注册可更改设置并替换运行中服务器的隐藏工具。仅用于开发和测试。需重启。",
+    "addon.backup_hint.name": "完整 HA 快照建议级别（面向 LLM）",
+    "addon.backup_hint.description": "调整 LLM 在 `ha_manage_backup(scope='snapshot')` 工具描述中看到的提示措辞，即在执行高风险操作（例如批量删除设备）之前何时建议创建完整的 Home Assistant tarball 备份。仅影响这一句面向 LLM 的提示文本。\n\n如需在每次编辑自动化 / 脚本 / 辅助元素等之前自动创建快照，请使用下方单独的 **启用编辑自动备份** 开关。",
+    "addon.secret_path.name": "密钥路径覆盖",
+    "addon.secret_path.description": "MCP 服务器的可选自定义 HTTP 路径。留空则使用自动生成的安全路径。\n",
+    "addon.enable_auto_backup.name": "启用编辑自动备份",
+    "addon.enable_auto_backup.description": "在每次被封装的写入/破坏性 MCP 工具调用（自动化、脚本、场景、辅助元素、仪表盘、标签、类别、分组、地理区域、区域、日历、待办、实体、集成，以及对应的移除/删除工具）之前，按实体捕获快照。快照以 YAML 文件形式保存在 /data/ha_mcp_backups/ 下（可通过 HAMCP_BACKUP_DIR 覆盖），并可在网页设置界面的“备份”选项卡中或通过 ha_manage_backup(scope='edits', ...) 列出、恢复或删除。尽力而为——失败会记录 WARNING，但绝不会阻断底层写入。默认开启；取消勾选即可退出。需重启才能生效。",
+    "addon.auto_backup_throttle_minutes.name": "自动备份节流（分钟）",
+    "addon.auto_backup_throttle_minutes.description": "按实体的节流窗口。0（默认）表示每次被封装的写入都捕获快照。N>0 表示每个实体每 N 分钟最多捕获一次快照。范围 0–1440。",
+    "addon.auto_backup_retain_per_entity.name": "自动备份保留数量（每个实体）",
+    "addon.auto_backup_retain_per_entity.description": "每个实体保留的最大快照数量。超出该上限的较旧快照会在每次成功捕获时被轮换清除。默认 100，范围 1–10000。",
+    "addon.enable_snapshot_delete.name": "允许删除快照",
+    "addon.enable_snapshot_delete.description": "允许 ha_manage_backup 删除完整的 HA 快照 tarball（scope='snapshot', action='delete'）。默认关闭——快照可能是错误更改之后最后的恢复点，因此必须由人工在此主动开启。即使开启，计划备份、最新剩余的快照，以及比下方年龄下限更新的快照仍受保护。",
+    "addon.snapshot_delete_min_age_days.name": "可删除快照的最小年龄（天）",
+    "addon.snapshot_delete_min_age_days.description": "快照至少要达到此天数才能被删除。范围 0–365；0 表示禁用该下限（最新快照和计划备份的保护仍然有效）。默认 7。",
+    "addon.disabled_tools.name": "已禁用的工具（以逗号分隔）",
+    "addon.disabled_tools.description": "此处列出的工具会被强制关闭，并在网页设置界面（“工具”选项卡）中锁定——在取消此选项之前无法在那里重新启用。少数必备工具（ha_search、ha_get_overview、ha_get_state、ha_report_issue、ha_manage_backup）无法禁用，即使列在此处也会继续运行。ha_get_skill_guide 仅在严格最佳实践模式（enable_strict_mandatory_bps）关闭时才能禁用。以逗号分隔的工具名称（例如 ha_call_event,ha_eval_template）。",
+    "addon.pinned_tools.name": "已固定的工具（以逗号分隔）",
+    "addon.pinned_tools.description": "此处列出的工具会被锁定为固定——它们显示在“工具”选项卡顶部，且在取消此选项之前无法从网页设置界面取消固定。与工具搜索搭配使用时很有用。以逗号分隔的工具名称。",
+    "addon.verify_ssl.name": "验证 TLS 证书",
+    "addon.verify_ssl.description": "验证 Home Assistant 服务器的 TLS 证书。插件通过 Supervisor 代理连接，因此这通常没有影响，应保持启用。仅当你已将插件重新配置为通过公网 HTTPS 主机名与 HA 通信，且证书为自签名或主机名不匹配时才关闭。关闭会削弱传输安全性——除非确有需要，否则请保持开启。需重启才能生效。",
+    "addon_stable.enable_tool_search.description": "用基于搜索的发现取代完整工具目录。将空闲上下文减少约 90%，降至约 5K token。⚠️ 如果客户端自带内置工具搜索/延迟工具（claude.ai、Claude Desktop、Claude Code），请勿启用此功能——两层搜索会相互冲突，且在这些客户端中其内置工具搜索是更好的选择；请保持关闭。工具是否延迟取决于客户端与模型的组合：当你的配置会一次性加载完整目录时才使用此功能——例如没有原生延迟工具的模型（如 Gemini、本地 OpenAI 兼容模型、Claude Haiku）、无论模型如何都会内联全部工具架构的客户端（如 GitHub Copilot CLI），或上下文窗口较小时。部分 Codex 模型和 ChatGPT 也带有延迟工具——请直接向你的客户端/模型确认其具备哪些功能，以免不必要地保持启用此功能。工具通过 ha_search_tools 发现，并通过分类代理（读/写/删）执行。需重启插件才能生效——之后请在你的 AI 客户端中重新连接或刷新 MCP 服务器，以便重新加载工具列表。仅重启插件并不会刷新客户端缓存的工具列表；更改此处的任何设置后都适用这一点。"
   },
   "tool_groups": {
     "Add-ons": "插件",
@@ -456,193 +477,193 @@
     "Zones": "地理区域"
   },
   "tools": {
-    "ha_manage_backup": {
-      "title": "管理备份",
-      "description": "多态备份工具。详见工具描述中的路由矩阵。"
+    "ha_bulk_control": {
+      "title": "批量控制",
+      "description": "支持批量操作与 WebSocket 跟踪，同时控制多个设备。"
     },
-    "ha_get_addon": {
-      "title": "获取插件",
-      "description": "获取 Home Assistant 插件——列出已安装、可安装的，或查看某一个的详情。"
+    "ha_call_event": {
+      "title": "调用事件",
+      "description": "在 Home Assistant 事件总线上执行自定义事件。"
     },
-    "ha_manage_addon": {
-      "title": "管理插件",
-      "description": "管理 Home Assistant 插件——更新其配置或调用其内部 API。"
-    },
-    "ha_list_floors_areas": {
-      "title": "列出楼层与区域",
-      "description": "按楼层层级升序列出楼层，每层嵌套其所属区域，并包含未分配楼层的区域。"
-    },
-    "ha_set_area_or_floor": {
-      "title": "创建或更新区域或楼层",
-      "description": "创建或更新 Home Assistant 的区域或楼层。"
-    },
-    "ha_remove_area_or_floor": {
-      "title": "删除区域或楼层",
-      "description": "删除 Home Assistant 的区域或楼层。"
-    },
-    "ha_get_blueprint": {
-      "title": "获取蓝图",
-      "description": "获取蓝图信息——列出所有蓝图或查看某一个的详情。"
-    },
-    "ha_import_blueprint": {
-      "title": "导入蓝图",
-      "description": "从 URL 导入蓝图。"
-    },
-    "ha_report_issue": {
-      "title": "报告问题或反馈",
-      "description": "获取诊断信息和用于提交问题报告或反馈的模板。"
-    },
-    "ha_config_get_calendar_events": {
-      "title": "获取日历事件",
-      "description": "从日历实体获取日历事件。"
-    },
-    "ha_config_set_calendar_event": {
-      "title": "创建或更新日历事件",
-      "description": "在日历中创建新事件。"
-    },
-    "ha_config_remove_calendar_event": {
-      "title": "删除日历事件",
-      "description": "从日历中删除事件。"
-    },
-    "ha_get_camera_image": {
-      "title": "获取摄像头画面",
-      "description": "从 Home Assistant 摄像头实体获取快照画面。"
-    },
-    "ha_config_get_category": {
-      "title": "获取类别",
-      "description": "获取类别信息——列出某作用域下的所有类别，或按 ID 查看特定类别。"
-    },
-    "ha_config_set_category": {
-      "title": "创建或更新类别",
-      "description": "创建或更新 Home Assistant 类别。"
-    },
-    "ha_config_remove_category": {
-      "title": "删除类别",
-      "description": "删除 Home Assistant 类别。"
-    },
-    "ha_manage_custom_tool": {
-      "title": "自定义工具",
-      "description": "在沙箱中创建并运行自定义工具，或管理已保存的自定义工具。"
-    },
-    "ha_config_get_automation": {
-      "title": "获取自动化配置",
-      "description": "获取 Home Assistant 自动化配置。"
-    },
-    "ha_config_set_automation": {
-      "title": "创建或更新自动化",
-      "description": "创建或更新 Home Assistant 自动化。"
-    },
-    "ha_config_remove_automation": {
-      "title": "删除自动化",
-      "description": "删除 Home Assistant 自动化。"
-    },
-    "ha_config_get_dashboard": {
-      "title": "获取仪表盘",
-      "description": "获取仪表盘信息——列出所有仪表盘、获取配置，或搜索卡片。"
-    },
-    "ha_config_set_dashboard": {
-      "title": "创建或更新仪表盘",
-      "description": "创建或更新 Home Assistant 仪表盘。"
+    "ha_call_service": {
+      "title": "调用服务",
+      "description": "执行 Home Assistant 服务以控制实体并触发自动化。"
     },
     "ha_config_delete_dashboard": {
       "title": "删除仪表盘",
       "description": "彻底删除存储模式（storage-mode）的仪表盘。"
     },
-    "ha_config_list_helpers": {
-      "title": "列出辅助实体",
-      "description": "列出特定类型的 Home Assistant 辅助实体及其配置。"
+    "ha_config_delete_dashboard_resource": {
+      "title": "删除仪表盘资源",
+      "description": "删除仪表盘资源。"
     },
-    "ha_config_set_helper": {
-      "title": "创建或更新辅助实体",
-      "description": "创建或更新 Home Assistant 辅助实体与配置子条目（28 种类型，统一接口）。"
+    "ha_config_get_automation": {
+      "title": "获取自动化配置",
+      "description": "获取 Home Assistant 自动化配置。"
+    },
+    "ha_config_get_calendar_events": {
+      "title": "获取日历事件",
+      "description": "从日历实体获取日历事件。"
+    },
+    "ha_config_get_category": {
+      "title": "获取类别",
+      "description": "获取类别信息——列出某作用域下的所有类别，或按 ID 查看特定类别。"
+    },
+    "ha_config_get_dashboard": {
+      "title": "获取仪表盘",
+      "description": "获取仪表盘信息——列出所有仪表盘、获取配置，或搜索卡片。"
+    },
+    "ha_config_get_label": {
+      "title": "获取标签",
+      "description": "获取标签信息——列出所有标签或按 ID 查看特定标签。"
     },
     "ha_config_get_scene": {
       "title": "获取场景配置",
       "description": "获取 Home Assistant 场景配置。"
     },
-    "ha_config_set_scene": {
-      "title": "创建或更新场景",
-      "description": "创建或更新 Home Assistant 场景。"
-    },
-    "ha_config_remove_scene": {
-      "title": "删除场景",
-      "description": "删除 Home Assistant 场景。"
-    },
     "ha_config_get_script": {
       "title": "获取脚本配置",
       "description": "获取 Home Assistant 脚本配置。"
     },
-    "ha_config_set_script": {
-      "title": "创建或更新脚本",
-      "description": "创建或更新 Home Assistant 脚本。"
+    "ha_config_get_yaml": {
+      "title": "读取 YAML 配置片段",
+      "description": "从单个配置文件或 glob 匹配中，获取某个键下的当前 YAML 配置片段。"
     },
-    "ha_config_remove_script": {
-      "title": "删除脚本",
-      "description": "删除 Home Assistant 脚本。"
-    },
-    "ha_get_dashboard_screenshot": {
-      "title": "获取仪表盘截图",
-      "description": "获取 Home Assistant Lovelace 仪表盘视图的渲染图片。"
-    },
-    "ha_dev_manage_settings": {
-      "title": "管理服务器设置（开发者）",
-      "description": "管理 ha-mcp 服务器设置以及“工具”/“工具安全策略”/“备份”页面（开发者模式）。"
-    },
-    "ha_dev_manage_server": {
-      "title": "管理 MCP 服务器（开发者）",
-      "description": "管理正在运行的 ha-mcp 服务器本身（开发者模式）。"
-    },
-    "ha_manage_energy_prefs": {
-      "title": "管理能源仪表盘偏好",
-      "description": "管理 Home Assistant 能源仪表盘的偏好设置。"
-    },
-    "ha_set_entity": {
-      "title": "设置实体",
-      "description": "更新实体注册表中的实体属性。"
-    },
-    "ha_get_entity": {
-      "title": "获取实体",
-      "description": "获取一个或多个实体的实体注册表信息。"
-    },
-    "ha_remove_entity": {
-      "title": "删除实体",
-      "description": "从 Home Assistant 实体注册表中删除一个或多个实体。"
-    },
-    "ha_list_files": {
-      "title": "列出文件",
-      "description": "列出 Home Assistant 配置目录中某个目录下的文件。"
-    },
-    "ha_read_file": {
-      "title": "读取文件",
-      "description": "从 Home Assistant 配置目录读取文件。"
-    },
-    "ha_write_file": {
-      "title": "写入文件",
-      "description": "将文件写入 Home Assistant 配置中允许的目录。"
-    },
-    "ha_delete_file": {
-      "title": "删除文件",
-      "description": "从 Home Assistant 配置中允许的目录删除文件。"
+    "ha_config_list_dashboard_resources": {
+      "title": "列出仪表盘资源",
+      "description": "列出 Lovelace 仪表盘资源（自定义卡片、主题、CSS/JS）。"
     },
     "ha_config_list_groups": {
       "title": "列出分组",
       "description": "列出 Home Assistant 实体分组及其成员实体。"
     },
-    "ha_config_set_group": {
-      "title": "创建或更新分组",
-      "description": "通过 group.set 服务创建或更新基于服务的 Home Assistant 实体分组。"
+    "ha_config_list_helpers": {
+      "title": "列出辅助实体",
+      "description": "列出特定类型的 Home Assistant 辅助实体及其配置。"
+    },
+    "ha_config_remove_automation": {
+      "title": "删除自动化",
+      "description": "删除 Home Assistant 自动化。"
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "删除日历事件",
+      "description": "从日历中删除事件。"
+    },
+    "ha_config_remove_category": {
+      "title": "删除类别",
+      "description": "删除 Home Assistant 类别。"
     },
     "ha_config_remove_group": {
       "title": "删除分组",
       "description": "通过 group.remove 服务删除基于服务的 Home Assistant 实体分组。"
     },
+    "ha_config_remove_label": {
+      "title": "删除标签",
+      "description": "删除 Home Assistant 标签。"
+    },
+    "ha_config_remove_scene": {
+      "title": "删除场景",
+      "description": "删除 Home Assistant 场景。"
+    },
+    "ha_config_remove_script": {
+      "title": "删除脚本",
+      "description": "删除 Home Assistant 脚本。"
+    },
+    "ha_config_set_automation": {
+      "title": "创建或更新自动化",
+      "description": "创建或更新 Home Assistant 自动化。"
+    },
+    "ha_config_set_calendar_event": {
+      "title": "创建或更新日历事件",
+      "description": "在日历中创建新事件。"
+    },
+    "ha_config_set_category": {
+      "title": "创建或更新类别",
+      "description": "创建或更新 Home Assistant 类别。"
+    },
+    "ha_config_set_dashboard": {
+      "title": "创建或更新仪表盘",
+      "description": "创建或更新 Home Assistant 仪表盘。"
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "设置仪表盘资源",
+      "description": "创建或更新仪表盘资源（内联代码或外部 URL）。"
+    },
+    "ha_config_set_group": {
+      "title": "创建或更新分组",
+      "description": "通过 group.set 服务创建或更新基于服务的 Home Assistant 实体分组。"
+    },
+    "ha_config_set_helper": {
+      "title": "创建或更新辅助实体",
+      "description": "创建或更新 Home Assistant 辅助实体与配置子条目（28 种类型，统一接口）。"
+    },
+    "ha_config_set_label": {
+      "title": "创建或更新标签",
+      "description": "创建或更新 Home Assistant 标签。"
+    },
+    "ha_config_set_scene": {
+      "title": "创建或更新场景",
+      "description": "创建或更新 Home Assistant 场景。"
+    },
+    "ha_config_set_script": {
+      "title": "创建或更新脚本",
+      "description": "创建或更新 Home Assistant 脚本。"
+    },
+    "ha_config_set_yaml": {
+      "title": "原始 YAML 配置编辑",
+      "description": "更新 configuration.yaml、packages/*.yaml 或 themes/*.yaml 中的原始 YAML 配置（最后手段）。"
+    },
+    "ha_delete_file": {
+      "title": "删除文件",
+      "description": "从 Home Assistant 配置中允许的目录删除文件。"
+    },
+    "ha_dev_manage_server": {
+      "title": "管理 MCP 服务器（开发者）",
+      "description": "管理正在运行的 ha-mcp 服务器本身（开发者模式）。"
+    },
+    "ha_dev_manage_settings": {
+      "title": "管理服务器设置（开发者）",
+      "description": "管理 ha-mcp 服务器设置以及“工具”/“工具安全策略”/“备份”页面（开发者模式）。"
+    },
+    "ha_eval_template": {
+      "title": "评估模板",
+      "description": "使用 Home Assistant 的模板引擎评估 Jinja2 模板。"
+    },
+    "ha_get_addon": {
+      "title": "获取插件",
+      "description": "获取 Home Assistant 插件——列出已安装、可安装的，或查看某一个的详情。"
+    },
+    "ha_get_automation_traces": {
+      "title": "获取自动化追踪",
+      "description": "获取自动化与脚本的执行追踪以排查问题。"
+    },
+    "ha_get_blueprint": {
+      "title": "获取蓝图",
+      "description": "获取蓝图信息——列出所有蓝图或查看某一个的详情。"
+    },
+    "ha_get_camera_image": {
+      "title": "获取摄像头画面",
+      "description": "从 Home Assistant 摄像头实体获取快照画面。"
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "获取仪表盘截图",
+      "description": "获取 Home Assistant Lovelace 仪表盘视图的渲染图片。"
+    },
+    "ha_get_device": {
+      "title": "获取设备（含 Zigbee/ZHA/Z2M、Z-Wave 与 Matter）",
+      "description": "获取设备信息并支持分页，包含 Zigbee（ZHA/Z2M）与 Z-Wave JS 设备。"
+    },
+    "ha_get_entity": {
+      "title": "获取实体",
+      "description": "获取一个或多个实体的实体注册表信息。"
+    },
+    "ha_get_entity_exposure": {
+      "title": "获取实体暴露设置",
+      "description": "获取实体暴露（exposure）设置——列出全部或获取特定实体的设置。"
+    },
     "ha_get_hacs_info": {
       "title": "获取 HACS 信息",
       "description": "获取 HACS（Home Assistant 社区商店）数据——搜索商店或获取仓库详情。"
-    },
-    "ha_manage_hacs": {
-      "title": "管理 HACS",
-      "description": "管理 HACS（Home Assistant 社区商店）——安装/更新或添加自定义仓库。"
     },
     "ha_get_history": {
       "title": "获取实体历史或统计",
@@ -652,57 +673,13 @@
       "title": "获取集成",
       "description": "获取集成（配置条目）信息，支持分页。"
     },
-    "ha_set_integration": {
-      "title": "设置集成",
-      "description": "管理集成（配置条目）：启用/禁用、添加或更新选项。"
+    "ha_get_logs": {
+      "title": "获取日志",
+      "description": "从多个来源获取 Home Assistant 日志。"
     },
-    "ha_remove_helpers_integrations": {
-      "title": "删除辅助实体或集成",
-      "description": "删除 Home Assistant 的辅助实体或集成配置条目。"
-    },
-    "ha_config_get_label": {
-      "title": "获取标签",
-      "description": "获取标签信息——列出所有标签或按 ID 查看特定标签。"
-    },
-    "ha_config_set_label": {
-      "title": "创建或更新标签",
-      "description": "创建或更新 Home Assistant 标签。"
-    },
-    "ha_config_remove_label": {
-      "title": "删除标签",
-      "description": "删除 Home Assistant 标签。"
-    },
-    "ha_manage_radio": {
-      "title": "管理无线电（Z-Wave / Zigbee / Matter / Thread）",
-      "description": "管理 Home Assistant 的无线电——Z-Wave、Zigbee、Matter 与 Thread。"
-    },
-    "ha_get_device": {
-      "title": "获取设备（含 Zigbee/ZHA/Z2M、Z-Wave 与 Matter）",
-      "description": "获取设备信息并支持分页，包含 Zigbee（ZHA/Z2M）与 Z-Wave JS 设备。"
-    },
-    "ha_set_device": {
-      "title": "设置设备",
-      "description": "更新设备的属性，例如名称、区域、禁用状态或标签。"
-    },
-    "ha_remove_device": {
-      "title": "删除设备",
-      "description": "从 Home Assistant 设备注册表中删除孤立设备。"
-    },
-    "ha_config_list_dashboard_resources": {
-      "title": "列出仪表盘资源",
-      "description": "列出 Lovelace 仪表盘资源（自定义卡片、主题、CSS/JS）。"
-    },
-    "ha_config_set_dashboard_resource": {
-      "title": "设置仪表盘资源",
-      "description": "创建或更新仪表盘资源（内联代码或外部 URL）。"
-    },
-    "ha_config_delete_dashboard_resource": {
-      "title": "删除仪表盘资源",
-      "description": "删除仪表盘资源。"
-    },
-    "ha_search": {
-      "title": "搜索",
-      "description": "通过名称、域或区域搜索实体（灯光、传感器、开关、温控等），并在一次调用中同时检索自动化/脚本/场景/辅助实体/仪表盘配置内部。"
+    "ha_get_operation_status": {
+      "title": "获取操作状态",
+      "description": "通过实时 WebSocket 校验，检查一个或多个设备操作的状态。"
     },
     "ha_get_overview": {
       "title": "获取系统概览",
@@ -712,97 +689,141 @@
       "title": "获取实体状态",
       "description": "获取一个或多个实体的当前状态、state 与属性（灯光、开关、传感器、温控、覆盖件、锁、风扇等）。"
     },
-    "ha_call_service": {
-      "title": "调用服务",
-      "description": "执行 Home Assistant 服务以控制实体并触发自动化。"
-    },
-    "ha_get_operation_status": {
-      "title": "获取操作状态",
-      "description": "通过实时 WebSocket 校验，检查一个或多个设备操作的状态。"
-    },
-    "ha_bulk_control": {
-      "title": "批量控制",
-      "description": "支持批量操作与 WebSocket 跟踪，同时控制多个设备。"
-    },
-    "ha_call_event": {
-      "title": "调用事件",
-      "description": "在 Home Assistant 事件总线上执行自定义事件。"
-    },
-    "ha_list_services": {
-      "title": "列出可用服务",
-      "description": "列出 Home Assistant 可用服务，支持可选分页与详细程度控制。"
-    },
-    "ha_restart": {
-      "title": "重启 Home Assistant",
-      "description": "重启 Home Assistant。"
-    },
-    "ha_reload_core": {
-      "title": "重载核心组件",
-      "description": "在不完全重启的情况下重载 Home Assistant 配置。"
-    },
     "ha_get_system_health": {
       "title": "获取系统健康（含 ZHA/Z-Wave/集成诊断）",
       "description": "获取 Home Assistant 系统健康状态，包含 Zigbee（ZHA）、Z-Wave JS 及各集成诊断转储。"
-    },
-    "ha_manage_theme": {
-      "title": "管理前端主题",
-      "description": "管理 Home Assistant 前端主题。"
     },
     "ha_get_todo": {
       "title": "获取待办",
       "description": "获取待办清单或条目——列出所有待办清单或获取某个清单中的条目。"
     },
-    "ha_set_todo_item": {
-      "title": "设置待办条目",
-      "description": "在 Home Assistant 中创建或更新待办条目。"
+    "ha_get_zone": {
+      "title": "获取区域",
+      "description": "获取区域信息——列出所有区域或查看某一个的详情。"
     },
-    "ha_remove_todo_item": {
-      "title": "删除待办条目",
-      "description": "从 Home Assistant 待办清单中删除条目。"
+    "ha_import_blueprint": {
+      "title": "导入蓝图",
+      "description": "从 URL 导入蓝图。"
     },
-    "ha_get_automation_traces": {
-      "title": "获取自动化追踪",
-      "description": "获取自动化与脚本的执行追踪以排查问题。"
+    "ha_list_files": {
+      "title": "列出文件",
+      "description": "列出 Home Assistant 配置目录中某个目录下的文件。"
     },
-    "ha_manage_updates": {
-      "title": "管理更新",
-      "description": "管理 Home Assistant 更新——列出、查看详情、批量安装、跳过或取消跳过。"
+    "ha_list_floors_areas": {
+      "title": "列出楼层与区域",
+      "description": "按楼层层级升序列出楼层，每层嵌套其所属区域，并包含未分配楼层的区域。"
     },
-    "ha_get_logs": {
-      "title": "获取日志",
-      "description": "从多个来源获取 Home Assistant 日志。"
+    "ha_list_services": {
+      "title": "列出可用服务",
+      "description": "列出 Home Assistant 可用服务，支持可选分页与详细程度控制。"
     },
-    "ha_eval_template": {
-      "title": "评估模板",
-      "description": "使用 Home Assistant 的模板引擎评估 Jinja2 模板。"
+    "ha_manage_addon": {
+      "title": "管理插件",
+      "description": "管理 Home Assistant 插件——更新其配置或调用其内部 API。"
+    },
+    "ha_manage_backup": {
+      "title": "管理备份",
+      "description": "多态备份工具。详见工具描述中的路由矩阵。"
+    },
+    "ha_manage_custom_tool": {
+      "title": "自定义工具",
+      "description": "在沙箱中创建并运行自定义工具，或管理已保存的自定义工具。"
+    },
+    "ha_manage_energy_prefs": {
+      "title": "管理能源仪表盘偏好",
+      "description": "管理 Home Assistant 能源仪表盘的偏好设置。"
+    },
+    "ha_manage_hacs": {
+      "title": "管理 HACS",
+      "description": "管理 HACS（Home Assistant 社区商店）——安装/更新或添加自定义仓库。"
     },
     "ha_manage_pipeline": {
       "title": "管理 Assist 管线",
       "description": "管理 Home Assistant Assist 语音管线。"
     },
-    "ha_get_entity_exposure": {
-      "title": "获取实体暴露设置",
-      "description": "获取实体暴露（exposure）设置——列出全部或获取特定实体的设置。"
+    "ha_manage_radio": {
+      "title": "管理无线电（Z-Wave / Zigbee / Matter / Thread）",
+      "description": "管理 Home Assistant 的无线电——Z-Wave、Zigbee、Matter 与 Thread。"
     },
-    "ha_config_set_yaml": {
-      "title": "原始 YAML 配置编辑",
-      "description": "更新 configuration.yaml、packages/*.yaml 或 themes/*.yaml 中的原始 YAML 配置（最后手段）。"
+    "ha_manage_theme": {
+      "title": "管理前端主题",
+      "description": "管理 Home Assistant 前端主题。"
     },
-    "ha_config_get_yaml": {
-      "title": "读取 YAML 配置片段",
-      "description": "从单个配置文件或 glob 匹配中，获取某个键下的当前 YAML 配置片段。"
+    "ha_manage_updates": {
+      "title": "管理更新",
+      "description": "管理 Home Assistant 更新——列出、查看详情、批量安装、跳过或取消跳过。"
     },
-    "ha_get_zone": {
-      "title": "获取区域",
-      "description": "获取区域信息——列出所有区域或查看某一个的详情。"
+    "ha_read_file": {
+      "title": "读取文件",
+      "description": "从 Home Assistant 配置目录读取文件。"
+    },
+    "ha_reload_core": {
+      "title": "重载核心组件",
+      "description": "在不完全重启的情况下重载 Home Assistant 配置。"
+    },
+    "ha_remove_area_or_floor": {
+      "title": "删除区域或楼层",
+      "description": "删除 Home Assistant 的区域或楼层。"
+    },
+    "ha_remove_device": {
+      "title": "删除设备",
+      "description": "从 Home Assistant 设备注册表中删除孤立设备。"
+    },
+    "ha_remove_entity": {
+      "title": "删除实体",
+      "description": "从 Home Assistant 实体注册表中删除一个或多个实体。"
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "删除辅助实体或集成",
+      "description": "删除 Home Assistant 的辅助实体或集成配置条目。"
+    },
+    "ha_remove_todo_item": {
+      "title": "删除待办条目",
+      "description": "从 Home Assistant 待办清单中删除条目。"
+    },
+    "ha_remove_zone": {
+      "title": "删除区域",
+      "description": "删除 Home Assistant 区域。"
+    },
+    "ha_report_issue": {
+      "title": "报告问题或反馈",
+      "description": "获取诊断信息和用于提交问题报告或反馈的模板。"
+    },
+    "ha_restart": {
+      "title": "重启 Home Assistant",
+      "description": "重启 Home Assistant。"
+    },
+    "ha_search": {
+      "title": "搜索",
+      "description": "通过名称、域或区域搜索实体（灯光、传感器、开关、温控等），并在一次调用中同时检索自动化/脚本/场景/辅助实体/仪表盘配置内部。"
+    },
+    "ha_set_area_or_floor": {
+      "title": "创建或更新区域或楼层",
+      "description": "创建或更新 Home Assistant 的区域或楼层。"
+    },
+    "ha_set_device": {
+      "title": "设置设备",
+      "description": "更新设备的属性，例如名称、区域、禁用状态或标签。"
+    },
+    "ha_set_entity": {
+      "title": "设置实体",
+      "description": "更新实体注册表中的实体属性。"
+    },
+    "ha_set_integration": {
+      "title": "设置集成",
+      "description": "管理集成（配置条目）：启用/禁用、添加或更新选项。"
+    },
+    "ha_set_todo_item": {
+      "title": "设置待办条目",
+      "description": "在 Home Assistant 中创建或更新待办条目。"
     },
     "ha_set_zone": {
       "title": "设置区域",
       "description": "创建或更新 Home Assistant 区域。"
     },
-    "ha_remove_zone": {
-      "title": "删除区域",
-      "description": "删除 Home Assistant 区域。"
+    "ha_write_file": {
+      "title": "写入文件",
+      "description": "将文件写入 Home Assistant 配置中允许的目录。"
     }
   }
 }
