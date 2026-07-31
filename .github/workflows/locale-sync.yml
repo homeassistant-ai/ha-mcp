@@ -1,5 +1,10 @@
 name: Locale Sync
 
+# ENGINE DRILL — DO NOT MERGE. This branch's copy of the workflow removes the
+# Gemini key and the Claude fallback so the ONLY live engine is the Codex
+# CLI: the run must log a failover from gemini to codex and still commit
+# machine translations.
+
 # Machine-translate stale and missing catalog strings on the PR that changed
 # the English source, so translations are reviewed in the same PR (issue
 # #2083). scripts/translate_locales.py diffs the English-source baseline,
@@ -105,10 +110,6 @@ jobs:
           npm install -g @openai/codex@latest
           echo "Codex CLI fallback ready"
         fi
-        if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-          npm install -g @anthropic-ai/claude-code
-          echo "Claude CLI fallback ready"
-        fi
 
     - name: Translate stale and missing strings
       id: translate
@@ -116,9 +117,6 @@ jobs:
       # halfway through a new language) is still committed; the job is failed
       # afterwards so the gap stays visible and a rerun continues from it.
       continue-on-error: true
-      env:
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       run: uv run python scripts/translate_locales.py
 
     - name: Commit and push if changed

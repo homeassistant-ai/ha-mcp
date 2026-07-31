@@ -164,7 +164,7 @@
     "status.saved_llm_api": "Saved. LLM API exposure applies on the next agent message.",
     "status.saved_reload_failed": "Saved (reload failed; refresh to verify).",
     "status.nothing_editable": "Nothing editable.",
-    "status.stopping": "Stopping...",
+    "status.stopping": "Stopping…",
     "status.stopped_offline": "Stopped. This page will go offline",
     "status.stopped_connection": "Stopped (connection dropped)",
     "status.restarting": "Restarting…",
