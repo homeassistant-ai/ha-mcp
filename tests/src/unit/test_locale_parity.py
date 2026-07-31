@@ -578,6 +578,82 @@ def test_derived_catalogs_match_the_canonical_store() -> None:
     )
 
 
+# The strings shipped from BOTH authored surfaces, by (surface, key).
+# Generation holds cross-surface identity for the derived catalogs, but the
+# component catalog is authored separately from the settings store, so a
+# string shared between those two can still drift: either side can be edited
+# alone. Membership is pinned because the grouping is by English text — a key
+# whose English moves on one side only silently *leaves* the check, which is
+# exactly the drift it exists to catch.
+AUTHORED_SHARED_PLACES = {
+    "src/ha_mcp/settings_ui/locales": (
+        "messages.advanced.extra_yaml_write_keys.label",
+    ),
+    "custom_components/ha_mcp_tools/translations": (
+        "options.step.tools_info.data.extra_yaml_keys",
+    ),
+}
+
+
+@cache
+def _authored_shared_groups() -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    """English strings that appear byte-identical on both authored surfaces."""
+    places: dict[str, list[tuple[str, str]]] = {}
+    for surface, strings in _catalogs_by_surface("en").items():
+        for key, text in strings.items():
+            places.setdefault(text, []).append((surface, key))
+    return tuple(
+        (text, tuple(where))
+        for text, where in places.items()
+        if len({surface for surface, _ in where}) > 1
+    )
+
+
+def test_authored_shared_strings_are_discovered() -> None:
+    """The check below only covers what the grouping still finds."""
+    found: dict[str, set[str]] = {}
+    for _, where in _authored_shared_groups():
+        for surface, key in where:
+            found.setdefault(surface, set()).add(key)
+
+    assert {surface: sorted(keys) for surface, keys in found.items()} == {
+        surface: sorted(keys) for surface, keys in AUTHORED_SHARED_PLACES.items()
+    }, (
+        "the strings shared between the settings store and the component "
+        "catalog are no longer the pinned ones. A key that left usually did "
+        "so because its English moved on one side only — fix the wording, not "
+        "the pin. A key that arrived is newly covered. Update "
+        "AUTHORED_SHARED_PLACES once the difference is the intended one."
+    )
+
+
+@pytest.mark.parametrize("locale", _translated_component_locales())
+def test_authored_shared_strings_read_the_same(locale: str) -> None:
+    """One option described on both authored surfaces reads as one wording."""
+    catalogs = _catalogs_by_surface(locale)
+    divergent = []
+    for english, where in _authored_shared_groups():
+        rendered: dict[str, list[str]] = {}
+        for surface, key in where:
+            value = catalogs[surface].get(key)
+            label = f"{surface}/{locale}: {key}"
+            if value is None:
+                # Settings messages may omit a key; English is the fallback,
+                # so the screen still disagrees with the translated sibling.
+                value, label = english, f"{label} (missing, renders English)"
+            rendered.setdefault(value, []).append(label)
+        if len(rendered) > 1:
+            divergent.append(
+                " vs ".join(", ".join(labels) for labels in rendered.values())
+            )
+
+    assert not divergent, (
+        f"{locale} renders {len(divergent)} English string(s) differently "
+        "depending on the surface — the English is byte-identical, so pick "
+        "one wording for both:\n" + "\n".join(divergent)
+    )
+
+
 def test_connect_local_lan_quotes_the_bind_host_option() -> None:
     """The sentence names an on-screen option, so it has to name that option.
 

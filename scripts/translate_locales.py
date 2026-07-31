@@ -204,8 +204,15 @@ def _plan_settings(plan: Plan, module: Any, changed: dict[str, set[str]]) -> Non
         for key in changed.get(SETTINGS_SURFACE, set())
         if key.startswith("messages.")
     }
+    # A " (parsed)"-suffixed baseline key pins a feature-gated tool's parsed
+    # docstring while the stub is what the UI renders (and what the catalogs
+    # translate). A parsed-only change therefore needs a repin, not a
+    # retranslation — retranslating would overwrite every locale with a fresh
+    # translation of the unchanged stub.
     changed_tools = {
-        key.removesuffix(" (parsed)") for key in changed.get(TOOLS_SURFACE, set())
+        key
+        for key in changed.get(TOOLS_SURFACE, set())
+        if not key.endswith(" (parsed)")
     }
     tool_texts: dict[str, str] = dict(module._english_tool_texts())
     groups, tool_names = module._renderable_groups_and_tools()
@@ -327,9 +334,18 @@ def _call_gemini(prompt: str) -> dict[str, Any]:
     }
     last_error = ""
     for attempt in range(1, 6):
-        response = httpx.post(
-            url, json=body, headers={"x-goog-api-key": api_key}, timeout=180
-        )
+        try:
+            response = httpx.post(
+                url, json=body, headers={"x-goog-api-key": api_key}, timeout=180
+            )
+        except httpx.RequestError as exc:
+            # Connect/read timeouts, DNS failures, resets — as transient as a
+            # 5xx; retry with the same bounded backoff.
+            last_error = f"transport error: {exc!r}"
+            delay = 20 * attempt
+            print(f"  engine {last_error}; retrying in {delay}s", file=sys.stderr)
+            time.sleep(delay)
+            continue
         if response.status_code == 200:
             payload = response.json()
             text = payload["candidates"][0]["content"]["parts"][0]["text"]
