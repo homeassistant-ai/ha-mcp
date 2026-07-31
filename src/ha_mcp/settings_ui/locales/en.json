@@ -155,7 +155,7 @@
     "actions.dismiss": "Dismiss",
     "status.loaded": "Loaded",
     "status.loading_ellipsis": "Loading…",
-    "status.loading_parentheses": "(loading...)",
+    "status.loading_parentheses": "(loading…)",
     "status.unsaved": "Unsaved changes...",
     "status.saving": "Saving…",
     "status.saving_server_setting": "Saving server setting...",
