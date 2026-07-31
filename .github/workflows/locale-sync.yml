@@ -65,10 +65,14 @@ jobs:
     - uses: actions/checkout@v7
       with:
         ref: ${{ github.event.pull_request.head.ref || github.ref }}
-        # An App/PAT token here does double duty: its push survives branch
-        # rules and, unlike the default GITHUB_TOKEN, the push triggers the
-        # PR checks on the new head commit instead of leaving them unreported.
-        token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        # Never leave a credential in the checkout: the translate step below
+        # executes PR-head code (the scripts and the package they import),
+        # which must not be able to read the privileged push token. The push
+        # step authenticates itself explicitly instead. GEMINI_API_KEY is the
+        # one secret that PR-head code necessarily sees (the translate step
+        # is that code); it is a free-tier, rotatable key, and fork PRs —
+        # the untrusted case — never reach this job at all.
+        persist-credentials: false
 
     - name: Install uv
       uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -87,6 +91,14 @@ jobs:
       run: uv run python scripts/translate_locales.py
 
     - name: Commit and push if changed
+      env:
+        # An App/PAT token here does double duty: its push survives branch
+        # rules and, unlike the default GITHUB_TOKEN, the push triggers the
+        # PR checks on the new head commit instead of leaving them
+        # unreported. Scoped to this step — which runs only git, never
+        # repository code — so PR-head code cannot read it.
+        PUSH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -99,7 +111,7 @@ jobs:
           exit 0
         fi
         git commit -m "chore(internal): machine-translate locale updates"
-        git push
+        git push "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${BRANCH}"
 
     - name: Fail if translation failed
       if: steps.translate.outcome != 'success'
