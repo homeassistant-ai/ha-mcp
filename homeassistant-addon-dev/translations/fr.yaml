@@ -1,7 +1,7 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
 # src/ha_mcp/settings_ui/locales/fr.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   backup_hint:
     name: Niveau d'indication d'instantané HA complet (côté LLM)

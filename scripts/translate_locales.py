@@ -18,8 +18,10 @@ is described to the engine by the catalog's own ``meta.native_name``):
 - ``custom_components/ha_mcp_tools/translations/<code>.json``
 
 The engine is one function (``_call_gemini``): the Gemini API free tier, keyed
-by ``GEMINI_API_KEY``. ``GEMINI_MODEL`` / ``GEMINI_API_URL`` override the
-default model and endpoint, so swapping providers is a one-function change.
+by ``GEMINI_API_KEY``, with ``GEMINI_MODEL`` / ``GEMINI_API_URL`` overrides for
+Gemini-compatible endpoints. A genuinely different provider means editing
+``_call_gemini`` itself (its response parsing is Gemini-shaped) — still a
+one-function change.
 Every returned string is validated (placeholder parity, the settings UI markup
 allowlist, panel-link parity) before it is written; a failure leaves that
 string unwritten and the run red rather than shipping a broken translation.
@@ -40,7 +42,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, NamedTuple
 
 import httpx
 
@@ -80,12 +82,26 @@ _STYLE_SAMPLE_KEYS = (
 )
 
 
+# Closed set: the apply functions branch on this and raise on anything else,
+# so a typo'd section fails loudly instead of silently dropping a translation
+# or leaving an orphan behind.
+Section = Literal["messages", "tools", "tool_groups", "component"]
+
+
+class ItemRef(NamedTuple):
+    """One (locale, section, key) address — shared by deletions and errors."""
+
+    locale: str
+    section: Section
+    key: str
+
+
 @dataclass
 class WorkItem:
     """One string to translate for one locale."""
 
     locale: str
-    section: str  # "messages" | "tools" | "tool_groups" | "component"
+    section: Section
     key: str  # dotted target key ("<tool>.title" inside tools)
     english: str
 
@@ -93,7 +109,7 @@ class WorkItem:
 @dataclass
 class Plan:
     items: list[WorkItem] = field(default_factory=list)
-    deletions: list[tuple[str, str, str]] = field(default_factory=list)
+    deletions: list[ItemRef] = field(default_factory=list)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -128,12 +144,25 @@ def _target_locales() -> list[str]:
 
 
 def _flatten(value: Any, prefix: str = "") -> dict[str, str]:
+    """Flatten a catalog to dotted keys, refusing shapes it cannot round-trip.
+
+    ``_apply_component`` rewrites whole files through this flatten/unflatten
+    pair, so a silently dropped leaf (a list-valued selector option, say)
+    would be silently DELETED from every translated catalog by an unattended
+    CI run. Fail loudly instead; extend the round-trip when a non-string leaf
+    legitimately appears.
+    """
     flat: dict[str, str] = {}
     if isinstance(value, dict):
         for key, item in value.items():
             flat.update(_flatten(item, f"{prefix}.{key}" if prefix else key))
     elif isinstance(value, str):
         flat[prefix] = value
+    else:
+        raise ValueError(
+            f"catalog leaf {prefix!r} is {type(value).__name__}, not str — "
+            "the translate pipeline only round-trips string leaves"
+        )
     return flat
 
 
@@ -160,7 +189,7 @@ def _plan_locale_messages(
             plan.items.append(WorkItem(locale, "messages", key, text))
     for key in messages:
         if key not in en_messages:
-            plan.deletions.append((locale, "messages", key))
+            plan.deletions.append(ItemRef(locale=locale, section="messages", key=key))
 
 
 def _plan_locale_tools(
@@ -182,7 +211,7 @@ def _plan_locale_tools(
                 )
     for name in tools:
         if name not in tool_names:
-            plan.deletions.append((locale, "tools", name))
+            plan.deletions.append(ItemRef(locale=locale, section="tools", key=name))
 
 
 def _plan_locale_groups(
@@ -194,7 +223,9 @@ def _plan_locale_groups(
             plan.items.append(WorkItem(locale, "tool_groups", group, group))
     for group in tool_groups:
         if group not in groups:
-            plan.deletions.append((locale, "tool_groups", group))
+            plan.deletions.append(
+                ItemRef(locale=locale, section="tool_groups", key=group)
+            )
 
 
 def _plan_settings(plan: Plan, module: Any, changed: dict[str, set[str]]) -> None:
@@ -220,7 +251,7 @@ def _plan_settings(plan: Plan, module: Any, changed: dict[str, set[str]]) -> Non
     for locale in _target_locales():
         catalog = _load_json(LOCALES_DIR / f"{locale}.json")
         _plan_locale_messages(
-            plan, locale, en_messages, catalog["messages"], changed_messages
+            plan, locale, en_messages, catalog.get("messages", {}), changed_messages
         )
         _plan_locale_tools(plan, locale, catalog, changed_tools, tool_texts, tool_names)
         _plan_locale_groups(plan, locale, catalog, groups)
@@ -238,7 +269,9 @@ def _plan_component(plan: Plan, changed: dict[str, set[str]]) -> None:
                 plan.items.append(WorkItem(path.stem, "component", key, text))
         for key in flat:
             if key not in en_flat:
-                plan.deletions.append((path.stem, "component", key))
+                plan.deletions.append(
+                    ItemRef(locale=path.stem, section="component", key=key)
+                )
 
 
 def build_plan(module: Any) -> Plan:
@@ -348,8 +381,16 @@ def _call_gemini(prompt: str) -> dict[str, Any]:
             continue
         if response.status_code == 200:
             payload = response.json()
-            text = payload["candidates"][0]["content"]["parts"][0]["text"]
-            parsed: dict[str, Any] = json.loads(text)
+            try:
+                text = payload["candidates"][0]["content"]["parts"][0]["text"]
+                parsed: dict[str, Any] = json.loads(text)
+            except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+                # An empty/filtered candidate list or non-JSON answer should
+                # read like the HTTP failures, not a raw traceback.
+                raise SystemExit(
+                    f"Gemini API returned an unusable response ({exc!r}): "
+                    f"{json.dumps(payload)[:300]}"
+                ) from exc
             return parsed
         last_error = f"HTTP {response.status_code}: {response.text[:300]}"
         if response.status_code in (429, 500, 502, 503, 504):
@@ -406,14 +447,24 @@ def _accept_or_retry(
             failures.append(f"{locale}/{item.section}/{item.key}: {reason}")
 
 
+# Consecutive chunk-level engine failures before the run stops calling the
+# engine at all. One failure can be content-specific (e.g. a safety-filter
+# block on one chunk's strings); two in a row reads as systemic (quota
+# exhausted, endpoint down), where further calls only burn retry backoff.
+_ENGINE_GIVE_UP_AFTER = 2
+
+
 def _translate_locale(
     locale: str, items: list[WorkItem]
-) -> tuple[dict[tuple[str, str], str], list[str]]:
+) -> tuple[dict[tuple[str, str], str], list[str], bool]:
     """Translate one locale's strings, deduplicated by English text.
 
-    Returns ``{(section, key): translation}`` plus a list of failures. One
-    English string translated once is applied to every target that shares it,
-    keeping cross-surface wording consistent by construction.
+    Returns ``{(section, key): translation}``, a list of failures, and
+    whether the engine was declared dead for the rest of the run. One English
+    string translated once is applied to every target that shares it, keeping
+    cross-surface wording consistent by construction. A chunk-level engine
+    failure marks that chunk's strings failed and moves on, so one blocked or
+    truncated batch cannot take down the whole run.
     """
     unique: dict[str, list[WorkItem]] = {}
     for item in items:
@@ -422,8 +473,21 @@ def _translate_locale(
 
     results: dict[tuple[str, str], str] = {}
     failures: list[str] = []
+    consecutive_engine_failures = 0
     for chunk in _chunk(by_id):
-        response = _call_gemini(_prompt(locale, chunk))
+        try:
+            response = _call_gemini(_prompt(locale, chunk))
+        except SystemExit as exc:
+            consecutive_engine_failures += 1
+            failures += [
+                f"{locale}/{item.section}/{item.key}: engine call failed ({exc})"
+                for english in chunk.values()
+                for item in unique[english]
+            ]
+            if consecutive_engine_failures >= _ENGINE_GIVE_UP_AFTER:
+                return results, failures, True
+            continue
+        consecutive_engine_failures = 0
         time.sleep(_SECONDS_BETWEEN_REQUESTS)
         for string_id, english in chunk.items():
             _accept_or_retry(
@@ -435,21 +499,25 @@ def _translate_locale(
                 results,
                 failures,
             )
-    return results, failures
+    return results, failures, False
 
 
 def _delete_from_settings(
-    catalog: dict[str, Any], locale: str, deletions: list[tuple[str, str, str]]
+    catalog: dict[str, Any], locale: str, deletions: list[ItemRef]
 ) -> None:
     for own_locale, section, key in deletions:
         if own_locale != locale:
             continue
         if section == "messages":
-            catalog["messages"].pop(key, None)
+            catalog.get("messages", {}).pop(key, None)
         elif section == "tools":
             catalog.get("tools", {}).pop(key, None)
         elif section == "tool_groups":
             catalog.get("tool_groups", {}).pop(key, None)
+        elif section == "component":
+            pass  # applied by _apply_component
+        else:
+            raise ValueError(f"unknown section {section!r} for deletion {key!r}")
 
 
 def _write_into_settings(
@@ -457,18 +525,22 @@ def _write_into_settings(
 ) -> None:
     for (section, key), value in translations.items():
         if section == "messages":
-            catalog["messages"][key] = value
+            catalog.setdefault("messages", {})[key] = value
         elif section == "tool_groups":
             catalog.setdefault("tool_groups", {})[key] = value
         elif section == "tools":
             name, fld = key.rsplit(".", 1)
             catalog.setdefault("tools", {}).setdefault(name, {})[fld] = value
+        elif section == "component":
+            pass  # applied by _apply_component
+        else:
+            raise ValueError(f"unknown section {section!r} for key {key!r}")
 
 
 def _apply_settings(
     locale: str,
     translations: dict[tuple[str, str], str],
-    deletions: list[tuple[str, str, str]],
+    deletions: list[ItemRef],
 ) -> None:
     path = LOCALES_DIR / f"{locale}.json"
     catalog = _load_json(path)
@@ -479,11 +551,8 @@ def _apply_settings(
 
     # Deterministic ordering: messages mirror en.json's key order, the tool
     # sections sort by their own keys.
-    catalog["messages"] = {
-        key: catalog["messages"][key]
-        for key in en_messages
-        if key in catalog["messages"]
-    }
+    messages = catalog.get("messages", {})
+    catalog["messages"] = {key: messages[key] for key in en_messages if key in messages}
     catalog["tools"] = dict(sorted(catalog.get("tools", {}).items()))
     catalog["tool_groups"] = dict(sorted(catalog.get("tool_groups", {}).items()))
 
@@ -495,24 +564,53 @@ def _apply_settings(
 def _apply_component(
     locale: str,
     translations: dict[tuple[str, str], str],
-    deletions: list[tuple[str, str, str]],
+    deletions: list[ItemRef],
 ) -> None:
     path = COMPONENT_DIR / f"{locale}.json"
     if not path.exists():
         return
     flat = _flatten(_load_json(path))
     before = dict(flat)
-    for own_locale, section, key in deletions:
-        if own_locale == locale and section == "component":
-            flat.pop(key, None)
-    for (section, key), value in translations.items():
-        if section == "component":
-            flat[key] = value
+    for ref in deletions:
+        if ref.locale == locale and ref.section == "component":
+            flat.pop(ref.key, None)
+    for (target_section, target_key), value in translations.items():
+        if target_section == "component":
+            flat[target_key] = value
     en_flat = _flatten(_load_json(COMPONENT_DIR / "en.json"))
     ordered = {key: flat[key] for key in en_flat if key in flat}
     if ordered != before:
         _dump_json(path, _unflatten(ordered))
         print(f"updated {path.relative_to(REPO_ROOT)}")
+
+
+def _translate_and_apply(plan: Plan, by_locale: dict[str, list[WorkItem]]) -> list[str]:
+    """Translate every locale's planned work and write the catalogs."""
+    failures: list[str] = []
+    engine_dead = False
+    try:
+        for locale in _target_locales():
+            results: dict[tuple[str, str], str] = {}
+            if locale in by_locale and engine_dead:
+                failures.append(
+                    f"{locale}: {len(by_locale[locale])} string(s) skipped — "
+                    "the engine was declared unavailable earlier in this run"
+                )
+            elif locale in by_locale:
+                results, locale_failures, engine_dead = _translate_locale(
+                    locale, by_locale[locale]
+                )
+                failures += locale_failures
+            _apply_settings(locale, results, plan.deletions)
+            _apply_component(locale, results, plan.deletions)
+    finally:
+        # Whatever happened above — full success, partial fill, engine death,
+        # or a crash — the derived catalogs must match the canonical store as
+        # it now stands on disk, because the workflow commits partial
+        # progress. Without this, a died-halfway run would auto-commit a
+        # state that fails test_derived_catalogs_match_the_canonical_store.
+        generate_locales.write()
+    return failures
 
 
 def main() -> int:
@@ -543,16 +641,7 @@ def main() -> int:
             print(f"  delete {locale}/{section}/{key}")
         return 0
 
-    failures: list[str] = []
-    for locale in _target_locales():
-        results: dict[tuple[str, str], str] = {}
-        if locale in by_locale:
-            results, locale_failures = _translate_locale(locale, by_locale[locale])
-            failures += locale_failures
-        _apply_settings(locale, results, plan.deletions)
-        _apply_component(locale, results, plan.deletions)
-
-    generate_locales.write()
+    failures = _translate_and_apply(plan, by_locale)
 
     if failures:
         print(

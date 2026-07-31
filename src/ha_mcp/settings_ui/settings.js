@@ -1840,6 +1840,9 @@ document.getElementById('stopSidecarBtn').addEventListener('click', stopSidecar)
 // the strings and their order come from the features.* keys in
 // locales/en.json — edit that file, then run
 // scripts/generate_locales.py.
+// The master/sub-flag gating these rows describe is enforced by
+// config.py:_apply_feature_flag_overrides; the UI dims sub-rows and
+// re-renders live when the master toggle flips.
 const FEATURE_META = {
   enable_tool_search: {
     label: "Enable tool search",

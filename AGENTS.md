@@ -336,6 +336,7 @@ On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, sy
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
 | `addon-publish.yml` | Release | HA add-on update |
 | `sync-tool-docs.yml` | Push to master (`src/ha_mcp/tools/`, `scripts/extract_tools.py`) | Regenerate `tools.json`, README, DOCS.md |
+| `locale-sync.yml` | Same-repo PR touching locale catalogs, tool sources, or the locale scripts | Machine-translate stale/missing strings and commit them to the PR branch |
 
 **Docker image tags** (`ghcr.io/homeassistant-ai/ha-mcp`): stable releases push `:latest` + `:stable` + semver tags (`release-publish.yml`); dev builds push only `:dev` + `:dev-<sha>` (`publish-dev.yml`) — **never `:latest`**, which is reserved for stable. The HA add-on images live in separate repos (`-addon-{arch}`, `-addon-dev-{arch}`) and are selected by an explicit `version:` pin, not by `:latest`.
 

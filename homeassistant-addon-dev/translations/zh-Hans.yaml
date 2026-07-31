@@ -1,7 +1,7 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
 # src/ha_mcp/settings_ui/locales/zh-Hans.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   backup_hint:
     name: 完整 HA 快照建议级别（面向 LLM）
