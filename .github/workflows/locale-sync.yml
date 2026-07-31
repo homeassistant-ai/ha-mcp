@@ -204,16 +204,33 @@ jobs:
         BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
       run: |
         patch="$RUNNER_TEMP/locale-sync.patch"
-        # A rename/copy record names only its destination in --numstat, so a
-        # crafted patch could delete any tracked file by \"renaming\" it into
-        # the locale tree while every listed path passes the allowlist.
-        # Legitimate pipeline patches never contain such records (the export
-        # step diffs with --no-renames), so reject them outright.
+        # Pre-checks for patch forms that hide a path from every listing:
+        # explicit rename/copy records name only their destination in
+        # --numstat, and a headerless rename (diff --git a/OLD b/NEW with no
+        # rename lines) is invisible even to --summary. Legitimate pipeline
+        # patches contain neither — the export step diffs with --no-renames,
+        # which always prints identical a/ and b/ sides.
         if git apply --summary "$patch" | grep -qE '^ *(rename|copy) '; then
-          echo "::error::patch contains rename/copy records, which can smuggle paths past the allowlist; refusing."
+          echo "::error::patch contains rename/copy records; refusing."
           exit 1
         fi
-        git apply --numstat "$patch" | cut -f3 > /tmp/patch-files
+        if grep '^diff --git ' "$patch" | grep -qvE '^diff --git a/(.+) b/\1$'; then
+          echo "::error::patch has a diff header whose a/ and b/ sides differ (disguised rename); refusing."
+          exit 1
+        fi
+        if ! git apply --index "$patch"; then
+          # The branch moved while we translated (cancel-in-progress is
+          # false, so a completed late run can race a newer push). The next
+          # run on the new head redoes the remainder; dropping this patch
+          # loses nothing that is not recomputable.
+          echo "::warning::patch no longer applies to the branch head; skipping push — the next run will redo the remaining work."
+          exit 0
+        fi
+        # The authoritative allowlist runs AFTER apply, where git has
+        # resolved both sides of every change: a disguised rename stages its
+        # source as a deletion, which --name-only lists. Nothing has been
+        # pushed yet, so applying first costs nothing.
+        git diff --staged --name-only --no-renames > /tmp/staged-files
         while IFS= read -r f; do
           case "$f" in
             src/ha_mcp/settings_ui/locales/*) ;;
@@ -228,15 +245,7 @@ jobs:
               exit 1
               ;;
           esac
-        done < /tmp/patch-files
-        if ! git apply --index "$patch"; then
-          # The branch moved while we translated (cancel-in-progress is
-          # false, so a completed late run can race a newer push). The next
-          # run on the new head redoes the remainder; dropping this patch
-          # loses nothing that is not recomputable.
-          echo "::warning::patch no longer applies to the branch head; skipping push — the next run will redo the remaining work."
-          exit 0
-        fi
+        done < /tmp/staged-files
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git commit -m "chore(internal): machine-translate locale updates"

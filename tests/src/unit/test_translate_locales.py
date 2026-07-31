@@ -390,6 +390,24 @@ class TestTimeBudget:
         assert failures[0] == "de: time budget exhausted — stopping this run"
         assert failed == {("messages", "first"), ("messages", "second")}
 
+    def test_engine_refuses_to_start_past_the_deadline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A worst-case engine call is ~20 minutes of timeouts and backoff —
+        it must not start once the budget is spent, or it eats the slack
+        between the script's bound and the work-losing job timeout."""
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setattr(
+            translate_locales.httpx,
+            "post",
+            lambda *_a, **_k: pytest.fail("HTTP call after the deadline"),
+        )
+        monkeypatch.setattr(
+            translate_locales, "_DEADLINE", translate_locales.time.monotonic() - 1
+        )
+        with pytest.raises(SystemExit, match="time budget"):
+            translate_locales._call_gemini("prompt")
+
 
 class TestRepinBaseline:
     def test_changed_parsed_keys_stay_stale_for_human_review(

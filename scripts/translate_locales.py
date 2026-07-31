@@ -483,6 +483,12 @@ def _prompt(locale: str, batch: dict[str, str]) -> str:
 
 def _call_gemini(prompt: str) -> dict[str, Any]:
     """One engine call. The single place a provider swap would touch."""
+    # Deadline-guarded at entry AND before every retry sleep: a worst-case
+    # call (five 180s timeouts plus backoff) runs ~20 minutes, which would
+    # otherwise blow straight through the time budget's slack and into the
+    # job timeout — the one path that loses uncommitted work.
+    if _out_of_time():
+        raise SystemExit("time budget exhausted before the engine call")
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise SystemExit("GEMINI_API_KEY is not set but there are strings to translate")
@@ -508,6 +514,9 @@ def _call_gemini(prompt: str) -> dict[str, Any]:
             # Connect/read timeouts, DNS failures, resets — as transient as a
             # 5xx; retry with the same bounded backoff.
             last_error = f"transport error: {exc!r}"
+            if _out_of_time():
+                last_error += " (time budget exhausted; not retrying)"
+                break
             delay = 20 * attempt
             print(f"  engine {last_error}; retrying in {delay}s", file=sys.stderr)
             time.sleep(delay)
@@ -527,6 +536,9 @@ def _call_gemini(prompt: str) -> dict[str, Any]:
             return parsed
         last_error = f"HTTP {response.status_code}: {response.text[:300]}"
         if response.status_code in (429, 500, 502, 503, 504):
+            if _out_of_time():
+                last_error += " (time budget exhausted; not retrying)"
+                break
             delay = 20 * attempt
             print(f"  engine {last_error}; retrying in {delay}s", file=sys.stderr)
             time.sleep(delay)
