@@ -158,7 +158,7 @@
     "status.loading_parentheses": "(loading…)",
     "status.unsaved": "Unsaved changes...",
     "status.saving": "Saving…",
-    "status.saving_server_setting": "Saving server setting...",
+    "status.saving_server_setting": "Saving server setting…",
     "status.saved": "Saved.",
     "status.saved_restart": "Saved. Restart required.",
     "status.saved_llm_api": "Saved. LLM API exposure applies on the next agent message.",

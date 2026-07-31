@@ -91,16 +91,8 @@ jobs:
       run: uv sync --dev
 
     - name: Prepare fallback translation engines
-      # Optional failover chain behind the free Gemini tier: the Codex CLI
-      # (authenticated exactly like test.yml wires CODEX_AUTH) and the Claude
-      # Code CLI (CLAUDE_CODE_OAUTH_TOKEN). Each is skipped when its secret is
-      # absent; the script uses whatever is installed and authenticated, in
-      # order Gemini → Codex → Claude. Same trust boundary as GEMINI_API_KEY:
-      # these credentials are visible to the translate step, which runs
-      # PR-head code — same-repo PRs only, and CODEX_AUTH is already exposed
-      # to PR-triggered jobs the same way by test.yml.
+      # ENGINE DRILL: only the Claude Code CLI is wired on this branch.
       env:
-        CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       run: |
         if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
