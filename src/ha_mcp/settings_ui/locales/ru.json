@@ -155,7 +155,7 @@
     "actions.dismiss": "Закрыть уведомление",
     "status.loaded": "Загружено",
     "status.loading_ellipsis": "Загрузка…",
-    "status.loading_parentheses": "(загрузка...)",
+    "status.loading_parentheses": "(загрузка…)",
     "status.unsaved": "Есть несохранённые изменения...",
     "status.saving": "Сохранение…",
     "status.saving_server_setting": "Сохранение настройки сервера...",

@@ -155,7 +155,7 @@
     "actions.dismiss": "Schließen",
     "status.loaded": "Geladen",
     "status.loading_ellipsis": "Lädt…",
-    "status.loading_parentheses": "(lädt...)",
+    "status.loading_parentheses": "(wird geladen…)",
     "status.unsaved": "Nicht gespeicherte Änderungen...",
     "status.saving": "Speichert…",
     "status.saving_server_setting": "Speichert Server-Einstellung...",
