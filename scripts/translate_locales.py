@@ -569,7 +569,8 @@ def _call_codex(prompt: str) -> dict[str, Any]:
             raise SystemExit(f"codex engine did not run: {exc!r}") from exc
         if proc.returncode != 0 or not answer.exists():
             raise SystemExit(
-                f"codex engine failed (exit {proc.returncode}): {proc.stderr[-300:]}"
+                f"codex engine failed (exit {proc.returncode}): "
+                f"stderr={proc.stderr[-400:]!r} stdout={proc.stdout[-400:]!r}"
             )
         return _extract_json(answer.read_text(encoding="utf-8"))
 
@@ -590,8 +591,10 @@ def _call_claude(prompt: str) -> dict[str, Any]:
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SystemExit(f"claude engine did not run: {exc!r}") from exc
     if proc.returncode != 0:
+        # The CLI reports most failures on stdout; surface both streams.
         raise SystemExit(
-            f"claude engine failed (exit {proc.returncode}): {proc.stderr[-300:]}"
+            f"claude engine failed (exit {proc.returncode}): "
+            f"stderr={proc.stderr[-400:]!r} stdout={proc.stdout[-400:]!r}"
         )
     return _extract_json(proc.stdout)
 
