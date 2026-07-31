@@ -16,7 +16,7 @@ essentially file-I/O behaviour.
 import json
 from pathlib import Path
 
-import ha_mcp.tools.tools_code as tools_code
+from ha_mcp.tools import tools_code
 
 
 class TestLoadSavedTools:

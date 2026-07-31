@@ -488,9 +488,7 @@ class TestWithAutoBackupDecorator:
         class _Settings:
             enable_auto_backup = True
 
-        monkeypatch.setattr(
-            "ha_mcp.tools.auto_backup.get_global_settings", lambda: _Settings()
-        )
+        monkeypatch.setattr("ha_mcp.tools.auto_backup.get_global_settings", _Settings)
         monkeypatch.setattr(
             "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
         )
@@ -518,9 +516,7 @@ class TestWithAutoBackupDecorator:
         class _Settings:
             enable_auto_backup = True
 
-        monkeypatch.setattr(
-            "ha_mcp.tools.auto_backup.get_global_settings", lambda: _Settings()
-        )
+        monkeypatch.setattr("ha_mcp.tools.auto_backup.get_global_settings", _Settings)
         monkeypatch.setattr(
             "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
         )

@@ -1977,8 +1977,7 @@ def _name_tier(query_lower: str, texts: Any, *, exact: bool) -> int | None:
             if query_norm and query_norm in _sep_normalized(text_lower):
                 return 100
             ratio = _calc_ratio(query_lower, text_lower)
-            if ratio > best_ratio:
-                best_ratio = ratio
+            best_ratio = max(best_ratio, ratio)
     if not exact and best_ratio >= FUZZY_THRESHOLD:
         return best_ratio
     return None
@@ -3206,7 +3205,7 @@ def _exposure_enrichment(
     rather than crashing the join).
     """
     join = _registry_enrichment(view, entity_id)
-    domain = entity_id.split(".")[0] if "." in entity_id else ""
+    domain = entity_id.split(".", maxsplit=1)[0] if "." in entity_id else ""
     info: dict[str, Any] = {
         "domain": domain,
         "area": join["area"],
@@ -5196,7 +5195,7 @@ def _assist_default_exposed(hass: HomeAssistant, entity_id: str) -> bool:
         or getattr(entry, "hidden_by", None) is not None
     ):
         return False
-    domain = entity_id.split(".")[0] if "." in entity_id else entity_id
+    domain = entity_id.split(".", maxsplit=1)[0] if "." in entity_id else entity_id
     if domain in DEFAULT_EXPOSED_DOMAINS:
         return True
     from homeassistant.exceptions import HomeAssistantError

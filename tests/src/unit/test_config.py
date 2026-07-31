@@ -176,6 +176,7 @@ class TestConfigErrorHandling:
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
 
         # Should exit with error code
@@ -206,6 +207,7 @@ class TestConfigErrorHandling:
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
 
         assert result.returncode != 0
@@ -224,6 +226,7 @@ class TestConfigErrorHandling:
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
 
         assert result.returncode != 0
@@ -242,6 +245,7 @@ class TestConfigErrorHandling:
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
 
         # Should NOT contain the old noisy warning
@@ -260,6 +264,7 @@ class TestConfigErrorHandling:
             capture_output=True,
             text=True,
             timeout=60,
+            check=False,
         )
 
         assert result.returncode == 0

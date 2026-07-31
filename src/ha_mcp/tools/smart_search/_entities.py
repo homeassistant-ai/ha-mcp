@@ -680,7 +680,7 @@ class EntitySearchMixin(_SearchBase):
             "_hidden_by": "hidden" if entity_id in hidden_entity_ids else None,
         }
         if include_domain:
-            record["domain"] = entity_id.split(".")[0]
+            record["domain"] = entity_id.split(".", maxsplit=1)[0]
         return record
 
     @classmethod

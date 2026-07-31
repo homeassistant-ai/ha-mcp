@@ -120,7 +120,7 @@ class CameraTools:
                 "Expected format: camera.entity_name"
             )
 
-        domain = entity_id.split(".")[0]
+        domain = entity_id.split(".", maxsplit=1)[0]
         if domain != "camera":
             raise ValueError(
                 f"Entity {entity_id} is not a camera entity. "

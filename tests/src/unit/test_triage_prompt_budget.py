@@ -64,6 +64,7 @@ def test_budget_harness_passes() -> None:
         capture_output=True,
         text=True,
         cwd=_REPO_ROOT,
+        check=False,
     )
     assert result.returncode == 0, (
         f"verify_triage_prompt_budget.mjs failed:\n{result.stdout}\n{result.stderr}"

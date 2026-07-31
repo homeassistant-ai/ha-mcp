@@ -1467,7 +1467,6 @@ class TestFinishUpdateCycle:
         async def _refresh():
             if refresh_side_effect is not None:
                 raise refresh_side_effect
-            return None
 
         coordinator.async_refresh = AsyncMock(side_effect=_refresh)
         return coordinator

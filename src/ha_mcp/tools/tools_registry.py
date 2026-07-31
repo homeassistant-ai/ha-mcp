@@ -50,7 +50,11 @@ def _process_device_domain(
         return value, is_z2m, zwave_node_id
     # Z2M: identifier is ["mqtt", "zigbee2mqtt_0xIEEE"] or "zigbee2mqtt_bridge_0xIEEE"
     if domain == "mqtt" and "zigbee2mqtt" in value.lower():
-        extracted = "0x" + value.split("_0x")[-1] if "_0x" in value else ieee_address
+        extracted = (
+            "0x" + value.rsplit("_0x", maxsplit=1)[-1]
+            if "_0x" in value
+            else ieee_address
+        )
         return extracted, True, zwave_node_id
     # Z-Wave JS: identifier is ["zwave_js", "{home_id}-{node_id}"]
     if domain == "zwave_js" and "-" in value:

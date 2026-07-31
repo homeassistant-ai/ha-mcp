@@ -126,7 +126,7 @@ class DeviceControlTools:
                     )
                 )
 
-            domain = entity_id.split(".")[0]
+            domain = entity_id.split(".", maxsplit=1)[0]
             handler = get_domain_handler(domain)
 
             # Validate entity exists if requested
@@ -749,7 +749,7 @@ class DeviceControlTools:
         try:
             if "." not in entity_id:
                 return None
-            domain = entity_id.split(".")[0]
+            domain = entity_id.split(".", maxsplit=1)[0]
             handler = get_domain_handler(domain)
             valid_actions = handler.get("valid_actions", ["on", "off", "toggle"])
             if action not in valid_actions:

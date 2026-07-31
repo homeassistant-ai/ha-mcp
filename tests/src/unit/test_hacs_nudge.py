@@ -48,9 +48,7 @@ def _fake_hacs(*, repos=None, category: str = "integration"):
     """
     repos = repos or {}
     hacs = MagicMock(name="hacs")
-    hacs.repositories.get_by_full_name = MagicMock(
-        side_effect=lambda full_name: repos.get(full_name)
-    )
+    hacs.repositories.get_by_full_name = MagicMock(side_effect=repos.get)
     coordinator = MagicMock(name="coordinator")
     hacs.coordinators = {category: coordinator}
     return hacs, coordinator

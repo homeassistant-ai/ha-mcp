@@ -110,6 +110,7 @@ def _run_git(args: list[str], repo_dir: Path) -> str:
         cwd=repo_dir,
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")

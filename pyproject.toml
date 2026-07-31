@@ -140,6 +140,26 @@ select = [
     "A",     # builtin shadowing
     "LOG",   # logging best practices
     "SIM",   # simplify
+    "PLE",   # pylint errors (real bugs: bad logging args, await outside async)
+    # Targeted pylint conventions/refactors/warnings. The PL family is NOT
+    # selected wholesale: PLC0415 (import-outside-top-level) fights the
+    # deliberate lazy-init architecture, and PLR2004 (magic values),
+    # PLR0913/PLR0917 (wide FastMCP tool signatures) and PLR0911 (too many
+    # returns -- a separate signal from C901's cyclomatic complexity, and
+    # noisy on this codebase's early-return validation style) are noise
+    # here. Add codes individually so a new upstream PLR rule does not land
+    # enabled by default.
+    "PLC0206", # dict-index-missing-items
+    "PLC0207", # missing-maxsplit-arg
+    "PLR0402", # manual-from-import
+    "PLR1711", # useless-return
+    "PLR1714", # repeated-equality-comparison
+    "PLR1730", # if-stmt-min-max
+    "PLR5501", # collapsible-else-if
+    "PLW0108", # unnecessary-lambda
+    "PLW0602", # global-variable-not-assigned
+    "PLW1510", # subprocess-run-without-check
+    "PLW2901", # redefined-loop-name
 ]
 ignore = [
     "E501",    # line too long — formatter handles this
@@ -162,6 +182,12 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/**/*" = ["E501", "B011"]
+# Temporary: the equivalent PLC0207/PLR5501 fixes landed in
+# homeassistant-addon-webhook-proxy-dev/ only, per the dev-first/promote-only
+# flow (allow-stable-edit is for stable-only hotfixes, not routine sweeps —
+# see homeassistant-addon-webhook-proxy/AGENTS.md "Dev-first, promote-only").
+# Remove this ignore once the next promote carries the fix into stable.
+"homeassistant-addon-webhook-proxy/**" = ["PLC0207", "PLR5501"]
 # C901 is enforced repo-wide with no per-file exemptions (the grandfathered
 # list was fully cleared by issue #925). Do NOT add "path" = ["C901"] entries
 # here — extract helpers to bring the function below the threshold instead:
