@@ -865,10 +865,11 @@ def test_settings_messages_carry_no_key_english_dropped(locale: str) -> None:
 
 # A catalog wholesale-copied from English passes key parity, placeholder
 # parity and the markup allowlist — every existing check. Both authored
-# surfaces get a ceiling: leaving one out accepts a wholesale-English catalog
-# there. The generated add-on YAMLs need none of their own — their strings
-# are the settings UI ``messages`` (``addon.*`` / ``features.*``), so the
-# settings ceiling already covers them.
+# surfaces get a ceiling, and so does each generated add-on projection
+# (test_generated_addon_projections_are_translated): the ~21 addon-only
+# strings are under 5% of the whole settings catalog, so without their own
+# per-flavor ceiling an all-English Supervisor page would ride under the
+# catalog-wide share.
 #
 # The ceilings differ because what legitimately repeats differs. The settings
 # UI messages sit far under theirs: the highest among the shipped locales is

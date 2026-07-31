@@ -362,6 +362,57 @@ class TestResumableProgress:
         assert not translate_locales.PROGRESS_PATH.exists()
 
 
+class TestRepinBaseline:
+    def test_changed_parsed_keys_stay_stale_for_human_review(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A moved parsed docstring on a feature-gated tool keeps its OLD
+        baseline hash — the red staleness test is the human checkpoint that
+        the hand-written stub still describes the tool; only the manual
+        update_locale_baseline.py repin (the confirmation) clears it."""
+        monkeypatch.setattr(translate_locales, "REPO_ROOT", tmp_path)
+        baseline = tmp_path / "baseline.json"
+        surface = "settings UI tool titles and descriptions"
+        baseline.write_text(
+            json.dumps(
+                {
+                    surface: {
+                        "ha_x.description (parsed)": "oldhash",
+                        "ha_x.description": "oldrendered",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        module = SimpleNamespace(
+            BASELINE_PATH=baseline,
+            english_sources=lambda: {
+                surface: {
+                    "ha_x.description (parsed)": "NEWhash",
+                    "ha_x.description": "NEWrendered",
+                }
+            },
+        )
+        translate_locales._repin_baseline(module)
+        written = json.loads(baseline.read_text(encoding="utf-8"))
+        assert written[surface]["ha_x.description (parsed)"] == "oldhash"
+        assert written[surface]["ha_x.description"] == "NEWrendered"
+
+    def test_new_parsed_keys_pin_fresh(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(translate_locales, "REPO_ROOT", tmp_path)
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text(json.dumps({"s": {}}), encoding="utf-8")
+        module = SimpleNamespace(
+            BASELINE_PATH=baseline,
+            english_sources=lambda: {"s": {"ha_new.description (parsed)": "h1"}},
+        )
+        translate_locales._repin_baseline(module)
+        written = json.loads(baseline.read_text(encoding="utf-8"))
+        assert written["s"]["ha_new.description (parsed)"] == "h1"
+
+
 class TestMetaOnlyStub:
     def test_documented_stub_language_flow_does_not_crash(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

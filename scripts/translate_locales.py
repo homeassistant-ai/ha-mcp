@@ -320,10 +320,12 @@ def _plan_settings(plan: Plan, module: Any, changed: dict[str, set[str]]) -> Non
         if key.startswith("messages.")
     }
     # A " (parsed)"-suffixed baseline key pins a feature-gated tool's parsed
-    # docstring while the stub is what the UI renders (and what the catalogs
-    # translate). A parsed-only change therefore needs a repin, not a
-    # retranslation — retranslating would overwrite every locale with a fresh
-    # translation of the unchanged stub.
+    # docstring; the catalogs translate the hand-written stub, so a
+    # parsed-only change is no translation work — retranslating would
+    # overwrite every locale with a fresh translation of the unchanged stub.
+    # It IS review work (both renderings reach readers, flag-dependent), so
+    # _repin_baseline deliberately keeps such keys stale until a human
+    # confirms the stub and repins manually.
     changed_tools = {
         key
         for key in changed.get(TOOLS_SURFACE, set())
@@ -799,6 +801,38 @@ def _translate_and_apply(
     return failures, completed
 
 
+def _repin_baseline(module: Any) -> None:
+    """Rewrite the baseline — except keys awaiting a human's stub review.
+
+    A change to the PARSED docstring of a feature-gated tool is editorial
+    work, not translation work: the catalogs translate the hand-written stub,
+    so nothing on screen went stale, but someone must confirm the stub still
+    describes the tool. Automation must not wave that through — changed
+    ``" (parsed)"`` keys keep their OLD hash here, leaving
+    ``test_translations_are_checked_against_current_english`` red until a
+    human confirms and runs ``scripts/update_locale_baseline.py`` (the manual
+    repin, which is that confirmation).
+    """
+    current = module.english_sources()
+    old = json.loads(module.BASELINE_PATH.read_text("utf-8"))
+    held: list[str] = []
+    for surface, hashes in current.items():
+        for key, old_hash in old.get(surface, {}).items():
+            if key.endswith(" (parsed)") and key in hashes and hashes[key] != old_hash:
+                hashes[key] = old_hash
+                held.append(key)
+    module.BASELINE_PATH.write_text(
+        json.dumps(current, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(f"repinned {module.BASELINE_PATH.relative_to(REPO_ROOT)}")
+    for key in held:
+        print(
+            f"  held stale (needs human stub review + manual repin): {key}",
+            file=sys.stderr,
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -840,12 +874,7 @@ def main() -> int:
         return 2
 
     _clear_progress()
-    fresh = _load_test_module()
-    fresh.BASELINE_PATH.write_text(
-        json.dumps(fresh.english_sources(), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    print(f"repinned {fresh.BASELINE_PATH.relative_to(REPO_ROOT)}")
+    _repin_baseline(_load_test_module())
     return 0
 
 

@@ -4,7 +4,7 @@ name: Locale Sync
 # the English source, so translations are reviewed in the same PR (issue
 # #2083). scripts/translate_locales.py diffs the English-source baseline,
 # retranslates exactly the changed/missing keys via the Gemini API, runs
-# scripts/generate_locales.py, repins the baseline, and this workflow commits
+# scripts/generate_locales.py, repins the baseline, and the push job commits
 # the result back to the PR branch. A second run after that push finds no
 # stale keys and commits nothing, so the loop terminates.
 #
@@ -14,6 +14,17 @@ name: Locale Sync
 # (the PR author included) can hand-translate, run generate_locales.py +
 # update_locale_baseline.py, and push; hand-edits always win and the next run
 # no-ops. The job stays red until every string is translated.
+#
+# Two jobs on purpose, as blast-radius reduction rather than a hard boundary:
+# the translate job executes PR-authored code (the scripts and everything
+# `uv sync` resolves) and holds no credential beyond the free-tier Gemini
+# key; the push job runs on a fresh runner, executes only git, and refuses
+# any patch that touches files outside the locale allowlist. A same-repo PR
+# can still edit this workflow itself (pull_request runs the PR's copy), so
+# none of this stops a determined collaborator — it stops a compromised
+# dependency or an unreviewed script change from reaching the push
+# credential, and caps what a hijacked translate job could smuggle into the
+# commit.
 #
 # Fork PRs are skipped: they carry no secrets and their branches cannot be
 # pushed to. For those, a maintainer runs the script locally (see AGENTS.md
@@ -46,39 +57,37 @@ permissions:
 
 concurrency:
   group: locale-sync-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # false: cancelling would kill a long translation run before anything is
+  # committed, losing every finished string (the progress sidecar only helps
+  # once committed). A completed late run lands through the push job's
+  # rebase-and-retry; the queued run then finds little or nothing left to do.
+  cancel-in-progress: false
 
 jobs:
-  sync:
+  translate:
     name: Translate changed strings
     # Same-repo PRs only: a fork PR exposes no secrets and its head branch
-    # cannot be pushed to from here.
+    # cannot be pushed to from here. workflow_dispatch is for re-running on a
+    # PR branch — never on the default branch, where the fallback refs would
+    # otherwise make the push job commit straight to master with the
+    # rule-bypassing credential.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name == 'workflow_dispatch' &&
+        github.ref_name != github.event.repository.default_branch) ||
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     # A brand-new language is ~700 strings under free-tier request pacing.
     timeout-minutes: 45
+    outputs:
+      have_patch: ${{ steps.export.outputs.have_patch }}
 
     steps:
-    - name: Generate GitHub App token
-      id: app-token
-      uses: actions/create-github-app-token@v3
-      with:
-        app-id: ${{ secrets.RELEASE_APP_ID }}
-        private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-      continue-on-error: true
-
     - uses: actions/checkout@v7
       with:
         ref: ${{ github.event.pull_request.head.ref || github.ref }}
-        # Never leave a credential in the checkout: the translate step below
-        # executes PR-head code (the scripts and the package they import),
-        # which must not be able to read the privileged push token. The push
-        # step authenticates itself explicitly instead. GEMINI_API_KEY is the
-        # one secret that PR-head code necessarily sees (the translate step
-        # is that code); it is a free-tier, rotatable key, and fork PRs —
-        # the untrusted case — never reach this job at all.
+        # This job executes PR-authored code, so it gets no credential except
+        # GEMINI_API_KEY (free-tier, rotatable) — never the push token.
         persist-credentials: false
 
     - name: Install uv
@@ -97,18 +106,9 @@ jobs:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       run: uv run python scripts/translate_locales.py
 
-    - name: Commit and push if changed
-      env:
-        # An App/PAT token here does double duty: its push survives branch
-        # rules and, unlike the default GITHUB_TOKEN, the push triggers the
-        # PR checks on the new head commit instead of leaving them
-        # unreported. Scoped to this step — which runs only git, never
-        # repository code — so PR-head code cannot read it.
-        PUSH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-        BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+    - name: Export changes as a patch
+      id: export
       run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
         git add src/ha_mcp/settings_ui/locales src/ha_mcp/settings_ui/settings.js \
                 custom_components/ha_mcp_tools/translations \
                 homeassistant-addon/translations homeassistant-addon-dev/translations \
@@ -122,13 +122,119 @@ jobs:
         fi
         if git diff --staged --quiet; then
           echo "No translation updates."
+          echo "have_patch=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        git commit -m "chore(internal): machine-translate locale updates"
-        git push "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${BRANCH}"
+        git diff --staged --binary > "$RUNNER_TEMP/locale-sync.patch"
+        echo "have_patch=true" >> "$GITHUB_OUTPUT"
+
+    - name: Upload patch
+      if: steps.export.outputs.have_patch == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: locale-sync-patch
+        path: ${{ runner.temp }}/locale-sync.patch
+        retention-days: 1
 
     - name: Fail if translation failed
       if: steps.translate.outcome != 'success'
       run: |
         echo "::error::scripts/translate_locales.py did not finish cleanly; partial progress (if any) was committed. Two ways to green: (1) re-run this workflow to let it continue where it stopped, or (2) do it by hand — translate the strings 'uv run python scripts/translate_locales.py --dry-run' lists, run 'uv run python scripts/generate_locales.py' and 'uv run python scripts/update_locale_baseline.py', and push. Hand-edits always win; the pipeline never overwrites them."
+        exit 1
+
+  push:
+    name: Commit translations
+    needs: translate
+    # always(): partial progress from a failed translate run must still land
+    # (that is the resumability story). Skipped when nothing changed.
+    if: >-
+      always() &&
+      needs.translate.result != 'skipped' &&
+      needs.translate.result != 'cancelled' &&
+      needs.translate.outputs.have_patch == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Generate GitHub App token
+      id: app-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ secrets.RELEASE_APP_ID }}
+        private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      continue-on-error: true
+
+    - name: Ensure push credential
+      # This job's permissions are contents: read, so the default
+      # GITHUB_TOKEN cannot push at all — an App/PAT credential is required,
+      # same as _update-addon-config.yml. Fail loudly instead of pretending.
+      env:
+        APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+      run: |
+        if [ -z "$APP_TOKEN" ] && [ -z "$RELEASE_TOKEN" ]; then
+          echo "::error::No push credential: the release App token could not be minted and RELEASE_TOKEN is unset. The default GITHUB_TOKEN cannot push (contents: read) — configure RELEASE_APP_ID/RELEASE_APP_PRIVATE_KEY or RELEASE_TOKEN."
+          exit 1
+        fi
+
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.pull_request.head.ref || github.ref }}
+        persist-credentials: false
+
+    - name: Download patch
+      uses: actions/download-artifact@v8
+      with:
+        name: locale-sync-patch
+        path: ${{ runner.temp }}
+
+    - name: Verify, apply, commit, push
+      # Runs only git and coreutils — no PR-authored code. The allowlist
+      # check caps what a hijacked translate job could put in the patch to
+      # exactly the files the pipeline legitimately writes.
+      env:
+        PUSH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN }}
+        BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      run: |
+        patch="$RUNNER_TEMP/locale-sync.patch"
+        git apply --numstat "$patch" | cut -f3 > /tmp/patch-files
+        while IFS= read -r f; do
+          case "$f" in
+            src/ha_mcp/settings_ui/locales/*) ;;
+            src/ha_mcp/settings_ui/settings.js) ;;
+            custom_components/ha_mcp_tools/translations/*) ;;
+            homeassistant-addon/translations/*) ;;
+            homeassistant-addon-dev/translations/*) ;;
+            tests/src/unit/locale_source_baseline.json) ;;
+            tests/src/unit/locale_sync_progress.json) ;;
+            *)
+              echo "::error::patch touches a path outside the locale allowlist: $f"
+              exit 1
+              ;;
+          esac
+        done < /tmp/patch-files
+        if ! git apply --index "$patch"; then
+          # The branch moved while we translated (cancel-in-progress is
+          # false, so a completed late run can race a newer push). The next
+          # run on the new head redoes the remainder; dropping this patch
+          # loses nothing that is not recomputable.
+          echo "::warning::patch no longer applies to the branch head; skipping push — the next run will redo the remaining work."
+          exit 0
+        fi
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git commit -m "chore(internal): machine-translate locale updates"
+        for attempt in 1 2 3; do
+          if git push "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${BRANCH}"; then
+            echo "Pushed translations (attempt ${attempt})."
+            exit 0
+          fi
+          echo "Push rejected on attempt ${attempt}; rebasing onto the current branch head and retrying."
+          git pull --rebase "https://github.com/${{ github.repository }}.git" "$BRANCH" || {
+            git rebase --abort 2>/dev/null || true
+            echo "::warning::could not rebase onto the moved branch head; skipping push — the next run will redo the remaining work."
+            exit 0
+          }
+        done
+        echo "::error::could not push translations after 3 attempts."
         exit 1

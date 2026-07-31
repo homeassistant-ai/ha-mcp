@@ -750,8 +750,9 @@ merge — so the PR adding a tool goes red, rather than the next PR someone
 opens. Separately from those key rules, both authored surfaces cap how much
 *text* a catalog
 may leave byte-identical to English or omit outright, so a stub cannot ride the
-fallbacks: 5% for the settings UI `messages` and its `tools` titles and
-descriptions, and 15% for the component catalogs,
+fallbacks: 5% for the settings UI `messages`, its `tools` titles and
+descriptions, and each generated add-on projection (per flavor, computed from
+the canonical store), and 15% for the component catalogs,
 which carry the product names as keys of their own. On top of that share, a
 `tools` entry whose title *and* description are *both* byte-identical to English
 fails by name however small its share — for feature-gated tools against either
@@ -779,7 +780,11 @@ empty, so the English a `tools` entry translates is read from the tool
 definition in `src/ha_mcp/tools/` — the `title=` kwarg and the summary
 paragraph of the docstring, or the `FEATURE_GATED_TOOLS` stub where a gated
 tool shows one instead. Editing that summary moves the English out from under
-six catalogs; the pipeline retranslates them.
+six catalogs; the pipeline retranslates them. One deliberate exception: a
+change to a feature-gated tool's PARSED docstring (its stub unchanged) is
+stub-review work, not translation work — the pipeline holds that baseline key
+stale, and the red check clears only when a human confirms the stub still
+describes the tool and runs `python scripts/update_locale_baseline.py`.
 
 **Rate limits and outages degrade loudly, never silently.** Engine calls are
 paced under the free-tier request rate and retry transient errors (429/5xx,
