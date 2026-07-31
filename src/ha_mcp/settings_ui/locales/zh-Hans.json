@@ -155,7 +155,7 @@
     "actions.dismiss": "忽略",
     "status.loaded": "已加载",
     "status.loading_ellipsis": "加载中…",
-    "status.loading_parentheses": "(加载中…)",
+    "status.loading_parentheses": "（加载中…）",
     "status.unsaved": "未保存的更改…",
     "status.saving": "保存中…",
     "status.saving_server_setting": "正在保存服务器设置…",
