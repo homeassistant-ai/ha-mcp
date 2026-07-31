@@ -49,6 +49,23 @@ class TestResolveText:
             == "English name"
         )
 
+    def test_untranslated_flavor_override_beats_localized_generic(self) -> None:
+        """Fallback is locale-then-English per candidate: a flavor override
+        the locale has not translated yet must project its ENGLISH, not the
+        locale's generic features text that lacks the flavor-specific
+        instructions."""
+        messages = {"features.opt.help": "generic localized"}
+        english = {
+            "addon_stable.opt.description": "stable-specific English",
+            "features.opt.help": "generic English",
+        }
+        assert (
+            generate_locales.resolve_text(
+                messages, english, "stable", "opt", "description"
+            )
+            == "stable-specific English"
+        )
+
     def test_missing_canonical_string_names_the_key_to_add(self) -> None:
         with pytest.raises(SystemExit, match=r"addon\.opt\.name"):
             generate_locales.resolve_text({}, {}, "dev", "opt", "name")

@@ -105,7 +105,8 @@ jobs:
         git add src/ha_mcp/settings_ui/locales src/ha_mcp/settings_ui/settings.js \
                 custom_components/ha_mcp_tools/translations \
                 homeassistant-addon/translations homeassistant-addon-dev/translations \
-                tests/src/unit/locale_source_baseline.json
+                tests/src/unit/locale_source_baseline.json \
+                tests/src/unit/locale_sync_progress.json
         if git diff --staged --quiet; then
           echo "No translation updates."
           exit 0
