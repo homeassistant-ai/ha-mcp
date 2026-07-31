@@ -141,6 +141,50 @@ jobs:
         git commit -m "chore(internal): machine-translate locale updates"
         git push "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${BRANCH}"
 
+    - name: Summon Codex to finish the translations
+      # The Codex cloud connector answers @codex mentions posted by the
+      # ghhamcp account (GH_TOKEN_CODEX_COMMENT) — the exact plumbing
+      # pr-codex-review-delivery.yml uses for reviews. One summon per PR:
+      # re-summon by deleting the marked comment if a later failure needs a
+      # fresh task.
+      if: steps.translate.outcome != 'success' && github.event_name == 'pull_request'
+      uses: actions/github-script@v9
+      env:
+        HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      with:
+        github-token: ${{ secrets.GH_TOKEN_CODEX_COMMENT }}
+        script: |
+          const prNumber = context.payload.pull_request.number;
+          const marker = 'codex-translate-summon';
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: prNumber,
+            per_page: 100,
+          });
+          if (comments.some(c => c.body?.includes(marker))) {
+            core.info('Codex already summoned on this PR; skipping.');
+            return;
+          }
+          const body = [
+            '@codex the automated locale translation on this pull request failed (no translation engine available).',
+            `Check out branch \`${process.env.HEAD_REF}\` and finish the job:`,
+            '1. `uv run python scripts/translate_locales.py --dry-run` lists the stale or missing strings.',
+            "2. Translate exactly those strings in the catalogs it names, matching each catalog's existing style; keep `{placeholders}` and inline markup identical to English.",
+            '3. Run `uv run python scripts/generate_locales.py` and `uv run python scripts/update_locale_baseline.py`.',
+            '4. Update this pull request branch with the result.',
+            '',
+            `<!-- ${marker} -->`,
+          ].join('
+');
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: prNumber,
+            body,
+          });
+          core.info('Summoned Codex.');
+
     - name: Fail if translation failed
       if: steps.translate.outcome != 'success'
       run: |
