@@ -35,6 +35,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -63,6 +64,11 @@ from ha_mcp.settings_ui._i18n import (  # noqa: E402
 
 LOCALES_DIR = REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
 COMPONENT_DIR = REPO_ROOT / "custom_components" / "ha_mcp_tools" / "translations"
+# Committed by the workflow after a PARTIAL run: which locales already
+# received each changed string, so a rerun (quota hit, crash) resumes instead
+# of re-spending the budget retranslating the early locales. Deleted again by
+# the first fully successful run.
+PROGRESS_PATH = REPO_ROOT / "tests" / "src" / "unit" / "locale_sync_progress.json"
 
 SETTINGS_SURFACE = "src/ha_mcp/settings_ui/locales"
 COMPONENT_SURFACE = "custom_components/ha_mcp_tools/translations"
@@ -104,6 +110,10 @@ class WorkItem:
     section: Section
     key: str  # dotted target key ("<tool>.title" inside tools)
     english: str
+    # True when queued because the ENGLISH changed (vs. filling a missing
+    # key); only these are worth recording in the resumable-progress file —
+    # a filled key's presence in the catalog is its own progress marker.
+    changed: bool = False
 
 
 @dataclass
@@ -123,6 +133,60 @@ def _dump_json(path: Path, data: dict[str, Any]) -> None:
         encoding="utf-8",
         newline="\n",
     )
+
+
+def _text_sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _progress_load() -> dict[str, Any]:
+    if not PROGRESS_PATH.exists():
+        return {}
+    data: dict[str, Any] = json.loads(PROGRESS_PATH.read_text(encoding="utf-8"))
+    return data
+
+
+def _progress_done(
+    progress: dict[str, Any], section: str, key: str, english: str, locale: str
+) -> bool:
+    """Whether ``locale`` already received ``key`` for the CURRENT English."""
+    entry = progress.get(f"{section}|{key}")
+    return (
+        isinstance(entry, dict)
+        and entry.get("english_sha") == _text_sha(english)
+        and locale in entry.get("locales", [])
+    )
+
+
+def _record_progress(completed: dict[tuple[str, str], set[str]], plan: Plan) -> None:
+    """Persist which locales received each changed string this partial run."""
+    english_by_ref: dict[tuple[str, str], str] = {
+        (item.section, item.key): item.english for item in plan.items if item.changed
+    }
+    progress = _progress_load()
+    for (section, key), locales in completed.items():
+        english = english_by_ref.get((section, key))
+        if english is None:
+            continue
+        entry_key = f"{section}|{key}"
+        entry = progress.get(entry_key)
+        sha = _text_sha(english)
+        if isinstance(entry, dict) and entry.get("english_sha") == sha:
+            entry["locales"] = sorted(set(entry.get("locales", [])) | locales)
+        else:
+            progress[entry_key] = {"english_sha": sha, "locales": sorted(locales)}
+    PROGRESS_PATH.write_text(
+        json.dumps(progress, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    print(f"recorded partial progress in {PROGRESS_PATH.relative_to(REPO_ROOT)}")
+
+
+def _clear_progress() -> None:
+    if PROGRESS_PATH.exists():
+        PROGRESS_PATH.unlink()
+        print(f"cleared {PROGRESS_PATH.relative_to(REPO_ROOT)}")
 
 
 def _changed_keys(module: Any) -> dict[str, set[str]]:
@@ -186,7 +250,9 @@ def _plan_locale_messages(
 ) -> None:
     for key, text in en_messages.items():
         if key in changed_messages or key not in messages:
-            plan.items.append(WorkItem(locale, "messages", key, text))
+            plan.items.append(
+                WorkItem(locale, "messages", key, text, changed=key in changed_messages)
+            )
     for key in messages:
         if key not in en_messages:
             plan.deletions.append(ItemRef(locale=locale, section="messages", key=key))
@@ -207,7 +273,13 @@ def _plan_locale_tools(
             tool_key = f"{name}.{fld}"
             if tool_key in changed_tools or fld not in entry:
                 plan.items.append(
-                    WorkItem(locale, "tools", tool_key, tool_texts[tool_key])
+                    WorkItem(
+                        locale,
+                        "tools",
+                        tool_key,
+                        tool_texts[tool_key],
+                        changed=tool_key in changed_tools,
+                    )
                 )
     for name in tools:
         if name not in tool_names:
@@ -248,25 +320,51 @@ def _plan_settings(plan: Plan, module: Any, changed: dict[str, set[str]]) -> Non
     tool_texts: dict[str, str] = dict(module._english_tool_texts())
     groups, tool_names = module._renderable_groups_and_tools()
 
+    progress = _progress_load()
     for locale in _target_locales():
         catalog = _load_json(LOCALES_DIR / f"{locale}.json")
+        # A changed key a previous partial run already translated for this
+        # locale (same English) is not re-queued — resumability after a
+        # quota hit or crash, without repinning unfinished keys.
+        loc_changed_messages = {
+            key
+            for key in changed_messages
+            if not _progress_done(progress, "messages", key, en_messages[key], locale)
+        }
+        loc_changed_tools = {
+            key
+            for key in changed_tools
+            if not _progress_done(progress, "tools", key, tool_texts[key], locale)
+        }
         _plan_locale_messages(
-            plan, locale, en_messages, catalog.get("messages", {}), changed_messages
+            plan, locale, en_messages, catalog.get("messages", {}), loc_changed_messages
         )
-        _plan_locale_tools(plan, locale, catalog, changed_tools, tool_texts, tool_names)
+        _plan_locale_tools(
+            plan, locale, catalog, loc_changed_tools, tool_texts, tool_names
+        )
         _plan_locale_groups(plan, locale, catalog, groups)
 
 
 def _plan_component(plan: Plan, changed: dict[str, set[str]]) -> None:
     en_flat = _flatten(_load_json(COMPONENT_DIR / "en.json"))
     changed_component = changed.get(COMPONENT_SURFACE, set())
+    progress = _progress_load()
     for path in sorted(COMPONENT_DIR.glob("*.json")):
         if path.stem == "en":
             continue
         flat = _flatten(_load_json(path))
+        loc_changed = {
+            key
+            for key in changed_component
+            if not _progress_done(progress, "component", key, en_flat[key], path.stem)
+        }
         for key, text in en_flat.items():
-            if key in changed_component or key not in flat:
-                plan.items.append(WorkItem(path.stem, "component", key, text))
+            if key in loc_changed or key not in flat:
+                plan.items.append(
+                    WorkItem(
+                        path.stem, "component", key, text, changed=key in loc_changed
+                    )
+                )
         for key in flat:
             if key not in en_flat:
                 plan.deletions.append(
@@ -294,6 +392,12 @@ def _validate(item: WorkItem, translated: Any) -> str | None:
         for tag in _TAG_LIKE_RE.findall(translated):
             if _ALLOWED_TAGS_RE.fullmatch(tag) is None:
                 return f"markup {tag!r} not in the settings UI allowlist"
+        # Multiset parity, like panel links: a dropped </strong> or an
+        # invented <code> is all-allowlisted yet malforms what tHtml restores.
+        if Counter(_TAG_LIKE_RE.findall(translated)) != Counter(
+            _TAG_LIKE_RE.findall(item.english)
+        ):
+            return "formatting-tag set differs from English"
         if Counter(_PANEL_LINK_RE.findall(translated)) != Counter(
             _PANEL_LINK_RE.findall(item.english)
         ):
@@ -332,6 +436,9 @@ def _prompt(locale: str, batch: dict[str, str]) -> str:
         "Rules:\n"
         "- Respond with ONLY a JSON object carrying exactly the same keys; "
         "each value is the translation of that key's string.\n"
+        "- The keys are stable identifiers that also name where the string "
+        "appears in the UI (section:dotted.key); use them as context for "
+        "wording and grammatical agreement, and return them unchanged.\n"
         "- Preserve every {placeholder} token exactly as written.\n"
         "- Preserve inline HTML tags exactly (<code>, <strong>, "
         '<a href="#" data-panel-link="...">, </a>); translate only the '
@@ -417,34 +524,41 @@ def _chunk(batch: dict[str, str]) -> list[dict[str, str]]:
     return chunks
 
 
+def _string_id(item: WorkItem) -> str:
+    """The JSON identifier a string travels under — also its UI context."""
+    return f"{item.section}:{item.key}"
+
+
 def _accept_or_retry(
     locale: str,
-    string_id: str,
-    english: str,
-    targets: list[WorkItem],
+    item: WorkItem,
     translated: Any,
     results: dict[tuple[str, str], str],
     failures: list[str],
+    failed: set[tuple[str, str]],
 ) -> None:
-    """Apply one translated string to every target it validates for."""
-    rejected = [
-        (item, reason) for item in targets if (reason := _validate(item, translated))
-    ]
-    if rejected:
-        hint = "; ".join(sorted({reason for _, reason in rejected}))
-        retry = _call_gemini(
-            _prompt(locale, {string_id: english})
-            + f"\n\nYour previous attempt was rejected: {hint}. "
-            "Fix that and return the corrected JSON."
-        )
-        time.sleep(_SECONDS_BETWEEN_REQUESTS)
-        translated = retry.get(string_id)
-    for item in targets:
-        reason = _validate(item, translated)
-        if reason is None:
-            results[(item.section, item.key)] = str(translated)
+    """Validate one translated string, retrying once with the reason."""
+    reason = _validate(item, translated)
+    if reason is not None:
+        try:
+            retry = _call_gemini(
+                _prompt(locale, {_string_id(item): item.english})
+                + f"\n\nYour previous attempt was rejected: {reason}. "
+                "Fix that and return the corrected JSON."
+            )
+        except SystemExit as exc:
+            # The retry is best-effort; an engine failure here degrades to the
+            # original (rejected) answer failing validation below.
+            print(f"  retry call failed: {exc}", file=sys.stderr)
         else:
-            failures.append(f"{locale}/{item.section}/{item.key}: {reason}")
+            translated = retry.get(_string_id(item))
+        time.sleep(_SECONDS_BETWEEN_REQUESTS)
+        reason = _validate(item, translated)
+    if reason is None:
+        results[(item.section, item.key)] = str(translated)
+    else:
+        failures.append(f"{locale}/{item.section}/{item.key}: {reason}")
+        failed.add((item.section, item.key))
 
 
 # Consecutive chunk-level engine failures before the run stops calling the
@@ -456,50 +570,61 @@ _ENGINE_GIVE_UP_AFTER = 2
 
 def _translate_locale(
     locale: str, items: list[WorkItem]
-) -> tuple[dict[tuple[str, str], str], list[str], bool]:
-    """Translate one locale's strings, deduplicated by English text.
+) -> tuple[dict[tuple[str, str], str], list[str], set[tuple[str, str]], bool]:
+    """Translate one locale's strings with their keys as context.
 
-    Returns ``{(section, key): translation}``, a list of failures, and
-    whether the engine was declared dead for the rest of the run. One English
-    string translated once is applied to every target that shares it, keeping
-    cross-surface wording consistent by construction. A chunk-level engine
-    failure marks that chunk's strings failed and moves on, so one blocked or
-    truncated batch cannot take down the whole run.
+    Returns ``{(section, key): translation}``, human-readable failures, the
+    failed ``(section, key)`` set, and whether the engine was declared dead
+    for the rest of the run. Strings travel under their ``section:key``
+    identifiers rather than deduplicated by English text — the same English
+    may legitimately need different wording per key (Spanish genders
+    "enabled" as ``activado``/``activada`` depending on the noun), and the
+    key gives the model that context. The one pair *required* to share
+    wording across the authored surfaces is aligned afterwards by
+    ``_align_authored_shared``. A chunk-level engine failure marks that
+    chunk's strings failed and moves on, so one blocked or truncated batch
+    cannot take down the whole run.
     """
-    unique: dict[str, list[WorkItem]] = {}
-    for item in items:
-        unique.setdefault(item.english, []).append(item)
-    by_id = {f"s{index}": text for index, text in enumerate(unique)}
+    by_id = {_string_id(item): item for item in items}
+    batch = {sid: item.english for sid, item in by_id.items()}
 
     results: dict[tuple[str, str], str] = {}
     failures: list[str] = []
+    failed: set[tuple[str, str]] = set()
+    dead = False
     consecutive_engine_failures = 0
-    for chunk in _chunk(by_id):
+    for chunk in _chunk(batch):
+        if dead:
+            break
         try:
             response = _call_gemini(_prompt(locale, chunk))
         except SystemExit as exc:
             consecutive_engine_failures += 1
-            failures += [
-                f"{locale}/{item.section}/{item.key}: engine call failed ({exc})"
-                for english in chunk.values()
-                for item in unique[english]
-            ]
+            for sid in chunk:
+                item = by_id[sid]
+                failures.append(
+                    f"{locale}/{item.section}/{item.key}: engine call failed ({exc})"
+                )
+                failed.add((item.section, item.key))
             if consecutive_engine_failures >= _ENGINE_GIVE_UP_AFTER:
-                return results, failures, True
+                dead = True
             continue
         consecutive_engine_failures = 0
         time.sleep(_SECONDS_BETWEEN_REQUESTS)
-        for string_id, english in chunk.items():
+        for sid in chunk:
             _accept_or_retry(
-                locale,
-                string_id,
-                english,
-                unique[english],
-                response.get(string_id),
-                results,
-                failures,
+                locale, by_id[sid], response.get(sid), results, failures, failed
             )
-    return results, failures, False
+    if dead:
+        for item in items:
+            ref = (item.section, item.key)
+            if ref not in results and ref not in failed:
+                failures.append(
+                    f"{locale}/{item.section}/{item.key}: not attempted — "
+                    "engine gave up earlier in this run"
+                )
+                failed.add(ref)
+    return results, failures, failed, dead
 
 
 def _delete_from_settings(
@@ -584,9 +709,52 @@ def _apply_component(
         print(f"updated {path.relative_to(REPO_ROOT)}")
 
 
-def _translate_and_apply(plan: Plan, by_locale: dict[str, list[WorkItem]]) -> list[str]:
-    """Translate every locale's planned work and write the catalogs."""
+def _align_authored_shared(
+    locale: str, results: dict[tuple[str, str], str], module: Any
+) -> None:
+    """Byte-align the wording shared across the two authored surfaces.
+
+    Per-key contextual translation may word the settings and component copies
+    of one shared English string differently;
+    ``test_authored_shared_strings_read_the_same`` requires them identical.
+    The settings side wins (the historical rule); when only the component
+    side was retranslated this run, the locale's existing settings
+    translation is the reference.
+    """
+    for _english, where in module._authored_shared_groups():
+        settings_keys = [
+            key.removeprefix("messages.")
+            for surface, key in where
+            if surface == SETTINGS_SURFACE and key.startswith("messages.")
+        ]
+        component_keys = [key for surface, key in where if surface == COMPONENT_SURFACE]
+        if not settings_keys:
+            continue
+        value = results.get(("messages", settings_keys[0]))
+        if value is None:
+            catalog = _load_json(LOCALES_DIR / f"{locale}.json")
+            value = catalog.get("messages", {}).get(settings_keys[0])
+        if value is None:
+            continue
+        for key in settings_keys[1:]:
+            if ("messages", key) in results:
+                results[("messages", key)] = value
+        for key in component_keys:
+            if ("component", key) in results:
+                results[("component", key)] = value
+
+
+def _translate_and_apply(
+    plan: Plan, by_locale: dict[str, list[WorkItem]], module: Any
+) -> tuple[list[str], dict[tuple[str, str], set[str]]]:
+    """Translate every locale's planned work and write the catalogs.
+
+    Returns the failures plus ``{(section, key): locales}`` for every
+    *changed* string that was successfully written — the raw material for the
+    resumable-progress file when the run is partial.
+    """
     failures: list[str] = []
+    completed: dict[tuple[str, str], set[str]] = {}
     engine_dead = False
     try:
         for locale in _target_locales():
@@ -597,10 +765,16 @@ def _translate_and_apply(plan: Plan, by_locale: dict[str, list[WorkItem]]) -> li
                     "the engine was declared unavailable earlier in this run"
                 )
             elif locale in by_locale:
-                results, locale_failures, engine_dead = _translate_locale(
+                results, locale_failures, _failed, engine_dead = _translate_locale(
                     locale, by_locale[locale]
                 )
                 failures += locale_failures
+                _align_authored_shared(locale, results, module)
+                for item in by_locale[locale]:
+                    if item.changed and (item.section, item.key) in results:
+                        completed.setdefault((item.section, item.key), set()).add(
+                            locale
+                        )
             _apply_settings(locale, results, plan.deletions)
             _apply_component(locale, results, plan.deletions)
     finally:
@@ -610,7 +784,7 @@ def _translate_and_apply(plan: Plan, by_locale: dict[str, list[WorkItem]]) -> li
         # progress. Without this, a died-halfway run would auto-commit a
         # state that fails test_derived_catalogs_match_the_canonical_store.
         generate_locales.write()
-    return failures
+    return failures, completed
 
 
 def main() -> int:
@@ -641,9 +815,10 @@ def main() -> int:
             print(f"  delete {locale}/{section}/{key}")
         return 0
 
-    failures = _translate_and_apply(plan, by_locale)
+    failures, completed = _translate_and_apply(plan, by_locale, module)
 
     if failures:
+        _record_progress(completed, plan)
         print(
             "translation failures (baseline left stale so the run stays red):",
             file=sys.stderr,
@@ -652,6 +827,7 @@ def main() -> int:
             print(f"  {failure}", file=sys.stderr)
         return 2
 
+    _clear_progress()
     fresh = _load_test_module()
     fresh.BASELINE_PATH.write_text(
         json.dumps(fresh.english_sources(), indent=2, sort_keys=True) + "\n",

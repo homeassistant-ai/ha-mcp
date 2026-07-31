@@ -55,9 +55,22 @@ class TestValidate:
         assert _validate(_item(), "Hallo {name}") is None
 
     def test_rejects_markup_outside_the_allowlist_in_messages(self) -> None:
-        assert _validate(_item(english="x"), "ein <b>Wort</b>") is not None
-        assert _validate(_item(english="x"), "ein <CODE>Wort</CODE>") is not None
-        assert _validate(_item(english="x"), "ein <code>Wort</code>") is None
+        english = "a <code>word</code>"
+        assert _validate(_item(english=english), "ein <b>Wort</b>") is not None
+        assert _validate(_item(english=english), "ein <CODE>Wort</CODE>") is not None
+        assert _validate(_item(english=english), "ein <code>Wort</code>") is None
+
+    def test_rejects_formatting_tag_multiset_drift(self) -> None:
+        """A dropped closing tag or an invented allowlisted tag is still
+        malformed markup for tHtml, even though every tag passes the
+        allowlist individually."""
+        english = "a <strong>bold</strong> word"
+        assert _validate(_item(english=english), "ein <strong>fettes Wort") is not None
+        assert _validate(_item(english="plain"), "ein <code>Wort</code>") is not None
+        assert (
+            _validate(_item(english=english), "ein <strong>fettes</strong> Wort")
+            is None
+        )
 
     def test_markup_rules_apply_only_to_messages(self) -> None:
         # Tool and component strings render through escapeHtml / HA core, so
@@ -256,7 +269,7 @@ class TestEngineFailureDegradation:
     def test_one_failed_chunk_degrades_to_per_string_failures(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        answers = iter([SystemExit("quota"), {"s1": "Zwei"}])
+        answers = iter([SystemExit("quota"), {"messages:second": "Zwei"}])
 
         def fake_call(_prompt: str) -> dict[str, str]:
             answer = next(answers)
@@ -269,9 +282,12 @@ class TestEngineFailureDegradation:
             WorkItem("de", "messages", "first", "One"),
             WorkItem("de", "messages", "second", "Two"),
         ]
-        results, failures, dead = translate_locales._translate_locale("de", items)
+        results, failures, failed, dead = translate_locales._translate_locale(
+            "de", items
+        )
         assert results == {("messages", "second"): "Zwei"}
         assert failures == ["de/messages/first: engine call failed (quota)"]
+        assert failed == {("messages", "first")}
         assert dead is False
 
     def test_two_consecutive_failures_declare_the_engine_dead(
@@ -286,12 +302,64 @@ class TestEngineFailureDegradation:
             WorkItem("de", "messages", "second", "Two"),
             WorkItem("de", "messages", "third", "Three"),
         ]
-        results, failures, dead = translate_locales._translate_locale("de", items)
+        results, failures, failed, dead = translate_locales._translate_locale(
+            "de", items
+        )
         assert results == {}
         assert dead is True
-        # The give-up happens after the second consecutive failure; the third
-        # chunk is never attempted, so exactly two failure entries exist.
-        assert len(failures) == 2
+        # Two chunk failures trip the give-up; the never-attempted third
+        # string is still recorded as failed so nothing slips the report.
+        assert len(failures) == 3
+        assert failed == {
+            ("messages", "first"),
+            ("messages", "second"),
+            ("messages", "third"),
+        }
+
+
+class TestResumableProgress:
+    @pytest.fixture(autouse=True)
+    def _tmp_progress(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            translate_locales, "PROGRESS_PATH", tmp_path / "progress.json"
+        )
+        monkeypatch.setattr(translate_locales, "REPO_ROOT", tmp_path)
+
+    def test_partial_run_records_and_next_plan_skips(self) -> None:
+        plan = Plan(
+            items=[
+                WorkItem("de", "messages", "greeting", "Hello", changed=True),
+                WorkItem("ru", "messages", "greeting", "Hello", changed=True),
+            ]
+        )
+        translate_locales._record_progress({("messages", "greeting"): {"de"}}, plan)
+        progress = translate_locales._progress_load()
+        assert translate_locales._progress_done(
+            progress, "messages", "greeting", "Hello", "de"
+        )
+        # ru never completed; and a further English change invalidates de too.
+        assert not translate_locales._progress_done(
+            progress, "messages", "greeting", "Hello", "ru"
+        )
+        assert not translate_locales._progress_done(
+            progress, "messages", "greeting", "Hello again", "de"
+        )
+
+    def test_record_merges_and_clear_removes(self) -> None:
+        plan = Plan(
+            items=[WorkItem("de", "messages", "greeting", "Hello", changed=True)]
+        )
+        translate_locales._record_progress({("messages", "greeting"): {"de"}}, plan)
+        plan.items[0] = WorkItem("es", "messages", "greeting", "Hello", changed=True)
+        translate_locales._record_progress({("messages", "greeting"): {"es"}}, plan)
+        progress = translate_locales._progress_load()
+        assert progress["messages|greeting"]["locales"] == ["de", "es"]
+        translate_locales._clear_progress()
+        assert translate_locales._progress_load() == {}
+
+    def test_full_success_leaves_no_progress_file(self) -> None:
+        translate_locales._clear_progress()  # no file: a clean no-op
+        assert not translate_locales.PROGRESS_PATH.exists()
 
 
 class TestMetaOnlyStub:

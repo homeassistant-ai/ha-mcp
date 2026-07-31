@@ -940,6 +940,44 @@ def test_settings_catalog_is_not_a_copy_of_english(locale: str) -> None:
 
 
 @pytest.mark.parametrize("locale", _non_english_settings_locales())
+def test_generated_addon_projections_are_translated(locale: str) -> None:
+    """The add-on subset needs its own ceiling, per flavor.
+
+    All ~21 ``addon.*`` strings left untranslated are under 5% of the whole
+    settings catalog — invisible to the catalog-wide share above — yet they
+    project an essentially English Supervisor configuration page. This is
+    the deleted per-flavor anti-copy check reborn, computed from the
+    canonical store the projections are generated from rather than from the
+    committed YAML (which the derived-files test already pins byte-exact).
+    """
+    catalogs = generate_locales.load_catalogs()
+    english = catalogs["en"]
+    messages = catalogs.get(locale, {})
+    for flavor, addon_dir in generate_locales.ADDON_FLAVORS.items():
+        texts = {
+            (key, field): generate_locales.resolve_text(
+                messages, english, flavor, key, field
+            )
+            for key in generate_locales.schema_keys(addon_dir)
+            for field in ("name", "description")
+        }
+        untranslated = sorted(
+            f"{key}.{field}"
+            for (key, field), text in texts.items()
+            if text
+            == generate_locales.resolve_text(english, english, flavor, key, field)
+        )
+        share = len(untranslated) / len(texts)
+        assert share <= _MAX_ENGLISH_IDENTICAL_SHARE, (
+            f"the {flavor} add-on projection for {locale} leaves "
+            f"{len(untranslated)} of {len(texts)} option strings "
+            f"({share:.1%}) byte-identical to English — over the "
+            f"{_MAX_ENGLISH_IDENTICAL_SHARE:.0%} ceiling. Untranslated: "
+            f"{untranslated[:10]}"
+        )
+
+
+@pytest.mark.parametrize("locale", _non_english_settings_locales())
 def test_settings_catalog_tools_are_translated(locale: str) -> None:
     """Exactness says every tool is present, not that any was translated.
 

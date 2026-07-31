@@ -105,10 +105,14 @@ def resolve_text(
         f"features.{key}.{ui_field}",
         f"addon.{key}.{field}",
     )
+    # Locale-then-English per candidate, not all-locale-then-all-English: a
+    # flavor override that the locale has not translated yet must fall back
+    # to the override's ENGLISH — content-correct wording beats a localized
+    # generic that lacks the flavor-specific instructions. The pipeline
+    # fills the override's translation on its next run.
     for candidate in candidates:
         if candidate in messages:
             return messages[candidate]
-    for candidate in candidates:
         if candidate in english:
             return english[candidate]
     raise SystemExit(
