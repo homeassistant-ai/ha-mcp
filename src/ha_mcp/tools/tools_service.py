@@ -1385,13 +1385,15 @@ class ServiceTools:
         timeout_seconds: int = 10,
     ) -> dict[str, Any]:
         """
-        Check status of one or more device operations with real-time WebSocket verification.
+        Get the status of one or more device operations with real-time WebSocket verification.
 
         Pass a single operation_id string to check one operation, or a list of IDs
         to check multiple operations at once (bulk status).
 
-        The timeout_seconds parameter applies to single-operation checks only.
-        Bulk checks poll each operation individually with a short internal timeout.
+        The timeout_seconds wait window bounds both modes. Bulk checks poll
+        all operations concurrently under one shared window and report
+        per-item failures inside detailed_results instead of aborting the
+        batch.
 
         Use this to track operations initiated by ha_bulk_control or ha_call_service.
         For current entity states, use ha_get_state instead.
@@ -1401,7 +1403,7 @@ class ServiceTools:
             # before the body runs, so operation_id is already the final shape.
             if isinstance(operation_id, list):
                 result = await self._device_tools.get_bulk_operation_status(
-                    operation_ids=operation_id
+                    operation_ids=operation_id, timeout_seconds=timeout_seconds
                 )
                 return cast(dict[str, Any], result)
             result = await self._device_tools.get_device_operation_status(

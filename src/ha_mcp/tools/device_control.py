@@ -301,33 +301,50 @@ class DeviceControlTools:
         action: str,
         parameters: dict[str, Any] | None,
     ) -> tuple[str, dict[str, Any] | None]:
-        service_mapping = {
-            "on": "turn_on",
-            "off": "turn_off",
-            "toggle": "toggle",
-            "open": "open_cover" if domain == "cover" else "turn_on",
-            "close": "close_cover" if domain == "cover" else "turn_off",
-            "set": "turn_on" if domain == "light" else "set_temperature",
-        }
+        if domain == "climate" and action in ("heat", "cool", "auto", "heat_cool"):
+            parameters = dict(parameters or {})
+            parameters["hvac_mode"] = action
+            return "set_hvac_mode", parameters
 
-        service_name = service_mapping.get(action, action)
-
-        if domain == "climate":
-            if action in ["heat", "cool", "auto"]:
-                service_name = "set_hvac_mode"
-                if not parameters:
-                    parameters = {}
-                parameters["hvac_mode"] = action
-            elif action == "set":
-                service_name = "set_temperature"
-
-        elif domain == "media_player":
-            if action in ["play", "pause", "stop"]:
-                service_name = f"media_{action}"
-            elif action == "set":
-                service_name = "volume_set"
-
+        service_name = self._SERVICE_OVERRIDES.get(
+            (domain, action), self._GENERIC_SERVICE_MAP.get(action, action)
+        )
         return service_name, parameters
+
+    # Domain-specific action-to-service mappings; anything not listed
+    # falls through to _GENERIC_SERVICE_MAP, then to the action verbatim.
+    # tests/src/e2e/workflows/device_control/test_action_service_resolution.py
+    # pins every DOMAIN_HANDLERS table entry through this resolver against
+    # a live instance's service list.
+    _SERVICE_OVERRIDES: ClassVar[dict[tuple[str, str], str]] = {
+        ("cover", "open"): "open_cover",
+        ("cover", "close"): "close_cover",
+        ("cover", "stop"): "stop_cover",
+        ("cover", "set"): "set_cover_position",
+        ("light", "set"): "turn_on",
+        # lock.open exists; the generic mapping's turn_on does not.
+        ("lock", "open"): "open",
+        ("climate", "set"): "set_temperature",
+        ("media_player", "play"): "media_play",
+        ("media_player", "pause"): "media_pause",
+        ("media_player", "stop"): "media_stop",
+        ("media_player", "next"): "media_next_track",
+        ("media_player", "previous"): "media_previous_track",
+        ("media_player", "set"): "volume_set",
+        ("alarm_control_panel", "arm_home"): "alarm_arm_home",
+        ("alarm_control_panel", "arm_away"): "alarm_arm_away",
+        ("alarm_control_panel", "arm_night"): "alarm_arm_night",
+        ("alarm_control_panel", "disarm"): "alarm_disarm",
+    }
+
+    _GENERIC_SERVICE_MAP: ClassVar[dict[str, str]] = {
+        "on": "turn_on",
+        "off": "turn_off",
+        "toggle": "toggle",
+        "open": "turn_on",
+        "close": "turn_off",
+        "set": "set_temperature",
+    }
 
     _DOMAIN_PARAMS: ClassVar[dict[str, list[str]]] = {
         "light": ["brightness", "color_temp_kelvin", "rgb_color", "effect"],
@@ -1274,13 +1291,20 @@ class DeviceControlTools:
         return response
 
     async def get_bulk_operation_status(
-        self, operation_ids: list[str]
+        self, operation_ids: list[str], timeout_seconds: int = 10
     ) -> dict[str, Any]:
         """
         Check status of multiple operations.
 
+        Polls all operations concurrently under one shared
+        ``timeout_seconds`` window, so the wall time is bounded by the
+        window rather than growing with the batch size. Per-item failures
+        become structured entries in ``detailed_results`` rather than
+        aborting the batch.
+
         Args:
             operation_ids: List of operation IDs to check
+            timeout_seconds: Wait window applied to every operation
 
         Returns:
             Status summary for all operations
@@ -1296,26 +1320,69 @@ class DeviceControlTools:
                 )
             )
 
-        # Check all operations
-        statuses = []
-        for op_id in operation_ids:
-            status = await self.get_device_operation_status(op_id)
-            statuses.append(status)
+        # Check all operations concurrently under one shared wait window.
+        # Per-item failures must not abort the batch: get_device_operation_status
+        # raises ToolError for failed / timed-out / not-found operations, so each
+        # one is caught and folded back into detailed_results as a structured
+        # entry — otherwise the first bad operation would discard the status of
+        # every other one. The whole parsed error payload is preserved (context
+        # keys like entity_id / duration_ms sit at its top level), with the
+        # batch "status" field layered on for the summary counts.
+        error_code_to_status = {
+            ErrorCode.SERVICE_CALL_FAILED.value: "failed",
+            ErrorCode.TIMEOUT_OPERATION.value: "timeout",
+            ErrorCode.RESOURCE_NOT_FOUND.value: "not_found",
+        }
+
+        async def check_one(op_id: str) -> dict[str, Any]:
+            try:
+                return await self.get_device_operation_status(
+                    op_id, timeout_seconds=timeout_seconds
+                )
+            except ToolError as e:
+                try:
+                    err = json.loads(str(e))
+                except ValueError:
+                    err = {"success": False, "error": {"message": str(e)}}
+                error_info = err.get("error") or {}
+                return {
+                    **err,
+                    "operation_id": op_id,
+                    "status": error_code_to_status.get(
+                        error_info.get("code", ""), "failed"
+                    ),
+                }
+
+        statuses = list(
+            await asyncio.gather(*(check_one(op_id) for op_id in operation_ids))
+        )
 
         # Summarize results
         completed = len([s for s in statuses if s.get("status") == "completed"])
         failed = len([s for s in statuses if s.get("status") in ["failed", "timeout"]])
+        not_found = len([s for s in statuses if s.get("status") == "not_found"])
         pending = len([s for s in statuses if s.get("status") == "pending"])
 
+        # The batch call itself succeeded; per-item failures live inside
+        # detailed_results (batch-item pattern). Top-level ``success`` is
+        # the repo-wide response contract every tool return carries.
         return {
+            "success": True,
             "total_operations": len(operation_ids),
             "completed": completed,
             "failed": failed,
+            "not_found": not_found,
             "pending": pending,
             "all_complete": pending == 0,
             "summary": {
                 "success_rate": f"{completed}/{len(operation_ids)}",
-                "completion_percentage": (completed / len(operation_ids)) * 100,
+                # Terminal fraction (nothing left in flight) — consistent
+                # with all_complete; success_rate carries the successful
+                # fraction separately.
+                "completion_percentage": (
+                    (completed + failed + not_found) / len(operation_ids)
+                )
+                * 100,
             },
             "detailed_results": statuses,
             "recommendations": (
@@ -1324,7 +1391,7 @@ class DeviceControlTools:
                     "Check failed operations for specific error messages",
                     "Retry failed operations with different parameters if needed",
                 ]
-                if pending > 0 or failed > 0
+                if pending > 0 or failed > 0 or not_found > 0
                 else ["All operations completed successfully!"]
             ),
         }

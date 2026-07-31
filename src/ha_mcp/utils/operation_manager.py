@@ -23,7 +23,6 @@ class OperationStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     TIMEOUT = "timeout"
-    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -286,42 +285,51 @@ class OperationManager:
 
         initial_count = len(self.operations)
 
-        # Remove completed operations older than 5 minutes
-        # Remove failed/cancelled operations older than 1 minute
+        # Remove completed operations 5 minutes after completion
+        # Remove failed/timed-out operations 1 minute after completion
+        # (TIMEOUT can be set outside this pass: get_operation() marks an
+        # expired PENDING op in place on the read path — anchoring the TTL
+        # on completion_time keeps such an op queryable for its full
+        # terminal minute even when it timed out long after start_time)
         # Remove expired pending operations
         to_remove = []
 
         for op_id, operation in self.operations.items():
-            age_seconds = (current_time * 1000 - operation.start_time) / 1000
+            terminal_anchor = operation.completion_time or operation.start_time
+            age_seconds = (current_time * 1000 - terminal_anchor) / 1000
 
             if (
                 operation.status == OperationStatus.COMPLETED and age_seconds > 300
             ) or (
-                operation.status in [OperationStatus.FAILED, OperationStatus.CANCELLED]
+                operation.status in (OperationStatus.FAILED, OperationStatus.TIMEOUT)
                 and age_seconds > 60
             ):
                 to_remove.append(op_id)
             elif operation.status == OperationStatus.PENDING and operation.is_expired:
-                # Mark as timeout first
+                # Mark as timeout and KEEP it for the terminal minute — same
+                # treatment as a read-path timeout, so a poll shortly after
+                # expiry reports "timeout" rather than not_found regardless
+                # of which path noticed first. The TTL branch above reclaims
+                # it once completion_time is a minute old.
                 operation.status = OperationStatus.TIMEOUT
                 operation.completion_time = current_time * 1000
-                to_remove.append(op_id)
 
         # Remove operations
         for op_id in to_remove:
             del self.operations[op_id]
 
-        # If still over limit, remove oldest completed operations
+        # If still over limit, remove oldest terminal operations (never
+        # in-flight PENDING ones — those expire on their own timeout).
         if len(self.operations) > self.max_operations:
-            completed_ops = [
+            terminal_ops = [
                 (op_id, op)
                 for op_id, op in self.operations.items()
-                if op.status == OperationStatus.COMPLETED
+                if op.status != OperationStatus.PENDING
             ]
-            completed_ops.sort(key=lambda x: x[1].completion_time or 0)
+            terminal_ops.sort(key=lambda x: x[1].completion_time or 0)
 
             excess = len(self.operations) - self.max_operations
-            for op_id, _ in completed_ops[:excess]:
+            for op_id, _ in terminal_ops[:excess]:
                 del self.operations[op_id]
 
         removed_count = initial_count - len(self.operations)

@@ -9,7 +9,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import safe_call_tool
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -61,24 +61,43 @@ class TestOperationStatusConsolidation:
     async def test_list_operation_ids_invalid(self, mcp_client):
         """
         Test: Passing a list of invalid operation IDs returns bulk status.
+
+        Per-item failures must NOT abort the batch: every requested ID gets
+        a structured entry in detailed_results (regression pin — the bulk
+        loop used to re-raise the first not-found ToolError and discard the
+        status of every other operation).
         """
         logger.info("Testing list of invalid operation IDs")
 
-        result = await safe_call_tool(
-            mcp_client,
-            "ha_get_operation_status",
-            {
-                "operation_id": [
-                    "nonexistent_op_111",
-                    "nonexistent_op_222",
-                    "nonexistent_op_333",
-                ],
-            },
-        )
+        # The bulk summary succeeds even when every item fails (per-item
+        # errors live inside detailed_results) — so this goes through the
+        # success-path assertion helper, which enforces the top-level
+        # success contract.
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success(
+                "ha_get_operation_status",
+                {
+                    "operation_id": [
+                        "nonexistent_op_111",
+                        "nonexistent_op_222",
+                        "nonexistent_op_333",
+                    ],
+                },
+            )
 
         assert isinstance(result, dict), f"Expected dict response, got {type(result)}"
-        assert "success" in result or "error" in result, (
-            f"Response missing 'success' or 'error' field: {result}"
+        assert result.get("total_operations") == 3, (
+            f"Bulk status must cover every requested ID, got: {result}"
+        )
+        detailed = result.get("detailed_results")
+        assert isinstance(detailed, list) and len(detailed) == 3, (
+            f"Every ID needs a structured entry in detailed_results: {result}"
+        )
+        assert result.get("not_found") == 3, (
+            f"All three nonexistent IDs should report not_found: {result}"
+        )
+        assert all(item.get("status") == "not_found" for item in detailed), (
+            f"Each entry should carry status='not_found': {detailed}"
         )
         logger.info(f"List invalid ops result: {result}")
 

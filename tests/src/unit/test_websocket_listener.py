@@ -10,7 +10,6 @@ and async device operations get marked COMPLETED instead of expiring.
 
 from __future__ import annotations
 
-from datetime import datetime
 from unittest.mock import patch
 
 import pytest
@@ -56,21 +55,10 @@ def _make_state_changed_event(
 
 @pytest.fixture
 def listener_service():
-    """Construct a fresh listener with a real ``stats`` dict so the
-    handler's mutations don't crash, but no real WS connection.
-    """
+    """Construct a fresh listener with no real WS connection."""
     from ha_mcp.client.websocket_listener import WebSocketListenerService
 
-    service = WebSocketListenerService()
-    # Real-ish stats dict so the int-isinstance checks pass.
-    service.stats = {
-        "events_processed": 0,
-        "operations_updated": 0,
-        "connection_errors": 0,
-        "last_event_time": None,
-        "start_time": datetime.now(),
-    }
-    return service
+    return WebSocketListenerService()
 
 
 @pytest.mark.asyncio
