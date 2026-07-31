@@ -281,8 +281,12 @@ def test_write_tool_attaches_skill_content_somewhere(
 
 def _emit_file_refs() -> list[str]:
     """Statically extract every ``file_ref`` literal passed to _emit()."""
-    checker_path = TOOLS_DIR / "best_practice_checker.py"
-    tree = ast.parse(checker_path.read_text())
+    # Every best_practice_* module, not just the checker: the checks are split
+    # across modules, and scanning one of them would silently stop covering
+    # the anchors emitted by the others.
+    checker_paths = sorted(TOOLS_DIR.glob("best_practice_*.py"))
+    assert checker_paths, "no best_practice_* modules found"
+    tree = ast.parse("\n".join(path.read_text() for path in checker_paths))
     refs: list[str] = []
     for node in ast.walk(tree):
         if (
