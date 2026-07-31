@@ -791,16 +791,16 @@ an outage — still commits every finished translation plus
 resume where it stopped: **re-running the workflow is the entire recovery
 procedure.** Only a fully successful run repins the baseline and deletes the
 progress file, so CI stays red until every string is translated and nothing
-unvalidated ever ships. Engines form a failover chain: the Gemini free tier
-(`GEMINI_API_URL` / `GEMINI_MODEL` / `GEMINI_API_KEY` cover any
-Gemini-compatible endpoint), then — when their credentials are present — the
-Codex CLI (`CODEX_AUTH`, the same scaffolding `test.yml` uses) and the
-Claude Code CLI (`CLAUDE_CODE_OAUTH_TOKEN`). An engine that exhausts its own
-retries is dropped for the rest of the run and the next takes over; each
-engine is one small function in `scripts/translate_locales.py`, so adding or
-replacing providers stays a one-function change. Worst case, hand-translate
-and run `python scripts/update_locale_baseline.py`, exactly as before the
-pipeline existed.
+unvalidated ever ships. **The fallback when the engine is down is a human**:
+anyone (the PR author included) can hand-translate the strings the dry-run
+lists, run `python scripts/generate_locales.py` and
+`python scripts/update_locale_baseline.py`, and push — CI goes green and the
+next pipeline run no-ops (it also cleans up any committed progress file).
+Hand-edits always win; the machine only ever touches strings whose English
+changed. The engine itself is one function (`_call_gemini`) with
+`GEMINI_API_URL` / `GEMINI_MODEL` / `GEMINI_API_KEY` overrides for any
+Gemini-compatible endpoint, so replacing the provider stays a one-function
+change.
 
 The Webhook Proxy add-on and its bundled integration stay **English-only by
 decision** — not worth the upkeep. The test records that, so any other new

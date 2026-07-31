@@ -17,15 +17,14 @@ is described to the engine by the catalog's own ``meta.native_name``):
   from the tool definitions via ``scripts/extract_tools.py``)
 - ``custom_components/ha_mcp_tools/translations/<code>.json``
 
-Engines form a failover chain (``_call_engine``): the Gemini API free tier
-(``GEMINI_API_KEY``; ``GEMINI_MODEL`` / ``GEMINI_API_URL`` override the model
-and any Gemini-compatible endpoint), then — when their credentials are
-present — the Codex CLI (``~/.codex/auth.json``, the same ``CODEX_AUTH``
-scaffolding ``test.yml`` uses) and the Claude Code CLI
-(``CLAUDE_CODE_OAUTH_TOKEN``). An engine that exhausts its own retries is
-dropped for the rest of the run and the next one takes over; each engine is
-one small function, so adding or replacing providers stays a one-function
-change.
+The engine is one function (``_call_gemini``): the Gemini API free tier,
+keyed by ``GEMINI_API_KEY``, with ``GEMINI_MODEL`` / ``GEMINI_API_URL``
+overrides for any Gemini-compatible endpoint. The fallback when the engine is
+down is a HUMAN: hand-edit the translations, run
+``python scripts/generate_locales.py`` and
+``python scripts/update_locale_baseline.py``, and push — the next pipeline
+run sees nothing stale and no-ops. Hand-edits always win; the machine only
+touches strings whose English changed.
 Every returned string is validated (placeholder parity, the settings UI markup
 allowlist, formatting-tag parity, panel-link parity) before it is written; a
 failure leaves that string unwritten and the run red rather than shipping a
@@ -51,13 +50,9 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
-import subprocess
 import sys
-import tempfile
 import time
 from collections import Counter
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
@@ -526,118 +521,6 @@ def _call_gemini(prompt: str) -> dict[str, Any]:
     raise SystemExit(f"Gemini API call failed: {last_error}")
 
 
-def _extract_json(text: str) -> dict[str, Any]:
-    """Parse the JSON object out of possibly fenced or prose-wrapped output."""
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end <= start:
-        raise SystemExit(f"no JSON object in engine output: {text[:200]!r}")
-    try:
-        parsed = json.loads(text[start : end + 1])
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"engine output is not valid JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise SystemExit("engine output is JSON but not an object")
-    return parsed
-
-
-_CODEX_AUTH_PATH = Path.home() / ".codex" / "auth.json"
-
-
-def _call_codex(prompt: str) -> dict[str, Any]:
-    """Fallback engine: the Codex CLI, non-interactive.
-
-    Authenticated by ``~/.codex/auth.json`` — the exact scaffolding
-    ``test.yml`` already uses for the ``CODEX_AUTH`` secret. The prompt is a
-    pure text transform, so the agent runs in the read-only sandbox with no
-    repository access and its final message is captured via
-    ``--output-last-message``.
-    """
-    with tempfile.TemporaryDirectory() as tmp:
-        answer = Path(tmp) / "answer.md"
-        cmd = ["codex", "exec", "--skip-git-repo-check", "--ephemeral"]
-        cmd += ["--sandbox", "read-only", "--color", "never", "--cd", tmp]
-        model = os.environ.get("CODEX_TRANSLATE_MODEL")
-        if model:
-            cmd += ["--model", model]
-        cmd += ["--output-last-message", str(answer), "-"]
-        try:
-            proc = subprocess.run(
-                cmd, input=prompt, capture_output=True, text=True, timeout=600
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise SystemExit(f"codex engine did not run: {exc!r}") from exc
-        if proc.returncode != 0 or not answer.exists():
-            raise SystemExit(
-                f"codex engine failed (exit {proc.returncode}): "
-                f"stderr={proc.stderr[-400:]!r} stdout={proc.stdout[-400:]!r}"
-            )
-        return _extract_json(answer.read_text(encoding="utf-8"))
-
-
-def _call_claude(prompt: str) -> dict[str, Any]:
-    """Fallback engine: the Claude Code CLI in print mode.
-
-    Authenticated by the ``CLAUDE_CODE_OAUTH_TOKEN`` env var (the token
-    ``claude setup-token`` mints for CI); ``-p`` reads the prompt from stdin
-    and prints only the final response.
-    """
-    cmd = ["claude", "-p", "--output-format", "text"]
-    cmd += ["--model", os.environ.get("CLAUDE_TRANSLATE_MODEL", "sonnet")]
-    try:
-        proc = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, timeout=600
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SystemExit(f"claude engine did not run: {exc!r}") from exc
-    if proc.returncode != 0:
-        # The CLI reports most failures on stdout; surface both streams.
-        raise SystemExit(
-            f"claude engine failed (exit {proc.returncode}): "
-            f"stderr={proc.stderr[-400:]!r} stdout={proc.stdout[-400:]!r}"
-        )
-    return _extract_json(proc.stdout)
-
-
-def _available_engines() -> list[tuple[str, Callable[[str], dict[str, Any]]]]:
-    """The engine chain, in failover order, limited to what is authenticated."""
-    engines: list[tuple[str, Callable[[str], dict[str, Any]]]] = [
-        ("gemini", _call_gemini)
-    ]
-    if shutil.which("codex") and _CODEX_AUTH_PATH.exists():
-        engines.append(("codex", _call_codex))
-    if shutil.which("claude") and os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        engines.append(("claude", _call_claude))
-    return engines
-
-
-# Populated on first use; module-level so a run's failover is sticky — once an
-# engine has exhausted its own retries (quota gone, outage), later calls go
-# straight to the next engine instead of re-probing a dead one.
-_ENGINE_CHAIN: list[tuple[str, Callable[[str], dict[str, Any]]]] = []
-_ACTIVE_ENGINE = 0
-
-
-def _call_engine(prompt: str) -> dict[str, Any]:
-    """Call the active engine, failing over down the chain permanently."""
-    global _ACTIVE_ENGINE
-    if not _ENGINE_CHAIN:
-        _ENGINE_CHAIN.extend(_available_engines())
-    while True:
-        name, engine = _ENGINE_CHAIN[_ACTIVE_ENGINE]
-        try:
-            return engine(prompt)
-        except SystemExit as exc:
-            if len(_ENGINE_CHAIN) <= _ACTIVE_ENGINE + 1:
-                raise
-            _ACTIVE_ENGINE += 1
-            print(
-                f"  engine {name} failed ({exc}); failing over to "
-                f"{_ENGINE_CHAIN[_ACTIVE_ENGINE][0]}",
-                file=sys.stderr,
-            )
-
-
 def _chunk(batch: dict[str, str]) -> list[dict[str, str]]:
     chunks: list[dict[str, str]] = []
     current: dict[str, str] = {}
@@ -670,7 +553,7 @@ def _accept_or_retry(
     reason = _validate(item, translated)
     if reason is not None:
         try:
-            retry = _call_engine(
+            retry = _call_gemini(
                 _prompt(locale, {_string_id(item): item.english})
                 + f"\n\nYour previous attempt was rejected: {reason}. "
                 "Fix that and return the corrected JSON."
@@ -726,7 +609,7 @@ def _translate_locale(
         if dead:
             break
         try:
-            response = _call_engine(_prompt(locale, chunk))
+            response = _call_gemini(_prompt(locale, chunk))
         except SystemExit as exc:
             consecutive_engine_failures += 1
             for sid in chunk:

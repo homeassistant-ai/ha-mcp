@@ -259,79 +259,6 @@ class TestCallGeminiRetry:
             translate_locales._call_gemini("prompt")
 
 
-class TestExtractJson:
-    def test_plain_and_fenced_and_prose_wrapped(self) -> None:
-        assert translate_locales._extract_json('{"a": "b"}') == {"a": "b"}
-        assert translate_locales._extract_json('```json\n{"a": "b"}\n```') == {"a": "b"}
-        assert translate_locales._extract_json('Here you go:\n{"a": "b"}\nDone.') == {
-            "a": "b"
-        }
-
-    def test_rejects_no_object_and_bad_json(self) -> None:
-        with pytest.raises(SystemExit, match="no JSON object"):
-            translate_locales._extract_json("nothing here")
-        with pytest.raises(SystemExit, match="not valid JSON"):
-            translate_locales._extract_json("{broken}")
-        with pytest.raises(SystemExit, match="no JSON object"):
-            translate_locales._extract_json("[1, 2]")
-
-
-class TestEngineFailover:
-    @pytest.fixture(autouse=True)
-    def _fresh_chain(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(translate_locales, "_ENGINE_CHAIN", [])
-        monkeypatch.setattr(translate_locales, "_ACTIVE_ENGINE", 0)
-
-    def test_failover_is_sticky(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls: list[str] = []
-
-        def dead(_prompt: str) -> dict[str, Any]:
-            calls.append("dead")
-            raise SystemExit("quota")
-
-        def alive(_prompt: str) -> dict[str, Any]:
-            calls.append("alive")
-            return {"ok": "yes"}
-
-        translate_locales._ENGINE_CHAIN.extend([("dead", dead), ("alive", alive)])
-        assert translate_locales._call_engine("p") == {"ok": "yes"}
-        assert translate_locales._call_engine("p") == {"ok": "yes"}
-        # The dead engine is consulted exactly once; later calls skip it.
-        assert calls == ["dead", "alive", "alive"]
-
-    def test_last_engine_failure_propagates(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        def dead(_prompt: str) -> dict[str, Any]:
-            raise SystemExit("down")
-
-        translate_locales._ENGINE_CHAIN.append(("only", dead))
-        with pytest.raises(SystemExit, match="down"):
-            translate_locales._call_engine("p")
-
-    def test_available_engines_require_credentials(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.setattr(
-            translate_locales.shutil, "which", lambda _name: "/usr/bin/fake"
-        )
-        monkeypatch.setattr(
-            translate_locales, "_CODEX_AUTH_PATH", tmp_path / "absent.json"
-        )
-        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
-        assert [name for name, _ in translate_locales._available_engines()] == [
-            "gemini"
-        ]
-
-        (tmp_path / "absent.json").write_text("{}", encoding="utf-8")
-        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
-        assert [name for name, _ in translate_locales._available_engines()] == [
-            "gemini",
-            "codex",
-            "claude",
-        ]
-
-
 class TestEngineFailureDegradation:
     @pytest.fixture(autouse=True)
     def _fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -350,7 +277,7 @@ class TestEngineFailureDegradation:
                 raise answer
             return answer
 
-        monkeypatch.setattr(translate_locales, "_call_engine", fake_call)
+        monkeypatch.setattr(translate_locales, "_call_gemini", fake_call)
         items = [
             WorkItem("de", "messages", "first", "One"),
             WorkItem("de", "messages", "second", "Two"),
@@ -369,7 +296,7 @@ class TestEngineFailureDegradation:
         def fake_call(_prompt: str) -> dict[str, str]:
             raise SystemExit("quota")
 
-        monkeypatch.setattr(translate_locales, "_call_engine", fake_call)
+        monkeypatch.setattr(translate_locales, "_call_gemini", fake_call)
         items = [
             WorkItem("de", "messages", "first", "One"),
             WorkItem("de", "messages", "second", "Two"),

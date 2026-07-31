@@ -10,8 +10,10 @@ name: Locale Sync
 #
 # Rate limits / outages: a partial run (daily-quota hit, engine outage)
 # commits whatever finished plus a progress file the next run resumes from —
-# re-running this workflow is the entire recovery procedure. The job stays
-# red until every string is translated.
+# re-running this workflow is the recovery procedure. Alternatively any human
+# (the PR author included) can hand-translate, run generate_locales.py +
+# update_locale_baseline.py, and push; hand-edits always win and the next run
+# no-ops. The job stays red until every string is translated.
 #
 # Fork PRs are skipped: they carry no secrets and their branches cannot be
 # pushed to. For those, a maintainer runs the script locally (see AGENTS.md
@@ -85,31 +87,6 @@ jobs:
     - name: Install dependencies
       run: uv sync --dev
 
-    - name: Prepare fallback translation engines
-      # Optional failover chain behind the free Gemini tier: the Codex CLI
-      # (authenticated exactly like test.yml wires CODEX_AUTH) and the Claude
-      # Code CLI (CLAUDE_CODE_OAUTH_TOKEN). Each is skipped when its secret is
-      # absent; the script uses whatever is installed and authenticated, in
-      # order Gemini → Codex → Claude. Same trust boundary as GEMINI_API_KEY:
-      # these credentials are visible to the translate step, which runs
-      # PR-head code — same-repo PRs only, and CODEX_AUTH is already exposed
-      # to PR-triggered jobs the same way by test.yml.
-      env:
-        CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
-        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      run: |
-        if [ -n "$CODEX_AUTH" ]; then
-          mkdir -p "$HOME/.codex"
-          printf '%s' "$CODEX_AUTH" > "$HOME/.codex/auth.json"
-          chmod 600 "$HOME/.codex/auth.json"
-          npm install -g @openai/codex@latest
-          echo "Codex CLI fallback ready"
-        fi
-        if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-          npm install -g @anthropic-ai/claude-code
-          echo "Claude CLI fallback ready"
-        fi
-
     - name: Translate stale and missing strings
       id: translate
       # continue-on-error so partial progress (e.g. a free-tier daily cap hit
@@ -118,7 +95,6 @@ jobs:
       continue-on-error: true
       env:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       run: uv run python scripts/translate_locales.py
 
     - name: Commit and push if changed
@@ -154,5 +130,5 @@ jobs:
     - name: Fail if translation failed
       if: steps.translate.outcome != 'success'
       run: |
-        echo "::error::scripts/translate_locales.py did not finish cleanly; partial progress (if any) was committed. Rerun this workflow to continue."
+        echo "::error::scripts/translate_locales.py did not finish cleanly; partial progress (if any) was committed. Two ways to green: (1) re-run this workflow to let it continue where it stopped, or (2) do it by hand — translate the strings 'uv run python scripts/translate_locales.py --dry-run' lists, run 'uv run python scripts/generate_locales.py' and 'uv run python scripts/update_locale_baseline.py', and push. Hand-edits always win; the pipeline never overwrites them."
         exit 1
