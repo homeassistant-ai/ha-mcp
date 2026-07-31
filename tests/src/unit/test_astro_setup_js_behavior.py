@@ -13,7 +13,7 @@ Tests in this module:
   config, including the branches where scope is skipped (stdio-local),
   where config is gated behind a remote-path choice (remote scope), and
   where an HTTP method plus a stdio-only client forces the platform step
-  for the mcp-proxy bridge.
+  for the stdio bridge.
 * Loop over every real client id and drive the happy path to config
   generation, asserting both that the per-client branch emitted into
   ``config-output`` AND that the emitted content is non-empty (so a typo
@@ -359,7 +359,7 @@ class TestWizardStateMachine:
         self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
     ) -> None:
         """An HTTP server method plus a stdio-only client forces the
-        platform step for the mcp-proxy bridge.
+        platform step for the stdio bridge.
 
         ha-addon -> claude-desktop (stdio-only) -> local leaves config
         hidden until a platform is chosen, because ``needsPlatform()``
@@ -393,7 +393,7 @@ class TestWizardStateMachine:
         _assert_clean_init(result)
         assert 'data-before-platform="true"' in result.dom, (
             "config section should still be hidden before the platform "
-            "(mcp-proxy OS) is chosen"
+            "(stdio bridge OS) is chosen"
         )
         assert 'data-after-platform="false"' in result.dom, (
             "config section should be visible after the platform is chosen"
@@ -414,6 +414,21 @@ def _load_client_ids() -> list[str]:
 
 
 CLIENT_IDS = _load_client_ids()
+
+
+def _load_bridge_client_ids() -> list[str]:
+    """Stdio-only clients that actually run the fastmcp-remote bridge.
+
+    Read at collection time from the real ``stdioOnlyClients``/``isZed``
+    split so a client added to that list picks up bridge-config coverage
+    automatically, instead of silently getting none until someone remembers
+    to update a hardcoded parametrize list here.
+    """
+    vars_ = extract_astro_frontmatter_vars(SETUP_ASTRO, ["stdioOnlyClients"])
+    return [c for c in vars_["stdioOnlyClients"] if c != "zed"]
+
+
+BRIDGE_CLIENT_IDS = _load_bridge_client_ids()
 
 
 def _flow_for_client(
@@ -531,22 +546,29 @@ class TestPerClientInstructionTemplate:
         )
 
 
-class TestMcpProxySdkPin:
-    """The generated mcp-proxy config must pin the MCP SDK below 2.0.
+class TestStdioBridgeChoice:
+    """The generated stdio-bridge config must use a bridge with a bounded SDK.
 
     mcp-proxy imports ``request_ctx`` from ``mcp.server.lowlevel.server``
     but declares an unbounded ``mcp>=`` dependency, so an unconstrained
     ``uvx mcp-proxy`` resolves mcp 2.x and dies on an ImportError before
-    it ever connects (#2073). ``--with`` is a *global* uvx option, so
-    dropping it after the package name silently stops constraining
-    anything — hence the ordering assertion.
+    it ever connects (#2073). The wizard therefore emits ``fastmcp-remote``,
+    which pins ``fastmcp-slim[client,server]==<its own version>``, and that
+    package in turn bounds ``mcp`` itself, so it cannot drift onto an
+    incompatible SDK.
 
-    Every stdio-only client that goes through the bridge is covered:
-    Zed is excluded because it takes the URL directly.
+    The regression this guards is emitting *any* bridge whose SDK dependency
+    resolves unbounded, so reverting to a bare ``mcp-proxy`` invocation must
+    fail here even though `uv` would still install it without error. The
+    break only surfaces later, on import, not at install time.
+
+    Every stdio-only client that goes through the bridge is covered, derived
+    from the real ``stdioOnlyClients`` list minus Zed (which takes the URL
+    directly) rather than hardcoded here.
     """
 
-    @pytest.mark.parametrize("client_id", ["claude-desktop", "jetbrains"])
-    def test_generated_config_pins_mcp_below_2(
+    @pytest.mark.parametrize("client_id", BRIDGE_CLIENT_IDS, ids=BRIDGE_CLIENT_IDS)
+    def test_generated_config_uses_bounded_stdio_bridge(
         self,
         client_id: str,
         setup_script: str,
@@ -578,19 +600,91 @@ class TestMcpProxySdkPin:
         config = json.loads(match.group(1).replace("&quot;", '"'))
         args = config["mcpServers"]["home-assistant"]["args"]
 
-        assert "mcp-proxy" in args, f"{client_id}: not an mcp-proxy config: {args}"
-        assert "--with" in args, (
-            f"{client_id}: mcp-proxy config does not pin the MCP SDK — an "
-            f"unconstrained uvx resolves mcp 2.x and fails on ImportError "
-            f"(#2073); args={args}"
+        assert "fastmcp-remote" in args, (
+            f"{client_id}: expected a fastmcp-remote bridge config; args={args}"
         )
-        assert args[args.index("--with") + 1] == "mcp<2.0.0", (
-            f"{client_id}: --with must be followed by the mcp<2.0.0 "
-            f"constraint; args={args}"
+        assert "mcp-proxy" not in args, (
+            f"{client_id}: mcp-proxy declares an unbounded mcp>= dependency and "
+            f"breaks on every SDK major (#2073). Use fastmcp-remote, whose SDK "
+            f"dependency is bounded; args={args}"
         )
-        assert args.index("--with") < args.index("mcp-proxy"), (
-            f"{client_id}: --with is a global uv option and must precede the "
-            f"package name, otherwise it constrains nothing; args={args}"
+        # fastmcp-remote needs no SDK pin, so a stray `--with` here means the
+        # mcp-proxy workaround was carried over onto a bridge that never
+        # needed it.
+        assert "--with" not in args, (
+            f"{client_id}: fastmcp-remote's own SDK dependency is already "
+            f"bounded; a --with constraint is leftover mcp-proxy scaffolding; "
+            f"args={args}"
+        )
+        # The bridge takes exactly [package, url]: the package name must come
+        # first (reversed, uvx would treat the URL as the package), and no
+        # stray flag should sneak in between. The URL itself is whatever the
+        # wizard resolved (a real connect URL in the browser, a `{{...}}`
+        # placeholder in this harness), so this doesn't assert its contents.
+        assert len(args) == 2 and args[0] == "fastmcp-remote", (
+            f"{client_id}: expected exactly [package, url]; args={args}"
+        )
+
+    @pytest.mark.parametrize(
+        ("client_id", "expects_panel"),
+        [("claude-desktop", True), ("jetbrains", True), ("zed", False)],
+    )
+    def test_bridge_panel_matches_emitted_config(
+        self,
+        client_id: str,
+        expects_panel: bool,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        """The bridge instructions must not contradict the config below them.
+
+        All three clients are stdio-only, but Zed's ``context_servers`` entry
+        takes the connect URL directly and runs no bridge process. Showing it
+        "install fastmcp-remote" above a config containing no bridge is the
+        regression this pins.
+        """
+        assert client_id in wizard_vars["stdioOnlyClients"], (
+            f"test premise: {client_id!r} must be a stdio-only client"
+        )
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-addon")
+                + _click("client", client_id)
+                + _click("scope", "local")
+                + _click("platform", "macos")
+                + """
+                const instructionsEl = document.getElementById('setup-instructions');
+                document.body.dataset.instructionsHtml = String(
+                  (instructionsEl && instructionsEl.innerHTML) || ''
+                );
+                document.body.dataset.configCode = (
+                  document.querySelector('#config-output code').textContent || ''
+                );
+                """
+            ),
+        )
+        _assert_clean_init(result)
+        instructions_match = re.search(r'data-instructions-html="([^"]*)"', result.dom)
+        assert instructions_match is not None, "instructions were not captured"
+        instructions = instructions_match.group(1)
+        config_match = re.search(r'data-config-code="([^"]*)"', result.dom)
+        assert config_match is not None, "config-output was not captured"
+        config_text = config_match.group(1).replace("&quot;", '"')
+
+        mentions_bridge = "fastmcp-remote" in instructions
+        assert mentions_bridge is expects_panel, (
+            f"{client_id}: bridge instructions present={mentions_bridge}, "
+            f"expected={expects_panel}; instructions={instructions[:400]!r}"
+        )
+        # The panel and the config have to tell the same story: a client told to
+        # install the bridge must get a config that runs it, and vice versa.
+        assert ("fastmcp-remote" in config_text) is expects_panel, (
+            f"{client_id}: config and bridge instructions disagree; "
+            f"config={config_text[:400]!r}"
         )
 
 
@@ -757,7 +851,7 @@ class TestUvxPlatformGating:
     ) -> None:
         # uvx -> cursor -> local leaves config hidden (needsPlatform() fires on
         # the uvx method) until an OS is chosen, then it unhides. Mirrors the
-        # mcp-proxy gating test: records visibility before AND after the click.
+        # stdio-bridge gating test: records visibility before AND after the click.
         result = run_script(
             setup_script,
             prelude=prelude,

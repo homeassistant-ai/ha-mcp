@@ -63,7 +63,7 @@ const withBase = (path: string) => {
           <h3 class="text-lg font-medium text-white mb-2">Do I need the Home Assistant App?</h3>
           <p class="text-slate-300"><strong class="text-green-400">No.</strong> The HA app is just one installation method. Most users run ha-mcp directly on their computer using <code class="bg-slate-800 px-1 rounded">uvx</code> (recommended for Claude Desktop). To run ha-mcp inside Home Assistant itself, you can install it as the app (Home Assistant OS / Supervised) or via the <a href="#custom-component" class="text-blue-400 hover:underline">HA-MCP custom component</a>'s in-process server, which works on every installation type.</p>
           <p class="text-slate-400 text-sm mt-2">If you <em>do</em> run the app, you don't also need <code class="bg-slate-800 px-1 rounded">uvx</code> — that would be a second, separate instance. HTTP-native clients (Codex, Cursor, Windsurf, Claude Code) connect straight to the app's URL, no proxy needed. One caveat: as of early 2026, Codex's HTTP MCP support has a <a href="https://github.com/openai/codex/issues/11284" class="text-blue-400 hover:underline">known initialization bug</a> where it loads no tools; if you hit that, run ha-mcp locally over stdio with <code class="bg-slate-800 px-1 rounded">uvx</code> instead.</p>
-          <p class="text-slate-400 text-sm mt-2"><strong class="text-amber-300">Don't run both for the same client.</strong> If you switch to the app, remove any local/stdio entry from your client config — a Claude Desktop server running <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest</code> with <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> / <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code> is the local version and bypasses the app entirely. Pointing both at the same Home Assistant can leave the connection wedged until you restart. The app's Claude Desktop config uses <code class="bg-slate-800 px-1 rounded">uvx mcp-proxy</code> with the app's URL and <strong>no</strong> token.</p>
+          <p class="text-slate-400 text-sm mt-2"><strong class="text-amber-300">Don't run both for the same client.</strong> If you switch to the app, remove any local/stdio entry from your client config — a Claude Desktop server running <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest</code> with <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> / <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code> is the local version and bypasses the app entirely. Pointing both at the same Home Assistant can leave the connection wedged until you restart. The app's Claude Desktop config uses <code class="bg-slate-800 px-1 rounded">uvx fastmcp-remote</code> with the app's URL and <strong>no</strong> token.</p>
         </div>
 
         <div class="faq-item">
@@ -246,28 +246,25 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
 ImportError: cannot import name 'request_ctx' from 'mcp.server.lowlevel.server'</code></pre>
           <p class="text-slate-300 mb-3"><strong class="text-white">Cause:</strong> the <code class="bg-slate-800 px-1 rounded">mcp</code> SDK released version 2.0.0, which removed <code class="bg-slate-800 px-1 rounded">request_ctx</code>. mcp-proxy depends on <code class="bg-slate-800 px-1 rounded">mcp</code> without an upper version bound, so <code class="bg-slate-800 px-1 rounded">uvx</code> installs the incompatible 2.x release. Clearing the uv cache does not help — a fresh install picks the same version.</p>
           <p class="text-slate-300 mb-3">This only affects clients that reach an HTTP ha-mcp deployment through the mcp-proxy bridge (Claude Desktop and JetBrains). The local stdio setup — <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest</code> — is unaffected, and so are the add-on, Docker, and the custom component themselves: ha-mcp already pins the SDK below 2.0.</p>
-          <p class="text-slate-300 mb-2"><strong class="text-white">Fix:</strong> pin the SDK in the mcp-proxy config's <code class="bg-slate-800 px-1 rounded">args</code>. <code class="bg-slate-800 px-1 rounded">--with</code> is a global <code class="bg-slate-800 px-1 rounded">uv</code> option, so it must come <em>before</em> the package name:</p>
+          <p class="text-slate-300 mb-2"><strong class="text-white">Fix:</strong> switch the bridge to <code class="bg-slate-800 px-1 rounded">fastmcp-remote</code>, the stdio bridge published by the FastMCP project. It pins its dependency on the MCP SDK to a bounded range, so an SDK release cannot break it the way it broke mcp-proxy. Replace the whole server entry with:</p>
           <pre class="code-block"><code>{`{
   "mcpServers": {
     "home-assistant": {
       "command": "uvx",
       "args": [
-        "--with",
-        "mcp<2.0.0",
-        "mcp-proxy",
-        "--transport",
-        "streamablehttp",
+        "fastmcp-remote",
         "http://192.168.1.100:9583/private_your_secret_path"
       ]
     }
   }
 }`}</code></pre>
-          <p class="text-slate-400 text-sm mt-3">Restart the client after saving. The <a href={withBase('/setup')} class="text-blue-400 hover:underline">Setup Wizard</a> now generates this pin automatically — existing configs written before it need the two <code class="bg-slate-800 px-1 rounded">args</code> entries added by hand. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/2073" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#2073</a>.</p>
+          <p class="text-slate-400 text-sm mt-3">Keep your own connect URL. No <code class="bg-slate-800 px-1 rounded">--transport</code> flag is needed: fastmcp-remote defaults to Streamable HTTP, which is what ha-mcp serves. Restart the client after saving (Claude Desktop: <strong>File &rarr; Exit</strong>, then reopen; closing the window is not enough). The <a href={withBase('/setup')} class="text-blue-400 hover:underline">Setup Wizard</a> generates this config for stdio-only clients.</p>
+          <p class="text-slate-400 text-sm mt-3"><strong class="text-slate-300">Prefer to stay on mcp-proxy?</strong> Adding <code class="bg-slate-800 px-1 rounded">"--with", "mcp&lt;2.0.0"</code> to its <code class="bg-slate-800 px-1 rounded">args</code> also works. <code class="bg-slate-800 px-1 rounded">--with</code> is a global <code class="bg-slate-800 px-1 rounded">uv</code> option, so it must come <em>before</em> the package name. That pin has to be revisited on the next SDK major; switching bridges does not. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/2073" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#2073</a>.</p>
         </div>
 
         <div class="faq-item" id="uv-tls-interception">
           <h3 class="text-lg font-medium text-white mb-2">uvx fails with <code class="bg-slate-800 px-1 rounded">invalid peer certificate: UnknownIssuer</code></h3>
-          <p class="text-slate-300 mb-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> can't download ha-mcp (or <code class="bg-slate-800 px-1 rounded">mcp-proxy</code>, if you connect to the app through it) and the log shows a certificate error fetching from PyPI, the failure is in <code class="bg-slate-800 px-1 rounded">uv</code>'s package download — it never reaches Home Assistant:</p>
+          <p class="text-slate-300 mb-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> can't download ha-mcp (or <code class="bg-slate-800 px-1 rounded">fastmcp-remote</code>, if you connect to the app through it) and the log shows a certificate error fetching from PyPI, the failure is in <code class="bg-slate-800 px-1 rounded">uv</code>'s package download — it never reaches Home Assistant:</p>
           <pre class="code-block mb-3"><code>Failed to fetch: https://pypi.org/simple/ha-mcp/
   invalid peer certificate: UnknownIssuer</code></pre>
           <p class="text-slate-300 mb-3">In Claude Desktop this often shows up as the server briefly connecting, then "transport closed unexpectedly" — <code class="bg-slate-800 px-1 rounded">uvx</code> exits when it can't fetch the package.</p>
@@ -286,7 +283,7 @@ ImportError: cannot import name 'request_ctx' from 'mcp.server.lowlevel.server'<
     }
   }
 }`}</code></pre>
-          <p class="text-slate-400 text-sm mt-3">Connecting to the HA app through <code class="bg-slate-800 px-1 rounded">uvx mcp-proxy</code> instead? Add the same <code class="bg-slate-800 px-1 rounded">UV_NATIVE_TLS=1</code> entry to that config's <code class="bg-slate-800 px-1 rounded">env</code> block. The equivalent <code class="bg-slate-800 px-1 rounded">--native-tls</code> flag also works, but it is a global <code class="bg-slate-800 px-1 rounded">uv</code> option, so it must come before the package name. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/1506" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#1506</a>.</p>
+          <p class="text-slate-400 text-sm mt-3">Connecting to the HA app through <code class="bg-slate-800 px-1 rounded">uvx fastmcp-remote</code> instead? Add the same <code class="bg-slate-800 px-1 rounded">UV_NATIVE_TLS=1</code> entry to that config's <code class="bg-slate-800 px-1 rounded">env</code> block. The equivalent <code class="bg-slate-800 px-1 rounded">--native-tls</code> flag also works, but it is a global <code class="bg-slate-800 px-1 rounded">uv</code> option, so it must come before the package name. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/1506" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#1506</a>.</p>
         </div>
 
         <div class="faq-item">

@@ -28,7 +28,7 @@ const clientsData = [
     "configLocation": "macOS: ~/Library/Application Support/Claude/claude_desktop_config.json\nWindows (traditional installer): %APPDATA%\\Claude\\claude_desktop_config.json\nWindows (Microsoft Store): path varies by package — see the Windows setup guide for a detection snippet\n",
     "accuracy": 5,
     "order": 1,
-    "httpNote": "Use mcp-proxy for HTTP connections (see Network/Remote setup)",
+    "httpNote": "Use fastmcp-remote for HTTP connections (see Network/Remote setup)",
   },
   {
     "id": "claude-code",
@@ -146,7 +146,7 @@ const clientsData = [
     "configLocation": "Settings → Tools → AI Assistant → Model Context Protocol (MCP)",
     "accuracy": 4,
     "order": 12,
-    "httpNote": "stdio only - use mcp-remote for HTTP servers",
+    "httpNote": "stdio only - use fastmcp-remote for HTTP servers",
     "clientNote": "Requires IDE 2025.1+ with the AI Assistant plugin (251.26094.80.5+). Restart IDE after config changes. Migrating from Claude Desktop? The MCP Servers panel has an 'Import from Claude' button to auto-import existing servers.",
   },
   {
@@ -263,7 +263,9 @@ const scopeData: { id: string; name: string; description: string; icon: IconName
 ];
 
 // Client transport capabilities for filtering
-// stdio-only: clients that need mcp-proxy for HTTP connections
+// stdio-only: clients that cannot speak HTTP directly. Most of these need the
+// fastmcp-remote bridge for HTTP connections; Zed is the one exception (its
+// own config format takes the connect URL directly, see isZed/needsStdioBridge).
 const stdioOnlyClients = ['claude-desktop', 'jetbrains', 'zed'];
 // remote-only: clients that require HTTPS (can't use local HTTP)
 const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
@@ -1019,7 +1021,10 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
 
   // The platform step only appears when OS-specific commands are needed:
   // stdio-local (always), the uvx server host OS, or an HTTP method whose
-  // client is stdio-only (uv install on the client machine for mcp-proxy).
+  // client is stdio-only (uv install on the client machine for the bridge).
+  // Known gap: this checks isStdioOnly(), not needsStdioBridge(), so it still
+  // asks Zed users to pick an OS even though Zed's config needs no bridge and
+  // nothing here is actually OS-specific for it.
   function needsPlatform() {
     if (state.method === 'stdio-local') return true;
     if (state.method === 'uvx') return true;
@@ -1032,7 +1037,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
     if (el) el.textContent = String(val);
   }
 
-  // Helper to check if client is stdio-only (needs mcp-proxy for HTTP)
+  // Helper to check if client cannot speak HTTP directly. Most such clients
+  // need the stdio bridge for HTTP; Zed is the one exception (see isZed).
   function isStdioOnly(clientId) {
     return stdioOnlyClients.includes(clientId);
   }
@@ -1106,7 +1112,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
     if (platformHelp) {
       if (isStdio) platformHelp.textContent = 'Choose how to run ha-mcp on your machine.';
       else if (method === 'uvx') platformHelp.textContent = 'Choose the operating system of the machine that will run the ha-mcp server.';
-      else platformHelp.textContent = 'Choose the operating system of your client machine (for the mcp-proxy bridge).';
+      else platformHelp.textContent = 'Choose the operating system of your client machine.';
     }
 
     // Show only the remote-path cards that apply to the chosen method
@@ -1362,7 +1368,12 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
     const isLocal = isStdio;
     const isNetwork = !isStdio && scope === 'local';
     const isRemote = !isStdio && scope === 'remote';
-    const needsMcpProxy = isStdioOnly(state.client?.id) && !isStdio;
+    // Zed is stdio-only, but its `context_servers` entry takes the connect URL
+    // directly, so it is the one stdio-only client that runs no bridge process.
+    // Excluded from needsStdioBridge below so every consumer of that flag
+    // agrees with what Zed's config actually contains.
+    const isZed = state.client?.id === 'zed';
+    const needsStdioBridge = isStdioOnly(state.client?.id) && !isStdio && !isZed;
 
     const derivedDeployment = isStdio ? null : method; // ha-component | ha-addon | docker | uvx
     const derivedPlatform = state.platform?.id || null;
@@ -1401,7 +1412,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
     }
 
     // Platform instructions (uvx installation or Docker) - shown only when the
-    // platform step ran (stdio run OS, uvx server OS, or mcp-proxy client OS).
+    // platform step ran (stdio run OS, uvx server OS, or bridge client OS).
     const platformId = derivedPlatform;
     const isDockerPlatform = platformId === 'docker';
 
@@ -1411,7 +1422,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
         <h3 class="instruction-title">Docker Required</h3>
         <p class="text-slate-300">Make sure Docker or Docker Desktop is installed and running.</p>
       </div>`);
-    } else if (platformId && !isDockerPlatform && (isLocal || derivedDeployment === 'uvx' || needsMcpProxy)) {
+    } else if (platformId && !isDockerPlatform && (isLocal || derivedDeployment === 'uvx' || needsStdioBridge)) {
       let uvInstall = '';
       if (platformId === 'macos') {
         uvInstall = `<div class="instruction-block">
@@ -1792,18 +1803,17 @@ ingress:
       </div>`);
     }
 
-    // mcp-proxy instructions for stdio-only clients
-    if (needsMcpProxy) {
-      const brewNote = platformId === 'macos'
-        ? `<p class="text-xs text-slate-400 mt-2">Or install ahead of time with Homebrew: <code>brew install mcp-proxy</code></p>`
-        : '';
-      const mcpProxyInstr = `<div class="instruction-block border-yellow-700/50 bg-yellow-900/10">
-        <h3 class="instruction-title text-yellow-300">mcp-proxy Required</h3>
-        <p class="text-slate-300 mb-2">${state.client.name} only supports stdio. Use mcp-proxy to connect to HTTP servers:</p>
-        <pre class="code-block"><code># mcp-proxy is run automatically via uvx in the config below</code></pre>
-        <p class="text-xs text-slate-400 mt-2">The config below pins <code>mcp&lt;2.0.0</code>. mcp-proxy is not yet compatible with version 2 of the MCP SDK, and without the pin it fails to start with <code>ImportError: cannot import name 'request_ctx'</code>.</p>${brewNote}
+    // stdio bridge instructions for the stdio-only clients that actually run a
+    // bridge. Zed is excluded from needsStdioBridge itself (it takes the URL
+    // directly), so this check covers it without a special case here.
+    if (needsStdioBridge) {
+      const stdioBridgeInstr = `<div class="instruction-block border-yellow-700/50 bg-yellow-900/10">
+        <h3 class="instruction-title text-yellow-300">stdio Bridge Required</h3>
+        <p class="text-slate-300 mb-2">${state.client.name} only supports stdio. Use fastmcp-remote to connect to HTTP servers:</p>
+        <pre class="code-block"><code># fastmcp-remote is run automatically via uvx in the config below</code></pre>
+        <p class="text-xs text-slate-400 mt-2">fastmcp-remote is the stdio bridge published by the FastMCP project. It pins its dependency on the MCP SDK to a bounded range, so an SDK release cannot break it the way it broke mcp-proxy (<a href="${base}/faq#mcp-proxy-request-ctx" class="text-blue-400 hover:underline">details</a>).</p>
       </div>`;
-      instructions.push(mcpProxyInstr);
+      instructions.push(stdioBridgeInstr);
     }
 
     // Client-specific notes for HTTP-based connections.
@@ -1854,7 +1864,6 @@ ingress:
     if (state.client.configFormat === 'json') {
       // VS Code uses different structure: mcp.servers instead of mcpServers
       const isVSCode = state.client.id === 'vscode';
-      const isZed = state.client.id === 'zed';
       const isOpenCode = state.client.id === 'opencode';
 
       if (isStdio) {
@@ -1946,33 +1955,41 @@ ingress:
             }
           }, null, 2);
         }
-      } else if (needsMcpProxy) {
-        // stdio-only client using mcp-proxy
-        if (isZed) {
-          config = JSON.stringify({
-            context_servers: {
-              "home-assistant": {
-                url: mcpUrl
-              }
+      } else if (needsStdioBridge) {
+        // fastmcp-remote is the FastMCP project's own stdio bridge. It is used
+        // here in preference to mcp-proxy, which declares an unbounded
+        // `mcp>=...` and so broke outright when the SDK released 2.0.0 and
+        // removed `request_ctx` (#2073). fastmcp-remote pins
+        // `fastmcp-slim[client,server]==<its own version>`, and that package
+        // in turn bounds `mcp` (`mcp<2.0,>=1.24.0` as of fastmcp-slim 3.4.5),
+        // so an SDK release alone cannot repeat this break. No `mcp<...`
+        // constraint is added here the way mcp-proxy needed one: adding one
+        // would only reintroduce a version to revisit on the next SDK major,
+        // for a bridge whose own bound already covers that.
+        //
+        // No `@latest` suffix either, unlike the `ha-mcp@latest` stdio config
+        // below: per uv's docs, a bare `uvx <pkg>` reuses whatever version
+        // resolved on first run, while `@latest` forces a fresh resolve every
+        // invocation. fastmcp-remote doesn't need that: an older cached
+        // version stays compatible because of the bound above, and matching
+        // upstream's own bare `uvx fastmcp-remote <url>` example keeps this
+        // config recognizable against their docs.
+        //
+        // No `--transport` flag: fastmcp-remote defaults to Streamable HTTP,
+        // which is what ha-mcp serves. No `--auth` flag either: bare
+        // `uvx fastmcp-remote <url>` was verified to complete initialize and
+        // tools/list in ~1s against a standard-mode (no-OAuth, secret-path)
+        // deployment, so its default auth mode does not stall on OAuth
+        // discovery the way the 300s `--auth-timeout` default would suggest.
+        // Not verified against OAuth-enabled or remote-tunnel deployments.
+        config = JSON.stringify({
+          mcpServers: {
+            "home-assistant": {
+              command: "uvx",
+              args: ["fastmcp-remote", mcpUrl]
             }
-          }, null, 2);
-        } else {
-          // `--with "mcp<2.0.0"` pins the MCP SDK below 2.0. mcp-proxy 0.12.0
-          // declares an unbounded `mcp>=1.27.1` but imports `request_ctx` from
-          // `mcp.server.lowlevel.server`, which mcp 2.0.0 removed — so an
-          // unconstrained `uvx mcp-proxy` resolves 2.x and dies on an
-          // ImportError before it ever connects (#2073). `--with` is a global
-          // uvx option, so it must precede the package name. Drop the pin once
-          // mcp-proxy ships an mcp 2.x-compatible release.
-          config = JSON.stringify({
-            mcpServers: {
-              "home-assistant": {
-                command: "uvx",
-                args: ["--with", "mcp<2.0.0", "mcp-proxy", "--transport", "streamablehttp", mcpUrl]
-              }
-            }
-          }, null, 2);
-        }
+          }
+        }, null, 2);
       } else {
         // HTTP-native client
         if (state.client.id === 'cline') {
