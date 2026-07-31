@@ -151,6 +151,32 @@ _NON_STATE_CHANGING_DOMAINS = {
     "system_log",
 }
 
+#: Emitted when a ``return_response=true`` reply is not HA's
+#: ``{"changed_states": [...], "service_response": ...}`` envelope. Without it an
+#: empty ``result`` reads as an affirmative "no entity states changed" rather than
+#: "the records could not be separated out". Module-level so the tests that
+#: pin the behaviour assert against this exact string instead of a prose fragment
+#: that goes tautologically green when the wording is edited.
+_NON_ENVELOPE_WARNING = (
+    "Home Assistant's return_response reply did not match the expected "
+    "{changed_states, service_response} envelope, so no changed-state records "
+    "could be separated from the response data. An empty 'result' here does NOT "
+    "mean nothing changed — the whole reply is reported under 'service_response'."
+)
+
+#: Emitted when the component served a ``return_response`` call but returned no
+#: ``service_response`` key. The component only sets that key for a non-null
+#: response, so an absent key is ambiguous server-side: the service may genuinely
+#: have returned nothing, or the component may have discarded the response on its
+#: dispatched-but-unconfirmed path. Only raised alongside ``partial`` — the case
+#: where the discard is actually possible — so a plain null response stays quiet.
+_COMPONENT_RESPONSE_UNCONFIRMED_WARNING = (
+    "The service was dispatched but its confirmation did not arrive, and no "
+    "response data came back with it. A null 'service_response' here does NOT "
+    "prove the service returned nothing — the response may have been produced "
+    "and lost with the confirmation. Re-read state to confirm the outcome."
+)
+
 # ``_SERVICE_TO_STATE`` (the service -> expected primary-state map) is the single
 # source of truth in ``util_helpers`` — imported above and shared with the bulk
 # consumer (``device_control``) so both write paths hand the component the same
@@ -343,9 +369,18 @@ class ServiceTools:
         service: str,
         entity_id: str | None,
         data: str | dict[str, Any] | None,
+        *,
+        return_response: bool = False,
     ) -> dict[str, Any]:
-        """Build a partial-success response for service call timeouts."""
-        return {
+        """Build a partial-success response for service call timeouts.
+
+        When ``return_response`` was requested the key is emitted here too, so a
+        caller never has to branch on whether the key exists: every successful
+        reply carries it. It is necessarily null — the reply never arrived — and
+        that null proves nothing about what the service returned, so it comes
+        with the same ambiguity warning the component's unconfirmed path uses.
+        """
+        response: dict[str, Any] = {
             "success": True,
             "partial": True,
             "domain": domain,
@@ -366,6 +401,10 @@ class ServiceTools:
                 "The service was dispatched and may still be executing."
             ],
         }
+        if return_response:
+            response["service_response"] = None
+            response["warnings"].append(_COMPONENT_RESPONSE_UNCONFIRMED_WARNING)
+        return response
 
     async def _capture_initial_state(self, entity_id: str | None) -> str | None:
         """Capture the current state of an entity before a service call."""
@@ -427,31 +466,36 @@ class ServiceTools:
         ``service_response`` is still reported as present (``True``) so the caller
         emits the key.
 
-        Either key missing means a non-conforming responder (HA core always sends
-        both), and the empty ``result`` that follows would otherwise read as an
-        affirmative "no entity states changed". The returned *warnings* say so
-        explicitly; the caller surfaces them rather than letting the emptiness lie.
+        With ``return_response`` false there is no envelope to split: HA returns a
+        plain changed-states list, so it passes through untouched and no
+        ``service_response`` key is emitted (``present`` False). That is the
+        overwhelming majority of calls.
+
+        Anything that is not that envelope — a non-dict reply, a missing key, or a
+        ``changed_states`` that is not a list — means a non-conforming responder
+        (HA core always sends both keys, with a list). The empty ``result`` that
+        follows would otherwise read as an affirmative "no entity states changed",
+        so every such shape returns a *warning* AND still surfaces the reply under
+        ``service_response``: a caller that asked for response data must never get
+        back neither the data nor an explanation.
         """
-        if not (return_response and isinstance(result, dict)):
+        if not return_response:
             return result, None, False, []
-        warnings = (
-            []
-            if "changed_states" in result and "service_response" in result
-            else [
-                "Home Assistant's return_response reply did not match the expected "
-                "{changed_states, service_response} envelope, so no changed-state "
-                "records could be identified. An empty 'result' here does NOT mean "
-                "nothing changed — the reply is reported under 'service_response'."
-            ]
-        )
+        if not isinstance(result, dict):
+            # Not an envelope at all. Surface the raw reply as the response data
+            # rather than dropping the key the caller explicitly asked for.
+            return [], result, True, [_NON_ENVELOPE_WARNING]
         if "service_response" not in result:
-            return [], result, True, warnings
-        return (
-            result.get("changed_states") or [],
-            result["service_response"],
-            True,
-            warnings,
-        )
+            # Echoing the dict whole AND projecting its ``changed_states`` would
+            # ship those records twice — the duplication this split removes.
+            return [], result, True, [_NON_ENVELOPE_WARNING]
+        states = result.get("changed_states")
+        if not isinstance(states, list):
+            # A non-list ``changed_states`` would sail through projection
+            # untouched (``compact_service_result`` returns non-lists as-is),
+            # silently ignoring result_fields and emitting the raw value.
+            return [], result["service_response"], True, [_NON_ENVELOPE_WARNING]
+        return states, result["service_response"], True, []
 
     @staticmethod
     def _project_service_result(
@@ -467,9 +511,10 @@ class ServiceTools:
         Issue #1446. Precedence:
 
         - ``verbose=True``: bypass every transformation; return ``result`` as-is.
-          (A ``return_response`` envelope is split off BEFORE this helper runs —
-          see ``_split_return_response_envelope`` — so ``result`` here is always
-          the changed states, whatever the mode.)
+          (``result`` here is always changed-state records, never an envelope:
+          the legacy path splits the envelope off before calling this — see
+          ``_split_return_response_envelope`` — and the component path passes
+          transition ``new_state``s, which are never enveloped to begin with.)
         - Explicit ``fields`` or ``attribute_keys``: apply per-record projection
           via ``project_entity_record`` to every record. No compaction; this is
           the power-user path.
@@ -520,6 +565,7 @@ class ServiceTools:
         service: str,
         entity_id: str | None,
         data: str | dict[str, Any] | None,
+        return_response: bool = False,
     ) -> dict[str, Any]:
         """Handle a HomeAssistantConnectionError raised while calling a service.
 
@@ -531,7 +577,9 @@ class ServiceTools:
         # mean the service was dispatched but HA didn't respond in time.
         # The operation is likely still running (e.g., update.install, long automations).
         if isinstance(error.__cause__, httpx.TimeoutException):
-            return self._build_timeout_response(domain, service, entity_id, data)
+            return self._build_timeout_response(
+                domain, service, entity_id, data, return_response=return_response
+            )
         # Non-timeout connection errors are real failures
         exception_to_structured_error(
             error,
@@ -949,6 +997,16 @@ class ServiceTools:
             # call with different shapes. The component only sets the key for a
             # non-null response, so a null one arrives as an absent key here.
             response["service_response"] = component_result.get("service_response")
+            # ...which makes an absent key ambiguous: genuinely-null response, or
+            # one the component produced and dropped with the confirmation on its
+            # dispatched-unconfirmed path. Only the latter is possible when
+            # ``partial``, so warn there rather than on every null.
+            if "service_response" not in component_result and component_result.get(
+                "partial"
+            ):
+                response.setdefault("warnings", []).append(
+                    _COMPONENT_RESPONSE_UNCONFIRMED_WARNING
+                )
         if should_wait:
             if component_result.get("partial"):
                 # Dispatched, but the confirming state_changed did not arrive within
@@ -1020,7 +1078,9 @@ class ServiceTools:
             return_response=return_response,
         )
         if isinstance(component_result, _AmbiguousDispatch):
-            return self._build_timeout_response(domain, service, entity_id, data)
+            return self._build_timeout_response(
+                domain, service, entity_id, data, return_response=return_response
+            )
         if component_result is None:
             return None
         return self._build_component_call_response(
@@ -1289,6 +1349,10 @@ class ServiceTools:
                 service=service,
                 entity_id=entity_id,
                 data=data,
+                # The parameter, not ``return_response_bool`` — that local is
+                # bound inside the try and would be unbound if the error fired
+                # before it.
+                return_response=return_response,
             )
         except ToolError:
             raise

@@ -15,9 +15,11 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
-from ha_mcp.tools.tools_service import ServiceTools
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.tools.tools_service import _NON_ENVELOPE_WARNING, ServiceTools
 
 _SHELL_RESPONSE = {"stdout": "abc", "stderr": "", "returncode": 0}
 
@@ -54,9 +56,12 @@ def _occurrences(response: dict[str, Any], needle: str) -> int:
 def _no_component():
     """Belt-and-braces pin to the legacy REST path (component advertises nothing).
 
-    These tests already take that path without the patch: none passes an
-    ``entity_id``, so ``should_wait`` is False and ``_maybe_component_call_service``
-    early-returns before consulting the component at all. The patch keeps the
+    These tests already take that path without the patch: none calls a service in
+    ``_STATE_CHANGING_SERVICES`` (they all use ``shell_command.test``), so
+    ``should_wait`` is False and ``_maybe_component_call_service`` early-returns
+    before consulting the component at all. The service name is what is
+    load-bearing here, NOT the absence of an ``entity_id`` —
+    ``test_entity_id_filters_the_changed_states`` passes one. The patch keeps the
     routing decision from silently changing if that early-out ever moves —
     ``component_supports(None, ...)`` is False, so ``_call_service_via_component``
     returns None and ``ha_call_service`` falls through to the REST POST.
@@ -136,7 +141,7 @@ class TestReturnResponsePlacement:
         )
         # An empty result here is an artifact of the unrecognized shape, not a
         # claim that nothing changed — say so rather than letting it read that way.
-        assert any("does NOT mean" in w for w in response["warnings"]), (
+        assert _NON_ENVELOPE_WARNING in response["warnings"], (
             f"an unrecognized envelope must warn about the empty result: {response!r}"
         )
 
@@ -150,8 +155,52 @@ class TestReturnResponsePlacement:
 
         assert response["service_response"] == _SHELL_RESPONSE
         assert response["result"] == []
-        assert any("does NOT mean" in w for w in response["warnings"]), (
+        assert _NON_ENVELOPE_WARNING in response["warnings"], (
             f"a missing changed_states must warn about the empty result: {response!r}"
+        )
+
+    async def test_non_dict_reply_still_surfaces_the_requested_key(self):
+        """A non-envelope reply must not drop BOTH the key and the explanation.
+
+        Returning neither is the masking this PR exists to remove: the caller
+        asked for response data and would learn nothing about where it went.
+        """
+        tools = _make_tools([_CHANGED_STATE])
+
+        response = await tools.ha_call_service(
+            domain="shell_command", service="test", return_response=True
+        )
+
+        assert response["service_response"] == [_CHANGED_STATE]
+        assert response["result"] == []
+        assert _NON_ENVELOPE_WARNING in response["warnings"], (
+            f"a non-dict reply must warn rather than silently drop: {response!r}"
+        )
+
+    async def test_non_list_changed_states_warns_and_does_not_reach_projection(self):
+        """A non-list ``changed_states`` would sail through projection untouched.
+
+        ``compact_service_result`` returns non-lists unchanged, so the raw value
+        would be emitted as ``result`` with ``result_fields`` silently ignored.
+        """
+        tools = _make_tools(
+            {
+                "changed_states": {"unexpected": "shape"},
+                "service_response": _SHELL_RESPONSE,
+            }
+        )
+
+        response = await tools.ha_call_service(
+            domain="shell_command",
+            service="test",
+            return_response=True,
+            result_fields=["entity_id"],
+        )
+
+        assert response["service_response"] == _SHELL_RESPONSE
+        assert response["result"] == []
+        assert _NON_ENVELOPE_WARNING in response["warnings"], (
+            f"a non-list changed_states must warn: {response!r}"
         )
 
     async def test_conforming_envelope_emits_no_envelope_warning(self):
@@ -164,7 +213,7 @@ class TestReturnResponsePlacement:
             domain="shell_command", service="test", return_response=True
         )
 
-        assert not any("does NOT mean" in w for w in response.get("warnings", [])), (
+        assert "warnings" not in response, (
             f"a conforming envelope must not warn: {response!r}"
         )
 
@@ -223,6 +272,55 @@ class TestReturnResponsePlacement:
             f"the propagation chain must be filtered to the target: {result!r}"
         )
         assert response["service_response"] == _SHELL_RESPONSE
+
+    async def test_projection_and_envelope_warnings_both_surface(self):
+        """Warnings from projection and from the envelope split are concatenated.
+
+        ``result_attribute_keys`` without ``attributes`` in ``result_fields`` emits
+        a projection warning; the missing ``service_response`` emits the envelope
+        warning. Both must reach the caller — one source must not shadow the other.
+        """
+        tools = _make_tools({"changed_states": [_CHANGED_STATE]})
+
+        response = await tools.ha_call_service(
+            domain="shell_command",
+            service="test",
+            return_response=True,
+            result_fields=["state"],
+            result_attribute_keys=["brightness"],
+        )
+
+        warnings = response["warnings"]
+        assert _NON_ENVELOPE_WARNING in warnings, (
+            f"the envelope warning must survive alongside projection ones: {warnings!r}"
+        )
+        assert any("result_attribute_keys was ignored" in w for w in warnings), (
+            f"the projection warning must survive alongside the envelope one: {warnings!r}"
+        )
+
+    async def test_timeout_still_emits_the_requested_key(self):
+        """A timed-out call must not be the one shape missing service_response.
+
+        The reply never arrived, so the value is necessarily null — and that null
+        proves nothing, hence the ambiguity warning rather than a bare null.
+        """
+        timed_out = HomeAssistantConnectionError("timed out")
+        # ``_handle_connection_error`` classifies on ``__cause__`` — an httpx
+        # timeout is a dispatched-but-unanswered call, not a failure.
+        timed_out.__cause__ = httpx.ReadTimeout("slow")
+        tools = _make_tools(None)
+        tools._client.call_service = AsyncMock(side_effect=timed_out)
+
+        response = await tools.ha_call_service(
+            domain="shell_command", service="test", return_response=True
+        )
+
+        assert response["partial"] is True
+        assert "service_response" in response
+        assert response["service_response"] is None
+        assert any("does NOT prove" in w for w in response["warnings"]), (
+            f"a timed-out return_response call must flag the ambiguity: {response!r}"
+        )
 
     async def test_return_response_false_has_no_service_response_key(self):
         """Without return_response the REST reply is a plain changed-states list."""

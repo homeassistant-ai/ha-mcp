@@ -210,7 +210,11 @@ class TestProjectServiceResult:
         assert "nonexistent_attr" in warnings[0]
 
     def test_non_list_result_passthrough(self):
-        """A dict result passes through every mode (defensive — see above)."""
+        """A dict result passes through every mode.
+
+        Defensive only: ha_call_service splits the return_response envelope before
+        projection, so both its paths hand this helper a changed-state list.
+        """
         result = {"service_response": {"forecast": []}}
         projected, warnings = ServiceTools._project_service_result(
             result,

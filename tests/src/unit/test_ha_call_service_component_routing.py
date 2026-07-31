@@ -381,6 +381,61 @@ async def test_return_response_null_still_emits_the_key() -> None:
 
 
 @pytest.mark.asyncio
+async def test_partial_without_response_warns_that_null_is_not_proof() -> None:
+    """A dispatched-unconfirmed call can lose a response the service produced.
+
+    The component only sets ``service_response`` for a non-null response, so an
+    absent key on the partial path is ambiguous: the service may have returned
+    nothing, or the component may have discarded the response along with the
+    confirmation. Emitting a bare ``service_response: null`` would assert the
+    first, so the ambiguity is warned about instead.
+    """
+    ws = make_ws(
+        "ha_mcp_tools/call_service",
+        info_result=_CAPS_CALL,
+        cmd_result=_partial_result("light.a"),
+    )
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light",
+            service="turn_on",
+            entity_id="light.a",
+            return_response=True,
+        )
+
+    assert resp["service_response"] is None
+    assert any("does NOT prove" in w for w in resp["warnings"]), (
+        f"a partial call with no response must flag the ambiguity: {resp!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_confirmed_null_response_does_not_warn() -> None:
+    """A confirmed call's null response is unambiguous — no warning noise."""
+    ws = make_ws(
+        "ha_mcp_tools/call_service",
+        info_result=_CAPS_CALL,
+        cmd_result=_confirmed_result("light.a"),
+    )
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light",
+            service="turn_on",
+            entity_id="light.a",
+            return_response=True,
+        )
+
+    assert resp["service_response"] is None
+    assert not any("does NOT prove" in w for w in resp.get("warnings", []))
+
+
+@pytest.mark.asyncio
 async def test_no_return_response_omits_the_key() -> None:
     """Without return_response the component path emits no service_response key."""
     ws = make_ws(

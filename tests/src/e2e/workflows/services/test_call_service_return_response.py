@@ -40,7 +40,7 @@ async def _find_calendar_entity(mcp_client) -> str:
             {"query": "calendar", "domain_filter": "calendar", "limit": 10},
         )
     entities = data.get("entities", [])
-    assert entities, f"seeded local_calendar not found via ha_search: {data!r}"
+    assert entities, f"no calendar entity found via ha_search: {data!r}"
     entity_id = entities[0].get("entity_id")
     assert entity_id, f"calendar search record lacks an entity_id: {entities[0]!r}"
     return entity_id
@@ -81,26 +81,31 @@ class TestReturnResponsePlacement:
         )
         service_response = data["service_response"]
 
-        result = data.get("result")
-        assert not (isinstance(result, dict) and "service_response" in result), (
-            f"result must not carry a nested service_response copy: {result!r}"
+        # Assert the key EXISTS before asserting what it doesn't contain — a
+        # regression that dropped ``result`` entirely would satisfy the negative
+        # check vacuously.
+        assert isinstance(data.get("result"), list), (
+            f"result must be the projected changed-state list: {data!r}"
         )
+        result = data["result"]
+        assert not any(
+            isinstance(record, dict) and "service_response" in record
+            for record in result
+        ), f"result must not carry a nested service_response copy: {result!r}"
 
         # The response must carry the payload exactly once — the token cost the
-        # issue is about. Count the key first (cheap and always meaningful), then
-        # the serialized payload itself when it is distinctive enough for a
-        # substring match to mean something (a bare ``{}`` would match any empty
-        # dict elsewhere in the response).
+        # issue is about. Assert it structurally rather than by substring count:
+        # a small payload (``{}``, ``[]``) matches incidentally anywhere else in
+        # the response, so a length-gated substring check silently skipped the
+        # strongest assertion exactly when the payload was cheapest to duplicate.
         serialized = json.dumps(data, sort_keys=True)
         assert serialized.count('"service_response"') == 1, (
             f"service_response key appears more than once: {data!r}"
         )
-        payload = json.dumps(service_response, sort_keys=True)
-        if len(payload) > 8:
-            assert serialized.count(payload) == 1, (
-                f"service_response payload appears {serialized.count(payload)} "
-                f"times, expected exactly 1: {data!r}"
-            )
+        records = result if isinstance(result, list) else [result]
+        assert all(record != service_response for record in records), (
+            f"result carries a copy of the service response: {result!r}"
+        )
 
         logger.info(
             f"calendar.get_events returned its response once: "
