@@ -399,6 +399,47 @@ class TestWizardStateMachine:
             "config section should be visible after the platform is chosen"
         )
 
+    @pytest.mark.parametrize("client_id", ["jetbrains", "zed"])
+    def test_http_method_native_http_client_skips_platform(
+        self,
+        client_id: str,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        """An HTTP server method plus a native-HTTP client needs no platform
+        step at all: config should already be visible after scope alone.
+
+        Regression test for the bug this class's stdio-only counterpart
+        above pins the positive case for: jetbrains/zed used to be
+        classified stdio-only (forcing a pointless OS choice for clients
+        with no bridge, no uv install, nothing OS-specific to configure)
+        even though their config is identical regardless of platform.
+        """
+        assert client_id not in wizard_vars["stdioOnlyClients"], (
+            f"test premise: {client_id!r} must not be a stdio-only client"
+        )
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-addon")
+                + _click("client", client_id)
+                + _click("scope", "local")
+                + """
+              document.body.dataset.afterScope = String(
+                document.getElementById('section-config').classList.contains('hidden')
+              );
+            """
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-after-scope="false"' in result.dom, (
+            f"{client_id}: config section should already be visible after "
+            f"scope alone, no platform step should be needed"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Per-client coverage
@@ -417,15 +458,16 @@ CLIENT_IDS = _load_client_ids()
 
 
 def _load_bridge_client_ids() -> list[str]:
-    """Stdio-only clients that actually run the fastmcp-remote bridge.
+    """Every client left in ``stdioOnlyClients`` genuinely runs the bridge.
 
-    Read at collection time from the real ``stdioOnlyClients``/``isZed``
-    split so a client added to that list picks up bridge-config coverage
-    automatically, instead of silently getting none until someone remembers
-    to update a hardcoded parametrize list here.
+    Read at collection time so a client added to that list picks up
+    bridge-config coverage automatically, instead of silently getting none
+    until someone remembers to update a hardcoded parametrize list here.
+    JetBrains and Zed are not in the source list at all (both have native
+    Streamable HTTP support), so no filtering is needed here.
     """
     vars_ = extract_astro_frontmatter_vars(SETUP_ASTRO, ["stdioOnlyClients"])
-    return [c for c in vars_["stdioOnlyClients"] if c != "zed"]
+    return list(vars_["stdioOnlyClients"])
 
 
 BRIDGE_CLIENT_IDS = _load_bridge_client_ids()
@@ -627,7 +669,7 @@ class TestStdioBridgeChoice:
 
     @pytest.mark.parametrize(
         ("client_id", "expects_panel"),
-        [("claude-desktop", True), ("jetbrains", True), ("zed", False)],
+        [("claude-desktop", True), ("jetbrains", False), ("zed", False)],
     )
     def test_bridge_panel_matches_emitted_config(
         self,
@@ -639,13 +681,17 @@ class TestStdioBridgeChoice:
     ) -> None:
         """The bridge instructions must not contradict the config below them.
 
-        All three clients are stdio-only, but Zed's ``context_servers`` entry
-        takes the connect URL directly and runs no bridge process. Showing it
-        "install fastmcp-remote" above a config containing no bridge is the
-        regression this pins.
+        Claude Desktop is the only client left that genuinely runs the
+        bridge. JetBrains and Zed both have native Streamable HTTP support
+        (JetBrains via a bare-url mcpServers entry, Zed via its own
+        ``context_servers`` entry) and so must show neither the "install
+        fastmcp-remote" panel nor a bridge command in the emitted config.
+        Showing one without the other is the regression this pins.
         """
-        assert client_id in wizard_vars["stdioOnlyClients"], (
-            f"test premise: {client_id!r} must be a stdio-only client"
+        assert (client_id in wizard_vars["stdioOnlyClients"]) is expects_panel, (
+            f"test premise drifted: {client_id!r} in stdioOnlyClients "
+            f"({client_id in wizard_vars['stdioOnlyClients']}) no longer "
+            f"matches expects_panel={expects_panel}"
         )
         result = run_script(
             setup_script,

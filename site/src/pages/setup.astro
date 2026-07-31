@@ -141,12 +141,11 @@ const clientsData = [
     "name": "JetBrains IDEs",
     "company": "JetBrains",
     "logo": "/logos/jetbrains.svg",
-    "transports": ["stdio"],
+    "transports": ["stdio", "streamable-http"],
     "configFormat": "json",
     "configLocation": "Settings → Tools → AI Assistant → Model Context Protocol (MCP)",
     "accuracy": 4,
     "order": 12,
-    "httpNote": "stdio only - use fastmcp-remote for HTTP servers",
     "clientNote": "Requires IDE 2025.1+ with the AI Assistant plugin (251.26094.80.5+). Restart IDE after config changes. Migrating from Claude Desktop? The MCP Servers panel has an 'Import from Claude' button to auto-import existing servers.",
   },
   {
@@ -154,12 +153,11 @@ const clientsData = [
     "name": "Zed",
     "company": "Zed Industries",
     "logo": "/logos/zed.svg",
-    "transports": ["stdio"],
+    "transports": ["stdio", "streamable-http"],
     "configFormat": "json",
     "configLocation": "macOS/Linux: ~/.config/zed/settings.json\nWindows: %APPDATA%\\Zed\\settings.json\nProject-specific: .zed/settings.json (overrides global)",
     "accuracy": 4,
     "order": 13,
-    "httpNote": "stdio only - limited HTTP support",
     "clientNote": "Settings file supports JSON with // comments.",
   },
   {
@@ -263,10 +261,12 @@ const scopeData: { id: string; name: string; description: string; icon: IconName
 ];
 
 // Client transport capabilities for filtering
-// stdio-only: clients that cannot speak HTTP directly. Most of these need the
-// fastmcp-remote bridge for HTTP connections; Zed is the one exception (its
-// own config format takes the connect URL directly, see isZed/needsStdioBridge).
-const stdioOnlyClients = ['claude-desktop', 'jetbrains', 'zed'];
+// stdio-only: clients that genuinely cannot speak HTTP directly and need the
+// fastmcp-remote bridge for HTTP connections. JetBrains and Zed both added
+// native Streamable HTTP support (confirmed against jetbrains.com/help and
+// zed.dev/docs; #1470 fixed the same class of stale classification for
+// Codex) and so are handled by their own JSON-native branches below instead.
+const stdioOnlyClients = ['claude-desktop'];
 // remote-only: clients that require HTTPS (can't use local HTTP)
 const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
 ---
@@ -1022,9 +1022,6 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
   // The platform step only appears when OS-specific commands are needed:
   // stdio-local (always), the uvx server host OS, or an HTTP method whose
   // client is stdio-only (uv install on the client machine for the bridge).
-  // Known gap: this checks isStdioOnly(), not needsStdioBridge(), so it still
-  // asks Zed users to pick an OS even though Zed's config needs no bridge and
-  // nothing here is actually OS-specific for it.
   function needsPlatform() {
     if (state.method === 'stdio-local') return true;
     if (state.method === 'uvx') return true;
@@ -1037,8 +1034,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
     if (el) el.textContent = String(val);
   }
 
-  // Helper to check if client cannot speak HTTP directly. Most such clients
-  // need the stdio bridge for HTTP; Zed is the one exception (see isZed).
+  // Helper to check if client cannot speak HTTP directly and needs the
+  // fastmcp-remote bridge for HTTP connections.
   function isStdioOnly(clientId) {
     return stdioOnlyClients.includes(clientId);
   }
@@ -1368,12 +1365,11 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
     const isLocal = isStdio;
     const isNetwork = !isStdio && scope === 'local';
     const isRemote = !isStdio && scope === 'remote';
-    // Zed is stdio-only, but its `context_servers` entry takes the connect URL
-    // directly, so it is the one stdio-only client that runs no bridge process.
-    // Excluded from needsStdioBridge below so every consumer of that flag
-    // agrees with what Zed's config actually contains.
+    // Zed is not in stdioOnlyClients (it has native Streamable HTTP support),
+    // so it never reaches needsStdioBridge. isZed exists purely to select its
+    // own `context_servers` JSON shape below, independent of that flag.
     const isZed = state.client?.id === 'zed';
-    const needsStdioBridge = isStdioOnly(state.client?.id) && !isStdio && !isZed;
+    const needsStdioBridge = isStdioOnly(state.client?.id) && !isStdio;
 
     const derivedDeployment = isStdio ? null : method; // ha-component | ha-addon | docker | uvx
     const derivedPlatform = state.platform?.id || null;
@@ -2065,10 +2061,13 @@ ingress:
               }
             }
           }, null, 2);
-        } else if (state.client.id === 'cursor') {
-          // Cursor's .cursor/mcp.json takes a bare url and auto-detects the
-          // transport (Streamable HTTP for a streamable endpoint) — no type/
-          // transport field. Confirmed against Cursor MCP docs.
+        } else if (state.client.id === 'cursor' || state.client.id === 'jetbrains') {
+          // Both take a bare url under mcpServers, no type/transport field.
+          // Cursor's .cursor/mcp.json auto-detects Streamable HTTP; JetBrains'
+          // MCP Servers panel reads this shape directly for its HTTP transport
+          // option. Confirmed against Cursor MCP docs and
+          // jetbrains.com/help/ai-assistant/mcp.html (that page does not state
+          // a minimum version for HTTP support specifically).
           config = JSON.stringify({
             mcpServers: {
               "home-assistant": {
