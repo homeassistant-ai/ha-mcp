@@ -362,6 +362,35 @@ class TestResumableProgress:
         assert not translate_locales.PROGRESS_PATH.exists()
 
 
+class TestTimeBudget:
+    def test_exhausted_budget_degrades_like_a_quota_hit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the self-imposed wall-clock bound trips, no further engine
+        calls happen and every unfinished string is a recorded failure — the
+        same resumable shape as an engine failure, instead of the job timeout
+        losing everything uncommitted."""
+
+        def must_not_call(_prompt: str) -> dict[str, Any]:
+            raise AssertionError("engine called after the deadline")
+
+        monkeypatch.setattr(translate_locales, "_call_gemini", must_not_call)
+        monkeypatch.setattr(
+            translate_locales, "_DEADLINE", translate_locales.time.monotonic() - 1
+        )
+        items = [
+            WorkItem("de", "messages", "first", "One"),
+            WorkItem("de", "messages", "second", "Two"),
+        ]
+        results, failures, failed, dead = translate_locales._translate_locale(
+            "de", items
+        )
+        assert results == {}
+        assert dead is True
+        assert failures[0] == "de: time budget exhausted — stopping this run"
+        assert failed == {("messages", "first"), ("messages", "second")}
+
+
 class TestRepinBaseline:
     def test_changed_parsed_keys_stay_stale_for_human_review(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

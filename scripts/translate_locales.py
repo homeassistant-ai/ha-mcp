@@ -89,6 +89,18 @@ TOOLS_SURFACE = "settings UI tool titles and descriptions"
 DEFAULT_MODEL = "gemini-2.5-flash"
 # Free-tier pacing: stay comfortably under the strictest published RPM.
 _SECONDS_BETWEEN_REQUESTS = 7.0
+# Self-imposed wall-clock bound, kept below the workflow's job timeout: when
+# it trips, the run degrades exactly like a quota hit — remaining strings
+# marked failed, finished work written, progress recorded, resumable — where
+# a job-level cancellation would lose everything uncommitted.
+_TIME_BUDGET_SECONDS = float(os.environ.get("TRANSLATE_TIME_BUDGET_SECONDS", "2400"))
+_DEADLINE: float | None = None
+
+
+def _out_of_time() -> bool:
+    return _DEADLINE is not None and time.monotonic() > _DEADLINE
+
+
 # Chunks are bounded by source characters, not string count — help texts run
 # to ~1500 characters each.
 _MAX_CHARS_PER_REQUEST = 6000
@@ -582,6 +594,24 @@ def _accept_or_retry(
 _ENGINE_GIVE_UP_AFTER = 2
 
 
+def _mark_unattempted(
+    locale: str,
+    items: list[WorkItem],
+    results: dict[tuple[str, str], str],
+    failures: list[str],
+    failed: set[tuple[str, str]],
+) -> None:
+    """Record every still-unhandled item so nothing slips the report."""
+    for item in items:
+        ref = (item.section, item.key)
+        if ref not in results and ref not in failed:
+            failures.append(
+                f"{locale}/{item.section}/{item.key}: not attempted — "
+                "engine gave up or time ran out earlier in this run"
+            )
+            failed.add(ref)
+
+
 def _translate_locale(
     locale: str, items: list[WorkItem]
 ) -> tuple[dict[tuple[str, str], str], list[str], set[tuple[str, str]], bool]:
@@ -610,6 +640,10 @@ def _translate_locale(
     for chunk in _chunk(batch):
         if dead:
             break
+        if _out_of_time():
+            failures.append(f"{locale}: time budget exhausted — stopping this run")
+            dead = True
+            break
         try:
             response = _call_gemini(_prompt(locale, chunk))
         except SystemExit as exc:
@@ -630,14 +664,7 @@ def _translate_locale(
                 locale, by_id[sid], response.get(sid), results, failures, failed
             )
     if dead:
-        for item in items:
-            ref = (item.section, item.key)
-            if ref not in results and ref not in failed:
-                failures.append(
-                    f"{locale}/{item.section}/{item.key}: not attempted — "
-                    "engine gave up earlier in this run"
-                )
-                failed.add(ref)
+        _mark_unattempted(locale, items, results, failures, failed)
     return results, failures, failed, dead
 
 
@@ -834,6 +861,8 @@ def _repin_baseline(module: Any) -> None:
 
 
 def main() -> int:
+    global _DEADLINE
+    _DEADLINE = time.monotonic() + _TIME_BUDGET_SECONDS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dry-run",

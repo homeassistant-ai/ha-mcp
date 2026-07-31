@@ -104,6 +104,10 @@ jobs:
       continue-on-error: true
       env:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        # Below timeout-minutes so the script hits its own bound first and
+        # degrades resumably (progress recorded, partial work exported); the
+        # job timeout is a backstop that should never fire.
+        TRANSLATE_TIME_BUDGET_SECONDS: "2400"
       run: uv run python scripts/translate_locales.py
 
     - name: Export changes as a patch
@@ -125,7 +129,10 @@ jobs:
           echo "have_patch=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        git diff --staged --binary > "$RUNNER_TEMP/locale-sync.patch"
+        # --no-renames: emit deletions and additions as themselves, never as
+        # rename records — the push job rejects rename/copy records outright,
+        # and this guarantees the pipeline's own patches never contain any.
+        git diff --staged --binary --no-renames > "$RUNNER_TEMP/locale-sync.patch"
         echo "have_patch=true" >> "$GITHUB_OUTPUT"
 
     - name: Upload patch
@@ -197,6 +204,15 @@ jobs:
         BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
       run: |
         patch="$RUNNER_TEMP/locale-sync.patch"
+        # A rename/copy record names only its destination in --numstat, so a
+        # crafted patch could delete any tracked file by \"renaming\" it into
+        # the locale tree while every listed path passes the allowlist.
+        # Legitimate pipeline patches never contain such records (the export
+        # step diffs with --no-renames), so reject them outright.
+        if git apply --summary "$patch" | grep -qE '^ *(rename|copy) '; then
+          echo "::error::patch contains rename/copy records, which can smuggle paths past the allowlist; refusing."
+          exit 1
+        fi
         git apply --numstat "$patch" | cut -f3 > /tmp/patch-files
         while IFS= read -r f; do
           case "$f" in
