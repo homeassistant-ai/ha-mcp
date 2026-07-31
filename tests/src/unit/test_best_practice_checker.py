@@ -2837,7 +2837,9 @@ class TestVariablesForwardReferenceSpanWalking:
         assert _variables_warnings({"first": "{{ 'later }}' }}", "later": "1"}) == []
 
     def test_statement_delimiter_inside_a_literal(self):
-        warnings = _variables_warnings({"first": "{% if '%}' ~ later %}x{% endif %}", "later": "1"})
+        warnings = _variables_warnings(
+            {"first": "{% if '%}' ~ later %}x{% endif %}", "later": "1"}
+        )
         assert _has_warning_containing(warnings, "`first`", "`later`")
 
     def test_unterminated_span_is_not_guessed_at(self):
@@ -2856,7 +2858,9 @@ class TestVariablesForwardReferenceNonCode:
 
     def test_read_after_endraw_is_still_flagged(self):
         config = {"first": "{% raw %}x{% endraw %}{{ later }}", "later": "1"}
-        assert _has_warning_containing(_variables_warnings(config), "`first`", "`later`")
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
 
 
 class TestVariablesForwardReferenceScoping:
@@ -2869,7 +2873,9 @@ class TestVariablesForwardReferenceScoping:
             "first": "{% for x in [1] %}{% set later = 1 %}{% endfor %}{{ later }}",
             "later": "1",
         }
-        assert _has_warning_containing(_variables_warnings(config), "`first`", "`later`")
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
 
     def test_read_inside_the_loop_is_still_shadowed(self):
         config = {
@@ -2879,17 +2885,24 @@ class TestVariablesForwardReferenceScoping:
         assert _variables_warnings(config) == []
 
     def test_loop_target_is_a_binding_not_a_read(self):
-        config = {"first": "{% for later in [1] %}{{ later }}{% endfor %}", "later": "1"}
+        config = {
+            "first": "{% for later in [1] %}{{ later }}{% endfor %}",
+            "later": "1",
+        }
         assert _variables_warnings(config) == []
 
     def test_iterable_is_read_in_the_enclosing_scope(self):
         # `later` on the right of `in` is evaluated before the target binds.
         config = {"first": "{% for later in later %}x{% endfor %}", "later": "1"}
-        assert _has_warning_containing(_variables_warnings(config), "`first`", "`later`")
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
 
     def test_with_block_binding_ends_at_endwith(self):
         config = {"first": "{% with later = 1 %}{% endwith %}{{ later }}", "later": "1"}
-        assert _has_warning_containing(_variables_warnings(config), "`first`", "`later`")
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
 
     def test_with_block_binding_holds_inside(self):
         config = {"first": "{% with later = 1 %}{{ later }}{% endwith %}", "later": "1"}
@@ -2904,7 +2917,9 @@ class TestVariablesForwardReferenceScoping:
 
     def test_macro_parameter_default_is_read_outside(self):
         config = {"first": "{% macro m(x=later) %}{% endmacro %}", "later": "1"}
-        assert _has_warning_containing(_variables_warnings(config), "`first`", "`later`")
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
 
     def test_set_outside_a_loop_still_shadows_afterwards(self):
         config = {"first": "{% set later = 1 %}{{ later }}", "later": "1"}
@@ -2915,26 +2930,46 @@ class TestVariablesForwardReferenceBindingForms:
     """Every spelling of a binding Jinja accepts."""
 
     def test_whitespace_control_minus(self):
-        assert _variables_warnings({"first": "{%- set later = 1 %}{{ later }}", "later": "1"}) == []
+        assert (
+            _variables_warnings(
+                {"first": "{%- set later = 1 %}{{ later }}", "later": "1"}
+            )
+            == []
+        )
 
     def test_whitespace_control_plus(self):
-        assert _variables_warnings({"first": "{%+ set later = 1 %}{{ later }}", "later": "1"}) == []
+        assert (
+            _variables_warnings(
+                {"first": "{%+ set later = 1 %}{{ later }}", "later": "1"}
+            )
+            == []
+        )
 
     def test_with_is_a_binding_tag_too(self):
         config = {"first": "{% with later = 3 %}{{ later }}{% endwith %}", "later": "1"}
         assert _variables_warnings(config) == []
 
     def test_tuple_target_binds_every_name(self):
-        config = {"first": "{% set (later, other) = (1, 2) %}{{ later }}{{ other }}", "later": "1", "other": "2"}
+        config = {
+            "first": "{% set (later, other) = (1, 2) %}{{ later }}{{ other }}",
+            "later": "1",
+            "other": "2",
+        }
         assert _variables_warnings(config) == []
 
     def test_multi_target_set_binds_every_name(self):
-        config = {"first": "{% set later, other = 1, 2 %}{{ later }}{{ other }}", "later": "1", "other": "2"}
+        config = {
+            "first": "{% set later, other = 1, 2 %}{{ later }}{{ other }}",
+            "later": "1",
+            "other": "2",
+        }
         assert _variables_warnings(config) == []
 
     def test_multi_target_right_hand_side_is_still_read(self):
         config = {"first": "{% set a1, b1 = later, 2 %}", "later": "1"}
-        assert _has_warning_containing(_variables_warnings(config), "`first`", "`later`")
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
 
     def test_block_form_set_binds(self):
         config = {"first": "{% set later %}x{% endset %}{{ later }}", "later": "1"}
@@ -2943,7 +2978,9 @@ class TestVariablesForwardReferenceBindingForms:
     def test_attribute_target_reads_the_base_name(self):
         # `{% set later.x = 1 %}` assigns into `later`, so it reads it.
         config = {"first": "{% set later.x = 1 %}", "later": "1"}
-        assert _has_warning_containing(_variables_warnings(config), "`first`", "`later`")
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
 
 
 class TestVariablesForwardReferenceTokenPositions:
@@ -2952,7 +2989,9 @@ class TestVariablesForwardReferenceTokenPositions:
     def test_spaced_attribute_access(self):
         # Jinja parses `wetter . later` as attribute access, verified against a
         # live render, so the name after the dot is not a read.
-        assert _variables_warnings({"first": "{{ wetter . later }}", "later": "1"}) == []
+        assert (
+            _variables_warnings({"first": "{{ wetter . later }}", "later": "1"}) == []
+        )
 
     def test_call_keyword_argument(self):
         assert _variables_warnings({"first": "{{ dict(later=1) }}", "later": "1"}) == []
@@ -2961,7 +3000,9 @@ class TestVariablesForwardReferenceTokenPositions:
         assert _variables_warnings({"first": "{{ 1 is later }}", "later": "1"}) == []
 
     def test_negated_test_name(self):
-        assert _variables_warnings({"first": "{{ 1 is not later }}", "later": "1"}) == []
+        assert (
+            _variables_warnings({"first": "{{ 1 is not later }}", "later": "1"}) == []
+        )
 
     def test_jinja_keyword_sharing_a_sibling_name(self):
         assert _variables_warnings({"first": "{% if x %}y{% endif %}", "if": "1"}) == []
@@ -2984,17 +3025,23 @@ class TestVariablesForwardReferenceNesting:
 
     def test_template_in_a_dict_key(self):
         config = {"first": {"{{ later }}": "v"}, "later": "1"}
-        assert _has_warning_containing(_variables_warnings(config), "`first`", "`later`")
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
 
     def test_template_in_a_nested_list(self):
         config = {"first": [{"deep": ["{{ later }}"]}], "later": "1"}
-        assert _has_warning_containing(_variables_warnings(config), "`first`", "`later`")
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
 
     def test_bindings_do_not_leak_between_values(self):
         # Each string is scanned on its own, so a `{% set %}` in one value
         # cannot shadow a read in the next.
         config = {"first": ["{% set later = 1 %}", "{{ later }}"], "later": "1"}
-        assert _has_warning_containing(_variables_warnings(config), "`first`", "`later`")
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
 
 
 class TestVariablesForwardReferenceNormalizationSeam:

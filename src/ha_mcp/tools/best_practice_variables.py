@@ -42,7 +42,9 @@ _RE_BLOCK_SET = re.compile(r"[-+]?\s*set\s+([^\W\d]\w*)\s*[-+]?\s*$")
 # `{% for a, b in expr if cond %}` — the targets bind for the loop body, the
 # iterable is evaluated in the enclosing scope, and the filter clause sees the
 # targets already bound.
-_RE_FOR = re.compile(r"[-+]?\s*for\s+(.*?)\s+in\s+(.*?)(?:\s+if\s+(.*?))?\s*[-+]?$", re.DOTALL)
+_RE_FOR = re.compile(
+    r"[-+]?\s*for\s+(.*?)\s+in\s+(.*?)(?:\s+if\s+(.*?))?\s*[-+]?$", re.DOTALL
+)
 # `{% macro name(a, b=1) %}` — the name binds in the enclosing scope, the
 # parameters inside the macro body.
 _RE_MACRO = re.compile(r"[-+]?\s*macro\s+([^\W\d]\w*)\s*\((.*?)\)", re.DOTALL)
@@ -74,14 +76,58 @@ _RE_JINJA_IDENT = re.compile(r"(?<![\w.])[^\W\d]\w*")
 # positive instead.
 _JINJA_KEYWORDS = frozenset(
     {
-        "and", "as", "autoescape", "block", "break", "call", "context",
-        "continue", "do", "elif", "else", "endautoescape", "endblock",
-        "endcall", "endfilter", "endfor", "endif", "endmacro", "endraw",
-        "endset", "endtrans", "endwith", "extends", "false", "filter", "for",
-        "from", "if", "ignore", "import", "in", "include", "is", "loop",
-        "macro", "missing", "none", "not", "or", "pluralize", "raw",
-        "recursive", "required", "scoped", "set", "trans", "true", "with",
-        "without", "False", "None", "True",
+        "and",
+        "as",
+        "autoescape",
+        "block",
+        "break",
+        "call",
+        "context",
+        "continue",
+        "do",
+        "elif",
+        "else",
+        "endautoescape",
+        "endblock",
+        "endcall",
+        "endfilter",
+        "endfor",
+        "endif",
+        "endmacro",
+        "endraw",
+        "endset",
+        "endtrans",
+        "endwith",
+        "extends",
+        "false",
+        "filter",
+        "for",
+        "from",
+        "if",
+        "ignore",
+        "import",
+        "in",
+        "include",
+        "is",
+        "loop",
+        "macro",
+        "missing",
+        "none",
+        "not",
+        "or",
+        "pluralize",
+        "raw",
+        "recursive",
+        "required",
+        "scoped",
+        "set",
+        "trans",
+        "true",
+        "with",
+        "without",
+        "False",
+        "None",
+        "True",
     }
 )
 # Tags that open a variable scope, mapped to the tag that closes it. A binding
@@ -231,6 +277,60 @@ def _split_parameters(parameters: str) -> tuple[set[str], set[str]]:
     return bound, reads
 
 
+def _scan_for(body: str, visible: set[str], scopes: list[set[str]]) -> set[str]:
+    """Read a `{% for %}` tag and push the scope its targets bind in."""
+    match = _RE_FOR.match(body)
+    if match is None:
+        scopes.append(set())
+        return set()
+    targets, iterable, condition = match.groups()
+    # The iterable is evaluated where the loop stands, so it reads from the
+    # enclosing scope; the filter clause runs per item, with the targets bound.
+    names = _read_names(iterable, visible)
+    bound, reads = _split_targets(targets)
+    names |= reads - visible
+    scopes.append(bound)
+    if condition:
+        names |= _read_names(condition, visible | bound)
+    return names
+
+
+def _scan_macro(body: str, visible: set[str], scopes: list[set[str]]) -> set[str]:
+    """Read a `{% macro %}` tag, binding its name outside and its params in."""
+    match = _RE_MACRO.match(body)
+    if match is None:
+        scopes.append(set())
+        return set()
+    scopes[-1].add(match.group(1))
+    bound, reads = _split_parameters(match.group(2))
+    scopes.append(bound)
+    return reads - visible
+
+
+def _scan_binding(
+    tag: str, body: str, visible: set[str], scopes: list[set[str]]
+) -> set[str]:
+    """Read a `{% set %}` / `{% with %}` tag and apply its bindings.
+
+    A `{% set %}` binds in the current scope from here on; a `{% with %}`
+    opens a scope of its own that `{% endwith %}` discards.
+    """
+    names: set[str] = set()
+    assignment = _RE_ASSIGN.match(body)
+    if assignment is not None:
+        bound, reads = _split_targets(assignment.group(1))
+        names |= _read_names(assignment.group(2), visible)
+        names |= reads - visible
+    else:
+        block_set = _RE_BLOCK_SET.match(body)
+        bound = {block_set.group(1)} if block_set else set()
+    if tag == "with":
+        scopes.append(bound)
+    else:
+        scopes[-1] |= bound
+    return names
+
+
 def _referenced_names(value: Any) -> set[str]:
     """Return the identifier tokens a variables-block value reads."""
     names: set[str] = set()
@@ -251,54 +351,16 @@ def _referenced_names(value: Any) -> set[str]:
             if tag in _SCOPE_CLOSERS:
                 if len(scopes) > 1:
                     scopes.pop()
-                continue
-
-            if tag == "for":
-                match = _RE_FOR.match(body)
-                if match is None:
+            elif tag == "for":
+                names |= _scan_for(body, visible, scopes)
+            elif tag == "macro":
+                names |= _scan_macro(body, visible, scopes)
+            elif tag in ("set", "with"):
+                names |= _scan_binding(tag, body, visible, scopes)
+            else:
+                if tag == "call":
                     scopes.append(set())
-                    continue
-                targets, iterable, condition = match.groups()
-                names |= _read_names(iterable, visible)
-                bound, reads = _split_targets(targets)
-                names |= reads - visible
-                scopes.append(bound)
-                if condition:
-                    names |= _read_names(condition, visible | bound)
-                continue
-
-            if tag == "macro":
-                match = _RE_MACRO.match(body)
-                if match is None:
-                    scopes.append(set())
-                    continue
-                scopes[-1].add(match.group(1))
-                bound, reads = _split_parameters(match.group(2))
-                names |= reads - visible
-                scopes.append(bound)
-                continue
-
-            if tag in ("set", "with"):
-                assignment = _RE_ASSIGN.match(body)
-                if assignment is not None:
-                    bound, reads = _split_targets(assignment.group(1))
-                    names |= _read_names(assignment.group(2), visible)
-                    names |= reads - visible
-                else:
-                    block_set = _RE_BLOCK_SET.match(body)
-                    bound = {block_set.group(1)} if block_set else set()
-                if tag == "with":
-                    scopes.append(bound)
-                else:
-                    scopes[-1] |= bound
-                continue
-
-            if tag == "call":
                 names |= _read_names(body, visible)
-                scopes.append(set())
-                continue
-
-            names |= _read_names(body, visible)
     return names
 
 
