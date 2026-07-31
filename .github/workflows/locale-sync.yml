@@ -8,6 +8,11 @@ name: Locale Sync
 # the result back to the PR branch. A second run after that push finds no
 # stale keys and commits nothing, so the loop terminates.
 #
+# Rate limits / outages: a partial run (daily-quota hit, engine outage)
+# commits whatever finished plus a progress file the next run resumes from —
+# re-running this workflow is the entire recovery procedure. The job stays
+# red until every string is translated.
+#
 # Fork PRs are skipped: they carry no secrets and their branches cannot be
 # pushed to. For those, a maintainer runs the script locally (see AGENTS.md
 # § Translations).

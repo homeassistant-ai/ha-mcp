@@ -23,8 +23,17 @@ Gemini-compatible endpoints. A genuinely different provider means editing
 ``_call_gemini`` itself (its response parsing is Gemini-shaped) — still a
 one-function change.
 Every returned string is validated (placeholder parity, the settings UI markup
-allowlist, panel-link parity) before it is written; a failure leaves that
-string unwritten and the run red rather than shipping a broken translation.
+allowlist, formatting-tag parity, panel-link parity) before it is written; a
+failure leaves that string unwritten and the run red rather than shipping a
+broken translation.
+
+Rate limits and outages: requests are paced under the free-tier rate and
+retry transient errors with backoff; a persistently failing batch marks its
+strings failed and the run continues, and two consecutive dead batches stop
+the run early. Partial runs are resumable — completed work is recorded in
+``tests/src/unit/locale_sync_progress.json`` and skipped on the rerun; only a
+fully successful run repins the baseline and deletes that record, so the
+parity suite stays red until every string is translated.
 
 Usage::
 

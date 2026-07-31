@@ -781,6 +781,24 @@ paragraph of the docstring, or the `FEATURE_GATED_TOOLS` stub where a gated
 tool shows one instead. Editing that summary moves the English out from under
 six catalogs; the pipeline retranslates them.
 
+**Rate limits and outages degrade loudly, never silently.** Engine calls are
+paced under the free-tier request rate and retry transient errors (429/5xx,
+timeouts) with backoff; a request that keeps failing marks its strings failed
+and the run continues, and two consecutive dead batches stop the run early
+instead of burning the remaining quota. A partial run — a daily-quota hit,
+an outage — still commits every finished translation plus
+`tests/src/unit/locale_sync_progress.json`, which the next run reads to
+resume where it stopped: **re-running the workflow is the entire recovery
+procedure.** Only a fully successful run repins the baseline and deletes the
+progress file, so CI stays red until every string is translated and nothing
+unvalidated ever ships. If the Gemini free tier ever disappears,
+`GEMINI_API_URL` / `GEMINI_MODEL` / `GEMINI_API_KEY` point the script at any
+Gemini-compatible endpoint, and the whole provider contract is the single
+`_call_gemini` function in `scripts/translate_locales.py` — swapping
+providers is editing that one function. Worst case, hand-translate and run
+`python scripts/update_locale_baseline.py`, exactly as before the pipeline
+existed.
+
 The Webhook Proxy add-on and its bundled integration stay **English-only by
 decision** — not worth the upkeep. The test records that, so any other new
 catalog directory fails until it is either translated everywhere or listed as
