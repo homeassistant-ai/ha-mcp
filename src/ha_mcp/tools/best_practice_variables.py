@@ -251,11 +251,11 @@ def _split_targets(targets: str) -> tuple[set[str], set[str]]:
     bound: set[str] = set()
     reads: set[str] = set()
     for chunk in targets.strip().strip("()[]").split(","):
-        chunk = chunk.strip()
-        if _RE_PLAIN_NAME.fullmatch(chunk):
-            bound.add(chunk)
+        target = chunk.strip()
+        if _RE_PLAIN_NAME.fullmatch(target):
+            bound.add(target)
         else:
-            reads |= _read_names(chunk, set())
+            reads |= _read_names(target, set())
     return bound, reads
 
 
