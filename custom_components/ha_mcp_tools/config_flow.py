@@ -228,7 +228,7 @@ def _sentence_prefix(sentence: str, language: str, english: str) -> str:
     if not sentence:
         return sentence
     if (
-        language.split("-")[0].lower() in _NO_ASCII_SENTENCE_SPACE
+        language.split("-", maxsplit=1)[0].lower() in _NO_ASCII_SENTENCE_SPACE
         and sentence != english
     ):
         return sentence

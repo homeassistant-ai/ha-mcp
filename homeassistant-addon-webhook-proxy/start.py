@@ -1507,41 +1507,40 @@ def _install_integration_and_handle_restart() -> None:
                 {"notification_id": "mcp_proxy_restart"},
             )
             log_info("Setup completed after HA restart")
+    elif not _ensure_config_entry():
+        log_error(
+            "Could not create config entry. Webhook is NOT active. "
+            "Restart Home Assistant; if the problem persists, "
+            "remove and re-add the integration manually from "
+            "Settings → Devices & Services."
+        )
+        _ha_core_api(
+            "POST",
+            "/services/persistent_notification/create",
+            {
+                "title": ("MCP Webhook Proxy: webhook URL is not active"),
+                "message": (
+                    "The addon could not create the integration's "
+                    "config entry, so the webhook URL is currently "
+                    "**not active**. Restart Home Assistant; if "
+                    "the problem persists, remove and re-add the "
+                    "MCP Webhook Proxy integration from "
+                    "Settings → Devices & Services."
+                ),
+                "notification_id": "mcp_proxy_setup_failed",
+            },
+        )
     else:
-        if not _ensure_config_entry():
-            log_error(
-                "Could not create config entry. Webhook is NOT active. "
-                "Restart Home Assistant; if the problem persists, "
-                "remove and re-add the integration manually from "
-                "Settings → Devices & Services."
-            )
-            _ha_core_api(
-                "POST",
-                "/services/persistent_notification/create",
-                {
-                    "title": ("MCP Webhook Proxy: webhook URL is not active"),
-                    "message": (
-                        "The addon could not create the integration's "
-                        "config entry, so the webhook URL is currently "
-                        "**not active**. Restart Home Assistant; if "
-                        "the problem persists, remove and re-add the "
-                        "MCP Webhook Proxy integration from "
-                        "Settings → Devices & Services."
-                    ),
-                    "notification_id": "mcp_proxy_setup_failed",
-                },
-            )
-        else:
-            # Reload the config entry so the integration reads the fresh
-            # config file we just wrote (it may have loaded with stale data
-            # during HA boot, before this addon started).
-            _reload_config_entry()
-            # Dismiss any leftover restart notification from first install
-            _ha_core_api(
-                "POST",
-                "/services/persistent_notification/dismiss",
-                {"notification_id": "mcp_proxy_restart"},
-            )
+        # Reload the config entry so the integration reads the fresh
+        # config file we just wrote (it may have loaded with stale data
+        # during HA boot, before this addon started).
+        _reload_config_entry()
+        # Dismiss any leftover restart notification from first install
+        _ha_core_api(
+            "POST",
+            "/services/persistent_notification/dismiss",
+            {"notification_id": "mcp_proxy_restart"},
+        )
 
 
 def _enforce_oauth_or_disable(enable_oauth: bool) -> None:

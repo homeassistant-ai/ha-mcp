@@ -90,6 +90,7 @@ def run_gemini_query(
             cwd=str(workdir),
             timeout=timeout,
             env=env,
+            check=False,
         )
 
         output = result.stdout
@@ -162,6 +163,7 @@ def run_claude_query(
             text=True,
             timeout=timeout,
             env=env,
+            check=False,
         )
 
         output = result.stdout

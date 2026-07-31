@@ -80,15 +80,13 @@ def _slice_ws_messages(
     offset/limit were applied.
     """
     total_collected = len(messages)
-    if offset < 0:
-        offset = 0
+    offset = max(offset, 0)
     if offset > total_collected:
         sliced: list[Any] = []
     elif limit is None:
         sliced = messages[offset:]
     else:
-        if limit < 0:
-            limit = 0
+        limit = max(limit, 0)
         sliced = messages[offset : offset + limit]
 
     pagination: dict[str, Any] = {
@@ -158,9 +156,8 @@ def _summarize_ws_messages(
                 flush(i)
                 run_start = None
             result.append(msg)
-        else:
-            if run_start is None:
-                run_start = i
+        elif run_start is None:
+            run_start = i
 
     if run_start is not None:
         flush(len(messages))

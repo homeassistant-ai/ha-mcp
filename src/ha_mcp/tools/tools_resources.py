@@ -333,7 +333,7 @@ def _decode_legacy_worker_url(url: str) -> str | None:
         return None
     try:
         # Extract base64 part: https://worker.dev/{base64}?type=module
-        encoded = url[len(prefix) :].split("?")[0]
+        encoded = url[len(prefix) :].split("?", maxsplit=1)[0]
         # validate=True mirrors _decode_data_uri: urlsafe_b64decode otherwise
         # silently DISCARDS non-alphabet characters, so a junk path could
         # decode to plausible text and be masked as inline content.

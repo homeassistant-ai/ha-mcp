@@ -734,7 +734,7 @@ def _categorize_step_path(path: str, domain: str) -> str | None:
         return "condition"
     if path == "action" or path.startswith(("action/", "sequence/")):
         return "action"
-    if domain == "script" and path.split("/")[0].isdigit():
+    if domain == "script" and path.split("/", maxsplit=1)[0].isdigit():
         return "action"
     return None
 

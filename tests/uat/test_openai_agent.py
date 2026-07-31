@@ -27,6 +27,7 @@ class TestArgParsing:
             [sys.executable, str(AGENT_SCRIPT)],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode != 0
 
@@ -36,6 +37,7 @@ class TestArgParsing:
             [sys.executable, str(AGENT_SCRIPT), "--help"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0
         assert "--prompt" in result.stdout

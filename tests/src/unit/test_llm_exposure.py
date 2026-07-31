@@ -60,7 +60,7 @@ class TestOverridesLoading:
     def test_loads_only_bool_values(self, monkeypatch):
         # load_llm_api_overrides imports load_tool_config lazily from
         # settings_ui — patch it there.
-        import ha_mcp.settings_ui as settings_ui
+        from ha_mcp import settings_ui
 
         monkeypatch.setattr(
             settings_ui,
@@ -79,7 +79,7 @@ class TestOverridesLoading:
         }
 
     def test_missing_or_malformed_key_is_empty(self, monkeypatch):
-        import ha_mcp.settings_ui as settings_ui
+        from ha_mcp import settings_ui
 
         monkeypatch.setattr(settings_ui, "load_tool_config", dict)
         assert load_llm_api_overrides() == {}
@@ -91,7 +91,7 @@ class TestOverridesLoading:
 
 class TestPinnedNames:
     def test_mirrors_server_tool_search_semantics(self, monkeypatch):
-        import ha_mcp.settings_ui as settings_ui
+        from ha_mcp import settings_ui
         from ha_mcp.transforms import DEFAULT_PINNED_TOOLS
 
         default_pinned = next(iter(DEFAULT_PINNED_TOOLS))

@@ -114,6 +114,7 @@ def _run_bat_scenario(scenario: dict, agent: str, ha_url: str, ha_token: str) ->
         capture_output=True,
         text=True,
         timeout=300,
+        check=False,
     )
 
     if result.returncode != 0:

@@ -25,7 +25,7 @@ from ._embedded_stubs import fake_llm_apis, install
 
 install()
 
-import custom_components.ha_mcp_tools.llm_api as llm_api  # noqa: E402
+from custom_components.ha_mcp_tools import llm_api  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_LLM_API_UNSUB,
     DOMAIN,

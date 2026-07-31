@@ -42,7 +42,7 @@ def main():
     print(f"🧪 Running E2E tests: {' '.join(args)}")
 
     # Run pytest
-    result = subprocess.run(args)
+    result = subprocess.run(args, check=False)
     sys.exit(result.returncode)
 
 

@@ -285,9 +285,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -339,9 +337,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -389,9 +385,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -440,7 +434,7 @@ class TestRunOidcServer:
         async def fake_coro(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(side_effect=lambda **kwargs: fake_coro(**kwargs))
+        mock_mcp.run_async = MagicMock(side_effect=fake_coro)
         mock_server.mcp = mock_mcp
 
         async def capture_run_with_shutdown(coro):
@@ -536,9 +530,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -586,9 +578,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -643,9 +633,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -696,9 +684,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -744,9 +730,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -799,9 +783,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -847,9 +829,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -895,9 +875,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -948,9 +926,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -1007,9 +983,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -1063,9 +1037,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -1119,9 +1091,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -1171,9 +1141,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -1267,9 +1235,7 @@ class TestRunOidcServerSettingsUI:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server = MagicMock()
         mock_server.mcp = mock_mcp
 

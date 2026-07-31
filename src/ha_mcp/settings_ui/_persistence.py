@@ -116,14 +116,14 @@ def _seed_tool_config_from_env(settings: Settings) -> dict[str, str]:
     tools: dict[str, str] = {}
     disabled_raw = getattr(settings, "disabled_tools", "")
     if disabled_raw:
-        for name in disabled_raw.split(","):
-            name = name.strip()
+        for raw_name in disabled_raw.split(","):
+            name = raw_name.strip()
             if name:
                 tools[name] = "disabled"
     pinned_raw = getattr(settings, "pinned_tools", "")
     if pinned_raw:
-        for name in pinned_raw.split(","):
-            name = name.strip()
+        for raw_name in pinned_raw.split(","):
+            name = raw_name.strip()
             if name and name not in tools:
                 tools[name] = "pinned"
     return tools
@@ -176,12 +176,12 @@ def env_pinned_tools(settings: Settings | None = None) -> dict[str, str]:
     if settings is None:
         settings = get_global_settings()
     pinned: dict[str, str] = {}
-    for name in (settings.disabled_tools or "").split(","):
-        name = name.strip()
+    for raw_name in (settings.disabled_tools or "").split(","):
+        name = raw_name.strip()
         if name:
             pinned[name] = "disabled"
-    for name in (settings.pinned_tools or "").split(","):
-        name = name.strip()
+    for raw_name in (settings.pinned_tools or "").split(","):
+        name = raw_name.strip()
         if name:
             pinned[name] = "pinned"
     return pinned

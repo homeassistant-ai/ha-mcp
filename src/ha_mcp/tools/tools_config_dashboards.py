@@ -745,9 +745,8 @@ def _card_matches(
             pattern = entity_id.replace(".", r"\.").replace("*", ".*")
             if not any(re.match(pattern, e) for e in all_entities if e):
                 return False
-        else:
-            if entity_id not in all_entities:
-                return False
+        elif entity_id not in all_entities:
+            return False
 
     # Heading filter (for heading cards or section titles)
     if heading is not None:

@@ -220,7 +220,9 @@ class HomeAssistantTestEnvironment:
         cmd = [sys.executable, "-m", "pytest", "tests/src/e2e/", "-v", "--tb=short"]
 
         try:
-            result = subprocess.run(cmd, env=env, cwd=Path(__file__).parent.parent)
+            result = subprocess.run(
+                cmd, env=env, cwd=Path(__file__).parent.parent, check=False
+            )
             if result.returncode == 0:
                 logger.info("✅ All tests passed!")
             else:

@@ -114,7 +114,7 @@ class TestAttemptCParallelFetch:
         fetched_uids = []
 
         async def _individual_fetch(method: str, url: str) -> dict:
-            uid = url.split("/")[-1]
+            uid = url.rsplit("/", maxsplit=1)[-1]
             fetched_uids.append(uid)
             # "Morning Routine" references sensor.kitchen_temp in condition
             if uid == "uid_morning":
@@ -180,7 +180,7 @@ class TestAttemptCParallelFetch:
 
         async def _slow_fetch(method: str, url: str) -> dict:
             nonlocal call_count
-            uid = url.split("/")[-1]
+            uid = url.rsplit("/", maxsplit=1)[-1]
             if url.rstrip("/") == "/config/automation/config":
                 raise Exception("Bulk unavailable")
             call_count += 1

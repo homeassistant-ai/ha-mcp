@@ -128,7 +128,7 @@ def match_predicate(predicate: Predicate, args: dict[str, Any]) -> bool:
 
 
 def match_rule(rule: Rule, tool_name: str, args: dict[str, Any]) -> bool:
-    if rule.tool_name != "*" and rule.tool_name != tool_name:
+    if rule.tool_name not in ("*", tool_name):
         return False
     return all(match_predicate(p, args) for p in rule.when)
 

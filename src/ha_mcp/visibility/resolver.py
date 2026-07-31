@@ -185,7 +185,7 @@ def _is_assist_exposed(
         entry.get("entity_category") is not None or entry.get("hidden_by") is not None
     ):
         return False
-    domain = eid.split(".")[0]
+    domain = eid.split(".", maxsplit=1)[0]
     if domain in DEFAULT_EXPOSED_DOMAINS:
         return True
     if domain == "binary_sensor":

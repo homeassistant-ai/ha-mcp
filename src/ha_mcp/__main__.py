@@ -574,8 +574,6 @@ def _get_timestamped_uvicorn_log_config() -> dict:
 
 async def _cleanup_resources() -> None:
     """Clean up all server resources gracefully."""
-    global _server
-
     logger.info("Cleaning up server resources...")
 
     # Close WebSocket listener service if running
@@ -730,7 +728,7 @@ def _signal_handler(signum: int, frame: Any) -> None:
     This handler initiates graceful shutdown on first signal.
     On second signal, forces immediate exit.
     """
-    global _shutdown_in_progress, _shutdown_event
+    global _shutdown_in_progress
 
     sig_name = signal.Signals(signum).name
 

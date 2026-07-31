@@ -9,6 +9,11 @@ history from before the fork.
 -->
 
 
+## v2.1.1.dev3 (2026-07-31)
+
+Internal: lint cleanup (ruff pylint rules) — no behavior change.
+
+
 ## v2.1.1.dev2 (2026-07-30)
 
 Documentation: warn Tailscale Funnel users that Claude.ai connectors require the

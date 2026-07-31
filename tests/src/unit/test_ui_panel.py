@@ -18,7 +18,7 @@ from ._embedded_stubs import FakeSession, FakeUpstream, install
 
 install()
 
-import custom_components.ha_mcp_tools.ui_panel as ui_panel  # noqa: E402
+from custom_components.ha_mcp_tools import ui_panel  # noqa: E402
 from custom_components.ha_mcp_tools.const import DATA_WEBHOOK, DOMAIN  # noqa: E402
 
 _TARGET = "http://127.0.0.1:9584/private_abc"

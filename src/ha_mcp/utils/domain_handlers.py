@@ -205,7 +205,7 @@ def get_domain_handler(entity_id: str) -> dict[str, Any]:
         # Fallback for invalid entity ID format
         return get_default_handler()
 
-    domain = entity_id.split(".")[0]
+    domain = entity_id.split(".", maxsplit=1)[0]
     return DOMAIN_HANDLERS.get(domain, get_default_handler())
 
 
