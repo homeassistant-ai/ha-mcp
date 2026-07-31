@@ -105,8 +105,14 @@ jobs:
         git add src/ha_mcp/settings_ui/locales src/ha_mcp/settings_ui/settings.js \
                 custom_components/ha_mcp_tools/translations \
                 homeassistant-addon/translations homeassistant-addon-dev/translations \
-                tests/src/unit/locale_source_baseline.json \
-                tests/src/unit/locale_sync_progress.json
+                tests/src/unit/locale_source_baseline.json
+        # The progress sidecar exists only after a partial run; a bare git add
+        # of a nonexistent pathspec is exit 128. Stage it when present, and
+        # stage its deletion when a successful run just cleared a tracked one.
+        progress=tests/src/unit/locale_sync_progress.json
+        if [ -f "$progress" ] || git ls-files --error-unmatch "$progress" >/dev/null 2>&1; then
+          git add "$progress"
+        fi
         if git diff --staged --quiet; then
           echo "No translation updates."
           exit 0
