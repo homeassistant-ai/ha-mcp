@@ -62,13 +62,18 @@ def test_failed_query_reports_exit_code_even_without_stderr(get_func):
     """
     with patch.object(
         ha_query.subprocess, "run", return_value=_completed(2, stdout="partial")
-    ):
+    ) as mock_run:
         text, returncode = get_func()("q", "http://ha.local:8123", "token")
 
     assert returncode == 2
     assert "[exit 2]" in text
     # The partial answer is kept — the marker is what makes it non-scorable.
     assert "partial" in text
+    # check=False is load-bearing: with check=True the non-zero exit raises
+    # CalledProcessError, which these functions do not catch, so neither the
+    # annotation above nor the tuple return is ever reached. A return_value
+    # mock cannot express that, so assert the kwarg directly.
+    assert mock_run.call_args.kwargs["check"] is False
 
 
 @pytest.mark.parametrize("get_func", QUERY_FUNCS)
