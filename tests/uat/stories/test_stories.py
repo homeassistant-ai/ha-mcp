@@ -137,6 +137,7 @@ def _run_bat_scenario(scenario: dict, agent: str, ha_url: str, ha_token: str) ->
             f"Stdout: {result.stdout[-1000:]}\n"
             f"Stderr: {result.stderr[-2000:]}"
         )
+        return None  # py/mixed-returns: unreachable, pytest.fail always raises
 
 
 def _evaluate_result(story: dict, result: dict, agent: str) -> None:
