@@ -163,14 +163,22 @@ class TestConfigErrorHandling:
 
     @pytest.fixture
     def child_env(self, tmp_path):
-        """Child-process env that ignores the developer's project ``.env``.
+        """Child-process env for half of the isolation from a developer ``.env``.
 
-        ``ha_mcp.config`` loads ``<project_root>/.env`` by absolute path, so
-        dropping the credential vars from the child environment is not enough:
-        on a machine with the documented local ``.env`` the subprocess would
-        start up fine and never print the message under test. Only an
-        ``HAMCP_ENV_FILE`` that *exists* wins over that fallback — a path that
-        does not exist falls straight back to ``.env``.
+        Dropping the credential vars from the child environment is not enough
+        on a machine with the documented local ``.env``: the subprocess would
+        start up fine and never print the message under test. There are two
+        independent readers of that file and each needs its own mitigation.
+
+        This fixture handles the first: ``ha_mcp.config`` runs ``load_dotenv``
+        on ``<project_root>/.env`` by absolute path at import. Only an
+        ``HAMCP_ENV_FILE`` that *exists* wins over it — a path that does not
+        exist falls straight back to ``.env``, so an empty file is the lever.
+
+        The second is ``Settings.model_config``'s ``env_file=".env"``, which
+        pydantic-settings resolves against the child's **cwd** and which
+        ``HAMCP_ENV_FILE`` cannot reach. Every test here therefore also passes
+        ``cwd=tmp_path``. Both are required; neither alone isolates the child.
         """
         empty_env_file = tmp_path / "empty.env"
         empty_env_file.write_text("")
@@ -178,7 +186,7 @@ class TestConfigErrorHandling:
         env["HAMCP_ENV_FILE"] = str(empty_env_file)
         return env
 
-    def test_missing_env_vars_shows_friendly_message(self, child_env):
+    def test_missing_env_vars_shows_friendly_message(self, child_env, tmp_path):
         """When HOMEASSISTANT_URL and TOKEN are missing, show friendly error."""
         # Run ha-mcp without any env vars set
         env = child_env
@@ -189,6 +197,7 @@ class TestConfigErrorHandling:
         result = subprocess.run(
             [sys.executable, "-m", "ha_mcp"],
             env=env,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -213,7 +222,7 @@ class TestConfigErrorHandling:
         assert "pydantic_core._pydantic_core.ValidationError" not in stderr
         assert "Field required [type=missing" not in stderr
 
-    def test_missing_only_url_shows_that_var(self, child_env):
+    def test_missing_only_url_shows_that_var(self, child_env, tmp_path):
         """When only HOMEASSISTANT_URL is missing, show that in message."""
         env = child_env
         env.pop("HOMEASSISTANT_URL", None)
@@ -222,6 +231,7 @@ class TestConfigErrorHandling:
         result = subprocess.run(
             [sys.executable, "-m", "ha_mcp"],
             env=env,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -234,7 +244,7 @@ class TestConfigErrorHandling:
         assert "  - HOMEASSISTANT_URL" in result.stderr
         assert "  - HOMEASSISTANT_TOKEN" not in result.stderr
 
-    def test_missing_only_token_shows_that_var(self, child_env):
+    def test_missing_only_token_shows_that_var(self, child_env, tmp_path):
         """When only HOMEASSISTANT_TOKEN is missing, show that in message."""
         env = child_env
         env.pop("HOMEASSISTANT_TOKEN", None)
@@ -243,6 +253,7 @@ class TestConfigErrorHandling:
         result = subprocess.run(
             [sys.executable, "-m", "ha_mcp"],
             env=env,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -255,7 +266,7 @@ class TestConfigErrorHandling:
         assert "  - HOMEASSISTANT_TOKEN" in result.stderr
         assert "  - HOMEASSISTANT_URL" not in result.stderr
 
-    def test_no_env_file_warning_removed(self, child_env):
+    def test_no_env_file_warning_removed(self, child_env, tmp_path):
         """No warning should be shown when .env file is missing."""
         env = child_env
         env.pop("HOMEASSISTANT_URL", None)
@@ -264,6 +275,7 @@ class TestConfigErrorHandling:
         result = subprocess.run(
             [sys.executable, "-m", "ha_mcp"],
             env=env,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=30,
@@ -284,7 +296,7 @@ class TestConfigErrorHandling:
         combined_output = result.stdout + result.stderr
         assert "[ENV] WARNING: No environment file found" not in combined_output
 
-    def test_smoke_test_still_works(self, child_env):
+    def test_smoke_test_still_works(self, child_env, tmp_path):
         """Smoke test should work with dummy credentials."""
         # Smoke test sets its own dummy credentials
         env = child_env
@@ -292,6 +304,7 @@ class TestConfigErrorHandling:
         result = subprocess.run(
             [sys.executable, "-m", "ha_mcp", "--smoke-test"],
             env=env,
+            cwd=tmp_path,
             capture_output=True,
             text=True,
             timeout=60,
