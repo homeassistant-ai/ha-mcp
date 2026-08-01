@@ -127,6 +127,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "declaration looks dead.",
     ),
     (
+        "py/unused-global-variable",
+        "src/ha_mcp/tools/best_practice_result.py",
+        "_DEFAULT_SKILL_PREFIX",
+        "Cross-module use: best_practice_result.py is the leaf module the "
+        "best_practice_* checks import to emit a warning, so this default is "
+        "read by best_practice_checker.py as the skill_prefix parameter "
+        "default. CodeQL's single-file analysis misses the cross-module "
+        "import, so the declaration looks dead.",
+    ),
+    (
         "py/unused-import",
         "packaging/binary/pyinstaller_hooks/runtime_hook.py",
         "idna",

@@ -85,7 +85,16 @@ NOT_VERIFIED_WARNING_PREFIX = (
 )
 
 
-def _normalize_automation_config(config: Any, is_root: bool = True) -> Any:
+# Keys whose value is a free-form user namespace rather than part of HA's
+# action schema. Names inside them are the user's own variable names, so no
+# alias mapping may rewrite them (a variable named 'sequences' is data, not a
+# misspelled 'sequence' key).
+_USER_NAMESPACE_KEYS = frozenset({"variables", "trigger_variables"})
+
+
+def _normalize_automation_config(
+    config: Any, is_root: bool = True, *, in_user_namespace: bool = False
+) -> Any:
     """
     Recursively normalize automation config field names to HA's canonical form.
 
@@ -105,17 +114,31 @@ def _normalize_automation_config(config: Any, is_root: bool = True) -> Any:
     blocks are already plural and pass through unchanged (issue #498: never
     rewrite these deeper keys).
 
+    No mapping applies below a 'variables:' / 'trigger_variables:' key. That
+    subtree is a free-form user namespace, so a key named 'sequences' there is
+    a variable the user declared, not an alias to canonicalize. Rewriting it
+    renamed the variable in what was written to HA (breaking every
+    '{{ sequences }}' reference in the automation) and, when a sibling named
+    'sequence' also existed, dropped the user's value outright.
+
     Args:
         config: Automation configuration (dict, list, or primitive)
         is_root: Whether this is the root-level automation config dict. Only the
                  root level gets the singular -> plural list-key normalization.
+        in_user_namespace: Whether this value sits inside a variables block.
+                 Set on recursion; no caller passes it.
 
     Returns:
         Normalized configuration with plural list field names at the root level.
     """
     # Handle lists - recursively process each item
     if isinstance(config, list):
-        return [_normalize_automation_config(item, is_root=False) for item in config]
+        return [
+            _normalize_automation_config(
+                item, is_root=False, in_user_namespace=in_user_namespace
+            )
+            for item in config
+        ]
 
     # Handle primitives (strings, numbers, etc.)
     if not isinstance(config, dict):
@@ -124,20 +147,22 @@ def _normalize_automation_config(config: Any, is_root: bool = True) -> Any:
     # Process dictionary
     normalized = config.copy()
 
-    # Build field mappings (source alias -> canonical key).
+    # Build field mappings (source alias -> canonical key). Inside a variables
+    # block every key is a user-chosen name, so the mapping stays empty there.
     field_mappings: dict[str, str] = {}
 
-    # Pluralize the root list keys to HA's 2024.10+ canonical form. ONLY at the
-    # root level: deeper in the tree 'trigger'/'action'/'condition' are type
-    # discriminators / service calls, not list keys, and must not be touched
-    # (e.g., 'action' inside a delay object -- see issue #498).
-    if is_root:
-        field_mappings["trigger"] = "triggers"
-        field_mappings["action"] = "actions"
-        field_mappings["condition"] = "conditions"
+    if not in_user_namespace:
+        # Pluralize the root list keys to HA's 2024.10+ canonical form. ONLY at
+        # the root level: deeper in the tree 'trigger'/'action'/'condition' are
+        # type discriminators / service calls, not list keys, and must not be
+        # touched (e.g., 'action' inside a delay object -- see issue #498).
+        if is_root:
+            field_mappings["trigger"] = "triggers"
+            field_mappings["action"] = "actions"
+            field_mappings["condition"] = "conditions"
 
-    # 'sequences' -> 'sequence': the canonical key is singular at any level.
-    field_mappings["sequences"] = "sequence"
+        # 'sequences' -> 'sequence': the canonical key is singular at any level.
+        field_mappings["sequences"] = "sequence"
 
     # Apply field mapping to current level, preferring the canonical key.
     for src, dst in field_mappings.items():
@@ -149,7 +174,11 @@ def _normalize_automation_config(config: Any, is_root: bool = True) -> Any:
 
     # Recursively process all values in the dictionary
     for key, value in normalized.items():
-        normalized[key] = _normalize_automation_config(value, is_root=False)
+        normalized[key] = _normalize_automation_config(
+            value,
+            is_root=False,
+            in_user_namespace=in_user_namespace or key in _USER_NAMESPACE_KEYS,
+        )
 
     return normalized
 
