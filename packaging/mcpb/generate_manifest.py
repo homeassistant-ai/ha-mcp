@@ -12,7 +12,7 @@ from pathlib import Path
 def _get_docstring_description(node: ast.AsyncFunctionDef) -> str:
     """Get the first line of a function's docstring for use as a description."""
     docstring = ast.get_docstring(node) or ""
-    return docstring.split("\n")[0].strip() if docstring else ""
+    return docstring.split("\n", maxsplit=1)[0].strip() if docstring else ""
 
 
 def _extract_title_and_decorator_description(

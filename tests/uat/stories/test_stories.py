@@ -118,16 +118,25 @@ def _run_bat_scenario(scenario: dict, agent: str, ha_url: str, ha_token: str) ->
     )
 
     if result.returncode != 0:
-        logger.error(f"BAT runner failed: {result.stderr}")
+        # run_uat.py exits 1 without emitting JSON when the agent CLI it was
+        # asked for isn't installed. That is the only non-zero exit that means
+        # "unavailable" rather than "broken", so it keeps the skip path.
+        if "No agents available" in result.stderr:
+            return {"agents": {agent: {"available": False, "all_passed": False}}}
+        pytest.fail(
+            f"BAT runner exited {result.returncode}.\n"
+            f"Stderr: {result.stderr[-2000:]}\n"
+            f"Stdout: {result.stdout[-1000:]}"
+        )
 
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
-        return {
-            "agents": {agent: {"available": False, "all_passed": False}},
-            "raw_stdout": result.stdout,
-            "raw_stderr": result.stderr,
-        }
+        pytest.fail(
+            f"BAT runner exited 0 but its stdout is not JSON.\n"
+            f"Stdout: {result.stdout[-1000:]}\n"
+            f"Stderr: {result.stderr[-2000:]}"
+        )
 
 
 def _evaluate_result(story: dict, result: dict, agent: str) -> None:

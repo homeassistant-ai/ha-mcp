@@ -186,8 +186,11 @@ ignore = [
 # homeassistant-addon-webhook-proxy-dev/ only, per the dev-first/promote-only
 # flow (allow-stable-edit is for stable-only hotfixes, not routine sweeps —
 # see homeassistant-addon-webhook-proxy/AGENTS.md "Dev-first, promote-only").
-# Remove this ignore once the next promote carries the fix into stable.
+# The dev entry covers a reset-dev-from-stable run, which overwrites the dev
+# tree with the still-unfixed stable code. Remove both entries once the next
+# promote carries the fixes into stable.
 "homeassistant-addon-webhook-proxy/**" = ["PLC0207", "PLR5501"]
+"homeassistant-addon-webhook-proxy-dev/**" = ["PLC0207", "PLR5501"]
 # C901 is enforced repo-wide with no per-file exemptions (the grandfathered
 # list was fully cleared by issue #925). Do NOT add "path" = ["C901"] entries
 # here — extract helpers to bring the function below the threshold instead:

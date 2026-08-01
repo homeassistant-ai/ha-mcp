@@ -26,7 +26,13 @@ class TestDockerBuild:
             text=True,
             check=False,
         )
-        assert result.returncode != 0, "uv should not be in the runtime image"
+        # Exactly 1 — that is ``which`` reporting "not found". Any other
+        # non-zero code means docker never ran the command (125/126/127), which
+        # would otherwise pass as if the image were clean.
+        assert result.returncode == 1, (
+            f"expected `which uv` to exit 1 (not found), got {result.returncode}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
 
     def test_ha_mcp_command_exists(self):
         """Verify ha-mcp command is installed."""

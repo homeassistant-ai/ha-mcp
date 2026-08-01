@@ -673,11 +673,12 @@ def get_git_info() -> tuple[str, str]:
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),
-            check=False,
+            check=True,
         )
         sha = result.stdout.strip()
     except Exception:
-        # Best-effort git lookup; keep the "unknown" default if git is unavailable.
+        # Best-effort git lookup; keep the "unknown" default if git is
+        # unavailable or fails.
         pass
     try:
         result = subprocess.run(
@@ -685,11 +686,12 @@ def get_git_info() -> tuple[str, str]:
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),
-            check=False,
+            check=True,
         )
         describe = result.stdout.strip()
     except Exception:
-        # Best-effort git lookup; keep the "unknown" default if git is unavailable.
+        # Best-effort git lookup; keep the "unknown" default if git is
+        # unavailable or fails.
         pass
     return sha, describe
 

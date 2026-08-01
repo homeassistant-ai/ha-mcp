@@ -52,8 +52,12 @@ def run_gemini_query(
     ha_token: str,
     branch: str | None = None,
     timeout: int = 120,
-) -> str:
-    """Run a query via Gemini CLI with MCP tools."""
+) -> tuple[str, int]:
+    """Run a query via Gemini CLI with MCP tools.
+
+    Returns the answer text and the CLI's exit code, so callers can tell an
+    empty answer apart from a failed query.
+    """
     workdir = Path(tempfile.mkdtemp(prefix="ha_query_gemini_"))
     try:
         cmd = mcp_server_command(branch)
@@ -103,10 +107,14 @@ def run_gemini_query(
             # Output wasn't JSON; keep the raw stdout text as-is.
             pass
 
-        if result.returncode != 0 and result.stderr:
-            output += f"\n[stderr]: {result.stderr}"
+        # Any non-zero exit is a failed query, stderr or not — a silent
+        # failure would otherwise be consumed as a real (empty) answer.
+        if result.returncode != 0:
+            output += f"\n[exit {result.returncode}]"
+            if result.stderr:
+                output += f"\n[stderr]: {result.stderr}"
 
-        return output
+        return output, result.returncode
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -117,8 +125,12 @@ def run_claude_query(
     ha_token: str,
     branch: str | None = None,
     timeout: int = 120,
-) -> str:
-    """Run a query via Claude CLI with MCP tools."""
+) -> tuple[str, int]:
+    """Run a query via Claude CLI with MCP tools.
+
+    Returns the answer text and the CLI's exit code, so callers can tell an
+    empty answer apart from a failed query.
+    """
     cmd = mcp_server_command(branch)
     config = {
         "mcpServers": {
@@ -167,10 +179,14 @@ def run_claude_query(
         )
 
         output = result.stdout
-        if result.returncode != 0 and result.stderr:
-            output += f"\n[stderr]: {result.stderr}"
+        # Any non-zero exit is a failed query, stderr or not — a silent
+        # failure would otherwise be consumed as a real (empty) answer.
+        if result.returncode != 0:
+            output += f"\n[exit {result.returncode}]"
+            if result.stderr:
+                output += f"\n[stderr]: {result.stderr}"
 
-        return output
+        return output, result.returncode
     finally:
         config_file.unlink(missing_ok=True)
 
@@ -203,15 +219,23 @@ def main() -> None:
         sys.exit(1)
 
     if args.agent == "gemini":
-        response = run_gemini_query(
+        response, returncode = run_gemini_query(
             args.query, args.ha_url, args.ha_token, args.branch, args.timeout
         )
     else:
-        response = run_claude_query(
+        response, returncode = run_claude_query(
             args.query, args.ha_url, args.ha_token, args.branch, args.timeout
         )
 
+    # Print the answer first either way — consumers read stdout — then exit
+    # non-zero so a failed query can't be scored as a verification result.
     print(response)
+    if returncode != 0:
+        print(
+            f"Error: {args.agent} CLI exited with code {returncode}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

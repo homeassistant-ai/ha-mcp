@@ -248,6 +248,14 @@ class TestConfigErrorHandling:
             check=False,
         )
 
+        # Liveness anchor: the run has to reach the credential check and fail
+        # there. Without this, a startup crash (import error, packaging break)
+        # never prints the warning either and passes the assertion below.
+        assert result.returncode != 0
+        assert "Configuration Error" in result.stderr
+        assert "HOMEASSISTANT_URL" in result.stderr
+        assert "HOMEASSISTANT_TOKEN" in result.stderr
+
         # Should NOT contain the old noisy warning
         combined_output = result.stdout + result.stderr
         assert "[ENV] WARNING: No environment file found" not in combined_output

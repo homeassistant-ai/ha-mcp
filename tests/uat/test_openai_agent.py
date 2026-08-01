@@ -22,14 +22,22 @@ class TestArgParsing:
     """Test CLI argument parsing."""
 
     def test_missing_required_args_exits(self):
-        """Script exits with error when required args are missing."""
+        """Script exits with argparse's usage error when required args are missing."""
         result = subprocess.run(
             [sys.executable, str(AGENT_SCRIPT)],
             capture_output=True,
             text=True,
             check=False,
         )
-        assert result.returncode != 0
+        # 2 is argparse's usage-error code; any other non-zero exit means the
+        # script got past parsing and died somewhere else.
+        assert result.returncode == 2, f"stderr: {result.stderr}"
+        # The usage line names every flag, so pin the missing-argument message
+        # itself — otherwise any argparse error satisfies the flag assertions.
+        assert "the following arguments are required" in result.stderr
+        assert "--prompt" in result.stderr
+        assert "--mcp-config" in result.stderr
+        assert "--base-url" in result.stderr
 
     def test_help_flag(self):
         """Script shows help text."""
