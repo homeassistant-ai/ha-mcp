@@ -869,8 +869,11 @@ async def _run_concurrent_bulk_operations(mcp_client, entities):
             return {"success": False, "error": str(e)}
 
     bulk_tasks = [
-        bulk_operation(entity_groups[0], "turn_on"),
-        bulk_operation(entity_groups[1] if len(entity_groups) > 1 else [], "turn_off"),
+        # "on"/"off" is the control-action vocabulary (valid_actions
+        # tables); "turn_on"/"turn_off" fails per-item at dispatch, which
+        # kept this helper exercising nothing while reporting success.
+        bulk_operation(entity_groups[0], "on"),
+        bulk_operation(entity_groups[1] if len(entity_groups) > 1 else [], "off"),
     ]
 
     bulk_results = await asyncio.gather(*bulk_tasks, return_exceptions=True)
@@ -885,6 +888,22 @@ async def _run_concurrent_bulk_operations(mcp_client, entities):
     assert not hard_failures, (
         f"concurrent bulk operations must not fail outside the tolerated "
         f"wrapper timeout: {hard_failures}"
+    )
+
+    # A wholesale failure is not the only quiet leg: an invalid action (or a
+    # vocabulary drift) fails PER ITEM inside an otherwise healthy-looking
+    # response, so pin the per-item counts on every batch that dispatched.
+    item_failures = {
+        i: r.get("failed_commands")
+        for i, r in enumerate(bulk_results)
+        if isinstance(r, dict)
+        and not r.get("timed_out")
+        and r.get("error") != "No entities"
+        and r.get("failed_commands")
+    }
+    assert not item_failures, (
+        f"concurrent bulk operations on seeded lights must not fail "
+        f"per-item: {item_failures} in {bulk_results}"
     )
 
     # A dispatched batch reports per-item counts and carries no top-level
