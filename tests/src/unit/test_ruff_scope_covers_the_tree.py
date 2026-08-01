@@ -11,14 +11,31 @@ Precedent for asserting on workflow contents: ``test_triage_prompt_budget.py``.
 from __future__ import annotations
 
 import shlex
-import subprocess
 from pathlib import Path
-
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PR_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr.yml"
 _RUFF_CHECK = "uv run ruff check "
+
+# Build/tooling directories that hold no source of ours. Anything starting with
+# a dot is skipped separately. ``worktree`` is the repo's own gitignored
+# worktree root (AGENTS.md) — it contains whole checkouts, so walking into it
+# would report the same directories over again.
+_NOT_SOURCE = frozenset(
+    {
+        "__pycache__",
+        "build",
+        "dist",
+        "eggs",
+        "htmlcov",
+        "local",
+        "node_modules",
+        "sdist",
+        "venv",
+        "wheels",
+        "worktree",
+    }
+)
 
 
 def _ruff_check_dirs() -> set[str]:
@@ -42,36 +59,54 @@ def _ruff_check_dirs() -> set[str]:
     }
 
 
-def _tracked_python_top_levels() -> set[str]:
-    """Top-level directories containing tracked ``*.py`` files."""
-    try:
-        result = subprocess.run(
-            ["git", "ls-files", "*.py"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except FileNotFoundError:
-        pytest.skip("git is not installed")
+def _holds_python(directory: Path) -> bool:
+    """True if the tree under ``directory`` contains a ``.py`` file.
 
-    tops = set()
-    for line in result.stdout.splitlines():
-        parts = line.split("/")
-        # A root-level .py file has no directory argument that could cover it.
-        assert len(parts) > 1, f"root-level Python file is unlintable in CI: {line}"
-        tops.add(parts[0])
-    assert tops, "git ls-files matched no Python at all — check the invocation"
+    Walked directly rather than via ``git ls-files`` so the test does not
+    depend on git being installed, or on the checkout passing git's
+    ownership check — CI containers run as a different UID than the checkout
+    owner, which is why ``pr.yml`` re-adds ``safe.directory`` for its own git
+    calls.
+    """
+    for path in directory.rglob("*.py"):
+        if any(
+            part in _NOT_SOURCE or part.startswith(".")
+            for part in path.relative_to(directory).parts
+        ):
+            continue
+        return True
+    return False
+
+
+def _top_levels_holding_python() -> set[str]:
+    tops = {
+        entry.name
+        for entry in REPO_ROOT.iterdir()
+        if entry.is_dir()
+        and not entry.name.startswith(".")
+        and entry.name not in _NOT_SOURCE
+        and _holds_python(entry)
+    }
+    assert tops, "Found no Python anywhere in the tree — check the walk"
     return tops
 
 
 def test_ruff_check_covers_every_directory_holding_python():
-    uncovered = _tracked_python_top_levels() - _ruff_check_dirs()
+    uncovered = _top_levels_holding_python() - _ruff_check_dirs()
     assert not uncovered, (
-        "These directories contain tracked Python but are not passed to ruff in "
-        f"the 'Run ruff check' step of pr.yml: {sorted(uncovered)}. Add them "
+        "These directories contain Python but are not passed to ruff in the "
+        f"'Run ruff check' step of pr.yml: {sorted(uncovered)}. Add them "
         "there — lefthook already lints them via **/*.py, so the gap shows up "
         "only in CI."
+    )
+
+
+def test_no_root_level_python_escapes_the_directory_list():
+    """A ``.py`` file at the repo root has no directory argument covering it."""
+    root_python = [p.name for p in REPO_ROOT.glob("*.py")]
+    assert not root_python, (
+        f"Root-level Python files are not linted by CI: {sorted(root_python)}. "
+        "Move them into a directory that pr.yml passes to ruff."
     )
 
 
