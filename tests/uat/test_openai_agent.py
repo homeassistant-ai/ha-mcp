@@ -33,12 +33,15 @@ class TestArgParsing:
         # script failed somewhere other than argument validation — before it
         # (an import or startup error) or after it.
         assert result.returncode == 2, f"stderr: {result.stderr}"
-        # The usage line names every flag, so pin the missing-argument message
-        # itself — otherwise any argparse error satisfies the flag assertions.
-        assert "the following arguments are required" in result.stderr
-        assert "--prompt" in result.stderr
-        assert "--mcp-config" in result.stderr
-        assert "--base-url" in result.stderr
+        # Match the whole missing-arguments list in one assertion. Substring
+        # checks per flag would not discriminate: the usage block above the
+        # error prints every flag either way, so dropping required=True from
+        # one of them still leaves its name in stderr — as "[--base-url URL]".
+        # argparse emits this line unwrapped, so an exact match is safe.
+        assert (
+            "the following arguments are required: "
+            "--prompt, --mcp-config, --base-url" in result.stderr
+        ), f"stderr: {result.stderr}"
 
     def test_help_flag(self):
         """Script shows help text."""
