@@ -30,23 +30,36 @@ def extract_error_message(data: dict[str, Any]) -> str:
     return str(error_obj)
 
 
+def _parse_error_result(result) -> dict[str, Any]:
+    """Parse an isError=true result, whose content is a serialized ToolError."""
+    if hasattr(result, "content") and result.content:
+        if hasattr(result.content[0], "text"):
+            error_text = result.content[0].text
+            try:
+                # ToolError content is JSON-serialized structured error
+                return json.loads(error_text)
+            except json.JSONDecodeError:
+                return {"success": False, "error": error_text}
+    return {"success": False, "error": "Unknown error (isError=true)"}
+
+
 def parse_mcp_result(result) -> dict[str, Any]:
     """Parse MCP tool result from FastMCP client response.
 
     Handles both success responses and error responses (isError=true).
     When isError is true, the error content is parsed as JSON if possible.
     """
+    # A plain dict is the fallback shape the tests' own _safe_tool_call
+    # wrappers return when a call times out or errors. It is already parsed,
+    # and running it through the content extraction below would replace both
+    # its discrimination markers and its real error text with the generic
+    # "No content in result" placeholder.
+    if isinstance(result, dict):
+        return result
+
     # Check if this is an error response (isError=true from ToolError)
     if hasattr(result, "isError") and result.isError:
-        if hasattr(result, "content") and result.content:
-            if hasattr(result.content[0], "text"):
-                error_text = result.content[0].text
-                try:
-                    # ToolError content is JSON-serialized structured error
-                    return json.loads(error_text)
-                except json.JSONDecodeError:
-                    return {"success": False, "error": error_text}
-        return {"success": False, "error": "Unknown error (isError=true)"}
+        return _parse_error_result(result)
 
     # Tools that return a FastMCP ``ToolResult`` with a non-text content block
     # (e.g. ``include_screenshot`` / ``return_screenshot`` attach an image)

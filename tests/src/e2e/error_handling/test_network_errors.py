@@ -20,6 +20,16 @@ from ..utilities.assertions import (
 logger = logging.getLogger(__name__)
 
 
+def _error_text_from_result(result: Any) -> str:
+    """Best-effort error text from a tool result flagged with isError."""
+    content = getattr(result, "content", None)
+    if content:
+        text = getattr(content[0], "text", None)
+        if text:
+            return str(text)
+    return str(result)
+
+
 def _get_error_str(data: dict, max_len: int = 50) -> str:
     """Extract error string from response data, handling both string and dict errors."""
     error = data.get("error", "")
@@ -38,9 +48,21 @@ class TestErrorHandling:
     ):
         """Safe wrapper for tool calls with timeout protection."""
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 mcp_client.call_tool(tool_name, params), timeout=timeout
             )
+            # A tool failure reaches callers two ways depending on the
+            # transport: as a raised ToolError (the except below) or as a
+            # returned result carrying isError. Fold the returned form into
+            # the same marked dict so marker-based discrimination is
+            # transport-independent.
+            if getattr(result, "isError", False):
+                return {
+                    "success": False,
+                    "tool_error": True,
+                    "error": _error_text_from_result(result),
+                }
+            return result
         except TimeoutError:
             logger.warning(f"Tool call {tool_name} timed out after {timeout}s")
             # "timed_out" lets callers tolerate the wrapper-timeout leg on
@@ -55,6 +77,52 @@ class TestErrorHandling:
         except Exception as e:
             logger.warning(f"Tool call {tool_name} failed: {e}")
             return {"success": False, "tool_error": True, "error": str(e)}
+
+    async def _search_lights_or_tolerate_timeout(
+        self, mcp_client, limit: int
+    ) -> list[dict[str, Any]] | None:
+        """Search for lights, tolerating only the wrapper-timeout leg.
+
+        Both _safe_tool_call fallbacks parse as empty content, so a failed
+        search reads exactly like "this instance has no lights" and silently
+        degrades every contract downstream of it. The markers therefore have
+        to be read before the parse: the wrapper timeout is tolerated (None
+        comes back, so the caller can warn and drop just that leg), a tool
+        error is a regression.
+
+        An empty result set is a regression too, not an empty instance: the
+        e2e environments seed the demo platform's six lights (bed_light,
+        ceiling_lights, kitchen_lights, office_rgbw_lights,
+        living_room_rgbww_lights, entrance_color_white_lights) and conftest's
+        boot wait polls light.bed_light into the state machine before any
+        test runs, so a successful light search always has entities.
+
+        Returns the raw entity dicts, or None on the tolerated timeout.
+        """
+        search_result = await self._safe_tool_call(
+            mcp_client,
+            "ha_search",
+            {"query": "light", "domain_filter": "light", "limit": limit},
+        )
+
+        if isinstance(search_result, dict) and search_result.get("timed_out"):
+            return None
+
+        assert not (
+            isinstance(search_result, dict) and search_result.get("success") is False
+        ), f"ha_search with valid params must not error: {search_result}"
+
+        search_data = parse_mcp_result(search_result)
+        assert search_data.get("success"), (
+            f"ha_search with valid params must succeed: {search_data}"
+        )
+        entities = search_data.get("entities") or []
+        assert entities, (
+            f"the seeded demo lights must be searchable, so an empty result "
+            f"is a search regression rather than an empty instance: "
+            f"{search_data}"
+        )
+        return entities
 
     async def test_invalid_entity_id_handling(self, mcp_client):
         """
@@ -148,43 +216,30 @@ class TestErrorHandling:
         # 3. MISSING REQUIRED PARAMETERS: Try to call service without required params
         logger.info("📋 Testing missing required parameters...")
 
-        # Try to call light.turn_on without entity_id (if lights exist).
-        # A failed search is not "no lights": parse_mcp_result renders both
-        # _safe_tool_call fallbacks as empty content, so the markers must be
-        # read before the parse. Only the wrapper timeout is tolerated.
-        search_result = await self._safe_tool_call(
-            mcp_client,
-            "ha_search",
-            {"query": "light", "domain_filter": "light", "limit": 1},
-        )
-
-        if isinstance(search_result, dict) and search_result.get("timed_out"):
+        # Try to call light.turn_on without entity_id. The probe only means
+        # something on an instance that has lights, and the helper is what
+        # keeps "no lights" from standing in for a failed search.
+        if await self._search_lights_or_tolerate_timeout(mcp_client, 1) is None:
             logger.warning(
                 "  entity search timed out; skipping the missing-params probe"
             )
         else:
-            assert not (
-                isinstance(search_result, dict)
-                and search_result.get("success") is False
-            ), f"ha_search with valid params must not error: {search_result}"
-            search_data = parse_mcp_result(search_result)
-            if search_data.get("success") and search_data.get("entities"):
-                # Call service without entity_id to test parameter validation
-                missing_params_result = await self._safe_tool_call(
-                    mcp_client,
-                    "ha_call_service",
-                    {
-                        "domain": "light",
-                        "service": "turn_on",
-                        # Missing entity_id
-                    },
-                )
+            # Call service without entity_id to test parameter validation
+            missing_params_result = await self._safe_tool_call(
+                mcp_client,
+                "ha_call_service",
+                {
+                    "domain": "light",
+                    "service": "turn_on",
+                    # Missing entity_id
+                },
+            )
 
-                missing_params_data = parse_mcp_result(missing_params_result)
-                # This might succeed (affects all lights) or fail depending on HA config
-                logger.info(
-                    f"  Service call without entity_id: {'succeeded' if missing_params_data.get('success') else 'failed'}"
-                )
+            missing_params_data = parse_mcp_result(missing_params_result)
+            # This might succeed (affects all lights) or fail depending on HA config
+            logger.info(
+                f"  Service call without entity_id: {'succeeded' if missing_params_data.get('success') else 'failed'}"
+            )
 
         logger.info("✅ Service call error handling test completed")
 
@@ -321,12 +376,17 @@ class TestErrorHandling:
     ) -> None:
         """Assert live status for the ids a bulk batch just dispatched.
 
-        Fabricated entities never appear in this list (they are rejected
-        before dispatch — the not_found VALUE contract for unknown ids is
-        pinned by test_operation_status.py's test_list_operation_ids_invalid),
-        so every id present must resolve to a live per-item entry whose status
-        is one a dispatched operation can actually reach — never not_found,
-        which would mean the batch lost track of an operation it just created.
+        Fabricated entities never appear in this list because the batch keeps
+        the validate_first=True default: control_device_smart validates the
+        entity before store_pending_operation registers an id, so a rejected
+        entity never gets one. Every id present therefore has to resolve to a
+        live per-item entry whose status is one a dispatched operation can
+        actually reach — never not_found, which would mean the batch lost
+        track of an operation it just created.
+
+        The not_found VALUE contract for ids that were never dispatched is
+        pinned separately by test_operation_status.py's
+        test_list_operation_ids_invalid.
         """
         # Keep the poll window below _safe_tool_call's 10s wrapper timeout so
         # a still-pending operation returns a pending entry instead of
@@ -349,12 +409,30 @@ class TestErrorHandling:
         ), f"bulk status must not fail on ids the batch just created: {status_result}"
         status_data = parse_mcp_result(status_result)
         detailed = status_data.get("detailed_results", [])
+        # Count first: the id-set comparison below collapses duplicate and
+        # keyless entries, so a batch that dropped or doubled an entry would
+        # still satisfy it.
+        assert len(detailed) == len(operation_ids), (
+            f"bulk status must return one entry per dispatched id, got "
+            f"{len(detailed)} for {len(operation_ids)} ids: {status_data}"
+        )
         by_status = {
             entry.get("operation_id"): entry.get("status") for entry in detailed
         }
         assert set(by_status) == set(operation_ids), (
             f"bulk status must cover exactly the dispatched ids: {status_data}"
         )
+        # A failed entry carries the structured payload of the single-op
+        # error it was folded back from, and the only code that maps to
+        # "failed" on purpose is SERVICE_CALL_FAILED — anything else lands
+        # there through the unknown-code fallback and would hide what
+        # actually went wrong.
+        for entry in detailed:
+            if entry.get("status") == "failed":
+                assert entry.get("error", {}).get("code") == "SERVICE_CALL_FAILED", (
+                    f"a failed operation must report SERVICE_CALL_FAILED, not "
+                    f"an unmapped code folded into the same status: {entry}"
+                )
         stray = {
             op_id: status
             for op_id, status in by_status.items()
@@ -393,117 +471,95 @@ class TestErrorHandling:
         # 2. INVALID ENTITIES: Mix of valid and invalid entity IDs
         logger.info("❌ Testing mixed valid/invalid entities...")
 
-        # Get one valid entity. Both _safe_tool_call fallbacks parse as
-        # empty content, which reads exactly like "no lights on this
-        # instance" — and an empty valid_entities silently degrades every
+        # Get one valid entity. An empty valid_entities degrades every
         # contract below (nothing dispatches, so no operation ids and no
-        # status section). Discriminate before the parse: the wrapper
-        # timeout is tolerated, a tool error is a regression.
-        search_result = await self._safe_tool_call(
-            mcp_client,
-            "ha_search",
-            {"query": "light", "domain_filter": "light", "limit": 1},
-        )
-
-        valid_entities = []
-        if isinstance(search_result, dict) and search_result.get("timed_out"):
+        # status section), which is why the helper only lets the tolerated
+        # search timeout produce one.
+        found = await self._search_lights_or_tolerate_timeout(mcp_client, 1)
+        if found is None:
             logger.warning(
                 "  entity search timed out; proceeding with fabricated entities only"
             )
+            valid_entities: list[str] = []
         else:
-            assert not (
-                isinstance(search_result, dict)
-                and search_result.get("success") is False
-            ), f"ha_search with valid params must not error: {search_result}"
-            search_data = parse_mcp_result(search_result)
-            if search_data.get("success") and search_data.get("entities"):
-                valid_entities = [search_data["entities"][0]["entity_id"]]
+            valid_entities = [found[0]["entity_id"]]
 
+        # Always non-empty: the two fabricated ids are unconditional.
         mixed_entities = valid_entities + ["nonexistent.entity", "invalid.test"]
 
-        if mixed_entities:
-            mixed_bulk_result = await self._safe_tool_call(
-                mcp_client,
-                "ha_bulk_control",
-                {
-                    "operations": [
-                        # "on" is the control-action vocabulary
-                        # (valid_actions tables); "turn_on" is rejected
-                        # upfront for every entity, which kept this whole
-                        # block dead.
-                        {"entity_id": entity_id, "action": "on"}
-                        for entity_id in mixed_entities
-                    ]
-                },
+        mixed_bulk_result = await self._safe_tool_call(
+            mcp_client,
+            "ha_bulk_control",
+            {
+                "operations": [
+                    # "on" is the control-action vocabulary
+                    # (valid_actions tables); "turn_on" is rejected
+                    # upfront for every entity, which kept this whole
+                    # block dead.
+                    {"entity_id": entity_id, "action": "on"}
+                    for entity_id in mixed_entities
+                ]
+            },
+        )
+
+        # A wholesale batch failure is the exact outcome this block
+        # exists to rule out, so it must FAIL the test, not skip it:
+        # an aborted batch arrives as a ToolError (folded into a
+        # plain dict by _safe_tool_call), never as a response with
+        # per-item entries. Only the wrapper-timeout leg is tolerated
+        # (flaky lanes) — the "timed_out" marker is set before
+        # parse_mcp_result collapses both legs into the same shape.
+        if isinstance(mixed_bulk_result, dict) and mixed_bulk_result.get("timed_out"):
+            logger.warning("  bulk call timed out; tolerated on flaky lanes")
+        else:
+            assert not (
+                isinstance(mixed_bulk_result, dict)
+                and mixed_bulk_result.get("success") is False
+            ), (
+                f"bulk_device_control must not abort wholesale on a "
+                f"batch containing invalid entities: {mixed_bulk_result}"
+            )
+            mixed_bulk_data = parse_mcp_result(mixed_bulk_result)
+            # The BATCH SHAPE is what routes this call to the LEGACY
+            # dispatch path, independent of whether a valid entity is in
+            # it: _build_service_call keeps each entity's own domain, so
+            # the fabricated IDs resolve to unknown services
+            # (nonexistent.turn_on), the component runs all guards before
+            # any dispatch and the whole frame raises, and
+            # _bulk_via_component treats that as a fallback signal — so
+            # legacy serves the batch and any dispatched entity gets a
+            # polling handle.
+            #
+            # Value-check the per-item contract on the response: the
+            # valid entities succeed and both fabricated entities fail
+            # as structured per-item entries (a missing entity becomes
+            # ENTITY_NOT_FOUND inside the batch) instead of aborting it.
+            operation_ids = mixed_bulk_data.get("operation_ids", [])
+            assert mixed_bulk_data.get("successful_commands") == len(valid_entities), (
+                f"the valid entities must succeed: {mixed_bulk_data}"
+            )
+            assert mixed_bulk_data.get("failed_commands") == 2, (
+                f"both fabricated entities must fail as per-item entries "
+                f"(not abort the batch): {mixed_bulk_data}"
+            )
+            if valid_entities:
+                assert len(operation_ids) == len(valid_entities), (
+                    f"the status contract below must be consciously updated, "
+                    f"not silently skipped: {mixed_bulk_data}"
+                )
+            logger.info(
+                f"  ✅ Mixed entities handled: "
+                f"{mixed_bulk_data.get('successful_commands')} succeeded, "
+                f"{mixed_bulk_data.get('failed_commands')} failed, "
+                f"{len(operation_ids)} operation ids"
             )
 
-            # A wholesale batch failure is the exact outcome this block
-            # exists to rule out, so it must FAIL the test, not skip it:
-            # an aborted batch arrives as a ToolError (folded into a
-            # plain dict by _safe_tool_call), never as a response with
-            # per-item entries. Only the wrapper-timeout leg is tolerated
-            # (flaky lanes) — the "timed_out" marker is set before
-            # parse_mcp_result collapses both legs into the same shape.
-            if isinstance(mixed_bulk_result, dict) and mixed_bulk_result.get(
-                "timed_out"
-            ):
-                logger.warning("  bulk call timed out; tolerated on flaky lanes")
-            else:
-                assert not (
-                    isinstance(mixed_bulk_result, dict)
-                    and mixed_bulk_result.get("success") is False
-                ), (
-                    f"bulk_device_control must not abort wholesale on a "
-                    f"batch containing invalid entities: {mixed_bulk_result}"
-                )
-                mixed_bulk_data = parse_mcp_result(mixed_bulk_result)
-                # This batch always exercises the LEGACY dispatch path:
-                # _build_service_call keeps each entity's own domain, so the
-                # fabricated IDs resolve to unknown services
-                # (nonexistent.turn_on), the component runs all guards
-                # before any dispatch and the whole frame raises, and
-                # _bulk_via_component treats that as a fallback signal —
-                # so operation_ids carries the real light and the status
-                # block below executes.
-                #
-                # Value-check the per-item contract on the response: the
-                # valid entities succeed and both fabricated entities fail
-                # as structured per-item entries (a missing entity becomes
-                # ENTITY_NOT_FOUND inside the batch) instead of aborting it.
-                operation_ids = mixed_bulk_data.get("operation_ids", [])
-                assert mixed_bulk_data.get("successful_commands") == len(
-                    valid_entities
-                ), f"the valid entities must succeed: {mixed_bulk_data}"
-                assert mixed_bulk_data.get("failed_commands") == 2, (
-                    f"both fabricated entities must fail as per-item entries "
-                    f"(not abort the batch): {mixed_bulk_data}"
-                )
-                if valid_entities:
-                    assert operation_ids, (
-                        f"a batch that dispatched a valid entity takes the "
-                        f"legacy tier and must return polling handles; an "
-                        f"empty list means this batch became "
-                        f"component-servable (that tier builds its response "
-                        f"with no operation ids by construction) and the "
-                        f"status contract below must be consciously updated "
-                        f"rather than silently skipped: {mixed_bulk_data}"
-                    )
-                logger.info(
-                    f"  ✅ Mixed entities handled: "
-                    f"{mixed_bulk_data.get('successful_commands')} succeeded, "
-                    f"{mixed_bulk_data.get('failed_commands')} failed, "
-                    f"{len(operation_ids)} operation ids"
-                )
-
-                # Legacy tier only: dispatched operations get polling
-                # handles — the assert above pins that routing claim, so
-                # this gate covers only the tolerated search-timeout leg,
-                # where no valid entity dispatched and the list is
-                # legitimately empty.
-                if operation_ids:
-                    await self._assert_dispatched_status_contract(
-                        mcp_client, operation_ids
-                    )
+            # Legacy tier only: dispatched operations get polling
+            # handles — the assert above pins that count, so this gate
+            # covers only the tolerated search-timeout leg, where no
+            # valid entity dispatched and the list is legitimately empty.
+            if operation_ids:
+                await self._assert_dispatched_status_contract(mcp_client, operation_ids)
 
         # 3. INVALID ACTION: Bulk operation with invalid action
         logger.info("🎬 Testing invalid action...")
@@ -671,29 +727,14 @@ class TestErrorHandling:
 
         logger.info("🚀 Testing concurrent operation handling...")
 
-        # Get some test entities. The early return below no-ops the whole
-        # test, so a failed search must not reach it disguised as an empty
-        # result set: both _safe_tool_call fallbacks parse as empty content.
-        # Tolerate the wrapper timeout, fail hard on a tool error.
-        search_result = await self._safe_tool_call(
-            mcp_client,
-            "ha_search",
-            {"query": "light", "domain_filter": "light", "limit": 3},
-        )
-
-        if isinstance(search_result, dict) and search_result.get("timed_out"):
+        # Get some test entities. An early return here no-ops the whole
+        # test, so only the tolerated search timeout is allowed to take it.
+        found = await self._search_lights_or_tolerate_timeout(mcp_client, 3)
+        if found is None:
             logger.warning("  entity search timed out; tolerated on flaky lanes")
             return
-        assert not (
-            isinstance(search_result, dict) and search_result.get("success") is False
-        ), f"ha_search with valid params must not error: {search_result}"
 
-        search_data = parse_mcp_result(search_result)
-        if not search_data.get("success") or not search_data.get("entities"):
-            logger.warning("⚠️ No entities found for concurrent operation test")
-            return
-
-        entities = search_data["entities"][:3]
+        entities = found[:3]
 
         await _run_concurrent_individual_operations(mcp_client, entities)
 
@@ -711,15 +752,48 @@ async def _safe_tool_call_standalone(
     if params is None:
         params = {}
     try:
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             mcp_client.call_tool(tool_name, params), timeout=timeout
         )
+        # Marker parity with the method twin: a returned isError result and
+        # a raised ToolError are the same failure over different transports,
+        # and callers discriminate on the markers, not the shape.
+        if getattr(result, "isError", False):
+            return {
+                "success": False,
+                "tool_error": True,
+                "error": _error_text_from_result(result),
+            }
+        return result
     except TimeoutError:
         logger.warning(f"Tool call {tool_name} timed out after {timeout}s")
-        return {"success": False, "error": f"Operation timed out after {timeout}s"}
+        return {
+            "success": False,
+            "timed_out": True,
+            "error": f"Operation timed out after {timeout}s",
+        }
     except Exception as e:
         logger.warning(f"Tool call {tool_name} failed: {e}")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "tool_error": True, "error": str(e)}
+
+
+def _hard_failures(results: list[Any]) -> list[Any]:
+    """Pick the concurrent results that failed for an untolerated reason.
+
+    A raised exception always counts. Among returned dicts only an explicit
+    ``success: False`` does: the bulk response carries no top-level
+    ``success`` key at all, so a plain truthiness test would flag healthy
+    batches. The wrapper timeout stays the one tolerated failure class on
+    flaky lanes, matching the sequential call sites above.
+    """
+    return [
+        r
+        for r in results
+        if isinstance(r, Exception)
+        or (
+            isinstance(r, dict) and r.get("success") is False and not r.get("timed_out")
+        )
+    ]
 
 
 async def _run_concurrent_individual_operations(mcp_client, entities):
@@ -748,6 +822,12 @@ async def _run_concurrent_individual_operations(mcp_client, entities):
     # Execute concurrent operations
     concurrent_tasks = [call_service_for_entity(entity) for entity in entities]
     concurrent_results = await asyncio.gather(*concurrent_tasks, return_exceptions=True)
+
+    hard_failures = _hard_failures(concurrent_results)
+    assert not hard_failures, (
+        f"concurrent service calls must not fail outside the tolerated "
+        f"wrapper timeout: {hard_failures}"
+    )
 
     successful_ops = sum(
         1
@@ -795,10 +875,24 @@ async def _run_concurrent_bulk_operations(mcp_client, entities):
 
     bulk_results = await asyncio.gather(*bulk_tasks, return_exceptions=True)
 
+    hard_failures = [
+        r
+        for r in _hard_failures(bulk_results)
+        # An empty entity group is a fixture shortfall, not a tool failure:
+        # bulk_operation returns this sentinel without calling anything.
+        if not (isinstance(r, dict) and r.get("error") == "No entities")
+    ]
+    assert not hard_failures, (
+        f"concurrent bulk operations must not fail outside the tolerated "
+        f"wrapper timeout: {hard_failures}"
+    )
+
+    # A dispatched batch reports per-item counts and carries no top-level
+    # success key, so "succeeded" here means "came back without an explicit
+    # failure" — counting result.get("success") would report 0 of 2 on a
+    # perfectly healthy run.
     successful_bulk = sum(
-        1
-        for result in bulk_results
-        if isinstance(result, dict) and result.get("success")
+        1 for r in bulk_results if isinstance(r, dict) and r.get("success") is not False
     )
     logger.info(
         f"  ✅ {successful_bulk}/{len(bulk_tasks)} concurrent bulk operations succeeded"
@@ -838,6 +932,12 @@ async def _run_concurrent_helper_creation(mcp_client, cleanup_tracker):
     ]
 
     helper_results = await asyncio.gather(*helper_tasks, return_exceptions=True)
+
+    hard_failures = _hard_failures(helper_results)
+    assert not hard_failures, (
+        f"concurrent helper creations must not fail outside the tolerated "
+        f"wrapper timeout: {hard_failures}"
+    )
 
     successful_helpers = sum(
         1
