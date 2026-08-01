@@ -115,6 +115,25 @@ def test_enable_strict_mandatory_bps_env_var_coercion_rejected(env_value):
         )
 
 
+def test_settings_ignores_an_env_file_in_the_working_directory(tmp_path, monkeypatch):
+    """The project ``.env`` is the only one read — never the cwd's.
+
+    ``model_config``'s ``env_file`` is a second dotenv read, independent of the
+    ``load_dotenv`` at import. Left relative it resolves against the process's
+    working directory, so launching the server from a directory holding an
+    unrelated ``.env`` silently supplied values for any matching field name
+    (``timeout``, ``debug``, ``log_level`` … are common in other projects'
+    files), and ``HAMCP_ENV_FILE`` could not override it.
+    """
+    (tmp_path / ".env").write_text("HOMEASSISTANT_URL=http://from-cwd:8123\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("HOMEASSISTANT_URL", raising=False)
+
+    from ha_mcp.config import Settings
+
+    assert Settings().homeassistant_url != "http://from-cwd:8123"
+
+
 def test_read_only_mode_disabled_by_default():
     """read_only_mode defaults to False (opt-in safety toggle, #1569)."""
     from ha_mcp.config import Settings
