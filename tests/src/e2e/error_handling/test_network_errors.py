@@ -148,31 +148,43 @@ class TestErrorHandling:
         # 3. MISSING REQUIRED PARAMETERS: Try to call service without required params
         logger.info("📋 Testing missing required parameters...")
 
-        # Try to call light.turn_on without entity_id (if lights exist)
+        # Try to call light.turn_on without entity_id (if lights exist).
+        # A failed search is not "no lights": parse_mcp_result renders both
+        # _safe_tool_call fallbacks as empty content, so the markers must be
+        # read before the parse. Only the wrapper timeout is tolerated.
         search_result = await self._safe_tool_call(
             mcp_client,
             "ha_search",
             {"query": "light", "domain_filter": "light", "limit": 1},
         )
 
-        search_data = parse_mcp_result(search_result)
-        if search_data.get("success") and search_data.get("entities"):
-            # Call service without entity_id to test parameter validation
-            missing_params_result = await self._safe_tool_call(
-                mcp_client,
-                "ha_call_service",
-                {
-                    "domain": "light",
-                    "service": "turn_on",
-                    # Missing entity_id
-                },
+        if isinstance(search_result, dict) and search_result.get("timed_out"):
+            logger.warning(
+                "  entity search timed out; skipping the missing-params probe"
             )
+        else:
+            assert not (
+                isinstance(search_result, dict)
+                and search_result.get("success") is False
+            ), f"ha_search with valid params must not error: {search_result}"
+            search_data = parse_mcp_result(search_result)
+            if search_data.get("success") and search_data.get("entities"):
+                # Call service without entity_id to test parameter validation
+                missing_params_result = await self._safe_tool_call(
+                    mcp_client,
+                    "ha_call_service",
+                    {
+                        "domain": "light",
+                        "service": "turn_on",
+                        # Missing entity_id
+                    },
+                )
 
-            missing_params_data = parse_mcp_result(missing_params_result)
-            # This might succeed (affects all lights) or fail depending on HA config
-            logger.info(
-                f"  Service call without entity_id: {'succeeded' if missing_params_data.get('success') else 'failed'}"
-            )
+                missing_params_data = parse_mcp_result(missing_params_result)
+                # This might succeed (affects all lights) or fail depending on HA config
+                logger.info(
+                    f"  Service call without entity_id: {'succeeded' if missing_params_data.get('success') else 'failed'}"
+                )
 
         logger.info("✅ Service call error handling test completed")
 
@@ -304,6 +316,56 @@ class TestErrorHandling:
 
         logger.info("✅ Template error conditions test completed")
 
+    async def _assert_dispatched_status_contract(
+        self, mcp_client, operation_ids: list[str]
+    ) -> None:
+        """Assert live status for the ids a bulk batch just dispatched.
+
+        Fabricated entities never appear in this list (they are rejected
+        before dispatch — the not_found VALUE contract for unknown ids is
+        pinned by test_operation_status.py's test_list_operation_ids_invalid),
+        so every id present must resolve to a live per-item entry whose status
+        is one a dispatched operation can actually reach — never not_found,
+        which would mean the batch lost track of an operation it just created.
+        """
+        # Keep the poll window below _safe_tool_call's 10s wrapper timeout so
+        # a still-pending operation returns a pending entry instead of
+        # tripping the wrapper.
+        status_result = await self._safe_tool_call(
+            mcp_client,
+            "ha_get_operation_status",
+            {"operation_id": operation_ids, "timeout_seconds": 5},
+        )
+
+        # Same discrimination as the bulk call: tolerate only the wrapper
+        # timeout; a failed status call on ids the batch just created is a
+        # regression, not a skip.
+        if isinstance(status_result, dict) and status_result.get("timed_out"):
+            logger.warning("  status call timed out; tolerated on flaky lanes")
+            return
+
+        assert not (
+            isinstance(status_result, dict) and status_result.get("success") is False
+        ), f"bulk status must not fail on ids the batch just created: {status_result}"
+        status_data = parse_mcp_result(status_result)
+        detailed = status_data.get("detailed_results", [])
+        by_status = {
+            entry.get("operation_id"): entry.get("status") for entry in detailed
+        }
+        assert set(by_status) == set(operation_ids), (
+            f"bulk status must cover exactly the dispatched ids: {status_data}"
+        )
+        stray = {
+            op_id: status
+            for op_id, status in by_status.items()
+            if status not in ("completed", "pending", "timeout", "failed")
+        }
+        assert not stray, (
+            f"dispatched operations reported an impossible status "
+            f"(batch lost track of them): {stray}"
+        )
+        logger.info(f"    dispatched statuses: {by_status}")
+
     async def test_bulk_operation_error_scenarios(self, mcp_client):
         """
         Test: Bulk operation error scenarios
@@ -331,17 +393,31 @@ class TestErrorHandling:
         # 2. INVALID ENTITIES: Mix of valid and invalid entity IDs
         logger.info("❌ Testing mixed valid/invalid entities...")
 
-        # Get one valid entity
+        # Get one valid entity. Both _safe_tool_call fallbacks parse as
+        # empty content, which reads exactly like "no lights on this
+        # instance" — and an empty valid_entities silently degrades every
+        # contract below (nothing dispatches, so no operation ids and no
+        # status section). Discriminate before the parse: the wrapper
+        # timeout is tolerated, a tool error is a regression.
         search_result = await self._safe_tool_call(
             mcp_client,
             "ha_search",
             {"query": "light", "domain_filter": "light", "limit": 1},
         )
 
-        search_data = parse_mcp_result(search_result)
         valid_entities = []
-        if search_data.get("success") and search_data.get("entities"):
-            valid_entities = [search_data["entities"][0]["entity_id"]]
+        if isinstance(search_result, dict) and search_result.get("timed_out"):
+            logger.warning(
+                "  entity search timed out; proceeding with fabricated entities only"
+            )
+        else:
+            assert not (
+                isinstance(search_result, dict)
+                and search_result.get("success") is False
+            ), f"ha_search with valid params must not error: {search_result}"
+            search_data = parse_mcp_result(search_result)
+            if search_data.get("success") and search_data.get("entities"):
+                valid_entities = [search_data["entities"][0]["entity_id"]]
 
         mixed_entities = valid_entities + ["nonexistent.entity", "invalid.test"]
 
@@ -402,6 +478,16 @@ class TestErrorHandling:
                     f"both fabricated entities must fail as per-item entries "
                     f"(not abort the batch): {mixed_bulk_data}"
                 )
+                if valid_entities:
+                    assert operation_ids, (
+                        f"a batch that dispatched a valid entity takes the "
+                        f"legacy tier and must return polling handles; an "
+                        f"empty list means this batch became "
+                        f"component-servable (that tier builds its response "
+                        f"with no operation ids by construction) and the "
+                        f"status contract below must be consciously updated "
+                        f"rather than silently skipped: {mixed_bulk_data}"
+                    )
                 logger.info(
                     f"  ✅ Mixed entities handled: "
                     f"{mixed_bulk_data.get('successful_commands')} succeeded, "
@@ -410,62 +496,14 @@ class TestErrorHandling:
                 )
 
                 # Legacy tier only: dispatched operations get polling
-                # handles. Fabricated entities never appear here (they are
-                # rejected before dispatch — the not_found VALUE contract
-                # for unknown ids is pinned by test_operation_status.py's
-                # test_list_operation_ids_invalid), so every id present
-                # must resolve to a live per-item entry whose status is one
-                # a dispatched operation can actually reach — never
-                # not_found, which would mean the batch lost track of an
-                # operation it just created.
+                # handles — the assert above pins that routing claim, so
+                # this gate covers only the tolerated search-timeout leg,
+                # where no valid entity dispatched and the list is
+                # legitimately empty.
                 if operation_ids:
-                    # Keep the poll window below _safe_tool_call's 10s
-                    # wrapper timeout so a still-pending operation returns
-                    # a pending entry instead of tripping the wrapper.
-                    status_result = await self._safe_tool_call(
-                        mcp_client,
-                        "ha_get_operation_status",
-                        {"operation_id": operation_ids, "timeout_seconds": 5},
+                    await self._assert_dispatched_status_contract(
+                        mcp_client, operation_ids
                     )
-
-                    # Same discrimination as the bulk call: tolerate only
-                    # the wrapper timeout; a failed status call on ids the
-                    # batch just created is a regression, not a skip.
-                    if isinstance(status_result, dict) and status_result.get(
-                        "timed_out"
-                    ):
-                        logger.warning(
-                            "  status call timed out; tolerated on flaky lanes"
-                        )
-                    else:
-                        assert not (
-                            isinstance(status_result, dict)
-                            and status_result.get("success") is False
-                        ), (
-                            f"bulk status must not fail on ids the batch "
-                            f"just created: {status_result}"
-                        )
-                        status_data = parse_mcp_result(status_result)
-                        detailed = status_data.get("detailed_results", [])
-                        by_status = {
-                            entry.get("operation_id"): entry.get("status")
-                            for entry in detailed
-                        }
-                        assert set(by_status) == set(operation_ids), (
-                            f"bulk status must cover exactly the dispatched "
-                            f"ids: {status_data}"
-                        )
-                        stray = {
-                            op_id: status
-                            for op_id, status in by_status.items()
-                            if status
-                            not in ("completed", "pending", "timeout", "failed")
-                        }
-                        assert not stray, (
-                            f"dispatched operations reported an impossible "
-                            f"status (batch lost track of them): {stray}"
-                        )
-                        logger.info(f"    dispatched statuses: {by_status}")
 
         # 3. INVALID ACTION: Bulk operation with invalid action
         logger.info("🎬 Testing invalid action...")
@@ -633,12 +671,22 @@ class TestErrorHandling:
 
         logger.info("🚀 Testing concurrent operation handling...")
 
-        # Get some test entities
+        # Get some test entities. The early return below no-ops the whole
+        # test, so a failed search must not reach it disguised as an empty
+        # result set: both _safe_tool_call fallbacks parse as empty content.
+        # Tolerate the wrapper timeout, fail hard on a tool error.
         search_result = await self._safe_tool_call(
             mcp_client,
             "ha_search",
             {"query": "light", "domain_filter": "light", "limit": 3},
         )
+
+        if isinstance(search_result, dict) and search_result.get("timed_out"):
+            logger.warning("  entity search timed out; tolerated on flaky lanes")
+            return
+        assert not (
+            isinstance(search_result, dict) and search_result.get("success") is False
+        ), f"ha_search with valid params must not error: {search_result}"
 
         search_data = parse_mcp_result(search_result)
         if not search_data.get("success") or not search_data.get("entities"):
