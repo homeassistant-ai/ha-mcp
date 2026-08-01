@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 
 def parse_mcp_result(result) -> dict[str, Any]:
     """Parse MCP result from tool response."""
+    # Same passthrough contract as the shared utilities.assertions helper:
+    # an already-parsed dict comes back unchanged.
+    if isinstance(result, dict):
+        return result
     try:
         if hasattr(result, "content") and result.content:
             response_text = str(result.content[0].text)

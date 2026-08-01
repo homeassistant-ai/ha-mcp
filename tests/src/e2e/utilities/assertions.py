@@ -31,7 +31,7 @@ def extract_error_message(data: dict[str, Any]) -> str:
 
 
 def _parse_error_result(result) -> dict[str, Any]:
-    """Parse an isError=true result, whose content is a serialized ToolError."""
+    """Parse an error-flagged result, whose content is a serialized ToolError."""
     if hasattr(result, "content") and result.content:
         if hasattr(result.content[0], "text"):
             error_text = result.content[0].text
@@ -46,19 +46,24 @@ def _parse_error_result(result) -> dict[str, Any]:
 def parse_mcp_result(result) -> dict[str, Any]:
     """Parse MCP tool result from FastMCP client response.
 
-    Handles both success responses and error responses (isError=true).
-    When isError is true, the error content is parsed as JSON if possible.
+    Handles both success responses and error-flagged responses. When the
+    error flag is set, the error content is parsed as JSON if possible.
     """
-    # A plain dict is the fallback shape the tests' own _safe_tool_call
-    # wrappers return when a call times out or errors. It is already parsed,
-    # and running it through the content extraction below would replace both
-    # its discrimination markers and its real error text with the generic
-    # "No content in result" placeholder.
+    # General contract of this shared helper: an already-parsed dict comes
+    # back unchanged. Several hundred e2e call sites feed results through
+    # here, and not all of them come from the client — the tests' own
+    # _safe_tool_call wrappers return a plain marked dict when a call times
+    # out or errors. Running such a dict through the content extraction
+    # below would replace both its discrimination markers and its real
+    # error text with the generic "No content in result" placeholder.
     if isinstance(result, dict):
         return result
 
-    # Check if this is an error response (isError=true from ToolError)
-    if hasattr(result, "isError") and result.isError:
+    # Check if this is an error response (from ToolError). fastmcp's
+    # CallToolResult spells the flag ``is_error``; the raw MCP CallToolResult
+    # spells it ``isError``. Accept either so the gate holds whichever type
+    # reaches this helper.
+    if getattr(result, "is_error", False) or getattr(result, "isError", False):
         return _parse_error_result(result)
 
     # Tools that return a FastMCP ``ToolResult`` with a non-text content block
