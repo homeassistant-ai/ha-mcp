@@ -85,6 +85,24 @@ def test_failed_query_appends_stderr_when_present(get_func):
     assert "boom" in text
 
 
+@pytest.mark.parametrize("get_func", QUERY_FUNCS)
+def test_timed_out_query_is_annotated_and_keeps_its_partial_output(get_func):
+    """A hung CLI is a failed query, not a missing one.
+
+    Without this the exception escapes ``main()`` as a traceback: the answer
+    is never printed, so the partial output the CLI did manage is lost along
+    with the ``[exit N]`` marker the skill docs tell evaluators to look for.
+    """
+    timeout = subprocess.TimeoutExpired(cmd=["agent"], timeout=120, output=b"partial")
+    with patch.object(ha_query.subprocess, "run", side_effect=timeout):
+        text, returncode = get_func()("q", "http://ha.local:8123", "token")
+
+    assert returncode == ha_query.TIMEOUT_EXIT
+    assert f"[exit {ha_query.TIMEOUT_EXIT}]" in text
+    assert "timed out after" in text
+    assert "partial" in text
+
+
 def test_gemini_json_envelope_is_unwrapped():
     """The gemini CLI's JSON envelope still yields the bare response text."""
     with patch.object(
@@ -97,17 +115,31 @@ def test_gemini_json_envelope_is_unwrapped():
     assert (text, returncode) == ("unwrapped", 0)
 
 
-def test_main_exits_non_zero_when_the_query_failed(monkeypatch, capsys):
+# Both dispatch arms of main() unpack the new tuple, so both must be driven.
+AGENTS = [("gemini", "run_gemini_query"), ("claude", "run_claude_query")]
+
+
+def _fake_argv(agent: str) -> list[str]:
+    return [
+        "ha_query.py",
+        "--ha-url",
+        "http://ha",
+        "--ha-token",
+        "t",
+        "--agent",
+        agent,
+        "question",
+    ]
+
+
+@pytest.mark.parametrize(("agent", "func_name"), AGENTS)
+def test_main_exits_non_zero_when_the_query_failed(
+    agent, func_name, monkeypatch, capsys
+):
     """A failed query must not exit 0 — that is what let it be scored."""
-    monkeypatch.setattr(
-        ha_query.sys,
-        "argv",
-        ["ha_query.py", "--ha-url", "http://ha", "--ha-token", "t", "question"],
-    )
-    monkeypatch.setattr(ha_query.shutil, "which", lambda _: "/usr/bin/gemini")
-    monkeypatch.setattr(
-        ha_query, "run_gemini_query", lambda *a, **kw: ("partial\n[exit 2]", 2)
-    )
+    monkeypatch.setattr(ha_query.sys, "argv", _fake_argv(agent))
+    monkeypatch.setattr(ha_query.shutil, "which", lambda _: f"/usr/bin/{agent}")
+    monkeypatch.setattr(ha_query, func_name, lambda *a, **kw: ("partial\n[exit 2]", 2))
 
     with pytest.raises(SystemExit) as excinfo:
         ha_query.main()
@@ -119,14 +151,11 @@ def test_main_exits_non_zero_when_the_query_failed(monkeypatch, capsys):
     assert "exited with code 2" in captured.err
 
 
-def test_main_exits_zero_on_success(monkeypatch, capsys):
-    monkeypatch.setattr(
-        ha_query.sys,
-        "argv",
-        ["ha_query.py", "--ha-url", "http://ha", "--ha-token", "t", "question"],
-    )
-    monkeypatch.setattr(ha_query.shutil, "which", lambda _: "/usr/bin/gemini")
-    monkeypatch.setattr(ha_query, "run_gemini_query", lambda *a, **kw: ("answer", 0))
+@pytest.mark.parametrize(("agent", "func_name"), AGENTS)
+def test_main_exits_zero_on_success(agent, func_name, monkeypatch, capsys):
+    monkeypatch.setattr(ha_query.sys, "argv", _fake_argv(agent))
+    monkeypatch.setattr(ha_query.shutil, "which", lambda _: f"/usr/bin/{agent}")
+    monkeypatch.setattr(ha_query, func_name, lambda *a, **kw: ("answer", 0))
 
     ha_query.main()
 

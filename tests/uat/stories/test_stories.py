@@ -144,8 +144,10 @@ def _evaluate_result(story: dict, result: dict, agent: str) -> None:
     """Evaluate BAT results against story expectations."""
     agent_result = result.get("agents", {}).get(agent, {})
 
-    if not agent_result.get("available", False):
-        pytest.skip(f"Agent '{agent}' not available")
+    # No "agent unavailable" skip here: the caller resolved the agent through
+    # shutil.which before running, and run_uat exits non-zero (now a failure,
+    # above) when the single agent it was asked for is missing. An exit-0 run
+    # therefore cannot report the agent as unavailable.
 
     # Basic pass: agent completed without errors
     all_passed = agent_result.get("all_passed", False)

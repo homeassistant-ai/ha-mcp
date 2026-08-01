@@ -17,6 +17,11 @@ Usage:
       --ha-url http://localhost:PORT --ha-token TOKEN \
       --agent gemini --branch v6.6.1 \
       "List all automations and their states."
+
+Exit status is part of the contract: 0 means the agent CLI answered, and any
+non-zero exit means the query failed and its output must not be scored as a
+verification result. The answer text is still printed to stdout either way,
+annotated with an ``[exit N]`` marker, because consumers read stdout.
 """
 
 from __future__ import annotations
@@ -32,6 +37,36 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent.parent
+
+# GNU timeout(1)'s convention, so a hang is distinguishable from a CLI error.
+TIMEOUT_EXIT = 124
+
+
+def _annotate_failure(output: str, returncode: int, stderr: str = "") -> str:
+    """Mark a failed query's output so it cannot read as a real answer.
+
+    Any non-zero exit is a failed query, stderr or not. The danger is not the
+    empty answer — it is the partial one, which reads like a result and gets
+    scored as a verification outcome.
+    """
+    if returncode == 0:
+        return output
+    output += f"\n[exit {returncode}]"
+    if stderr:
+        output += f"\n[stderr]: {stderr}"
+    return output
+
+
+def _timed_out(exc: subprocess.TimeoutExpired, timeout: int) -> tuple[str, int]:
+    """Render a hung CLI in the same shape as any other failed query."""
+    partial = exc.stdout or ""
+    if isinstance(partial, bytes):
+        # POSIX attaches raw, untranslated bytes even under text=True.
+        partial = partial.decode(errors="replace")
+    return (
+        _annotate_failure(partial, TIMEOUT_EXIT, f"timed out after {timeout}s"),
+        TIMEOUT_EXIT,
+    )
 
 
 def mcp_server_command(branch: str | None) -> list[str]:
@@ -108,15 +143,12 @@ def run_gemini_query(
             # Output wasn't JSON; keep the raw stdout text as-is.
             pass
 
-        # Any non-zero exit is a failed query, stderr or not. The danger is
-        # not the empty answer — it is the partial one, which reads like a
-        # real result and gets scored as a verification outcome.
-        if result.returncode != 0:
-            output += f"\n[exit {result.returncode}]"
-            if result.stderr:
-                output += f"\n[stderr]: {result.stderr}"
-
-        return output, result.returncode
+        return (
+            _annotate_failure(output, result.returncode, result.stderr),
+            result.returncode,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return _timed_out(exc, timeout)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -181,16 +213,12 @@ def run_claude_query(
             check=False,
         )
 
-        output = result.stdout
-        # Any non-zero exit is a failed query, stderr or not. The danger is
-        # not the empty answer — it is the partial one, which reads like a
-        # real result and gets scored as a verification outcome.
-        if result.returncode != 0:
-            output += f"\n[exit {result.returncode}]"
-            if result.stderr:
-                output += f"\n[stderr]: {result.stderr}"
-
-        return output, result.returncode
+        return (
+            _annotate_failure(result.stdout, result.returncode, result.stderr),
+            result.returncode,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return _timed_out(exc, timeout)
     finally:
         config_file.unlink(missing_ok=True)
 

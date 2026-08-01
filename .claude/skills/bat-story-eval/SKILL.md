@@ -133,8 +133,9 @@ uv run python tests/uat/stories/scripts/ha_query.py \
 ```
 Record each answer as **confirmed** / **denied** / **unclear**. A non-zero exit
 from `ha_query.py` means the query itself failed (the output carries an
-`[exit N]` marker) — that is not one of the three outcomes; re-run it, and if it
-keeps failing record the story as unverified rather than scoring it.
+`[exit N]` marker; `[exit 124]` is a timeout) — that is not one of the three
+outcomes; re-run it, and if it keeps failing record the story as `unverified`
+(Step 5) rather than scoring it. See `references/evaluation-protocol.md`.
 
 Run remaining pre-built stories on the same container:
 ```bash
@@ -259,9 +260,11 @@ For each story+agent:
 
 Append eval results as NEW lines (never modify existing):
 ```python
-record["eval_score"] = "pass"  # or "partial" or "fail"
+record["eval_score"] = "pass"  # or "partial", "fail", or "unverified"
 record["eval_notes"] = "Entity created, triggers verified"
 record["eval_trend"] = "stable"  # or "new", "improved", "decreased"
+# "unverified" is for a story whose verification query itself failed — it is
+# not a result, so it carries no trend and is not compared to the baseline.
 ```
 
 ## Step 6: Report
@@ -356,6 +359,8 @@ Flag >5% total size increase (directly impacts token cost per turn).
 | `tests/uat/stories/scripts/ha_query.py` | Query live HA via agent+MCP for verification |
 | `tests/uat/stories/catalog/s*.yaml` | Pre-built story definitions |
 | `local/uat-results.jsonl` | Historical results (gitignored) |
+| `references/evaluation-protocol.md` | Scoring rules, verification questions, cross-agent checks |
+| `references/regression-protocol.md` | Regression classification and flaky handling |
 
 ## Important Notes
 
