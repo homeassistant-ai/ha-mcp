@@ -33,15 +33,13 @@ OAUTH_MODE_TOKEN = "oauth-mode-token"
 # Support for different environment files via HAMCP_ENV_FILE
 env_file = os.getenv("HAMCP_ENV_FILE", ".env")
 env_path = project_root / env_file
+if not env_path.exists():
+    # Fallback to default .env
+    env_path = project_root / ".env"
 
-# Load the specified environment file (silently, since env vars may come from other sources)
+# Load the environment file (silently, since env vars may come from other sources)
 if env_path.exists():
     load_dotenv(env_path)
-else:
-    # Fallback to default .env
-    default_env_path = project_root / ".env"
-    if default_env_path.exists():
-        load_dotenv(default_env_path)
 
 
 class Settings(BaseSettings):
@@ -565,7 +563,15 @@ class Settings(BaseSettings):
         return port
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="allow"
+        # Absolute, and the same file load_dotenv already resolved above. A
+        # relative ".env" here would be a second, independent read that
+        # pydantic-settings resolves against the process's working directory —
+        # so HAMCP_ENV_FILE would not govern it, and a stray .env in whatever
+        # directory the server was launched from would silently supply values.
+        env_file=str(env_path),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="allow",
     )
 
 

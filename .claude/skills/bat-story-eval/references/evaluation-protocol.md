@@ -29,7 +29,16 @@ uv run python tests/uat/stories/scripts/ha_query.py \
   "Does an automation with alias 'Sunset Porch Light' exist? Show its triggers and actions."
 ```
 
-Evaluate the response:
+Check the exit code first. `ha_query.py` exits non-zero when the agent CLI
+itself failed, and prints `[exit N]` (plus stderr, when there is any) after
+whatever text the CLI managed to produce — `[exit 124]` for a query that hung
+past its timeout. The one non-zero exit without a marker is `Error: <agent>
+CLI not found`, which means the agent is not installed: fix the environment
+rather than re-running. A failed query is **not a measurement**: do not score
+it as any of the three outcomes below — re-run it, and if it keeps failing,
+record the story as `unverified` (see Step 5 of SKILL.md) and say why.
+
+Only when the query exited 0, evaluate the response:
 - **Confirmed**: The answer clearly confirms the expected outcome
 - **Denied**: The answer clearly shows the expected outcome did NOT happen
 - **Unclear**: The answer is ambiguous or incomplete

@@ -270,7 +270,7 @@ jobs:
       run: uv sync --dev
 
     - name: Run ruff check
-      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ homeassistant-addon-webhook-proxy-dev/ scripts/
+      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ homeassistant-addon-webhook-proxy-dev/ packaging/ scripts/
 
     - name: Run ruff format check on changed Python files
       run: |

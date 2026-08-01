@@ -186,8 +186,16 @@ ignore = [
 # homeassistant-addon-webhook-proxy-dev/ only, per the dev-first/promote-only
 # flow (allow-stable-edit is for stable-only hotfixes, not routine sweeps —
 # see homeassistant-addon-webhook-proxy/AGENTS.md "Dev-first, promote-only").
-# Remove this ignore once the next promote carries the fix into stable.
-"homeassistant-addon-webhook-proxy/**" = ["PLC0207", "PLR5501"]
+# The -dev entries name where a reset-dev-from-stable run puts those same two
+# stable files (start.py stays put, mcp_proxy/ is renamed to mcp_proxy_dev/),
+# so the auto-opened reset PR lints clean. Scoped per file and per rule so
+# both rules stay live everywhere else in both trees — the -dev tree is where
+# all new webhook-proxy code is authored. Remove all four once the next
+# promote carries the fixes into stable.
+"homeassistant-addon-webhook-proxy/start.py" = ["PLR5501"]
+"homeassistant-addon-webhook-proxy/mcp_proxy/__init__.py" = ["PLC0207"]
+"homeassistant-addon-webhook-proxy-dev/start.py" = ["PLR5501"]
+"homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py" = ["PLC0207"]
 # C901 is enforced repo-wide with no per-file exemptions (the grandfathered
 # list was fully cleared by issue #925). Do NOT add "path" = ["C901"] entries
 # here — extract helpers to bring the function below the threshold instead:
