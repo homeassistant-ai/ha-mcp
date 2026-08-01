@@ -375,23 +375,10 @@ def _check_variables_order(
     HA renders a variables block one entry at a time, feeding each result into
     the context for the next (``ScriptVariables.async_simple_render`` for an
     action-level step, ``async_render`` for the top-level and
-    ``trigger_variables`` blocks). A name declared further down is therefore
-    undefined at render time, and what that costs depends on how the template
-    uses it. HA's undefined is ``LoggingUndefined(jinja2.Undefined)``
-    (``helpers/template/__init__.py``), and the split comes from the base
-    class: jinja2's ``Undefined`` answers ``__str__``, ``__iter__``,
-    ``__bool__``, ``__len__`` and ``__eq__``/``__ne__``/``__hash__`` without
-    raising, and routes everything else to ``_fail_with_undefined_error``. HA
-    re-wraps three of the quiet ones (``__str__``, ``__iter__``, ``__bool__``)
-    to log as they pass:
-
-    * silent — a bare ``{{ later }}``, ``{% if later %}``, ``~`` concatenation,
-      ``==``/``!=``, ``{% for x in later %}`` and ``| length`` yield an empty,
-      falsy, empty-iterating value, so the automation loads and runs on through
-      the wrong branch with only a warning in the log and on the trace
-    * raising — attribute access, item access, arithmetic, an ordering
-      comparison and casts such as ``| int`` raise ``UndefinedError``, log at
-      ERROR and abort the step
+    ``trigger_variables`` blocks), so a name declared further down is undefined
+    at render time. Which uses then raise ``UndefinedError`` and which stay
+    quiet is documented for users in ``automation-patterns.md#variables``; this
+    scan only has to find the forward read.
 
     Only *later* siblings count. Names coming from anywhere else — an earlier
     sibling, an earlier action's ``response_variable``, the trigger context —
@@ -401,7 +388,8 @@ def _check_variables_order(
     full Jinja parser:
 
     * a later sibling whose name also exists in an outer scope, where the
-      reference is legal and resolves outward (the warning text names this one)
+      reference is legal and resolves outward (the reference file names this
+      one)
     * a sibling whose name collides with an HA template global (``states``,
       ``trigger``, ...) or with a filter or test named in a position the strip
       passes in :func:`_read_names` do not reach. Jinja's own keywords are
@@ -412,12 +400,15 @@ def _check_variables_order(
     ``variables``, HA merges them into a single sequentially-rendered mapping
     (``components/automation/__init__.py``, ``_create_automation_entities``),
     so a ``trigger_variables`` key reading a ``variables`` key is a forward
-    read this per-block scan does not see. The reverse direction is safe: the
-    merge puts ``trigger_variables`` first, so a ``variables`` key reading one
-    of them is a backward read. ``trigger_variables`` is additionally rendered
-    on its own when the triggers are attached (``_async_attach_triggers``,
-    ``limited=True``), so a forward read inside that block is real even when
-    a later ``variables`` key overwrites the same name.
+    read this per-block scan does not see. The reverse direction is safe for
+    distinct names: the merge puts ``trigger_variables`` first, so a
+    ``variables`` key reading one of them is a backward read. A name present in
+    *both* is the exception — ``dict.update`` keeps the ``trigger_variables``
+    position and takes the ``variables`` template, so that entry renders early.
+    ``trigger_variables`` is additionally rendered on its own when the triggers
+    are attached (``_async_attach_triggers``, ``limited=True``), so a forward
+    read inside that block is real even when a later ``variables`` key
+    overwrites the same name.
     """
     if not isinstance(variables, dict) or len(variables) < 2:
         return
@@ -432,17 +423,10 @@ def _check_variables_order(
         reads = ", ".join(f"`{name}`" for name in forward)
         _emit(
             warnings,
-            f"`{block_key}` key `{key}` reads {reads}, declared later in the same "
-            "block — HA renders a variables block one key at a time, so a name "
-            "further down is not defined yet. How that fails depends on the use: "
-            "attribute or item access, arithmetic, an ordering comparison and "
-            "casts like `| int` raise `UndefinedError` and abort the step, while "
-            "a bare `{{ }}`, `{% if %}`, `~`, `==`, iteration and `| length` "
-            "silently yield an empty, falsy value and let the automation run on "
-            "through the wrong branch. Move the keys it reads above it, or split "
-            "them into consecutive `variables:` steps. Not a problem when the "
-            "name is also defined in an outer scope — the reference then "
-            "resolves outward.",
+            f"`{block_key}` key `{key}` reads {reads}, declared later in the "
+            "same block — HA renders a variables block one key at a time, so a "
+            "name further down is not defined yet. Move the keys it reads "
+            "above it.",
             skill_prefix,
             "automation-patterns.md#variables",
         )

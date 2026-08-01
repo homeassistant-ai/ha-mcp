@@ -50,8 +50,8 @@ def _emit(
         warnings: Accumulator (also holds ``referenced_files``).
         message: Human-readable warning body — the inline alternative.
         skill_prefix: When set, embedded as the ``skill://`` URI route.
-            When ``None``, the URI route is omitted but the other two
-            routes still appear.
+            When falsy, the whole ``See ...`` suffix is dropped rather than
+            just that route — see :func:`_skill_route_suffix`.
         file_ref: File path relative to the ``references/`` directory of
             the home-assistant-best-practices skill, optionally with a
             ``#anchor`` suffix

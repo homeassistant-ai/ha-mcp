@@ -2786,11 +2786,16 @@ _FORWARD_REF_CONFIG = {
 
 
 class TestVariablesForwardReferenceMessage:
-    """Warning payload: outer-scope caveat, skill route, referenced file."""
+    """Warning payload: rule and fix, skill route, referenced file."""
 
-    def test_names_outer_scope_caveat(self):
+    def test_names_the_rule_and_the_fix(self):
+        # Replaces the outer-scope caveat test: that caveat moved to the
+        # reference file, but the message must still carry why the read fails
+        # and what to do about it, not just the offending key names.
         warnings = check_automation_config(_FORWARD_REF_CONFIG)
-        assert _has_warning_containing(warnings, "outer scope")
+        assert _has_warning_containing(
+            warnings, "one key at a time", "Move the keys it reads above it"
+        )
 
     def test_skill_route_and_referenced_file(self):
         warnings = check_automation_config(_FORWARD_REF_CONFIG)
