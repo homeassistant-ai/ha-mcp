@@ -131,7 +131,10 @@ uv run python tests/uat/stories/scripts/ha_query.py \
   --agent <agent> \
   "Does an automation with alias 'Sunset Porch Light' exist?"
 ```
-Record each answer as **confirmed** / **denied** / **unclear**.
+Record each answer as **confirmed** / **denied** / **unclear**. A non-zero exit
+from `ha_query.py` means the query itself failed (the output carries an
+`[exit N]` marker) — that is not one of the three outcomes; re-run it, and if it
+keeps failing record the story as unverified rather than scoring it.
 
 Run remaining pre-built stories on the same container:
 ```bash

@@ -30,7 +30,8 @@ class TestArgParsing:
             check=False,
         )
         # 2 is argparse's usage-error code; any other non-zero exit means the
-        # script got past parsing and died somewhere else.
+        # script failed somewhere other than argument validation — before it
+        # (an import or startup error) or after it.
         assert result.returncode == 2, f"stderr: {result.stderr}"
         # The usage line names every flag, so pin the missing-argument message
         # itself — otherwise any argparse error satisfies the flag assertions.

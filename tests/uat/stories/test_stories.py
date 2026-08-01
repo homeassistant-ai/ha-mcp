@@ -118,11 +118,11 @@ def _run_bat_scenario(scenario: dict, agent: str, ha_url: str, ha_token: str) ->
     )
 
     if result.returncode != 0:
-        # run_uat.py exits 1 without emitting JSON when the agent CLI it was
-        # asked for isn't installed. That is the only non-zero exit that means
-        # "unavailable" rather than "broken", so it keeps the skip path.
-        if "No agents available" in result.stderr:
-            return {"agents": {agent: {"available": False, "all_passed": False}}}
+        # run_uat.py never exits after emitting its summary, so a non-zero exit
+        # means no result was produced. Its one "agent unavailable" exit cannot
+        # reach us either: the caller already resolved the agent through the
+        # same shutil.which check the runner uses. So this is a broken run —
+        # surface it instead of degrading it into a skip.
         pytest.fail(
             f"BAT runner exited {result.returncode}.\n"
             f"Stderr: {result.stderr[-2000:]}\n"

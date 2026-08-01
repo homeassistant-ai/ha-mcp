@@ -55,8 +55,9 @@ def run_gemini_query(
 ) -> tuple[str, int]:
     """Run a query via Gemini CLI with MCP tools.
 
-    Returns the answer text and the CLI's exit code, so callers can tell an
-    empty answer apart from a failed query.
+    Returns the answer text and the CLI's exit code, so callers can tell a
+    failed query apart from a real answer — the text alone cannot, since a
+    failing CLI may still have printed a partial one.
     """
     workdir = Path(tempfile.mkdtemp(prefix="ha_query_gemini_"))
     try:
@@ -107,8 +108,9 @@ def run_gemini_query(
             # Output wasn't JSON; keep the raw stdout text as-is.
             pass
 
-        # Any non-zero exit is a failed query, stderr or not — a silent
-        # failure would otherwise be consumed as a real (empty) answer.
+        # Any non-zero exit is a failed query, stderr or not. The danger is
+        # not the empty answer — it is the partial one, which reads like a
+        # real result and gets scored as a verification outcome.
         if result.returncode != 0:
             output += f"\n[exit {result.returncode}]"
             if result.stderr:
@@ -128,8 +130,9 @@ def run_claude_query(
 ) -> tuple[str, int]:
     """Run a query via Claude CLI with MCP tools.
 
-    Returns the answer text and the CLI's exit code, so callers can tell an
-    empty answer apart from a failed query.
+    Returns the answer text and the CLI's exit code, so callers can tell a
+    failed query apart from a real answer — the text alone cannot, since a
+    failing CLI may still have printed a partial one.
     """
     cmd = mcp_server_command(branch)
     config = {
@@ -179,8 +182,9 @@ def run_claude_query(
         )
 
         output = result.stdout
-        # Any non-zero exit is a failed query, stderr or not — a silent
-        # failure would otherwise be consumed as a real (empty) answer.
+        # Any non-zero exit is a failed query, stderr or not. The danger is
+        # not the empty answer — it is the partial one, which reads like a
+        # real result and gets scored as a verification outcome.
         if result.returncode != 0:
             output += f"\n[exit {result.returncode}]"
             if result.stderr:

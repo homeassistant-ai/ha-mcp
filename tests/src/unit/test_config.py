@@ -161,14 +161,30 @@ def test_read_only_mode_env_var_coercion_rejected(env_value):
 class TestConfigErrorHandling:
     """Test configuration error handling and user-friendly messages."""
 
-    def test_missing_env_vars_shows_friendly_message(self):
+    @pytest.fixture
+    def child_env(self, tmp_path):
+        """Child-process env that ignores the developer's project ``.env``.
+
+        ``ha_mcp.config`` loads ``<project_root>/.env`` by absolute path, so
+        dropping the credential vars from the child environment is not enough:
+        on a machine with the documented local ``.env`` the subprocess would
+        start up fine and never print the message under test. Only an
+        ``HAMCP_ENV_FILE`` that *exists* wins over that fallback — a path that
+        does not exist falls straight back to ``.env``.
+        """
+        empty_env_file = tmp_path / "empty.env"
+        empty_env_file.write_text("")
+        env = os.environ.copy()
+        env["HAMCP_ENV_FILE"] = str(empty_env_file)
+        return env
+
+    def test_missing_env_vars_shows_friendly_message(self, child_env):
         """When HOMEASSISTANT_URL and TOKEN are missing, show friendly error."""
         # Run ha-mcp without any env vars set
-        env = os.environ.copy()
+        env = child_env
         # Remove any HA env vars that might be set
         env.pop("HOMEASSISTANT_URL", None)
         env.pop("HOMEASSISTANT_TOKEN", None)
-        env.pop("HAMCP_ENV_FILE", None)
 
         result = subprocess.run(
             [sys.executable, "-m", "ha_mcp"],
@@ -185,8 +201,11 @@ class TestConfigErrorHandling:
         # Should show friendly message, not raw stacktrace
         stderr = result.stderr
         assert "Configuration Error" in stderr
-        assert "HOMEASSISTANT_URL" in stderr
-        assert "HOMEASSISTANT_TOKEN" in stderr
+        # The two-space-dash prefix is the dynamic "what is actually missing"
+        # list. The static body of the banner names both variables regardless
+        # of which one is missing, so a bare name match proves nothing.
+        assert "  - HOMEASSISTANT_URL" in stderr
+        assert "  - HOMEASSISTANT_TOKEN" in stderr
         assert "Long-Lived Access Tokens" in stderr
         assert "github.com/homeassistant-ai/ha-mcp" in stderr
 
@@ -194,11 +213,10 @@ class TestConfigErrorHandling:
         assert "pydantic_core._pydantic_core.ValidationError" not in stderr
         assert "Field required [type=missing" not in stderr
 
-    def test_missing_only_url_shows_that_var(self):
+    def test_missing_only_url_shows_that_var(self, child_env):
         """When only HOMEASSISTANT_URL is missing, show that in message."""
-        env = os.environ.copy()
+        env = child_env
         env.pop("HOMEASSISTANT_URL", None)
-        env.pop("HAMCP_ENV_FILE", None)
         env["HOMEASSISTANT_TOKEN"] = "test_token_value"
 
         result = subprocess.run(
@@ -211,13 +229,15 @@ class TestConfigErrorHandling:
         )
 
         assert result.returncode != 0
-        assert "HOMEASSISTANT_URL" in result.stderr
+        # Match the dynamic missing-list entry, and require the variable that
+        # IS set to be absent from it — the static banner body names both.
+        assert "  - HOMEASSISTANT_URL" in result.stderr
+        assert "  - HOMEASSISTANT_TOKEN" not in result.stderr
 
-    def test_missing_only_token_shows_that_var(self):
+    def test_missing_only_token_shows_that_var(self, child_env):
         """When only HOMEASSISTANT_TOKEN is missing, show that in message."""
-        env = os.environ.copy()
+        env = child_env
         env.pop("HOMEASSISTANT_TOKEN", None)
-        env.pop("HAMCP_ENV_FILE", None)
         env["HOMEASSISTANT_URL"] = "http://test.local:8123"
 
         result = subprocess.run(
@@ -230,14 +250,16 @@ class TestConfigErrorHandling:
         )
 
         assert result.returncode != 0
-        assert "HOMEASSISTANT_TOKEN" in result.stderr
+        # Match the dynamic missing-list entry, and require the variable that
+        # IS set to be absent from it — the static banner body names both.
+        assert "  - HOMEASSISTANT_TOKEN" in result.stderr
+        assert "  - HOMEASSISTANT_URL" not in result.stderr
 
-    def test_no_env_file_warning_removed(self):
+    def test_no_env_file_warning_removed(self, child_env):
         """No warning should be shown when .env file is missing."""
-        env = os.environ.copy()
+        env = child_env
         env.pop("HOMEASSISTANT_URL", None)
         env.pop("HOMEASSISTANT_TOKEN", None)
-        env.pop("HAMCP_ENV_FILE", None)
 
         result = subprocess.run(
             [sys.executable, "-m", "ha_mcp"],
@@ -250,21 +272,22 @@ class TestConfigErrorHandling:
 
         # Liveness anchor: the run has to reach the credential check and fail
         # there. Without this, a startup crash (import error, packaging break)
-        # never prints the warning either and passes the assertion below.
+        # never prints the warning either and passes the assertion below. The
+        # two-space-dash entries are the dynamic missing-vars list, which no
+        # other startup banner emits.
         assert result.returncode != 0
         assert "Configuration Error" in result.stderr
-        assert "HOMEASSISTANT_URL" in result.stderr
-        assert "HOMEASSISTANT_TOKEN" in result.stderr
+        assert "  - HOMEASSISTANT_URL" in result.stderr
+        assert "  - HOMEASSISTANT_TOKEN" in result.stderr
 
         # Should NOT contain the old noisy warning
         combined_output = result.stdout + result.stderr
         assert "[ENV] WARNING: No environment file found" not in combined_output
 
-    def test_smoke_test_still_works(self):
+    def test_smoke_test_still_works(self, child_env):
         """Smoke test should work with dummy credentials."""
-        env = os.environ.copy()
         # Smoke test sets its own dummy credentials
-        env.pop("HAMCP_ENV_FILE", None)
+        env = child_env
 
         result = subprocess.run(
             [sys.executable, "-m", "ha_mcp", "--smoke-test"],

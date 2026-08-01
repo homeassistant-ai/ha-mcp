@@ -27,8 +27,10 @@ class TestDockerBuild:
             check=False,
         )
         # Exactly 1 — that is ``which`` reporting "not found". Any other
-        # non-zero code means docker never ran the command (125/126/127), which
-        # would otherwise pass as if the image were clean.
+        # non-zero code means the check never happened: 125/126 for docker
+        # failing to start the container, 127 usually for ``which`` itself
+        # being absent from the image. Those would otherwise pass as if the
+        # image were clean.
         assert result.returncode == 1, (
             f"expected `which uv` to exit 1 (not found), got {result.returncode}: "
             f"{result.stderr.strip() or result.stdout.strip()}"

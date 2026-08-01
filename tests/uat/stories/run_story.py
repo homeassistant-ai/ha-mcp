@@ -676,10 +676,11 @@ def get_git_info() -> tuple[str, str]:
             check=True,
         )
         sha = result.stdout.strip()
-    except Exception:
+    except Exception as e:
         # Best-effort git lookup; keep the "unknown" default if git is
-        # unavailable or fails.
-        pass
+        # unavailable or fails. Say so — otherwise every result row records
+        # "unknown" with no trace of why the commit identity was lost.
+        logger.warning("git rev-parse failed, recording sha=unknown: %s", e)
     try:
         result = subprocess.run(
             ["git", "describe", "--tags", "--always"],
@@ -689,10 +690,11 @@ def get_git_info() -> tuple[str, str]:
             check=True,
         )
         describe = result.stdout.strip()
-    except Exception:
+    except Exception as e:
         # Best-effort git lookup; keep the "unknown" default if git is
-        # unavailable or fails.
-        pass
+        # unavailable or fails. Say so — otherwise every result row records
+        # "unknown" with no trace of why the commit identity was lost.
+        logger.warning("git describe failed, recording describe=unknown: %s", e)
     return sha, describe
 
 
