@@ -19,33 +19,33 @@ configuration:
 
       Pour les instantanés automatiques par modification d''automatisations /
 
-      scripts / assistants / etc., utilise le bouton **Activer la sauvegarde
+      scripts / assistants / etc., utilisez le bouton **Activer la sauvegarde
 
       automatique des modifications** séparé ci-dessous.'
   secret_path:
     name: Remplacement du chemin secret
-    description: 'Chemin HTTP personnalisé optionnel pour le serveur MCP. Laisse vide
-      pour utiliser le chemin sécurisé généré automatiquement.
+    description: 'Chemin HTTP personnalisé optionnel pour le serveur MCP. Laissez
+      vide pour utiliser le chemin sécurisé généré automatiquement.
 
       '
   enable_tool_search:
     name: Activer la recherche d'outils
     description: 'Remplace le catalogue complet d''outils par une découverte basée
       sur la recherche. Réduit le contexte inactif d''environ 90 %, à près de 5K tokens.
-      ⚠️ N''active PAS ceci dans les clients qui ont leur propre recherche d''outils
+      ⚠️ N''activez PAS ceci dans les clients qui ont leur propre recherche d''outils
       intégrée / outils différés (claude.ai, Claude Desktop, Claude Code) — les deux
       couches de recherche entrent en conflit, et la recherche d''outils intégrée
-      du client y est le meilleur choix ; laisse ceci désactivé. Le report des outils
-      dépend de la combinaison client/modèle : utilise ceci lorsque ta configuration
+      du client y est le meilleur choix ; laissez ceci désactivé. Le report des outils
+      dépend de la combinaison client/modèle : utilisez ceci lorsque votre configuration
       charge le catalogue complet d''emblée — modèles sans outils différés natifs
       (p. ex. Gemini, modèles locaux compatibles OpenAI, Claude Haiku), clients qui
       intègrent tous les schémas d''outils quel que soit le modèle (p. ex. GitHub
       Copilot CLI), ou fenêtres de contexte plus petites. Certains modèles Codex et
-      ChatGPT incluent aussi des outils différés — vérifie directement auprès de ton
-      client/modèle quelles fonctionnalités il possède pour ne pas laisser ceci activé
-      inutilement. Les outils sont trouvés via ha_search_tools et exécutés via des
-      proxys catégorisés (lecture/écriture/suppression). Nécessite un redémarrage
-      pour prendre effet. Reconnecte ou actualise ensuite le serveur MCP dans ton
+      ChatGPT incluent aussi des outils différés — vérifiez directement auprès de
+      votre client/modèle quelles fonctionnalités il possède pour ne pas laisser ceci
+      activé inutilement. Les outils sont trouvés via ha_search_tools et exécutés
+      via des proxys catégorisés (lecture/écriture/suppression). Nécessite un redémarrage
+      pour prendre effet. Reconnectez ou actualisez ensuite le serveur MCP dans votre
       client IA pour qu''il recharge la liste des outils. Un redémarrage de l''add-on
       seul n''actualise PAS la liste d''outils mise en cache d''un client ; ceci s''applique
       après chaque changement de paramètre ici.'
@@ -155,8 +155,8 @@ configuration:
     name: Vérifier le certificat TLS
     description: Vérifie le certificat TLS du serveur Home Assistant. L'add-on se
       connecte via le proxy Supervisor, donc cela n'a normalement aucun effet et doit
-      rester activé. Désactive uniquement si tu as reconfiguré l'add-on pour communiquer
-      avec HA via un nom d'hôte HTTPS public avec un certificat auto-signé ou une
-      discordance de nom d'hôte. Désactiver affaiblit la sécurité du transport — laisse
-      activé sauf si tu sais que tu en as besoin. Nécessite un redémarrage pour prendre
-      effet.
+      rester activé. Désactivez uniquement si vous avez reconfiguré l'add-on pour
+      communiquer avec HA via un nom d'hôte HTTPS public avec un certificat auto-signé
+      ou une discordance de nom d'hôte. Désactiver affaiblit la sécurité du transport
+      — laissez activé sauf si vous savez que vous en avez besoin. Nécessite un redémarrage
+      pour prendre effet.

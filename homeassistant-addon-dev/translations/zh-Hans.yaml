@@ -18,9 +18,9 @@ configuration:
   enable_tool_search:
     name: 启用工具搜索
     description: 用基于搜索的发现取代完整工具目录。将空闲上下文减少约 90%，降至约 5K token。⚠️ 如果客户端自带内置工具搜索/延迟工具（claude.ai、Claude
-      Desktop、Claude Code），请勿启用此功能——两层搜索会相互冲突，且在这些客户端中其内置工具搜索是更好的选择；请保持关闭。工具是否延迟取决于客户端与模型的组合：当你的配置会一次性加载完整目录时才使用此功能——例如没有原生延迟工具的模型（如
+      Desktop、Claude Code），请勿启用此功能——两层搜索会相互冲突，且在这些客户端中其内置工具搜索是更好的选择；请保持关闭。工具是否延迟取决于客户端与模型的组合：当您的配置会一次性加载完整目录时才使用此功能——例如没有原生延迟工具的模型（如
       Gemini、本地 OpenAI 兼容模型、Claude Haiku）、无论模型如何都会内联全部工具架构的客户端（如 GitHub Copilot CLI），或上下文窗口较小时。部分
-      Codex 模型和 ChatGPT 也带有延迟工具——请直接向你的客户端/模型确认其具备哪些功能，以免不必要地保持启用此功能。工具通过 ha_search_tools
+      Codex 模型和 ChatGPT 也带有延迟工具——请直接向您的客户端/模型确认其具备哪些功能，以免不必要地保持启用此功能。工具通过 ha_search_tools
       发现，并通过分类代理（读/写/删）执行。需要重启才能生效。
   enable_tool_security_policies:
     name: 启用工具安全策略（高级）
@@ -31,8 +31,8 @@ configuration:
       Web UI 工具选项卡中的开关相同。默认关闭。需要重启才能生效。
   enable_beta_features:
     name: 启用测试版功能（主开关）
-    description: ⚠ 危险——这些工具可能永久损坏你的 Home Assistant 安装。它们会写入你的 YAML 配置、文件系统，安装自定义组件，运行任意沙箱
-      Python，并编辑 AI 所见的工具文档字符串。无保修、无支持保证——启用即代表你自担风险。开启前请先为 Home Assistant 做备份，切勿在无备份的情况下于生产环境启用。下方
+    description: ⚠ 危险——这些工具可能永久损坏您的 Home Assistant 安装。它们会写入您的 YAML 配置、文件系统，安装自定义组件，运行任意沙箱
+      Python，并编辑 AI 所见的工具文档字符串。无保修、无支持保证——启用即代表您自担风险。开启前请先为 Home Assistant 做备份，切勿在无备份的情况下于生产环境启用。下方
       5 个实验性子开关的主网关；即使显式设为 true，当此主开关关闭时，子开关在运行时会被忽略。相同的开关也显示在 Web 设置界面的“测试版功能（危险）”下——任一入口在重启后都会反映到另一入口。
   enable_yaml_config_editing:
     name: 启用 YAML 配置编辑（测试版）
@@ -82,16 +82,16 @@ configuration:
       工具被锁定启用——它是确认密钥的唯一发布方。为上方“写入时附加最佳实践技能”选项的子项，当其父项关闭时无效。需要重启才能生效。
   enable_filesystem_tools:
     name: 启用文件系统工具（测试版）
-    description: 设置 HAMCP_ENABLE_FILESYSTEM_TOOLS=true。启用对你 Home Assistant 文件系统的直接文件读/写访问。警告：这会让
-      MCP 服务器直接读写你的 Home Assistant 文件系统，获得对系统的敏感文件访问权限。仅在信任 AI 助手进行文件操作时才启用。需要重启才能生效。需要上方（及
+    description: 设置 HAMCP_ENABLE_FILESYSTEM_TOOLS=true。启用对您 Home Assistant 文件系统的直接文件读/写访问。警告：这会让
+      MCP 服务器直接读写您的 Home Assistant 文件系统，获得对系统的敏感文件访问权限。仅在信任 AI 助手进行文件操作时才启用。需要重启才能生效。需要上方（及
       Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。
   enable_dashboard_screenshot:
     name: 启用仪表盘截图模式（测试版）
     description: 测试版功能——默认关闭。新增 ha_get_dashboard_screenshot 工具，以及仪表盘 get/set 工具上的
       include_screenshot / return_screenshot 选项，让 AI 助手可检查一个或多个响应式 Lovelace 图像（例如验证其刚创建的仪表盘）。支持稳定的命名视图、移动/平板/桌面批次，以及
-      PNG/JPEG/WebP/BMP 输出。渲染在独立的、可选引擎中运行——balloob 的“Puppet”插件（无头 Chromium）——你安装一次（添加
-      balloob 的插件仓库，然后安装“Puppet”）并为其提供长期访问令牌；在 Docker/容器部署中，你将该引擎作为 sidecar 运行并设置
-      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL。除非你同时启用此功能并安装引擎，否则不会安装任何重型组件。需要重启才能生效。需要上方（及
+      PNG/JPEG/WebP/BMP 输出。渲染在独立的、可选引擎中运行——balloob 的“Puppet”插件（无头 Chromium）——您安装一次（添加
+      balloob 的插件仓库，然后安装“Puppet”）并为其提供长期访问令牌；在 Docker/容器部署中，您将该引擎作为 sidecar 运行并设置
+      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL。除非您同时启用此功能并安装引擎，否则不会安装任何重型组件。需要重启才能生效。需要上方（及
       Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。
   enable_auto_backup:
     name: 启用编辑自动备份
@@ -122,5 +122,5 @@ configuration:
     description: 此处列出的工具会被锁定为固定——它们显示在“工具”选项卡顶部，且在取消此选项之前无法从网页设置界面取消固定。与工具搜索搭配使用时很有用。以逗号分隔的工具名称。
   verify_ssl:
     name: 验证 TLS 证书
-    description: 验证 Home Assistant 服务器的 TLS 证书。插件通过 Supervisor 代理连接，因此这通常没有影响，应保持启用。仅当你已将插件重新配置为通过公网
+    description: 验证 Home Assistant 服务器的 TLS 证书。插件通过 Supervisor 代理连接，因此这通常没有影响，应保持启用。仅当您已将插件重新配置为通过公网
       HTTPS 主机名与 HA 通信，且证书为自签名或主机名不匹配时才关闭。关闭会削弱传输安全性——除非确有需要，否则请保持开启。需重启才能生效。
