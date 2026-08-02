@@ -67,6 +67,140 @@ _LOG_LEVEL_RE = re.compile(
 
 VALID_LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG")
 
+# Full HA log line, e.g.
+# "2026-05-27 10:15:23.456 ERROR (MainThread) [homeassistant.components.zha] msg"
+# Distinct from _LOG_LEVEL_RE above, which only sniffs the level out of a line.
+_HA_LOG_LINE_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)"
+    r"\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)"
+    r"\s+\([^)]*\)"
+    r"\s+\[([^\]]+)\]"
+    r"\s+(.+)$",
+    re.IGNORECASE,
+)
+_MAX_MESSAGE_LEN = 200
+_COMPONENT_PREFIX_DEPTH = 3
+_DEFAULT_TOP_N = 20
+
+
+def _get_component_prefix(logger_name: str) -> str:
+    """Extract the component prefix (first N dotted segments) of a logger name."""
+    parts = logger_name.split(".")
+    if len(parts) >= _COMPONENT_PREFIX_DEPTH:
+        return ".".join(parts[:_COMPONENT_PREFIX_DEPTH])
+    return logger_name
+
+
+def _parse_error_log_structured(
+    raw_text: str,
+    search: str | None = None,
+    level: str | None = None,
+    top_n: int = _DEFAULT_TOP_N,
+) -> dict[str, Any]:
+    """Parse the raw error log into a deduplicated, component-grouped summary.
+
+    ``source='error_log'`` normally returns raw text. A busy instance produces a
+    50-200 KB log in which the same handful of errors repeat thousands of times,
+    so the raw form can exhaust an agent's context while conveying very little.
+    This collapses identical (logger, message) pairs into counted issues, groups
+    them by component, and returns only the ``top_n`` noisiest — bounded output
+    regardless of input size.
+
+    Unparseable lines (tracebacks, continuation lines) are skipped by design;
+    ``summary.parsed_entries`` vs ``summary.total_raw_lines`` exposes how much
+    was dropped so the caller can fall back to raw text when it matters.
+    """
+    lines = raw_text.splitlines() if raw_text else []
+    total_raw_lines = len(lines)
+
+    parsed: list[dict[str, str]] = []
+    for line in lines:
+        match = _HA_LOG_LINE_RE.match(line.strip())
+        if not match:
+            continue
+        timestamp, log_level, logger_name, message = match.groups()
+        log_level = log_level.upper()
+        if level and log_level != level:
+            continue
+        if search:
+            needle = search.lower()
+            if needle not in message.lower() and needle not in logger_name.lower():
+                continue
+        parsed.append(
+            {
+                "timestamp": timestamp,
+                "level": log_level,
+                "logger": logger_name,
+                "message": message[:_MAX_MESSAGE_LEN],
+            }
+        )
+
+    # Dedupe on (logger, truncated message) — the message is already capped, so
+    # errors differing only past the cap collapse together on purpose.
+    dedup: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in parsed:
+        key = (entry["logger"], entry["message"])
+        record = dedup.get(key)
+        if record is None:
+            record = {
+                "logger": entry["logger"],
+                "level": entry["level"],
+                "message": entry["message"],
+                "count": 0,
+                "first_seen": entry["timestamp"],
+                "last_seen": entry["timestamp"],
+            }
+            dedup[key] = record
+        record["count"] += 1
+        record["last_seen"] = entry["timestamp"]
+
+    all_issues = sorted(dedup.values(), key=lambda i: i["count"], reverse=True)
+
+    by_component: dict[str, dict[str, Any]] = {}
+    for issue in all_issues:
+        prefix = _get_component_prefix(issue["logger"])
+        bucket = by_component.setdefault(
+            prefix, {"total_occurrences": 0, "issue_count": 0}
+        )
+        bucket["total_occurrences"] += issue["count"]
+        bucket["issue_count"] += 1
+
+    top_issues = [
+        {
+            "component": _get_component_prefix(issue["logger"]),
+            "logger": issue["logger"],
+            "level": issue["level"],
+            "message": issue["message"],
+            "count": issue["count"],
+            "first_seen": issue["first_seen"],
+            "last_seen": issue["last_seen"],
+        }
+        for issue in all_issues[:top_n]
+    ]
+
+    component_table = dict(
+        sorted(
+            by_component.items(),
+            key=lambda kv: kv[1]["total_occurrences"],
+            reverse=True,
+        )
+    )
+
+    return {
+        "success": True,
+        "source": "error_log",
+        "structured": True,
+        "summary": {
+            "total_raw_lines": total_raw_lines,
+            "parsed_entries": len(parsed),
+            "unique_issues": len(all_issues),
+            "components_affected": len(by_component),
+            "showing_top_n": min(top_n, len(all_issues)),
+        },
+        "top_issues": top_issues,
+        "by_component": component_table,
+    }
+
 
 def _compact_logbook_entries(entries: list[Any]) -> list[dict[str, Any]]:
     """Strip logbook entries to essential fields only.
@@ -212,6 +346,8 @@ class UtilityTools:
         level: str | None,
         slug: str | None,
         order: Literal["newest", "oldest"],
+        structured: bool = False,
+        top_n: int | None = None,
     ) -> dict[str, Any]:
         if source == "logbook":
             return await self._get_logbook(
@@ -230,7 +366,12 @@ class UtilityTools:
             )
         if source == "error_log":
             return await self._get_error_log(
-                limit=limit, search=search, level=level, order=order
+                limit=limit,
+                search=search,
+                level=level,
+                order=order,
+                structured=structured,
+                top_n=top_n,
             )
         if source == "logger":
             # logger reports per-integration levels, not time-ordered events;
@@ -259,11 +400,18 @@ class UtilityTools:
         level: str | None,
         slug: str | None,
         order: Literal["newest", "oldest"] = "newest",
+        structured: bool = False,
+        top_n: int | None = None,
     ) -> dict[str, Any]:
         level = self._validate_log_level(level)
         warnings = self._collect_log_warnings(
             source, level, entity_id, end_time, slug, order
         )
+        if structured and source != "error_log":
+            warnings.append(
+                "Parameter 'structured' only applies to source='error_log'; "
+                f"ignored for source='{source}'"
+            )
         self._validate_log_slug(source, slug)
         result = await self._fetch_log_source(
             source,
@@ -277,6 +425,8 @@ class UtilityTools:
             level,
             slug,
             order,
+            structured=structured and source == "error_log",
+            top_n=top_n,
         )
         if warnings:
             result["warnings"] = warnings
@@ -606,14 +756,30 @@ class UtilityTools:
         search: str | None = None,
         level: str | None = None,
         order: Literal["newest", "oldest"] = "newest",
+        structured: bool = False,
+        top_n: int | None = None,
     ) -> dict[str, Any]:
-        """Fetch raw error log text from home-assistant.log."""
+        """Fetch raw error log text from home-assistant.log.
+
+        With ``structured=True`` the raw text is collapsed into a counted,
+        component-grouped summary instead (see ``_parse_error_log_structured``);
+        ``limit``/``order`` do not apply in that mode, ``top_n`` bounds it.
+        """
         effective_limit = self._coerce_limit(
             limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
         )
 
         try:
             raw_log = await self._client.get_error_log()
+
+            if structured:
+                return _parse_error_log_structured(
+                    raw_log or "",
+                    search=search,
+                    level=level,
+                    top_n=top_n if top_n and top_n > 0 else _DEFAULT_TOP_N,
+                )
+
             lines = raw_log.splitlines() if raw_log else []
 
             filters_applied: dict[str, str] = {}
@@ -1204,6 +1370,29 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         compact: bool = True,
         # System/error_log-specific
         level: str | None = None,
+        # error_log-specific: structured summary instead of raw text
+        structured: Annotated[
+            bool,
+            Field(
+                description=(
+                    "source='error_log' only. When True, return a deduplicated, "
+                    "component-grouped summary of the log (counted issues sorted "
+                    "by frequency) instead of raw text. Use this on busy "
+                    "instances where the raw log is large enough to exhaust "
+                    "context. Ignored for other sources."
+                )
+            ),
+        ] = False,
+        top_n: Annotated[
+            int | None,
+            Field(
+                ge=1,
+                description=(
+                    "Max distinct issues to return when structured=True "
+                    "(default 20). Bounds the response regardless of log size."
+                ),
+            ),
+        ] = None,
         # Supervisor + system_service-specific (different namespaces)
         slug: str | None = None,
     ) -> dict[str, Any]:
@@ -1223,6 +1412,10 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger'. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.
         **Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)
         **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)
+        **error_log params:** structured (default False — when True, returns a
+            deduplicated, component-grouped summary sorted by occurrence count
+            instead of raw text; bounded output on large logs), top_n (max
+            distinct issues in structured output, default 20)
         **Supervisor params:** slug = add-on slug, e.g. "core_mosquitto" (use
             ha_get_addon() to list installed slugs)
         **System-service params:** slug = service name. The slug "supervisor"
@@ -1241,6 +1434,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             level=level,
             slug=slug,
             order=order,
+            structured=structured,
+            top_n=top_n,
         )
 
     @mcp.tool(
