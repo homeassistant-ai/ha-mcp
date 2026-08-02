@@ -720,12 +720,16 @@ def _translate_surface(
     results: dict[tuple[str, str], str],
     failures: list[str],
     failed: set[tuple[str, str]],
-) -> bool:
+    consecutive_engine_failures: int,
+) -> tuple[bool, int]:
     """Translate one surface's chunks; True when the engine is declared dead.
 
     A chunk-level engine failure marks that chunk's strings failed and moves
     on, so one blocked or truncated batch cannot take down the whole run; two
-    in a row read as systemic and stop the calls.
+    in a row read as systemic and stop the calls. The counter is owned by the
+    caller and threaded through: a locale's surfaces are consecutive requests
+    to the same engine, so a failure at the end of one and a failure at the
+    start of the next are two in a row.
     """
     # The register anchor is the one input to a run that nothing downstream
     # can check, and on same-repo PRs the workflow commits without a human in
@@ -740,11 +744,10 @@ def _translate_surface(
             file=sys.stderr,
         )
 
-    consecutive_engine_failures = 0
     for chunk in _chunk(batch):
         if _out_of_time():
             failures.append(f"{locale}: time budget exhausted — stopping this run")
-            return True
+            return True, consecutive_engine_failures
         try:
             response = _call_gemini(_prompt(locale, chunk, surface, queued_keys))
         except SystemExit as exc:
@@ -756,7 +759,7 @@ def _translate_surface(
                 )
                 failed.add((item.section, item.key))
             if consecutive_engine_failures >= _ENGINE_GIVE_UP_AFTER:
-                return True
+                return True, consecutive_engine_failures
             continue
         consecutive_engine_failures = 0
         time.sleep(_SECONDS_BETWEEN_REQUESTS)
@@ -771,7 +774,7 @@ def _translate_surface(
                 surface,
                 queued_keys,
             )
-    return False
+    return False, consecutive_engine_failures
 
 
 def _translate_locale(
@@ -808,11 +811,23 @@ def _translate_locale(
     failures: list[str] = []
     failed: set[tuple[str, str]] = set()
     dead = False
+    # Owned here, not per surface: the surfaces of one locale are consecutive
+    # requests to the same engine, so a failure ending one and a failure
+    # opening the next are two in a row.
+    consecutive_engine_failures = 0
     for surface, batch in batches.items():
         if dead:
             break
-        dead = _translate_surface(
-            locale, surface, batch, by_id, queued[surface], results, failures, failed
+        dead, consecutive_engine_failures = _translate_surface(
+            locale,
+            surface,
+            batch,
+            by_id,
+            queued[surface],
+            results,
+            failures,
+            failed,
+            consecutive_engine_failures,
         )
     if dead:
         _mark_unattempted(locale, items, results, failures, failed)

@@ -430,6 +430,55 @@ class TestPlanning:
             "would pass with sampling switched off entirely"
         )
 
+    def test_engine_failures_count_across_a_locale_not_per_surface(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One failure ending the settings surface and one opening the component
+        surface are two consecutive failures against the same engine. A counter
+        living inside the per-surface call resets between them, so the run keeps
+        calling an engine that has already answered twice in a row."""
+        locales = tmp_path / "locales"
+        component = tmp_path / "component"
+        locales.mkdir()
+        component.mkdir()
+        (locales / "en.json").write_text(
+            json.dumps(
+                {"meta": {"native_name": "English"}, "messages": {"a": "Your page."}}
+            ),
+            encoding="utf-8",
+        )
+        (locales / "de.json").write_text(
+            json.dumps({"meta": {"native_name": "Deutsch"}, "messages": {"a": "…"}}),
+            encoding="utf-8",
+        )
+        (component / "en.json").write_text(json.dumps({"x": "Your token."}), "utf-8")
+        (component / "de.json").write_text(json.dumps({"x": "…"}), "utf-8")
+        monkeypatch.setattr(translate_locales, "LOCALES_DIR", locales)
+        monkeypatch.setattr(translate_locales, "COMPONENT_DIR", component)
+        monkeypatch.setattr(translate_locales.time, "sleep", lambda _s: None)
+
+        calls: list[str] = []
+
+        def dead_engine(prompt: str) -> dict[str, str]:
+            calls.append(prompt)
+            raise SystemExit("engine down")
+
+        monkeypatch.setattr(translate_locales, "_call_gemini", dead_engine)
+
+        _results, _failures, _failed, dead = translate_locales._translate_locale(
+            "de",
+            [
+                WorkItem("de", "messages", "a", "Your page."),
+                WorkItem("de", "component", "x", "Your token."),
+            ],
+        )
+
+        assert dead, "two failed chunks in a row must declare the engine dead"
+        assert len(calls) == 2, (
+            f"expected the run to stop after the second failure, saw {len(calls)} "
+            "engine calls"
+        )
+
     def test_clean_tree_plans_no_work(self) -> None:
         """The no-op invariant the CI loop terminates on: after a translation
         commit repins the baseline, the retriggered run must find nothing."""
