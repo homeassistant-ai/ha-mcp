@@ -194,6 +194,9 @@ class HomeAssistantSmartMCPServer:
         # Register tools
         self.tools_registry.register_all_tools()
 
+        # Register MCP prompts (safety, troubleshooting, automation, status, security)
+        self._initialize_prompts()
+
         # Register bundled skills as MCP resources
         self._register_skills()
 
@@ -284,6 +287,30 @@ class HomeAssistantSmartMCPServer:
         # so it is innermost: its result scan sees the raw tool output before
         # any other middleware transforms it.
         self._apply_visibility_outbound_middleware()
+
+    def _initialize_prompts(self) -> None:
+        """Register all MCP prompt modules with the server.
+
+        Prompts are reusable, parameterized conversation-starters that guide
+        LLMs through structured workflows: safety guards, troubleshooting
+        chains, automation creation, status reports, and security-sensitive
+        operations.
+
+        Failures are logged and swallowed: prompts are additive guidance, so a
+        broken prompt module must never take the tool surface down with it.
+        """
+        try:
+            from .prompts import register_all_prompts
+
+            register_all_prompts(self.mcp)
+            logger.info(
+                "Registered MCP prompts "
+                "(safety, troubleshooting, automation, status, security)"
+            )
+        except Exception:
+            logger.exception(
+                "Failed to register MCP prompts — server will start without prompts"
+            )
 
     def _get_skills_dir(self) -> Path | None:
         """Return the bundled skills directory if it exists.
