@@ -473,10 +473,32 @@ def _style_sample_keys(
     )[:_STYLE_SAMPLE_COUNT]
 
 
-def _style_samples(locale: str, exclude: Container[str] = frozenset()) -> str:
+def _surface_catalogs(locale: str, surface: Section) -> tuple[dict[str, str], ...]:
+    """The (english, translated) pair a request of this section samples from.
+
+    The two authored surfaces do not have to agree — today the French component
+    catalog is `vous` throughout while its settings catalog mixes `tu` and
+    `vous` — so a component request sampled from the settings catalog would be
+    told to use a register its own surface does not use.
+    """
+    if surface == "component":
+        return (
+            _flatten(_load_json(COMPONENT_DIR / "en.json")),
+            _flatten(_load_json(COMPONENT_DIR / f"{locale}.json"))
+            if (COMPONENT_DIR / f"{locale}.json").exists()
+            else {},
+        )
     catalog = _load_json(LOCALES_DIR / f"{locale}.json")
-    english = _load_json(LOCALES_DIR / "en.json")["messages"]
-    translated: dict[str, str] = catalog.get("messages", {})
+    return (
+        _load_json(LOCALES_DIR / "en.json")["messages"],
+        catalog.get("messages", {}),
+    )
+
+
+def _style_samples(
+    locale: str, surface: Section, exclude: Container[str] = frozenset()
+) -> str:
+    english, translated = _surface_catalogs(locale, surface)
     return "\n\n".join(
         f"EN: {english[key]}\n{locale.upper()}: {translated[key]}"
         for key in _style_sample_keys(english, translated, exclude)
@@ -484,14 +506,17 @@ def _style_samples(locale: str, exclude: Container[str] = frozenset()) -> str:
 
 
 def _prompt(
-    locale: str, batch: dict[str, str], queued_message_keys: Container[str]
+    locale: str,
+    batch: dict[str, str],
+    surface: Section,
+    queued_keys: Container[str],
 ) -> str:
-    """One request. ``queued_message_keys`` is every ``messages`` key this run
-    still has to translate — not just this chunk's. Results are applied after
-    all chunks finish, so a key queued in a later chunk still has its OLD
-    translation on disk while this one is prompted; sampling it would show a
-    stale pair as the thing to imitate."""
-    samples = _style_samples(locale, queued_message_keys)
+    """One request, for one surface. ``queued_keys`` is every key of that
+    surface the run still has to translate — not just this chunk's. Results are
+    applied after all chunks finish, so a key queued in a later chunk still has
+    its OLD translation on disk while this one is prompted; sampling it would
+    show a stale pair as the thing to imitate."""
+    samples = _style_samples(locale, surface, queued_keys)
     style = (
         f"Match the tone and terminology of these existing translations:\n{samples}\n\n"
         if samples
@@ -632,14 +657,15 @@ def _accept_or_retry(
     results: dict[tuple[str, str], str],
     failures: list[str],
     failed: set[tuple[str, str]],
-    queued_message_keys: Container[str],
+    surface: Section,
+    queued_keys: Container[str],
 ) -> None:
     """Validate one translated string, retrying once with the reason."""
     reason = _validate(item, translated)
     if reason is not None:
         try:
             retry = _call_gemini(
-                _prompt(locale, {_string_id(item): item.english}, queued_message_keys)
+                _prompt(locale, {_string_id(item): item.english}, surface, queued_keys)
                 + f"\n\nYour previous attempt was rejected: {reason}. "
                 "Fix that and return the corrected JSON."
             )
@@ -683,6 +709,56 @@ def _mark_unattempted(
             failed.add(ref)
 
 
+def _translate_surface(
+    locale: str,
+    surface: Section,
+    batch: dict[str, str],
+    by_id: dict[str, WorkItem],
+    queued_keys: set[str],
+    results: dict[tuple[str, str], str],
+    failures: list[str],
+    failed: set[tuple[str, str]],
+) -> bool:
+    """Translate one surface's chunks; True when the engine is declared dead.
+
+    A chunk-level engine failure marks that chunk's strings failed and moves
+    on, so one blocked or truncated batch cannot take down the whole run; two
+    in a row read as systemic and stop the calls.
+    """
+    consecutive_engine_failures = 0
+    for chunk in _chunk(batch):
+        if _out_of_time():
+            failures.append(f"{locale}: time budget exhausted — stopping this run")
+            return True
+        try:
+            response = _call_gemini(_prompt(locale, chunk, surface, queued_keys))
+        except SystemExit as exc:
+            consecutive_engine_failures += 1
+            for sid in chunk:
+                item = by_id[sid]
+                failures.append(
+                    f"{locale}/{item.section}/{item.key}: engine call failed ({exc})"
+                )
+                failed.add((item.section, item.key))
+            if consecutive_engine_failures >= _ENGINE_GIVE_UP_AFTER:
+                return True
+            continue
+        consecutive_engine_failures = 0
+        time.sleep(_SECONDS_BETWEEN_REQUESTS)
+        for sid in chunk:
+            _accept_or_retry(
+                locale,
+                by_id[sid],
+                response.get(sid),
+                results,
+                failures,
+                failed,
+                surface,
+                queued_keys,
+            )
+    return False
+
+
 def _translate_locale(
     locale: str, items: list[WorkItem]
 ) -> tuple[dict[tuple[str, str], str], list[str], set[tuple[str, str]], bool]:
@@ -701,49 +777,28 @@ def _translate_locale(
     cannot take down the whole run.
     """
     by_id = {_string_id(item): item for item in items}
-    batch = {sid: item.english for sid, item in by_id.items()}
-    # Every message key this locale still owes, so no chunk samples a key
-    # another chunk is about to rewrite (its catalog entry is still the
-    # translation of the PREVIOUS English until the run applies results).
-    queued_message_keys = {item.key for item in items if item.section == "messages"}
+    # Requests are grouped by the surface they are sampled from, because the
+    # register rule points at samples and the two authored surfaces need not
+    # agree. Every key the surface still owes is excluded from its own
+    # samples: results are applied after the last chunk, so a key queued
+    # anywhere still carries the translation of the PREVIOUS English.
+    batches: dict[Section, dict[str, str]] = {}
+    queued: dict[Section, set[str]] = {}
+    for sid, item in by_id.items():
+        surface: Section = "component" if item.section == "component" else "messages"
+        batches.setdefault(surface, {})[sid] = item.english
+        queued.setdefault(surface, set()).add(item.key)
 
     results: dict[tuple[str, str], str] = {}
     failures: list[str] = []
     failed: set[tuple[str, str]] = set()
     dead = False
-    consecutive_engine_failures = 0
-    for chunk in _chunk(batch):
+    for surface, batch in batches.items():
         if dead:
             break
-        if _out_of_time():
-            failures.append(f"{locale}: time budget exhausted — stopping this run")
-            dead = True
-            break
-        try:
-            response = _call_gemini(_prompt(locale, chunk, queued_message_keys))
-        except SystemExit as exc:
-            consecutive_engine_failures += 1
-            for sid in chunk:
-                item = by_id[sid]
-                failures.append(
-                    f"{locale}/{item.section}/{item.key}: engine call failed ({exc})"
-                )
-                failed.add((item.section, item.key))
-            if consecutive_engine_failures >= _ENGINE_GIVE_UP_AFTER:
-                dead = True
-            continue
-        consecutive_engine_failures = 0
-        time.sleep(_SECONDS_BETWEEN_REQUESTS)
-        for sid in chunk:
-            _accept_or_retry(
-                locale,
-                by_id[sid],
-                response.get(sid),
-                results,
-                failures,
-                failed,
-                queued_message_keys,
-            )
+        dead = _translate_surface(
+            locale, surface, batch, by_id, queued[surface], results, failures, failed
+        )
     if dead:
         _mark_unattempted(locale, items, results, failures, failed)
     return results, failures, failed, dead

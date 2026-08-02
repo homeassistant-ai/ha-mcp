@@ -211,7 +211,12 @@ class TestPromptRegisterRule:
     """The rule points at the samples, so it carries nothing without them."""
 
     @staticmethod
-    def _locales(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, de: dict) -> None:
+    def _locales(
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        de: dict,
+        component_de: dict | None = None,
+    ) -> None:
         locales = tmp_path / "locales"
         locales.mkdir()
         (locales / "en.json").write_text(
@@ -229,11 +234,23 @@ class TestPromptRegisterRule:
         )
         monkeypatch.setattr(translate_locales, "LOCALES_DIR", locales)
 
+        component = tmp_path / "component"
+        component.mkdir()
+        (component / "en.json").write_text(
+            json.dumps({"step": {"title": "Check your token."}}), encoding="utf-8"
+        )
+        (component / "de.json").write_text(
+            json.dumps({"step": component_de or {}}), encoding="utf-8"
+        )
+        monkeypatch.setattr(translate_locales, "COMPONENT_DIR", component)
+
     def test_rule_ships_with_the_samples(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._locales(tmp_path, monkeypatch, {"greeting": "Starte deinen Client neu."})
-        prompt = translate_locales._prompt("de", {"messages:other": "Save"}, set())
+        prompt = translate_locales._prompt(
+            "de", {"messages:other": "Save"}, "messages", set()
+        )
         assert "Starte deinen Client neu." in prompt
         assert "Address the reader the way the sample translations" in prompt
 
@@ -241,7 +258,9 @@ class TestPromptRegisterRule:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._locales(tmp_path, monkeypatch, {})
-        prompt = translate_locales._prompt("de", {"messages:greeting": "Save"}, set())
+        prompt = translate_locales._prompt(
+            "de", {"messages:greeting": "Save"}, "messages", set()
+        )
         assert "Match the tone and terminology" not in prompt
         assert "Address the reader the way" not in prompt
 
@@ -254,10 +273,29 @@ class TestPromptRegisterRule:
         show that stale pair as the sample — the whole queue has to go."""
         self._locales(tmp_path, monkeypatch, {"greeting": "Starte deinen Client neu."})
         prompt = translate_locales._prompt(
-            "de", {"messages:other": "Save"}, {"greeting"}
+            "de", {"messages:other": "Save"}, "messages", {"greeting"}
         )
         assert "Starte deinen Client neu." not in prompt
         assert "Match the tone and terminology" not in prompt
+
+    def test_component_work_samples_the_component_catalog(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The two authored surfaces need not share a register — French ships a
+        `vous`-only component catalog next to a settings catalog that mixes `tu`
+        and `vous` — so a component request must not be told to imitate the
+        settings catalog's register."""
+        self._locales(
+            tmp_path,
+            monkeypatch,
+            {"greeting": "Starte deinen Client neu."},
+            component_de={"title": "Prüfen Sie Ihr Token."},
+        )
+        prompt = translate_locales._prompt(
+            "de", {"component:other": "Save"}, "component", set()
+        )
+        assert "Prüfen Sie Ihr Token." in prompt
+        assert "Starte deinen Client neu." not in prompt
 
 
 class TestFlattenRoundTrip:
