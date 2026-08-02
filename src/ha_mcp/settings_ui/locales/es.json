@@ -705,6 +705,10 @@
       "title": "Importar plano",
       "description": "Importa un plano desde una URL."
     },
+    "ha_intent_process": {
+      "title": "Procesar intención de Assist",
+      "description": "Ejecuta una frase en lenguaje natural a través del sistema de intenciones de Assist de Home Assistant."
+    },
     "ha_list_files": {
       "title": "Listar archivos",
       "description": "Lista los archivos de un directorio dentro del directorio de configuración de Home Assistant."

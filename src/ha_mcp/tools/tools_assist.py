@@ -55,6 +55,7 @@ class AssistTools:
             "readOnlyHint": False,
             "destructiveHint": True,
             "idempotentHint": False,
+            "openWorldHint": False,
         },
     )
     @log_tool_usage

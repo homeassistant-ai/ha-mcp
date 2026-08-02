@@ -705,6 +705,10 @@
       "title": "Importa un blueprint",
       "description": "Importa un blueprint da un URL."
     },
+    "ha_intent_process": {
+      "title": "Elabora l'intento di Assist",
+      "description": "Esegue una frase in linguaggio naturale attraverso il sistema di intenti Assist di Home Assistant."
+    },
     "ha_list_files": {
       "title": "Elenca i file",
       "description": "Elenca i file di una cartella all'interno della cartella di configurazione di Home Assistant."

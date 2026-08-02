@@ -705,6 +705,10 @@
       "title": "Импортировать чертеж",
       "description": "Импортировать чертеж Home Assistant по URL."
     },
+    "ha_intent_process": {
+      "title": "Обработать намерение Assist",
+      "description": "Выполнять фразу на естественном языке через систему намерений Assist в Home Assistant."
+    },
     "ha_list_files": {
       "title": "Список файлов",
       "description": "Показать файлы в разрешённом каталоге конфигурации."
