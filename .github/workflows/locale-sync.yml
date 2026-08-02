@@ -12,34 +12,51 @@ name: Locale Sync
 # exactly the changed/missing keys via the Gemini API, regenerates the
 # derived catalogs, and repins the baseline. Untranslated merges accumulate
 # as baseline drift, so one run picks up everything merged since the last
-# one — and a hand-translated change repins the baseline in its own PR, so
-# the bot never touches a string a human translated: it only ever rewrites
-# keys whose English moved out from under them, or that no locale carries.
+# one. The bot only ever rewrites keys whose English moved out from under
+# them, or that no locale carries — so a hand translation survives exactly
+# when its PR also repinned the baseline (scripts/update_locale_baseline.py,
+# which is what tells the bot the changed English is already covered).
 #
-# Verification is split in two: every returned string is validated before it
-# is written (placeholder, markup and panel-link parity, in the script), and
-# after a clean run the completeness suite in
-# tests/src/unit/test_locale_parity.py runs here under
-# LOCALE_COMPLETENESS_CHECKS=1 — the same checks PR CI skips. It failing is
-# the signal a human is owed: the engine pasted English back, a hand edit
-# broke parity, or a feature-gated tool's parsed docstring changed and needs
-# its stub confirmed + scripts/update_locale_baseline.py (see AGENTS.md
-# § Translations). On that failure nothing is pushed and the run goes red —
-# machine translations are recomputable, so dropping them loses nothing.
+# Verification is three layers. (1) Every returned string is validated
+# before it is written (placeholder, markup and panel-link parity, in the
+# script). (2) After a clean run, the content-completeness checks that PR CI
+# skips run here under LOCALE_COMPLETENESS_CHECKS=1; a failure means the
+# output may be corrupt (the engine pasted English back, parity broke) and
+# BLOCKS the push — machine translations are recomputable, so dropping them
+# loses nothing. (3) The English-source staleness check runs separately and
+# does NOT block the push: after a clean run the only way it fails is a
+# held feature-gated stub key awaiting human review (see AGENTS.md
+# § Translations), which is routine — blocking on it would wedge every
+# unrelated translation and re-burn the Gemini quota daily until someone
+# runs update_locale_baseline.py. It reddens the job instead.
 #
 # Rate limits / outages degrade loudly, never silently: a partial run
 # (daily quota, engine outage, network) still pushes whatever finished plus
 # a progress file (tests/src/unit/locale_sync_progress.json) the next run
-# resumes from — spent quota is never wasted — and the job fails so the gap
-# stays visible. Re-running this workflow (or just waiting for tomorrow's
-# cron) is the recovery procedure. The fallback when the engine is down is a
-# human: hand-translate, run generate_locales.py + update_locale_baseline.py,
-# and open an ordinary PR — hand-edits always win.
+# resumes from — spent quota is never wasted — and the translate job fails
+# so the gap stays visible. Re-running this workflow (or just waiting for
+# tomorrow's cron) is the recovery procedure. The fallback when the engine
+# is down is a human: hand-translate, run generate_locales.py +
+# update_locale_baseline.py, and open an ordinary PR — hand-edits always win.
+#
+# Two jobs on purpose, as blast-radius reduction: the translate job executes
+# everything `uv sync` resolves (a supply chain of hundreds of packages) and
+# holds no credential beyond the free-tier Gemini key; the push job runs on
+# a fresh runner, executes only git against a fresh clone (no hooks, no
+# project code), and refuses any patch that touches files outside the locale
+# allowlist. A compromised dependency in the translate job can therefore
+# corrupt at most the locale files the pipeline legitimately writes — never
+# reach the ruleset-bypassing push credential.
 #
 # The push deliberately carries NO [skip ci], unlike sync-tool-docs.yml:
 # sync-integration-mirror, publish-dev and addon-publish-dev reacting to it
-# is how the translated catalogs actually ship. There is no retrigger loop —
-# this workflow runs on cron, not on push.
+# is how the translated catalogs actually ship. The same push also fires
+# e2e-tests, performance-tests and notify-dev-channel (which no-ops with no
+# PR number in the commit message) — the cost of an ordinary merge, daily.
+# A partial run's push reaches the dev channel with only per-string
+# validation behind it; accepted — validated-partial beats untranslated,
+# and the next run completes it. There is no retrigger loop — this workflow
+# runs on cron, not on push.
 
 on:
   schedule:
@@ -66,24 +83,36 @@ concurrency:
 
 jobs:
   translate:
-    name: Translate and land locale updates
-    # workflow_dispatch on a non-default ref would translate that ref's tree
-    # and push the result to master — refuse it. schedule always runs on
-    # the default branch.
-    if: >-
-      github.event_name == 'schedule' ||
-      github.ref_name == github.event.repository.default_branch
+    name: Translate stale and missing strings
     runs-on: ubuntu-latest
     # The script bounds itself at TRANSLATE_TIME_BUDGET_SECONDS (2400s) and
-    # degrades resumably when it trips; this is the backstop around install,
-    # verification and the push, and should never fire.
-    timeout-minutes: 55
+    # degrades resumably when it trips; this is the backstop around install
+    # and verification, and should never fire.
+    timeout-minutes: 50
+    outputs:
+      have_patch: ${{ steps.export.outputs.have_patch }}
+      translate_outcome: ${{ steps.translate.outcome }}
+      verify_outcome: ${{ steps.verify.outcome }}
+      staleness_outcome: ${{ steps.staleness.outcome }}
 
     steps:
+    - name: Refuse non-default refs
+      # workflow_dispatch on a non-default ref would translate that ref's
+      # tree and push the result to master. A visible failure, not a silent
+      # job-level skip — an all-skipped run reports green, which reads as
+      # "synced" to the maintainer who dispatched it.
+      if: github.event_name != 'schedule'
+      run: |
+        if [ "${{ github.ref_name }}" != "${{ github.event.repository.default_branch }}" ]; then
+          echo "::error::locale-sync must be dispatched on the default branch, not '${{ github.ref_name }}' — its push targets master."
+          exit 1
+        fi
+
     - uses: actions/checkout@v7
       with:
-        # The push below authenticates explicitly with the App token;
-        # nothing here needs an ambient credential.
+        # This job executes the resolved dependency tree, so it gets no
+        # credential except GEMINI_API_KEY (free-tier, rotatable) — never
+        # the push token.
         persist-credentials: false
 
     - name: Install uv
@@ -105,7 +134,7 @@ jobs:
         TRANSLATE_TIME_BUDGET_SECONDS: "2400"
       run: uv run python scripts/translate_locales.py
 
-    - name: Stage locale changes
+    - name: Export changes as a patch
       id: export
       run: |
         git add src/ha_mcp/settings_ui/locales src/ha_mcp/settings_ui/settings.js \
@@ -122,63 +151,223 @@ jobs:
         if git diff --staged --quiet; then
           echo "No translation updates."
           echo "have_patch=false" >> "$GITHUB_OUTPUT"
-        else
-          echo "have_patch=true" >> "$GITHUB_OUTPUT"
+          exit 0
         fi
+        # --no-renames: emit deletions and additions as themselves, never as
+        # rename records — the push job rejects rename/copy records outright,
+        # and this guarantees the pipeline's own patches never contain any.
+        git diff --staged --binary --no-renames > "$RUNNER_TEMP/locale-sync.patch"
+        echo "have_patch=true" >> "$GITHUB_OUTPUT"
+
+    - name: Upload patch
+      if: steps.export.outputs.have_patch == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: locale-sync-patch
+        path: ${{ runner.temp }}/locale-sync.patch
+        retention-days: 1
 
     - name: Verify translated-catalog completeness
       id: verify
-      # Runs even with no diff: a clean no-op run over a stale tree (a held
-      # feature-gated key awaiting stub review, a hand edit that broke
-      # parity) must still go red. Skipped after a partial run — the state
-      # is incomplete by construction and the job already fails for it.
+      # Content completeness only — the staleness check runs in the next
+      # step because its failure must not block the push (see the header).
+      # Runs even with no diff: a clean no-op run over a tree a hand edit
+      # broke must still go red. Skipped after a partial run — the state is
+      # incomplete by construction and the job already fails for it.
+      # --maxfail=0 overrides pytest.ini's --maxfail=3: a systemic failure
+      # must name every string, not the first three. The junitxml assertion
+      # closes the fail-open hole where a renamed env var or refactored
+      # marker skips every gated test and pytest exits 0 having verified
+      # nothing (test_locale_sync_gate_shape.py pins the wiring pre-merge;
+      # this asserts it at run time).
       if: steps.translate.outcome == 'success'
       continue-on-error: true
       env:
         LOCALE_COMPLETENESS_CHECKS: "1"
-      run: uv run pytest tests/src/unit/test_locale_parity.py -q
+      run: |
+        assert_nothing_skipped() {
+          # The <testsuite> attributes carry the counts; requiring
+          # skipped="0" and forbidding tests="0" needs no XML parser.
+          attrs=$(grep -o -m1 '<testsuite [^>]*' "$1")
+          echo "$1: $attrs"
+          case "$attrs" in
+            *'skipped="0"'*) ;;
+            *)
+              echo "::error::$1 reports skipped tests — the completeness gate failed open; LOCALE_COMPLETENESS_CHECKS is no longer wired to the completeness markers."
+              exit 1
+              ;;
+          esac
+          case "$attrs" in
+            *'tests="0"'*)
+              echo "::error::$1 collected zero tests — the -k filter no longer matches; the gate verified nothing."
+              exit 1
+              ;;
+          esac
+        }
+        uv run pytest tests/src/unit/test_locale_parity.py -q --maxfail=0 \
+          -k "not test_translations_are_checked_against_current_english" \
+          --junitxml="$RUNNER_TEMP/verify-parity.xml"
+        uv run pytest tests/src/unit/test_settings_ui_i18n.py -q --maxfail=0 \
+          -k "test_shipped_catalog_translates_the_tools_tab" \
+          --junitxml="$RUNNER_TEMP/verify-i18n.xml"
+        assert_nothing_skipped "$RUNNER_TEMP/verify-parity.xml"
+        assert_nothing_skipped "$RUNNER_TEMP/verify-i18n.xml"
 
+    - name: Check for held English-source staleness
+      id: staleness
+      # Non-blocking by design: after a clean run the only failure mode is
+      # a feature-gated tool's held " (parsed)" baseline key, which needs a
+      # human to confirm the stub and run scripts/update_locale_baseline.py.
+      # The job goes red (see the final step) but the push proceeds —
+      # nothing about the held key makes this run's output worse.
+      if: steps.translate.outcome == 'success'
+      continue-on-error: true
+      env:
+        LOCALE_COMPLETENESS_CHECKS: "1"
+      run: |
+        uv run pytest tests/src/unit/test_locale_parity.py -q --maxfail=0 \
+          -k "test_translations_are_checked_against_current_english" \
+          --junitxml="$RUNNER_TEMP/staleness.xml"
+        attrs=$(grep -o -m1 '<testsuite [^>]*' "$RUNNER_TEMP/staleness.xml")
+        echo "staleness: $attrs"
+        case "$attrs" in
+          *'tests="1"'*'skipped="0"'*|*'skipped="0"'*'tests="1"'*) ;;
+          *)
+            echo "::error::the staleness check did not run exactly once unskipped — the completeness gate failed open; LOCALE_COMPLETENESS_CHECKS is no longer wired to the completeness markers."
+            exit 1
+            ;;
+        esac
+
+    - name: Surface partial or failed runs
+      if: >-
+        !cancelled() &&
+        (steps.translate.outcome != 'success' ||
+         steps.verify.outcome == 'failure' ||
+         steps.staleness.outcome == 'failure')
+      run: |
+        if [ "${{ steps.translate.outcome }}" != "success" ]; then
+          echo "::error::scripts/translate_locales.py did not finish cleanly; any finished strings are exported for the push job (see its result for whether they landed) and the remainder is recorded in the progress file. Re-run this workflow — or let tomorrow's cron — continue from it, or hand-translate per AGENTS.md § Translations."
+        fi
+        if [ "${{ steps.verify.outcome }}" = "failure" ]; then
+          echo "::error::content-completeness verification failed after a clean translate run, so nothing will be pushed — the output may be corrupt (English pasted back, parity broken). The pytest output above names exactly what is off."
+        fi
+        if [ "${{ steps.staleness.outcome }}" = "failure" ]; then
+          echo "::error::the English-source baseline holds stale keys — after a clean run that means a feature-gated tool's parsed docstring changed. A human must confirm the stub still describes the tool and run scripts/update_locale_baseline.py; the push was NOT blocked for this."
+        fi
+        exit 1
+
+  push:
+    name: Push translations to master
+    needs: translate
+    # always(): partial progress from a failed translate run must still land
+    # (that is the resumability story). The one state that must NOT land is a
+    # completed run whose CONTENT verification failed — the translations are
+    # recomputable, so dropping them loses nothing. A staleness failure
+    # (held gated-stub keys) deliberately does not appear here: it reddens
+    # the translate job without blocking the push.
+    if: >-
+      always() &&
+      needs.translate.result != 'skipped' &&
+      needs.translate.result != 'cancelled' &&
+      needs.translate.outputs.have_patch == 'true' &&
+      !(needs.translate.outputs.translate_outcome == 'success' &&
+        needs.translate.outputs.verify_outcome == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
     - name: Generate GitHub App token
       id: app-token
-      if: steps.export.outputs.have_patch == 'true'
       uses: actions/create-github-app-token@v3
       with:
         app-id: ${{ secrets.RELEASE_APP_ID }}
         private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       continue-on-error: true
 
-    - name: Commit and push to master
-      # A completed run whose verification FAILED is the one case that must
-      # not land unattended — nothing is pushed and the job goes red; the
-      # translations are recomputable, so dropping them loses nothing. A
-      # partial run pushes: its incompleteness is expected, quantified, and
-      # resumable, and every string it did write passed per-string
-      # validation.
-      if: >-
-        steps.export.outputs.have_patch == 'true' &&
-        !(steps.translate.outcome == 'success' && steps.verify.outcome == 'failure')
+    - name: Ensure push credential
+      # This job's permissions are contents: read, so the default
+      # GITHUB_TOKEN cannot push at all — an App/PAT credential is required,
+      # same as sync-tool-docs.yml. Fail loudly instead of pretending.
       env:
-        PUSH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN }}
+        APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
       run: |
-        # This job's permissions are contents: read, so the default
-        # GITHUB_TOKEN cannot push — an App/PAT credential with a ruleset
-        # bypass is required, same as sync-tool-docs.yml. Fail loudly
-        # instead of pretending.
-        if [ -z "$PUSH_TOKEN" ]; then
+        if [ -z "$APP_TOKEN" ] && [ -z "$RELEASE_TOKEN" ]; then
           echo "::error::No push credential: the release App token could not be minted and RELEASE_TOKEN is unset. Configure RELEASE_APP_ID/RELEASE_APP_PRIVATE_KEY or RELEASE_TOKEN."
           exit 1
         fi
+
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Download patch
+      uses: actions/download-artifact@v8
+      with:
+        name: locale-sync-patch
+        path: ${{ runner.temp }}
+
+    - name: Verify, apply, commit, push
+      # Runs only git and coreutils on a fresh clone — no project code, no
+      # hooks. The allowlist check caps what a hijacked translate job could
+      # put in the patch to exactly the files the pipeline legitimately
+      # writes.
+      env:
+        PUSH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN }}
+      run: |
+        patch="$RUNNER_TEMP/locale-sync.patch"
+        # Pre-checks for patch forms that hide a path from every listing:
+        # explicit rename/copy records name only their destination in
+        # --numstat, and a headerless rename (diff --git a/OLD b/NEW with no
+        # rename lines) is invisible even to --summary. Legitimate pipeline
+        # patches contain neither — the export step diffs with --no-renames,
+        # which always prints identical a/ and b/ sides.
+        if git apply --summary "$patch" | grep -qE '^ *(rename|copy) '; then
+          echo "::error::patch contains rename/copy records; refusing."
+          exit 1
+        fi
+        if grep '^diff --git ' "$patch" | grep -qvE '^diff --git a/(.+) b/\1$'; then
+          echo "::error::patch has a diff header whose a/ and b/ sides differ (disguised rename); refusing."
+          exit 1
+        fi
+        if ! git apply --index "$patch"; then
+          # master moved between the translate job's checkout and this one
+          # (an ordinary merge — the master-write concurrency group only
+          # serialises the workflows in the group). The next run on the new
+          # master redoes the remainder; dropping this patch loses nothing
+          # that is not recomputable.
+          echo "::warning::patch no longer applies to master; skipping push — the next run will redo the remaining work."
+          exit 0
+        fi
+        # The authoritative allowlist runs AFTER apply, where git has
+        # resolved both sides of every change: a disguised rename stages its
+        # source as a deletion, which --name-only lists. Nothing has been
+        # pushed yet, so applying first costs nothing.
+        git diff --staged --name-only --no-renames > /tmp/staged-files
+        while IFS= read -r f; do
+          case "$f" in
+            src/ha_mcp/settings_ui/locales/*) ;;
+            src/ha_mcp/settings_ui/settings.js) ;;
+            custom_components/ha_mcp_tools/translations/*) ;;
+            homeassistant-addon/translations/*) ;;
+            homeassistant-addon-dev/translations/*) ;;
+            tests/src/unit/locale_source_baseline.json) ;;
+            tests/src/unit/locale_sync_progress.json) ;;
+            *)
+              echo "::error::patch touches a path outside the locale allowlist: $f"
+              exit 1
+              ;;
+          esac
+        done < /tmp/staged-files
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git commit -m "chore(internal): machine-translate locale updates"
-        # master can advance between this job's checkout and its push whenever
-        # any PR merges in the same window, which rejects a bare push as a
-        # non-fast-forward (the master-write concurrency group only
-        # serialises the workflows in the group, not ordinary merges). Rebase
-        # onto the latest master and retry before giving up. Unlike
-        # sync-tool-docs, a conflict IS possible here — a hand-translation
-        # merging mid-run — and losing to it is correct: abort, go red, and
-        # let the next run recompute against the hand edit (which wins).
+        # master can advance between this job's checkout and its push
+        # whenever any PR merges in the same window, which rejects a bare
+        # push as a non-fast-forward. Rebase onto the latest master and
+        # retry before giving up. A conflicted rebase means a racing locale
+        # edit — losing to it is correct (hand-edits win): abort, warn, and
+        # let the next run recompute against it.
         for attempt in 1 2 3 4 5; do
           if git push "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:master; then
             echo "Pushed locale updates (attempt ${attempt})."
@@ -187,22 +376,9 @@ jobs:
           echo "Push rejected on attempt ${attempt}; rebasing onto origin/master and retrying."
           git pull --rebase origin master || {
             git rebase --abort 2>/dev/null || true
-            echo "::error::Rebase onto origin/master failed (likely a racing locale edit); nothing pushed — the next run will redo the work against it."
-            exit 1
+            echo "::warning::could not rebase onto the moved master (likely a racing locale edit); skipping push — the next run will redo the remaining work."
+            exit 0
           }
         done
-        echo "::error::Could not push locale updates after 5 attempts."
-        exit 1
-
-    - name: Surface partial or failed runs
-      if: >-
-        !cancelled() &&
-        (steps.translate.outcome != 'success' || steps.verify.outcome == 'failure')
-      run: |
-        if [ "${{ steps.translate.outcome }}" != "success" ]; then
-          echo "::error::scripts/translate_locales.py did not finish cleanly; finished strings (if any) were pushed and the remainder is recorded in the progress file. Re-run this workflow — or let tomorrow's cron — continue from it, or hand-translate per AGENTS.md § Translations."
-        fi
-        if [ "${{ steps.verify.outcome }}" = "failure" ]; then
-          echo "::error::the completeness suite failed after a clean translate run, so nothing was pushed — a human is owed. Common cause: a feature-gated tool's parsed docstring changed; confirm the stub still describes the tool and run scripts/update_locale_baseline.py. The pytest output above names exactly what is off."
-        fi
+        echo "::error::Could not push locale updates after 5 attempts — the push output above shows whether this is repeated racing or a credential/ruleset rejection."
         exit 1

@@ -28,9 +28,9 @@ Add the two authored catalogs — this one may start as a `meta`-only stub
 (`native_name`, `dir`) — then run `python scripts/generate_locales.py` and
 merge: the post-merge `locale-sync.yml` workflow machine-fills every string
 over its next daily runs. To fill them in your own PR instead, run
-`scripts/translate_locales.py` yourself and review its output like any other
-diff. Also
-add the new code to the locale list in the repository-root `AGENTS.md`
+`scripts/translate_locales.py` yourself and review its output like any
+other diff. Also add the new code to the locale list in the repository-root
+`AGENTS.md`
 § Translations — that list is pinned by
 `test_agents_md_lists_every_shipped_locale`. The engine reads the target
 language from `meta.native_name`, so any language an LLM can write — natural
@@ -78,6 +78,9 @@ In PR CI (`tests/src/unit/test_locale_parity.py`, ungated):
   generator output (`test_derived_catalogs_match_the_canonical_store`); run
   `python scripts/generate_locales.py` after touching any `addon.*`,
   `addon_stable.*` or `features.*` key.
+- Component-catalog `{placeholder}` parity, for keys whose English still
+  matches the baseline — a hand edit that drops a placeholder fails the PR
+  that makes it; a translation awaiting a machine rewrite is excluded.
 
 In the post-merge `locale-sync.yml` workflow only (the same test file, gated
 behind `LOCALE_COMPLETENESS_CHECKS=1` — a PR that changes English merges

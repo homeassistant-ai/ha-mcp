@@ -70,17 +70,20 @@ ADDON_DIRS = (
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
 # Completeness of the TRANSLATED catalogs — missing or orphaned keys, English
-# moving out from under a translation, untranslated-share ceilings — is owed
-# by the post-merge locale-sync workflow, not by the PR that edits English:
-# any PR merges untranslated and the daily sync lands the translations
-# afterwards, so between a merge and the next sync run these checks fail on
-# master by design. They run only under LOCALE_COMPLETENESS_CHECKS=1, which
-# locale-sync.yml sets after running scripts/translate_locales.py — there a
-# failure means a human is owed (the engine pasted English back, a hand edit
-# broke parity, or a gated stub awaits review). Everything NOT gated binds
-# the PR author to deterministic, engine-free work: English-side pins,
-# generated-file byte-exactness (run scripts/generate_locales.py), and the
-# structural surface rules.
+# moving out from under a translation, cross-surface shared wording,
+# untranslated-share ceilings — is owed by the post-merge locale-sync
+# workflow, not by the PR that edits English: any PR merges untranslated and
+# the daily sync lands the translations afterwards, so between a merge and
+# the next sync run these checks fail on master by design. They run only
+# under LOCALE_COMPLETENESS_CHECKS=1, which locale-sync.yml sets after
+# running scripts/translate_locales.py — there a failure means a human is
+# owed (the engine pasted English back, a hand edit broke parity, or a gated
+# stub awaits review). Everything NOT gated binds the PR author to
+# deterministic, engine-free work: English-side pins, generated-file
+# byte-exactness (run scripts/generate_locales.py), the structural surface
+# rules — and placeholder parity on keys whose English is current, the one
+# translated-content rule a hand edit can break in a way the sync cannot
+# repair. test_locale_sync_gate_shape.py pins the env-var wiring.
 completeness = pytest.mark.skipif(
     not os.environ.get("LOCALE_COMPLETENESS_CHECKS"),
     reason=(
@@ -443,12 +446,25 @@ def test_component_catalog_matches_english_keys(locale: str) -> None:
     )
 
 
-@completeness
 @pytest.mark.parametrize("locale", _translated_component_locales())
 def test_component_catalog_keeps_english_placeholders(locale: str) -> None:
-    """A dropped or renamed ``{placeholder}`` loses the value HA substitutes."""
+    """A dropped or renamed ``{placeholder}`` loses the value HA substitutes.
+
+    Deliberately NOT gated behind ``completeness``: this is the guard on
+    hand edits, so it must run in the PR that makes them. Keys whose English
+    moved since the baseline are excluded — their translations are owed a
+    machine rewrite that restores the placeholders, and until the sync runs
+    the old translation legitimately carries the old set.
+    """
     english = _component_catalog("en")
     translated = _component_catalog(locale)
+    surface = "custom_components/ha_mcp_tools/translations"
+    recorded = json.loads(BASELINE_PATH.read_text("utf-8")).get(surface, {})
+    pending = {
+        key
+        for key, digest in english_sources()[surface].items()
+        if recorded.get(key) != digest
+    }
 
     mismatched = {
         key: (
@@ -457,6 +473,7 @@ def test_component_catalog_keeps_english_placeholders(locale: str) -> None:
         )
         for key, text in translated.items()
         if key in english
+        and key not in pending
         and set(_PLACEHOLDER_RE.findall(english[key]))
         != set(_PLACEHOLDER_RE.findall(text))
     }
@@ -708,6 +725,7 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
         "common.connect_local_lan string, then here"
     )
 
+    checked = 0
     for locale in ["en", *_translated_component_locales()]:
         catalog = _component_catalog(locale)
         if locale != "en" and "common.connect_local_lan" not in catalog:
@@ -715,12 +733,20 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
             # language mid-fill) legitimately lacks the key — completeness
             # is the gated checks' business, the literal is this one's.
             continue
+        checked += 1
         value = catalog["common.connect_local_lan"]
         assert quoted in value, (
             f"custom_components/ha_mcp_tools/translations/{locale}.json "
             f"common.connect_local_lan is {value!r}, which does not quote the "
             f"{quoted!r} option the reader has to find on the form"
         )
+    # The mid-fill tolerance must not let the check degrade to English-only:
+    # if every translated catalog lost the key, that is drift, not a stub.
+    assert checked > 1, (
+        "no translated catalog carries common.connect_local_lan at all — the "
+        "check above covered only English, which is the 'guard that silently "
+        "stopped running' shape tests/pytest.ini exists to prevent"
+    )
 
 
 def _settings_catalog(locale: str) -> dict[str, Any]:
@@ -749,11 +775,10 @@ def _renderable_groups_and_tools() -> tuple[frozenset[str], frozenset[str]]:
     and its consumers cannot drift apart.
 
     The tools are parsed out of their sources rather than read from the
-    committed ``site/src/data/tools.json``: that file is regenerated only
-    *after* merge, by ``sync-tool-docs.yml`` on a ``[skip ci]`` commit — so
-    it is stale in exactly the post-merge window the locale-sync workflow
-    (where the gated checks run) works in. Parsing the sources keeps the
-    check aligned with the tree it runs on.
+    committed ``site/src/data/tools.json``: that file is generator output a
+    separate post-merge workflow (``sync-tool-docs.yml``) keeps current, and
+    this check must judge the tree it runs on, not trust an artifact with
+    its own update schedule.
     """
     tools = extract_tools.extract_tools()
     assert tools, (

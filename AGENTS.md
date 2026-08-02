@@ -745,10 +745,9 @@ lacks: nothing renders it. `tool_groups` and `tools` may do neither: each locale
 must carry exactly the renderable group headings and every tool name, no key
 more and none fewer. The check derives the tool set from
 the sources (`scripts/extract_tools.py`), not from the committed
-`site/src/data/tools.json` that `sync-tool-docs.yml` regenerates only after
-merge — the committed file goes stale in exactly the window the post-merge
-locale sync works in. Separately from those key rules, both authored surfaces cap how much
-*text* a catalog
+`site/src/data/tools.json` — the check must not depend on a generated
+artifact that a separate post-merge workflow keeps current. Separately from
+those key rules, both authored surfaces cap how much *text* a catalog
 may leave byte-identical to English or omit outright, so a stub cannot ride the
 fallbacks: 5% for the settings UI `messages`, its `tools` titles and
 descriptions, and each generated add-on projection (per flavor, computed from
@@ -771,15 +770,20 @@ runs it AFTER merge, on a daily schedule, and pushes the result straight to
 master with the release App credential (the same pattern as the version-bump
 bots and `sync-tool-docs.yml`) — so any PR, fork or same-repo, merges
 without owing translations, and one sync run picks up everything merged
-since the last one. The checks that police translated content (missing or orphaned
-keys, staleness against the baseline, the untranslated-share ceilings) are
-gated behind `LOCALE_COMPLETENESS_CHECKS=1` and run in that workflow, not in
-PR CI; what a PR still owes is deterministic and engine-free — regenerate
-the derived catalogs (`python scripts/generate_locales.py`) when a canonical
-English string changes. To choose the wording yourself, translate in your
-own PR — hand-edits always win and the next sync run no-ops — or run
-`scripts/translate_locales.py` locally to machine-fill in-PR or to use a
-different engine.
+since the last one. The checks that police translated content (missing or
+orphaned keys, staleness against the baseline, cross-surface shared wording,
+the untranslated-share ceilings, filled tool sections) are gated behind
+`LOCALE_COMPLETENESS_CHECKS=1` and run in that workflow, not in PR CI —
+`test_locale_sync_gate_shape.py` pins the wiring. What a PR still owes is
+deterministic and engine-free: regenerate the derived catalogs
+(`python scripts/generate_locales.py`) when a canonical English string
+changes, and placeholder parity on component keys whose English is current.
+To choose the wording yourself, translate in your own PR **and run
+`python scripts/update_locale_baseline.py` in it** — the repinned baseline
+is what tells the next sync your wording already covers the changed English
+(hand-edits win); without the repin the sync retranslates the key and
+overwrites you. Run `scripts/translate_locales.py` locally instead to
+machine-fill in-PR or to use a different engine (it repins for you).
 The baseline pins the English each translation was written against, because
 key parity cannot see a string whose meaning changed: #1993 flipped a policy
 string from ALL-match to ANY-match and left the Chinese text asserting the

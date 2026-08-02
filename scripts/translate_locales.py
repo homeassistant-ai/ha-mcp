@@ -36,8 +36,7 @@ strings failed and the run continues, and two consecutive dead batches stop
 the run early. Partial runs are resumable — completed work is recorded in
 ``tests/src/unit/locale_sync_progress.json`` and skipped on the rerun; only a
 fully successful run repins the baseline and deletes that record, so the
-locale-sync workflow's completeness verification stays red until every
-string is translated.
+locale-sync runs stay red until every string is translated.
 
 Usage::
 
