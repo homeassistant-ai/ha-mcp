@@ -139,7 +139,14 @@ def test_the_push_allowlist_covers_exactly_the_pipeline_outputs() -> None:
     only either never lands (export-only) or is dead weight (allowlist-only).
     """
     jobs = _workflow()["jobs"]
-    export = "\n".join(str(step.get("run", "")) for step in jobs["translate"]["steps"])
+    # Only the step that stages the patch: the verify steps also name
+    # tests/src/unit paths, which would satisfy the assertion even with the
+    # git add list gutted.
+    export = "\n".join(
+        str(step.get("run", ""))
+        for step in jobs["translate"]["steps"]
+        if "git add" in str(step.get("run", ""))
+    )
     allowlist = "\n".join(str(step.get("run", "")) for step in jobs["push"]["steps"])
     for path in (
         "src/ha_mcp/settings_ui/locales",
@@ -158,15 +165,20 @@ def test_the_push_allowlist_covers_exactly_the_pipeline_outputs() -> None:
             f"the push job's allowlist no longer accepts {path!r} — the "
             "patch would be refused"
         )
+    assert "FEATURE_META" in allowlist, (
+        "the push job no longer confines settings.js changes to the "
+        "generated FEATURE_META block — it is the one non-catalog file on "
+        "the allowlist, and it is served as client-side JS"
+    )
 
 
 def test_dispatch_on_a_non_default_ref_fails_loudly() -> None:
     """A wrong-ref dispatch must go red, not silently skip green."""
     steps = _workflow()["jobs"]["translate"]["steps"]
+    # The ref and default branch reach the script through env (never
+    # expanded into shell), so match on the whole step, not just its run.
     guard = "\n".join(
-        str(step.get("run", ""))
-        for step in steps
-        if "default_branch" in str(step.get("run", ""))
+        str(step.get("run", "")) for step in steps if "default_branch" in str(step)
     )
     assert "exit 1" in guard, (
         f"{_WORKFLOW.name} no longer refuses workflow_dispatch on a "

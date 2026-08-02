@@ -446,6 +446,22 @@ def test_component_catalog_matches_english_keys(locale: str) -> None:
     )
 
 
+@cache
+def _pending_component_keys() -> frozenset[str]:
+    """Component keys whose English moved since the baseline was pinned.
+
+    Locale-independent, and ``english_sources`` re-parses the tool sources
+    each call — computed once for the parametrized check below.
+    """
+    surface = "custom_components/ha_mcp_tools/translations"
+    recorded = json.loads(BASELINE_PATH.read_text("utf-8")).get(surface, {})
+    return frozenset(
+        key
+        for key, digest in english_sources()[surface].items()
+        if recorded.get(key) != digest
+    )
+
+
 @pytest.mark.parametrize("locale", _translated_component_locales())
 def test_component_catalog_keeps_english_placeholders(locale: str) -> None:
     """A dropped or renamed ``{placeholder}`` loses the value HA substitutes.
@@ -458,13 +474,7 @@ def test_component_catalog_keeps_english_placeholders(locale: str) -> None:
     """
     english = _component_catalog("en")
     translated = _component_catalog(locale)
-    surface = "custom_components/ha_mcp_tools/translations"
-    recorded = json.loads(BASELINE_PATH.read_text("utf-8")).get(surface, {})
-    pending = {
-        key
-        for key, digest in english_sources()[surface].items()
-        if recorded.get(key) != digest
-    }
+    pending = _pending_component_keys()
 
     mismatched = {
         key: (

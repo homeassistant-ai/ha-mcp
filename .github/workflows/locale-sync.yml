@@ -67,19 +67,13 @@ on:
 permissions:
   contents: read
 
-# Shared group for every workflow that pushes to master (hotfix-release,
-# semver-release, addon-publish-dev, sync-tool-docs): a bot push landing
-# while semantic-release is mid-run aborts the release un-retryably
-# ("Upstream branch ... has changed"), so master writers must not overlap.
-# cancel-in-progress must be false: a running release must never be
-# cancelled by a locale sync.
+# Self-overlap only (a dispatch during the cron run): the shared
+# master-write group lives on the push job, not here — holding it through
+# dependency install and up to 40 minutes of translation would make a
+# merged hotfix release queue behind work that never touches master.
 concurrency:
-  group: master-write
+  group: locale-sync
   cancel-in-progress: false
-  # queue: max keeps every queued run waiting FIFO. The default single-slot
-  # queue evicts the OLDER pending run when a new one queues, which could
-  # silently drop a queued release behind a bot run.
-  queue: max
 
 jobs:
   translate:
@@ -102,9 +96,16 @@ jobs:
       # job-level skip — an all-skipped run reports green, which reads as
       # "synced" to the maintainer who dispatched it.
       if: github.event_name != 'schedule'
+      # The FULL ref, not ref_name: a tag named after the default branch
+      # would pass a short-name compare and push its older tree to master.
+      # Values reach the script through env / ambient vars, never expanded
+      # into shell: git permits backticks, $ and quotes in ref names, and
+      # this is the guard that must not be bypassable.
+      env:
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
-        if [ "${{ github.ref_name }}" != "${{ github.event.repository.default_branch }}" ]; then
-          echo "::error::locale-sync must be dispatched on the default branch, not '${{ github.ref_name }}' — its push targets master."
+        if [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+          echo "::error::locale-sync must be dispatched on the default branch (got '$GITHUB_REF') — its push targets master."
           exit 1
         fi
 
@@ -274,6 +275,21 @@ jobs:
         needs.translate.outputs.verify_outcome == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Shared group for every workflow that pushes to master (hotfix-release,
+    # semver-release, addon-publish-dev, sync-tool-docs): a bot push landing
+    # while semantic-release is mid-run aborts the release un-retryably
+    # ("Upstream branch ... has changed"), so master writers must not
+    # overlap. On this short job only — the translate leg never writes to
+    # master and must not hold the slot. cancel-in-progress must be false:
+    # a running release must never be cancelled by a locale sync.
+    concurrency:
+      group: master-write
+      cancel-in-progress: false
+      # queue: max keeps every queued run waiting FIFO. The default
+      # single-slot queue evicts the OLDER pending run when a new one
+      # queues, which could silently drop a queued release behind a bot
+      # push.
+      queue: max
 
     steps:
     - name: Generate GitHub App token
@@ -359,6 +375,32 @@ jobs:
               ;;
           esac
         done < /tmp/staged-files
+        # settings.js is served client-side JS, and the pipeline only ever
+        # legitimately rewrites its generated FEATURE_META block —
+        # generate_locales preserves everything else as read from disk, so
+        # a hijacked translate job could smuggle arbitrary code through the
+        # one non-catalog file on the allowlist. Outside the marker region
+        # (markers included), the patched file must be byte-identical to
+        # master's.
+        js=src/ha_mcp/settings_ui/settings.js
+        strip_generated() {
+          awk '
+            index($0, "// FEATURE_META:BEGIN GENERATED") == 1 { inblock = 1; begins++; next }
+            index($0, "// FEATURE_META:END GENERATED") == 1   { inblock = 0; ends++; next }
+            !inblock { print }
+            END { if (begins != 1 || ends != 1) exit 9 }
+          ' "$1"
+        }
+        git show "HEAD:$js" > /tmp/settings-js-base
+        if ! strip_generated /tmp/settings-js-base > /tmp/outside-base \
+          || ! strip_generated "$js" > /tmp/outside-new; then
+          echo "::error::settings.js does not carry exactly one FEATURE_META marker pair; refusing."
+          exit 1
+        fi
+        if ! cmp -s /tmp/outside-base /tmp/outside-new; then
+          echo "::error::patch modifies settings.js outside the generated FEATURE_META block; refusing."
+          exit 1
+        fi
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git commit -m "chore(internal): machine-translate locale updates"
@@ -368,13 +410,17 @@ jobs:
         # retry before giving up. A conflicted rebase means a racing locale
         # edit — losing to it is correct (hand-edits win): abort, warn, and
         # let the next run recompute against it.
+        # One authenticated URL for push AND rebase-fetch: the checkout has
+        # persist-credentials false, so a bare `origin` fetch is anonymous —
+        # fine while the repo is public, silently broken the day it is not.
+        remote="https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git"
         for attempt in 1 2 3 4 5; do
-          if git push "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:master; then
+          if git push "$remote" HEAD:master; then
             echo "Pushed locale updates (attempt ${attempt})."
             exit 0
           fi
-          echo "Push rejected on attempt ${attempt}; rebasing onto origin/master and retrying."
-          git pull --rebase origin master || {
+          echo "Push rejected on attempt ${attempt}; rebasing onto the current master and retrying."
+          git pull --rebase "$remote" master || {
             git rebase --abort 2>/dev/null || true
             echo "::warning::could not rebase onto the moved master (likely a racing locale edit); skipping push — the next run will redo the remaining work."
             exit 0
