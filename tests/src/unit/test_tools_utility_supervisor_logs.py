@@ -17,6 +17,7 @@ Covers two REST-client paths and their tools_utility wrappers:
   error translation.
 """
 
+import inspect
 import json
 import re
 from pathlib import Path
@@ -29,6 +30,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
+    _ERROR_LOG_LINES,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantClient,
@@ -604,8 +606,32 @@ class TestGetErrorLogBranchSelection:
             result = await mock_client.get_error_log()
 
         assert "error log via supervisor" in result
-        mock_client._supervisor_logs_get.assert_called_once_with("core")
+        # An explicit window is required. Without `lines`, Supervisor returns
+        # its 100-line default, so the add-on saw ~100 lines where the
+        # supervised branch (?lines=20000) saw ~18k on the same instance — and
+        # any "what keeps repeating?" analysis over that slice is meaningless.
+        mock_client._supervisor_logs_get.assert_called_once_with(
+            "core", lines=_ERROR_LOG_LINES
+        )
         mock_client._request.assert_not_called()
+
+    async def test_addon_and_supervised_branches_request_the_same_window(
+        self, mock_client
+    ):
+        """Both Supervisor-backed branches must read the same amount of log.
+
+        They drifted once already (add-on had no window at all); pin them
+        together so a change to one is a visible change to the other.
+        """
+        mock_client._supervisor_logs_get = AsyncMock(return_value="x")
+        with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True):
+            await mock_client.get_error_log()
+        addon_lines = mock_client._supervisor_logs_get.call_args.kwargs["lines"]
+
+        assert addon_lines == _ERROR_LOG_LINES
+        # The supervised branch builds the window into its URL literal.
+        source = inspect.getsource(type(mock_client).get_error_log)
+        assert f"lines={_ERROR_LOG_LINES}" in source
 
 
 class TestGetSystemServiceLogs:

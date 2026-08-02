@@ -65,7 +65,7 @@ _LOG_LEVEL_RE = re.compile(
     r"(?:^|\s)(DEBUG|INFO|WARNING|ERROR|CRITICAL)(?:\s|:|\])", re.IGNORECASE
 )
 
-VALID_LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG")
+VALID_LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG", "CRITICAL")
 
 # Full HA log line, e.g.
 # "2026-05-27 10:15:23.456 ERROR (MainThread) [homeassistant.components.zha] msg"
@@ -81,6 +81,27 @@ _HA_LOG_LINE_RE = re.compile(
 _MAX_MESSAGE_LEN = 200
 _COMPONENT_PREFIX_DEPTH = 3
 _DEFAULT_TOP_N = 20
+_MAX_TOP_N = MAX_LIMIT
+_MAX_COMPONENTS = 50
+# Marks a message the 200-char cap cut short, so a truncated entry is never
+# mistaken for the whole message (and so two distinct errors that happen to
+# share a prefix are visibly, not invisibly, merged).
+_TRUNCATION_MARK = "…[truncated]"
+
+# Supervisor-backed installs (add-on, HAOS, supervised) read HA Core's journald
+# stream, where every line is wrapped in ANSI colour codes:
+#   "\x1b[31m2026-08-02 08:12:27.290 ERROR (MainThread) [x] msg\x1b[0m"
+# Only container/pip installs read the plain home-assistant.log file. Because
+# _HA_LOG_LINE_RE is ^-anchored and str.strip() does not remove ESC, an
+# un-stripped journald line matches NOTHING — which previously produced a
+# confident "no errors found" on an instance whose log was full of them. Strip
+# first, always.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences (journald colour codes) from a log line."""
+    return _ANSI_RE.sub("", text)
 
 
 def _get_component_prefix(logger_name: str) -> str:
@@ -89,6 +110,58 @@ def _get_component_prefix(logger_name: str) -> str:
     if len(parts) >= _COMPONENT_PREFIX_DEPTH:
         return ".".join(parts[:_COMPONENT_PREFIX_DEPTH])
     return logger_name
+
+
+def _extract_log_entries(
+    lines: list[str],
+    search: str | None = None,
+    level: str | None = None,
+) -> tuple[list[dict[str, str]], int]:
+    """Parse raw log lines into entries, returning ``(entries, unparseable)``.
+
+    Split out from ``_parse_error_log_structured`` to keep both under the repo's
+    complexity ceiling. Counts a line as unparseable only when it does not match
+    the HA log format at all — lines dropped by ``level``/``search`` are simply
+    absent from ``entries``, never counted as unparseable.
+    """
+    entries: list[dict[str, str]] = []
+    unparseable = 0
+    needle = search.lower() if search else None
+
+    for line in lines:
+        # Strip ANSI *before* matching: on Supervisor-backed installs the line
+        # arrives colour-wrapped and would otherwise never match, and the
+        # trailing reset code would land inside `message` and split the dedup
+        # key for what is really one recurring error.
+        clean = _strip_ansi(line).strip()
+        if not clean:
+            continue
+        match = _HA_LOG_LINE_RE.match(clean)
+        if not match:
+            unparseable += 1
+            continue
+        timestamp, log_level, logger_name, message = match.groups()
+        log_level = log_level.upper()
+        if level and log_level != level:
+            continue
+        if (
+            needle
+            and needle not in message.lower()
+            and needle not in logger_name.lower()
+        ):
+            continue
+        truncated = len(message) > _MAX_MESSAGE_LEN
+        entries.append(
+            {
+                "timestamp": timestamp,
+                "level": log_level,
+                "logger": logger_name,
+                "message": message[:_MAX_MESSAGE_LEN]
+                + (_TRUNCATION_MARK if truncated else ""),
+            }
+        )
+
+    return entries, unparseable
 
 
 def _parse_error_log_structured(
@@ -102,44 +175,32 @@ def _parse_error_log_structured(
     ``source='error_log'`` normally returns raw text. A busy instance produces a
     50-200 KB log in which the same handful of errors repeat thousands of times,
     so the raw form can exhaust an agent's context while conveying very little.
-    This collapses identical (logger, message) pairs into counted issues, groups
-    them by component, and returns only the ``top_n`` noisiest — bounded output
-    regardless of input size.
+    This collapses identical (level, logger, message) triples into counted
+    issues, groups them by component, and returns only the ``top_n`` noisiest.
 
-    Unparseable lines (tracebacks, continuation lines) are skipped by design;
-    ``summary.parsed_entries`` vs ``summary.total_raw_lines`` exposes how much
-    was dropped so the caller can fall back to raw text when it matters.
+    Counting is deliberately split three ways, because conflating these two
+    reasons for "not in the summary" made an aggressively filtered log look like
+    an unparseable one:
+
+    * ``total_raw_lines``   - lines in the input
+    * ``unparseable_lines`` - lines that did not match the HA log format at all
+      (tracebacks, continuation lines, format drift)
+    * ``parsed_entries``    - lines that parsed AND survived ``level``/``search``
+
+    Only ``unparseable_lines`` says anything about whether falling back to the
+    raw text would reveal more; a small ``parsed_entries`` under a narrow filter
+    is the feature working, not data loss.
     """
     lines = raw_text.splitlines() if raw_text else []
     total_raw_lines = len(lines)
+    parsed, unparseable_lines = _extract_log_entries(lines, search=search, level=level)
 
-    parsed: list[dict[str, str]] = []
-    for line in lines:
-        match = _HA_LOG_LINE_RE.match(line.strip())
-        if not match:
-            continue
-        timestamp, log_level, logger_name, message = match.groups()
-        log_level = log_level.upper()
-        if level and log_level != level:
-            continue
-        if search:
-            needle = search.lower()
-            if needle not in message.lower() and needle not in logger_name.lower():
-                continue
-        parsed.append(
-            {
-                "timestamp": timestamp,
-                "level": log_level,
-                "logger": logger_name,
-                "message": message[:_MAX_MESSAGE_LEN],
-            }
-        )
-
-    # Dedupe on (logger, truncated message) — the message is already capped, so
-    # errors differing only past the cap collapse together on purpose.
-    dedup: dict[tuple[str, str], dict[str, Any]] = {}
+    # Dedupe on (level, logger, message). Level is part of the key because a
+    # first-wins level meant a later ERROR could be reported under an earlier
+    # WARNING with the same text.
+    dedup: dict[tuple[str, str, str], dict[str, Any]] = {}
     for entry in parsed:
-        key = (entry["logger"], entry["message"])
+        key = (entry["level"], entry["logger"], entry["message"])
         record = dedup.get(key)
         if record is None:
             record = {
@@ -178,28 +239,51 @@ def _parse_error_log_structured(
         for issue in all_issues[:top_n]
     ]
 
-    component_table = dict(
-        sorted(
-            by_component.items(),
-            key=lambda kv: kv[1]["total_occurrences"],
-            reverse=True,
-        )
+    # Cap by_component too: a log with thousands of distinct loggers would
+    # otherwise make the response unbounded, contradicting the whole premise.
+    ranked_components = sorted(
+        by_component.items(),
+        key=lambda kv: kv[1]["total_occurrences"],
+        reverse=True,
     )
+    component_table = dict(ranked_components[:_MAX_COMPONENTS])
 
-    return {
+    summary: dict[str, Any] = {
+        "total_raw_lines": total_raw_lines,
+        "unparseable_lines": unparseable_lines,
+        "parsed_entries": len(parsed),
+        "unique_issues": len(all_issues),
+        "components_affected": len(by_component),
+        "showing_top_n": min(top_n, len(all_issues)),
+        "showing_components": len(component_table),
+    }
+
+    result: dict[str, Any] = {
         "success": True,
         "source": "error_log",
         "structured": True,
-        "summary": {
-            "total_raw_lines": total_raw_lines,
-            "parsed_entries": len(parsed),
-            "unique_issues": len(all_issues),
-            "components_affected": len(by_component),
-            "showing_top_n": min(top_n, len(all_issues)),
-        },
+        "summary": summary,
         "top_issues": top_issues,
         "by_component": component_table,
     }
+
+    # Fail loudly on format drift. Silence here is what turned an unreadable log
+    # into a confident "no errors found"; if nothing parsed but there WAS input,
+    # say so rather than returning an empty summary that reads as all-clear.
+    if total_raw_lines > 0 and not parsed:
+        if unparseable_lines > 0:
+            result["warning"] = (
+                f"No log lines could be parsed ({unparseable_lines} of "
+                f"{total_raw_lines} did not match the expected Home Assistant log "
+                "format). This summary is NOT evidence that the log is clean - "
+                "re-run with structured=False to read the raw text."
+            )
+        else:
+            result["warning"] = (
+                "No entries matched the requested filters. The log parsed "
+                "successfully, so this reflects the filters, not a parse failure."
+            )
+    return result
 
 
 def _compact_logbook_entries(entries: list[Any]) -> list[dict[str, Any]]:
@@ -750,6 +834,51 @@ class UtilityTools:
             )
             raise  # unreachable: exception_to_structured_error always raises
 
+    def _build_structured_error_log(
+        self,
+        raw_log: str,
+        search: str | None,
+        level: str | None,
+        top_n: int | None,
+        limit: int | None,
+        order: Literal["newest", "oldest"],
+    ) -> dict[str, Any]:
+        """Summarise the raw error log and annotate what shaped the result."""
+        effective_top_n = self._coerce_limit(
+            top_n, default=_DEFAULT_TOP_N, suggestion_example="20"
+        )
+        result = _parse_error_log_structured(
+            raw_log,
+            search=search,
+            level=level,
+            top_n=min(effective_top_n, _MAX_TOP_N),
+        )
+        # Report the filters that shaped the summary, matching the raw path —
+        # otherwise an empty summary is indistinguishable from a quiet log.
+        structured_filters = {
+            k: v for k, v in (("level", level), ("search", search)) if v
+        }
+        if structured_filters:
+            result["filters_applied"] = structured_filters
+        # `limit`/`order` are accepted for signature compatibility but do nothing
+        # here; say so rather than silently ignoring them, which is the
+        # convention this tool already uses elsewhere.
+        ignored = [
+            name
+            for name, given in (
+                ("limit", limit is not None),
+                ("order", order != "newest"),
+            )
+            if given
+        ]
+        if ignored:
+            result["warnings"] = [
+                f"Parameter(s) {', '.join(ignored)} do not apply when "
+                "structured=True; the summary ranks the whole log by "
+                "occurrence count. Use top_n to bound the output."
+            ]
+        return result
+
     async def _get_error_log(
         self,
         limit: int | None = None,
@@ -763,21 +892,29 @@ class UtilityTools:
 
         With ``structured=True`` the raw text is collapsed into a counted,
         component-grouped summary instead (see ``_parse_error_log_structured``);
-        ``limit``/``order`` do not apply in that mode, ``top_n`` bounds it.
+        ``limit``/``order`` do not apply in that mode (the summary is ranked by
+        occurrence count over the whole log, not a positional window), and
+        ``top_n`` bounds it instead.
         """
-        effective_limit = self._coerce_limit(
-            limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
-        )
+        # In structured mode the summary covers the whole log, so `limit` is
+        # meaningless — and validating it here would reject limit=0 for a
+        # parameter that has no effect. Only coerce it on the raw path.
+        if not structured:
+            effective_limit = self._coerce_limit(
+                limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
+            )
 
         try:
             raw_log = await self._client.get_error_log()
 
             if structured:
-                return _parse_error_log_structured(
+                return self._build_structured_error_log(
                     raw_log or "",
                     search=search,
                     level=level,
-                    top_n=top_n if top_n and top_n > 0 else _DEFAULT_TOP_N,
+                    top_n=top_n,
+                    limit=limit,
+                    order=order,
                 )
 
             lines = raw_log.splitlines() if raw_log else []
@@ -1409,13 +1546,21 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "logger": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)
 
         **Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')
-        **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger'. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.
+        **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.
         **Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)
-        **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)
+        **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG, CRITICAL)
         **error_log params:** structured (default False — when True, returns a
-            deduplicated, component-grouped summary sorted by occurrence count
-            instead of raw text; bounded output on large logs), top_n (max
-            distinct issues in structured output, default 20)
+            deduplicated, component-grouped summary ranked by occurrence count
+            instead of raw text), top_n (max distinct issues, default 20, max 500).
+            In structured mode `search` matches the message and logger name only,
+            whereas on the raw path it matches the whole line; `limit`/`order`
+            do not apply.
+
+        **Prefer source='system' for triage.** It returns HA's own deduplicated
+        system_log entries with counts, first_occurred and full tracebacks, which
+        error_log parsing cannot recover. Use error_log with structured=True when
+        you need coverage past system_log's window (it keeps ~50 recent
+        WARNING+ entries) or the per-component rollup.
         **Supervisor params:** slug = add-on slug, e.g. "core_mosquitto" (use
             ha_get_addon() to list installed slugs)
         **System-service params:** slug = service name. The slug "supervisor"

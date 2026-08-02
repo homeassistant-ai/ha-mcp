@@ -16,6 +16,8 @@ import pytest
 
 from ha_mcp.tools.tools_utility import (
     _DEFAULT_TOP_N,
+    _MAX_COMPONENTS,
+    _TRUNCATION_MARK,
     _get_component_prefix,
     _parse_error_log_structured,
     register_utility_tools,
@@ -42,6 +44,44 @@ _UNPARSEABLE_LOG = textwrap.dedent("""\
     Not a valid log line
     Another unparseable line
     2026-05-27 10:00:01 INVALIDLEVEL (thread) [logger] message
+""")
+
+# Ordering fixture: emitted deliberately WORST-first so the sort is
+# load-bearing. `noisy` has one issue seen 5 times (5 occurrences, 1 issue);
+# `chatty` has three distinct issues seen once each (3 occurrences, 3 issues) —
+# so ranking by total_occurrences and ranking by issue_count disagree, and the
+# assertions can tell which one the code used.
+_UNSORTED_LOG = textwrap.dedent("""\
+    2026-05-27 10:00:00.000 ERROR (MainThread) [chatty.sub.mod] alpha
+    2026-05-27 10:00:01.000 ERROR (MainThread) [chatty.sub.mod] beta
+    2026-05-27 10:00:02.000 ERROR (MainThread) [chatty.sub.mod] gamma
+    2026-05-27 10:00:03.000 ERROR (MainThread) [noisy.sub.mod] frequent
+    2026-05-27 10:00:04.000 ERROR (MainThread) [noisy.sub.mod] frequent
+    2026-05-27 10:00:05.000 ERROR (MainThread) [noisy.sub.mod] frequent
+    2026-05-27 10:00:06.000 ERROR (MainThread) [noisy.sub.mod] frequent
+    2026-05-27 10:00:07.000 ERROR (MainThread) [noisy.sub.mod] frequent
+""")
+
+# What Supervisor-backed installs (add-on / HAOS / supervised) actually return:
+# HA Core's journald stream, ANSI-coloured. Only container/pip installs read the
+# plain file the other fixtures imitate.
+_ANSI_LOG = (
+    "\x1b[31m2026-05-27 10:00:01.123 ERROR (MainThread) "
+    "[homeassistant.components.zha] Device timeout\x1b[0m\n"
+    "\x1b[33m2026-05-27 10:00:02.456 WARNING (MainThread) "
+    "[homeassistant.components.tuya] Slow response\x1b[0m\n"
+    "\x1b[31m2026-05-27 10:00:03.789 ERROR (MainThread) "
+    "[homeassistant.components.zha] Device timeout\x1b[0m\n"
+)
+
+# A real error followed by its traceback — the traceback lines are unparseable
+# by design, which is what makes parsed_entries < total_raw_lines meaningful.
+_TRACEBACK_LOG = textwrap.dedent("""\
+    2026-05-27 10:00:01.123 ERROR (MainThread) [homeassistant.components.zha] Update failed
+    Traceback (most recent call last):
+      File "/usr/src/homeassistant/zha.py", line 42, in _async_update
+        await self._device.read()
+    ValueError: device did not respond
 """)
 
 
@@ -147,9 +187,15 @@ class TestParseErrorLogStructured:
         assert device_timeout["component"] == "homeassistant.components.zha"
 
     def test_top_issues_sorted_by_count_desc(self):
-        result = _parse_error_log_structured(_SAMPLE_LOG)
+        # _UNSORTED_LOG deliberately emits the *least* frequent issue first, so
+        # this fails if the sort is removed. Asserting on _SAMPLE_LOG would not:
+        # its insertion order already equals its sorted order, so the assertion
+        # held with the sort deleted.
+        result = _parse_error_log_structured(_UNSORTED_LOG)
         counts = [i["count"] for i in result["top_issues"]]
         assert counts == sorted(counts, reverse=True)
+        assert counts[0] > counts[-1], "fixture must have a non-flat count spread"
+        assert result["top_issues"][0]["message"] == "frequent"
 
     def test_top_issues_first_and_last_seen(self):
         result = _parse_error_log_structured(_SAMPLE_LOG)
@@ -166,9 +212,16 @@ class TestParseErrorLogStructured:
         assert "homeassistant.loader" in result["by_component"]
 
     def test_by_component_sorted_by_total_occurrences(self):
-        result = _parse_error_log_structured(_SAMPLE_LOG)
+        # In _UNSORTED_LOG the component that appears FIRST has several small
+        # issues that out-total another component's single larger one, so the
+        # ordering can only come from the sort, not from insertion order.
+        result = _parse_error_log_structured(_UNSORTED_LOG)
         totals = [v["total_occurrences"] for v in result["by_component"].values()]
         assert totals == sorted(totals, reverse=True)
+        first, second = list(result["by_component"].items())[:2]
+        assert first[1]["total_occurrences"] > second[1]["total_occurrences"]
+        # The winner wins on volume despite having fewer distinct issues.
+        assert first[1]["issue_count"] < second[1]["issue_count"]
 
     def test_by_component_issue_count(self):
         result = _parse_error_log_structured(_SAMPLE_LOG)
@@ -227,7 +280,18 @@ class TestParseErrorLogStructured:
         long_msg = "x" * 300
         log = f"2026-05-27 10:00:01.000 ERROR (MainThread) [homeassistant.components.test] {long_msg}\n"
         result = _parse_error_log_structured(log)
-        assert len(result["top_issues"][0]["message"]) == 200
+        message = result["top_issues"][0]["message"]
+        # Truncation is MARKED: an unmarked cut is indistinguishable from a
+        # genuinely short message, and silently merges distinct errors that
+        # happen to share their first 200 characters.
+        assert message.endswith(_TRUNCATION_MARK)
+        assert len(message) == 200 + len(_TRUNCATION_MARK)
+        assert message[:200] == "x" * 200
+
+    def test_short_message_is_not_marked_truncated(self):
+        log = "2026-05-27 10:00:01.000 ERROR (MainThread) [homeassistant.components.test] short\n"
+        result = _parse_error_log_structured(log)
+        assert result["top_issues"][0]["message"] == "short"
 
     def test_default_top_n_is_applied(self):
         # Build a log with more unique issues than _DEFAULT_TOP_N
@@ -330,3 +394,120 @@ class TestHaGetLogsStructured:
         result = await tools["ha_get_logs"](source="logbook", structured=True)
         assert "warnings" in result
         assert any("structured" in w for w in result["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the review blockers (PR #2107)
+#
+# Each of these fails against the original implementation. They exist because
+# the first version of this feature was validated only against plain-file
+# fixtures, which is the one install type most users do NOT have.
+# ---------------------------------------------------------------------------
+class TestSupervisorInstallRegressions:
+    """Supervisor-backed installs (add-on / HAOS) serve ANSI-coloured journald."""
+
+    def test_ansi_coloured_lines_parse(self):
+        # The original ^-anchored regex matched none of these, so a log full of
+        # errors summarised as "success: true, top_issues: []".
+        result = _parse_error_log_structured(_ANSI_LOG)
+        assert result["summary"]["parsed_entries"] == 3
+        assert result["summary"]["unparseable_lines"] == 0
+        assert result["summary"]["unique_issues"] == 2
+
+    def test_ansi_reset_code_does_not_leak_into_message(self):
+        # A trailing \x1b[0m inside `message` would split the dedup key, so the
+        # same recurring error would be counted as several distinct ones.
+        result = _parse_error_log_structured(_ANSI_LOG)
+        timeout = next(
+            i for i in result["top_issues"] if i["message"] == "Device timeout"
+        )
+        assert timeout["count"] == 2
+        for issue in result["top_issues"]:
+            assert "\x1b" not in issue["message"]
+
+    def test_total_format_drift_warns_instead_of_reading_as_clean(self):
+        result = _parse_error_log_structured(_UNPARSEABLE_LOG)
+        assert result["summary"]["parsed_entries"] == 0
+        assert result["summary"]["unparseable_lines"] > 0
+        assert "warning" in result
+        assert "NOT evidence" in result["warning"]
+
+    def test_empty_log_does_not_warn(self):
+        # No input is genuinely nothing to report — distinct from format drift.
+        assert "warning" not in _parse_error_log_structured("")
+
+
+class TestCountSemantics:
+    """`unparseable` and `filtered out` are different things."""
+
+    def test_traceback_lines_counted_as_unparseable(self):
+        # 1 ERROR line + 4 traceback lines (header, File, source, exception).
+        result = _parse_error_log_structured(_TRACEBACK_LOG)
+        s = result["summary"]
+        assert s["total_raw_lines"] == 5
+        assert s["parsed_entries"] == 1
+        assert s["unparseable_lines"] == 4
+        assert s["parsed_entries"] < s["total_raw_lines"]
+
+    def test_filtered_out_lines_are_not_reported_as_unparseable(self):
+        # The bug this guards: with level='ERROR' on a healthy log, a caller
+        # reading parsed_entries vs total_raw_lines concluded "99% unparseable"
+        # and fell back to the raw log — the exact behaviour this feature exists
+        # to prevent.
+        lines = [
+            f"2026-05-27 10:00:{i % 60:02d}.000 INFO (MainThread) [homeassistant.core] tick"
+            for i in range(200)
+        ]
+        lines.append(
+            "2026-05-27 11:00:00.000 ERROR (MainThread) [homeassistant.components.zha] dead"
+        )
+        result = _parse_error_log_structured("\n".join(lines), level="ERROR")
+        assert result["summary"]["unparseable_lines"] == 0
+        assert result["summary"]["parsed_entries"] == 1
+        assert "warning" not in result
+
+    def test_all_filtered_out_warns_about_filters_not_parsing(self):
+        result = _parse_error_log_structured(_SAMPLE_LOG, search="nothing-matches-this")
+        assert result["summary"]["parsed_entries"] == 0
+        assert result["summary"]["unparseable_lines"] == 0
+        assert "reflects the filters" in result["warning"]
+
+
+class TestBoundedOutput:
+    """`bounded output regardless of input size` must hold for the whole payload."""
+
+    def test_by_component_is_capped(self):
+        log = "\n".join(
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [comp{i}.sub.mod] issue{i}"
+            for i in range(_MAX_COMPONENTS * 4)
+        )
+        result = _parse_error_log_structured(log)
+        assert len(result["by_component"]) == _MAX_COMPONENTS
+        assert result["summary"]["showing_components"] == _MAX_COMPONENTS
+        # The true total is still reported, so the cap never hides the scale.
+        assert result["summary"]["components_affected"] == _MAX_COMPONENTS * 4
+
+    def test_by_component_totals_survive_top_n_truncation(self):
+        # "nothing is hidden by the cap": occurrences dropped from top_issues
+        # must still be counted in by_component.
+        log = "\n".join(
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [one.sub.mod] issue{i}"
+            for i in range(10)
+        )
+        result = _parse_error_log_structured(log, top_n=2)
+        assert len(result["top_issues"]) == 2
+        bucket = result["by_component"]["one.sub.mod"]
+        assert bucket["issue_count"] == 10
+        assert bucket["total_occurrences"] == 10
+
+
+class TestDedupKey:
+    def test_same_message_at_different_levels_stays_distinct(self):
+        # First-wins on level meant a later ERROR could be reported as WARNING.
+        log = textwrap.dedent("""\
+            2026-05-27 10:00:00.000 WARNING (MainThread) [a.b.c] same text
+            2026-05-27 10:00:01.000 ERROR (MainThread) [a.b.c] same text
+        """)
+        result = _parse_error_log_structured(log)
+        assert result["summary"]["unique_issues"] == 2
+        assert {i["level"] for i in result["top_issues"]} == {"WARNING", "ERROR"}
