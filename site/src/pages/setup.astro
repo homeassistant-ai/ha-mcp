@@ -2770,9 +2770,10 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
 
     if (clickChoice('data-server-method', requested.method)
       && clickChoice('data-client', requested.client)) {
-      if (state.method !== 'stdio-local') clickChoice('data-scope', requested.scope);
-      if (needsPlatform()) clickChoice('data-platform', requested.platform);
-      if (state.scope === 'remote' && remotePathsForMethod(state.method).includes(requested.remotePath)) {
+      const scopeRestored = state.method === 'stdio-local'
+        || clickChoice('data-scope', requested.scope);
+      if (scopeRestored && needsPlatform()) clickChoice('data-platform', requested.platform);
+      if (scopeRestored && state.scope === 'remote' && remotePathsForMethod(state.method).includes(requested.remotePath)) {
         clickChoice('data-remote-path', requested.remotePath);
       }
     }
