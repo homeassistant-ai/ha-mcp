@@ -453,12 +453,13 @@ def _style_sample_keys(
 ) -> list[str]:
     """The keys whose sample pair shows this catalog's address register.
 
-    ``exclude`` drops the keys of the request being built. A key is in a
-    request only because its English moved or it is missing, so its committed
-    translation renders the PREVIOUS English: pairing it with the new source
-    presents a mismatch as the thing to imitate, and when the key is itself in
-    the batch the model answers with the stale text it was just shown — which
-    validates, gets written, and repins the baseline as if it were current.
+    ``exclude`` drops every key the run still owes, not just the ones in the
+    request being built: results are applied after the last chunk, so a key
+    queued anywhere in the run still carries the translation of the PREVIOUS
+    English. Pairing that with the new source presents a mismatch as the thing
+    to imitate, and when the key is itself in the batch the model answers with
+    the stale text it was just shown — which validates, gets written, and
+    repins the baseline as if it were current.
     """
     return sorted(
         (
