@@ -25,13 +25,18 @@ so their key and placeholder parity is checked here.
 ``scripts/translate_locales.py`` is the pipeline that keeps the authored
 catalogs green: it machine-translates the keys the baseline check below
 reports as changed or missing, regenerates the derived catalogs, and repins
-the baseline.
+the baseline. It runs AFTER merge, on a daily schedule
+(``.github/workflows/locale-sync.yml``), so any PR — fork or same-repo —
+merges without owing translations; the checks that police the translated
+content are gated behind ``LOCALE_COMPLETENESS_CHECKS`` (see the marker
+below) and run in that workflow, not in PR CI.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -63,6 +68,26 @@ ADDON_DIRS = (
 )
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+# Completeness of the TRANSLATED catalogs — missing or orphaned keys, English
+# moving out from under a translation, untranslated-share ceilings — is owed
+# by the post-merge locale-sync workflow, not by the PR that edits English:
+# any PR merges untranslated and the daily sync lands the translations
+# afterwards, so between a merge and the next sync run these checks fail on
+# master by design. They run only under LOCALE_COMPLETENESS_CHECKS=1, which
+# locale-sync.yml sets after running scripts/translate_locales.py — there a
+# failure means a human is owed (the engine pasted English back, a hand edit
+# broke parity, or a gated stub awaits review). Everything NOT gated binds
+# the PR author to deterministic, engine-free work: English-side pins,
+# generated-file byte-exactness (run scripts/generate_locales.py), and the
+# structural surface rules.
+completeness = pytest.mark.skipif(
+    not os.environ.get("LOCALE_COMPLETENESS_CHECKS"),
+    reason=(
+        "translated-catalog completeness is verified by the post-merge "
+        "locale-sync workflow — set LOCALE_COMPLETENESS_CHECKS=1 to run"
+    ),
+)
 
 GUARDED_SURFACES = {
     "src/ha_mcp/settings_ui/locales",
@@ -399,6 +424,7 @@ def test_component_translation_locales_are_discovered() -> None:
     )
 
 
+@completeness
 @pytest.mark.parametrize("locale", _translated_component_locales())
 def test_component_catalog_matches_english_keys(locale: str) -> None:
     english = _component_catalog("en")
@@ -417,6 +443,7 @@ def test_component_catalog_matches_english_keys(locale: str) -> None:
     )
 
 
+@completeness
 @pytest.mark.parametrize("locale", _translated_component_locales())
 def test_component_catalog_keeps_english_placeholders(locale: str) -> None:
     """A dropped or renamed ``{placeholder}`` loses the value HA substitutes."""
@@ -440,6 +467,7 @@ def test_component_catalog_keeps_english_placeholders(locale: str) -> None:
     )
 
 
+@completeness
 def test_translations_are_checked_against_current_english() -> None:
     """Catch the drift key parity cannot see: same key, changed meaning.
 
@@ -627,6 +655,7 @@ def test_authored_shared_strings_are_discovered() -> None:
     )
 
 
+@completeness
 @pytest.mark.parametrize("locale", _translated_component_locales())
 def test_authored_shared_strings_read_the_same(locale: str) -> None:
     """One option described on both authored surfaces reads as one wording."""
@@ -680,7 +709,13 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
     )
 
     for locale in ["en", *_translated_component_locales()]:
-        value = _component_catalog(locale)["common.connect_local_lan"]
+        catalog = _component_catalog(locale)
+        if locale != "en" and "common.connect_local_lan" not in catalog:
+            # A catalog the post-merge sync has not filled yet (a new
+            # language mid-fill) legitimately lacks the key — completeness
+            # is the gated checks' business, the literal is this one's.
+            continue
+        value = catalog["common.connect_local_lan"]
         assert quoted in value, (
             f"custom_components/ha_mcp_tools/translations/{locale}.json "
             f"common.connect_local_lan is {value!r}, which does not quote the "
@@ -715,11 +750,10 @@ def _renderable_groups_and_tools() -> tuple[frozenset[str], frozenset[str]]:
 
     The tools are parsed out of their sources rather than read from the
     committed ``site/src/data/tools.json``: that file is regenerated only
-    *after* merge, by ``sync-tool-docs.yml`` on a ``[skip ci]`` commit. Reading
-    it would let the PR that adds a tool stay green and then turn every
-    subsequent PR red across all six locales, landing the failure on whoever
-    opens the next one. Parsing the sources puts it on the PR that owes the
-    translations.
+    *after* merge, by ``sync-tool-docs.yml`` on a ``[skip ci]`` commit — so
+    it is stale in exactly the post-merge window the locale-sync workflow
+    (where the gated checks run) works in. Parsing the sources keeps the
+    check aligned with the tree it runs on.
     """
     tools = extract_tools.extract_tools()
     assert tools, (
@@ -789,6 +823,7 @@ def test_settings_ui_locales_are_discovered() -> None:
     )
 
 
+@completeness
 @pytest.mark.parametrize("locale", _non_english_settings_locales())
 def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
     """Both sections are keyed off the tool catalog, and nothing checked it.
@@ -800,10 +835,11 @@ def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
     a new tag that sorts first for an existing tool, leaves *every* locale
     showing English for it with no test going red.
 
-    The tool set is parsed from the sources, so the PR that adds a tool is the
-    one that goes red — see ``_renderable_groups_and_tools`` for why reading
-    the committed ``tools.json`` instead would move that failure onto the next
-    PR to open.
+    The tool set is parsed from the sources — see
+    ``_renderable_groups_and_tools`` for why the committed ``tools.json``
+    would be the wrong reference. A tool the codebase gained is missing here
+    until the post-merge sync fills it, which is why this check is gated to
+    that workflow.
     """
     groups, tool_names = _renderable_groups_and_tools()
     catalog = _settings_catalog(locale)
@@ -833,6 +869,7 @@ def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
     )
 
 
+@completeness
 @pytest.mark.parametrize("locale", _non_english_settings_locales())
 def test_settings_messages_carry_no_key_english_dropped(locale: str) -> None:
     """The one direction nothing else here looks in.
@@ -924,6 +961,7 @@ def _assert_not_a_copy(
     )
 
 
+@completeness
 @pytest.mark.parametrize("locale", _non_english_settings_locales())
 def test_settings_catalog_is_not_a_copy_of_english(locale: str) -> None:
     """A stub catalog has to fail somewhere, and this is the only place.
@@ -940,6 +978,7 @@ def test_settings_catalog_is_not_a_copy_of_english(locale: str) -> None:
     )
 
 
+@completeness
 @pytest.mark.parametrize("locale", _non_english_settings_locales())
 def test_generated_addon_projections_are_translated(locale: str) -> None:
     """The add-on subset needs its own ceiling, per flavor.
@@ -978,6 +1017,7 @@ def test_generated_addon_projections_are_translated(locale: str) -> None:
         )
 
 
+@completeness
 @pytest.mark.parametrize("locale", _non_english_settings_locales())
 def test_settings_catalog_tools_are_translated(locale: str) -> None:
     """Exactness says every tool is present, not that any was translated.
@@ -1068,6 +1108,7 @@ def test_the_tools_share_counts_both_english_renderings() -> None:
         )
 
 
+@completeness
 @pytest.mark.parametrize("locale", _translated_component_locales())
 def test_component_catalog_is_not_a_copy_of_english(locale: str) -> None:
     """Key parity says every key is present, not that any was translated."""
