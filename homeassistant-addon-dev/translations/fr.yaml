@@ -168,7 +168,7 @@ configuration:
       sur false lors des appels suivants une fois qu''il a le contenu. Lorsque cet
       interrupteur principal est désactivé, AUCUN skill_content n''est émis, indépendamment
       du paramètre par appel ou des avertissements BP. Recommandé ACTIVÉ comme premier
-      choix ; désactive uniquement pour les modèles avec de très petites fenêtres
+      choix ; désactivez uniquement pour les modèles avec de très petites fenêtres
       de contexte. Désactiver ceci peut dégrader la précision des écritures. Nécessite
       un redémarrage pour prendre effet.'
   enable_strict_mandatory_bps:
@@ -220,8 +220,8 @@ configuration:
       et listés, restaurés ou supprimés via l'onglet Sauvegardes dans l'interface
       Web des paramètres ou via ha_manage_backup(scope='edits', ...). Au mieux — les
       erreurs enregistrent un WARNING mais ne bloquent jamais l'écriture sous-jacente.
-      Activé par défaut ; décoche pour désactiver. Nécessite un redémarrage pour prendre
-      effet.
+      Activé par défaut ; décochez pour désactiver. Nécessite un redémarrage pour
+      prendre effet.
   auto_backup_throttle_minutes:
     name: Limitation de la sauvegarde automatique (minutes)
     description: Fenêtre de limitation par entité. 0 (par défaut) capture un instantané

@@ -134,7 +134,7 @@
     "features.enable_yaml_packages_scene.label": "允许 scene 出现在 packages/*.yaml",
     "features.enable_yaml_packages_scene.help": "YAML 配置编辑的子开关。开启时，ha_config_set_yaml 接受 packages/*.yaml 中的 yaml_path='scene'。关闭时，客户端和服务器端都会拒绝该调用。存储模式工具（ha_config_set_scene）不受影响。默认关闭；仅当上方“启用 YAML 配置编辑”也开启时生效。",
     "features.enable_filesystem_tools.label": "启用文件系统工具（测试版）",
-    "features.enable_filesystem_tools.help": "设置 HAMCP_ENABLE_FILESYSTEM_TOOLS=true。启用对您 Home Assistant 文件系统的直接文件读/写访问。警告：这会让 MCP 服务器直接读写您的 Home Assistant 文件系统，获得对系统的敏感文件访问权限。仅在信任 AI 助手进行文件操作时才启用。需要重启才能生效。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。",
+    "features.enable_filesystem_tools.help": "设置 HAMCP_ENABLE_FILESYSTEM_TOOLS=true。启用对您的 Home Assistant 文件系统的直接文件读/写访问。警告：这会让 MCP 服务器直接读写您的 Home Assistant 文件系统，获得对系统的敏感文件访问权限。仅在信任 AI 助手进行文件操作时才启用。需要重启才能生效。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。",
     "features.enable_code_mode.label": "启用自定义工具沙箱（测试版）",
     "features.enable_code_mode.help": "测试版功能。启用 ha_manage_custom_tool 工具，当没有内置工具可处理请求时，让 AI 助手在安全沙箱中创建、运行、保存和删除自定义 Python 代码。代码在隔离的解释器中运行，无文件系统或任意网络访问。沙箱代码可调用 HA REST API（api_get/api_post）、发送 WebSocket 命令（ws_send）、调用现有 MCP 工具（call_tool），或删除已保存工具（delete_saved_tool）。已保存工具默认持久化到 /data/saved_tools.json，以便在插件重启后保留，且对任何能连接的客户端可见。已知限制见 docs/beta.md。需要重启才能生效。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。",
     "features.enable_lite_docstrings.label": "启用精简工具文档字符串（测试版）",

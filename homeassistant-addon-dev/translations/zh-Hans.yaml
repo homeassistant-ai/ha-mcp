@@ -82,7 +82,7 @@ configuration:
       工具被锁定启用——它是确认密钥的唯一发布方。为上方“写入时附加最佳实践技能”选项的子项，当其父项关闭时无效。需要重启才能生效。
   enable_filesystem_tools:
     name: 启用文件系统工具（测试版）
-    description: 设置 HAMCP_ENABLE_FILESYSTEM_TOOLS=true。启用对您 Home Assistant 文件系统的直接文件读/写访问。警告：这会让
+    description: 设置 HAMCP_ENABLE_FILESYSTEM_TOOLS=true。启用对您的 Home Assistant 文件系统的直接文件读/写访问。警告：这会让
       MCP 服务器直接读写您的 Home Assistant 文件系统，获得对系统的敏感文件访问权限。仅在信任 AI 助手进行文件操作时才启用。需要重启才能生效。需要上方（及
       Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。
   enable_dashboard_screenshot:
