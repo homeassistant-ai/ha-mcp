@@ -164,6 +164,15 @@ class TestStyleSamples:
             _SAMPLE_ENGLISH, translated, {"short"}
         ) == ["middle", "long"]
 
+    def test_reflexive_second_person_counts_as_addressing(self) -> None:
+        """`yourself` / `yourselves` address the reader as much as `your`; no
+        English string uses them today, so this pins the intent rather than a
+        current behaviour."""
+        english = {"a": "Give yourself access.", "b": "Help yourselves."}
+        assert translate_locales._style_sample_keys(
+            english, dict.fromkeys(english, "…")
+        ) == ["b", "a"]
+
     def test_a_meta_only_stub_samples_nothing(self) -> None:
         """A new language starts as a stub the pipeline fills, so an empty
         catalog must yield no samples rather than raise."""
@@ -224,17 +233,31 @@ class TestPromptRegisterRule:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._locales(tmp_path, monkeypatch, {"greeting": "Starte deinen Client neu."})
-        prompt = translate_locales._prompt("de", {"messages:other": "Save"})
+        prompt = translate_locales._prompt("de", {"messages:other": "Save"}, set())
         assert "Starte deinen Client neu." in prompt
-        assert "Address the reader exactly as the sample translations do" in prompt
+        assert "Address the reader the way the sample translations" in prompt
 
     def test_stub_catalog_gets_neither(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._locales(tmp_path, monkeypatch, {})
-        prompt = translate_locales._prompt("de", {"messages:greeting": "Save"})
+        prompt = translate_locales._prompt("de", {"messages:greeting": "Save"}, set())
         assert "Match the tone and terminology" not in prompt
-        assert "Address the reader exactly as" not in prompt
+        assert "Address the reader the way" not in prompt
+
+    def test_a_key_queued_for_a_later_chunk_is_not_sampled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Results are applied only after every chunk finishes, so a key another
+        chunk still owes carries the translation of the PREVIOUS English while
+        this chunk is prompted. Excluding only the current chunk's keys would
+        show that stale pair as the sample — the whole queue has to go."""
+        self._locales(tmp_path, monkeypatch, {"greeting": "Starte deinen Client neu."})
+        prompt = translate_locales._prompt(
+            "de", {"messages:other": "Save"}, {"greeting"}
+        )
+        assert "Starte deinen Client neu." not in prompt
+        assert "Match the tone and terminology" not in prompt
 
 
 class TestFlattenRoundTrip:

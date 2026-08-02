@@ -115,7 +115,9 @@ _MAX_CHARS_PER_REQUEST = 6000
 # language, which is how formal German reaches a catalog that addresses its
 # reader informally in every string of its own. Prefer English sources that
 # address the reader, shortest first so the per-request overhead stays small.
-_SECOND_PERSON_RE = re.compile(r"\byou(?:r|rs)?\b", re.IGNORECASE)
+_SECOND_PERSON_RE = re.compile(
+    r"\b(?:you|your|yours|yourself|yourselves)\b", re.IGNORECASE
+)
 _STYLE_SAMPLE_COUNT = 3
 
 
@@ -480,11 +482,15 @@ def _style_samples(locale: str, exclude: Container[str] = frozenset()) -> str:
     )
 
 
-def _prompt(locale: str, batch: dict[str, str]) -> str:
-    samples = _style_samples(
-        locale,
-        exclude={sid.split(":", 1)[1] for sid in batch if sid.startswith("messages:")},
-    )
+def _prompt(
+    locale: str, batch: dict[str, str], queued_message_keys: Container[str]
+) -> str:
+    """One request. ``queued_message_keys`` is every ``messages`` key this run
+    still has to translate — not just this chunk's. Results are applied after
+    all chunks finish, so a key queued in a later chunk still has its OLD
+    translation on disk while this one is prompted; sampling it would show a
+    stale pair as the thing to imitate."""
+    samples = _style_samples(locale, queued_message_keys)
     style = (
         f"Match the tone and terminology of these existing translations:\n{samples}\n\n"
         if samples
@@ -494,10 +500,14 @@ def _prompt(locale: str, batch: dict[str, str]) -> str:
     # that address the reader and no rule, a single-string request still came
     # back formal for a catalog that is informal throughout. Both halves are
     # load-bearing — the rule points at the samples, so it says nothing
-    # without them.
+    # without them. Worded as a majority rather than "exactly": a catalog can
+    # be internally inconsistent (fr mixes tu and vous today), and telling the
+    # model to imitate contradictory samples exactly is an instruction it
+    # cannot follow.
     register_rule = (
-        "- Address the reader exactly as the sample translations do: stay "
-        "informal where they are informal, formal where they are formal.\n"
+        "- Address the reader the way the sample translations predominantly "
+        "do; if they disagree, follow the form most of them use and apply it "
+        "consistently.\n"
         if samples
         else ""
     )
@@ -621,13 +631,14 @@ def _accept_or_retry(
     results: dict[tuple[str, str], str],
     failures: list[str],
     failed: set[tuple[str, str]],
+    queued_message_keys: Container[str],
 ) -> None:
     """Validate one translated string, retrying once with the reason."""
     reason = _validate(item, translated)
     if reason is not None:
         try:
             retry = _call_gemini(
-                _prompt(locale, {_string_id(item): item.english})
+                _prompt(locale, {_string_id(item): item.english}, queued_message_keys)
                 + f"\n\nYour previous attempt was rejected: {reason}. "
                 "Fix that and return the corrected JSON."
             )
@@ -690,6 +701,10 @@ def _translate_locale(
     """
     by_id = {_string_id(item): item for item in items}
     batch = {sid: item.english for sid, item in by_id.items()}
+    # Every message key this locale still owes, so no chunk samples a key
+    # another chunk is about to rewrite (its catalog entry is still the
+    # translation of the PREVIOUS English until the run applies results).
+    queued_message_keys = {item.key for item in items if item.section == "messages"}
 
     results: dict[tuple[str, str], str] = {}
     failures: list[str] = []
@@ -704,7 +719,7 @@ def _translate_locale(
             dead = True
             break
         try:
-            response = _call_gemini(_prompt(locale, chunk))
+            response = _call_gemini(_prompt(locale, chunk, queued_message_keys))
         except SystemExit as exc:
             consecutive_engine_failures += 1
             for sid in chunk:
@@ -720,7 +735,13 @@ def _translate_locale(
         time.sleep(_SECONDS_BETWEEN_REQUESTS)
         for sid in chunk:
             _accept_or_retry(
-                locale, by_id[sid], response.get(sid), results, failures, failed
+                locale,
+                by_id[sid],
+                response.get(sid),
+                results,
+                failures,
+                failed,
+                queued_message_keys,
             )
     if dead:
         _mark_unattempted(locale, items, results, failures, failed)
