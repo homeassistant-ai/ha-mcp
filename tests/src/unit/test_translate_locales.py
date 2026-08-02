@@ -34,6 +34,25 @@ from translate_locales import (  # noqa: E402
     _validate,
 )
 
+_SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
+# Catalogs that carry translated text. A new language may ship as a meta-only
+# stub for the pipeline to fill (AGENTS.md § Translations), and a stub has no
+# wording to sample yet — requiring samples of it would forbid the documented
+# way to add a language.
+_TRANSLATED_LOCALES = sorted(
+    path.stem
+    for path in _SETTINGS_LOCALES.glob("*.json")
+    if path.stem != "en" and json.loads(path.read_text("utf-8")).get("messages")
+)
+
+
+_SAMPLE_ENGLISH = {
+    "long": "Restart the server, then refresh the tool list in your AI client.",
+    "neutral": "Server Settings",
+    "short": "Your browser blocks storage.",
+    "middle": "Reload the page, then re-apply your changes.",
+}
+
 
 def _item(section: str = "messages", english: str = "Hello {name}") -> WorkItem:
     return WorkItem("de", section, "greeting", english)
@@ -98,6 +117,124 @@ class TestChunk:
 
     def test_empty_batch_yields_no_chunks(self) -> None:
         assert _chunk({}) == []
+
+
+class TestStyleSamples:
+    """The samples are the catalog's address register, and only the samples.
+
+    Nothing downstream can recover it: ``_validate`` checks placeholders and
+    markup, the parity suite checks keys and how much text is still English.
+    A sample pair whose English does not address the reader therefore leaves
+    the engine on its own default for the language — measured against the
+    shipped catalogs, that turns German formal in a catalog whose own strings
+    address the reader informally throughout.
+    """
+
+    def test_prefers_reader_addressing_sources_shortest_first(self) -> None:
+        translated = dict.fromkeys(_SAMPLE_ENGLISH, "…")
+        assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
+            "short",
+            "middle",
+            "long",
+        ]
+
+    def test_skips_keys_the_catalog_has_not_translated(self) -> None:
+        """``messages`` may omit keys — English is the per-key fallback — so an
+        untranslated key carries no register and must not be sampled."""
+        translated = {"long": "…", "neutral": "…"}
+        assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
+            "long"
+        ]
+
+    def test_no_addressing_source_yields_no_samples(self) -> None:
+        """Degenerate but defined: an English catalog that never addresses the
+        reader gives the prompt no style block rather than a neutral one."""
+        assert (
+            translate_locales._style_sample_keys({"a": "Server Settings"}, {"a": "…"})
+            == []
+        )
+
+    def test_keys_in_the_request_are_not_sampled(self) -> None:
+        """A key is in a request because its English moved, so its committed
+        translation renders the previous English. Shown as the sample for the
+        very string being translated, the model answers with that stale text —
+        measured against the live engine, byte-identical to the old wording."""
+        translated = dict.fromkeys(_SAMPLE_ENGLISH, "…")
+        assert translate_locales._style_sample_keys(
+            _SAMPLE_ENGLISH, translated, {"short"}
+        ) == ["middle", "long"]
+
+    def test_a_meta_only_stub_samples_nothing(self) -> None:
+        """A new language starts as a stub the pipeline fills, so an empty
+        catalog must yield no samples rather than raise."""
+        assert translate_locales._style_sample_keys({"a": "Your setting"}, {}) == []
+
+    def test_the_translated_catalogs_are_discovered(self) -> None:
+        """The parametrised check below runs over a glob, and an empty glob
+        would collapse it to a silent skip rather than a failure."""
+        assert _TRANSLATED_LOCALES, "no translated catalogs found to check samples for"
+
+    @pytest.mark.parametrize("locale", _TRANSLATED_LOCALES)
+    def test_every_shipped_catalog_gets_reader_addressing_samples(
+        self, locale: str
+    ) -> None:
+        """The guarantee has to hold for what actually ships, not just for a
+        fixture: every shipped catalog must yield samples, and every one of
+        them must address the reader."""
+        english = json.loads((_SETTINGS_LOCALES / "en.json").read_text("utf-8"))[
+            "messages"
+        ]
+        translated = json.loads(
+            (_SETTINGS_LOCALES / f"{locale}.json").read_text("utf-8")
+        ).get("messages", {})
+        keys = translate_locales._style_sample_keys(english, translated)
+
+        assert keys, (
+            f"{locale}.json yields no style sample, so the engine gets no "
+            "signal about how this catalog addresses its reader"
+        )
+        assert all(
+            translate_locales._SECOND_PERSON_RE.search(english[key]) for key in keys
+        ), f"{locale}.json samples {keys} do not address the reader"
+
+
+class TestPromptRegisterRule:
+    """The rule points at the samples, so it carries nothing without them."""
+
+    @staticmethod
+    def _locales(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, de: dict) -> None:
+        locales = tmp_path / "locales"
+        locales.mkdir()
+        (locales / "en.json").write_text(
+            json.dumps(
+                {
+                    "meta": {"native_name": "English"},
+                    "messages": {"greeting": "Restart your client."},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (locales / "de.json").write_text(
+            json.dumps({"meta": {"native_name": "Deutsch"}, "messages": de}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(translate_locales, "LOCALES_DIR", locales)
+
+    def test_rule_ships_with_the_samples(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._locales(tmp_path, monkeypatch, {"greeting": "Starte deinen Client neu."})
+        prompt = translate_locales._prompt("de", {"messages:other": "Save"})
+        assert "Starte deinen Client neu." in prompt
+        assert "Address the reader exactly as the sample translations do" in prompt
+
+    def test_stub_catalog_gets_neither(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._locales(tmp_path, monkeypatch, {})
+        prompt = translate_locales._prompt("de", {"messages:greeting": "Save"})
+        assert "Match the tone and terminology" not in prompt
+        assert "Address the reader exactly as" not in prompt
 
 
 class TestFlattenRoundTrip:

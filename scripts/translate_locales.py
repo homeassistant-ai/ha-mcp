@@ -50,9 +50,11 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from collections import Counter
+from collections.abc import Container
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
@@ -105,11 +107,16 @@ def _out_of_time() -> bool:
 # to ~1500 characters each.
 _MAX_CHARS_PER_REQUEST = 6000
 
-_STYLE_SAMPLE_KEYS = (
-    "notice.shared_settings",
-    "features.read_only_mode.help",
-    "tabs.server",
-)
+# The style samples are the only signal the engine gets about how a catalog
+# addresses its reader — du/Sie, tu/vous, 你/您 — and nothing downstream can
+# recover it: placeholder, markup and key-parity validation pass either way,
+# and the ceilings only count text left untranslated. Samples whose English
+# does not address the reader leave the model on its own default for the
+# language, which is how formal German reaches a catalog that addresses its
+# reader informally in every string of its own. Prefer English sources that
+# address the reader, shortest first so the per-request overhead stays small.
+_SECOND_PERSON_RE = re.compile(r"\byou(?:r|rs)?\b", re.IGNORECASE)
+_STYLE_SAMPLE_COUNT = 3
 
 
 # Closed set: the apply functions branch on this and raise on anything else,
@@ -437,21 +444,60 @@ def _language_label(locale: str) -> str:
     return f"{native} ({locale})"
 
 
-def _style_samples(locale: str) -> str:
+def _style_sample_keys(
+    english: dict[str, str],
+    translated: dict[str, str],
+    exclude: Container[str] = frozenset(),
+) -> list[str]:
+    """The keys whose sample pair shows this catalog's address register.
+
+    ``exclude`` drops the keys of the request being built. A key is in a
+    request only because its English moved or it is missing, so its committed
+    translation renders the PREVIOUS English: pairing it with the new source
+    presents a mismatch as the thing to imitate, and when the key is itself in
+    the batch the model answers with the stale text it was just shown — which
+    validates, gets written, and repins the baseline as if it were current.
+    """
+    return sorted(
+        (
+            key
+            for key, text in english.items()
+            if key in translated
+            and key not in exclude
+            and _SECOND_PERSON_RE.search(text)
+        ),
+        key=lambda key: (len(english[key]), key),
+    )[:_STYLE_SAMPLE_COUNT]
+
+
+def _style_samples(locale: str, exclude: Container[str] = frozenset()) -> str:
     catalog = _load_json(LOCALES_DIR / f"{locale}.json")
     english = _load_json(LOCALES_DIR / "en.json")["messages"]
-    samples = [
-        f"EN: {english[key]}\n{locale.upper()}: {catalog['messages'][key]}"
-        for key in _STYLE_SAMPLE_KEYS
-        if key in catalog.get("messages", {}) and key in english
-    ]
-    return "\n\n".join(samples)
+    translated: dict[str, str] = catalog.get("messages", {})
+    return "\n\n".join(
+        f"EN: {english[key]}\n{locale.upper()}: {translated[key]}"
+        for key in _style_sample_keys(english, translated, exclude)
+    )
 
 
 def _prompt(locale: str, batch: dict[str, str]) -> str:
-    samples = _style_samples(locale)
+    samples = _style_samples(
+        locale,
+        exclude={sid.split(":", 1)[1] for sid in batch if sid.startswith("messages:")},
+    )
     style = (
         f"Match the tone and terminology of these existing translations:\n{samples}\n\n"
+        if samples
+        else ""
+    )
+    # Carried by the samples, but not read off them on its own: with samples
+    # that address the reader and no rule, a single-string request still came
+    # back formal for a catalog that is informal throughout. Both halves are
+    # load-bearing — the rule points at the samples, so it says nothing
+    # without them.
+    register_rule = (
+        "- Address the reader exactly as the sample translations do: stay "
+        "informal where they are informal, formal where they are formal.\n"
         if samples
         else ""
     )
@@ -474,6 +520,7 @@ def _prompt(locale: str, batch: dict[str, str]) -> str:
         "GitHub Copilot), MCP tool names (ha_*), environment variables, "
         "file paths, URLs, configuration keys, and any text in double "
         "quotes that names an on-screen option or a literal value.\n"
+        f"{register_rule}"
         "- Keep the ⚠ and ⚠️ symbols where English has them.\n\n"
         f"{style}"
         "Strings to translate (JSON):\n"
