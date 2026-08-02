@@ -473,7 +473,9 @@ def _style_sample_keys(
     )[:_STYLE_SAMPLE_COUNT]
 
 
-def _surface_catalogs(locale: str, surface: Section) -> tuple[dict[str, str], ...]:
+def _surface_catalogs(
+    locale: str, surface: Section
+) -> tuple[dict[str, str], dict[str, str]]:
     """The (english, translated) pair a request of this section samples from.
 
     The two authored surfaces do not have to agree — today the French component
@@ -725,6 +727,19 @@ def _translate_surface(
     on, so one blocked or truncated batch cannot take down the whole run; two
     in a row read as systemic and stop the calls.
     """
+    # The register anchor is the one input to a run that nothing downstream
+    # can check, and on same-repo PRs the workflow commits without a human in
+    # the loop — so the log is the only place its choice is inspectable.
+    sample_keys = _style_sample_keys(*_surface_catalogs(locale, surface), queued_keys)
+    if sample_keys:
+        print(f"  {locale}/{surface}: register samples {sample_keys}")
+    else:
+        print(
+            f"  {locale}/{surface}: no sample addresses the reader — the engine "
+            "falls back to its own register for this language",
+            file=sys.stderr,
+        )
+
     consecutive_engine_failures = 0
     for chunk in _chunk(batch):
         if _out_of_time():

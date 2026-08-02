@@ -364,6 +364,72 @@ class TestPlanning:
         assert [(i.key, i.english) for i in plan.items] == [("Lights", "Lights")]
         assert plan.deletions == []
 
+    def test_run_wide_queue_reaches_every_chunk_and_the_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_translate_locale`` is what computes the exclusion set and hands it
+        to each request; the per-``_prompt`` tests cannot see that. Two chunks
+        plus a forced retry, and no prompt may quote a key the run still owes."""
+        locales = tmp_path / "locales"
+        locales.mkdir()
+        # Each over half the character budget, so the two land in separate
+        # chunks — with both in one chunk the run-wide set and the chunk-local
+        # one are the same thing and the check below proves nothing.
+        big = "x" * (translate_locales._MAX_CHARS_PER_REQUEST // 2 + 100)
+        english = {
+            "first": f"Restart your client. {big}",
+            "second": f"Reload your page. {big}",
+            "sample": "Check your token.",
+        }
+        (locales / "en.json").write_text(
+            json.dumps({"meta": {"native_name": "English"}, "messages": english}),
+            encoding="utf-8",
+        )
+        (locales / "de.json").write_text(
+            json.dumps(
+                {
+                    "meta": {"native_name": "Deutsch"},
+                    "messages": {k: f"DE-{k} deinen" for k in english},
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(translate_locales, "LOCALES_DIR", locales)
+        monkeypatch.setattr(translate_locales.time, "sleep", lambda _s: None)
+
+        prompts: list[str] = []
+
+        chunk_prompts: list[str] = []
+
+        def fake_engine(prompt: str) -> dict[str, str]:
+            prompts.append(prompt)
+            if "previous attempt was rejected" not in prompt:
+                chunk_prompts.append(prompt)
+            # Empty answers fail validation, so every string also exercises the
+            # retry prompt in _accept_or_retry.
+            return dict.fromkeys(("messages:first", "messages:second"), "")
+
+        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+
+        items = [
+            WorkItem("de", "messages", key, english[key]) for key in ("first", "second")
+        ]
+        translate_locales._translate_locale("de", items)
+
+        assert len(chunk_prompts) >= 2, (
+            f"expected the work to span two chunks, got {len(chunk_prompts)} "
+            "requests — the run-wide set is indistinguishable from the "
+            "chunk-local one inside a single chunk"
+        )
+        assert len(prompts) > len(chunk_prompts), "expected retry prompts too"
+        for prompt in prompts:
+            assert "DE-first" not in prompt
+            assert "DE-second" not in prompt
+        assert any("DE-sample" in prompt for prompt in prompts), (
+            "the untouched key should still be sampled — otherwise this test "
+            "would pass with sampling switched off entirely"
+        )
+
     def test_clean_tree_plans_no_work(self) -> None:
         """The no-op invariant the CI loop terminates on: after a translation
         commit repins the baseline, the retriggered run must find nothing."""
