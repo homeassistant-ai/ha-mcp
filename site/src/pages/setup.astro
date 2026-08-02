@@ -996,6 +996,28 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
     remotePath: null,  // builtin-webhook | webhook-proxy | cloudflared | custom (scope=remote)
   };
 
+  const setupStateParams = ['method', 'client', 'scope', 'platform', 'remote'];
+  let restoringState = false;
+
+  // Keep the address bar and the Setup navbar link shareable at every step.
+  // Forced/irrelevant choices are omitted so each URL has one canonical form.
+  function syncSetupUrl(mode = 'push') {
+    if (restoringState) return;
+
+    const url = new URL(window.location.href);
+    setupStateParams.forEach(param => url.searchParams.delete(param));
+    if (state.method) url.searchParams.set('method', state.method);
+    if (state.client) url.searchParams.set('client', state.client.id);
+    if (state.method !== 'stdio-local' && state.scope) url.searchParams.set('scope', state.scope);
+    if (state.platform && needsPlatform()) url.searchParams.set('platform', state.platform.id);
+    if (state.scope === 'remote' && state.remotePath) url.searchParams.set('remote', state.remotePath);
+
+    const relativeUrl = `${url.pathname}${url.search}${url.hash}`;
+    window.history[mode === 'replace' ? 'replaceState' : 'pushState']({}, '', relativeUrl);
+    const setupNavLink = document.querySelector('[data-nav-id="setup"]');
+    if (setupNavLink) setupNavLink.href = relativeUrl;
+  }
+
   // Display labels
   const methodLabels = {
     'ha-component': 'HA Custom Component',
@@ -1047,6 +1069,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
 
   // Smooth scroll to a section with a slight delay for the animation
   function scrollToSection(sectionId, delay = 100) {
+    if (restoringState) return;
     setTimeout(() => {
       const section = document.getElementById(sectionId);
       if (section && !section.classList.contains('hidden')) {
@@ -1189,6 +1212,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
       });
 
       updateSections('section-client');
+      syncSetupUrl();
     });
   });
 
@@ -1221,6 +1245,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
       });
 
       updateSections(isStdio ? 'section-platform' : 'section-scope');
+      syncSetupUrl();
     });
   });
 
@@ -1266,6 +1291,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
       else next = 'section-config';
       updateSections(next);
       if (next === 'section-config') generateConfig();
+      syncSetupUrl();
     });
   });
 
@@ -1284,6 +1310,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
       const next = scope === 'remote' ? 'section-remote-path' : 'section-config';
       updateSections(next);
       if (next === 'section-config') generateConfig();
+      syncSetupUrl();
     });
   });
 
@@ -1298,6 +1325,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
 
       updateSections('section-config');
       generateConfig();
+      syncSetupUrl();
     });
   });
 
@@ -1309,6 +1337,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
     state.remotePath = null;
     document.querySelectorAll('[data-client], [data-scope], [data-platform], [data-remote-path]').forEach(c => c.classList.remove('selected'));
     updateSections('section-client');
+    syncSetupUrl();
   });
 
   document.getElementById('selected-client')?.addEventListener('click', () => {
@@ -1318,6 +1347,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
     state.remotePath = null;
     document.querySelectorAll('[data-scope], [data-platform], [data-remote-path]').forEach(c => c.classList.remove('selected'));
     updateSections(isStdio ? 'section-platform' : 'section-scope');
+    syncSetupUrl();
   });
 
   document.getElementById('selected-platform-prev')?.addEventListener('click', () => {
@@ -1325,22 +1355,29 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
     state.remotePath = null;
     document.querySelectorAll('[data-platform], [data-remote-path]').forEach(c => c.classList.remove('selected'));
     updateSections('section-platform');
+    syncSetupUrl();
   });
 
   document.getElementById('selected-remotepath-prev')?.addEventListener('click', () => {
     state.remotePath = null;
     document.querySelectorAll('[data-remote-path]').forEach(c => c.classList.remove('selected'));
     updateSections('section-remote-path');
+    syncSetupUrl();
   });
 
-  // Start over
-  document.getElementById('start-over').addEventListener('click', () => {
+  function resetWizard() {
     state = { method: null, client: null, scope: null, platform: null, remotePath: null };
     document.querySelectorAll('[data-server-method], [data-client], [data-scope], [data-platform], [data-remote-path]').forEach(c => {
       c.classList.remove('selected');
     });
     document.querySelectorAll('[data-client], [data-scope]').forEach(c => { c.disabled = false; c.title = ''; });
+  }
+
+  // Start over
+  document.getElementById('start-over').addEventListener('click', () => {
+    resetWizard();
     updateSections('section-method');
+    syncSetupUrl();
   });
 
   // Generate configuration
@@ -2690,5 +2727,62 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
     }
     notesEl.innerHTML = notes;
   }
+
+  function clickChoice(attribute, value) {
+    if (!value) return false;
+    const choice = Array.from(document.querySelectorAll(`[${attribute}]`))
+      .find(element => element.getAttribute(attribute) === value);
+    if (!(choice instanceof HTMLButtonElement) || choice.disabled || choice.classList.contains('hidden')) return false;
+    choice.click();
+    return true;
+  }
+
+  function currentSetupSection() {
+    if (shouldShowConfig()) return 'section-config';
+    if (!state.method) return 'section-method';
+    if (!state.client) return 'section-client';
+
+    const scope = state.method === 'stdio-local' ? 'local' : state.scope;
+    if (!scope) return 'section-scope';
+    if (needsPlatform() && !state.platform) return 'section-platform';
+    if (scope === 'remote' && !state.remotePath) return 'section-remote-path';
+    return 'section-method';
+  }
+
+  // Re-run the normal selection handlers so shared links get the same
+  // filtering and derived output as an interactive visit. Invalid or stale
+  // combinations stop at the last valid step and are canonicalized away.
+  function restoreStateFromUrl() {
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+    const shouldPositionWizard = !url.hash && setupStateParams.some(param => params.has(param));
+    const requested = {
+      method: params.get('method'),
+      client: params.get('client'),
+      scope: params.get('scope'),
+      platform: params.get('platform'),
+      remotePath: params.get('remote'),
+    };
+
+    restoringState = true;
+    resetWizard();
+    updateSections();
+
+    if (clickChoice('data-server-method', requested.method)
+      && clickChoice('data-client', requested.client)) {
+      if (state.method !== 'stdio-local') clickChoice('data-scope', requested.scope);
+      if (needsPlatform()) clickChoice('data-platform', requested.platform);
+      if (state.scope === 'remote' && remotePathsForMethod(state.method).includes(requested.remotePath)) {
+        clickChoice('data-remote-path', requested.remotePath);
+      }
+    }
+
+    restoringState = false;
+    syncSetupUrl('replace');
+    if (shouldPositionWizard) scrollToSection(currentSetupSection(), 0);
+  }
+
+  restoreStateFromUrl();
+  window.addEventListener('popstate', restoreStateFromUrl);
 
 </script>

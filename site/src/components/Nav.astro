@@ -31,6 +31,7 @@ const links = [
         {links.map(link => (
           <a
             href={withBase(link.href)}
+            data-nav-id={link.id}
             class:list={[
               'px-3 py-1.5 rounded-lg text-sm transition-colors',
               active === link.id
